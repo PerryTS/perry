@@ -520,6 +520,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "destroy", true, Some("Socket")),
     method("net", "on", true, Some("Socket")),
     method("net", "upgradeToTLS", true, Some("Socket")),
+    // Issue #1123 followup — `net.Server` instance methods backing
+    // `createServer(...).listen/.close/.address/.on`. Mirrors the
+    // shape of the http-server rows at entries.rs:2298. The
+    // factory `createServer(...)` itself doesn't show up in the
+    // dispatch table because it lowers to `Expr::NetCreateServer`
+    // (handled in `crates/perry-codegen/src/expr.rs`), not a
+    // NativeMethodCall — same reason `("http", "createServer")`
+    // appears here but not as a dispatch-table row.
+    method("net", "listen", true, Some("Server")),
+    method("net", "close", true, Some("Server")),
+    method("net", "address", true, Some("Server")),
+    method("net", "addListener", true, Some("Server")),
     // Issue #811 — IP classification helpers + Happy-Eyeballs default
     // accessors. Pure string/global-flag functions.
     method("net", "isIP", false, None),

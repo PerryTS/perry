@@ -42,7 +42,7 @@ use std::sync::Mutex;
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
@@ -124,6 +124,33 @@ mod statics {
         static N: OnceLock<Mutex<i64>> = OnceLock::new();
         N.get_or_init(|| Mutex::new(1))
     }
+
+    /// Server registry — `net.createServer(...)` returns a handle here.
+    /// Separate from the socket map: server handles host an accept-loop
+    /// shutdown channel and a bound port; sockets host a per-connection
+    /// command channel + per-connection listener map. Keyed by the same
+    /// monotonic id counter as sockets, so handles never collide.
+    pub fn servers() -> &'static Mutex<HashMap<i64, ServerState>> {
+        static S: OnceLock<Mutex<HashMap<i64, ServerState>>> = OnceLock::new();
+        S.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+}
+
+/// Backing state for an `net.Server` handle (`net.createServer(...)`).
+/// Mirrors `perry-ext-http-server::HttpServer` in shape but stripped to
+/// the raw-TCP surface — no hyper, no request/response channels, just
+/// the accept loop's shutdown sender + bound address. Per-server event
+/// listeners (`'connection'`, `'listening'`, `'close'`, `'error'`) live
+/// in the shared `statics::listeners()` map keyed by the server's id;
+/// reusing the socket listener map keeps the GC scanner walk single-
+/// pass instead of needing a second per-server scanner.
+pub(crate) struct ServerState {
+    /// Set by `.listen()`, dropped by `.close()`. Send on this channel
+    /// to break the accept loop's `tokio::select!`.
+    pub shutdown_tx: Option<oneshot::Sender<()>>,
+    pub bound_port: u16,
+    pub bound_host: String,
+    pub listening: bool,
 }
 
 static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -186,6 +213,23 @@ enum PendingNetEvent {
     Data(i64, Vec<u8>),
     Close(i64),
     Error(i64, String),
+    /// Issue #1123 followup — accept-loop on a `net.Server` produced
+    /// a new client socket. Fires the server's `'connection'`
+    /// listeners with the new socket handle.
+    ///   `.0` = server id (for listener lookup)
+    ///   `.1` = socket id (passed to listeners as the arg)
+    ServerConnection(i64, i64),
+    /// Issue #1123 followup — `listener.bind()` resolved + accept
+    /// loop is running. Fires `'listening'` listeners + the
+    /// `.listen(port, cb)` callback. `.0` = server id.
+    ServerListening(i64),
+    /// Issue #1123 followup — accept-loop exited (after `.close()`
+    /// or bind failure). Fires `'close'` listeners on the server.
+    ServerClose(i64),
+    /// Issue #1123 followup — bind / accept I/O error on the server.
+    /// Fires `'error'` listeners with an Error-shaped object.
+    ///   `.0` = server id, `.1` = error message.
+    ServerError(i64, String),
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -706,13 +750,27 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
 pub unsafe extern "C" fn js_net_create_server(
     _options_i64: i64,
     connection_listener_i64: i64,
-) -> f64 {
+) -> i64 {
     ensure_gc_scanner_registered();
     let id = next_id();
     statics::listeners()
         .lock()
         .unwrap()
         .insert(id, HashMap::new());
+    // Issue #1123 followup — register the server in the dedicated
+    // `servers()` map alongside the listener-map entry. The accept
+    // loop in `js_net_server_listen` populates `shutdown_tx` + the
+    // bound address fields; `js_net_server_close` consumes the
+    // shutdown sender to wake the accept loop.
+    statics::servers().lock().unwrap().insert(
+        id,
+        ServerState {
+            shutdown_tx: None,
+            bound_port: 0,
+            bound_host: String::new(),
+            listening: false,
+        },
+    );
     if connection_listener_i64 != 0 {
         if let Ok(mut listeners) = statics::listeners().lock() {
             listeners
@@ -723,10 +781,309 @@ pub unsafe extern "C" fn js_net_create_server(
                 .push(connection_listener_i64);
         }
     }
-    // The codegen's `DOUBLE` return slot just stores the raw bits via
-    // the JSValue F64 path — no NaN-boxing of the handle here. Match
-    // the historic perry-runtime/src/net.rs:35 contract.
-    id as f64
+    // Issue #1123 followup — return the raw `i64` handle so the codegen
+    // can NaN-box it with POINTER_TAG (mirroring `js_node_http_create_server`).
+    // Without this, downstream `server.listen(...)` couldn't recover
+    // the handle: `unbox_to_i64` on a bare `1.0` would mask to 0 because
+    // the lower 48 bits of `0x3FF0_0000_0000_0000` are all zero.
+    //
+    // Side effect: `typeof server` now reports `"object"` (the canonical
+    // Node value — `net.Server extends EventEmitter`) instead of the
+    // `"number"` the initial #1123 placeholder briefly surfaced. The
+    // existing test fixture's expected stdout was updated to match.
+    id
+}
+
+// ─── FFI: net.Server.listen / .close / .address / .on ────────────────────────
+//
+// Issue #1123 followup — full accept-loop wiring for the server handle
+// allocated by `js_net_create_server` above. Mirrors the shape of
+// `perry-ext-http-server::js_node_http_server_listen` (bind + spawn
+// accept loop on the multi-thread tokio runtime, then return
+// immediately; per-event dispatch happens on the main thread inside
+// `js_net_process_pending`).
+//
+// **Why not reuse the http-server scaffolding?** That crate hard-wires
+// hyper's HTTP/1 service path into every accepted connection — every
+// byte goes through `service_fn` + `Response<Full<Bytes>>`. raw TCP
+// (`net.createServer`) emits the accepted `TcpStream` directly to the
+// user's `'connection'` listener wrapped in a `net.Socket` handle. The
+// two paths share the "spawn accept loop + drain on main thread"
+// pattern but nothing past the listener.bind() call.
+
+/// `server.listen(port, callback?)` — bind a tokio `TcpListener` on
+/// `0.0.0.0:port` and spawn an accept loop on the shared multi-thread
+/// runtime. The `callback` (a NaN-boxed closure pointer in the codegen's
+/// NA_PTR slot, raw i64 here after unboxing in lower_call.rs) is
+/// registered as a one-shot `'listening'` listener; when the bind
+/// resolves, the accept-loop task pushes a `ServerListening` event so
+/// the main-thread pump invokes both the user's `.on('listening', cb)`
+/// listeners and the trailing `.listen(port, cb)` callback.
+///
+/// Bind failures emit a `ServerError` and a `ServerClose` so the user's
+/// `.on('error', err => …)` + `.on('close', () => …)` listeners fire
+/// the same way they would on Node.
+///
+/// # Safety
+///
+/// `handle` must be a server id returned by `js_net_create_server`.
+/// `callback_i64` may be 0 (no callback) or a raw `*const RawClosureHeader`
+/// cast to `i64` — the codegen ABI for NA_PTR-unboxed closures.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i64: i64) {
+    ensure_gc_scanner_registered();
+    let port_u16 = port as u16;
+    let host = "0.0.0.0".to_string();
+
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+
+    // Mark the server as listening + stash the shutdown sender. If the
+    // handle isn't registered, bail before touching tokio.
+    {
+        let mut servers = match statics::servers().lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let s = match servers.get_mut(&handle) {
+            Some(s) => s,
+            None => return,
+        };
+        s.shutdown_tx = Some(shutdown_tx);
+        s.bound_port = port_u16;
+        s.bound_host = host.clone();
+        s.listening = true;
+    }
+
+    // Stash the listen-callback under `'listening'` so the pump fires
+    // it on the first ServerListening event, then drops it (matching
+    // Node's "callback runs once on listen" semantics).
+    if callback_i64 != 0 {
+        if let Ok(mut listeners) = statics::listeners().lock() {
+            listeners
+                .entry(handle)
+                .or_default()
+                .entry("listening".to_string())
+                .or_default()
+                .push(callback_i64);
+        }
+    }
+
+    let host_for_spawn = host.clone();
+    let server_id = handle;
+
+    // Schedule the accept loop on the multi-thread tokio runtime that
+    // perry-stdlib hosts. Mirrors `js_node_http_server_listen`'s
+    // spawn_blocking_with_reactor → tokio::spawn pattern: the outer
+    // closure tickles tokio's CONTEXT statics through LTO; the inner
+    // `tokio::spawn` actually runs the async work.
+    perry_ffi::spawn_blocking_with_reactor(move || {
+        // Same LTO-defeating dance as `spawn_socket_runner` above.
+        let try_h = tokio::runtime::Handle::try_current();
+        std::hint::black_box(&try_h);
+        if try_h.is_err() {
+            eprintln!(
+                "[perry-ext-net] BUG: js_net_server_listen Handle::try_current returned Err — \
+                 LTO has likely dead-stripped tokio's CONTEXT statics."
+            );
+        }
+        let rt = tokio::runtime::Handle::current();
+        let jh = rt.spawn(async move {
+            let bind_str = format!("{}:{}", host_for_spawn, port_u16);
+            let listener = match TcpListener::bind(&bind_str).await {
+                Ok(l) => l,
+                Err(e) => {
+                    push_event(PendingNetEvent::ServerError(
+                        server_id,
+                        format!("bind {}: {}", bind_str, e),
+                    ));
+                    push_event(PendingNetEvent::ServerClose(server_id));
+                    if let Ok(mut servers) = statics::servers().lock() {
+                        if let Some(s) = servers.get_mut(&server_id) {
+                            s.listening = false;
+                        }
+                    }
+                    return;
+                }
+            };
+            // bind succeeded — fire `'listening'`.
+            push_event(PendingNetEvent::ServerListening(server_id));
+
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        match accepted {
+                            Ok((stream, _peer)) => {
+                                // Allocate a fresh Socket handle that
+                                // shares the existing socket machinery
+                                // (run_socket_task, command channel,
+                                // 'data'/'end'/'close'/'error' pump
+                                // dispatch). The accept side doesn't
+                                // need a tokio TcpStream::connect — we
+                                // already have the stream — so we
+                                // bypass `spawn_socket_task` (which
+                                // calls TcpStream::connect inside) and
+                                // call `run_socket_task` directly with
+                                // the accepted stream.
+                                let socket_id = next_id();
+                                let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
+                                statics::sockets().lock().unwrap().insert(
+                                    socket_id,
+                                    SocketState {
+                                        cmd_tx: tx,
+                                        pending_rx: None,
+                                        is_open: true,
+                                    },
+                                );
+                                statics::listeners()
+                                    .lock()
+                                    .unwrap()
+                                    .insert(socket_id, HashMap::new());
+
+                                // Surface the new socket to the user's
+                                // `'connection'` listener on the main
+                                // thread *before* spawning the read
+                                // loop — the listener typically registers
+                                // its own `.on('data', ...)` handlers
+                                // and we want those in place before
+                                // bytes start arriving. The accepted
+                                // stream's read loop spawns next.
+                                push_event(PendingNetEvent::ServerConnection(server_id, socket_id));
+
+                                // Spawn the per-socket read/write loop
+                                // on the same runtime as the accept
+                                // loop. We use a fresh `tokio::spawn`
+                                // rather than `spawn_socket_runner` to
+                                // avoid the nested `spawn_blocking_with_reactor`
+                                // wrap — we're already inside a tokio
+                                // task, so direct `tokio::spawn` is fine
+                                // (the LTO black_box workaround only
+                                // matters at the FFI entry point where
+                                // we cross back into Rust-from-C
+                                // territory).
+                                tokio::spawn(async move {
+                                    let mut rx = rx;
+                                    run_socket_task(
+                                        socket_id,
+                                        Transport::Plain(stream),
+                                        &mut rx,
+                                    )
+                                    .await;
+                                });
+                            }
+                            Err(e) => {
+                                push_event(PendingNetEvent::ServerError(
+                                    server_id,
+                                    format!("accept: {}", e),
+                                ));
+                                // Don't break the loop on a transient
+                                // accept error — Node doesn't.
+                            }
+                        }
+                    }
+                    _ = &mut shutdown_rx => {
+                        break;
+                    }
+                }
+            }
+            // Loop exited (close() called or fatal error) — emit
+            // a final 'close' event so user code can see the
+            // server stopped.
+            push_event(PendingNetEvent::ServerClose(server_id));
+            if let Ok(mut servers) = statics::servers().lock() {
+                if let Some(s) = servers.get_mut(&server_id) {
+                    s.listening = false;
+                }
+            }
+        });
+        std::hint::black_box(&jh);
+        std::mem::forget(jh);
+    });
+}
+
+/// `server.close(callback?)` — break the accept loop and fire the
+/// optional callback once it exits. The actual `'close'` listener
+/// dispatch happens in the main-thread pump when the accept-loop
+/// task pushes its terminal `ServerClose` event.
+///
+/// # Safety
+///
+/// `handle` must be a server id; `callback_i64` is a raw closure ptr.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_server_close(handle: i64, callback_i64: i64) {
+    // Stash the user's close callback under `'close'` so the pump fires
+    // it alongside the registered listeners when the accept loop exits.
+    if callback_i64 != 0 {
+        if let Ok(mut listeners) = statics::listeners().lock() {
+            listeners
+                .entry(handle)
+                .or_default()
+                .entry("close".to_string())
+                .or_default()
+                .push(callback_i64);
+        }
+    }
+    // Drop the shutdown sender — the accept loop's `tokio::select!`
+    // wakes immediately on the receiver side and exits its loop.
+    if let Ok(mut servers) = statics::servers().lock() {
+        if let Some(s) = servers.get_mut(&handle) {
+            s.shutdown_tx.take();
+        }
+    }
+}
+
+/// `server.address()` — returns a JSON string the TS-side wrapper can
+/// `JSON.parse` into `{ port, address, family }`. Matches the
+/// perry-ext-http-server contract (`js_node_http_server_address_json`).
+///
+/// Returns `null` (as a JS string) for an unlistening server.
+///
+/// # Safety
+///
+/// `handle` must be a server id. The returned `*mut StringHeader` is
+/// allocated in the runtime arena and follows perry-ffi's standard
+/// ownership: the caller hands it to user code as a NaN-boxed JS string.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_server_address(handle: i64) -> *mut StringHeader {
+    let json = match statics::servers().lock() {
+        Ok(g) => match g.get(&handle) {
+            Some(s) if s.listening => {
+                let family = if s.bound_host.contains(':') {
+                    "IPv6"
+                } else {
+                    "IPv4"
+                };
+                format!(
+                    "{{\"port\":{},\"address\":\"{}\",\"family\":\"{}\"}}",
+                    s.bound_port, s.bound_host, family
+                )
+            }
+            _ => "null".to_string(),
+        },
+        Err(_) => "null".to_string(),
+    };
+    alloc_string(&json).as_raw()
+}
+
+/// `server.on(event, cb)` — register a server-level listener for
+/// `'connection'`, `'listening'`, `'close'`, or `'error'`. Reuses
+/// the shared listener map keyed on the server id (server ids and
+/// socket ids are drawn from the same monotonic counter so they
+/// never collide).
+///
+/// # Safety
+///
+/// `event_ptr` must be null or a Perry-runtime `StringHeader`. `cb`
+/// is a raw `*const ClosureHeader` cast to `i64`.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_server_on(handle: i64, event_ptr: i64, cb: i64) {
+    ensure_gc_scanner_registered();
+    let event = match string_from_header_i64(event_ptr) {
+        Some(e) => e,
+        None => return,
+    };
+    let mut listeners = statics::listeners().lock().unwrap();
+    let entry = listeners.entry(handle).or_default();
+    entry.entry(event).or_default().push(cb);
 }
 
 // ─── FFI: socket.connect(port, host) (instance method on existing handle) ─────
@@ -1174,6 +1531,95 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 statics::listeners().lock().unwrap().remove(&id);
                 statics::sockets().lock().unwrap().remove(&id);
             }
+            // Issue #1123 followup — server-side events. The
+            // accept loop pushes `ServerConnection`/`ServerListening`/
+            // `ServerError`/`ServerClose`; the main-thread pump
+            // converts them into the appropriate JS dispatch.
+            PendingNetEvent::ServerConnection(server_id, socket_id) => {
+                let cbs = listeners_for(server_id, "connection");
+                if cbs.is_empty() {
+                    continue;
+                }
+                // Sockets returned by the codegen's `net.connect`
+                // path (`js_net_socket_connect` → NR_PTR ret kind in
+                // lower_call.rs) are NaN-boxed with POINTER_TAG over
+                // the raw socket id. Match that here so user code
+                // sees the same value shape regardless of which side
+                // produced the socket: `sock.on(...)` then dispatches
+                // through the `("net", true, "on", Some("Socket"))`
+                // NATIVE_MODULE_TABLE row (which `unbox_to_i64`s the
+                // receiver back to the raw id). Bare-number sockets
+                // skipped the dispatch and hit the generic property
+                // path → `(number).on is not a function`.
+                let sock_f64 = f64::from_bits(
+                    0x7FFD_0000_0000_0000 | (socket_id as u64 & 0x0000_FFFF_FFFF_FFFF),
+                );
+                for cb in cbs {
+                    if cb != 0 {
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(sock_f64);
+                    }
+                }
+            }
+            PendingNetEvent::ServerListening(server_id) => {
+                // Take + drain the 'listening' listeners so the
+                // optional `listen(port, cb)` callback fires exactly
+                // once (Node's semantics). Subsequent
+                // `.on('listening', ...)` registrations would have
+                // to wait for another `.listen(...)` cycle — fine,
+                // re-binding without close() in between would error
+                // on bind anyway.
+                let cbs = {
+                    let mut listeners = statics::listeners().lock().unwrap();
+                    if let Some(per_server) = listeners.get_mut(&server_id) {
+                        per_server.remove("listening").unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    }
+                };
+                for cb in cbs {
+                    if cb != 0 {
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
+                    }
+                }
+            }
+            PendingNetEvent::ServerClose(server_id) => {
+                // Drain close listeners (one-shot, like Node).
+                let cbs = {
+                    let mut listeners = statics::listeners().lock().unwrap();
+                    if let Some(per_server) = listeners.get_mut(&server_id) {
+                        per_server.remove("close").unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    }
+                };
+                for cb in cbs {
+                    if cb != 0 {
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
+                    }
+                }
+                // Tear down the server entry so the keepalive gate
+                // (`js_ext_net_has_active_handles`) lets the runtime
+                // exit cleanly after the user's close() resolves.
+                statics::servers().lock().unwrap().remove(&server_id);
+                statics::listeners().lock().unwrap().remove(&server_id);
+            }
+            PendingNetEvent::ServerError(server_id, msg) => {
+                let cbs = listeners_for(server_id, "error");
+                if cbs.is_empty() {
+                    // Node prints to stderr if there's no handler and
+                    // crashes the process; we just log and continue —
+                    // less hostile to test harnesses that haven't
+                    // wired an error listener yet.
+                    eprintln!("[perry-ext-net] server {} error: {}", server_id, msg);
+                    continue;
+                }
+                let err_f64 = build_error_object(&msg);
+                for cb in cbs {
+                    if cb != 0 {
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(err_f64);
+                    }
+                }
+            }
         }
     }
 
@@ -1197,6 +1643,13 @@ pub extern "C" fn js_net_has_pending() -> i32 {
         return 1;
     }
     if !statics::sockets().lock().unwrap().is_empty() {
+        return 1;
+    }
+    // Issue #1123 followup — a listening `net.Server` keeps the loop
+    // alive too: pre-fix, `createServer(...).listen(port, cb)` would
+    // exit before any client ever connected because the gate only
+    // counted accepted sockets.
+    if !statics::servers().lock().unwrap().is_empty() {
         return 1;
     }
     0
@@ -1249,6 +1702,13 @@ pub extern "C" fn js_ext_net_has_active_handles() -> i32 {
         return 1;
     }
     if !statics::sockets().lock().unwrap().is_empty() {
+        return 1;
+    }
+    // Issue #1123 followup — same rationale as `js_net_has_pending`:
+    // a listening server must keep the event loop alive until
+    // `.close()` drops the shutdown sender and the accept-loop task
+    // pushes its terminal `ServerClose` event.
+    if !statics::servers().lock().unwrap().is_empty() {
         return 1;
     }
     0

@@ -2706,7 +2706,25 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
 
     // ========== Net ==========
     module.declare_function("js_net_create_connection", DOUBLE, &[I32, I64, I64]);
-    module.declare_function("js_net_create_server", DOUBLE, &[I64, I64]);
+    // Issue #1123 followup — switched from `DOUBLE` to `I64` return.
+    // Previous shape returned `id as f64` which arrived in user code
+    // as a bare number; the receiver-unboxing path on `server.listen`
+    // masked the lower 48 bits of `1.0` and got 0, so the listen FFI
+    // ran with `handle=0` and silently bailed. Now we return the raw
+    // handle as i64 and let codegen NaN-box with POINTER_TAG in
+    // `expr.rs::Expr::NetCreateServer`, matching the
+    // `js_node_http_create_server` (`I64, &[I64]`) convention.
+    module.declare_function("js_net_create_server", I64, &[I64, I64]);
+    // Issue #1123 followup — `net.Server` instance method FFIs. The
+    // NA_PTR slot for callbacks is `I64` here (closures arrive as raw
+    // pointer-bits after the codegen's `unbox_to_i64` lowering); ports
+    // are `DOUBLE` because the codegen passes NA_F64 args as JS
+    // numbers without unboxing. address() returns a `*mut StringHeader`
+    // — `I64` at the FFI level.
+    module.declare_function("js_net_server_listen", VOID, &[I64, DOUBLE, I64]);
+    module.declare_function("js_net_server_close", VOID, &[I64, I64]);
+    module.declare_function("js_net_server_address", I64, &[I64]);
+    module.declare_function("js_net_server_on", VOID, &[I64, I64, I64]);
 
     // ========== Performance ==========
     module.declare_function("js_performance_now", DOUBLE, &[]);

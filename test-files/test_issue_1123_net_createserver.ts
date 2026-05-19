@@ -43,17 +43,21 @@
 import * as net from "node:net";
 import { createServer } from "node:net";
 
-// A — dotted form. Pre-fix: codegen bail. Post-fix: numeric handle.
+// A — dotted form. Pre-fix: codegen bail. Post-fix: Server handle.
 const serverA = net.createServer((sock: any) => { sock.end("ok\n"); });
 console.log("A typeof:", typeof serverA);
 console.log("A truthy:", !!serverA);
 
-// B — named-import form. Pre-fix: undefined. Post-fix: numeric handle.
+// B — named-import form. Pre-fix: undefined. Post-fix: Server handle.
 const serverB = createServer((sock: any) => { sock.end("ok\n"); });
 console.log("B typeof:", typeof serverB);
 console.log("B truthy:", !!serverB);
 
-// Both handles should be distinct positive integers.
-console.log("A === B:", serverA === serverB);
-console.log("A > 0:", serverA > 0);
-console.log("B > 0:", serverB > 0);
+// The #1123 followup (v0.5.1012) changed `js_net_create_server` to
+// return a NaN-boxed POINTER handle (matching `js_node_http_create_server`)
+// so receiver-unboxing in `server.listen(...)` recovers the raw handle
+// instead of masking it to 0. Side effect: `typeof === "object"` per
+// Node's `net.Server extends EventEmitter`, and `===` / `>` comparisons
+// on the raw value don't make sense anymore — drop those assertions.
+// The actual listen + accept-loop behaviour is pinned in
+// `test_issue_1123_listen.ts`.

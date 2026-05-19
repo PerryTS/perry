@@ -4057,6 +4057,24 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                             );
                         }
                     }
+                    // Issue #1123 followup — mirror the top-level
+                    // `Expr::NetCreateServer` registration in lower.rs
+                    // for the inside-function case. Without this,
+                    // `function main() { const s = createServer(...);
+                    // s.listen(port, cb); }` would have `s` unregistered
+                    // and `s.listen` would fall through dispatch.
+                    if let Stmt::Let {
+                        name,
+                        init: Some(Expr::NetCreateServer { .. }),
+                        ..
+                    } = s
+                    {
+                        ctx.register_native_instance(
+                            name.clone(),
+                            "net".to_string(),
+                            "Server".to_string(),
+                        );
+                    }
                 }
                 result.extend(stmts);
             }

@@ -168,6 +168,21 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_node_http2_server_close",                  OwnerKind::WellKnown("http")),
     ("js_node_http2_server_address_json",           OwnerKind::WellKnown("http")),
     ("js_node_http2_server_on",                     OwnerKind::WellKnown("http")),
+
+    // ── #1123 followup: node:net server-side ─────────────────────────
+    // `perry-ext-net` defines `js_net_server_*`. These are emitted by
+    // the codegen NATIVE_MODULE_TABLE rows added in lower_call.rs;
+    // unlike the existing socket-side `js_net_socket_*` FFIs (already
+    // pulled in via the `("net", "createConnection")` import flip),
+    // server-side use sometimes appears in code that doesn't import
+    // anything from "node:net" beyond `createServer` itself, so the
+    // import flip might not fire. Tagging here so the linker pulls
+    // libperry_ext_net.a in regardless.
+    ("js_net_create_server",                        OwnerKind::WellKnown("net")),
+    ("js_net_server_listen",                        OwnerKind::WellKnown("net")),
+    ("js_net_server_close",                         OwnerKind::WellKnown("net")),
+    ("js_net_server_address",                       OwnerKind::WellKnown("net")),
+    ("js_net_server_on",                            OwnerKind::WellKnown("net")),
 ];
 
 /// Process-wide collector of provider keys observed during codegen.

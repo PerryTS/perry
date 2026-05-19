@@ -6682,6 +6682,32 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
                                     );
                                 }
                             }
+                            // Issue #1123 followup — `net.createServer(...)` /
+                            // bare `createServer(...)` from `node:net` lower
+                            // to `Expr::NetCreateServer { … }` (NOT the
+                            // generic `NativeMethodCall` shape above), so
+                            // they need their own registration arm. Tagging
+                            // the binding as `("net", "Server")` makes
+                            // subsequent `server.listen/.close/.on/.address`
+                            // calls dispatch via the class_filter rows
+                            // added in lower_call.rs.
+                            if let Stmt::Let {
+                                name,
+                                init: Some(Expr::NetCreateServer { .. }),
+                                ..
+                            } = s
+                            {
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    "net".to_string(),
+                                    "Server".to_string(),
+                                );
+                                ctx.module_native_instances.push((
+                                    name.clone(),
+                                    "net".to_string(),
+                                    "Server".to_string(),
+                                ));
+                            }
                             // User-defined factory wrappers: when the init is a
                             // bare call to `userFunc(...)` and `userFunc` was
                             // registered as a native-instance factory (via

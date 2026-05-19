@@ -7827,6 +7827,59 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         args: &[NA_STR, NA_F64, NA_STR, NA_F64],
         ret: NR_PTR,
     },
+    // ========== net.Server (issue #1123 followup) ==========
+    // Server-side TCP via `net.createServer(...).listen(port, cb)`. The
+    // factory itself is wired through `Expr::NetCreateServer` in
+    // perry-codegen/src/expr.rs (not this table); the instance methods
+    // dispatch here once the let-binding gets registered as
+    // `("net", "Server")` in HIR lowering. Shape mirrors
+    // `js_node_http_server_*` from perry-ext-http-server (signatures
+    // are deliberately parallel so the codegen side reads the same).
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "listen",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_listen",
+        args: &[NA_F64, NA_PTR],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "close",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_close",
+        args: &[NA_PTR],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "address",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_address",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "on",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_on",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "addListener",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_on",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_VOID,
+    },
     // ========== node:stream — Readable.from(iterable) (#631) ==========
     // The other stream constructors (`new Readable(opts)` etc.) are wired
     // via `lower_builtin_new` so the codegen can carry the closure-fields

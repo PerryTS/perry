@@ -10530,12 +10530,22 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 "0".to_string()
             };
+            // Issue #1123 followup — call returns the raw handle as `i64`
+            // (runtime_decls.rs declares `(I64, I64) -> I64`); NaN-box
+            // with POINTER_TAG so `unbox_to_i64` on the receiver in
+            // `server.listen(...)` round-trips correctly. This matches
+            // the `js_node_http_create_server` → `nanbox_pointer_inline`
+            // pattern in lower_native_module_dispatch's NR_PTR arm; we
+            // can't go through that arm because the dotted/named-import
+            // forms both lower to `Expr::NetCreateServer` (not a
+            // NativeMethodCall against the table).
             let blk = ctx.block();
-            Ok(blk.call(
-                DOUBLE,
+            let raw = blk.call(
+                I64,
                 "js_net_create_server",
                 &[(I64, &options_i64), (I64, &listener_i64)],
-            ))
+            );
+            Ok(nanbox_pointer_inline(blk, &raw))
         }
         Expr::DateParse(s) => {
             let s_box = lower_expr(ctx, s)?;

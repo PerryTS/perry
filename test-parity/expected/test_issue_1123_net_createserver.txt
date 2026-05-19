@@ -1,7 +1,4 @@
-A typeof: number
+A typeof: object
 A truthy: true
-B typeof: number
+B typeof: object
 B truthy: true
-A === B: false
-A > 0: true
-B > 0: true
