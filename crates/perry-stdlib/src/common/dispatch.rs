@@ -547,7 +547,9 @@ unsafe fn dispatch_net_socket(handle: i64, method: &str, args: &[f64]) -> f64 {
 
     match method {
         "write" if !args.is_empty() => {
-            crate::net::js_net_socket_write(handle, unbox_to_i64(args[0]));
+            // Issue #1131 — pass the full NaN-box bits; the runtime
+            // probes Buffer-vs-string and reads the correct layout.
+            crate::net::js_net_socket_write(handle, args[0].to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001) // undefined
         }
         "end" => {
@@ -620,7 +622,10 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
 
     match method {
         "write" if !args.is_empty() => {
-            js_net_socket_write(handle, unbox_to_i64(args[0]));
+            // Issue #1131 — pass the full NaN-box bits, not the
+            // pre-stripped pointer. perry-ext-net's js_net_socket_write
+            // now probes Buffer-vs-string itself.
+            js_net_socket_write(handle, args[0].to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
         "end" => {

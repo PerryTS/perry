@@ -199,6 +199,62 @@ unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
     (bits & 0x0000_FFFF_FFFF_FFFF) as *mut u8
 }
 
+/// Issue #1131 — read a NaN-boxed JS value as the raw bytes for
+/// `socket.write(chunk)`. Mirror of perry-ext-net's
+/// `jsvalue_to_socket_bytes` (the live path for `node:net` imports is
+/// the perry-ext-net copy after the well-known flip; this bundled-net
+/// copy stays in sync so the HANDLE_METHOD_DISPATCH fallback through
+/// `dispatch_net_socket` is correct too). A JS string is a 20-byte
+/// `StringHeader`; a Buffer is an 8-byte `BufferHeader` — reading one
+/// through the other's layout (the pre-#1131 unconditional
+/// `*BufferHeader` cast) emits garbage. Probe `BUFFER_REGISTRY` first.
+unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
+    let v = JSValue::from_bits(value.to_bits());
+    if v.is_undefined() || v.is_null() {
+        return None;
+    }
+    if v.is_string() {
+        let ptr = unbox_pointer(value) as *const StringHeader;
+        if ptr.is_null() {
+            return None;
+        }
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        return Some(std::slice::from_raw_parts(data, len).to_vec());
+    }
+    if v.is_pointer() {
+        let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+        if perry_runtime::buffer::js_buffer_is_buffer(raw) != 0 {
+            let buf = raw as *const BufferHeader;
+            if !buf.is_null() {
+                let len = (*buf).length as usize;
+                let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
+                return Some(std::slice::from_raw_parts(data, len).to_vec());
+            }
+        }
+        let sptr = raw as *const StringHeader;
+        if !sptr.is_null() {
+            let len = (*sptr).byte_len as usize;
+            if len <= (1 << 30) {
+                let data = (sptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                return Some(std::slice::from_raw_parts(data, len).to_vec());
+            }
+        }
+        return None;
+    }
+    if v.is_number() {
+        return Some(v.to_number().to_string().into_bytes());
+    }
+    if v.is_bool() {
+        return Some(
+            if v.to_bool() { "true" } else { "false" }
+                .to_string()
+                .into_bytes(),
+        );
+    }
+    None
+}
+
 unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<String> {
     if !is_nanboxed_pointer(obj_f64) {
         return None;
@@ -756,17 +812,19 @@ async fn run_socket_task(
 
 // ─── FFI: socket.write(buf) ──────────────────────────────────────────────────
 
-/// `socket.write(buffer)` — enqueues bytes for the writer task.
-/// Signature matches `{ has_receiver: true, method: "write", args: &[NA_PTR], ret: NR_VOID }`.
+/// `socket.write(chunk)` — enqueues bytes for the writer task.
+/// Issue #1131 — `chunk_bits` is the full NaN-boxed JS value (codegen
+/// passes `NA_JSV`; the dispatch shim passes `args[0].to_bits()`), not
+/// a pre-stripped `BufferHeader` pointer. `jsvalue_to_socket_bytes`
+/// probes Buffer-vs-string-vs-number and reads the correct layout so
+/// `socket.write("ping")` sends the UTF-8 bytes instead of garbage.
+/// Signature matches `{ has_receiver: true, method: "write", args: &[NA_JSV], ret: NR_VOID }`.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_write(handle: i64, buf_ptr: i64) {
-    if buf_ptr == 0 || (buf_ptr as usize) < 0x1000 {
-        return;
-    }
-    let buf = buf_ptr as *const BufferHeader;
-    let len = (*buf).length as usize;
-    let data_ptr = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len).to_vec();
+pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
+    let bytes = match jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
+        Some(b) => b,
+        None => return,
+    };
 
     let sockets = NET_SOCKETS.lock().unwrap();
     if let Some(s) = sockets.get(&handle) {

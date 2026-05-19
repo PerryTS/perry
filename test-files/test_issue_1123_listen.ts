@@ -16,15 +16,34 @@
 //
 //   1. createServer with a connection handler that prints what it saw
 //   2. listen on port 18994 — verify the listen() callback fires
-//   3. open a client via net.connect → write a Buffer → both sides close
+//   3. open a client via net.connect → write a string → both sides close
 //   4. server.close — verify the server tears down cleanly
 //   5. exit 0 via self-terminating timer (no infinite loop)
 //
-// `client.write(Buffer.from(...))` is used instead of `client.write("ping")`
-// because `js_net_socket_write` reads its arg as a BufferHeader pointer;
-// the bare-string overload (StringHeader vs BufferHeader layout mismatch)
-// is a pre-existing limitation tracked separately. Same shape used by
-// existing perry-ext-net socket tests.
+// Issue #1131 regression: `client.write("ping")` (bare JS string, NOT
+// a Buffer) must put the string's UTF-8 bytes on the wire. Pre-#1131
+// `js_net_socket_write` read every chunk through the `BufferHeader`
+// layout, so a `StringHeader`-shaped string surfaced its `utf16_len`
+// as the length and pulled "data" from the middle of the header — the
+// server saw garbage bytes (pre-fix the wire carried a 326-byte
+// blob read out of the StringHeader's tail at the wrong offset)
+// instead of the 4 UTF-8 bytes of "ping". This test now pins BOTH
+// `len=4` and the decoded content `data=ping`, so it's the
+// regression guard for #1131 as well as the #1123
+// listen/accept-loop lifecycle.
+//
+// NOTE: the content assertion uses `chunk.toString()`, not
+// `chunk[0]`. There is a *separate* pre-existing bug where integer
+// indexing (`chunk[N]`) on a Buffer delivered through an
+// `any`-typed `.on('data', cb)` callback parameter returns 0
+// (`chunk.length` and `chunk.toString()` are correct; only
+// `chunk[N]` is wrong). It reproduces with zero net code — a plain
+// `function f(b: any) { return b[0] }` called with
+// `Buffer.from("ping")` — so it is NOT part of #1131 (the outbound
+// write path, which this asserts is byte-correct). Tracked
+// separately. Using `toString()` keeps this test a true #1131
+// regression guard: pre-#1131 it printed a long garbage string,
+// post-#1131 it prints exactly `ping`.
 
 import { createServer, connect } from "node:net";
 
@@ -32,12 +51,13 @@ const PORT = 18994;
 
 const server = createServer((sock: any) => {
     sock.on("data", (chunk: any) => {
-        // Length-only assertion. `chunk.toString()` round-trip through
-        // alloc_buffer + js_buffer_to_string works for ASCII payloads
-        // (validated separately by other socket tests), but the wire
-        // here goes via the new accept-loop ServerConnection event;
-        // pinning byte length is enough to prove the bytes flow.
-        console.log("SERVER GOT len=" + chunk.length);
+        // #1131 — assert the length AND the decoded UTF-8 content.
+        // `data=ping` proves the string's actual bytes reached the
+        // server. Pre-fix this printed a 326-char garbage blob
+        // (StringHeader read through the BufferHeader layout).
+        console.log(
+            "SERVER GOT len=" + chunk.length + " data=" + chunk.toString(),
+        );
     });
     sock.on("close", () => {
         // No-op — the close event closes the loop.
@@ -61,8 +81,8 @@ server.listen(PORT, () => {
     // sidesteps that and matches typical Node patterns anyway.
     const client = connect(PORT, "127.0.0.1");
     client.on("connect", () => {
-        // Use Buffer.from(...) — see header comment.
-        client.write(Buffer.from("ping"));
+        // #1131 — bare JS string, must arrive as UTF-8 bytes.
+        client.write("ping");
         // Close from the client side after a tick; the server's
         // 'close' fires when the EOF reaches its accepted socket.
         setTimeout(() => {

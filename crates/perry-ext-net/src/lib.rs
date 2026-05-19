@@ -341,6 +341,91 @@ unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {
 extern "C" {
     fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
     fn js_object_get_field_by_name_f64(obj: *const ObjectHeader, key: *const StringHeader) -> f64;
+    /// Issue #1131 — returns 1 if `ptr` is a registered Buffer /
+    /// Uint8Array in the runtime's `BUFFER_REGISTRY`. This is the only
+    /// safe way to tell a `BufferHeader` apart from a `StringHeader`
+    /// after both have been NaN-boxed and stripped to a raw pointer
+    /// (a `Buffer` carries `POINTER_TAG`, a JS string `STRING_TAG`, but
+    /// the dispatch shims pass us the full NaN-box bits and we still
+    /// have to distinguish a pointer-tagged Buffer from a
+    /// pointer-tagged non-buffer object). Defined in
+    /// `crates/perry-runtime/src/buffer.rs::js_buffer_is_buffer`.
+    fn js_buffer_is_buffer(ptr: i64) -> i32;
+}
+
+/// Issue #1131 — read a NaN-boxed JS value as the raw bytes to put on
+/// the wire for `socket.write(chunk)`. Outbound mirror of
+/// `perry-ext-http-server`'s `jsvalue_to_body_bytes` (#1124): a JS
+/// string and a `Buffer` have *different* memory layouts
+/// (`StringHeader` is 20 bytes, `{ utf16_len, byte_len, capacity,
+/// refcount, flags }`; `BufferHeader` is 8 bytes, `{ length, capacity
+/// }`, data immediately after). The pre-#1131 code unconditionally
+/// reinterpreted the chunk pointer as a `*const BufferHeader`, so
+/// `socket.write("ping")` read the string's `utf16_len` as the buffer
+/// length and pulled "data" from `ptr + 8` — the middle of the
+/// `StringHeader` struct — emitting garbage instead of the UTF-8
+/// bytes.
+///
+/// Probe the runtime's `BUFFER_REGISTRY` first (`js_buffer_is_buffer`)
+/// to pick the `BufferHeader` layout for real Buffers / Uint8Arrays;
+/// otherwise read through the `StringHeader` layout for JS strings;
+/// otherwise stringify numbers / bools the same way `res.write(n)`
+/// does (Node throws `ERR_INVALID_ARG_TYPE` here, but Perry's existing
+/// body-write paths are lenient and stringify — keep parity with
+/// that). `null` / `undefined` produce `None` (no bytes written).
+unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
+    let v = JsValue::from_bits(value.to_bits());
+    if v.is_undefined() || v.is_null() {
+        return None;
+    }
+    // JS string — STRING_TAG, `StringHeader` layout.
+    if v.is_string() {
+        let ptr = unbox_pointer(value) as *const StringHeader;
+        if ptr.is_null() {
+            return None;
+        }
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        return Some(std::slice::from_raw_parts(data, len).to_vec());
+    }
+    // Heap pointer — could be a Buffer / Uint8Array (BufferHeader
+    // layout) or some other object. Probe the registry first.
+    if v.is_pointer() {
+        let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+        if js_buffer_is_buffer(raw) != 0 {
+            let buf = raw as *const BufferHeader;
+            if !buf.is_null() {
+                let len = (*buf).length as usize;
+                let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
+                return Some(std::slice::from_raw_parts(data, len).to_vec());
+            }
+        }
+        // Non-buffer pointer — fall back to the string-shaped header
+        // for runtime strings the codegen happened to NaN-box with
+        // POINTER_TAG instead of STRING_TAG.
+        let sptr = raw as *const StringHeader;
+        if !sptr.is_null() {
+            let len = (*sptr).byte_len as usize;
+            if len <= (1 << 30) {
+                let data = (sptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                return Some(std::slice::from_raw_parts(data, len).to_vec());
+            }
+        }
+        return None;
+    }
+    // Number / bool — stringify (parity with the lenient
+    // `res.write(value)` body path; Node would throw here).
+    if v.is_number() {
+        return Some(v.to_number().to_string().into_bytes());
+    }
+    if v.is_bool() {
+        return Some(
+            if v.to_bool() { "true" } else { "false" }
+                .to_string()
+                .into_bytes(),
+        );
+    }
+    None
 }
 
 /// True iff `val_f64` carries `POINTER_TAG` (0x7FFD) — a real pointer
@@ -1329,20 +1414,28 @@ async fn run_socket_task(
 
 // ─── FFI: socket.write(buf) ──────────────────────────────────────────────────
 
-/// `socket.write(buffer)` — enqueues bytes for the writer task.
+/// `socket.write(chunk)` — enqueues bytes for the writer task.
+///
+/// Issue #1131 — `chunk_bits` is the full NaN-boxed JS value (codegen
+/// passes `NA_JSV`, the dispatch shims pass `args[0].to_bits()`), NOT a
+/// pre-stripped `BufferHeader` pointer. `jsvalue_to_socket_bytes`
+/// probes the actual type (Buffer / Uint8Array vs JS string vs
+/// number / bool) and reads through the correct memory layout, so
+/// `socket.write("ping")` now sends the string's UTF-8 bytes instead
+/// of garbage read out of the wrong header shape. Outbound mirror of
+/// the #1124 inbound `res.write(Buffer)` fix.
 ///
 /// # Safety
 ///
-/// `buf_ptr` must be null or a Perry-runtime `BufferHeader` pointer.
+/// `chunk_bits` must be a valid NaN-boxed JS value (string / Buffer /
+/// number / bool / null / undefined). String / Buffer pointers must
+/// reference live runtime allocations.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_write(handle: i64, buf_ptr: i64) {
-    if buf_ptr == 0 || (buf_ptr as usize) < 0x1000 {
-        return;
-    }
-    let buf = buf_ptr as *const BufferHeader;
-    let len = (*buf).length as usize;
-    let data_ptr = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len).to_vec();
+pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
+    let bytes = match jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
+        Some(b) => b,
+        None => return,
+    };
 
     let sockets = statics::sockets().lock().unwrap();
     if let Some(s) = sockets.get(&handle) {

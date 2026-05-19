@@ -7770,7 +7770,13 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         method: "write",
         class_filter: Some("Socket"),
         runtime: "js_net_socket_write",
-        args: &[NA_PTR],
+        // Issue #1131 — pass the full NaN-boxed JS value (NA_JSV) so
+        // the runtime can probe Buffer-vs-string-vs-number and read
+        // through the correct header layout. NA_PTR pre-stripped the
+        // tag, so `sock.write("ping")` handed the runtime a bare
+        // StringHeader pointer that it reinterpreted as a
+        // BufferHeader → garbage on the wire.
+        args: &[NA_JSV],
         ret: NR_VOID,
     },
     NativeModSig {
