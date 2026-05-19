@@ -762,8 +762,7 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                         let arg = f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK));
                         for cb in data_listeners {
                             if cb != 0 {
-                                let closure =
-                                    JsClosure::from_raw(cb as *const RawClosureHeader);
+                                let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
                                 let _ = closure.call1(arg);
                             }
                         }

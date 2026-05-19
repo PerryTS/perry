@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 932 entries across 74 modules.
+Total: 936 entries across 74 modules.
 
 ## Modules
 
@@ -775,6 +775,9 @@ Total: 932 entries across 74 modules.
 ### Methods
 
 - `Socket` — module
+- `addListener` — instance *(class: `Server`)*
+- `address` — instance *(class: `Server`)*
+- `close` — instance *(class: `Server`)*
 - `connect` — module
 - `connect` — instance *(class: `Socket`)*
 - `createConnection` — module
@@ -785,6 +788,7 @@ Total: 932 entries across 74 modules.
 - `isIP` — module
 - `isIPv4` — module
 - `isIPv6` — module
+- `listen` — instance *(class: `Server`)*
 - `on` — instance *(class: `Socket`)*
 - `setDefaultAutoSelectFamily` — module
 - `setDefaultAutoSelectFamilyAttemptTimeout` — module

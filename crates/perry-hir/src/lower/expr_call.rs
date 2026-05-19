@@ -211,11 +211,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
     // perry-ext-http's `js_http_on` for client-side IncomingMessage
     // handles too via the cross-module on-listener path).
     if let Some(res_name) = pre_scan_node_http_client_callback_params(ctx, call) {
-        ctx.register_native_instance(
-            res_name,
-            "http".to_string(),
-            "IncomingMessage".to_string(),
-        );
+        ctx.register_native_instance(res_name, "http".to_string(), "IncomingMessage".to_string());
     }
 
     // Issue #577 Phase 4 — `httpServer.on('upgrade', (req, wsId, head) => …)`
@@ -6551,7 +6547,8 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                 // either `(listener)` or `(options, listener)`; mirror the
                 // dotted-form positional handling: 1 arg → listener-only,
                 // 2+ args → first is options, second is listener.
-                if let Some((module_name, Some(method_name))) = ctx.lookup_native_module(func_name) {
+                if let Some((module_name, Some(method_name))) = ctx.lookup_native_module(func_name)
+                {
                     if module_name == "net" && method_name == "createServer" {
                         let (options, connection_listener) = if args.len() >= 2 {
                             let mut args_iter = args.into_iter();

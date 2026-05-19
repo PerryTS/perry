@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 932 entries across 74 modules
+// Coverage: 936 entries across 74 modules
 
 declare module "@perryts/google-auth" {
   /** stdlib */

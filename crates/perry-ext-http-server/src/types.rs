@@ -164,8 +164,7 @@ pub fn jsvalue_to_body_bytes(value: f64) -> Option<Vec<u8>> {
             if !buf.is_null() {
                 unsafe {
                     let len = (*buf).length as usize;
-                    let data =
-                        (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
+                    let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
                     let slice = std::slice::from_raw_parts(data, len);
                     return Some(slice.to_vec());
                 }
