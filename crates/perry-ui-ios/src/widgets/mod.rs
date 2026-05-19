@@ -355,7 +355,6 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     }
 }
 
-
 /// Register a dynamic UIView subclass whose `layoutSubviews` keeps all sublayers
 /// sized to the view's layer bounds. Created once via ObjC runtime.
 fn gradient_bg_class() -> &'static AnyClass {
