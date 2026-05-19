@@ -387,6 +387,76 @@ pub(crate) fn pre_scan_node_http_create_server_params(
     Some((req_name, res_name))
 }
 
+/// Pre-scan for `http.get(url, (res) => …)` / `http.request(opts, (res) =>
+/// …)` / `https.get` / `https.request`. Issue #1124 followup — the
+/// `data` / `end` listeners on the IncomingMessage that arrives at the
+/// response callback need to dispatch via NATIVE_MODULE_TABLE entries
+/// (class_filter = Some("IncomingMessage")). Pre-fix the `(res)` param
+/// was untagged so `res.on('data', cb)` fell through to
+/// `js_native_call_method` → small-handle dispatch → no IncomingMessage
+/// `on` arm → listener never registered → `'end'` never fired and the
+/// (post-#1124-followup) Buffer body never flowed to the user.
+///
+/// Mirrors `pre_scan_node_http_create_server_params` shape but for the
+/// CLIENT factory + single-param `(res)` arrow shape.
+///
+/// Returns `Some(res_local_name)` when the pattern matches.
+pub(crate) fn pre_scan_node_http_client_callback_params(
+    ctx: &crate::lower::LoweringContext,
+    call: &ast::CallExpr,
+) -> Option<String> {
+    use ast::Callee;
+    let callee_expr = match &call.callee {
+        Callee::Expr(e) => e,
+        _ => return None,
+    };
+
+    let (module_name, method_name) = match callee_expr.as_ref() {
+        ast::Expr::Member(member) => {
+            let obj_ident = match member.obj.as_ref() {
+                ast::Expr::Ident(i) => i,
+                _ => return None,
+            };
+            let obj_name = obj_ident.sym.to_string();
+            let (module, _) = ctx.lookup_native_module(&obj_name)?;
+            let method = match &member.prop {
+                ast::MemberProp::Ident(i) => i.sym.to_string(),
+                _ => return None,
+            };
+            (module.to_string(), method)
+        }
+        ast::Expr::Ident(ident) => {
+            let func_name = ident.sym.to_string();
+            let (module, method_opt) = ctx.lookup_native_module(&func_name)?;
+            let method = method_opt?.to_string();
+            (module.to_string(), method)
+        }
+        _ => return None,
+    };
+
+    // Only http/https request/get factories. http2's `connect()` returns a
+    // ClientHttp2Session — different surface, separate pre-scan.
+    let _matched = match (module_name.as_str(), method_name.as_str()) {
+        ("http", "get" | "request") => true,
+        ("https", "get" | "request") => true,
+        _ => return None,
+    };
+
+    // The response callback is the last arrow/function arg. Walk
+    // backwards so options-then-cb shapes (`http.request(opts, cb)`)
+    // and url-then-cb shapes (`http.get(url, cb)`) both resolve.
+    let handler_arg = call.args.last()?;
+    if handler_arg.spread.is_some() {
+        return None;
+    }
+    let arrow = match handler_arg.expr.as_ref() {
+        ast::Expr::Arrow(a) => a,
+        _ => return None,
+    };
+    // First (and typically only) arrow param is the IncomingMessage.
+    arrow.params.first().and_then(pat_ident_name)
+}
+
 /// Pre-scan for `httpServer.on('upgrade', (req, wsId, head) => …)`
 /// (issue #577 Phase 4). When the receiver is a registered HttpServer
 /// native instance and the event name is `'upgrade'`, register the

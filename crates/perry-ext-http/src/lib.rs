@@ -728,18 +728,44 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 }
 
                 // `'data'` listeners — body is delivered as a single
-                // string chunk. True streaming requires a cooperative
+                // Buffer chunk. True streaming requires a cooperative
                 // spawn_async perry-ffi surface (v0.6.0 followup).
+                //
+                // Issue #1124 followup: pre-fix this allocated a JS
+                // string via `alloc_string(str::from_utf8(&body).unwrap_or(""))`,
+                // which silently collapsed any non-UTF-8 byte sequence
+                // (PNG file-magic, gzip frames, binary protocols, …) to
+                // the empty string before user code ever saw a byte.
+                // The mirror of the #1124 server-side fix (where the
+                // request body went the OTHER direction through a
+                // wrongly-shaped StringHeader): allocate a JS Buffer
+                // via `alloc_buffer(&bytes)` so the bytes survive the
+                // FFI boundary intact. The Buffer registers itself
+                // through perry-runtime's `is_registered_buffer` path
+                // so the `chunk.toString(enc)` / `chunk.length` /
+                // `Buffer.concat(...)` surface lights up on the
+                // returned value.
+                //
+                // TODO: encoding-aware data events — Node lets users
+                // call `res.setEncoding('utf8')` to get string chunks
+                // instead of Buffers. Perry-ext-http doesn't yet
+                // track a per-response encoding flag; default to
+                // Buffer (matches Node behavior when no encoding is
+                // set) and revisit when a caller demands the string
+                // form.
                 let data_listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
                     .and_then(|r| r.listeners.get("data").cloned())
                     .unwrap_or_default();
                 if !data_listeners.is_empty() && !body_clone.is_empty() {
-                    let s = alloc_string(std::str::from_utf8(&body_clone).unwrap_or(""));
-                    let arg = f64::from_bits(STRING_TAG | (s.as_raw() as u64 & PTR_MASK));
-                    for cb in data_listeners {
-                        if cb != 0 {
-                            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-                            let _ = closure.call1(arg);
+                    let buf = perry_ffi::alloc_buffer(&body_clone);
+                    if !buf.is_null() {
+                        let arg = f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK));
+                        for cb in data_listeners {
+                            if cb != 0 {
+                                let closure =
+                                    JsClosure::from_raw(cb as *const RawClosureHeader);
+                                let _ = closure.call1(arg);
+                            }
                         }
                     }
                 }

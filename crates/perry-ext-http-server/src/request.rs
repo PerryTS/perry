@@ -286,7 +286,35 @@ pub unsafe extern "C" fn js_node_http_im_on(
     {
         let im = match get_handle_mut::<IncomingMessage>(handle) {
             Some(im) => im,
-            None => return f64::from_bits(TAG_UNDEFINED),
+            None => {
+                // Issue #1124 followup — the same `("http",
+                // "IncomingMessage", "on")` dispatch row services
+                // BOTH the server-side IncomingMessage (registered
+                // here in perry-ext-http-server) and the client-side
+                // IncomingMessage that `http.get(url, (res) => …)`'s
+                // callback receives from perry-ext-http. The
+                // codegen can't distinguish them at compile time
+                // (the HIR pre-scan tags the param as
+                // `("http", "IncomingMessage")` regardless of
+                // factory), so we cross-route here on a miss:
+                // forward to perry-ext-http's `js_http_on` which
+                // checks its own registry and registers the
+                // listener under the client-side `IncomingMessageHandle`.
+                // Without this, client `res.on('end', cb)` was a
+                // silent no-op and the `'end'` event never fired,
+                // even with the new Buffer-shaped data dispatch.
+                extern "C" {
+                    fn js_http_on(
+                        handle: i64,
+                        event_ptr: *const StringHeader,
+                        callback: i64,
+                    ) -> i64;
+                }
+                let _ = js_http_on(handle, event_name_ptr, callback);
+                // Node's `.on()` returns the receiver — re-NaN-box
+                // the handle so chained calls still work.
+                return f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
+            }
         };
         im.listeners
             .entry(event.clone())
