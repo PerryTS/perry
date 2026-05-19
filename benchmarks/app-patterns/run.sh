@@ -35,6 +35,21 @@ if ! command -v hyperfine >/dev/null 2>&1; then
   exit 1
 fi
 
+TIMEOUT_BIN=""
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="$(command -v timeout)"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="$(command -v gtimeout)"
+fi
+
+run_smoke() {
+  if [ -n "$TIMEOUT_BIN" ]; then
+    "$TIMEOUT_BIN" 30 env NO_COLOR=1 FORCE_COLOR=0 "$@" 2>/dev/null
+  else
+    env NO_COLOR=1 FORCE_COLOR=0 "$@" 2>/dev/null
+  fi
+}
+
 # Resolve which kernels to run.
 if [ $# -gt 0 ]; then
   KERNELS=()
@@ -83,9 +98,9 @@ for KERNEL in "${KERNELS[@]}"; do
   # Bound each smoke-run by a hard timeout so a Perry hang doesn't stall
   # the whole sweep — emit a row marking the kernel as RUNTIME FAIL and
   # skip the hyperfine pass for it.
-  PERRY_SUM=$(timeout 30 "$PERRY_OUT" 2>/dev/null | grep '^checksum:' || echo "MISSING")
-  BUN_SUM=$(timeout 30 bun run "$KERNEL" 2>/dev/null | grep '^checksum:' || echo "MISSING")
-  NODE_SUM=$(timeout 30 node --experimental-strip-types "$KERNEL" 2>/dev/null | grep '^checksum:' || echo "MISSING")
+  PERRY_SUM=$(run_smoke "$PERRY_OUT" | grep '^checksum:' || echo "MISSING")
+  BUN_SUM=$(run_smoke bun run "$KERNEL" | grep '^checksum:' || echo "MISSING")
+  NODE_SUM=$(run_smoke node --experimental-strip-types "$KERNEL" | grep '^checksum:' || echo "MISSING")
   if [ "$PERRY_SUM" = "MISSING" ]; then
     echo "  ✗ Perry produced no checksum (hang or empty output):"
     echo "    Bun:   $BUN_SUM"

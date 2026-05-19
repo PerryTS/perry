@@ -969,6 +969,14 @@ pub(crate) fn test_seed_overflow_fields_root(owner: usize, value_bits: u64) {
 }
 
 #[cfg(test)]
+pub(crate) fn test_clear_overflow_fields_root() {
+    OVERFLOW_FIELDS.with(|m| m.borrow_mut().clear());
+    OVERFLOW_LAST.with(|c| unsafe {
+        *c.get() = (0, std::ptr::null_mut());
+    });
+}
+
+#[cfg(test)]
 pub(crate) fn test_overflow_fields_root() -> (usize, u64) {
     OVERFLOW_FIELDS.with(|m| {
         let m = m.borrow();

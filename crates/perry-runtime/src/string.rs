@@ -1184,7 +1184,7 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
         }
         // Allocate and cache
         let s = format!("{}", value as u64);
-        let ptr = js_string_from_bytes(s.as_bytes().as_ptr(), s.len() as u32);
+        let ptr = js_string_from_bytes_longlived(s.as_bytes().as_ptr(), s.len() as u32);
         unsafe {
             // Mark as shared so it's never mutated in-place
             (*ptr).refcount = 0;

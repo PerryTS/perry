@@ -4742,6 +4742,9 @@ fn compile_module_entry(
         {
             let blk = main.block_mut(0).unwrap();
             blk.call_void("js_gc_init", &[]);
+            if write_barriers_enabled() {
+                blk.call_void("js_gc_write_barriers_emitted", &[(I32, "1")]);
+            }
             // Wire up stdlib HANDLE_METHOD_DISPATCH eagerly when stdlib is
             // linked. Previously this was only called from
             // `ensure_pump_registered`, which fires lazily on the first
@@ -5184,6 +5187,9 @@ fn compile_module_entry(
             let blk = init_fn.block_mut(0).unwrap();
             if let Some(ref cname) = debug_init_const {
                 blk.call_void("puts", &[(PTR, &format!("@{}", cname))]);
+            }
+            if write_barriers_enabled() {
+                blk.call_void("js_gc_write_barriers_emitted", &[(I32, "1")]);
             }
             // Each non-entry module runs its own string pool init at
             // the start of its module init function. The entry main

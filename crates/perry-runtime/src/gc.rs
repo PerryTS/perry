@@ -12,7 +12,10 @@ use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::ffi::c_void;
-use std::sync::OnceLock;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    OnceLock,
+};
 use std::time::{Duration, Instant};
 
 /// GC header prepended to every heap allocation.
@@ -542,6 +545,16 @@ struct EvacuationTraceStats {
 }
 
 #[derive(Clone, Copy, Default)]
+struct CopyingNurseryTraceStats {
+    copied_objects: usize,
+    copied_bytes: usize,
+    promoted_objects: usize,
+    promoted_bytes: usize,
+    reset_blocks: usize,
+    fallback_reason: &'static str,
+}
+
+#[derive(Clone, Copy, Default)]
 struct LegacyRootTraceStats {
     pinned_roots: usize,
     pinned_bytes: usize,
@@ -678,6 +691,7 @@ struct GcCycleTrace {
     legacy_copy_only_scanner_pinned: LegacyRootTraceStats,
     evacuation_policy: EvacuationPolicyDecision,
     evacuation: EvacuationTraceStats,
+    copying_nursery: CopyingNurseryTraceStats,
     block_persist: BlockPersistTraceStats,
     sweep: SweepTraceStats,
     write_barrier: BarrierTraceCounters,
@@ -694,6 +708,7 @@ impl GcCycleTrace {
             "trace_worklist",
             "block_persistence",
             "evacuation",
+            "copying_nursery",
             "reference_rewrite",
             "sweep",
             "remembered_set_clear",
@@ -718,6 +733,10 @@ impl GcCycleTrace {
             legacy_copy_only_scanner_pinned: LegacyRootTraceStats::default(),
             evacuation_policy: EvacuationPolicyDecision::default(),
             evacuation: EvacuationTraceStats::default(),
+            copying_nursery: CopyingNurseryTraceStats {
+                fallback_reason: "not_attempted",
+                ..CopyingNurseryTraceStats::default()
+            },
             block_persist: BlockPersistTraceStats::default(),
             sweep: SweepTraceStats::default(),
             write_barrier: take_write_barrier_trace_counters(),
@@ -771,6 +790,14 @@ impl GcCycleTrace {
             "evacuation": {
                 "objects": self.evacuation.objects,
                 "bytes": self.evacuation.bytes,
+            },
+            "copying_nursery": {
+                "copied_objects": self.copying_nursery.copied_objects,
+                "copied_bytes": self.copying_nursery.copied_bytes,
+                "promoted_objects": self.copying_nursery.promoted_objects,
+                "promoted_bytes": self.copying_nursery.promoted_bytes,
+                "reset_blocks": self.copying_nursery.reset_blocks,
+                "fallback_reason": self.copying_nursery.fallback_reason,
             },
             "evacuation_policy": {
                 "allowed": self.evacuation_policy.allowed,
@@ -1058,6 +1085,8 @@ fn arena_region_json(region: crate::arena::ArenaRegionTelemetry) -> serde_json::
 fn arena_snapshot_json(snapshot: crate::arena::ArenaTelemetrySnapshot) -> serde_json::Value {
     serde_json::json!({
         "arena": arena_region_json(snapshot.arena),
+        "survivor0": arena_region_json(snapshot.survivor0),
+        "survivor1": arena_region_json(snapshot.survivor1),
         "longlived": arena_region_json(snapshot.longlived),
         "old": arena_region_json(snapshot.old),
         "total_in_use_bytes": snapshot.total_in_use_bytes,
@@ -2004,6 +2033,28 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     let force_evacuation = gc_force_evacuate_enabled();
     // MARK_SEEDS persists across GC cycles. Clear before any try_mark
     // call so trace sees only this cycle's freshly-marked headers.
+    clear_mark_seeds();
+    if let Some(freed_bytes) = gc_collect_minor_copying_fast_path(&mut trace, start) {
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        GC_STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            stats.collection_count += 1;
+            stats.total_freed_bytes += freed_bytes;
+            stats.last_pause_us = elapsed_us;
+        });
+        GC_FLAGS.with(|f| {
+            let cur = f.get();
+            if prev_in_alloc != 0 {
+                f.set(cur | GC_FLAG_IN_ALLOC);
+            } else {
+                f.set(cur & !GC_FLAG_IN_ALLOC);
+            }
+        });
+        if let Some(trace) = trace.as_mut() {
+            trace.pause_us = elapsed_us;
+        }
+        return GcCollectOutcome { freed_bytes, trace };
+    }
     clear_mark_seeds();
     let phase_start = trace_phase_start(&trace);
     let valid_ptrs = build_valid_pointer_set();
@@ -3188,6 +3239,15 @@ enum RuntimeRootVisitMode<'a> {
     Mark {
         valid_ptrs: &'a ValidPointerSet,
     },
+    CopyingCheck {
+        checker: &'a mut CopyingNurseryPreflight,
+    },
+    CopyingMark {
+        collector: &'a mut CopyingNurseryCollector,
+    },
+    CopyingRewrite {
+        collector: &'a CopyingNurseryCollector,
+    },
     Rewrite {
         valid_ptrs: &'a ValidPointerSet,
     },
@@ -3224,6 +3284,24 @@ impl<'a> RuntimeRootVisitor<'a> {
         }
     }
 
+    fn for_copying_check(checker: &'a mut CopyingNurseryPreflight) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::CopyingCheck { checker },
+        }
+    }
+
+    fn for_copying_mark(collector: &'a mut CopyingNurseryCollector) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::CopyingMark { collector },
+        }
+    }
+
+    fn for_copying_rewrite(collector: &'a CopyingNurseryCollector) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::CopyingRewrite { collector },
+        }
+    }
+
     fn for_verify(valid_ptrs: &'a ValidPointerSet, surface: &'static str) -> Self {
         Self {
             mode: RuntimeRootVisitMode::Verify {
@@ -3245,6 +3323,14 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::Mark { valid_ptrs } => {
                 try_mark_value(bits, valid_ptrs);
                 None
+            }
+            RuntimeRootVisitMode::CopyingCheck { checker } => {
+                checker.check_bits(bits);
+                None
+            }
+            RuntimeRootVisitMode::CopyingMark { collector } => collector.visit_value_bits(bits),
+            RuntimeRootVisitMode::CopyingRewrite { collector } => {
+                collector.rewrite_value_bits(bits)
             }
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => {
                 try_rewrite_nanboxed_value(bits, valid_ptrs)
@@ -3275,6 +3361,12 @@ impl<'a> RuntimeRootVisitor<'a> {
                 try_mark_raw_root_addr(addr, valid_ptrs);
                 None
             }
+            RuntimeRootVisitMode::CopyingCheck { checker } => {
+                checker.check_addr(addr);
+                None
+            }
+            RuntimeRootVisitMode::CopyingMark { collector } => collector.visit_raw_addr(addr),
+            RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_raw_addr(addr, valid_ptrs),
             RuntimeRootVisitMode::Verify {
                 valid_ptrs,
@@ -3304,6 +3396,9 @@ impl<'a> RuntimeRootVisitor<'a> {
         }
         match &mut self.mode {
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_raw_addr(addr, valid_ptrs),
+            RuntimeRootVisitMode::CopyingCheck { .. } => None,
+            RuntimeRootVisitMode::CopyingMark { .. } => None,
+            RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
             RuntimeRootVisitMode::Verify {
                 valid_ptrs,
                 surface,
@@ -3503,8 +3598,9 @@ impl<'a> RuntimeRootVisitor<'a> {
     }
 
     /// Visit a metadata-only raw heap pointer key. The value is rewritten
-    /// if forwarded, but it is not marked as a root and copy mode emits
-    /// nothing.
+    /// if forwarded, but it is not marked as a root. Mark/copy modes emit
+    /// nothing; post-copy rewrite only follows forwarding pointers that
+    /// already exist.
     pub fn visit_metadata_usize_slot(&mut self, slot: &mut usize) -> bool {
         if let Some(new_addr) = self.visit_metadata_raw_addr(*slot) {
             *slot = new_addr;
@@ -4222,6 +4318,856 @@ unsafe fn scan_dirty_lazy_array_slots(
         visit_slot,
     );
     scan_dirty_raw_ptr_slot(&(*lazy).materialized_bitmap, dirty_pages, stats, visit_slot);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CopyingPointerKind {
+    Eden,
+    FromSurvivor,
+    ToSurvivor,
+    Longlived,
+    Old,
+    Malloc,
+}
+
+#[derive(Clone, Copy)]
+struct CopyingPointer {
+    header: *mut GcHeader,
+    kind: CopyingPointerKind,
+}
+
+struct CopyingPointerSet {
+    malloc_users: crate::fast_hash::PtrHashSet<usize>,
+}
+
+impl CopyingPointerSet {
+    fn new() -> Self {
+        let mut malloc_users = crate::fast_hash::new_ptr_hash_set();
+        MALLOC_STATE.with(|s| {
+            let s = s.borrow();
+            for &header in s.objects.iter() {
+                let user = unsafe { (header as *mut u8).add(GC_HEADER_SIZE) } as usize;
+                malloc_users.insert(user);
+            }
+        });
+        Self { malloc_users }
+    }
+
+    #[inline]
+    fn classify(&self, addr: usize) -> Option<CopyingPointer> {
+        if addr < GC_HEADER_SIZE {
+            return None;
+        }
+        if self.malloc_users.contains(&addr) {
+            let header = unsafe { header_from_user_ptr(addr as *const u8) };
+            return unsafe { plausible_gc_header(header, false) }.then_some(CopyingPointer {
+                header,
+                kind: CopyingPointerKind::Malloc,
+            });
+        }
+
+        let space = crate::arena::classify_heap_space(addr);
+        if matches!(space, crate::arena::HeapSpace::Unknown) {
+            return None;
+        }
+        let header_addr = addr - GC_HEADER_SIZE;
+        if !matches!(
+            crate::arena::classify_heap_space(header_addr),
+            crate::arena::HeapSpace::NurseryEden
+                | crate::arena::HeapSpace::Survivor0
+                | crate::arena::HeapSpace::Survivor1
+                | crate::arena::HeapSpace::Longlived
+                | crate::arena::HeapSpace::Old
+        ) {
+            return None;
+        }
+        let header = header_addr as *mut GcHeader;
+        if unsafe { !plausible_gc_header(header, true) } {
+            return None;
+        }
+        let active_survivor = crate::arena::active_survivor_space();
+        let inactive_survivor = crate::arena::inactive_survivor_space();
+        let kind = match space {
+            crate::arena::HeapSpace::NurseryEden => CopyingPointerKind::Eden,
+            s if s == active_survivor => CopyingPointerKind::FromSurvivor,
+            s if s == inactive_survivor => CopyingPointerKind::ToSurvivor,
+            crate::arena::HeapSpace::Longlived => CopyingPointerKind::Longlived,
+            crate::arena::HeapSpace::Old => CopyingPointerKind::Old,
+            _ => return None,
+        };
+        Some(CopyingPointer { header, kind })
+    }
+
+    #[inline]
+    fn decode_bits(&self, bits: u64) -> Option<(usize, bool, u64)> {
+        let tag = bits & TAG_MASK;
+        if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
+            let addr = (bits & POINTER_MASK) as usize;
+            return (addr != 0).then_some((addr, true, tag));
+        }
+        if tag >= 0x7FF8_0000_0000_0000 {
+            return None;
+        }
+        let addr = bits as usize;
+        self.classify(addr).map(|_| (addr, false, 0))
+    }
+}
+
+unsafe fn plausible_gc_header(header: *mut GcHeader, arena: bool) -> bool {
+    if header.is_null() {
+        return false;
+    }
+    let obj_type = (*header).obj_type;
+    if !(1..=GC_TYPE_LAZY_ARRAY).contains(&obj_type) {
+        return false;
+    }
+    let size = (*header).size as usize;
+    if size < GC_HEADER_SIZE || size > (1usize << 34) {
+        return false;
+    }
+    let is_arena = (*header).gc_flags & GC_FLAG_ARENA != 0;
+    is_arena == arena
+}
+
+struct CopyingNurseryPreflight {
+    ptrs: *const CopyingPointerSet,
+    fallback_reason: Option<&'static str>,
+    pinned_reason: &'static str,
+    worklist: Vec<*mut GcHeader>,
+    seen: crate::fast_hash::PtrHashSet<usize>,
+}
+
+impl CopyingNurseryPreflight {
+    fn new(ptrs: &CopyingPointerSet, pinned_reason: &'static str) -> Self {
+        Self {
+            ptrs,
+            fallback_reason: None,
+            pinned_reason,
+            worklist: Vec::new(),
+            seen: crate::fast_hash::new_ptr_hash_set(),
+        }
+    }
+
+    fn ptrs(&self) -> &CopyingPointerSet {
+        unsafe { &*self.ptrs }
+    }
+
+    fn check_bits(&mut self, bits: u64) {
+        self.check_bits_with_reason(bits, self.pinned_reason);
+    }
+
+    fn check_bits_with_reason(&mut self, bits: u64, pinned_reason: &'static str) {
+        if let Some((addr, _, _)) = self.ptrs().decode_bits(bits) {
+            self.check_addr_with_reason(addr, pinned_reason);
+        }
+    }
+
+    fn check_addr(&mut self, addr: usize) {
+        self.check_addr_with_reason(addr, self.pinned_reason);
+    }
+
+    fn check_addr_with_reason(&mut self, addr: usize, pinned_reason: &'static str) {
+        if self.fallback_reason.is_some() {
+            return;
+        }
+        let Some(ptr) = self.ptrs().classify(addr) else {
+            return;
+        };
+        unsafe {
+            if matches!(
+                ptr.kind,
+                CopyingPointerKind::Eden | CopyingPointerKind::FromSurvivor
+            ) && (*ptr.header).gc_flags & GC_FLAG_PINNED != 0
+            {
+                self.fallback_reason = Some(pinned_reason);
+                return;
+            }
+        }
+        if matches!(
+            ptr.kind,
+            CopyingPointerKind::Eden
+                | CopyingPointerKind::FromSurvivor
+                | CopyingPointerKind::Longlived
+                | CopyingPointerKind::Malloc
+        ) && self.seen.insert(ptr.header as usize)
+        {
+            self.worklist.push(ptr.header);
+        }
+    }
+
+    unsafe fn drain(&mut self) {
+        let mut i = 0usize;
+        while i < self.worklist.len() && self.fallback_reason.is_none() {
+            let header = self.worklist[i];
+            i += 1;
+            if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+                continue;
+            }
+            self.scan_object_fields(header);
+        }
+    }
+
+    unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
+        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+        match (*header).obj_type {
+            GC_TYPE_ARRAY => self.scan_array_fields(user_ptr),
+            GC_TYPE_OBJECT => self.scan_object_field_slots(user_ptr),
+            GC_TYPE_CLOSURE => self.scan_closure_fields(user_ptr),
+            GC_TYPE_PROMISE => self.scan_promise_fields(user_ptr),
+            GC_TYPE_ERROR => self.scan_error_fields(user_ptr),
+            GC_TYPE_MAP => self.scan_map_fields(user_ptr),
+            GC_TYPE_LAZY_ARRAY => self.scan_lazy_array_fields(user_ptr),
+            GC_TYPE_STRING | GC_TYPE_BIGINT => {}
+            _ => {}
+        }
+    }
+
+    unsafe fn scan_slot(&mut self, slot: *const u64) {
+        if slot.is_null() {
+            return;
+        }
+        self.check_bits_with_reason(*slot, "pinned_young_transitive");
+    }
+
+    unsafe fn scan_array_fields(&mut self, user_ptr: *mut u8) {
+        let arr = user_ptr as *const crate::array::ArrayHeader;
+        let length = (*arr).length;
+        let capacity = (*arr).capacity;
+        if length > capacity || length > 16_000_000 {
+            return;
+        }
+        let elements = user_ptr.add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+        for i in 0..length as usize {
+            self.scan_slot(elements.add(i));
+        }
+    }
+
+    unsafe fn scan_object_field_slots(&mut self, user_ptr: *mut u8) {
+        let obj = user_ptr as *const crate::object::ObjectHeader;
+        let field_count = (*obj).field_count;
+        if field_count > 1_000_000 {
+            return;
+        }
+        self.scan_slot(&(*obj).keys_array as *const _ as *const u64);
+        let fields = user_ptr.add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const u64;
+        for i in 0..field_count as usize {
+            self.scan_slot(fields.add(i));
+        }
+    }
+
+    unsafe fn scan_closure_fields(&mut self, user_ptr: *mut u8) {
+        let closure = user_ptr as *const crate::closure::ClosureHeader;
+        let capture_count = crate::closure::real_capture_count((*closure).capture_count);
+        let captures =
+            user_ptr.add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *const u64;
+        for i in 0..capture_count as usize {
+            self.scan_slot(captures.add(i));
+        }
+    }
+
+    unsafe fn scan_promise_fields(&mut self, user_ptr: *mut u8) {
+        let promise = user_ptr as *const crate::promise::Promise;
+        self.scan_slot(&(*promise).value as *const f64 as *const u64);
+        self.scan_slot(&(*promise).reason as *const f64 as *const u64);
+        self.scan_slot(&(*promise).on_fulfilled as *const _ as *const u64);
+        self.scan_slot(&(*promise).on_rejected as *const _ as *const u64);
+        self.scan_slot(&(*promise).next as *const _ as *const u64);
+    }
+
+    unsafe fn scan_error_fields(&mut self, user_ptr: *mut u8) {
+        let error = user_ptr as *const crate::error::ErrorHeader;
+        self.scan_slot(&(*error).message as *const _ as *const u64);
+        self.scan_slot(&(*error).name as *const _ as *const u64);
+        self.scan_slot(&(*error).stack as *const _ as *const u64);
+        self.scan_slot(&(*error).cause as *const f64 as *const u64);
+        self.scan_slot(&(*error).errors as *const _ as *const u64);
+    }
+
+    unsafe fn scan_map_fields(&mut self, user_ptr: *mut u8) {
+        let map = user_ptr as *const crate::map::MapHeader;
+        let size = (*map).size;
+        let capacity = (*map).capacity;
+        if size > capacity || size > 100_000 || (*map).entries.is_null() {
+            return;
+        }
+        let entries = (*map).entries as *const u64;
+        for i in 0..(size as usize) {
+            self.scan_slot(entries.add(i * 2));
+            self.scan_slot(entries.add(i * 2 + 1));
+        }
+    }
+
+    unsafe fn scan_lazy_array_fields(&mut self, user_ptr: *mut u8) {
+        let lazy = user_ptr as *const crate::json_tape::LazyArrayHeader;
+        if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
+            return;
+        }
+        self.scan_slot(&(*lazy).blob_str as *const _ as *const u64);
+        self.scan_slot(&(*lazy).materialized as *const _ as *const u64);
+        self.scan_slot(&(*lazy).materialized_elements as *const _ as *const u64);
+        self.scan_slot(&(*lazy).materialized_bitmap as *const _ as *const u64);
+
+        let cached_length = (*lazy).cached_length as usize;
+        let cache = (*lazy).materialized_elements;
+        let bitmap = (*lazy).materialized_bitmap;
+        if cache.is_null() || bitmap.is_null() || cached_length == 0 {
+            return;
+        }
+        let bitmap_words = cached_length.div_ceil(64);
+        for w in 0..bitmap_words {
+            let word = *bitmap.add(w);
+            if word == 0 {
+                continue;
+            }
+            let base_idx = w * 64;
+            for b in 0..64usize {
+                if word & (1u64 << b) == 0 {
+                    continue;
+                }
+                let i = base_idx + b;
+                if i >= cached_length {
+                    break;
+                }
+                self.scan_slot(cache.add(i) as *const u64);
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct StickyRememberedSet {
+    old_pages: crate::fast_hash::PtrHashSet<usize>,
+    external_pages: Vec<(usize, usize)>,
+}
+
+impl StickyRememberedSet {
+    fn remember_slot(&mut self, parent_header: *mut GcHeader, slot: *mut u64, external: bool) {
+        if parent_header.is_null() || slot.is_null() {
+            return;
+        }
+        let page = crate::arena::generation_page_for_addr(slot as usize);
+        if external {
+            self.external_pages.push((parent_header as usize, page));
+        } else {
+            self.old_pages.insert(page);
+        }
+    }
+
+    fn restore(&self) {
+        for &page in &self.old_pages {
+            mark_dirty_old_page(page);
+        }
+        for &(header, page) in &self.external_pages {
+            mark_dirty_external_slot_page(header, page);
+        }
+    }
+}
+
+struct CopyingNurseryCollector {
+    ptrs: CopyingPointerSet,
+    worklist: Vec<*mut GcHeader>,
+    marked_headers: Vec<*mut GcHeader>,
+    moved_headers: Vec<*mut GcHeader>,
+    sticky: StickyRememberedSet,
+    stats: CopyingNurseryTraceStats,
+    live_from_bytes: usize,
+}
+
+impl CopyingNurseryCollector {
+    fn new(ptrs: CopyingPointerSet) -> Self {
+        Self {
+            ptrs,
+            worklist: Vec::new(),
+            marked_headers: Vec::new(),
+            moved_headers: Vec::new(),
+            sticky: StickyRememberedSet::default(),
+            stats: CopyingNurseryTraceStats {
+                fallback_reason: "none",
+                ..CopyingNurseryTraceStats::default()
+            },
+            live_from_bytes: 0,
+        }
+    }
+
+    fn visit_value_bits(&mut self, bits: u64) -> Option<u64> {
+        let (addr, is_nanbox, tag) = self.ptrs.decode_bits(bits)?;
+        let new_addr = self.mark_addr(addr)?;
+        if new_addr == addr {
+            return None;
+        }
+        Some(if is_nanbox {
+            tag | (new_addr as u64 & POINTER_MASK)
+        } else {
+            new_addr as u64
+        })
+    }
+
+    fn visit_raw_addr(&mut self, addr: usize) -> Option<usize> {
+        let new_addr = self.mark_addr(addr)?;
+        (new_addr != addr).then_some(new_addr)
+    }
+
+    fn rewrite_value_bits(&self, bits: u64) -> Option<u64> {
+        let (addr, is_nanbox, tag) = self.ptrs.decode_bits(bits)?;
+        let new_addr = self.rewrite_raw_addr(addr)?;
+        Some(if is_nanbox {
+            tag | (new_addr as u64 & POINTER_MASK)
+        } else {
+            new_addr as u64
+        })
+    }
+
+    fn rewrite_raw_addr(&self, addr: usize) -> Option<usize> {
+        let ptr = self.ptrs.classify(addr)?;
+        unsafe {
+            if (*ptr.header).gc_flags & GC_FLAG_FORWARDED == 0 {
+                return None;
+            }
+            Some(forwarding_address(ptr.header) as usize)
+        }
+    }
+
+    fn mark_addr(&mut self, addr: usize) -> Option<usize> {
+        let ptr = self.ptrs.classify(addr)?;
+        match ptr.kind {
+            CopyingPointerKind::Eden | CopyingPointerKind::FromSurvivor => {
+                Some(unsafe { self.move_young(ptr) })
+            }
+            CopyingPointerKind::ToSurvivor => Some(addr),
+            CopyingPointerKind::Longlived | CopyingPointerKind::Malloc => {
+                unsafe {
+                    let flags = (*ptr.header).gc_flags;
+                    if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+                        (*ptr.header).gc_flags = flags | GC_FLAG_MARKED;
+                        self.worklist.push(ptr.header);
+                        self.marked_headers.push(ptr.header);
+                    }
+                }
+                Some(addr)
+            }
+            CopyingPointerKind::Old => Some(addr),
+        }
+    }
+
+    unsafe fn move_young(&mut self, ptr: CopyingPointer) -> usize {
+        let header = ptr.header;
+        let old_user = (header as *mut u8).add(GC_HEADER_SIZE);
+        let flags = (*header).gc_flags;
+        if flags & GC_FLAG_FORWARDED != 0 {
+            return forwarding_address(header) as usize;
+        }
+
+        let total = (*header).size as usize;
+        let payload = total - GC_HEADER_SIZE;
+        let promote = matches!(ptr.kind, CopyingPointerKind::FromSurvivor)
+            || flags & (GC_FLAG_HAS_SURVIVED | GC_FLAG_TENURED) != 0;
+        let new_user = if promote {
+            crate::arena::arena_alloc_gc_old(payload, 8, (*header).obj_type)
+        } else {
+            crate::arena::arena_alloc_gc_survivor(payload, 8, (*header).obj_type)
+        };
+        std::ptr::copy_nonoverlapping(old_user, new_user, payload);
+
+        let new_header = header_from_user_ptr(new_user);
+        (*new_header)._reserved = (*header)._reserved;
+        let preserved = flags & (GC_FLAG_SHAPE_SHARED | GC_FLAG_INTERNED | GC_FLAG_PINNED);
+        (*new_header).gc_flags = GC_FLAG_ARENA
+            | GC_FLAG_MARKED
+            | preserved
+            | if promote {
+                GC_FLAG_TENURED
+            } else {
+                GC_FLAG_HAS_SURVIVED
+            };
+
+        set_forwarding_address(header, new_user);
+        (*header).gc_flags &= !GC_FLAG_MARKED;
+
+        self.worklist.push(new_header);
+        self.moved_headers.push(new_header);
+        self.live_from_bytes += total;
+        if promote {
+            self.stats.promoted_objects += 1;
+            self.stats.promoted_bytes += total;
+        } else {
+            self.stats.copied_objects += 1;
+            self.stats.copied_bytes += total;
+        }
+        new_user as usize
+    }
+
+    unsafe fn visit_slot_with_parent(
+        &mut self,
+        slot: *mut u64,
+        parent_header: *mut GcHeader,
+        external: bool,
+    ) {
+        if slot.is_null() {
+            return;
+        }
+        let bits = *slot;
+        if let Some(new_bits) = self.visit_value_bits(bits) {
+            *slot = new_bits;
+        }
+        if !parent_header.is_null() {
+            let parent_user = (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize;
+            if matches!(
+                crate::arena::classify_heap_generation(parent_user),
+                crate::arena::HeapGeneration::Old
+            ) {
+                if let Some((child_addr, _, _)) = self.ptrs.decode_bits(*slot) {
+                    if crate::arena::pointer_in_nursery(child_addr) {
+                        self.sticky.remember_slot(parent_header, slot, external);
+                    }
+                }
+            }
+        }
+    }
+
+    unsafe fn drain(&mut self) {
+        let mut i = 0usize;
+        while i < self.worklist.len() {
+            let header = self.worklist[i];
+            i += 1;
+            if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+                continue;
+            }
+            self.scan_object_fields(header);
+        }
+    }
+
+    unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
+        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+        match (*header).obj_type {
+            GC_TYPE_ARRAY => self.scan_array_fields(header, user_ptr),
+            GC_TYPE_OBJECT => self.scan_object_field_slots(header, user_ptr),
+            GC_TYPE_CLOSURE => self.scan_closure_fields(header, user_ptr),
+            GC_TYPE_PROMISE => self.scan_promise_fields(header, user_ptr),
+            GC_TYPE_ERROR => self.scan_error_fields(header, user_ptr),
+            GC_TYPE_MAP => self.scan_map_fields(header, user_ptr),
+            GC_TYPE_LAZY_ARRAY => self.scan_lazy_array_fields(header, user_ptr),
+            GC_TYPE_STRING | GC_TYPE_BIGINT => {}
+            _ => {}
+        }
+    }
+
+    unsafe fn scan_array_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
+        let arr = user_ptr as *const crate::array::ArrayHeader;
+        let length = (*arr).length;
+        let capacity = (*arr).capacity;
+        if length > capacity || length > 16_000_000 {
+            return;
+        }
+        let elements = user_ptr.add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+        for i in 0..length as usize {
+            self.visit_slot_with_parent(elements.add(i), header, false);
+        }
+    }
+
+    unsafe fn scan_object_field_slots(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
+        let obj = user_ptr as *const crate::object::ObjectHeader;
+        let field_count = (*obj).field_count;
+        if field_count > 1_000_000 {
+            return;
+        }
+        self.visit_slot_with_parent(&(*obj).keys_array as *const _ as *mut u64, header, false);
+        let fields = user_ptr.add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
+        for i in 0..field_count as usize {
+            self.visit_slot_with_parent(fields.add(i), header, false);
+        }
+    }
+
+    unsafe fn scan_closure_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
+        let closure = user_ptr as *const crate::closure::ClosureHeader;
+        let capture_count = crate::closure::real_capture_count((*closure).capture_count);
+        let captures =
+            user_ptr.add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64;
+        for i in 0..capture_count as usize {
+            self.visit_slot_with_parent(captures.add(i), header, false);
+        }
+    }
+
+    unsafe fn scan_promise_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
+        let promise = user_ptr as *mut crate::promise::Promise;
+        self.visit_slot_with_parent(&(*promise).value as *const f64 as *mut u64, header, false);
+        self.visit_slot_with_parent(&(*promise).reason as *const f64 as *mut u64, header, false);
+        self.visit_slot_with_parent(
+            &(*promise).on_fulfilled as *const _ as *mut u64,
+            header,
+            false,
+        );
+        self.visit_slot_with_parent(
+            &(*promise).on_rejected as *const _ as *mut u64,
+            header,
+            false,
+        );
+        self.visit_slot_with_parent(&(*promise).next as *const _ as *mut u64, header, false);
+    }
+
+    unsafe fn scan_error_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
+        let error = user_ptr as *mut crate::error::ErrorHeader;
+        self.visit_slot_with_parent(&(*error).message as *const _ as *mut u64, header, false);
+        self.visit_slot_with_parent(&(*error).name as *const _ as *mut u64, header, false);
+        self.visit_slot_with_parent(&(*error).stack as *const _ as *mut u64, header, false);
+        self.visit_slot_with_parent(&(*error).cause as *const f64 as *mut u64, header, false);
+        self.visit_slot_with_parent(&(*error).errors as *const _ as *mut u64, header, false);
+    }
+
+    unsafe fn scan_map_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
+        let map = user_ptr as *const crate::map::MapHeader;
+        let size = (*map).size;
+        let capacity = (*map).capacity;
+        if size > capacity || size > 100_000 || (*map).entries.is_null() {
+            return;
+        }
+        let entries = (*map).entries as *mut u64;
+        for i in 0..(size as usize) {
+            self.visit_slot_with_parent(entries.add(i * 2), header, true);
+            self.visit_slot_with_parent(entries.add(i * 2 + 1), header, true);
+        }
+    }
+
+    unsafe fn scan_lazy_array_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
+        let lazy = user_ptr as *mut crate::json_tape::LazyArrayHeader;
+        if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
+            return;
+        }
+        self.visit_slot_with_parent(&(*lazy).blob_str as *const _ as *mut u64, header, false);
+        self.visit_slot_with_parent(&(*lazy).materialized as *const _ as *mut u64, header, false);
+        self.visit_slot_with_parent(
+            &(*lazy).materialized_elements as *const _ as *mut u64,
+            header,
+            false,
+        );
+        self.visit_slot_with_parent(
+            &(*lazy).materialized_bitmap as *const _ as *mut u64,
+            header,
+            false,
+        );
+
+        let cached_length = (*lazy).cached_length as usize;
+        let cache = (*lazy).materialized_elements;
+        let bitmap = (*lazy).materialized_bitmap;
+        if cache.is_null() || bitmap.is_null() || cached_length == 0 {
+            return;
+        }
+        let bitmap_words = cached_length.div_ceil(64);
+        for w in 0..bitmap_words {
+            let word = *bitmap.add(w);
+            if word == 0 {
+                continue;
+            }
+            let base_idx = w * 64;
+            for b in 0..64usize {
+                if word & (1u64 << b) == 0 {
+                    continue;
+                }
+                let i = base_idx + b;
+                if i >= cached_length {
+                    break;
+                }
+                self.visit_slot_with_parent(cache.add(i) as *mut u64, header, false);
+            }
+        }
+    }
+
+    unsafe fn clear_marks(&mut self) {
+        for &header in &self.marked_headers {
+            (*header).gc_flags &= !GC_FLAG_MARKED;
+        }
+        for &header in &self.moved_headers {
+            (*header).gc_flags &= !GC_FLAG_MARKED;
+        }
+    }
+}
+
+fn copying_legacy_root_scanners_present() -> bool {
+    ROOT_SCANNERS.with(|s| !s.borrow().is_empty())
+        || FFI_ROOT_SCANNERS.with(|s| !s.borrow().is_empty())
+}
+
+fn scan_remembered_dirty_slots_copying(
+    snapshot: &RememberedDirtySnapshot,
+    mut visit: impl FnMut(*mut u64, *mut GcHeader, bool, &mut RememberedSetTraceStats),
+) -> RememberedSetTraceStats {
+    let mut stats = RememberedSetTraceStats {
+        entries_scanned: snapshot.dirty_old_pages.len()
+            + snapshot.external_dirty_entries.len()
+            + snapshot.fallback_headers.len(),
+        dirty_pages_before: snapshot.dirty_pages.len(),
+        dirty_pages_scanned: snapshot.dirty_pages.len(),
+        ..RememberedSetTraceStats::default()
+    };
+    let mut seen_headers = crate::fast_hash::new_ptr_hash_set();
+
+    let mut scan_header = |header: *mut GcHeader, stats: &mut RememberedSetTraceStats| unsafe {
+        if header.is_null() || !seen_headers.insert(header as usize) {
+            return;
+        }
+        if !plausible_gc_header(header, true) {
+            return;
+        }
+        let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+        if !matches!(
+            crate::arena::classify_heap_generation(user),
+            crate::arena::HeapGeneration::Old
+        ) {
+            return;
+        }
+        stats.old_objects_considered += 1;
+        stats.valid_roots += 1;
+        stats.dirty_objects_scanned += 1;
+        let mut visit_slot = |slot: *mut u64, stats: &mut RememberedSetTraceStats| {
+            let external = !matches!(
+                crate::arena::classify_heap_generation(slot as usize),
+                crate::arena::HeapGeneration::Old
+            );
+            visit(slot, header, external, stats);
+        };
+        scan_dirty_object_slots(header, &snapshot.dirty_pages, stats, &mut visit_slot);
+    };
+
+    if !snapshot.dirty_old_pages.is_empty() {
+        crate::arena::old_arena_walk_objects_on_pages(&snapshot.dirty_old_pages, |header| {
+            scan_header(header as *mut GcHeader, &mut stats);
+        });
+    }
+    for &(_, header_addr) in &snapshot.external_dirty_entries {
+        scan_header(header_addr as *mut GcHeader, &mut stats);
+    }
+    for header_addr in snapshot.fallback_headers.iter().copied() {
+        scan_header(header_addr as *mut GcHeader, &mut stats);
+    }
+
+    stats.dirty_pages_after = remembered_dirty_page_count();
+    stats
+}
+
+fn copying_preflight_reason(ptrs: &CopyingPointerSet) -> Option<&'static str> {
+    if !generated_write_barriers_emitted() {
+        return Some("barriers_inactive");
+    }
+    if matches!(
+        conservative_stack_scan_decision(),
+        ConservativeStackScanDecision::Scan
+    ) {
+        return Some("conservative_stack");
+    }
+    if copying_legacy_root_scanners_present() {
+        return Some("copy_only_roots");
+    }
+
+    let mut checker = CopyingNurseryPreflight::new(ptrs, "pinned_young_root");
+    visit_mutable_root_slots(|slot| unsafe {
+        checker.check_bits(slot.read());
+    });
+    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    {
+        let mut visitor = RuntimeRootVisitor::for_copying_check(&mut checker);
+        for scanner in scanners {
+            scanner(&mut visitor);
+        }
+    }
+    unsafe {
+        checker.drain();
+    }
+    if checker.fallback_reason.is_some() {
+        return checker.fallback_reason;
+    }
+
+    let snapshot = remembered_dirty_snapshot();
+    let mut dirty_checker = CopyingNurseryPreflight::new(ptrs, "pinned_young_dirty_slot");
+    scan_remembered_dirty_slots_copying(&snapshot, |slot, _header, _external, _stats| unsafe {
+        dirty_checker.check_bits(*slot);
+    });
+    unsafe {
+        dirty_checker.drain();
+    }
+    dirty_checker.fallback_reason
+}
+
+fn gc_collect_minor_copying_fast_path(
+    trace: &mut Option<GcCycleTrace>,
+    start: Instant,
+) -> Option<u64> {
+    let ptrs = CopyingPointerSet::new();
+    if let Some(reason) = copying_preflight_reason(&ptrs) {
+        if let Some(trace) = trace.as_mut() {
+            trace.copying_nursery.fallback_reason = reason;
+        }
+        return None;
+    }
+
+    let phase_start = trace_phase_start(trace);
+    let from_space_bytes = crate::arena::copying_from_space_in_use_bytes();
+    let mut collector = CopyingNurseryCollector::new(ptrs);
+    collector.stats.fallback_reason = "none";
+    collector.stats.reset_blocks += crate::arena::copying_prepare_to_space();
+
+    visit_mutable_root_slots(|slot| unsafe {
+        let bits = slot.read();
+        if bits == 0 {
+            return;
+        }
+        if let Some(new_bits) = collector.visit_value_bits(bits) {
+            slot.write(new_bits);
+        }
+    });
+
+    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    {
+        let mut visitor = RuntimeRootVisitor::for_copying_mark(&mut collector);
+        for scanner in scanners {
+            scanner(&mut visitor);
+        }
+    }
+
+    let snapshot = remembered_dirty_snapshot();
+    let remembered_stats =
+        scan_remembered_dirty_slots_copying(&snapshot, |slot, header, external, stats| unsafe {
+            let before = *slot;
+            collector.visit_slot_with_parent(slot, header, external);
+            if *slot != before {
+                stats.newly_marked += 1;
+            }
+        });
+    if let Some(trace) = trace.as_mut() {
+        trace.remembered_set = remembered_stats;
+    }
+
+    unsafe {
+        collector.drain();
+    }
+    {
+        let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let mut visitor = RuntimeRootVisitor::for_copying_rewrite(&collector);
+        for scanner in scanners {
+            scanner(&mut visitor);
+        }
+    }
+    trace_phase_record(trace, "copying_nursery", phase_start);
+
+    let reset = crate::arena::copying_reset_from_spaces_and_flip();
+    collector.stats.reset_blocks += reset.reset_blocks;
+    remembered_set_clear();
+    collector.sticky.restore();
+    unsafe {
+        collector.clear_marks();
+    }
+
+    CONS_PINNED.with(|s| s.borrow_mut().clear());
+    let freed_bytes = from_space_bytes.saturating_sub(collector.live_from_bytes) as u64;
+    if let Some(trace) = trace.as_mut() {
+        trace.copying_nursery = collector.stats;
+        trace.sweep = SweepTraceStats {
+            freed_bytes,
+            reset_blocks: reset.reset_blocks,
+            deallocated_blocks: 0,
+            deallocated_bytes: 0,
+        };
+        trace.pause_us = start.elapsed().as_micros() as u64;
+    }
+    Some(freed_bytes)
 }
 
 fn try_mark_young_value_as_seed(value_bits: u64, valid_ptrs: &ValidPointerSet) -> bool {
@@ -5323,15 +6269,36 @@ thread_local! {
         const { Cell::new(BarrierTraceCounters::zero()) };
 }
 
+static GENERATED_WRITE_BARRIERS_EMITTED: AtomicUsize = AtomicUsize::new(0);
+
+#[no_mangle]
+pub extern "C" fn js_gc_write_barriers_emitted(active: u32) {
+    if active != 0 {
+        GENERATED_WRITE_BARRIERS_EMITTED.fetch_add(1, Ordering::AcqRel);
+    } else {
+        let _ = GENERATED_WRITE_BARRIERS_EMITTED.fetch_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |count| (count > 0).then_some(count - 1),
+        );
+    }
+}
+
+#[inline]
+fn generated_write_barriers_emitted() -> bool {
+    GENERATED_WRITE_BARRIERS_EMITTED.load(Ordering::Acquire) > 0
+}
+
 pub(crate) fn write_barriers_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        matches!(
-            std::env::var("PERRY_WRITE_BARRIERS").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
-        )
-    })
+    generated_write_barriers_emitted()
+        || *CACHED.get_or_init(|| {
+            matches!(
+                std::env::var("PERRY_WRITE_BARRIERS").as_deref(),
+                Ok("1") | Ok("on") | Ok("true")
+            )
+        })
 }
 
 #[inline]
@@ -7130,6 +8097,39 @@ mod tests {
         crate::arena::old_arena_page_index_clear_for_tests();
     }
 
+    struct CopyingNurseryTestGuard {
+        frame: u64,
+    }
+
+    impl CopyingNurseryTestGuard {
+        fn new(slot_count: u32) -> Self {
+            reset_shadow_stack();
+            reset_global_roots();
+            reset_remembered_set();
+            js_gc_write_barriers_emitted(1);
+            let frame = js_shadow_frame_push(slot_count);
+            Self { frame }
+        }
+    }
+
+    impl Drop for CopyingNurseryTestGuard {
+        fn drop(&mut self) {
+            js_shadow_frame_pop(self.frame);
+            reset_shadow_stack();
+            reset_global_roots();
+            reset_remembered_set();
+            js_gc_write_barriers_emitted(0);
+        }
+    }
+
+    fn young_leaf() -> usize {
+        crate::arena::arena_alloc_gc(32, 8, GC_TYPE_STRING) as usize
+    }
+
+    fn ptr_bits(addr: usize) -> u64 {
+        POINTER_TAG | (addr as u64 & POINTER_MASK)
+    }
+
     unsafe fn init_test_closure(ptr: *mut u8) {
         let closure = ptr as *mut crate::closure::ClosureHeader;
         (*closure).func_ptr = std::ptr::null();
@@ -7168,6 +8168,220 @@ mod tests {
             *elements.add(i) = 0;
         }
         (arr, elements)
+    }
+
+    #[test]
+    fn test_copying_minor_rewrites_shadow_and_global_roots() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let shadow_child = young_leaf();
+        let global_child = young_leaf();
+        let mut global_slot = global_child as u64;
+        js_shadow_slot_set(0, ptr_bits(shadow_child));
+        js_gc_register_global_root(&mut global_slot as *mut u64 as i64);
+
+        let _ = gc_collect_minor();
+        let shadow_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        let global_after = global_slot as usize;
+
+        assert_ne!(shadow_after, shadow_child);
+        assert_ne!(global_after, global_child);
+        assert!(crate::arena::pointer_in_nursery(shadow_after));
+        assert!(crate::arena::pointer_in_nursery(global_after));
+        assert_eq!(
+            crate::arena::classify_heap_space(shadow_after),
+            crate::arena::active_survivor_space()
+        );
+    }
+
+    #[test]
+    fn test_copying_minor_rewrites_dirty_old_slot_and_keeps_sticky_page() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let child = young_leaf();
+        let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
+        unsafe {
+            *elements = ptr_bits(child);
+        }
+        js_write_barrier_slot(ptr_bits(old_arr as usize), elements as u64, ptr_bits(child));
+        assert!(remembered_set_size() > 0);
+
+        let _ = gc_collect_minor();
+        let rewritten = unsafe { (*elements & POINTER_MASK) as usize };
+
+        assert_ne!(rewritten, child);
+        assert!(crate::arena::pointer_in_nursery(rewritten));
+        assert!(
+            remembered_set_size() > 0,
+            "old-to-survivor edge must stay dirty for the next minor"
+        );
+    }
+
+    #[test]
+    fn test_copying_minor_copies_transitive_young_graph() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let arr = crate::array::js_array_alloc(1);
+        let child = young_leaf();
+        unsafe {
+            (*arr).length = 1;
+            let elements =
+                (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+            *elements = ptr_bits(child);
+        }
+        js_shadow_slot_set(0, ptr_bits(arr as usize));
+
+        let _ = gc_collect_minor();
+        let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        let child_after = unsafe {
+            let elements = (arr_after as *mut u8)
+                .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                as *mut u64;
+            (*elements & POINTER_MASK) as usize
+        };
+
+        assert_ne!(arr_after, arr as usize);
+        assert_ne!(child_after, child);
+        assert!(crate::arena::pointer_in_nursery(arr_after));
+        assert!(crate::arena::pointer_in_nursery(child_after));
+    }
+
+    #[test]
+    fn test_copying_minor_rewrites_overflow_owner_metadata_key() {
+        struct OverflowFieldsRootGuard;
+
+        impl Drop for OverflowFieldsRootGuard {
+            fn drop(&mut self) {
+                crate::object::test_clear_overflow_fields_root();
+            }
+        }
+
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _overflow_guard = OverflowFieldsRootGuard;
+        crate::object::test_clear_overflow_fields_root();
+        gc_register_mutable_root_scanner(overflow_fields_mutable_root_scanner);
+
+        let owner = crate::object::js_object_alloc(0, 0) as usize;
+        let overflow_value = young_leaf();
+        crate::object::test_seed_overflow_fields_root(owner, ptr_bits(overflow_value));
+        js_shadow_slot_set(0, ptr_bits(owner));
+
+        let _ = gc_collect_minor();
+        let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        let (mapped_owner, mapped_value_bits) = crate::object::test_overflow_fields_root();
+        let mapped_value = (mapped_value_bits & POINTER_MASK) as usize;
+
+        assert_ne!(owner_after, owner);
+        assert_eq!(mapped_owner, owner_after);
+        assert_ne!(mapped_value, overflow_value);
+        assert!(crate::arena::pointer_in_nursery(owner_after));
+        assert!(crate::arena::pointer_in_nursery(mapped_value));
+    }
+
+    #[test]
+    fn test_copying_minor_promotes_survivor_on_second_survival() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let child = young_leaf();
+        js_shadow_slot_set(0, ptr_bits(child));
+
+        let _ = gc_collect_minor();
+        let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert!(crate::arena::pointer_in_nursery(survivor));
+
+        let _ = gc_collect_minor();
+        let promoted = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert_ne!(promoted, survivor);
+        assert!(crate::arena::pointer_in_old_gen(promoted));
+    }
+
+    #[test]
+    fn test_copying_minor_sticky_old_to_survivor_edge_promotes_next_cycle() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let child = young_leaf();
+        let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
+        unsafe {
+            *elements = ptr_bits(child);
+        }
+        js_write_barrier_slot(ptr_bits(old_arr as usize), elements as u64, ptr_bits(child));
+
+        let _ = gc_collect_minor();
+        let survivor = unsafe { (*elements & POINTER_MASK) as usize };
+        assert!(crate::arena::pointer_in_nursery(survivor));
+        assert!(remembered_set_size() > 0);
+
+        let _ = gc_collect_minor();
+        let promoted = unsafe { (*elements & POINTER_MASK) as usize };
+        assert!(crate::arena::pointer_in_old_gen(promoted));
+    }
+
+    #[test]
+    fn test_copying_minor_resets_eden_wholesale() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        for _ in 0..128 {
+            let _ = young_leaf();
+        }
+        let live = young_leaf();
+        js_shadow_slot_set(0, ptr_bits(live));
+
+        let _ = gc_collect_minor();
+        let snapshot = crate::arena::arena_telemetry_snapshot();
+        let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+
+        assert_eq!(snapshot.arena.in_use_bytes, 0);
+        assert!(crate::arena::pointer_in_nursery(live_after));
+    }
+
+    #[test]
+    fn test_copying_minor_falls_back_for_pinned_young_root() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let child = young_leaf();
+        unsafe {
+            (*header_from_user_ptr(child as *const u8)).gc_flags |= GC_FLAG_PINNED;
+        }
+        js_shadow_slot_set(0, ptr_bits(child));
+
+        let _ = gc_collect_minor();
+        let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+
+        assert_eq!(after, child);
+        unsafe {
+            (*header_from_user_ptr(child as *const u8)).gc_flags &= !GC_FLAG_PINNED;
+        }
+    }
+
+    #[test]
+    fn test_copying_minor_falls_back_for_transitive_pinned_young_child() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let arr = crate::array::js_array_alloc(1);
+        let child = young_leaf();
+        let elements = unsafe {
+            (*arr).length = 1;
+            let elements =
+                (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+            *elements = ptr_bits(child);
+            (*header_from_user_ptr(child as *const u8)).gc_flags |= GC_FLAG_PINNED;
+            elements
+        };
+        js_shadow_slot_set(0, ptr_bits(arr as usize));
+
+        let _ = gc_collect_minor();
+        let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        let child_after = unsafe { (*elements & POINTER_MASK) as usize };
+
+        assert_eq!(
+            arr_after, arr as usize,
+            "copying nursery must fall back before moving the young parent"
+        );
+        assert_eq!(
+            child_after, child,
+            "pinned transitive young child must keep its raw address"
+        );
+        unsafe {
+            let child_header = header_from_user_ptr(child as *const u8);
+            assert_eq!(
+                (*child_header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "pinned child must not receive a forwarding pointer"
+            );
+            (*child_header).gc_flags &= !GC_FLAG_PINNED;
+        }
     }
 
     unsafe fn alloc_old_test_map(

@@ -66,7 +66,9 @@ run_one() {
     fi
 }
 
-# Compile once per .ts file; run multiple modes against the same binary.
+# Compile once per GC/barrier mode. The write-barrier mode must be compiled
+# with PERRY_WRITE_BARRIERS=1 so generated store sites actually emit the
+# barrier calls that the runtime copying nursery relies on.
 PASS=0
 FAIL=0
 
@@ -75,22 +77,27 @@ run_test() {
     local rss_limit_mb="$2"
     local expect_substr="$3"
 
-    local bin="$TMPDIR/$(basename "${ts%.ts}")"
-    if ! $PERRY compile --no-cache "$ts" -o "$bin" >/dev/null 2>&1; then
-        printf "  FAIL [%-12s] %-40s compile failed\n" "compile" "$(basename "$ts")"
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
     local mode_specs=(
-        "default|"
-        "mark-sweep|PERRY_GEN_GC=0"
-        "gen-gc+wb|PERRY_GEN_GC=1 PERRY_WRITE_BARRIERS=1"
+        "default||"
+        "mark-sweep||PERRY_GEN_GC=0"
+        "gen-gc+wb|PERRY_WRITE_BARRIERS=1|PERRY_GEN_GC=1 PERRY_WRITE_BARRIERS=1"
     )
 
     for spec in "${mode_specs[@]}"; do
-        local mode_label="${spec%%|*}"
-        local env_str="${spec#*|}"
+        IFS='|' read -r mode_label compile_env_str env_str <<<"$spec"
+        local bin="$TMPDIR/$(basename "${ts%.ts}")_${mode_label//[^A-Za-z0-9_]/_}"
+
+        local compile_env_args=()
+        if [[ -n "$compile_env_str" ]]; then
+            # shellcheck disable=SC2206
+            compile_env_args=($compile_env_str)
+        fi
+        if ! env "${compile_env_args[@]+"${compile_env_args[@]}"}" \
+            $PERRY compile --no-cache "$ts" -o "$bin" >/dev/null 2>&1; then
+            printf "  FAIL [%-12s] %-40s compile failed\n" "$mode_label" "$(basename "$ts")"
+            FAIL=$((FAIL + 1))
+            continue
+        fi
 
         # Split env_str on spaces into argv tokens (an empty string
         # gives env zero args, which is fine).
