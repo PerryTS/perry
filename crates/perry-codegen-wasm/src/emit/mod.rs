@@ -297,7 +297,7 @@ pub(super) struct RuntimeImports {
     pub(super) await_promise: u32,
     // Bridge via WASM memory — Firefox canonicalizes NaN in function params,
     // so we write f64 args to memory (preserves NaN bits) and pass only plain numbers.
-    pub(super) mem_call: u32,     // (func_name_id, arg_count) -> result; args at mem[ARG_BASE..]
+    pub(super) mem_call: u32, // (func_name_id, arg_count) -> result; args at mem[ARG_BASE..]
     pub(super) mem_call_i32: u32, // (func_name_id, arg_count) -> i32; for is_truthy, string_eq, etc.
 }
 

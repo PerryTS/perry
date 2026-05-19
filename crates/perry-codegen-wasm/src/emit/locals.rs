@@ -73,7 +73,12 @@ pub(super) fn resolve_source_module_idx(
     best.map(|(i, _)| i)
 }
 
-pub(super) fn collect_locals(stmts: &[Stmt], map: &mut BTreeMap<LocalId, u32>, count: &mut u32, offset: u32) {
+pub(super) fn collect_locals(
+    stmts: &[Stmt],
+    map: &mut BTreeMap<LocalId, u32>,
+    count: &mut u32,
+    offset: u32,
+) {
     for stmt in stmts {
         match stmt {
             Stmt::Let { id, .. } => {

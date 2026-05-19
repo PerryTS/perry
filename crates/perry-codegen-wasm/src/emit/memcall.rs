@@ -16,7 +16,12 @@ impl<'a> FuncEmitCtx<'a> {
     /// Handles stack pointer save/advance/restore automatically.
     /// Call a bridge function. Frame must already be set up via emit_frame_begin + emit_store_arg.
     /// Returns f64 result, then restores sp.
-    pub(super) fn emit_memcall(&mut self, func: &mut Function, bridge_fn_name: &str, arg_count: u32) {
+    pub(super) fn emit_memcall(
+        &mut self,
+        func: &mut Function,
+        bridge_fn_name: &str,
+        arg_count: u32,
+    ) {
         let sp = self.emitter.nan_temp_global;
         let func_name_id = self
             .emitter
@@ -55,7 +60,12 @@ impl<'a> FuncEmitCtx<'a> {
         self.current_frame_size = self.frame_stack.pop().unwrap_or(0);
     }
 
-    pub(super) fn emit_memcall_void(&mut self, func: &mut Function, bridge_fn_name: &str, arg_count: u32) {
+    pub(super) fn emit_memcall_void(
+        &mut self,
+        func: &mut Function,
+        bridge_fn_name: &str,
+        arg_count: u32,
+    ) {
         let sp = self.emitter.nan_temp_global;
         let func_name_id = self
             .emitter
@@ -79,7 +89,12 @@ impl<'a> FuncEmitCtx<'a> {
         self.current_frame_size = self.frame_stack.pop().unwrap_or(0);
     }
 
-    pub(super) fn emit_memcall_i32(&mut self, func: &mut Function, bridge_fn_name: &str, arg_count: u32) {
+    pub(super) fn emit_memcall_i32(
+        &mut self,
+        func: &mut Function,
+        bridge_fn_name: &str,
+        arg_count: u32,
+    ) {
         let sp = self.emitter.nan_temp_global;
         let func_name_id = self
             .emitter
