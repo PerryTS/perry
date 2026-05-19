@@ -2432,30 +2432,29 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     // MARK_SEEDS persists across GC cycles. Clear before any try_mark
     // call so trace sees only this cycle's freshly-marked headers.
     clear_mark_seeds();
-    if copied_minor_can_skip_malloc_sweep(trigger.kind) {
-        if let Some(freed_bytes) = gc_collect_minor_copying_fast_path(&mut trace, start) {
-            let elapsed_us = start.elapsed().as_micros() as u64;
-            GC_STATS.with(|stats| {
-                let mut stats = stats.borrow_mut();
-                stats.collection_count += 1;
-                stats.total_freed_bytes += freed_bytes;
-                stats.last_pause_us = elapsed_us;
-            });
-            GC_FLAGS.with(|f| {
-                let cur = f.get();
-                if prev_in_alloc != 0 {
-                    f.set(cur | GC_FLAG_IN_ALLOC);
-                } else {
-                    f.set(cur & !GC_FLAG_IN_ALLOC);
-                }
-            });
-            if let Some(trace) = trace.as_mut() {
-                trace.pause_us = elapsed_us;
+    let malloc_sweep_due = copied_minor_malloc_sweep_due(trigger.kind);
+    if let Some(freed_bytes) =
+        gc_collect_minor_copying_fast_path(&mut trace, start, malloc_sweep_due)
+    {
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        GC_STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            stats.collection_count += 1;
+            stats.total_freed_bytes += freed_bytes;
+            stats.last_pause_us = elapsed_us;
+        });
+        GC_FLAGS.with(|f| {
+            let cur = f.get();
+            if prev_in_alloc != 0 {
+                f.set(cur | GC_FLAG_IN_ALLOC);
+            } else {
+                f.set(cur & !GC_FLAG_IN_ALLOC);
             }
-            return GcCollectOutcome { freed_bytes, trace };
+        });
+        if let Some(trace) = trace.as_mut() {
+            trace.pause_us = elapsed_us;
         }
-    } else if let Some(trace) = trace.as_mut() {
-        trace.copying_nursery.fallback_reason = "malloc_sweep_due";
+        return GcCollectOutcome { freed_bytes, trace };
     }
     clear_mark_seeds();
     let phase_start = trace_phase_start(&trace);
@@ -2674,11 +2673,9 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
 }
 
 #[inline]
-fn copied_minor_can_skip_malloc_sweep(trigger_kind: GcTriggerKind) -> bool {
-    if matches!(trigger_kind, GcTriggerKind::MallocCount) {
-        return false;
-    }
-    malloc_object_count() < GC_NEXT_MALLOC_TRIGGER.with(|c| c.get())
+fn copied_minor_malloc_sweep_due(trigger_kind: GcTriggerKind) -> bool {
+    matches!(trigger_kind, GcTriggerKind::MallocCount)
+        || malloc_object_count() >= GC_NEXT_MALLOC_TRIGGER.with(|c| c.get())
 }
 
 /// Generational GC (minor collection on every trigger) is now the
@@ -5850,6 +5847,7 @@ fn copying_preflight_reason(ptrs: &CopyingPointerSet) -> Option<&'static str> {
 fn gc_collect_minor_copying_fast_path(
     trace: &mut Option<GcCycleTrace>,
     start: Instant,
+    malloc_sweep_due: bool,
 ) -> Option<u64> {
     let ptrs = CopyingPointerSet::new();
     if let Some(reason) = copying_preflight_reason(&ptrs) {
@@ -5912,12 +5910,21 @@ fn gc_collect_minor_copying_fast_path(
     collector.stats.reset_blocks += reset.reset_blocks;
     remembered_set_clear();
     collector.sticky.restore();
+    let malloc_freed_bytes = if malloc_sweep_due {
+        let phase_start = trace_phase_start(trace);
+        let freed = sweep_malloc_objects();
+        trace_phase_record(trace, "malloc_sweep", phase_start);
+        freed
+    } else {
+        0
+    };
     unsafe {
         collector.clear_marks();
     }
 
     CONS_PINNED.with(|s| s.borrow_mut().clear());
-    let freed_bytes = from_space_bytes.saturating_sub(collector.live_from_bytes) as u64;
+    let nursery_freed_bytes = from_space_bytes.saturating_sub(collector.live_from_bytes) as u64;
+    let freed_bytes = nursery_freed_bytes.saturating_add(malloc_freed_bytes);
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = collector.stats;
         trace.sweep = SweepTraceStats {
@@ -6602,27 +6609,9 @@ fn sweep() -> u64 {
     sweep_with_age_bump(false).freed_bytes
 }
 
-/// Sweep variant that folds the minor-GC age-bump pass into the same arena walk.
-///
-/// `gc_collect_minor` previously did:
-///   1. arena_walk_objects to update HAS_SURVIVED/TENURED on marked young objects
-///   2. arena_walk_objects_with_block_index in `sweep` to free dead objects and
-///      compute block_has_live
-///
-/// Both walks visit every arena object header. With ~1.6M objects per cycle in
-/// perf-comprehensive, removing the dedicated age-bump walk saves ~10ms/cycle
-/// and avoids touching every header twice. The age-bump update is folded into
-/// the sweep walk's "alive" branches, gated on `block_idx < general_n` so only
-/// general-arena (nursery) objects age — longlived and old-gen are skipped, as
-/// in the original standalone age-bump pass (which used `pointer_in_old_gen`
-/// for the same gate).
-fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
+fn sweep_malloc_objects() -> u64 {
     let mut freed_bytes: u64 = 0;
-    let mut retained_forwarded_stub_objects: usize = 0;
-    let mut retained_forwarded_stub_bytes: usize = 0;
 
-    // Sweep malloc objects.
-    //
     // Lazy-set: instead of `set.remove(...)` per freed object (50 ns ×
     // tens of thousands of dead entries = several ms per GC cycle), we
     // flip `set_dirty = true` once and the next `gc_realloc` rebuilds
@@ -6690,6 +6679,28 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
             s.set_dirty = true;
         }
     });
+
+    freed_bytes
+}
+
+/// Sweep variant that folds the minor-GC age-bump pass into the same arena walk.
+///
+/// `gc_collect_minor` previously did:
+///   1. arena_walk_objects to update HAS_SURVIVED/TENURED on marked young objects
+///   2. arena_walk_objects_with_block_index in `sweep` to free dead objects and
+///      compute block_has_live
+///
+/// Both walks visit every arena object header. With ~1.6M objects per cycle in
+/// perf-comprehensive, removing the dedicated age-bump walk saves ~10ms/cycle
+/// and avoids touching every header twice. The age-bump update is folded into
+/// the sweep walk's "alive" branches, gated on `block_idx < general_n` so only
+/// general-arena (nursery) objects age — longlived and old-gen are skipped, as
+/// in the original standalone age-bump pass (which used `pointer_in_old_gen`
+/// for the same gate).
+fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
+    let mut freed_bytes = sweep_malloc_objects();
+    let mut retained_forwarded_stub_objects: usize = 0;
+    let mut retained_forwarded_stub_bytes: usize = 0;
 
     // Sweep arena objects. Two-phase strategy:
     //
@@ -7082,7 +7093,7 @@ pub extern "C" fn js_gc_write_barriers_emitted(active: u32) {
         let _ = GENERATED_WRITE_BARRIERS_EMITTED.fetch_update(
             Ordering::AcqRel,
             Ordering::Acquire,
-            |count| (count > 0).then_some(count - 1),
+            |count| count.checked_sub(1),
         );
     }
 }
@@ -9978,6 +9989,7 @@ mod tests {
     struct GcTriggerThresholdTestGuard {
         next_arena_trigger: usize,
         next_malloc_trigger: usize,
+        malloc_step: usize,
     }
 
     impl GcTriggerThresholdTestGuard {
@@ -9992,9 +10004,11 @@ mod tests {
                 trigger.set(usize::MAX);
                 previous
             });
+            let malloc_step = GC_MALLOC_COUNT_STEP.with(|step| step.get());
             Self {
                 next_arena_trigger,
                 next_malloc_trigger,
+                malloc_step,
             }
         }
 
@@ -10008,6 +10022,7 @@ mod tests {
         fn drop(&mut self) {
             GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(self.next_arena_trigger));
             GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(self.next_malloc_trigger));
+            GC_MALLOC_COUNT_STEP.with(|step| step.set(self.malloc_step));
         }
     }
 
@@ -10477,14 +10492,20 @@ mod tests {
     }
 
     #[test]
-    fn test_copying_minor_falls_back_when_malloc_sweep_due_on_arena_trigger() {
-        let _guard = CopyingNurseryTestGuard::new(1);
+    fn test_copying_minor_sweeps_malloc_when_due_on_arena_trigger() {
+        let _guard = CopyingNurseryTestGuard::new(2);
         let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        assert!(!copied_minor_can_skip_malloc_sweep(
-            GcTriggerKind::MallocCount
-        ));
-        let live = young_leaf();
-        js_shadow_slot_set(0, ptr_bits(live));
+        assert!(copied_minor_malloc_sweep_due(GcTriggerKind::MallocCount));
+        let live_young = young_leaf();
+        js_shadow_slot_set(0, ptr_bits(live_young));
+        let live_malloc = gc_malloc(
+            std::mem::size_of::<crate::closure::ClosureHeader>(),
+            GC_TYPE_CLOSURE,
+        );
+        unsafe {
+            init_test_closure(live_malloc);
+        }
+        js_shadow_slot_set(1, ptr_bits(live_malloc as usize));
 
         let churn_headers = allocate_dead_malloc_churn_headers(32);
         assert_eq!(
@@ -10492,10 +10513,9 @@ mod tests {
             churn_headers.len(),
             "malloc churn should be tracked before the collection"
         );
+        let tracked_before = malloc_object_count();
         trigger_guard.make_malloc_sweep_due();
-        assert!(!copied_minor_can_skip_malloc_sweep(
-            GcTriggerKind::ArenaBytes
-        ));
+        assert!(copied_minor_malloc_sweep_due(GcTriggerKind::ArenaBytes));
 
         let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
             kind: GcTriggerKind::ArenaBytes,
@@ -10504,17 +10524,77 @@ mod tests {
         let trace = outcome.trace.expect("test requested GC trace capture");
 
         assert_eq!(
-            trace.copying_nursery.fallback_reason, "malloc_sweep_due",
-            "arena-triggered minor GC must not use copied-minor when malloc sweep is due"
+            trace.copying_nursery.fallback_reason, "none",
+            "arena-triggered copied-minor GC should remain eligible when malloc sweep is due"
         );
         assert_eq!(
             tracked_malloc_headers_matching(&churn_headers),
             0,
-            "minor GC must sweep dead malloc churn when malloc pressure is due"
+            "copied-minor GC must sweep dead malloc churn when malloc pressure is due"
+        );
+        assert!(
+            malloc_user_ptr_tracked(live_malloc),
+            "live malloc root should survive copied-minor malloc sweep"
+        );
+        assert!(
+            malloc_object_count() < tracked_before,
+            "malloc sweep should reduce the tracked malloc object count"
         );
         assert!(
             outcome.freed_bytes > 0,
-            "sweeping minor path should report malloc reclaim"
+            "copied-minor path should report malloc reclaim"
+        );
+    }
+
+    #[test]
+    fn test_gc_check_trigger_copied_minor_malloc_sweep_rebaselines_trigger() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let live_malloc = gc_malloc(
+            std::mem::size_of::<crate::closure::ClosureHeader>(),
+            GC_TYPE_CLOSURE,
+        );
+        unsafe {
+            init_test_closure(live_malloc);
+        }
+        js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+
+        let churn_headers = allocate_dead_malloc_churn_headers(48);
+        assert_eq!(
+            tracked_malloc_headers_matching(&churn_headers),
+            churn_headers.len(),
+            "malloc churn should be tracked before gc_check_trigger"
+        );
+        let tracked_before = malloc_object_count();
+        trigger_guard.make_malloc_sweep_due();
+        let collections_before = gc_collection_count();
+
+        gc_check_trigger();
+
+        assert!(
+            gc_collection_count() > collections_before,
+            "gc_check_trigger should collect when malloc pressure is due"
+        );
+        assert_eq!(
+            tracked_malloc_headers_matching(&churn_headers),
+            0,
+            "copied-minor collection should reclaim dead malloc churn"
+        );
+        assert!(
+            malloc_user_ptr_tracked(live_malloc),
+            "live malloc root should survive gc_check_trigger collection"
+        );
+        let survivors_after = malloc_object_count();
+        assert!(
+            survivors_after < tracked_before,
+            "malloc sweep should reduce MALLOC_STATE.objects"
+        );
+        let malloc_step_after = GC_MALLOC_COUNT_STEP.with(|step| step.get());
+        let next_malloc_trigger = GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.get());
+        assert_eq!(
+            next_malloc_trigger,
+            survivors_after + malloc_step_after,
+            "gc_check_trigger should rebaseline the next malloc trigger to survivors + step"
         );
     }
 
