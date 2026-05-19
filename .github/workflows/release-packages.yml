@@ -551,6 +551,393 @@ jobs:
           path: staging/
 
   # ---------------------------------------------------------------------------
+  # Build per-target cross-compile staticlib bundles (issue #1083)
+  #
+  # The host bundles emitted by `build:` above ship only host-triple .a's, so
+  # every consumer build worker that cross-compiles to a non-host target has
+  # to re-derive the cross toolchain env on each `perry update` (Apple
+  # sysroot vars, NDK clang paths, MSVC `lib.exe` shims, alsa/audio dev
+  # headers, aws-lc-sys jitterentropy disable, etc.) and pay a 5-25 min
+  # cargo rebuild per target. We already build these libs correctly in
+  # release CI's `build:` matrix — this job just packages them into
+  # standalone tarballs so the worker can `tar xzf` instead of rebuild.
+  #
+  # Each `perry-cross-<triple>.tar.gz` ships:
+  #   libperry_runtime.a    (the cross-compiled runtime)
+  #   libperry_stdlib.a     (the cross-compiled stdlib)
+  #   libperry_ui_<plat>.a  (the cross-compiled UI backend, when applicable)
+  #   manifest.json         (perry_version + target_triple + sha256+size per file)
+  #
+  # Each matrix entry runs on the natural host runner for its toolchain:
+  #   - Apple targets: macos-14 (real Xcode + SDKs)
+  #   - Android      : ubuntu-24.04 + pre-installed NDK
+  #   - Windows MSVC : windows-latest (clang-cl + lib.exe)
+  # — so no Linux→Apple sysroot or Linux→Windows VM dance is needed inside
+  # this workflow.
+  # ---------------------------------------------------------------------------
+  build-cross:
+    needs: await-tests
+    strategy:
+      # Each leg is independent; let one Tier-3 failure not cancel the
+      # other targets so we still ship the bundles that did build.
+      fail-fast: false
+      matrix:
+        include:
+          # --- Apple, Tier-2 (stable) ---------------------------------------
+          - os: macos-14
+            target: aarch64-apple-darwin
+            ui_crate: perry-ui-macos
+            ui_lib: libperry_ui_macos.a
+            tier3: false
+          - os: macos-15
+            target: x86_64-apple-darwin
+            ui_crate: perry-ui-macos
+            ui_lib: libperry_ui_macos.a
+            tier3: false
+          - os: macos-14
+            target: aarch64-apple-ios
+            ui_crate: perry-ui-ios
+            ui_lib: libperry_ui_ios.a
+            tier3: false
+          - os: macos-14
+            target: aarch64-apple-ios-sim
+            ui_crate: perry-ui-ios
+            ui_lib: libperry_ui_ios.a
+            tier3: false
+          # --- Apple, Tier-3 (nightly + build-std) --------------------------
+          # tvOS / visionOS are Rust Tier-3: no prebuilt std, so we install
+          # nightly + rust-src and pass `-Zbuild-std=core,std,panic_abort`
+          # in the build step below. Mirrors the existing `build:` job's
+          # tvos/visionos handling. watchOS is currently dropped — see the
+          # comment in `build:` (ring 0.17.14 pointer-size assertion fails
+          # for `arm64_32-apple-watchos`).
+          - os: macos-14
+            target: aarch64-apple-tvos
+            ui_crate: perry-ui-tvos
+            ui_lib: libperry_ui_tvos.a
+            tier3: true
+          - os: macos-14
+            target: aarch64-apple-tvos-sim
+            ui_crate: perry-ui-tvos
+            ui_lib: libperry_ui_tvos.a
+            tier3: true
+          - os: macos-14
+            target: aarch64-apple-visionos
+            ui_crate: perry-ui-visionos
+            ui_lib: libperry_ui_visionos.a
+            tier3: true
+          - os: macos-14
+            target: aarch64-apple-visionos-sim
+            ui_crate: perry-ui-visionos
+            ui_lib: libperry_ui_visionos.a
+            tier3: true
+          # --- Android (NDK on Linux runner) --------------------------------
+          # perry-ui-android requires the NDK clang++ wrapper and JNI; the
+          # existing test.yml leg already cross-compiles it on ubuntu-24.04,
+          # so we mirror that env here. x86_64 included so emulator builds
+          # also have prebuilt libs.
+          - os: ubuntu-24.04
+            target: aarch64-linux-android
+            ui_crate: perry-ui-android
+            ui_lib: libperry_ui_android.a
+            tier3: false
+          - os: ubuntu-24.04
+            target: x86_64-linux-android
+            ui_crate: perry-ui-android
+            ui_lib: libperry_ui_android.a
+            tier3: false
+          # --- Windows MSVC (native runner) ---------------------------------
+          # Only x86_64 today. perry's compile.rs maps `--target windows`
+          # to `x86_64-pc-windows-msvc` (compile.rs:1009); ARM64 Windows
+          # support is a separate follow-up — re-add `aarch64-pc-windows-msvc`
+          # here once the CLI knows about it.
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ui_crate: perry-ui-windows
+            ui_lib: perry_ui_windows.lib
+            tier3: false
+
+    runs-on: ${{ matrix.os }}
+    env:
+      # Match `build:` for macOS object-file version tags so bottle-linked
+      # .a's don't emit "built for newer 'macOS' version" warnings against
+      # users on macOS 13.
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust stable + cross target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Rust nightly + rust-src (Tier-3 only)
+        if: matrix.tier3
+        run: rustup toolchain install nightly --component rust-src --profile minimal
+
+      # Same cache shape as `build:` so the cross legs share crate compiles
+      # across release cycles. Keyed on (target, Cargo.lock) — first run on a
+      # new target is cold, but every subsequent release-tag reuses the
+      # SWC/llvm-sys/webkit etc. precompile from the prior cycle.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-cross-${{ matrix.target }}"
+
+      # --- Per-runner toolchain wiring --------------------------------------
+      # Each of these blocks installs what the cross target needs that's NOT
+      # already on the runner image. Apple runners get Xcode for free; Linux
+      # runners get GTK/audio dev headers for the host build, but we don't
+      # need those here because we're cross-compiling.
+
+      - name: Wire Android NDK (Linux runner, android targets)
+        if: startsWith(matrix.target, 'aarch64-linux-android') || startsWith(matrix.target, 'x86_64-linux-android')
+        run: |
+          set -euo pipefail
+          # Reuse test.yml's NDK discovery — same precedence chain.
+          NDK=""
+          if [ -n "${ANDROID_NDK_HOME:-}" ]; then
+            NDK="$ANDROID_NDK_HOME"
+          elif [ -d "${ANDROID_HOME:-}/ndk-bundle" ]; then
+            NDK="$ANDROID_HOME/ndk-bundle"
+          elif [ -d "${ANDROID_HOME:-}/ndk" ]; then
+            NDK=$(ls -1d "$ANDROID_HOME/ndk/"*/ 2>/dev/null | sort -V | tail -1)
+            NDK="${NDK%/}"
+          fi
+          if [ -z "$NDK" ]; then
+            echo "::error::No Android NDK found on runner — cannot cross-build ${{ matrix.target }}"
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          HOST_TAG=linux-x86_64
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin"
+          TRIPLE="${{ matrix.target }}"
+          # NDK clang wrappers are named `<triple><api>-clang` (e.g.
+          # `aarch64-linux-android24-clang`); the API suffix is mandatory
+          # — `<triple>-clang` (no API) doesn't exist. We glob the highest
+          # API present on the runner image, matching test.yml's logic.
+          CLANG=$(ls "$TOOLCHAIN"/${TRIPLE}*-clang 2>/dev/null | sort -V | tail -1)
+          CLANGXX=$(ls "$TOOLCHAIN"/${TRIPLE}*-clang++ 2>/dev/null | sort -V | tail -1)
+          if [ -z "$CLANG" ]; then
+            echo "::error::Could not locate NDK clang under $TOOLCHAIN for $TRIPLE"
+            exit 1
+          fi
+          # cc-rs lookup vars: `CC_<triple>` / `CXX_<triple>` / `AR_<triple>`
+          # with `-` → `_`. The cargo-target linker var uses uppercase + `_`.
+          TRIPLE_UNDER=$(echo "$TRIPLE" | tr '-' '_')
+          TRIPLE_UPPER=$(echo "$TRIPLE_UNDER" | tr '[:lower:]' '[:upper:]')
+          {
+            echo "CC_${TRIPLE_UNDER}=$CLANG"
+            echo "CXX_${TRIPLE_UNDER}=$CLANGXX"
+            echo "AR_${TRIPLE_UNDER}=$TOOLCHAIN/llvm-ar"
+            echo "CARGO_TARGET_${TRIPLE_UPPER}_LINKER=$CLANG"
+          } >> "$GITHUB_ENV"
+          echo "NDK wired for $TRIPLE: $CLANG"
+
+      # The aarch64 MSVC target is Tier-2 but Rust still requires the cross
+      # std component to be installed by name (the matrix `targets:` field
+      # above handles that). Nothing else needed — windows-latest already
+      # ships clang-cl + lib.exe through Visual Studio.
+
+      # --- Build the three (or two, when UI is N/A) static libs ------------
+      - name: Build runtime + stdlib + UI (stable, Tier-2)
+        if: ${{ !matrix.tier3 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --target ${{ matrix.target }} -p perry-runtime
+          cargo build --release --target ${{ matrix.target }} -p perry-stdlib
+          # UI crate is matrix-driven. perry-ui-android needs the NDK env
+          # we wired above; perry-ui-windows builds against the MSVC SDK
+          # already on windows-latest. Both go through plain `cargo build`.
+          cargo build --release --target ${{ matrix.target }} -p ${{ matrix.ui_crate }}
+
+      - name: Build runtime + stdlib + UI (nightly + build-std, Tier-3)
+        if: matrix.tier3
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +nightly build --release \
+            -Z build-std=core,std,panic_abort \
+            --target ${{ matrix.target }} \
+            -p perry-runtime -p perry-stdlib -p ${{ matrix.ui_crate }}
+
+      # --- Package + manifest ----------------------------------------------
+      # Manifest schema (per issue #1083):
+      #   { "perry_version": "<x.y.z>", "target_triple": "<triple>",
+      #     "files": [{"path": "...", "sha256": "...", "size": N}, ...] }
+      # Computed on the runner (sha256sum on Linux, shasum on macOS,
+      # PowerShell Get-FileHash on Windows). We write the manifest with a
+      # plain shell here-doc + jq concatenation; jq is on every GHA runner
+      # so we don't pull in a separate scripting dep.
+      - name: Stage cross artifacts + manifest (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          UI_LIB="${{ matrix.ui_lib }}"
+          PERRY_VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          STAGING="cross-staging"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING"
+          # Required runtime + stdlib (always present on a successful build).
+          for lib in libperry_runtime.a libperry_stdlib.a; do
+            src="target/${TARGET}/release/${lib}"
+            if [ ! -f "$src" ]; then
+              echo "::error::Expected $src after build but it's missing — aborting bundle."
+              exit 1
+            fi
+            cp "$src" "$STAGING/$lib"
+          done
+          # UI lib (optional — perry-ui-android failures are non-fatal in
+          # principle, but we built it above so this should exist; we hard-fail
+          # if it's missing so the worker doesn't see a silently-degraded
+          # bundle).
+          UI_SRC="target/${TARGET}/release/${UI_LIB}"
+          if [ ! -f "$UI_SRC" ]; then
+            echo "::error::UI lib $UI_SRC missing after build — aborting bundle."
+            exit 1
+          fi
+          cp "$UI_SRC" "$STAGING/$UI_LIB"
+          # SHA256 + size for each staged file. macOS ships `shasum -a 256`,
+          # Linux ships `sha256sum` — wrap both behind one alias.
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha() { sha256sum "$1" | cut -d' ' -f1; }
+          else
+            sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+          fi
+          # `stat -c %s` (GNU) / `stat -f %z` (BSD) — choose at runtime.
+          if stat -c %s "$STAGING/libperry_runtime.a" >/dev/null 2>&1; then
+            sz() { stat -c %s "$1"; }
+          else
+            sz() { stat -f %z "$1"; }
+          fi
+          # Build the manifest with jq so we get correct JSON escaping
+          # (paths and triples are safe ASCII today, but the schema is the
+          # contract — let jq own it).
+          files_json=$(jq -n '[]')
+          for f in libperry_runtime.a libperry_stdlib.a "$UI_LIB"; do
+            files_json=$(jq -n --argjson acc "$files_json" \
+              --arg path "$f" \
+              --arg sha "$(sha "$STAGING/$f")" \
+              --argjson size "$(sz "$STAGING/$f")" \
+              '$acc + [{path: $path, sha256: $sha, size: $size}]')
+          done
+          jq -n --arg v "$PERRY_VERSION" --arg t "$TARGET" --argjson files "$files_json" \
+            '{perry_version: $v, target_triple: $t, files: $files}' \
+            > "$STAGING/manifest.json"
+          cat "$STAGING/manifest.json"
+          tar czf "perry-cross-${TARGET}.tar.gz" -C "$STAGING" .
+
+      - name: Stage cross artifacts + manifest (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = "${{ matrix.target }}"
+          $uiLib  = "${{ matrix.ui_lib }}"
+          $perryVersion = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' |
+            Select-Object -First 1).Matches[0].Groups[1].Value
+          $staging = "cross-staging"
+          if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+          New-Item -ItemType Directory -Path $staging | Out-Null
+          # Windows MSVC builds emit `perry_runtime.lib` / `perry_stdlib.lib`
+          # (no `lib` prefix, `.lib` extension) — match the host-build
+          # behavior at line ~448 above.
+          $libs = @("perry_runtime.lib", "perry_stdlib.lib", $uiLib)
+          foreach ($lib in $libs) {
+            $src = "target/$target/release/$lib"
+            if (-not (Test-Path $src)) {
+              Write-Error "Expected $src after build but it's missing — aborting bundle."
+              exit 1
+            }
+            Copy-Item $src (Join-Path $staging $lib)
+          }
+          # Build manifest with sha256 + size for each file.
+          $entries = @()
+          foreach ($lib in $libs) {
+            $path = Join-Path $staging $lib
+            $hash = (Get-FileHash -Algorithm SHA256 $path).Hash.ToLower()
+            $size = (Get-Item $path).Length
+            $entries += [pscustomobject]@{ path = $lib; sha256 = $hash; size = $size }
+          }
+          $manifest = [pscustomobject]@{
+            perry_version = $perryVersion
+            target_triple = $target
+            files         = $entries
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Out-File -Encoding utf8 (Join-Path $staging "manifest.json")
+          Get-Content (Join-Path $staging "manifest.json")
+          # tar is available on windows-latest (BSD tar 3.x preinstalled by
+          # MS since 2018); produce the same .tar.gz extension as Unix so
+          # consumers only have one filename pattern to handle.
+          tar czf "perry-cross-$target.tar.gz" -C $staging .
+
+      - name: Compute SHA256 sidecar (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="perry-cross-${{ matrix.target }}.tar.gz"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+          else
+            shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+          fi
+          cat "$ARCHIVE.sha256"
+
+      - name: Compute SHA256 sidecar (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "perry-cross-${{ matrix.target }}.tar.gz"
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          "$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
+          Get-Content "$archive.sha256"
+
+      - name: Upload cross release asset (Unix)
+        if: runner.os != 'Windows' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name }}"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+            echo "workflow_dispatch fallback: uploading to latest release tag $TAG"
+          fi
+          ARCHIVE="perry-cross-${{ matrix.target }}.tar.gz"
+          gh release upload "$TAG" "$ARCHIVE" --clobber
+          gh release upload "$TAG" "$ARCHIVE.sha256" --clobber
+
+      - name: Upload cross release asset (Windows)
+        if: runner.os == 'Windows' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          if (-not $tag) {
+            $tag = (gh release list --limit 1 --json tagName --jq '.[0].tagName')
+            Write-Host "workflow_dispatch fallback: uploading to latest release tag $tag"
+          }
+          $archive = "perry-cross-${{ matrix.target }}.tar.gz"
+          gh release upload "$tag" "$archive" --clobber
+          gh release upload "$tag" "$archive.sha256" --clobber
+
+      # Always upload as a workflow artifact too — lets a maintainer
+      # pull the bundle off a workflow_dispatch run that didn't target an
+      # existing release (e.g. a smoke-test on a branch).
+      - name: Upload cross build artifact (for inspection)
+        uses: actions/upload-artifact@v7
+        with:
+          name: perry-cross-${{ matrix.target }}
+          path: |
+            perry-cross-${{ matrix.target }}.tar.gz
+            perry-cross-${{ matrix.target }}.tar.gz.sha256
+
+  # ---------------------------------------------------------------------------
   # Update Homebrew tap
   # ---------------------------------------------------------------------------
   homebrew:
