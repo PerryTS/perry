@@ -235,14 +235,22 @@ if not cycles:
 
 for idx, cycle in enumerate(cycles):
     reason = nested(cycle, "copying_nursery", "fallback_reason")
+    eligible = nested(cycle, "copying_nursery", "eligible")
     if reason not in allowed_fallback_reasons:
         errors.append(f"cycle {idx}: unexpected fallback_reason={reason!r}")
+    if not isinstance(eligible, bool):
+        errors.append(f"cycle {idx}: copying_nursery.eligible={eligible!r}, want bool")
+    elif reason == "none" and eligible is not True:
+        errors.append(f"cycle {idx}: eligible={eligible!r} with fallback_reason='none'")
+    elif reason != "none" and eligible is not False:
+        errors.append(f"cycle {idx}: eligible={eligible!r} with fallback_reason={reason!r}")
 
 if mode == "copied_minor_precise":
     for idx, cycle in enumerate(cycles):
         if cycle.get("collection_kind") != "minor":
             errors.append(f"cycle {idx}: collection_kind={cycle.get('collection_kind')!r}, want 'minor'")
         reason = nested(cycle, "copying_nursery", "fallback_reason")
+        eligible = nested(cycle, "copying_nursery", "eligible")
         rebuilds = nested(cycle, "copying_nursery", "malloc_registry_rebuilds", default=-1)
         conservative_pinned_bytes = cycle.get("conservative_pinned_bytes", -1)
         legacy_pinned_bytes = nested(
@@ -250,6 +258,8 @@ if mode == "copied_minor_precise":
         )
         if reason != "none":
             errors.append(f"cycle {idx}: fallback_reason={reason!r}, want 'none'")
+        if eligible is not True:
+            errors.append(f"cycle {idx}: eligible={eligible!r}, want true")
         if rebuilds != 0:
             errors.append(f"cycle {idx}: malloc_registry_rebuilds={rebuilds}, want 0")
         if conservative_pinned_bytes != 0:
@@ -321,6 +331,8 @@ elif mode == "barriers_inactive":
     if not matches:
         errors.append("no trace reported barriers_inactive for copying and evacuation policy")
     for idx, cycle in enumerate(matches):
+        if nested(cycle, "copying_nursery", "eligible") is not False:
+            errors.append(f"barriers-inactive trace {idx}: copied-minor unexpectedly eligible")
         if nested(cycle, "evacuation_policy", "enabled") is not False:
             errors.append(f"barriers-inactive trace {idx}: evacuation policy unexpectedly enabled")
         if nested(cycle, "evacuation", "moved_bytes", default=-1) != 0:
