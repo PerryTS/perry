@@ -2432,26 +2432,30 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     // MARK_SEEDS persists across GC cycles. Clear before any try_mark
     // call so trace sees only this cycle's freshly-marked headers.
     clear_mark_seeds();
-    if let Some(freed_bytes) = gc_collect_minor_copying_fast_path(&mut trace, start) {
-        let elapsed_us = start.elapsed().as_micros() as u64;
-        GC_STATS.with(|stats| {
-            let mut stats = stats.borrow_mut();
-            stats.collection_count += 1;
-            stats.total_freed_bytes += freed_bytes;
-            stats.last_pause_us = elapsed_us;
-        });
-        GC_FLAGS.with(|f| {
-            let cur = f.get();
-            if prev_in_alloc != 0 {
-                f.set(cur | GC_FLAG_IN_ALLOC);
-            } else {
-                f.set(cur & !GC_FLAG_IN_ALLOC);
+    if copied_minor_can_skip_malloc_sweep(trigger.kind) {
+        if let Some(freed_bytes) = gc_collect_minor_copying_fast_path(&mut trace, start) {
+            let elapsed_us = start.elapsed().as_micros() as u64;
+            GC_STATS.with(|stats| {
+                let mut stats = stats.borrow_mut();
+                stats.collection_count += 1;
+                stats.total_freed_bytes += freed_bytes;
+                stats.last_pause_us = elapsed_us;
+            });
+            GC_FLAGS.with(|f| {
+                let cur = f.get();
+                if prev_in_alloc != 0 {
+                    f.set(cur | GC_FLAG_IN_ALLOC);
+                } else {
+                    f.set(cur & !GC_FLAG_IN_ALLOC);
+                }
+            });
+            if let Some(trace) = trace.as_mut() {
+                trace.pause_us = elapsed_us;
             }
-        });
-        if let Some(trace) = trace.as_mut() {
-            trace.pause_us = elapsed_us;
+            return GcCollectOutcome { freed_bytes, trace };
         }
-        return GcCollectOutcome { freed_bytes, trace };
+    } else if let Some(trace) = trace.as_mut() {
+        trace.copying_nursery.fallback_reason = "malloc_sweep_due";
     }
     clear_mark_seeds();
     let phase_start = trace_phase_start(&trace);
@@ -2667,6 +2671,14 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         trace.pause_us = elapsed_us;
     }
     GcCollectOutcome { freed_bytes, trace }
+}
+
+#[inline]
+fn copied_minor_can_skip_malloc_sweep(trigger_kind: GcTriggerKind) -> bool {
+    if matches!(trigger_kind, GcTriggerKind::MallocCount) {
+        return false;
+    }
+    malloc_object_count() < GC_NEXT_MALLOC_TRIGGER.with(|c| c.get())
 }
 
 /// Generational GC (minor collection on every trigger) is now the
@@ -9963,6 +9975,42 @@ mod tests {
         }
     }
 
+    struct GcTriggerThresholdTestGuard {
+        next_arena_trigger: usize,
+        next_malloc_trigger: usize,
+    }
+
+    impl GcTriggerThresholdTestGuard {
+        fn suppress_automatic_triggers() -> Self {
+            let next_arena_trigger = GC_NEXT_TRIGGER_BYTES.with(|trigger| {
+                let previous = trigger.get();
+                trigger.set(usize::MAX);
+                previous
+            });
+            let next_malloc_trigger = GC_NEXT_MALLOC_TRIGGER.with(|trigger| {
+                let previous = trigger.get();
+                trigger.set(usize::MAX);
+                previous
+            });
+            Self {
+                next_arena_trigger,
+                next_malloc_trigger,
+            }
+        }
+
+        fn make_malloc_sweep_due(&self) {
+            let current = malloc_object_count();
+            GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(current));
+        }
+    }
+
+    impl Drop for GcTriggerThresholdTestGuard {
+        fn drop(&mut self) {
+            GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(self.next_arena_trigger));
+            GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(self.next_malloc_trigger));
+        }
+    }
+
     static GENERATED_BARRIER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     struct GeneratedWriteBarrierTestGuard {
@@ -10063,6 +10111,61 @@ mod tests {
         (*closure).func_ptr = std::ptr::null();
         (*closure).capture_count = 0;
         (*closure).type_tag = crate::closure::CLOSURE_MAGIC;
+    }
+
+    #[inline(never)]
+    fn allocate_dead_malloc_churn_headers(per_type: usize) -> Vec<usize> {
+        let mut headers = Vec::with_capacity(per_type * 3);
+        for _ in 0..per_type {
+            let ptr = gc_malloc(32, GC_TYPE_STRING);
+            unsafe {
+                std::ptr::write_bytes(ptr, 0xA5, 32);
+                headers.push(header_from_user_ptr(ptr) as usize);
+            }
+        }
+        for _ in 0..per_type {
+            let ptr = gc_malloc(
+                std::mem::size_of::<crate::closure::ClosureHeader>(),
+                GC_TYPE_CLOSURE,
+            );
+            unsafe {
+                init_test_closure(ptr);
+                headers.push(header_from_user_ptr(ptr) as usize);
+            }
+        }
+        for _ in 0..per_type {
+            let ptr = gc_malloc(
+                std::mem::size_of::<crate::promise::Promise>(),
+                GC_TYPE_PROMISE,
+            ) as *mut crate::promise::Promise;
+            unsafe {
+                std::ptr::write(
+                    ptr,
+                    crate::promise::Promise {
+                        state: crate::promise::PromiseState::Pending,
+                        value: 0.0,
+                        reason: 0.0,
+                        on_fulfilled: std::ptr::null(),
+                        on_rejected: std::ptr::null(),
+                        next: std::ptr::null_mut(),
+                        async_id: 0,
+                        trigger_async_id: 0,
+                    },
+                );
+                headers.push(header_from_user_ptr(ptr as *const u8) as usize);
+            }
+        }
+        headers
+    }
+
+    fn tracked_malloc_headers_matching(headers: &[usize]) -> usize {
+        MALLOC_STATE.with(|state| {
+            let state = state.borrow();
+            headers
+                .iter()
+                .filter(|&&addr| state.objects.iter().any(|&header| header as usize == addr))
+                .count()
+        })
     }
 
     unsafe fn alloc_old_test_object(
@@ -10371,6 +10474,48 @@ mod tests {
 
         assert_eq!(snapshot.arena.in_use_bytes, 0);
         assert!(crate::arena::pointer_in_nursery(live_after));
+    }
+
+    #[test]
+    fn test_copying_minor_falls_back_when_malloc_sweep_due_on_arena_trigger() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        assert!(!copied_minor_can_skip_malloc_sweep(
+            GcTriggerKind::MallocCount
+        ));
+        let live = young_leaf();
+        js_shadow_slot_set(0, ptr_bits(live));
+
+        let churn_headers = allocate_dead_malloc_churn_headers(32);
+        assert_eq!(
+            tracked_malloc_headers_matching(&churn_headers),
+            churn_headers.len(),
+            "malloc churn should be tracked before the collection"
+        );
+        trigger_guard.make_malloc_sweep_due();
+        assert!(!copied_minor_can_skip_malloc_sweep(
+            GcTriggerKind::ArenaBytes
+        ));
+
+        let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
+            kind: GcTriggerKind::ArenaBytes,
+            steps_before: Some(GcStepSnapshot::current()),
+        });
+        let trace = outcome.trace.expect("test requested GC trace capture");
+
+        assert_eq!(
+            trace.copying_nursery.fallback_reason, "malloc_sweep_due",
+            "arena-triggered minor GC must not use copied-minor when malloc sweep is due"
+        );
+        assert_eq!(
+            tracked_malloc_headers_matching(&churn_headers),
+            0,
+            "minor GC must sweep dead malloc churn when malloc pressure is due"
+        );
+        assert!(
+            outcome.freed_bytes > 0,
+            "sweeping minor path should report malloc reclaim"
+        );
     }
 
     #[test]
