@@ -3654,6 +3654,8 @@ fn compile_function(
     } else {
         std::collections::HashMap::new()
     };
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 
     // Small leaf functions (≤ 8 statements) get alwaysinline so LLVM
     // exposes their operations to the caller's optimizer context — critical
@@ -3798,6 +3800,7 @@ fn compile_function(
         pending_declares: Vec::new(),
         integer_locals: &integer_locals,
         shadow_slot_map,
+        shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),
@@ -3874,7 +3877,7 @@ fn compile_function(
         ctx.buffer_data_slots.insert(p.id, (buf_slot, scope_idx));
     }
 
-    stmt::lower_stmts(&mut ctx, &f.body)
+    stmt::lower_top_level_stmts(&mut ctx, &f.body)
         .with_context(|| format!("lowering body of '{}'", f.name))?;
 
     // A function that falls off the end without an explicit `return`
@@ -4190,6 +4193,7 @@ fn compile_closure(
         pending_declares: Vec::new(),
         integer_locals: &integer_locals,
         shadow_slot_map: std::collections::HashMap::new(),
+        shadow_slot_clears_after_stmt: std::collections::HashMap::new(),
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),
@@ -4426,6 +4430,7 @@ fn compile_method(
         pending_declares: Vec::new(),
         integer_locals: &integer_locals,
         shadow_slot_map: std::collections::HashMap::new(),
+        shadow_slot_clears_after_stmt: std::collections::HashMap::new(),
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),
@@ -4910,6 +4915,7 @@ fn compile_module_entry(
             pending_declares: Vec::new(),
             integer_locals: &main_integer_locals,
             shadow_slot_map: std::collections::HashMap::new(),
+            shadow_slot_clears_after_stmt: std::collections::HashMap::new(),
             arena_state_slot: None,
             class_keys_slots: HashMap::new(),
             cached_lengths: HashMap::new(),
@@ -5295,6 +5301,7 @@ fn compile_module_entry(
             pending_declares: Vec::new(),
             integer_locals: &init_integer_locals,
             shadow_slot_map: std::collections::HashMap::new(),
+            shadow_slot_clears_after_stmt: std::collections::HashMap::new(),
             arena_state_slot: None,
             class_keys_slots: HashMap::new(),
             cached_lengths: HashMap::new(),
@@ -6188,6 +6195,7 @@ fn compile_static_method(
         pending_declares: Vec::new(),
         integer_locals: &integer_locals,
         shadow_slot_map: std::collections::HashMap::new(),
+        shadow_slot_clears_after_stmt: std::collections::HashMap::new(),
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),

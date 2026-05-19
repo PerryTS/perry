@@ -375,7 +375,8 @@ for test_file in "$TEST_DIR"/*.ts; do
     # `$(...)`, so capturing the exit code requires the file detour
     # rather than a `cmd | cap_output` pipeline.
     node_tmp=$(mktemp)
-    run_with_timeout 10 node --experimental-strip-types "$test_file" > "$node_tmp" 2>&1
+    run_with_timeout 10 env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
+        node --experimental-strip-types "$test_file" > "$node_tmp" 2>&1
     node_exit=$?
     node_output=$(cap_output < "$node_tmp")
     rm -f "$node_tmp"

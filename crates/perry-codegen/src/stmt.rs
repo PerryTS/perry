@@ -16,6 +16,17 @@ use crate::types::{DOUBLE, I32, I64, I8, PTR};
 /// statement splits control flow, `ctx.current_block` is updated to the
 /// "fall-through" block after the split.
 pub(crate) fn lower_stmts(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) -> Result<()> {
+    lower_stmts_inner(ctx, stmts, false)
+}
+
+/// Lower a user function's top-level statement list and apply the conservative
+/// shadow-slot clear plan computed for that exact list. Nested statement lists
+/// use `lower_stmts`, so this slice never clears inside loop/branch bodies.
+pub(crate) fn lower_top_level_stmts(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) -> Result<()> {
+    lower_stmts_inner(ctx, stmts, true)
+}
+
+fn lower_stmts_inner(ctx: &mut FnCtx<'_>, stmts: &[Stmt], emit_shadow_clears: bool) -> Result<()> {
     let mut i = 0;
     while i < stmts.len() {
         // Channel-reduction fusion: detect a length-3-or-4 sequence of
@@ -52,7 +63,11 @@ pub(crate) fn lower_stmts(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) -> Result<()> {
             {
                 if ctx.buffer_data_slots.contains_key(&reduction.array_id) {
                     crate::expr::lower_channel_reduction(ctx, &reduction)?;
+                    let last_lowered_idx = i + reduction.acc_ids.len() - 1;
                     i += reduction.acc_ids.len();
+                    if emit_shadow_clears && !ctx.block().is_terminated() {
+                        emit_shadow_clears_after_stmt(ctx, last_lowered_idx);
+                    }
                     if ctx.block().is_terminated() {
                         break;
                     }
@@ -68,9 +83,24 @@ pub(crate) fn lower_stmts(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) -> Result<()> {
         if ctx.block().is_terminated() {
             break;
         }
+        if emit_shadow_clears {
+            emit_shadow_clears_after_stmt(ctx, i);
+            if ctx.block().is_terminated() {
+                break;
+            }
+        }
         i += 1;
     }
     Ok(())
+}
+
+fn emit_shadow_clears_after_stmt(ctx: &mut FnCtx<'_>, stmt_idx: usize) {
+    let Some(slots) = ctx.shadow_slot_clears_after_stmt.get(&stmt_idx).cloned() else {
+        return;
+    };
+    for slot_idx in slots {
+        crate::expr::emit_shadow_slot_clear(ctx, slot_idx);
+    }
 }
 
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
@@ -823,12 +853,10 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 // Only fires when PERRY_SHADOW_STACK=1 is set at
                 // compile time, since the map is empty otherwise.
                 if !used_i32_init {
-                    if let Some(&slot_idx) = ctx.shadow_slot_map.get(id) {
-                        let v_i64 = ctx.block().bitcast_double_to_i64(&v);
-                        ctx.block().call_void(
-                            "js_shadow_slot_set",
-                            &[(I32, &slot_idx.to_string()), (I64, &v_i64)],
-                        );
+                    if ctx.shadow_slot_map.contains_key(id)
+                        && !crate::expr::expr_is_known_non_pointer_shadow_value(ctx, init_expr)
+                    {
+                        crate::expr::emit_shadow_slot_update_for_expr(ctx, *id, &v, init_expr);
                     }
                     // Seed the i32 slot from the init value when the local has one.
                     // Use fptosi→i64 + trunc→i32 instead of direct fptosi→i32

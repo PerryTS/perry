@@ -236,6 +236,7 @@ if not cycles:
 for idx, cycle in enumerate(cycles):
     reason = nested(cycle, "copying_nursery", "fallback_reason")
     eligible = nested(cycle, "copying_nursery", "eligible")
+    shadow_roots = cycle.get("shadow_roots")
     if reason not in allowed_fallback_reasons:
         errors.append(f"cycle {idx}: unexpected fallback_reason={reason!r}")
     if not isinstance(eligible, bool):
@@ -244,6 +245,23 @@ for idx, cycle in enumerate(cycles):
         errors.append(f"cycle {idx}: eligible={eligible!r} with fallback_reason='none'")
     elif reason != "none" and eligible is not False:
         errors.append(f"cycle {idx}: eligible={eligible!r} with fallback_reason={reason!r}")
+    if not isinstance(shadow_roots, dict):
+        errors.append(f"cycle {idx}: shadow_roots missing or not an object")
+    else:
+        for field in ("slots_scanned", "nonzero_slots", "pointer_roots", "rewritten_slots"):
+            value = shadow_roots.get(field)
+            if not isinstance(value, int) or value < 0:
+                errors.append(f"cycle {idx}: shadow_roots.{field}={value!r}, want non-negative int")
+        slots = shadow_roots.get("slots_scanned", -1)
+        nonzero = shadow_roots.get("nonzero_slots", -1)
+        pointers = shadow_roots.get("pointer_roots", -1)
+        rewritten = shadow_roots.get("rewritten_slots", -1)
+        if isinstance(slots, int) and isinstance(nonzero, int) and nonzero > slots:
+            errors.append(f"cycle {idx}: shadow_roots.nonzero_slots={nonzero} > slots_scanned={slots}")
+        if isinstance(nonzero, int) and isinstance(pointers, int) and pointers > nonzero:
+            errors.append(f"cycle {idx}: shadow_roots.pointer_roots={pointers} > nonzero_slots={nonzero}")
+        if isinstance(pointers, int) and isinstance(rewritten, int) and rewritten > pointers:
+            errors.append(f"cycle {idx}: shadow_roots.rewritten_slots={rewritten} > pointer_roots={pointers}")
 
 if mode == "copied_minor_precise":
     for idx, cycle in enumerate(cycles):
@@ -279,6 +297,16 @@ if mode == "copied_minor_precise":
     ]
     if not copied_productive:
         errors.append("no copied-minor trace copied or promoted any object")
+    nonzero_shadow_roots = [
+        nested(cycle, "shadow_roots", "nonzero_slots", default=0) for cycle in cycles
+    ]
+    if not nonzero_shadow_roots:
+        errors.append("copied-minor trace did not report shadow_roots.nonzero_slots")
+    elif nonzero_shadow_roots[-1] > nonzero_shadow_roots[0]:
+        errors.append(
+            "shadow_roots.nonzero_slots grew across copied-minor precise probe: "
+            f"{nonzero_shadow_roots}"
+        )
 elif mode == "evacuation_productive":
     productive = [
         cycle

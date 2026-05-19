@@ -888,6 +888,31 @@ struct ConservativePinTraceStats {
     pinned_bytes: usize,
 }
 
+#[derive(Clone, Copy, Default)]
+struct ShadowRootTraceStats {
+    slots_scanned: usize,
+    nonzero_slots: usize,
+    pointer_roots: usize,
+    rewritten_slots: usize,
+}
+
+impl ShadowRootTraceStats {
+    fn record_scan(&mut self, bits: u64) {
+        self.slots_scanned = self.slots_scanned.saturating_add(1);
+        if bits == 0 {
+            return;
+        }
+        self.nonzero_slots = self.nonzero_slots.saturating_add(1);
+        if shadow_slot_pointer_root(bits) {
+            self.pointer_roots = self.pointer_roots.saturating_add(1);
+        }
+    }
+
+    fn record_rewrite(&mut self) {
+        self.rewritten_slots = self.rewritten_slots.saturating_add(1);
+    }
+}
+
 const MIN_TENURED_NURSERY_BYTES: usize = 16 * 1024 * 1024;
 const MIN_CANDIDATE_BYTES: usize = 8 * 1024 * 1024;
 const MIN_CANDIDATE_RATIO_PCT: u64 = 25;
@@ -1021,6 +1046,7 @@ struct GcCycleTrace {
     conservative_pinned: usize,
     conservative_pinned_bytes: usize,
     legacy_copy_only_scanner_pinned: LegacyRootTraceStats,
+    shadow_roots: ShadowRootTraceStats,
     evacuation_policy: EvacuationPolicyDecision,
     evacuation: EvacuationTraceStats,
     copying_nursery: CopyingNurseryTraceStats,
@@ -1063,6 +1089,7 @@ impl GcCycleTrace {
             conservative_pinned: 0,
             conservative_pinned_bytes: 0,
             legacy_copy_only_scanner_pinned: LegacyRootTraceStats::default(),
+            shadow_roots: ShadowRootTraceStats::default(),
             evacuation_policy: EvacuationPolicyDecision::default(),
             evacuation: EvacuationTraceStats::default(),
             copying_nursery: CopyingNurseryTraceStats {
@@ -1118,6 +1145,12 @@ impl GcCycleTrace {
             "legacy_copy_only_scanner_pinned": {
                 "roots": self.legacy_copy_only_scanner_pinned.pinned_roots,
                 "bytes": self.legacy_copy_only_scanner_pinned.pinned_bytes,
+            },
+            "shadow_roots": {
+                "slots_scanned": self.shadow_roots.slots_scanned,
+                "nonzero_slots": self.shadow_roots.nonzero_slots,
+                "pointer_roots": self.shadow_roots.pointer_roots,
+                "rewritten_slots": self.shadow_roots.rewritten_slots,
             },
             "evacuation": {
                 "objects": self.evacuation.objects,
@@ -2582,7 +2615,10 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     } else {
         ConservativePinTraceStats::default()
     };
-    mark_mutable_root_slots(&valid_ptrs);
+    mark_mutable_root_slots(
+        &valid_ptrs,
+        trace.as_mut().map(|trace| &mut trace.shadow_roots),
+    );
     mark_mutable_registered_roots(&valid_ptrs);
     let legacy_root_stats = mark_registered_roots(&valid_ptrs, consider_evacuation);
     if let Some(trace) = trace.as_mut() {
@@ -2671,7 +2707,10 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         trace_phase_record(&mut trace, "evacuation", phase_start);
         if evacuation.objects > 0 {
             let phase_start = trace_phase_start(&trace);
-            rewrite_forwarded_references(&valid_ptrs);
+            rewrite_forwarded_references(
+                &valid_ptrs,
+                trace.as_mut().map(|trace| &mut trace.shadow_roots),
+            );
             evacuation_sticky =
                 rebuild_evacuated_old_to_young_remembered_set(&evacuated_new_headers);
             trace_phase_record(&mut trace, "reference_rewrite", phase_start);
@@ -2854,7 +2893,10 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     let conservative_root_stats = mark_stack_roots(&valid_ptrs);
 
     // 2. Scan mutable roots (shadow stack + registered globals)
-    mark_mutable_root_slots(&valid_ptrs);
+    mark_mutable_root_slots(
+        &valid_ptrs,
+        trace.as_mut().map(|trace| &mut trace.shadow_roots),
+    );
 
     // 3. Run runtime-owned mutable scanners, then legacy copy-only scanners.
     mark_mutable_registered_roots(&valid_ptrs);
@@ -4529,6 +4571,13 @@ fn visit_mutable_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
 }
 
 #[inline]
+fn shadow_slot_pointer_root(bits: u64) -> bool {
+    let tag = bits & TAG_MASK;
+    let addr = bits & POINTER_MASK;
+    addr != 0 && (tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG)
+}
+
+#[inline]
 fn mark_global_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
     // First try NaN-boxed interpretation (exported globals, closures, etc.).
     if try_mark_value(bits, valid_ptrs) {
@@ -4543,9 +4592,17 @@ fn mark_global_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
 }
 
 /// Mark mutable roots (shadow-stack slots and registered globals).
-fn mark_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
+fn mark_mutable_root_slots(
+    valid_ptrs: &ValidPointerSet,
+    mut shadow_stats: Option<&mut ShadowRootTraceStats>,
+) {
     visit_mutable_root_slots(|slot| unsafe {
         let bits = slot.read();
+        if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
+            if let Some(stats) = shadow_stats.as_mut() {
+                stats.record_scan(bits);
+            }
+        }
         if bits == 0 {
             return;
         }
@@ -6128,11 +6185,21 @@ fn gc_collect_minor_copying_fast_path(
 
     visit_mutable_root_slots(|slot| unsafe {
         let bits = slot.read();
+        if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
+            if let Some(trace) = trace.as_mut() {
+                trace.shadow_roots.record_scan(bits);
+            }
+        }
         if bits == 0 {
             return;
         }
         if let Some(new_bits) = collector.visit_value_bits(bits) {
             slot.write(new_bits);
+            if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
+                if let Some(trace) = trace.as_mut() {
+                    trace.shadow_roots.record_rewrite();
+                }
+            }
         }
     });
 
@@ -8378,7 +8445,10 @@ fn rewrite_remembered_dirty_ranges(valid_ptrs: &ValidPointerSet) {
 /// Walk every mutable root slot and rewrite forwarded pointers.
 /// Shadow slots are NaN-boxed JSValues; globals can be NaN-boxed or
 /// raw object-start pointers. `try_rewrite_value` handles both forms.
-fn rewrite_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
+fn rewrite_mutable_root_slots(
+    valid_ptrs: &ValidPointerSet,
+    mut shadow_stats: Option<&mut ShadowRootTraceStats>,
+) {
     visit_mutable_root_slots(|slot| unsafe {
         let bits = slot.read();
         if bits == 0 {
@@ -8386,6 +8456,11 @@ fn rewrite_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
         }
         if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
             slot.write(new_bits);
+            if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
+                if let Some(stats) = shadow_stats.as_mut() {
+                    stats.record_rewrite();
+                }
+            }
         }
     });
 }
@@ -8519,8 +8594,11 @@ fn verify_evacuated_no_stale_forwarded_refs(valid_ptrs: &ValidPointerSet) {
 /// root targets in `gc_collect_minor` keeps those references valid
 /// without rewriting). Legacy copy-only scanners still pin their own
 /// discoveries directly during root marking.
-fn rewrite_forwarded_references(valid_ptrs: &ValidPointerSet) {
-    rewrite_mutable_root_slots(valid_ptrs);
+fn rewrite_forwarded_references(
+    valid_ptrs: &ValidPointerSet,
+    shadow_stats: Option<&mut ShadowRootTraceStats>,
+) {
+    rewrite_mutable_root_slots(valid_ptrs, shadow_stats);
     rewrite_mutable_registered_roots(valid_ptrs);
     rewrite_remembered_dirty_ranges(valid_ptrs);
     rewrite_heap_objects(valid_ptrs);
@@ -10682,6 +10760,31 @@ mod tests {
     }
 
     #[test]
+    fn test_copying_minor_ignores_cleared_dead_shadow_slot_but_preserves_live_slot() {
+        let _guard = CopyingNurseryTestGuard::new(2);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let dead = young_leaf();
+        let live = young_leaf();
+        js_shadow_slot_set(0, ptr_bits(dead));
+        js_shadow_slot_set(0, 0);
+        js_shadow_slot_set(1, ptr_bits(live));
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let live_after = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_eq!(js_shadow_slot_get(0), 0);
+        assert_ne!(live_after, live);
+        assert!(crate::arena::pointer_in_nursery(live_after));
+        assert_eq!(trace.copying_nursery.copied_objects, 1);
+        assert_eq!(trace.copying_nursery.promoted_objects, 0);
+        assert_eq!(trace.shadow_roots.slots_scanned, 2);
+        assert_eq!(trace.shadow_roots.nonzero_slots, 1);
+        assert_eq!(trace.shadow_roots.pointer_roots, 1);
+        assert_eq!(trace.shadow_roots.rewritten_slots, 1);
+    }
+
+    #[test]
     fn test_copied_minor_verify_evacuation_env_remains_eligible() {
         let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
         let _guard = CopyingNurseryTestGuard::new(1);
@@ -12201,7 +12304,7 @@ mod tests {
         let mut global_bits = nursery_user as u64;
         js_gc_register_global_root((&mut global_bits as *mut u64) as i64);
 
-        rewrite_mutable_root_slots(&valid_ptrs);
+        rewrite_mutable_root_slots(&valid_ptrs, None);
 
         assert_eq!(
             js_shadow_slot_get(0),
