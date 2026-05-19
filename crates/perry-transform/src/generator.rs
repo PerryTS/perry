@@ -988,6 +988,22 @@ fn transform_generator_function_with_extra_captures(
         let mut case_body = state.body.clone();
         match &state.exit {
             StateExit::Yield { value, next_state } => {
+                // #1047: a user `return X` inside this state body — at
+                // any depth — must terminate the whole async function,
+                // not just exit the state. Without rewriting, the bare
+                // `return existing.kid` returns a non-iter-result from
+                // next(), the AsyncStepChain caller treats the missing
+                // `.done` as `false`, and re-enters the same state with
+                // the SAME state_id (the synthesized `state_id = N + 1`
+                // append below is unreachable when the user's return
+                // fires first). Result: infinite loop. Same fix as the
+                // `StateExit::Done` arm — set `__gen_done = true` and
+                // wrap the returned value in an iter-result with
+                // `done = true` so the async-step driver short-circuits.
+                if body_contains_return(&case_body) {
+                    prepend_done_before_returns(&mut case_body, done_id);
+                    rewrite_returns_as_done(&mut case_body);
+                }
                 case_body.push(Stmt::Expr(Expr::LocalSet(
                     state_id,
                     Box::new(Expr::Number(*next_state as f64)),
