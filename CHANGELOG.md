@@ -2,6 +2,44 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1011 — fix(compile) #1110 + chore(ffi) #1112: re-export-only FFI manifest collection; perry-ffi to crates.io
+
+Two related changes — both fall out of trying to ship `@perryts/storekit` and similar scoped npm wrappers without a sibling Perry checkout.
+
+### #1110: re-export-only paths missed `perry.nativeLibrary` manifest collection
+
+`#1085` fixed the **direct-import** form (`import { js_foo } from "@perryts/storekit"`) by skipping the wrapper-symbol registration in `import_function_prefixes`, letting `lower_call.rs` fall through to the FFI-manifest path. But the manifest is only added to `ctx.native_libraries` in `collect_modules.rs`'s **import-walk** (line ~700 / ~805) — never in the **re-export-walk** at line ~954. Programs that reach the FFI-bearing package only through a re-export chain (`./wrap` does `export { js_foo } from "@perryts/storekit"`, the entry imports from `./wrap`) had an empty `ctx.native_libraries`, so:
+
+1. `ffi_functions` built in `compile.rs` was empty.
+2. Every module's `opts.native_library_functions` was empty.
+3. `cross_module.ffi_signatures` in every codegen pass was empty.
+4. `lower_call.rs`'s `ffi_signatures.contains_key(name)` returned `false`.
+5. The early-`js_*` check at `lower_call.rs:1288` then **direct-called** the FFI symbol from the consumer's IR — but without ever pushing a matching `declare external` to the module's pending declarations.
+6. clang rejected the IR with `use of undefined value '@js_storekit_get_jws'`.
+
+The matching wrapper symbol (`perry_fn_wrap_ts__js_storekit_get_jws`) was emitted in IR via the closure-wrap stub `__perry_wrap_extern_wrap_ts__js_storekit_get_jws`, so the failure shape varied: sometimes link-time `undefined symbol`, sometimes IR-verifier-time `use of undefined value`.
+
+**Fix.** Mirror the per-kind manifest collection inside the re-export-walk loop: when the re-export source is a package import (not relative), walk up to find a `package.json` with `perry.nativeLibrary`, validate the abiVersion + allowlist exactly as the import-walk does, and push to `ctx.native_libraries`. Adds the standard `Native library: <name> (... FFI functions, via re-export)` log line so the import path is observable.
+
+**Bundled defensive fix in `lower_call.rs`:** force the FFI-manifest path whenever `ctx.ffi_signatures` knows the name, even if some other code path registers an entry in `import_function_prefixes` (the original failure shape from #1110 still required this — the manifest path was correct but the wrapper-prefix path won by accident). Future re-export shapes that leak `import_function_prefixes` entries past the per-specifier skip in `#1085` are now defensively routed through the FFI path.
+
+**Verified.** Reproduced the LLVM IR-verifier failure end-to-end with `import { … } from "./wrap"` re-exporting from `@perryts/storekit`; post-fix `wrap.ts.o` / `main_reexport.ts.o` both reference the plain manifest symbols (`_js_storekit_get_jws`) and the link succeeds.
+
+### #1112: publish perry-ffi to crates.io
+
+`perry-ffi` is the stable FFI surface that any `perry.nativeLibrary` wrapper compiles against. Today it lives only at `crates/perry-ffi/` in the monorepo — every npm-distributed wrapper has to write `perry-ffi = { path = "../../../../perry/perry/crates/perry-ffi" }`, which only resolves in a sibling-checkout layout. After `npm install` lands the wrapper inside `node_modules/`, the relative path is unresolvable and `cargo build` bombs with `no matching package named 'perry-ffi'`.
+
+**Changes for crates.io publication:**
+
+- **Cargo.toml metadata:** add `keywords` / `categories` / `readme` to `crates/perry-ffi/Cargo.toml`. Workspace dep entries for `perry-runtime` and `perry-ffi` now carry both `path` (in-tree builds win) and `version` (crates.io resolution metadata).
+- **`runtime-link` feature kept intact** (`runtime-link = ["dep:perry-runtime"]`). Initial attempt at #1112 moved `perry-runtime` to a path-only dev-dep with the feature reduced to a no-op stub — `cargo publish --dry-run` accepted that, but downstream test binaries (`perry-ext-mongodb`, `perry-ext-bcrypt`, …) which set `[dev-dependencies] perry-ffi = { ..., features = ["runtime-link"] }` then failed to link with `undefined symbol: js_string_from_bytes` because the runtime-symbol propagation died with the feature. Restored to the original shape (`perry-runtime = { workspace = true, optional = true }` + feature gate) so the in-tree test dance still works; external (npm-distributed) wrappers leave the feature off and don't pull perry-runtime in, exactly as before.
+
+**Publish prerequisite.** With `perry-runtime` reinstated as an optional dep, `cargo publish -p perry-ffi` now needs `perry-runtime` to exist on crates.io at the matching version — even though `runtime-link` is OFF by default and external consumers never trigger the resolution. `scripts/publish_perry_ffi.sh` checks for the resulting "no matching package named perry-runtime found" error and prints an explicit "publish perry-runtime first" message. Publishing perry-runtime itself is its own multi-step lift (it has paths to other workspace crates) and is left as the tracked follow-up; the metadata in this PR makes the eventual publish step a one-line invocation rather than a deep restructure.
+
+**Verified.** `cargo test --release -p perry-ext-mongodb` (the CI breakage case) compiles and links cleanly. The npm-distributed wrapper pattern (`perry-ffi = "0.5"` with no features) is unchanged from the original optional-dep shape.
+
+Adds `crates/perry-ffi/README.md` as the documentation rendered on crates.io.
+
 ## v0.5.1010 — fix(crypto): #1111 — CipherHandle property reads return bound-method closures so `c.getAuthTag?.()` doesn't short-circuit
 
 #1075 wired the runtime side of `createCipheriv("aes-256-gcm", ...)` —

@@ -196,7 +196,7 @@ opt-level = "s"       # Optimize for size in stdlib
 opt-level = 3
 
 [workspace.package]
-version = "0.5.1010"
+version = "0.5.1011"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"
@@ -260,8 +260,17 @@ perry-hir = { path = "crates/perry-hir" }
 perry-transform = { path = "crates/perry-transform" }
 perry-codegen = { path = "crates/perry-codegen" }
 perry-dispatch = { path = "crates/perry-dispatch" }
-perry-runtime = { path = "crates/perry-runtime" }
-perry-ffi = { path = "crates/perry-ffi" }
+# #1112: `perry-ffi` is published to crates.io so npm-packaged native
+# wrappers (per `perry.nativeLibrary` in package.json) can resolve it
+# without a sibling Perry checkout. perry-ffi's only direct reference
+# to perry-runtime is a `#[cfg(test)]` layout-assertion test which
+# moves perry-runtime to a path-only `[dev-dependencies]` entry —
+# `cargo publish -p perry-ffi` therefore strips it from the published
+# Cargo.toml, and external users never need perry-runtime in their
+# Cargo graph (Perry's compiler driver links `libperry_runtime.a`
+# into the final binary directly).
+perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011" }
+perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
 perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
 perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
 perry-ext-uuid = { path = "crates/perry-ext-uuid" }

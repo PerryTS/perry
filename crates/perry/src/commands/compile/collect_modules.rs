@@ -969,6 +969,78 @@ pub(super) fn collect_modules(
             if let Some((resolved_path, kind)) =
                 cached_resolve_import(src.as_str(), &canonical, ctx)
             {
+                // #1110: a re-export from a `perry.nativeLibrary` package
+                // (`export { foo } from "@perryts/storekit"`) is the only
+                // path through which storekit's manifest reaches the
+                // module graph — the import-walk above never visited it
+                // because SWC's re-export lowering doesn't synthesize an
+                // entry in `hir.imports`. Without the manifest in
+                // `ctx.native_libraries`, every downstream module's
+                // `opts.native_library_functions` is empty and the FFI
+                // dispatch path in `lower_call.rs` falls through to
+                // `perry_fn_<wrap>__<name>` (the wrapper symbol the
+                // re-exporting module never emits), leading to an LLVM
+                // verifier failure (`use of undefined value @<fn>`) on
+                // any indirect call. Mirror the per-kind manifest
+                // collection from the import-walk so the FFI surface
+                // remains visible through any depth of re-export chain.
+                let src_str = src.clone();
+                if !src_str.starts_with('.')
+                    && !src_str.starts_with('/')
+                    && !ctx.native_libraries.iter().any(|nl| nl.module == src_str)
+                {
+                    let mut pkg_dir = resolved_path.parent();
+                    while let Some(dir) = pkg_dir {
+                        if dir.join("package.json").exists() && has_perry_native_library(dir) {
+                            if let Some(manifest) =
+                                parse_native_library_manifest(dir, &src_str, target)
+                            {
+                                if let Err(msg) = super::resolve::validate_abi_version(&manifest) {
+                                    return Err(anyhow::anyhow!("{}", msg));
+                                }
+                                if !super::allowlist_matches(
+                                    &manifest.module,
+                                    &ctx.allow_native_library,
+                                ) {
+                                    anyhow::bail!(
+                                        "package `{}` declares `perry.nativeLibrary` \
+                                         (links arbitrary native code into the binary) \
+                                         but is not in your host \
+                                         `perry.allow.nativeLibrary`. Review the package, \
+                                         then add it to your host `package.json`:\n\
+                                         \n\
+                                           {{\n\
+                                             \"perry\": {{\n\
+                                               \"allow\": {{ \"nativeLibrary\": [\"{}\"] }}\n\
+                                             }}\n\
+                                           }}\n\
+                                         \n\
+                                         Scope wildcard (`\"@scope/*\"`) and the universal \
+                                         `\"*\"` escape hatch are both supported.\n\
+                                         \n\
+                                         For a one-off build, set \
+                                         `PERRY_ALLOW_PERRY_FEATURES=1` in the environment. \
+                                         (#497)",
+                                        manifest.module,
+                                        manifest.module,
+                                    );
+                                }
+                                match format {
+                                    OutputFormat::Text => println!(
+                                        "  Native library: {} ({} FFI functions, via re-export)",
+                                        manifest.module,
+                                        manifest.functions.len()
+                                    ),
+                                    OutputFormat::Json => {}
+                                }
+                                ctx.native_libraries.push(manifest);
+                            }
+                            break;
+                        }
+                        pkg_dir = dir.parent();
+                    }
+                }
+
                 match kind {
                     ModuleKind::NativeCompiled => {
                         collect_modules(

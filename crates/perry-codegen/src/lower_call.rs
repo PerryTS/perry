@@ -1321,7 +1321,23 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         // the linker resolves them against the linked native .a library.
         // Previously these were silently dropped (returned 0.0), which
         // caused Bloom Engine games to render blank windows.
-        let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() else {
+        //
+        // #1110 (follow-up to #1085): a symbol declared in the source
+        // package's `perry.nativeLibrary.functions` manifest is always
+        // resolved against the linked static library, never via the
+        // `perry_fn_<src>__<name>` wrapper (the source `.ts` is ambient
+        // and emits no wrapper). Force the FFI-manifest path whenever
+        // `ffi_signatures` knows the name, even if some other code path
+        // accidentally registered an entry in `import_function_prefixes`
+        // (re-export chains, namespace re-exports, etc. — anything that
+        // doesn't go through the #1085 per-specifier skip ends up there).
+        let force_ffi_path = ctx.ffi_signatures.contains_key(name);
+        let prefix_lookup = if force_ffi_path {
+            None
+        } else {
+            ctx.import_function_prefixes.get(name).cloned()
+        };
+        let Some(source_prefix) = prefix_lookup else {
             // Determine per-arg types: string args need to be unboxed
             // to raw `*const u8` pointers and passed as `ptr` so the
             // ARM64 ABI puts them in x-registers (not d-registers).

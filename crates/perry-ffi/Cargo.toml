@@ -5,11 +5,25 @@ edition.workspace = true
 license.workspace = true
 description = "Stable FFI surface for native bindings packages that wrap Rust crates for Perry. Wrapper authors depend on this; perry-runtime internals stay free to evolve."
 repository.workspace = true
+# #1112: published to crates.io so npm-packaged native wrappers can write
+# `perry-ffi = "0.5"` without a sibling Perry checkout. Keep the keyword
+# list under five entries (crates.io caps at 5).
+keywords = ["perry", "ffi", "native-bindings", "typescript"]
+categories = ["api-bindings", "external-ffi-bindings"]
+readme = "README.md"
 
 [dependencies]
-# Normal native package builds must not embed perry-runtime. The optional
-# dependency exists only for tests/layout assertions that intentionally link
-# against the in-tree runtime.
+# #1112: `perry-runtime` is restored as an OPTIONAL regular dep (not
+# a dev-dep) so the `runtime-link` feature actually propagates the
+# linkage into downstream test binaries (e.g.
+# `perry-ext-mongodb`'s `[dev-dependencies] perry-ffi = { ...,
+# features = ["runtime-link"] }`). Without that propagation, those
+# tests fail to link with `undefined symbol: js_string_from_bytes`
+# because the symbol perry-ffi's `alloc_string` calls lives in
+# perry-runtime. The optional + path-only workspace dep means
+# `cargo publish` will still error against the missing crates.io
+# entry — see `scripts/publish_perry_ffi.sh` for the maintainer
+# workflow (publish perry-runtime FIRST, then perry-ffi).
 perry-runtime = { workspace = true, optional = true }
 
 # Handle registry storage (#466 Phase 5 — `lru-cache`/db wrappers).
@@ -20,4 +34,14 @@ once_cell = "1"
 
 [features]
 default = []
+# Opt-in feature used by in-tree extension crates that need to link
+# against perry-runtime (the symbol providers behind perry-ffi's
+# `alloc_string` / `read_string` / handle-registry shims). Every
+# `perry-ext-*` lists `perry-ffi = { ..., features = ["runtime-link"] }`
+# under `[dev-dependencies]` so their `cargo test` binaries get the
+# `js_string_from_bytes` etc. symbols resolved. External wrappers
+# (npm-distributed binding packages) leave this OFF — Perry's
+# compiler driver links `libperry_runtime.a` into the final binary
+# at compile-time, so the runtime symbols are present at the final
+# link step without the Cargo-level dependency edge.
 runtime-link = ["dep:perry-runtime"]

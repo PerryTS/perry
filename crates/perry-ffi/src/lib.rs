@@ -83,6 +83,17 @@ pub use json::json_stringify;
 mod event_pump;
 pub use event_pump::notify_main_thread;
 
+// `runtime-link` gates this `extern crate` so external npm-packaged
+// wrappers (which lack perry-runtime in their Cargo graph) compile
+// without it. In-tree extension crates that need the runtime
+// symbols at test time enable the feature in their
+// `[dev-dependencies]` (`perry-ffi = { ..., features =
+// ["runtime-link"] }`), which pulls perry-runtime in here and makes
+// `js_string_from_bytes` etc. resolvable. For non-test builds,
+// Perry's compiler driver (`crates/perry/src/commands/compile/
+// library_search.rs`) appends `libperry_runtime.a` to the linker
+// invocation, so the runtime symbols are also present without the
+// Cargo dep edge.
 #[cfg(feature = "runtime-link")]
 extern crate perry_runtime as _perry_runtime_link;
 
