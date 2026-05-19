@@ -200,6 +200,27 @@ pub mod sqlite;
 #[cfg(feature = "database-sqlite")]
 pub use sqlite::*;
 
+// Unconditional sqlite-handle existence shims — referenced by
+// `perry-jsruntime::bridge` to decide whether a small-handle pointer
+// crossing the native→V8 boundary is a SqliteDbHandle / SqliteStmtHandle
+// (drizzle's BetterSQLiteSession reads `this.client.prepare(...)` from
+// session.js; without a real proxy object the call lands on `null`).
+// Defined here as 0-returning stubs when the `database-sqlite` feature
+// is OFF so the bridge's extern declarations always link. When the
+// feature is ON, `sqlite::js_sqlite_is_*_handle` are the real impls
+// (this stub is `#[cfg(not(...))]`'d out to avoid duplicate symbols).
+// Refs #1022.
+#[cfg(not(feature = "database-sqlite"))]
+#[no_mangle]
+pub extern "C" fn js_sqlite_is_db_handle(_handle: i64) -> i32 {
+    0
+}
+#[cfg(not(feature = "database-sqlite"))]
+#[no_mangle]
+pub extern "C" fn js_sqlite_is_stmt_handle(_handle: i64) -> i32 {
+    0
+}
+
 #[cfg(feature = "bundled-ioredis")]
 pub mod ioredis;
 #[cfg(feature = "bundled-ioredis")]

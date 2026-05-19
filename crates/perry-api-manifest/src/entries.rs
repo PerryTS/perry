@@ -408,6 +408,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Manifest-consistency catch-up (release-sweep gate): NATIVE_MODULE_TABLE
     // had a `raw` row that wasn't mirrored here.
     method("better-sqlite3", "raw", true, None),
+    // #1022 — surface the rest of the v8-proxy-materialized methods so
+    // the api-docs drift check stays green. `pragma` / `iterate` /
+    // `pluck` / `columns` / `transaction` are wired through
+    // `perry-jsruntime::bridge::materialize_sqlite_*_proxy` for the V8
+    // fallback path (drizzle on better-sqlite3); the native-side
+    // codegen lowering already routes the same names through
+    // `NATIVE_MODULE_TABLE`.
+    method("better-sqlite3", "pragma", true, None),
+    method("better-sqlite3", "iterate", true, None),
+    method("better-sqlite3", "pluck", true, None),
+    method("better-sqlite3", "columns", true, None),
+    method("better-sqlite3", "transaction", true, None),
     // tursodb (#424). open / exec / execBatch / close /
     // lastInsertRowid / isAutocommit shipped in v0.5.543; queryAll /
     // queryOne shipped in v0.5.553 (close the row-as-object gap by

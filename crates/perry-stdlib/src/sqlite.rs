@@ -627,3 +627,40 @@ pub unsafe extern "C" fn js_sqlite_in_transaction(db_handle: Handle) -> i32 {
     }
     0
 }
+
+/// Returns `1` if `handle` currently resolves to a `SqliteDbHandle` in
+/// this crate's handle registry, `0` otherwise. Used by the V8 bridge
+/// in `perry-jsruntime::bridge::native_object_to_v8` to decide whether
+/// to materialize a `v8::Object` proxy with `prepare`/`exec`/etc.
+/// method callbacks when a sqlite Database crosses the native→V8
+/// boundary (drizzle's `BetterSQLiteSession` does
+/// `this.client.prepare(query.sql)` from session.js — refs #1022).
+///
+/// Mirrors `perry-ext-better-sqlite3::js_sqlite_is_db_handle`. The
+/// duplicate-symbol resolution at link time picks one impl; whichever
+/// crate's `js_sqlite_open` registered the handle is the same impl
+/// whose `is_db_handle` answers the membership check (each crate
+/// keeps its own registry).
+#[no_mangle]
+pub unsafe extern "C" fn js_sqlite_is_db_handle(handle: Handle) -> i32 {
+    if get_handle::<SqliteDbHandle>(handle).is_some() {
+        1
+    } else {
+        0
+    }
+}
+
+/// Returns `1` if `handle` currently resolves to a `SqliteStmtHandle`
+/// in this crate's handle registry, `0` otherwise. Mirror of
+/// `js_sqlite_is_db_handle` for the Statement side — drizzle's
+/// PreparedQuery calls `stmt.run(...)` / `stmt.all(...)` /
+/// `stmt.get(...)` / `stmt.raw().all(...)` on the handle returned from
+/// `client.prepare(...)`. Refs #1022.
+#[no_mangle]
+pub unsafe extern "C" fn js_sqlite_is_stmt_handle(handle: Handle) -> i32 {
+    if get_handle::<SqliteStmtHandle>(handle).is_some() {
+        1
+    } else {
+        0
+    }
+}
