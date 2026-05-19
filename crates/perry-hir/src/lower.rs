@@ -54,11 +54,20 @@ pub struct LoweringContext {
     pub(crate) functions: Vec<(String, FuncId)>,
     /// Function parameter defaults: func_id -> (defaults, param_local_ids)
     /// Per-function param-default info used by the call-site fill pass:
-    /// `(func_id, [Option<default> per param], [LocalId per param], Option<rest_param_index>)`.
+    /// `(func_id, [Option<default> per param], [LocalId per param], Option<rest_param_index>, has_synthetic_arguments)`.
     /// The rest-param index (if any) is the position of `...rest`; the fill
     /// loop must stop before it because rest params get bundled at runtime
     /// from trailing positional args, not filled with `undefined`.
-    pub(crate) func_defaults: Vec<(FuncId, Vec<Option<Expr>>, Vec<LocalId>, Option<usize>)>,
+    /// `has_synthetic_arguments` is true when the trailing rest param was
+    /// inserted by `append_synthetic_arguments_param` because the body
+    /// references the magic `arguments` identifier — in that case the call
+    /// site must NOT pad missing fixed-param slots with `undefined`, because
+    /// the codegen synth-args bundle path uses `args.len()` to size the
+    /// runtime `arguments` array. Padding inflates `arguments.length` to
+    /// the declared fixed-param count regardless of how many args the
+    /// caller actually passed (issue #1069).
+    pub(crate) func_defaults:
+        Vec<(FuncId, Vec<Option<Expr>>, Vec<LocalId>, Option<usize>, bool)>,
     /// Classes: name -> id
     pub(crate) classes: Vec<(String, ClassId)>,
     /// Static members of classes: class_name -> (static_field_names, static_method_names)
@@ -1171,12 +1180,17 @@ impl LoweringContext {
     pub(crate) fn lookup_func_defaults(
         &self,
         func_id: FuncId,
-    ) -> Option<(&[Option<Expr>], &[LocalId], Option<usize>)> {
+    ) -> Option<(&[Option<Expr>], &[LocalId], Option<usize>, bool)> {
         self.func_defaults
             .iter()
-            .find(|(id, _, _, _)| *id == func_id)
-            .map(|(_, defaults, param_ids, rest_idx)| {
-                (defaults.as_slice(), param_ids.as_slice(), *rest_idx)
+            .find(|(id, _, _, _, _)| *id == func_id)
+            .map(|(_, defaults, param_ids, rest_idx, has_synth_args)| {
+                (
+                    defaults.as_slice(),
+                    param_ids.as_slice(),
+                    *rest_idx,
+                    *has_synth_args,
+                )
             })
     }
 
@@ -4483,8 +4497,12 @@ fn lower_module_decl(
                         func.params.iter().map(|p| p.default.clone()).collect();
                     let param_ids: Vec<LocalId> = func.params.iter().map(|p| p.id).collect();
                     let rest_idx = func.params.iter().position(|p| p.is_rest);
+                    let has_synth_args = func
+                        .params
+                        .last()
+                        .is_some_and(|p| p.is_rest && p.name == "arguments");
                     ctx.func_defaults
-                        .push((func.id, defaults, param_ids, rest_idx));
+                        .push((func.id, defaults, param_ids, rest_idx, has_synth_args));
                     module.functions.push(func);
                     // Track in exports
                     module.exports.push(Export::Named {
@@ -5494,8 +5512,12 @@ fn lower_module_decl(
                             let param_ids: Vec<LocalId> =
                                 func.params.iter().map(|p| p.id).collect();
                             let rest_idx = func.params.iter().position(|p| p.is_rest);
+                            let has_synth_args = func
+                                .params
+                                .last()
+                                .is_some_and(|p| p.is_rest && p.name == "arguments");
                             ctx.func_defaults
-                                .push((func.id, defaults, param_ids, rest_idx));
+                                .push((func.id, defaults, param_ids, rest_idx, has_synth_args));
                             module.functions.push(func);
                             // Register under both names: callable locally as
                             // `<ident>` (some modules also `export { foo }`
@@ -5564,8 +5586,12 @@ fn lower_module_decl(
                             func.params.iter().map(|p| p.default.clone()).collect();
                         let param_ids: Vec<LocalId> = func.params.iter().map(|p| p.id).collect();
                         let rest_idx = func.params.iter().position(|p| p.is_rest);
+                        let has_synth_args = func
+                            .params
+                            .last()
+                            .is_some_and(|p| p.is_rest && p.name == "arguments");
                         ctx.func_defaults
-                            .push((func.id, defaults, param_ids, rest_idx));
+                            .push((func.id, defaults, param_ids, rest_idx, has_synth_args));
                         module.functions.push(func);
                         // Both the named export entry (so the importer's
                         // namespace populator sees `default`) and the
@@ -6135,8 +6161,12 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
                         func.params.iter().map(|p| p.default.clone()).collect();
                     let param_ids: Vec<LocalId> = func.params.iter().map(|p| p.id).collect();
                     let rest_idx = func.params.iter().position(|p| p.is_rest);
+                    let has_synth_args = func
+                        .params
+                        .last()
+                        .is_some_and(|p| p.is_rest && p.name == "arguments");
                     ctx.func_defaults
-                        .push((func.id, defaults, param_ids, rest_idx));
+                        .push((func.id, defaults, param_ids, rest_idx, has_synth_args));
                     module.functions.push(func);
                 }
                 ast::Decl::Var(var_decl) => {

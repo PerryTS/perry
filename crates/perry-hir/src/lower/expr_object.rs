@@ -194,8 +194,11 @@ fn lower_method_prop(
         let defaults: Vec<Option<Expr>> = params.iter().map(|p| p.default.clone()).collect();
         let param_ids: Vec<LocalId> = params.iter().map(|p| p.id).collect();
         let rest_idx = params.iter().position(|p| p.is_rest);
+        let has_synth_args = params
+            .last()
+            .is_some_and(|p| p.is_rest && p.name == "arguments");
         ctx.func_defaults
-            .push((func_id, defaults, param_ids, rest_idx));
+            .push((func_id, defaults, param_ids, rest_idx, has_synth_args));
         ctx.pending_functions.push(Function {
             id: func_id,
             name: func_name,

@@ -6546,10 +6546,9 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
             // Fill in default arguments if callee is a known function
             let mut args = args;
             if let Expr::FuncRef(func_id) = &callee_expr {
-                if let Some((defaults, param_ids, rest_idx)) = ctx.lookup_func_defaults(*func_id) {
-                    let defaults = defaults.to_vec();
-                    let param_ids = param_ids.to_vec();
-                    let num_provided = args.len();
+                if let Some((defaults, param_ids, rest_idx, has_synth_args)) =
+                    ctx.lookup_func_defaults(*func_id)
+                {
                     // Refs #653 followup to v0.5.789's #645 fix: stop the
                     // default-fill loop BEFORE the rest param's slot. Pushing
                     // `Expr::Undefined` for a rest param turns
@@ -6558,6 +6557,31 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                     // `args[0] = undefined`. Real semantics: trailing positional
                     // args get bundled into the rest array at runtime; missing
                     // ones produce an empty array, NOT a single-undefined array.
+                    //
+                    // Issue #1069: synthetic-`arguments` rest param. For
+                    // `function f(a, b) { arguments }`, the HIR appends a
+                    // hidden `arguments`-named rest param so the body can
+                    // reference it. The codegen call-site synth-args path
+                    // (`crates/perry-codegen/src/lower_call.rs:974`) uses
+                    // `args.len()` to size the runtime `arguments` array
+                    // AND pads missing fixed-param slots with `undefined`
+                    // itself, so the body's `if (param === undefined) {
+                    // param = default; }` prefix applies user defaults
+                    // there. If we let the loop below push Undefined into
+                    // the fixed-param slots, `args.len()` inflates to the
+                    // declared fixed-param count and `arguments.length`
+                    // reads as the declared count regardless of the
+                    // caller's actual arg count — `f()` reports
+                    // `arguments.length === 2` instead of `0`. Skip the
+                    // fill loop entirely for synth-args callees.
+                    if has_synth_args {
+                        // Skip the default-fill loop. Codegen handles the
+                        // fixed-param padding and the body's default-fill
+                        // statements substitute user defaults.
+                    } else {
+                    let defaults = defaults.to_vec();
+                    let param_ids = param_ids.to_vec();
+                    let num_provided = args.len();
                     let fill_end = match rest_idx {
                         Some(i) => i,
                         None => defaults.len(),
@@ -6598,6 +6622,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                         }
                         args.push(substituted);
                     }
+                    } // end of !has_synth_args branch
                 }
             }
 

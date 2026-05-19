@@ -1154,6 +1154,23 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             let arr = raw_ptr as *const crate::array::ArrayHeader;
             return crate::array::js_array_get_f64(arr, idx_i32 as u32);
         }
+        // Issue #1069: bounds-check regular arrays so out-of-range reads
+        // return TAG_UNDEFINED instead of whatever's in the slot. Without
+        // this, an empty (or short) array — most visibly the synthetic
+        // `arguments` array bundled by the call-site for caller arity 0 —
+        // returns the raw 0.0 slot value because `js_array_alloc` rounds
+        // capacity up to MIN_ARRAY_CAPACITY and the unchecked load reads
+        // past `length` into zeroed-but-allocated storage. `arguments[0]`
+        // on `function f() { arguments[0] }; f()` printed `0` instead of
+        // `undefined`. The narrow gate (GC_TYPE_ARRAY) keeps object
+        // numeric-key fast path unchanged.
+        if obj_type == crate::gc::GC_TYPE_ARRAY {
+            let arr = raw_ptr as *const crate::array::ArrayHeader;
+            let length = unsafe { (*arr).length };
+            if (idx_i32 as u32) >= length {
+                return f64::from_bits(TAG_UNDEFINED);
+            }
+        }
     }
     let elem_addr = raw_ptr.wrapping_add(8 + (idx_i32 as usize) * 8);
     let v = unsafe { *(elem_addr as *const f64) };
