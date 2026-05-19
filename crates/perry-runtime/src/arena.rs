@@ -5,7 +5,7 @@
 //! can be reset at once (e.g., at end of program or during GC).
 
 use std::alloc::{alloc, Layout};
-use std::cell::UnsafeCell;
+use std::cell::{Cell, RefCell, UnsafeCell};
 
 /// Size of each arena block (1 MB — issue #179 tier 1 #1).
 ///
@@ -47,6 +47,208 @@ use std::cell::UnsafeCell;
 ///   iteration as it did with 16 × 8 MB blocks — the adaptive step
 ///   shrinks appropriately on the first productive collection.
 const BLOCK_SIZE: usize = 1024 * 1024;
+const GENERATION_PAGE_SHIFT: usize = 12;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HeapGeneration {
+    Unknown,
+    Nursery,
+    Longlived,
+    Old,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PageGenerationRange {
+    base: usize,
+    end: usize,
+    generation: HeapGeneration,
+}
+
+impl PageGenerationRange {
+    #[inline]
+    fn contains(self, addr: usize) -> bool {
+        addr >= self.base && addr < self.end
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PageGenerationCache {
+    page: usize,
+    range: PageGenerationRange,
+    valid: bool,
+}
+
+impl PageGenerationCache {
+    const fn empty() -> Self {
+        Self {
+            page: 0,
+            range: PageGenerationRange {
+                base: 0,
+                end: 0,
+                generation: HeapGeneration::Unknown,
+            },
+            valid: false,
+        }
+    }
+}
+
+type OldGenPageObjectMap = crate::fast_hash::PtrHashMap<usize, Vec<usize>>;
+
+thread_local! {
+    static GENERATION_RANGES: RefCell<Vec<PageGenerationRange>> =
+        const { RefCell::new(Vec::new()) };
+
+    static PAGE_GENERATION_CACHE: Cell<PageGenerationCache> =
+        const { Cell::new(PageGenerationCache::empty()) };
+
+    static OLD_GEN_PAGE_OBJECTS: RefCell<OldGenPageObjectMap> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+#[inline]
+pub(crate) fn generation_page_for_addr(addr: usize) -> usize {
+    addr >> GENERATION_PAGE_SHIFT
+}
+
+#[inline]
+fn invalidate_generation_cache() {
+    PAGE_GENERATION_CACHE.with(|cache| cache.set(PageGenerationCache::empty()));
+}
+
+#[inline]
+fn find_generation_range(
+    ranges: &[PageGenerationRange],
+    addr: usize,
+) -> Option<PageGenerationRange> {
+    let idx = ranges.partition_point(|range| range.base <= addr);
+    if idx == 0 {
+        return None;
+    }
+    let range = ranges[idx - 1];
+    range.contains(addr).then_some(range)
+}
+
+fn register_block_generation(base: usize, size: usize, generation: HeapGeneration) {
+    if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
+        return;
+    }
+    let end = base + size;
+    let range = PageGenerationRange {
+        base,
+        end,
+        generation,
+    };
+    GENERATION_RANGES.with(|ranges| {
+        let mut ranges = ranges.borrow_mut();
+        if let Some(existing) = ranges
+            .iter_mut()
+            .find(|existing| existing.base == base && existing.end == end)
+        {
+            *existing = range;
+            return;
+        }
+        let idx = ranges.partition_point(|existing| existing.base < base);
+        ranges.insert(idx, range);
+    });
+    invalidate_generation_cache();
+}
+
+fn unregister_block_generation(base: usize, size: usize) {
+    if base == 0 || size == 0 {
+        return;
+    }
+    let end = base + size;
+    GENERATION_RANGES.with(|ranges| {
+        ranges
+            .borrow_mut()
+            .retain(|range| !(range.base == base && range.end == end));
+    });
+    invalidate_generation_cache();
+}
+
+#[inline]
+pub(crate) fn classify_heap_generation(addr: usize) -> HeapGeneration {
+    if addr == 0 {
+        return HeapGeneration::Unknown;
+    }
+    let page = generation_page_for_addr(addr);
+    if let Some(generation) = PAGE_GENERATION_CACHE.with(|cache| {
+        let cached = cache.get();
+        (cached.valid && cached.page == page && cached.range.contains(addr))
+            .then_some(cached.range.generation)
+    }) {
+        return generation;
+    }
+
+    let found = GENERATION_RANGES.with(|ranges| {
+        let ranges = ranges.borrow();
+        find_generation_range(&ranges, addr)
+    });
+    if let Some(range) = found {
+        PAGE_GENERATION_CACHE.with(|cache| {
+            cache.set(PageGenerationCache {
+                page,
+                range,
+                valid: true,
+            });
+        });
+        range.generation
+    } else {
+        HeapGeneration::Unknown
+    }
+}
+
+fn register_old_object_pages(header_addr: usize, total_size: usize) {
+    if header_addr == 0 || total_size == 0 {
+        return;
+    }
+    let first_page = generation_page_for_addr(header_addr);
+    let last_page = generation_page_for_addr(header_addr + total_size - 1);
+    OLD_GEN_PAGE_OBJECTS.with(|index| {
+        let mut index = index.borrow_mut();
+        for page in first_page..=last_page {
+            let headers = index.entry(page).or_insert_with(Vec::new);
+            if !headers.contains(&header_addr) {
+                headers.push(header_addr);
+            }
+        }
+    });
+}
+
+pub(crate) fn old_arena_walk_objects_on_pages(
+    pages: &crate::fast_hash::PtrHashSet<usize>,
+    mut callback: impl FnMut(*mut u8),
+) -> usize {
+    if pages.is_empty() {
+        return 0;
+    }
+
+    let mut headers = Vec::new();
+    let mut seen = crate::fast_hash::new_ptr_hash_set();
+    OLD_GEN_PAGE_OBJECTS.with(|index| {
+        let index = index.borrow();
+        for page in pages {
+            if let Some(page_headers) = index.get(page) {
+                for &header_addr in page_headers {
+                    if seen.insert(header_addr) {
+                        headers.push(header_addr);
+                    }
+                }
+            }
+        }
+    });
+
+    let count = headers.len();
+    for header_addr in headers {
+        callback(header_addr as *mut u8);
+    }
+    count
+}
+
+#[cfg(test)]
+pub(crate) fn old_arena_page_index_clear_for_tests() {
+    OLD_GEN_PAGE_OBJECTS.with(|index| index.borrow_mut().clear());
+}
 
 /// Create a block of at least the given size (for oversized allocations)
 fn alloc_block(min_size: usize) -> ArenaBlock {
@@ -128,6 +330,7 @@ impl ArenaBlock {
 struct Arena {
     blocks: Vec<ArenaBlock>,
     current: usize,
+    generation: HeapGeneration,
 }
 
 impl Drop for Arena {
@@ -150,12 +353,14 @@ impl Drop for Arena {
 }
 
 impl Arena {
-    fn new() -> Self {
+    fn new(generation: HeapGeneration) -> Self {
         let initial = ArenaBlock::new();
+        register_block_generation(initial.data as usize, initial.size, generation);
         ARENA_TOTAL_BYTES.with(|t| t.set(t.get() + initial.size));
         Arena {
             blocks: vec![initial],
             current: 0,
+            generation,
         }
     }
 
@@ -211,6 +416,8 @@ impl Arena {
         // through nursery blocks.
         let fresh = alloc_block(size);
         let fresh_size = fresh.size;
+        let fresh_base = fresh.data as usize;
+        register_block_generation(fresh_base, fresh_size, self.generation);
         let mut tomb_idx: Option<usize> = None;
         for i in 0..self.blocks.len() {
             if self.blocks[i].data.is_null() {
@@ -250,7 +457,7 @@ thread_local! {
     /// `arena_reset_empty_blocks`).
     static ARENA_TOTAL_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 
-    static ARENA: UnsafeCell<Arena> = UnsafeCell::new(Arena::new());
+    static ARENA: UnsafeCell<Arena> = UnsafeCell::new(Arena::new(HeapGeneration::Nursery));
 
     /// Segregated long-lived arena (issue #179). Holds objects that are
     /// intentionally pinned for the lifetime of the program by explicit
@@ -269,7 +476,8 @@ thread_local! {
     /// still traverse them so mark/trace reach cached objects; root
     /// scanners (`scan_parse_roots`, `scan_shape_cache_roots`,
     /// `scan_transition_cache_roots`) keep them marked.
-    static LONGLIVED_ARENA: UnsafeCell<Arena> = UnsafeCell::new(Arena::new());
+    static LONGLIVED_ARENA: UnsafeCell<Arena> =
+        UnsafeCell::new(Arena::new(HeapGeneration::Longlived));
 
     /// Generational-GC old-generation arena (gen-GC Phase B per
     /// `docs/generational-gc-plan.md`). Holds objects PROMOTED from
@@ -286,7 +494,7 @@ thread_local! {
     /// the inline bump allocator. Major GC will eventually mark-
     /// sweep them in Phase C+; today they accumulate forever
     /// because nothing allocates into them.
-    static OLD_ARENA: UnsafeCell<Arena> = UnsafeCell::new(Arena::new());
+    static OLD_ARENA: UnsafeCell<Arena> = UnsafeCell::new(Arena::new(HeapGeneration::Old));
 
     /// Inline allocator state — a cache of the current arena block's
     /// `(data, offset, size)` triple, exposed via a stable pointer so
@@ -477,7 +685,6 @@ pub fn arena_alloc_gc_longlived(size: usize, align: usize, obj_type: u8) -> *mut
         (*header)._reserved = 0;
         (*header).size = total as u32;
     }
-
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
 
@@ -517,6 +724,7 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
         (*header)._reserved = 0;
         (*header).size = total as u32;
     }
+    register_old_object_pages(raw as usize, total);
 
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
@@ -664,6 +872,62 @@ pub fn arena_in_use_bytes() -> usize {
     used
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ArenaRegionTelemetry {
+    pub(crate) in_use_bytes: usize,
+    pub(crate) reserved_bytes: usize,
+    pub(crate) block_count: usize,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ArenaTelemetrySnapshot {
+    pub(crate) arena: ArenaRegionTelemetry,
+    pub(crate) longlived: ArenaRegionTelemetry,
+    pub(crate) old: ArenaRegionTelemetry,
+    pub(crate) total_in_use_bytes: usize,
+    pub(crate) total_reserved_bytes: usize,
+    pub(crate) total_block_count: usize,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct ArenaResetStats {
+    pub reset_blocks: usize,
+    pub deallocated_blocks: usize,
+    pub deallocated_bytes: usize,
+}
+
+fn arena_region_telemetry(arena: &Arena) -> ArenaRegionTelemetry {
+    ArenaRegionTelemetry {
+        in_use_bytes: arena.blocks.iter().map(|b| b.offset).sum(),
+        reserved_bytes: arena.blocks.iter().map(|b| b.size).sum(),
+        block_count: arena.blocks.iter().filter(|b| !b.data.is_null()).count(),
+    }
+}
+
+pub(crate) fn arena_telemetry_snapshot() -> ArenaTelemetrySnapshot {
+    sync_inline_arena_state();
+    let arena = ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        arena_region_telemetry(arena)
+    });
+    let longlived = LONGLIVED_ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        arena_region_telemetry(arena)
+    });
+    let old = OLD_ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        arena_region_telemetry(arena)
+    });
+    ArenaTelemetrySnapshot {
+        arena,
+        longlived,
+        old,
+        total_in_use_bytes: arena.in_use_bytes + longlived.in_use_bytes + old.in_use_bytes,
+        total_reserved_bytes: arena.reserved_bytes + longlived.reserved_bytes + old.reserved_bytes,
+        total_block_count: arena.block_count + longlived.block_count + old.block_count,
+    }
+}
+
 /// Walk all GcHeader objects in arena blocks linearly (general arena +
 /// longlived arena, in that order — block indices are global with
 /// general blocks occupying `0..general_block_count()`).
@@ -782,6 +1046,43 @@ pub fn arena_walk_objects(mut callback: impl FnMut(*mut u8)) {
     OLD_ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
         walk_region(&arena.blocks);
+    });
+}
+
+/// Walk only objects physically allocated in the old-generation arena.
+/// Dirty-page remembered scanning uses this to process old-gen modbuf
+/// pages without touching nursery or longlived blocks.
+pub fn old_arena_walk_objects(mut callback: impl FnMut(*mut u8)) {
+    use crate::gc::GcHeader;
+
+    OLD_ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        for block in &arena.blocks {
+            let mut offset = 0usize;
+            while offset < block.offset {
+                let aligned = (offset + 7) & !7;
+                if aligned >= block.offset {
+                    break;
+                }
+
+                let header_ptr = unsafe { block.data.add(aligned) };
+                let header = header_ptr as *const GcHeader;
+
+                unsafe {
+                    let total_size = (*header).size as usize;
+                    if total_size == 0 || total_size > block.size {
+                        break;
+                    }
+
+                    let obj_type = (*header).obj_type;
+                    if (1..=9).contains(&obj_type) {
+                        callback(header_ptr);
+                    }
+
+                    offset = aligned + total_size;
+                }
+            }
+        }
     });
 }
 
@@ -996,7 +1297,7 @@ pub fn arena_reset_all_blocks_to_zero() {
 /// the working set crosses ~64MB; with it, GC reclaims empty blocks
 /// in place and the inline allocator keeps reusing the same ~8MB
 /// arena block forever.
-pub fn arena_reset_empty_blocks(block_has_live: &[bool]) {
+pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
     let n_live = block_has_live.iter().filter(|&&b| b).count();
     let n_total = block_has_live.len();
     // Issue #179: only reset general-arena blocks. Longlived-arena blocks
@@ -1141,8 +1442,11 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) {
             }
             block.dead_cycles += 1;
             if block.dead_cycles >= DEALLOC_DEAD_CYCLES {
+                let base = block.data as usize;
+                let size = block.size;
                 let layout = Layout::from_size_align(block.size, 16).unwrap();
-                deallocated_ranges.push((block.data as usize, block.size));
+                unregister_block_generation(base, size);
+                deallocated_ranges.push((base, size));
                 std::alloc::dealloc(block.data, layout);
                 ARENA_TOTAL_BYTES.with(|t| t.set(t.get().saturating_sub(block.size)));
                 block.data = std::ptr::null_mut();
@@ -1151,6 +1455,15 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) {
                 block.dead_cycles = 0;
             }
         }
+        let reset_blocks = reset_block_ranges.len();
+        let deallocated_blocks = deallocated_ranges.len();
+        let deallocated_bytes: usize = deallocated_ranges.iter().map(|&(_, s)| s).sum();
+        let stats = ArenaResetStats {
+            reset_blocks,
+            deallocated_blocks,
+            deallocated_bytes,
+        };
+
         if !deallocated_ranges.is_empty() {
             // Drop free-list entries pointing into deallocated
             // blocks — same reasoning as the reset path, but the
@@ -1168,54 +1481,54 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) {
                 }
             });
             if std::env::var_os("PERRY_GC_DIAG").is_some() {
-                let total: usize = deallocated_ranges.iter().map(|&(_, s)| s).sum();
                 eprintln!(
                     "[gc-dealloc] freed {} blocks ({} bytes) back to OS",
                     deallocated_ranges.len(),
-                    total
+                    deallocated_bytes
                 );
             }
         }
 
         if reset_block_ranges.is_empty() && deallocated_ranges.is_empty() {
-            return;
-        }
-
-        // Walk back the `current` index to the first reset block —
-        // i.e., one with `offset == 0`. Skip tombstones (data.is_null())
-        // — the inline allocator can't bump from a deallocated slot.
-        // If we just picked the first block with any free space we'd
-        // land on the live block that still has 80 bytes left at the
-        // end (not enough for a 96-byte class instance), and the next
-        // alloc would push a fresh block. The reset blocks are the
-        // whole point of this routine — make sure we actually use one.
-        let mut new_current = arena.current;
-        for (i, block) in arena.blocks.iter().enumerate() {
-            if !block.data.is_null() && block.offset == 0 {
-                new_current = i;
-                break;
-            }
-        }
-        // If `new_current` ended up pointing at a tombstone (the only
-        // remaining offset==0 entries are deallocated slots), keep
-        // `arena.current` where it was — the next `Arena::alloc` slow
-        // path will tombstone-reuse a slot and update `current` then.
-        if !arena.blocks[new_current].data.is_null() {
-            arena.current = new_current;
-        }
-        let _ = (n_live, n_total);
-        INLINE_STATE.with(|s| {
-            let inline = &mut *s.get();
-            if !inline.data.is_null() {
-                let block = &arena.blocks[arena.current];
-                if !block.data.is_null() {
-                    inline.data = block.data;
-                    inline.offset = block.offset;
-                    inline.size = block.size;
+            stats
+        } else {
+            // Walk back the `current` index to the first reset block —
+            // i.e., one with `offset == 0`. Skip tombstones (data.is_null())
+            // — the inline allocator can't bump from a deallocated slot.
+            // If we just picked the first block with any free space we'd
+            // land on the live block that still has 80 bytes left at the
+            // end (not enough for a 96-byte class instance), and the next
+            // alloc would push a fresh block. The reset blocks are the
+            // whole point of this routine — make sure we actually use one.
+            let mut new_current = arena.current;
+            for (i, block) in arena.blocks.iter().enumerate() {
+                if !block.data.is_null() && block.offset == 0 {
+                    new_current = i;
+                    break;
                 }
             }
-        });
-    });
+            // If `new_current` ended up pointing at a tombstone (the only
+            // remaining offset==0 entries are deallocated slots), keep
+            // `arena.current` where it was — the next `Arena::alloc` slow
+            // path will tombstone-reuse a slot and update `current` then.
+            if !arena.blocks[new_current].data.is_null() {
+                arena.current = new_current;
+            }
+            let _ = (n_live, n_total);
+            INLINE_STATE.with(|s| {
+                let inline = &mut *s.get();
+                if !inline.data.is_null() {
+                    let block = &arena.blocks[arena.current];
+                    if !block.data.is_null() {
+                        inline.data = block.data;
+                        inline.offset = block.offset;
+                        inline.size = block.size;
+                    }
+                }
+            });
+            stats
+        }
+    })
 }
 
 /// Get arena memory statistics: (heap_used, heap_total)
@@ -1271,41 +1584,20 @@ pub fn old_gen_in_use_bytes() -> usize {
 
 /// Gen-GC Phase C: is `addr` inside any nursery (= general
 /// `ARENA`) block? Hot-path predicate for the write barrier —
-/// "is the child of this store a young-gen pointer?". Linear
-/// scan over nursery blocks; typically 5-30 blocks per thread,
-/// each compare is one branch + one less-than. Will be replaced
-/// by a single bit-test on the GcHeader's GC_FLAG_YOUNG once the
-/// nursery alloc path sets that flag (sub-phase C3).
+/// "is the child of this store a young-gen pointer?". Backed by
+/// page side metadata so the runtime barrier does not scan every
+/// arena block on each heap store.
 #[inline]
 pub fn pointer_in_nursery(addr: usize) -> bool {
-    ARENA.with(|a| unsafe {
-        let arena = &*a.get();
-        for block in &arena.blocks {
-            let base = block.data as usize;
-            if addr >= base && addr < base + block.size {
-                return true;
-            }
-        }
-        false
-    })
+    matches!(classify_heap_generation(addr), HeapGeneration::Nursery)
 }
 
 /// Gen-GC Phase C: is `addr` inside any old-gen arena block?
-/// Mirror of `pointer_in_nursery`. Empty in Phase B (returns
-/// false), populated in Phase C+ as promotion lands objects in
-/// the old region.
+/// Mirror of `pointer_in_nursery`, also backed by page side
+/// metadata.
 #[inline]
 pub fn pointer_in_old_gen(addr: usize) -> bool {
-    OLD_ARENA.with(|a| unsafe {
-        let arena = &*a.get();
-        for block in &arena.blocks {
-            let base = block.data as usize;
-            if addr >= base && addr < base + block.size {
-                return true;
-            }
-        }
-        false
-    })
+    matches!(classify_heap_generation(addr), HeapGeneration::Old)
 }
 
 #[cfg(test)]
@@ -1331,6 +1623,131 @@ mod tests {
     fn general_block_offset(idx: usize) -> usize {
         sync_inline_arena_state();
         ARENA.with(|a| unsafe { (&*a.get()).blocks[idx].offset })
+    }
+
+    fn run_with_fresh_arenas(test: impl FnOnce() + Send + 'static) {
+        std::thread::spawn(test)
+            .join()
+            .expect("arena test panicked");
+    }
+
+    fn reset_old_nursery_block(dead_cycles_before: u32) -> (usize, usize, usize, ArenaResetStats) {
+        let full_block_payload = BLOCK_SIZE - GC_HEADER_SIZE;
+        let mut blocks = Vec::new();
+        for _ in 0..7 {
+            let ptr = arena_alloc_gc(full_block_payload, 8, GC_TYPE_STRING) as usize;
+            let idx = general_block_index_for(ptr).expect("allocation should be in nursery");
+            blocks.push(idx);
+        }
+        blocks.sort_unstable();
+        blocks.dedup();
+        assert!(
+            blocks.len() >= 7,
+            "test setup should force seven distinct nursery blocks"
+        );
+
+        let current = ARENA.with(|a| unsafe { (&*a.get()).current });
+        let keep_low = current.saturating_sub(4);
+        let candidate = blocks
+            .into_iter()
+            .find(|&idx| idx < keep_low)
+            .expect("test setup should leave a nursery block outside the keep window");
+
+        let (base, size) = ARENA.with(|a| unsafe {
+            let arena = &mut *a.get();
+            let block = &mut arena.blocks[candidate];
+            assert!(!block.data.is_null());
+            assert!(block.offset > 0);
+            block.dead_cycles = dead_cycles_before;
+            (block.data as usize, block.size)
+        });
+
+        let mut block_has_live = vec![false; arena_block_count()];
+        block_has_live[current] = true;
+        let stats = arena_reset_empty_blocks(&block_has_live);
+        (candidate, base, size, stats)
+    }
+
+    #[test]
+    fn generation_metadata_classifies_arena_regions() {
+        run_with_fresh_arenas(|| {
+            let nursery = arena_alloc_gc(32, 8, GC_TYPE_STRING) as usize;
+            let longlived = arena_alloc_gc_longlived(32, 8, GC_TYPE_STRING) as usize;
+            let old = arena_alloc_gc_old(32, 8, GC_TYPE_STRING) as usize;
+
+            assert_eq!(classify_heap_generation(nursery), HeapGeneration::Nursery);
+            assert_eq!(
+                classify_heap_generation(longlived),
+                HeapGeneration::Longlived
+            );
+            assert_eq!(classify_heap_generation(old), HeapGeneration::Old);
+            assert!(pointer_in_nursery(nursery));
+            assert!(!pointer_in_nursery(longlived));
+            assert!(!pointer_in_old_gen(longlived));
+            assert!(pointer_in_old_gen(old));
+        });
+    }
+
+    #[test]
+    fn generation_metadata_survives_nursery_block_reset() {
+        run_with_fresh_arenas(|| {
+            let (idx, base, size, stats) = reset_old_nursery_block(0);
+            assert!(
+                stats.reset_blocks >= 1,
+                "test setup should reset at least one nursery block"
+            );
+            ARENA.with(|a| unsafe {
+                let arena = &*a.get();
+                assert!(!arena.blocks[idx].data.is_null());
+                assert_eq!(arena.blocks[idx].offset, 0);
+            });
+            assert_eq!(classify_heap_generation(base), HeapGeneration::Nursery);
+            assert_eq!(
+                classify_heap_generation(base + size - 1),
+                HeapGeneration::Nursery
+            );
+        });
+    }
+
+    #[test]
+    fn generation_metadata_removed_on_nursery_block_deallocation() {
+        run_with_fresh_arenas(|| {
+            let (idx, base, _size, stats) = reset_old_nursery_block(1);
+            assert!(
+                stats.deallocated_blocks >= 1,
+                "test setup should deallocate at least one nursery block"
+            );
+            ARENA.with(|a| unsafe {
+                let arena = &*a.get();
+                assert!(arena.blocks[idx].data.is_null());
+                assert_eq!(arena.blocks[idx].size, 0);
+            });
+            assert_eq!(classify_heap_generation(base), HeapGeneration::Unknown);
+            assert!(!pointer_in_nursery(base));
+        });
+    }
+
+    #[test]
+    fn generation_metadata_registered_on_tombstone_reuse() {
+        run_with_fresh_arenas(|| {
+            let (idx, _base, _size, stats) = reset_old_nursery_block(1);
+            assert!(
+                stats.deallocated_blocks >= 1,
+                "test setup should create a nursery tombstone"
+            );
+
+            let oversized = arena_alloc_gc(BLOCK_SIZE + 64, 8, GC_TYPE_STRING) as usize;
+            ARENA.with(|a| unsafe {
+                let arena = &*a.get();
+                assert!(!arena.blocks[idx].data.is_null());
+                assert!(
+                    arena.blocks[idx].size > BLOCK_SIZE,
+                    "oversized allocation should replace the tombstone with a fresh block"
+                );
+            });
+            assert_eq!(general_block_index_for(oversized), Some(idx));
+            assert_eq!(classify_heap_generation(oversized), HeapGeneration::Nursery);
+        });
     }
 
     /// Issue #179: a longlived-arena allocation must not land inside any

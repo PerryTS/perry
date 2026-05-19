@@ -1560,7 +1560,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // pointer stores in the per-thread remembered set so minor
     // GC can scan precise roots + RS instead of the full old-gen.
     //   js_write_barrier(parent_bits: u64, child_bits: u64)
+    //   js_write_barrier_slot(parent_bits: u64, slot_addr: u64, child_bits: u64)
     module.declare_function("js_write_barrier", VOID, &[I64, I64]);
+    module.declare_function("js_write_barrier_slot", VOID, &[I64, I64, I64]);
 
     // Array methods (Phase B.12).
     // - js_array_pop_f64(arr) -> f64    (last element, NaN if empty)

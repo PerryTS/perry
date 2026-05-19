@@ -544,12 +544,12 @@ unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
 }
 
 /// Grow the entries array if needed (header stays at same address)
-unsafe fn ensure_capacity(map: *mut MapHeader) {
+unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
     let size = (*map).size;
     let capacity = (*map).capacity;
 
     if size < capacity {
-        return;
+        return false;
     }
 
     // Double the capacity
@@ -564,6 +564,7 @@ unsafe fn ensure_capacity(map: *mut MapHeader) {
 
     (*map).entries = new_entries;
     (*map).capacity = new_capacity;
+    true
 }
 
 /// Set a key-value pair in the map
@@ -582,17 +583,42 @@ pub extern "C" fn js_map_set(map: *mut MapHeader, key: f64, value: f64) -> *mut 
         if idx >= 0 {
             // Update existing value (key position unchanged → no index update)
             let entries = entries_ptr_mut(map);
-            ptr::write(entries.add((idx as usize) * 2 + 1), value);
+            let value_slot = entries.add((idx as usize) * 2 + 1);
+            ptr::write(value_slot, value);
+            crate::gc::runtime_write_barrier_external_slot(
+                map as usize,
+                value_slot as usize,
+                value.to_bits(),
+            );
             return map;
         }
 
         // Key doesn't exist, append a new entry
-        ensure_capacity(map);
+        let grew = ensure_capacity(map);
         let size = (*map).size;
         let entries = entries_ptr_mut(map);
+        if grew && size > 0 {
+            crate::gc::runtime_dirty_external_slot_span(
+                map as usize,
+                entries as usize,
+                size as usize * 2,
+            );
+        }
 
-        ptr::write(entries.add((size as usize) * 2), key);
-        ptr::write(entries.add((size as usize) * 2 + 1), value);
+        let key_slot = entries.add((size as usize) * 2);
+        let value_slot = entries.add((size as usize) * 2 + 1);
+        ptr::write(key_slot, key);
+        ptr::write(value_slot, value);
+        crate::gc::runtime_write_barrier_external_slot(
+            map as usize,
+            key_slot as usize,
+            key.to_bits(),
+        );
+        crate::gc::runtime_write_barrier_external_slot(
+            map as usize,
+            value_slot as usize,
+            value.to_bits(),
+        );
 
         (*map).size = size + 1;
 
@@ -691,8 +717,20 @@ pub extern "C" fn js_map_delete(map: *mut MapHeader, key: f64) -> i32 {
         if (idx as u32) < size - 1 {
             let last_key = ptr::read(entries.add(((size - 1) as usize) * 2));
             let last_value = ptr::read(entries.add(((size - 1) as usize) * 2 + 1));
-            ptr::write(entries.add((idx as usize) * 2), last_key);
-            ptr::write(entries.add((idx as usize) * 2 + 1), last_value);
+            let key_slot = entries.add((idx as usize) * 2);
+            let value_slot = entries.add((idx as usize) * 2 + 1);
+            ptr::write(key_slot, last_key);
+            ptr::write(value_slot, last_value);
+            crate::gc::runtime_write_barrier_external_slot(
+                map as usize,
+                key_slot as usize,
+                last_key.to_bits(),
+            );
+            crate::gc::runtime_write_barrier_external_slot(
+                map as usize,
+                value_slot as usize,
+                last_value.to_bits(),
+            );
             swapped_key = Some(last_key);
         }
 

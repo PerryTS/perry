@@ -3570,10 +3570,9 @@ fn shadow_stack_enabled() -> bool {
 /// Gen-GC Phase C2 emission gate. PERRY_WRITE_BARRIERS=1 / on /
 /// true → emit `js_write_barrier(parent_bits, child_bits)` after
 /// every heap-store site. Default OFF — barriers cost a function
-/// call per store and the runtime entry's old-vs-young range scan
-/// is O(blocks). C3 will replace the range scan with a single
-/// GC_FLAG_YOUNG bit-test, at which point flipping the default
-/// becomes attractive.
+/// call per store. The runtime entry uses arena page side metadata
+/// for old-vs-young classification; flipping the default remains a
+/// later policy decision after barriered workloads are measured.
 pub(crate) fn write_barriers_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
