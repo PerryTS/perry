@@ -2230,6 +2230,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_crypto_aes256_encrypt", I64, &[I64, I64, I64]);
     module.declare_function("js_crypto_aes256_gcm_decrypt", I64, &[I64, I64, I64]);
     module.declare_function("js_crypto_aes256_gcm_encrypt", I64, &[I64, I64, I64]);
+    // Handle-based createCipheriv / createDecipheriv (#1075) — return a
+    // pre-NaN-boxed f64 carrying POINTER_TAG + handle id. Dispatched
+    // through HANDLE_METHOD_DISPATCH → `dispatch_cipher` for .update() /
+    // .final() / .getAuthTag() / .setAuthTag().
+    module.declare_function("js_crypto_create_cipheriv", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_crypto_create_decipheriv", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_crypto_hkdf_sha256", I64, &[I64, I64, I64, DOUBLE]);
     module.declare_function("js_crypto_pbkdf2", I64, &[I64, I64, DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_bytes_hex", I64, &[DOUBLE]);

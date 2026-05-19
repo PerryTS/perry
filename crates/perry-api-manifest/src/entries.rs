@@ -1729,6 +1729,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "randomFillSync", false, None),
     method("crypto", "createHash", false, None),
     method("crypto", "createHmac", false, None),
+    // `crypto.createCipheriv(alg, key, iv)` / `createDecipheriv(...)` —
+    // issue #1075. Registers a CipherHandle dispatched via the
+    // small-pointer-handle method route. Supports aes-128-cbc,
+    // aes-256-cbc, aes-128-gcm, aes-256-gcm. Wired in `expr.rs`
+    // (no NATIVE_MODULE_TABLE entry — direct dispatch like createHash).
+    method("crypto", "createCipheriv", false, None),
+    method("crypto", "createDecipheriv", false, None),
     // `crypto.createSecretKey(key, encoding?)` — required by jose for the
     // JWT signing path; returns a Uint8Array-marked Buffer of the key
     // bytes that `instanceof Uint8Array` accepts on both sides of the

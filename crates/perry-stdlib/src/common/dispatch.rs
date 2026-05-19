@@ -137,6 +137,20 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return crate::crypto::dispatch_hmac(handle, method_name, args);
     }
 
+    // crypto Cipher handle: createCipheriv(...) / createDecipheriv(...)
+    // followed by .update(...).final() / .getAuthTag() / .setAuthTag() —
+    // issue #1075. Method-gated like the Hash handle above so handle id
+    // collisions across registries (net.Socket id=1 vs CipherHandle id=1)
+    // don't accidentally route a socket method here.
+    #[cfg(feature = "crypto")]
+    if matches!(
+        method_name,
+        "update" | "final" | "getAuthTag" | "setAuthTag" | "setAAD"
+    ) && with_handle::<crate::crypto::CipherHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_cipher(handle, method_name, args);
+    }
+
     // SQLite Statement handle: stmt.raw() / .all() / .get() / .run() —
     // routes the dynamic-receiver path used by drizzle's
     // `this.stmt.raw().all(...params)` chain (where `this.stmt` is

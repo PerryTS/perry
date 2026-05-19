@@ -11731,6 +11731,53 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
 
+        // `crypto.createCipheriv(alg, key, iv)` / `crypto.createDecipheriv(...)`
+        // (issue #1075) — registers a CipherHandle in perry-stdlib and
+        // returns a small-integer handle NaN-boxed as POINTER_TAG. The
+        // runtime's HANDLE_METHOD_DISPATCH then routes subsequent
+        // `.update(buf)` / `.final()` / `.getAuthTag()` / `.setAuthTag(tag)`
+        // through `dispatch_cipher`. Supports aes-128-cbc, aes-256-cbc,
+        // aes-128-gcm, aes-256-gcm. See
+        // `perry-stdlib/src/crypto.rs::js_crypto_create_cipheriv`.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property }
+                    if (property == "createCipheriv" || property == "createDecipheriv")
+                        && matches!(
+                            object.as_ref(),
+                            Expr::NativeModuleRef(n) if n == "crypto"
+                        )
+            ) =>
+        {
+            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                property.as_str()
+            } else {
+                unreachable!()
+            };
+            if args.len() < 3 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let key_box = lower_expr(ctx, &args[1])?;
+            let iv_box = lower_expr(ctx, &args[2])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let key_handle = unbox_to_i64(blk, &key_box);
+            let iv_handle = unbox_to_i64(blk, &iv_box);
+            let fname = if property == "createCipheriv" {
+                "js_crypto_create_cipheriv"
+            } else {
+                "js_crypto_create_decipheriv"
+            };
+            // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
+            Ok(blk.call(
+                DOUBLE,
+                fname,
+                &[(I64, &alg_handle), (I64, &key_handle), (I64, &iv_handle)],
+            ))
+        }
+
         // Phase H crypto: `crypto.randomBytes(n)` as a Buffer.
         Expr::Call { callee, args, .. }
             if matches!(

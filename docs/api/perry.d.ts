@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 928 entries across 74 modules
+// Coverage: 930 entries across 74 modules
 
 declare module "@perryts/google-auth" {
   /** stdlib */
@@ -143,6 +143,10 @@ declare module "crypto" {
   export const constants: any;
   /** stdlib */
   export const subtle: any;
+  /** stdlib */
+  export function createCipheriv(...args: any[]): any;
+  /** stdlib */
+  export function createDecipheriv(...args: any[]): any;
   /** stdlib */
   export function createHash(...args: any[]): any;
   /** stdlib */
