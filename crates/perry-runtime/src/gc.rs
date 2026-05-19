@@ -1121,6 +1121,7 @@ fn evacuation_policy_initial_decision(
     pre_evac_pause_us: u64,
     allowed: bool,
     force: bool,
+    old_to_young_tracking_complete: bool,
 ) -> EvacuationPolicyDecision {
     let snapshot = EvacuationPolicySnapshot {
         tenured_still_in_nursery_bytes,
@@ -1134,6 +1135,15 @@ fn evacuation_policy_initial_decision(
             allowed,
             force,
             reason: "disabled",
+            snapshot,
+            ..EvacuationPolicyDecision::default()
+        };
+    }
+    if !old_to_young_tracking_complete {
+        return EvacuationPolicyDecision {
+            allowed,
+            force,
+            reason: "barriers_inactive",
             snapshot,
             ..EvacuationPolicyDecision::default()
         };
@@ -1277,7 +1287,10 @@ fn maybe_print_evacuation_policy_diag(
     decision: EvacuationPolicyDecision,
     evacuation: EvacuationTraceStats,
 ) {
-    if std::env::var_os("PERRY_GC_DIAG").is_none() || !decision.considered {
+    if std::env::var_os("PERRY_GC_DIAG").is_none() {
+        return;
+    }
+    if !decision.considered && decision.reason != "barriers_inactive" {
         return;
     }
     let snapshot = decision.snapshot;
@@ -2342,6 +2355,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         start.elapsed().as_micros() as u64,
         evacuation_policy_allowed,
         force_evacuation,
+        generated_write_barriers_emitted(),
     );
     if let Some(trace) = trace.as_mut() {
         trace.evacuation_policy = evacuation_policy;
@@ -9777,6 +9791,70 @@ mod tests {
         }
     }
 
+    static GENERATED_BARRIER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct GeneratedWriteBarrierTestGuard {
+        previous: usize,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl GeneratedWriteBarrierTestGuard {
+        fn active() -> Self {
+            let lock = GENERATED_BARRIER_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let previous = GENERATED_WRITE_BARRIERS_EMITTED.swap(0, Ordering::AcqRel);
+            js_gc_write_barriers_emitted(1);
+            Self {
+                previous,
+                _lock: lock,
+            }
+        }
+
+        fn inactive() -> Self {
+            let lock = GENERATED_BARRIER_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let previous = GENERATED_WRITE_BARRIERS_EMITTED.swap(0, Ordering::AcqRel);
+            Self {
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for GeneratedWriteBarrierTestGuard {
+        fn drop(&mut self) {
+            GENERATED_WRITE_BARRIERS_EMITTED.store(self.previous, Ordering::Release);
+        }
+    }
+
+    fn noop_copy_only_root_scanner(_mark: &mut dyn FnMut(f64)) {}
+
+    struct TemporaryCopyOnlyRootScanner {
+        previous_len: usize,
+    }
+
+    impl TemporaryCopyOnlyRootScanner {
+        fn new() -> Self {
+            let previous_len = ROOT_SCANNERS.with(|scanners| {
+                let mut scanners = scanners.borrow_mut();
+                let previous_len = scanners.len();
+                scanners.push(noop_copy_only_root_scanner);
+                previous_len
+            });
+            Self { previous_len }
+        }
+    }
+
+    impl Drop for TemporaryCopyOnlyRootScanner {
+        fn drop(&mut self) {
+            ROOT_SCANNERS.with(|scanners| {
+                scanners.borrow_mut().truncate(self.previous_len);
+            });
+        }
+    }
+
     fn young_leaf() -> usize {
         crate::arena::arena_alloc_gc(32, 8, GC_TYPE_STRING) as usize
     }
@@ -11862,10 +11940,30 @@ mod tests {
         assert_eq!(force.reason, "force");
 
         let low_pressure =
-            evacuation_policy_initial_decision(0, RSS_PRESSURE_BYTES - 1, 0, 0, true, false);
+            evacuation_policy_initial_decision(0, RSS_PRESSURE_BYTES - 1, 0, 0, true, false, true);
         assert!(!low_pressure.considered);
         assert!(!low_pressure.enabled);
         assert_eq!(low_pressure.reason, "low_pressure");
+
+        let pressure_barriers_inactive = evacuation_policy_initial_decision(
+            MIN_TENURED_NURSERY_BYTES,
+            RSS_HARD_PRESSURE_BYTES,
+            0,
+            0,
+            true,
+            false,
+            false,
+        );
+        assert!(!pressure_barriers_inactive.considered);
+        assert!(!pressure_barriers_inactive.enabled);
+        assert_eq!(pressure_barriers_inactive.reason, "barriers_inactive");
+
+        let force_barriers_inactive =
+            evacuation_policy_initial_decision(0, 0, 0, 0, true, true, false);
+        assert!(force_barriers_inactive.force);
+        assert!(!force_barriers_inactive.considered);
+        assert!(!force_barriers_inactive.enabled);
+        assert_eq!(force_barriers_inactive.reason, "barriers_inactive");
 
         let disabled = evacuation_policy_initial_decision(
             MIN_TENURED_NURSERY_BYTES,
@@ -11874,6 +11972,7 @@ mod tests {
             0,
             false,
             true,
+            false,
         );
         assert!(!disabled.considered);
         assert!(!disabled.enabled);
@@ -11981,6 +12080,65 @@ mod tests {
     }
 
     #[test]
+    fn test_forced_evacuation_barriers_inactive_does_not_forward_candidate() {
+        struct ResetGcTestState;
+
+        impl Drop for ResetGcTestState {
+            fn drop(&mut self) {
+                reset_shadow_stack();
+                reset_global_roots();
+                reset_remembered_set();
+                clear_marks();
+                clear_mark_seeds();
+                CONS_PINNED.with(|s| s.borrow_mut().clear());
+            }
+        }
+
+        let _reset = ResetGcTestState;
+        let _barrier_guard = GeneratedWriteBarrierTestGuard::inactive();
+        reset_shadow_stack();
+        reset_global_roots();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+        if !gc_force_evacuate_enabled() {
+            return;
+        }
+        assert!(
+            !generated_write_barriers_emitted(),
+            "this canary must verify the barriers-inactive evacuation gate"
+        );
+
+        let frame = js_shadow_frame_push(1);
+        let (parent, _) = unsafe { alloc_nursery_test_object(0) };
+        let parent_user = parent as usize;
+        let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };
+
+        unsafe {
+            (*parent_header).gc_flags |= GC_FLAG_TENURED;
+        }
+        js_shadow_slot_set(0, ptr_bits(parent_user));
+
+        let _ = gc_collect_minor();
+
+        let parent_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert_eq!(
+            parent_after, parent_user,
+            "forced evacuation must not move candidates when generated barriers are inactive"
+        );
+        unsafe {
+            assert_eq!(
+                (*parent_header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "barriers-inactive policy gate must leave the nursery candidate unforwarded"
+            );
+        }
+
+        js_shadow_frame_pop(frame);
+    }
+
+    #[test]
     fn test_evacuated_old_parent_re_remembers_young_child_canary() {
         struct ResetGcTestState;
 
@@ -11996,6 +12154,8 @@ mod tests {
         }
 
         let _reset = ResetGcTestState;
+        let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
+        let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::new();
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
@@ -12006,8 +12166,8 @@ mod tests {
             return;
         }
         assert!(
-            !generated_write_barriers_emitted(),
-            "this canary must exercise the evacuation path, not the copying nursery fast path"
+            generated_write_barriers_emitted(),
+            "this canary must exercise policy evacuation with generated barriers active"
         );
 
         let frame = js_shadow_frame_push(1);
