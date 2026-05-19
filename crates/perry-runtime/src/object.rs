@@ -271,6 +271,7 @@ fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
         }
     });
     if hit {
+        crate::gc::layout_note_slot(obj_ptr, field_index, vbits);
         return;
     }
     OVERFLOW_FIELDS.with(|m| {
@@ -285,6 +286,7 @@ fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
             *c.get() = (obj_ptr, vec_ptr);
         });
     });
+    crate::gc::layout_note_slot(obj_ptr, field_index, vbits);
 }
 
 /// Per-property attribute flags set by `Object.defineProperty` / `Object.freeze` / `Object.seal`.
@@ -874,6 +876,13 @@ pub fn scan_overflow_fields_roots_mut(visitor: &mut crate::gc::RuntimeRootVisito
             if visitor.visit_metadata_usize_slot(&mut new_owner) {
                 moved.push((owner, new_owner));
             }
+            if crate::gc::layout_visit_pointer_slots_for_user(new_owner, fields.len(), |i| {
+                if let Some(val_bits) = fields.get_mut(i) {
+                    visitor.visit_nanbox_u64_slot(val_bits);
+                }
+            }) {
+                continue;
+            }
             for val_bits in fields.iter_mut() {
                 visitor.visit_nanbox_u64_slot(val_bits);
             }
@@ -963,6 +972,7 @@ pub(crate) fn test_seed_overflow_fields_root(owner: usize, value_bits: u64) {
         m.clear();
         m.insert(owner, vec![value_bits]);
     });
+    crate::gc::layout_note_slot(owner, 0, value_bits);
     OVERFLOW_LAST.with(|c| unsafe {
         *c.get() = (0, std::ptr::null_mut());
     });
@@ -2573,6 +2583,27 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
     );
 }
 
+#[inline]
+unsafe fn note_object_field_slot(obj: *mut ObjectHeader, field_index: usize, value_bits: u64) {
+    crate::gc::layout_note_slot(obj as usize, field_index, value_bits);
+}
+
+#[inline]
+unsafe fn rebuild_object_field_layout(obj: *mut ObjectHeader, slot_count: usize) {
+    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+    crate::gc::layout_rebuild_from_slots(obj as *mut u8, fields, slot_count);
+}
+
+#[inline]
+unsafe fn rebuild_array_layout_from_slots(arr: *mut ArrayHeader) {
+    if arr.is_null() {
+        return;
+    }
+    let len = (*arr).length as usize;
+    let slots = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+    crate::gc::layout_rebuild_from_slots(arr as *mut u8, slots, len);
+}
+
 /// Allocate a new object with the given class ID and field count
 /// Returns a pointer to the object header
 #[no_mangle]
@@ -2620,6 +2651,7 @@ pub extern "C" fn js_object_alloc_with_parent(
         for i in 0..alloc_field_count {
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
 
         ptr
     }
@@ -2644,6 +2676,7 @@ pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut 
         (*ptr).parent_class_id = 0;
         (*ptr).field_count = field_count;
         (*ptr).keys_array = ptr::null_mut();
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
     ptr
@@ -2674,6 +2707,7 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
         (*ptr).parent_class_id = parent_class_id;
         (*ptr).field_count = field_count;
         (*ptr).keys_array = ptr::null_mut();
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
     ptr
@@ -2716,6 +2750,7 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
         (*ptr).parent_class_id = parent_class_id;
         (*ptr).field_count = field_count;
         (*ptr).keys_array = keys_array;
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
     ptr
 }
@@ -2766,6 +2801,7 @@ pub extern "C" fn js_build_class_keys_array(
         );
         unsafe {
             *elements_ptr.add(i) = nanboxed;
+            crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
         }
     }
     shape_cache_insert(shape_id, arr);
@@ -2807,6 +2843,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         (*ptr).field_count = field_count;
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
     // Use class_id as shape_id for caching the keys array.
@@ -2841,6 +2878,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
             );
             unsafe {
                 *elements_ptr.add(i) = nanboxed;
+                crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
             }
         }
         shape_cache_insert(shape_id, arr);
@@ -2884,6 +2922,7 @@ pub extern "C" fn js_object_alloc_with_shape(
         for i in 0..alloc_field_count {
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
+        crate::gc::layout_init_pointer_free(obj_ptr as *mut u8);
     }
 
     let cached = shape_cache_get(shape_id);
@@ -2910,6 +2949,7 @@ pub extern "C" fn js_object_alloc_with_shape(
             );
             unsafe {
                 *elements_ptr.add(i) = nanboxed;
+                crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
             }
         }
         shape_cache_insert(shape_id, arr);
@@ -2974,6 +3014,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         for i in 0..phys_slots as usize {
             ptr::write(fields_ptr.add(i), crate::value::TAG_UNDEFINED);
         }
+        crate::gc::layout_init_pointer_free(new_ptr as *mut u8);
         // Empty keys array with capacity reserved for the static props to come.
         let new_keys_arr = crate::array::js_array_alloc(extra_count);
         (*new_ptr).keys_array = new_keys_arr;
@@ -3017,6 +3058,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     for i in src_field_count as usize..phys_slots as usize {
         ptr::write(dst_fields.add(i), crate::value::TAG_UNDEFINED);
     }
+    rebuild_object_field_layout(new_ptr, src_field_count as usize);
 
     // Build keys array: copy ONLY src keys. Static keys are NOT added here — codegen uses
     // js_object_set_field_by_name for each static prop, which appends new keys via
@@ -3033,6 +3075,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
             *new_keys_elements.add(i) = *src_key_elements.add(i);
         }
         (*new_keys_arr).length = copy_count as u32;
+        rebuild_array_layout_from_slots(new_keys_arr);
     } else {
         (*new_keys_arr).length = 0;
     }
@@ -3414,6 +3457,7 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
         let slot = fields_ptr.add(field_index as usize);
         ptr::write(slot, value);
+        note_object_field_slot(obj, field_index as usize, value.bits());
         crate::gc::runtime_write_barrier_slot(obj as usize, slot as usize, value.bits());
     }
 }
@@ -5365,6 +5409,7 @@ pub extern "C" fn js_object_set_field_by_name(
                         (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
                     let slot = fields_ptr.add(slot_idx as usize);
                     ptr::write(slot, JSValue::from_bits(vbits));
+                    note_object_field_slot(obj, slot_idx as usize, vbits);
                     crate::gc::runtime_write_barrier_slot(obj as usize, slot as usize, vbits);
                     // Bump field_count only for inline slots — leaving
                     // it at the physical capacity is what steers
@@ -5504,6 +5549,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     *dst_data.add(i) = *src_data.add(i);
                 }
                 (*cloned).length = key_count as u32;
+                rebuild_array_layout_from_slots(cloned);
                 set_object_keys_array(obj, cloned);
                 cloned
             } else {
@@ -5658,6 +5704,7 @@ pub extern "C" fn js_object_set_field_by_name(
                 *dst_data.add(i) = *src_data.add(i);
             }
             (*cloned).length = key_count as u32;
+            rebuild_array_layout_from_slots(cloned);
             set_object_keys_array(obj, cloned);
             cloned
         } else {
@@ -5780,6 +5827,7 @@ pub extern "C" fn js_object_delete_field(
             *dst_elements.add(j) = *src_elements.add(j + 1);
         }
         (*keys_cloned).length = new_count as u32;
+        rebuild_array_layout_from_slots(keys_cloned);
         set_object_keys_array(obj, keys_cloned);
 
         // 1) Shift values down: for slot j in i..new_count, copy slot j+1
@@ -5792,6 +5840,7 @@ pub extern "C" fn js_object_delete_field(
                 let fields_ptr =
                     (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
                 ptr::write(fields_ptr.add(j), next);
+                note_object_field_slot(obj, j, next.bits());
             } else {
                 overflow_set(obj as usize, j, next.bits());
             }
@@ -5801,6 +5850,7 @@ pub extern "C" fn js_object_delete_field(
             let fields_ptr =
                 (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
             ptr::write(fields_ptr.add(new_count), JSValue::undefined());
+            note_object_field_slot(obj, new_count, crate::value::TAG_UNDEFINED);
         } else {
             overflow_set(obj as usize, new_count, crate::value::TAG_UNDEFINED);
         }
@@ -9567,6 +9617,7 @@ unsafe fn http_methods_array() -> f64 {
             crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
         );
         *elements_ptr.add(i) = nanboxed;
+        crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
     }
     let value = crate::value::js_nanbox_pointer(arr as i64);
     CACHED.store(value.to_bits(), Ordering::Relaxed);
@@ -9983,6 +10034,7 @@ pub extern "C" fn js_object_group_by(
             for (i, v) in items_for_key.iter().enumerate() {
                 std::ptr::write(arr_data.add(i), *v);
             }
+            rebuild_array_layout_from_slots(arr);
             // NaN-box the array pointer with POINTER_TAG before storing.
             let arr_boxed = f64::from_bits((arr as u64) | 0x7FFD_0000_0000_0000);
             js_object_set_field_by_name(obj, key_str_ptr, arr_boxed);
@@ -10286,6 +10338,7 @@ unsafe fn ensure_key_in_keys_array(obj: *mut ObjectHeader, key: *const crate::St
             *dst_data.add(i) = *src_data.add(i);
         }
         (*cloned).length = key_count as u32;
+        rebuild_array_layout_from_slots(cloned);
         set_object_keys_array(obj, cloned);
         cloned
     } else {
@@ -10331,6 +10384,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     *fields.add(1) = f64::from_bits(TAG_TRUE);
                     *fields.add(2) = f64::from_bits(TAG_FALSE);
                     *fields.add(3) = f64::from_bits(TAG_TRUE);
+                    rebuild_object_field_layout(desc, 4);
                     return f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000);
                 }
             }
@@ -10391,6 +10445,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             };
             *fields.add(2) = bool_to_f64(attrs.enumerable());
             *fields.add(3) = bool_to_f64(attrs.configurable());
+            rebuild_object_field_layout(desc, 4);
             return f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000);
         }
 
@@ -10409,6 +10464,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         *fields.add(1) = bool_to_f64(attrs.writable()); // writable
         *fields.add(2) = bool_to_f64(attrs.enumerable()); // enumerable
         *fields.add(3) = bool_to_f64(attrs.configurable()); // configurable
+        rebuild_object_field_layout(desc, 4);
         f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000)
     }
 }

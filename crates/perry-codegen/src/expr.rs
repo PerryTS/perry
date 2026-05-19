@@ -1087,6 +1087,18 @@ fn emit_write_barrier_slot_on_block(
     );
 }
 
+fn emit_layout_note_slot_on_block(
+    blk: &mut LlBlock,
+    parent_bits: &str,
+    slot_index: &str,
+    value_bits: &str,
+) {
+    blk.call_void(
+        "js_gc_note_slot_layout",
+        &[(I64, parent_bits), (I32, slot_index), (I64, value_bits)],
+    );
+}
+
 /// Issue #562 — `super({ ... })` for `class X extends ReadableStream`,
 /// `WritableStream`, or `TransformStream`. Extracts the underlying
 /// source/sink/transformer callbacks from the inline object literal,
@@ -3412,6 +3424,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let element_ptr = blk.inttoptr(I64, &element_addr);
                         blk.store(DOUBLE, &val_double, &element_ptr);
                         let val_bits = blk.bitcast_double_to_i64(&val_double);
+                        emit_layout_note_slot_on_block(blk, &arr_handle, &idx_i32, &val_bits);
                         emit_write_barrier_slot_on_block(
                             blk,
                             &arr_handle,
@@ -3770,6 +3783,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.store(DOUBLE, &val_double, &field_ptr);
                     let field_addr = blk.ptrtoint(&field_ptr, I64);
                     let val_bits = blk.bitcast_double_to_i64(&val_double);
+                    emit_layout_note_slot_on_block(blk, &obj_handle, &idx_str, &val_bits);
                     emit_write_barrier_slot_on_block(blk, &obj_bits, &field_addr, &val_bits);
                     return Ok(val_double);
                 }
@@ -4793,6 +4807,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let new_length = blk.add(I32, &length, "1");
                     let arr_ptr = blk.inttoptr(I64, &arr_handle);
                     blk.store(I32, &new_length, &arr_ptr);
+                    let value_bits = blk.bitcast_double_to_i64(&v);
+                    emit_layout_note_slot_on_block(blk, &arr_handle, &length, &value_bits);
                     blk.br(&merge_label);
                 }
 
@@ -14550,6 +14566,7 @@ fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Result<String>
         const ELEMENT_SIZE: u64 = 8;
         const GC_TYPE_ARRAY: u64 = 1;
         const GC_FLAG_ARENA: u64 = 0x02;
+        const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
 
         let total_size = GC_HEADER_SIZE + ARRAY_HEADER_SIZE + (n as u64) * ELEMENT_SIZE;
         let total_size_str = total_size.to_string();
@@ -14617,7 +14634,10 @@ fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Result<String>
 
         // Packed GcHeader (bits 0..7 obj_type, 8..15 gc_flags, 16..31
         // _reserved, 32..63 size).
-        let gc_packed: u64 = GC_TYPE_ARRAY | (GC_FLAG_ARENA << 8) | (total_size << 32);
+        let gc_packed: u64 = GC_TYPE_ARRAY
+            | (GC_FLAG_ARENA << 8)
+            | (GC_LAYOUT_POINTER_FREE << 16)
+            | (total_size << 32);
         blk.store(I64, &gc_packed.to_string(), &raw);
 
         // Packed ArrayHeader at raw+8 (length low 32 / capacity high 32).
@@ -14625,18 +14645,22 @@ fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Result<String>
         let arr_header_packed = (n as u64) | ((n as u64) << 32);
         blk.store(I64, &arr_header_packed.to_string(), &arr_header_addr);
 
+        let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
+        let user_ptr_as_i64 = blk.ptrtoint(&user_ptr, I64);
+
         // Elements at raw+16 + i*8.
         for (i, v) in vals.iter().enumerate() {
             let offset = (16 + i * 8).to_string();
             let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
             blk.store(DOUBLE, v, &elem_ptr);
+            let value_bits = blk.bitcast_double_to_i64(v);
+            let slot_index = i.to_string();
+            emit_layout_note_slot_on_block(blk, &user_ptr_as_i64, &slot_index, &value_bits);
         }
 
         // User pointer = raw + GC_HEADER_SIZE. This is the same address
         // `js_array_alloc_literal` returns and that the rest of the
         // codegen expects (ArrayHeader at offset 0, elements at offset 8).
-        let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
-        let user_ptr_as_i64 = blk.ptrtoint(&user_ptr, I64);
         return Ok(nanbox_pointer_inline(ctx.block(), &user_ptr_as_i64));
     }
 
@@ -14653,6 +14677,9 @@ fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Result<String>
         let offset = (8 + i * 8).to_string();
         let elem_ptr = ctx.block().gep_inbounds(I8, &arr_ptr, &[(I64, &offset)]);
         ctx.block().store(DOUBLE, v, &elem_ptr);
+        let value_bits = ctx.block().bitcast_double_to_i64(v);
+        let slot_index = i.to_string();
+        emit_layout_note_slot_on_block(ctx.block(), &arr, &slot_index, &value_bits);
     }
 
     Ok(nanbox_pointer_inline(ctx.block(), &arr))
@@ -14796,6 +14823,7 @@ fn lower_index_set_fast(
         let blk = ctx.block();
         let element_addr = store_element(blk, &arr_handle, &idx_i32, val_double);
         let val_bits = blk.bitcast_double_to_i64(val_double);
+        emit_layout_note_slot_on_block(blk, &arr_handle, &idx_i32, &val_bits);
         emit_write_barrier_slot_on_block(blk, &arr_handle, &element_addr, &val_bits);
         blk.br(&merge_label);
     }
@@ -14823,6 +14851,7 @@ fn lower_index_set_fast(
         let len_ptr = blk.inttoptr(I64, &arr_handle); // length is at offset 0
         blk.store(I32, &new_len, &len_ptr);
         let val_bits = blk.bitcast_double_to_i64(val_double);
+        emit_layout_note_slot_on_block(blk, &arr_handle, &idx_i32, &val_bits);
         emit_write_barrier_slot_on_block(blk, &arr_handle, &element_addr, &val_bits);
         blk.br(&merge_label);
     }

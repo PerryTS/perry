@@ -3905,6 +3905,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         const MIN_FIELD_SLOTS: u64 = 8;
         const GC_TYPE_OBJECT: u64 = 2;
         const GC_FLAG_ARENA: u64 = 0x02;
+        const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
         const OBJECT_TYPE_REGULAR: u64 = 1;
 
         let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
@@ -4010,7 +4011,10 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         //   bits  8..15  = gc_flags (u8)
         //   bits 16..31  = _reserved (u16)
         //   bits 32..63  = size (u32)
-        let gc_packed: u64 = GC_TYPE_OBJECT | (GC_FLAG_ARENA << 8) | ((total_size as u64) << 32);
+        let gc_packed: u64 = GC_TYPE_OBJECT
+            | (GC_FLAG_ARENA << 8)
+            | (GC_LAYOUT_POINTER_FREE << 16)
+            | ((total_size as u64) << 32);
         blk.store(I64, &gc_packed.to_string(), &raw);
 
         // Write ObjectHeader at raw + 8.

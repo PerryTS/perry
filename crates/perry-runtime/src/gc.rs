@@ -143,6 +143,114 @@ pub const OBJ_FLAG_FROZEN: u16 = 0x01;
 pub const OBJ_FLAG_SEALED: u16 = 0x02;
 pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
 
+// Pointer-slot layout state stored in the high bits of GcHeader._reserved.
+// Low bits remain object freeze/seal/preventExtensions flags.
+pub const GC_LAYOUT_STATE_MASK: u16 = 0xC000;
+const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
+pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
+const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
+
+#[derive(Clone)]
+enum LayoutSlotMask {
+    Inline(u64),
+    Heap(Vec<u64>),
+}
+
+impl LayoutSlotMask {
+    #[inline]
+    fn set_slot(&mut self, slot_index: usize) {
+        match self {
+            LayoutSlotMask::Inline(bits) if slot_index < 64 => {
+                *bits |= 1u64 << slot_index;
+            }
+            LayoutSlotMask::Inline(bits) => {
+                let mut words = vec![0; slot_index / 64 + 1];
+                words[0] = *bits;
+                words[slot_index / 64] |= 1u64 << (slot_index % 64);
+                *self = LayoutSlotMask::Heap(words);
+            }
+            LayoutSlotMask::Heap(words) => {
+                let word = slot_index / 64;
+                if words.len() <= word {
+                    words.resize(word + 1, 0);
+                }
+                words[word] |= 1u64 << (slot_index % 64);
+            }
+        }
+    }
+
+    #[inline]
+    fn clear_slot(&mut self, slot_index: usize) {
+        match self {
+            LayoutSlotMask::Inline(bits) if slot_index < 64 => {
+                *bits &= !(1u64 << slot_index);
+            }
+            LayoutSlotMask::Inline(_) => {}
+            LayoutSlotMask::Heap(words) => {
+                let word = slot_index / 64;
+                if word < words.len() {
+                    words[word] &= !(1u64 << (slot_index % 64));
+                    while words.last().copied() == Some(0) {
+                        words.pop();
+                    }
+                    if words.len() == 1 {
+                        *self = LayoutSlotMask::Inline(words[0]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        match self {
+            LayoutSlotMask::Inline(bits) => *bits == 0,
+            LayoutSlotMask::Heap(words) => words.iter().all(|&w| w == 0),
+        }
+    }
+
+    fn visit_slots<F: FnMut(usize)>(&self, slot_count: usize, mut visit: F) {
+        match self {
+            LayoutSlotMask::Inline(bits) => {
+                let limit = slot_count.min(64);
+                let mask = if limit == 64 {
+                    u64::MAX
+                } else if limit == 0 {
+                    0
+                } else {
+                    (1u64 << limit) - 1
+                };
+                let mut word = *bits & mask;
+                while word != 0 {
+                    let bit = word.trailing_zeros() as usize;
+                    visit(bit);
+                    word &= word - 1;
+                }
+            }
+            LayoutSlotMask::Heap(words) => {
+                let word_count = slot_count.div_ceil(64);
+                for (word_index, &raw_word) in words.iter().take(word_count).enumerate() {
+                    let remaining = slot_count.saturating_sub(word_index * 64);
+                    let limit = remaining.min(64);
+                    let mask = if limit == 64 {
+                        u64::MAX
+                    } else if limit == 0 {
+                        0
+                    } else {
+                        (1u64 << limit) - 1
+                    };
+                    let mut word = raw_word & mask;
+                    while word != 0 {
+                        let bit = word.trailing_zeros() as usize;
+                        visit(word_index * 64 + bit);
+                        word &= word - 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
 // NaN-boxing tag constants (duplicated from value.rs to avoid circular deps)
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
@@ -254,6 +362,14 @@ thread_local! {
 
     /// Module-level global variable addresses (registered by codegen)
     static GLOBAL_ROOTS: RefCell<Vec<*mut u64>> = const { RefCell::new(Vec::new()) };
+
+    /// Pointer-slot masks for arrays, object fields/overflow fields, and
+    /// closure captures. Keyed by user pointer (payload address after GcHeader).
+    static LAYOUT_SLOT_MASKS: RefCell<crate::fast_hash::PtrHashMap<usize, LayoutSlotMask>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
+    #[cfg(test)]
+    static TRACE_SLOT_READS: Cell<usize> = const { Cell::new(0) };
 
     /// Bit 0: reentrancy guard (`GC_FLAG_IN_ALLOC`) — set while gc_malloc /
     /// gc_realloc is mutating MALLOC_STATE. Prevents gc_check_trigger() from
@@ -2728,6 +2844,238 @@ unsafe fn header_from_user_ptr(user_ptr: *const u8) -> *mut GcHeader {
     (user_ptr as *mut u8).sub(GC_HEADER_SIZE) as *mut GcHeader
 }
 
+#[inline]
+unsafe fn set_layout_state(header: *mut GcHeader, state: u16) {
+    (*header)._reserved =
+        ((*header)._reserved & !GC_LAYOUT_STATE_MASK) | (state & GC_LAYOUT_STATE_MASK);
+}
+
+#[inline]
+fn strip_nanbox_user_ptr(bits: u64) -> usize {
+    if (bits >> 48) >= 0x7FF8 {
+        (bits & POINTER_MASK) as usize
+    } else {
+        bits as usize
+    }
+}
+
+#[inline]
+fn layout_pointer_bearing_bits(bits: u64) -> bool {
+    let tag = bits & TAG_MASK;
+    if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
+        return bits & POINTER_MASK != 0;
+    }
+    if tag >= 0x7FF8_0000_0000_0000 {
+        return false;
+    }
+    (0x1000..=POINTER_MASK).contains(&bits) && (bits & 0x7) == 0
+}
+
+#[inline]
+unsafe fn layout_header_for_user(user_ptr: usize) -> Option<*mut GcHeader> {
+    if user_ptr < GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header = header_from_user_ptr(user_ptr as *const u8);
+    let obj_type = (*header).obj_type;
+    matches!(obj_type, GC_TYPE_ARRAY | GC_TYPE_OBJECT | GC_TYPE_CLOSURE).then_some(header)
+}
+
+pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
+    let Some(header) = layout_header_for_user(user_ptr as usize) else {
+        return;
+    };
+    set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+    LAYOUT_SLOT_MASKS.with(|m| {
+        m.borrow_mut().remove(&(user_ptr as usize));
+    });
+}
+
+pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
+    let Some(header) = layout_header_for_user(user_ptr as usize) else {
+        return;
+    };
+    set_layout_state(header, GC_LAYOUT_UNKNOWN);
+    LAYOUT_SLOT_MASKS.with(|m| {
+        m.borrow_mut().remove(&(user_ptr as usize));
+    });
+}
+
+pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
+    if user_ptr == 0 {
+        return;
+    }
+    LAYOUT_SLOT_MASKS.with(|m| {
+        m.borrow_mut().remove(&user_ptr);
+    });
+}
+
+pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits: u64) {
+    if slot_index > 16_000_000 {
+        return;
+    }
+    unsafe {
+        let Some(header) = layout_header_for_user(parent_user) else {
+            return;
+        };
+        if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+            let new_user = forwarding_address(header) as usize;
+            if new_user != 0 && new_user != parent_user {
+                layout_note_slot(new_user, slot_index, value_bits);
+            }
+            return;
+        }
+        if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN {
+            return;
+        }
+        let pointer = layout_pointer_bearing_bits(value_bits);
+        if !pointer && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
+            return;
+        }
+        LAYOUT_SLOT_MASKS.with(|m| {
+            let mut masks = m.borrow_mut();
+            if pointer {
+                let mask = masks
+                    .entry(parent_user)
+                    .or_insert_with(|| LayoutSlotMask::Inline(0));
+                mask.set_slot(slot_index);
+                set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+            } else if let Some(mask) = masks.get_mut(&parent_user) {
+                mask.clear_slot(slot_index);
+                if mask.is_empty() {
+                    masks.remove(&parent_user);
+                    set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+                }
+            }
+        });
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_gc_note_slot_layout(parent: u64, slot_index: u32, value_bits: u64) {
+    let parent_user = strip_nanbox_user_ptr(parent);
+    layout_note_slot(parent_user, slot_index as usize, value_bits);
+}
+
+pub(crate) unsafe fn layout_rebuild_from_slots(
+    user_ptr: *mut u8,
+    slots: *const u64,
+    slot_count: usize,
+) {
+    let Some(header) = layout_header_for_user(user_ptr as usize) else {
+        return;
+    };
+    if slots.is_null() || slot_count == 0 {
+        set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+        LAYOUT_SLOT_MASKS.with(|m| {
+            m.borrow_mut().remove(&(user_ptr as usize));
+        });
+        return;
+    }
+
+    let mut mask = if slot_count <= 64 {
+        LayoutSlotMask::Inline(0)
+    } else {
+        LayoutSlotMask::Heap(vec![0; slot_count.div_ceil(64)])
+    };
+    for i in 0..slot_count {
+        if layout_pointer_bearing_bits(*slots.add(i)) {
+            mask.set_slot(i);
+        }
+    }
+
+    if mask.is_empty() {
+        set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+        LAYOUT_SLOT_MASKS.with(|m| {
+            m.borrow_mut().remove(&(user_ptr as usize));
+        });
+    } else {
+        set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+        LAYOUT_SLOT_MASKS.with(|m| {
+            m.borrow_mut().insert(user_ptr as usize, mask);
+        });
+    }
+}
+
+pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
+    if old_user.is_null() || new_user.is_null() || old_user == new_user {
+        return;
+    }
+    let Some(old_header) = layout_header_for_user(old_user as usize) else {
+        return;
+    };
+    let Some(new_header) = layout_header_for_user(new_user as usize) else {
+        return;
+    };
+    let state = (*old_header)._reserved & GC_LAYOUT_STATE_MASK;
+    set_layout_state(new_header, state);
+    LAYOUT_SLOT_MASKS.with(|m| {
+        let mut masks = m.borrow_mut();
+        masks.remove(&(new_user as usize));
+        if let Some(mask) = masks.remove(&(old_user as usize)) {
+            masks.insert(new_user as usize, mask);
+        }
+    });
+}
+
+fn layout_visit_pointer_slots<F: FnMut(usize)>(
+    user_ptr: usize,
+    slot_count: usize,
+    mut visit: F,
+) -> bool {
+    unsafe {
+        let Some(header) = layout_header_for_user(user_ptr) else {
+            return false;
+        };
+        match (*header)._reserved & GC_LAYOUT_STATE_MASK {
+            GC_LAYOUT_POINTER_FREE => true,
+            GC_LAYOUT_SIDE_MASK => LAYOUT_SLOT_MASKS.with(|m| {
+                let masks = m.borrow();
+                let Some(mask) = masks.get(&user_ptr) else {
+                    return false;
+                };
+                mask.visit_slots(slot_count, &mut visit);
+                true
+            }),
+            _ => false,
+        }
+    }
+}
+
+pub(crate) fn layout_visit_pointer_slots_for_user<F: FnMut(usize)>(
+    user_ptr: usize,
+    slot_count: usize,
+    visit: F,
+) -> bool {
+    layout_visit_pointer_slots(user_ptr, slot_count, visit)
+}
+
+#[cfg(test)]
+pub(crate) fn test_layout_pointer_slot_count(user_ptr: usize, slot_count: usize) -> Option<usize> {
+    let mut count = 0usize;
+    if layout_visit_pointer_slots(user_ptr, slot_count, |_| count += 1) {
+        Some(count)
+    } else {
+        None
+    }
+}
+
+#[inline(always)]
+fn record_trace_slot_read() {
+    #[cfg(test)]
+    TRACE_SLOT_READS.with(|c| c.set(c.get() + 1));
+}
+
+#[cfg(test)]
+fn test_reset_trace_slot_reads() {
+    TRACE_SLOT_READS.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+fn test_trace_slot_reads() -> usize {
+    TRACE_SLOT_READS.with(|c| c.get())
+}
+
 // Try to mark a value (if it's a heap pointer). Returns true if newly marked.
 // === MARK_SEEDS ===
 // Per-cycle worklist populated by `try_mark_value` /
@@ -4195,6 +4543,11 @@ unsafe fn scan_dirty_array_slots(
     }
     let elements =
         (user_ptr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+    if layout_visit_pointer_slots(user_ptr as usize, length as usize, |i| unsafe {
+        scan_dirty_slot(elements.add(i), dirty_pages, stats, visit_slot);
+    }) {
+        return;
+    }
     scan_dirty_slot_range(elements, length as usize, dirty_pages, stats, visit_slot);
 }
 
@@ -4212,6 +4565,11 @@ unsafe fn scan_dirty_object_field_slots(
     scan_dirty_raw_ptr_slot(&(*obj).keys_array, dirty_pages, stats, visit_slot);
     let fields =
         (user_ptr as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
+    if layout_visit_pointer_slots(user_ptr as usize, field_count as usize, |i| unsafe {
+        scan_dirty_slot(fields.add(i), dirty_pages, stats, visit_slot);
+    }) {
+        return;
+    }
     scan_dirty_slot_range(fields, field_count as usize, dirty_pages, stats, visit_slot);
 }
 
@@ -4225,6 +4583,11 @@ unsafe fn scan_dirty_closure_slots(
     let capture_count = crate::closure::real_capture_count((*closure).capture_count);
     let captures =
         (user_ptr as *mut u8).add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64;
+    if layout_visit_pointer_slots(user_ptr as usize, capture_count as usize, |i| unsafe {
+        scan_dirty_slot(captures.add(i), dirty_pages, stats, visit_slot);
+    }) {
+        return;
+    }
     scan_dirty_slot_range(
         captures,
         capture_count as usize,
@@ -4537,6 +4900,11 @@ impl CopyingNurseryPreflight {
             return;
         }
         let elements = user_ptr.add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+        if layout_visit_pointer_slots(user_ptr as usize, length as usize, |i| unsafe {
+            self.scan_slot(elements.add(i));
+        }) {
+            return;
+        }
         for i in 0..length as usize {
             self.scan_slot(elements.add(i));
         }
@@ -4550,6 +4918,11 @@ impl CopyingNurseryPreflight {
         }
         self.scan_slot(&(*obj).keys_array as *const _ as *const u64);
         let fields = user_ptr.add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const u64;
+        if layout_visit_pointer_slots(user_ptr as usize, field_count as usize, |i| unsafe {
+            self.scan_slot(fields.add(i));
+        }) {
+            return;
+        }
         for i in 0..field_count as usize {
             self.scan_slot(fields.add(i));
         }
@@ -4560,6 +4933,11 @@ impl CopyingNurseryPreflight {
         let capture_count = crate::closure::real_capture_count((*closure).capture_count);
         let captures =
             user_ptr.add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *const u64;
+        if layout_visit_pointer_slots(user_ptr as usize, capture_count as usize, |i| unsafe {
+            self.scan_slot(captures.add(i));
+        }) {
+            return;
+        }
         for i in 0..capture_count as usize {
             self.scan_slot(captures.add(i));
         }
@@ -4770,6 +5148,7 @@ impl CopyingNurseryCollector {
 
         let new_header = header_from_user_ptr(new_user);
         (*new_header)._reserved = (*header)._reserved;
+        layout_transfer(old_user, new_user);
         let preserved = flags & (GC_FLAG_SHAPE_SHARED | GC_FLAG_INTERNED | GC_FLAG_PINNED);
         (*new_header).gc_flags = GC_FLAG_ARENA
             | GC_FLAG_MARKED
@@ -4859,6 +5238,11 @@ impl CopyingNurseryCollector {
             return;
         }
         let elements = user_ptr.add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+        if layout_visit_pointer_slots(user_ptr as usize, length as usize, |i| unsafe {
+            self.visit_slot_with_parent(elements.add(i), header, false);
+        }) {
+            return;
+        }
         for i in 0..length as usize {
             self.visit_slot_with_parent(elements.add(i), header, false);
         }
@@ -4872,6 +5256,11 @@ impl CopyingNurseryCollector {
         }
         self.visit_slot_with_parent(&(*obj).keys_array as *const _ as *mut u64, header, false);
         let fields = user_ptr.add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
+        if layout_visit_pointer_slots(user_ptr as usize, field_count as usize, |i| unsafe {
+            self.visit_slot_with_parent(fields.add(i), header, false);
+        }) {
+            return;
+        }
         for i in 0..field_count as usize {
             self.visit_slot_with_parent(fields.add(i), header, false);
         }
@@ -4882,6 +5271,11 @@ impl CopyingNurseryCollector {
         let capture_count = crate::closure::real_capture_count((*closure).capture_count);
         let captures =
             user_ptr.add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64;
+        if layout_visit_pointer_slots(user_ptr as usize, capture_count as usize, |i| unsafe {
+            self.visit_slot_with_parent(captures.add(i), header, false);
+        }) {
+            return;
+        }
         for i in 0..capture_count as usize {
             self.visit_slot_with_parent(captures.add(i), header, false);
         }
@@ -5520,7 +5914,15 @@ unsafe fn trace_array(
         (user_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
 
     // Specialized field walker — see `mark_field_into_worklist`.
+    if layout_visit_pointer_slots(user_ptr as usize, length as usize, |i| {
+        record_trace_slot_read();
+        let val_bits = unsafe { *elements.add(i) };
+        mark_field_into_worklist(val_bits, valid_ptrs, worklist);
+    }) {
+        return;
+    }
     for i in 0..length as usize {
+        record_trace_slot_read();
         let val_bits = *elements.add(i);
         mark_field_into_worklist(val_bits, valid_ptrs, worklist);
     }
@@ -5550,9 +5952,16 @@ unsafe fn trace_object(
     // NaN-boxed JSValues and raw I64 pointers — codegen stores some
     // fields as raw I64 for is_pointer typed variables). See
     // `mark_field_into_worklist` for why this beats `try_mark_value_or_raw`.
-    for i in 0..field_count as usize {
-        let val_bits = *fields.add(i);
+    if !layout_visit_pointer_slots(user_ptr as usize, field_count as usize, |i| {
+        record_trace_slot_read();
+        let val_bits = unsafe { *fields.add(i) };
         mark_field_into_worklist(val_bits, valid_ptrs, worklist);
+    }) {
+        for i in 0..field_count as usize {
+            record_trace_slot_read();
+            let val_bits = *fields.add(i);
+            mark_field_into_worklist(val_bits, valid_ptrs, worklist);
+        }
     }
 
     // Trace keys_array pointer.
@@ -5697,7 +6106,15 @@ unsafe fn trace_closure(
     // slots only hold user-pointer object starts). See
     // `mark_field_into_worklist` for why this beats the generic
     // `try_mark_value_or_raw` path on this hot loop.
+    if layout_visit_pointer_slots(user_ptr as usize, capture_count as usize, |i| {
+        record_trace_slot_read();
+        let val_bits = unsafe { *captures.add(i) };
+        mark_field_into_worklist(val_bits, valid_ptrs, worklist);
+    }) {
+        return;
+    }
     for i in 0..capture_count as usize {
+        record_trace_slot_read();
         let val_bits = *captures.add(i);
         mark_field_into_worklist(val_bits, valid_ptrs, worklist);
     }
@@ -5860,13 +6277,14 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
                 if (*header).gc_flags & GC_FLAG_MARKED == 0 {
                     // Unmarked: free it
                     let total_size = (*header).size as usize;
+                    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                     freed_bytes += total_size as u64;
+                    layout_clear_for_ptr(user_ptr as usize);
 
                     // For Maps, also free the separately-allocated entries array
                     // and drop the lookup side-table entry so the next allocation
                     // at this GC slot doesn't inherit stale key→index pairs.
                     if (*header).obj_type == GC_TYPE_MAP {
-                        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                         let map = user_ptr as *const crate::map::MapHeader;
                         let entries = (*map).entries;
                         if !entries.is_null() {
@@ -5880,7 +6298,6 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
                         crate::map::drop_map_index(user_ptr as usize);
                     }
                     if (*header).obj_type == GC_TYPE_PROMISE {
-                        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                         let promise = user_ptr as *mut crate::promise::Promise;
                         crate::async_hooks::enqueue_gc_destroy((*promise).async_id);
                         crate::promise::clear_promise_context_for_gc(promise);
@@ -5987,9 +6404,10 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
             // off the 1.6 M-object-per-cycle sweep walk.
             if flags == 0 {
                 let total_size = (*header).size as usize;
+                let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
+                layout_clear_for_ptr(user_ptr as usize);
                 if overflow_active && (*header).obj_type == GC_TYPE_OBJECT {
-                    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                     crate::object::clear_overflow_for_ptr(user_ptr as usize);
                 }
                 return;
@@ -6036,6 +6454,7 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
                 let total_size = (*header).size as usize;
                 let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
+                layout_clear_for_ptr(user_ptr as usize);
 
                 if overflow_active && (*header).obj_type == GC_TYPE_OBJECT {
                     crate::object::clear_overflow_for_ptr(user_ptr as usize);
@@ -6454,6 +6873,8 @@ fn evacuate_tenured_nursery_objects_with_force(force_evacuation: bool) -> Evacua
             // its fields and (b) sweep keeps it alive. The mark
             // bit is cleared inline by sweep on surviving objects.
             let new_header = (new_user as *mut u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
+            (*new_header)._reserved = (*header)._reserved;
+            layout_transfer(user_ptr, new_user);
             (*new_header).gc_flags |= GC_FLAG_MARKED;
             // Carry TENURED forward — the new copy is logically
             // the same object, just relocated. Without this the
@@ -6588,6 +7009,11 @@ unsafe fn rewrite_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) 
     }
     let elements =
         (user_ptr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+    if layout_visit_pointer_slots(user_ptr as usize, length as usize, |i| unsafe {
+        rewrite_slot(elements.add(i), valid_ptrs);
+    }) {
+        return;
+    }
     for i in 0..length as usize {
         rewrite_slot(elements.add(i), valid_ptrs);
     }
@@ -6601,8 +7027,12 @@ unsafe fn rewrite_object_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet)
     }
     let fields =
         (user_ptr as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
-    for i in 0..field_count as usize {
+    if !layout_visit_pointer_slots(user_ptr as usize, field_count as usize, |i| unsafe {
         rewrite_slot(fields.add(i), valid_ptrs);
+    }) {
+        for i in 0..field_count as usize {
+            rewrite_slot(fields.add(i), valid_ptrs);
+        }
     }
     // keys_array — codegen may store either raw or NaN-boxed.
     // try_rewrite_value disambiguates by tag.
@@ -6632,6 +7062,11 @@ unsafe fn rewrite_closure_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet
     let capture_count = crate::closure::real_capture_count((*closure).capture_count);
     let captures =
         (user_ptr as *mut u8).add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64;
+    if layout_visit_pointer_slots(user_ptr as usize, capture_count as usize, |i| unsafe {
+        rewrite_slot(captures.add(i), valid_ptrs);
+    }) {
+        return;
+    }
     for i in 0..capture_count as usize {
         rewrite_slot(captures.add(i), valid_ptrs);
     }
@@ -6730,6 +7165,11 @@ unsafe fn verify_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, s
     }
     let elements =
         (user_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+    if layout_visit_pointer_slots(user_ptr as usize, length as usize, |i| unsafe {
+        verify_slot(elements.add(i), valid_ptrs, surface);
+    }) {
+        return;
+    }
     for i in 0..length as usize {
         verify_slot(elements.add(i), valid_ptrs, surface);
     }
@@ -6743,8 +7183,12 @@ unsafe fn verify_object_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, 
     }
     let fields = (user_ptr as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
         as *const u64;
-    for i in 0..field_count as usize {
+    if !layout_visit_pointer_slots(user_ptr as usize, field_count as usize, |i| unsafe {
         verify_slot(fields.add(i), valid_ptrs, surface);
+    }) {
+        for i in 0..field_count as usize {
+            verify_slot(fields.add(i), valid_ptrs, surface);
+        }
     }
     verify_slot(
         &(*obj).keys_array as *const _ as *const u64,
@@ -6772,6 +7216,11 @@ unsafe fn verify_closure_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet,
     let capture_count = crate::closure::real_capture_count((*closure).capture_count);
     let captures = (user_ptr as *const u8).add(std::mem::size_of::<crate::closure::ClosureHeader>())
         as *const u64;
+    if layout_visit_pointer_slots(user_ptr as usize, capture_count as usize, |i| unsafe {
+        verify_slot(captures.add(i), valid_ptrs, surface);
+    }) {
+        return;
+    }
     for i in 0..capture_count as usize {
         verify_slot(captures.add(i), valid_ptrs, surface);
     }
@@ -7620,14 +8069,12 @@ mod tests {
                 "child should start unmarked before array tracing"
             );
         }
-        let parent = crate::array::js_array_alloc(1);
-
-        unsafe {
-            (*parent).length = 1;
-            let elements = (parent as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
-                as *mut u64;
-            *elements = STRING_TAG | (child as u64 & POINTER_MASK);
-        }
+        let parent = crate::array::js_array_alloc_with_length(1);
+        crate::array::js_array_set_f64(
+            parent,
+            0,
+            f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
+        );
 
         let valid_ptrs = build_valid_pointer_set();
         let parent_bits = POINTER_TAG | (parent as u64 & POINTER_MASK);
@@ -7644,6 +8091,354 @@ mod tests {
                 0,
                 "tracing the marked array should mark its child element"
             );
+        }
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_layout_mask_pointer_free_array_scans_zero_slots() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let arr = crate::array::js_array_alloc_with_length(4);
+        for i in 0..4 {
+            crate::array::js_array_set_f64(arr, i, (i + 1) as f64);
+        }
+
+        let valid_ptrs = build_valid_pointer_set();
+        let mut worklist = Vec::new();
+        test_reset_trace_slot_reads();
+        unsafe {
+            trace_array(arr as *mut u8, &valid_ptrs, &mut worklist);
+        }
+
+        assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), Some(0));
+        assert_eq!(test_trace_slot_reads(), 0);
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_layout_mask_mixed_array_marks_only_pointer_slots_and_clears() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let child = crate::string::js_string_from_bytes(b"array-child".as_ptr(), 11) as *mut u8;
+        let child_header = unsafe { header_from_user_ptr(child) };
+        let arr = crate::array::js_array_alloc_with_length(3);
+        crate::array::js_array_set_f64(arr, 0, 1.0);
+        crate::array::js_array_set_f64(
+            arr,
+            1,
+            f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
+        );
+        crate::array::js_array_set_f64(arr, 2, 3.0);
+
+        assert_eq!(test_layout_pointer_slot_count(arr as usize, 3), Some(1));
+
+        let valid_ptrs = build_valid_pointer_set();
+        let mut worklist = Vec::new();
+        test_reset_trace_slot_reads();
+        unsafe {
+            trace_array(arr as *mut u8, &valid_ptrs, &mut worklist);
+            assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
+        assert_eq!(test_trace_slot_reads(), 1);
+
+        crate::array::js_array_set_f64(arr, 1, 2.0);
+        assert_eq!(test_layout_pointer_slot_count(arr as usize, 3), Some(0));
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_layout_mask_heap_conversion_keeps_sparse_words_zeroed() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let first_child =
+            crate::string::js_string_from_bytes(b"first-child".as_ptr(), 11) as *mut u8;
+        let later_child =
+            crate::string::js_string_from_bytes(b"later-child".as_ptr(), 11) as *mut u8;
+        let first_child_header = unsafe { header_from_user_ptr(first_child) };
+        let later_child_header = unsafe { header_from_user_ptr(later_child) };
+        let arr = crate::array::js_array_alloc_with_length(66);
+        crate::array::js_array_set_f64(
+            arr,
+            0,
+            f64::from_bits(STRING_TAG | (first_child as u64 & POINTER_MASK)),
+        );
+        crate::array::js_array_set_f64(arr, 64, 64.0);
+        crate::array::js_array_set_f64(
+            arr,
+            65,
+            f64::from_bits(STRING_TAG | (later_child as u64 & POINTER_MASK)),
+        );
+
+        assert_eq!(test_layout_pointer_slot_count(arr as usize, 66), Some(2));
+
+        let valid_ptrs = build_valid_pointer_set();
+        let mut worklist = Vec::new();
+        test_reset_trace_slot_reads();
+        unsafe {
+            trace_array(arr as *mut u8, &valid_ptrs, &mut worklist);
+            assert_ne!((*first_child_header).gc_flags & GC_FLAG_MARKED, 0);
+            assert_ne!((*later_child_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
+        assert_eq!(test_trace_slot_reads(), 2);
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_layout_mask_object_and_closure_slots() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let object_child =
+            crate::string::js_string_from_bytes(b"object-child".as_ptr(), 12) as *mut u8;
+        let object_child_header = unsafe { header_from_user_ptr(object_child) };
+        let obj = crate::object::js_object_alloc(0, 3);
+        crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.0));
+        crate::object::js_object_set_field(
+            obj,
+            1,
+            crate::value::JSValue::from_bits(STRING_TAG | (object_child as u64 & POINTER_MASK)),
+        );
+        crate::object::js_object_set_field(obj, 2, crate::value::JSValue::number(3.0));
+
+        assert_eq!(test_layout_pointer_slot_count(obj as usize, 3), Some(1));
+        let valid_ptrs = build_valid_pointer_set();
+        let mut worklist = Vec::new();
+        test_reset_trace_slot_reads();
+        unsafe {
+            trace_object(obj as *mut u8, &valid_ptrs, &mut worklist);
+            assert_ne!((*object_child_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
+        assert_eq!(test_trace_slot_reads(), 1);
+
+        let closure_child =
+            crate::string::js_string_from_bytes(b"closure-child".as_ptr(), 13) as *mut u8;
+        let closure_child_header = unsafe { header_from_user_ptr(closure_child) };
+        let closure = crate::closure::js_closure_alloc(std::ptr::null(), 3);
+        crate::closure::js_closure_set_capture_f64(closure, 0, 10.0);
+        crate::closure::js_closure_set_capture_f64(
+            closure,
+            1,
+            f64::from_bits(STRING_TAG | (closure_child as u64 & POINTER_MASK)),
+        );
+        crate::closure::js_closure_set_capture_f64(closure, 2, 30.0);
+
+        assert_eq!(test_layout_pointer_slot_count(closure as usize, 3), Some(1));
+        let valid_ptrs = build_valid_pointer_set();
+        let mut worklist = Vec::new();
+        test_reset_trace_slot_reads();
+        unsafe {
+            trace_closure(closure as *mut u8, &valid_ptrs, &mut worklist);
+            assert_ne!((*closure_child_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
+        assert_eq!(test_trace_slot_reads(), 1);
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_layout_mask_overflow_fields_and_array_grow_transfer() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let child = crate::string::js_string_from_bytes(b"overflow-child".as_ptr(), 14) as *mut u8;
+        let child_header = unsafe { header_from_user_ptr(child) };
+        let obj = crate::object::js_object_alloc(0, 0);
+        for i in 0..9 {
+            let name = format!("k{i}");
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let value = if i == 8 {
+                f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK))
+            } else {
+                i as f64
+            };
+            crate::object::js_object_set_field_by_name(obj, key, value);
+        }
+
+        assert_eq!(test_layout_pointer_slot_count(obj as usize, 9), Some(1));
+        let valid_ptrs = build_valid_pointer_set();
+        crate::object::scan_overflow_fields_roots(&mut |value| {
+            try_mark_value(value.to_bits(), &valid_ptrs);
+        });
+        unsafe {
+            assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
+
+        let arr = crate::array::js_array_alloc_with_length(1);
+        crate::array::js_array_set_f64(
+            arr,
+            0,
+            f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
+        );
+        let grown = crate::array::js_array_grow(arr, 128);
+        assert_eq!(test_layout_pointer_slot_count(grown as usize, 1), Some(1));
+
+        let moved = crate::array::js_array_alloc_with_length(1);
+        unsafe {
+            layout_transfer(grown as *mut u8, moved as *mut u8);
+        }
+        assert_eq!(test_layout_pointer_slot_count(moved as usize, 1), Some(1));
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_trace_array_uses_pointer_layout_mask() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let numeric = crate::array::js_array_alloc_with_length(3);
+        crate::array::js_array_set_f64(numeric, 0, 1.0);
+        crate::array::js_array_set_f64(numeric, 1, 2.0);
+        crate::array::js_array_set_f64(numeric, 2, 3.0);
+        assert_eq!(test_layout_pointer_slot_count(numeric as usize, 3), Some(0));
+
+        let valid_ptrs = build_valid_pointer_set();
+        assert!(try_mark_value(
+            POINTER_TAG | (numeric as u64 & POINTER_MASK),
+            &valid_ptrs
+        ));
+        test_reset_trace_slot_reads();
+        trace_marked_objects(&valid_ptrs);
+        assert_eq!(test_trace_slot_reads(), 0);
+        clear_marks();
+        clear_mark_seeds();
+
+        let child = crate::string::js_string_from_bytes(b"array-child".as_ptr(), 11) as *mut u8;
+        let child_header = unsafe { header_from_user_ptr(child) };
+        let mixed = crate::array::js_array_alloc_with_length(3);
+        crate::array::js_array_set_f64(mixed, 0, 1.0);
+        crate::array::js_array_set_f64(
+            mixed,
+            1,
+            f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
+        );
+        crate::array::js_array_set_f64(mixed, 2, 3.0);
+        assert_eq!(test_layout_pointer_slot_count(mixed as usize, 3), Some(1));
+
+        let valid_ptrs = build_valid_pointer_set();
+        assert!(try_mark_value(
+            POINTER_TAG | (mixed as u64 & POINTER_MASK),
+            &valid_ptrs
+        ));
+        test_reset_trace_slot_reads();
+        trace_marked_objects(&valid_ptrs);
+        assert_eq!(test_trace_slot_reads(), 1);
+        unsafe {
+            assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_trace_object_uses_pointer_layout_mask() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let numeric = crate::object::js_object_alloc(0, 3);
+        crate::object::js_object_set_field(numeric, 0, crate::value::JSValue::number(1.0));
+        crate::object::js_object_set_field(numeric, 1, crate::value::JSValue::number(2.0));
+        crate::object::js_object_set_field(numeric, 2, crate::value::JSValue::bool(false));
+        assert_eq!(test_layout_pointer_slot_count(numeric as usize, 3), Some(0));
+
+        let valid_ptrs = build_valid_pointer_set();
+        assert!(try_mark_value(
+            POINTER_TAG | (numeric as u64 & POINTER_MASK),
+            &valid_ptrs
+        ));
+        test_reset_trace_slot_reads();
+        trace_marked_objects(&valid_ptrs);
+        assert_eq!(test_trace_slot_reads(), 0);
+        clear_marks();
+        clear_mark_seeds();
+
+        let child = crate::string::js_string_from_bytes(b"object-child".as_ptr(), 12);
+        let child_header = unsafe { header_from_user_ptr(child as *mut u8) };
+        let mixed = crate::object::js_object_alloc(0, 3);
+        crate::object::js_object_set_field(mixed, 0, crate::value::JSValue::number(1.0));
+        crate::object::js_object_set_field(mixed, 1, crate::value::JSValue::string_ptr(child));
+        crate::object::js_object_set_field(mixed, 2, crate::value::JSValue::number(3.0));
+        assert_eq!(test_layout_pointer_slot_count(mixed as usize, 3), Some(1));
+
+        let valid_ptrs = build_valid_pointer_set();
+        assert!(try_mark_value(
+            POINTER_TAG | (mixed as u64 & POINTER_MASK),
+            &valid_ptrs
+        ));
+        test_reset_trace_slot_reads();
+        trace_marked_objects(&valid_ptrs);
+        assert_eq!(test_trace_slot_reads(), 1);
+        unsafe {
+            assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    extern "C" fn layout_mask_test_closure(_closure: *const crate::closure::ClosureHeader) -> f64 {
+        0.0
+    }
+
+    #[test]
+    fn test_trace_closure_uses_pointer_layout_mask() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let numeric = crate::closure::js_closure_alloc(layout_mask_test_closure as *const u8, 3);
+        crate::closure::js_closure_set_capture_f64(numeric, 0, 1.0);
+        crate::closure::js_closure_set_capture_f64(numeric, 1, 2.0);
+        crate::closure::js_closure_set_capture_ptr(numeric, 2, 7);
+        assert_eq!(test_layout_pointer_slot_count(numeric as usize, 3), Some(0));
+
+        let valid_ptrs = build_valid_pointer_set();
+        assert!(try_mark_value(
+            POINTER_TAG | (numeric as u64 & POINTER_MASK),
+            &valid_ptrs
+        ));
+        test_reset_trace_slot_reads();
+        trace_marked_objects(&valid_ptrs);
+        assert_eq!(test_trace_slot_reads(), 0);
+        clear_marks();
+        clear_mark_seeds();
+
+        let child = crate::string::js_string_from_bytes(b"closure-child".as_ptr(), 13) as *mut u8;
+        let child_header = unsafe { header_from_user_ptr(child) };
+        let mixed = crate::closure::js_closure_alloc(layout_mask_test_closure as *const u8, 3);
+        crate::closure::js_closure_set_capture_f64(mixed, 0, 1.0);
+        crate::closure::js_closure_set_capture_f64(
+            mixed,
+            1,
+            f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
+        );
+        crate::closure::js_closure_set_capture_ptr(mixed, 2, 7);
+        assert_eq!(test_layout_pointer_slot_count(mixed as usize, 3), Some(1));
+
+        let valid_ptrs = build_valid_pointer_set();
+        assert!(try_mark_value(
+            POINTER_TAG | (mixed as u64 & POINTER_MASK),
+            &valid_ptrs
+        ));
+        test_reset_trace_slot_reads();
+        trace_marked_objects(&valid_ptrs);
+        assert_eq!(test_trace_slot_reads(), 1);
+        unsafe {
+            assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
         }
 
         clear_marks();
@@ -8225,6 +9020,7 @@ mod tests {
             let elements =
                 (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
             *elements = ptr_bits(child);
+            layout_note_slot(arr as usize, 0, *elements);
         }
         js_shadow_slot_set(0, ptr_bits(arr as usize));
 
@@ -8356,6 +9152,7 @@ mod tests {
             let elements =
                 (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
             *elements = ptr_bits(child);
+            layout_note_slot(arr as usize, 0, *elements);
             (*header_from_user_ptr(child as *const u8)).gc_flags |= GC_FLAG_PINNED;
             elements
         };

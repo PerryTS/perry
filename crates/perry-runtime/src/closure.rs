@@ -569,6 +569,7 @@ pub extern "C" fn js_closure_alloc(func_ptr: *const u8, capture_count: u32) -> *
         (*ptr).func_ptr = func_ptr;
         (*ptr).capture_count = capture_count; // Preserve flag in high bit
         (*ptr).type_tag = CLOSURE_MAGIC;
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
     ptr
@@ -699,6 +700,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
                 let dest =
                     (allocated as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut u64;
                 std::ptr::copy_nonoverlapping(captures_ptr, dest, n);
+                crate::gc::layout_rebuild_from_slots(allocated as *mut u8, dest as *const u64, n);
             }
         }
         return allocated;
@@ -742,6 +744,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
         unsafe {
             let dest = (allocated as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut u64;
             std::ptr::copy_nonoverlapping(captures_ptr, dest, n);
+            crate::gc::layout_rebuild_from_slots(allocated as *mut u8, dest as *const u64, n);
         }
     }
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
@@ -796,6 +799,7 @@ pub extern "C" fn js_closure_set_capture_f64(closure: *mut ClosureHeader, index:
         let captures_ptr =
             (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
         *captures_ptr.add(index as usize) = value;
+        crate::gc::layout_note_slot(closure as usize, index as usize, value.to_bits());
     }
 }
 
@@ -822,6 +826,7 @@ pub extern "C" fn js_closure_set_capture_ptr(closure: *mut ClosureHeader, index:
         let captures_ptr =
             (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut i64;
         *captures_ptr.add(index as usize) = value;
+        crate::gc::layout_note_slot(closure as usize, index as usize, value as u64);
     }
 }
 
@@ -1885,6 +1890,11 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
         for i in 1..count {
             *dst_captures.add(i) = *src_captures.add(i);
         }
+        crate::gc::layout_rebuild_from_slots(
+            new_closure as *mut u8,
+            dst_captures as *const u64,
+            count,
+        );
         // NaN-box the new closure pointer
         let new_ptr = new_closure as u64;
         f64::from_bits(0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF))
@@ -1945,6 +1955,11 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         }
         let this_slot = count - 1;
         *dst_captures.add(this_slot) = recv_box;
+        crate::gc::layout_rebuild_from_slots(
+            new_closure as *mut u8,
+            dst_captures as *const u64,
+            count,
+        );
         let new_ptr = new_closure as u64;
         0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF)
     }
