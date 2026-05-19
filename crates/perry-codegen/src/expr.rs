@@ -617,6 +617,14 @@ pub(crate) struct FnCtx<'a> {
     /// Codegen uses this to know that `X.foo()` should be dispatched as
     /// a cross-module call rather than an object method call.
     pub namespace_imports: &'a std::collections::HashSet<String>,
+    /// Issue #321: subset of `namespace_imports` populated only by the
+    /// "named import resolves to a `export * as Foo from "./Foo"`" branch
+    /// in `compile.rs`. The StaticMethodCall arm uses this to decide
+    /// whether to route var-shape members through `js_closure_callN`
+    /// (safe for the user-import shape) vs. preserving the pre-fix
+    /// direct-call (silently-wrong-but-doesn't-throw) path used by
+    /// `import * as` namespaces in effect's internal modules.
+    pub namespace_reexport_named_imports: &'a std::collections::HashSet<String>,
     /// Issue #680: per-namespace member resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `source_prefix`. Consulted
     /// by namespace member access lowering to disambiguate when the same
@@ -6759,6 +6767,56 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let origin_suffix =
                         import_origin_suffix(ctx.import_function_origin_names, method_name);
                     let fn_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                    // Issue #321: var-shaped exports (e.g. `export const succeed
+                    // = (v) => new EffectInst(v)`) emit a ZERO-ARG getter
+                    // `perry_fn_<src>__<name>()` returning the closure. The
+                    // previous code emitted a 1-arg direct call against that
+                    // 0-arg symbol — the source returned the function pointer
+                    // unchanged and the consumer saw `typeof Effect.succeed(42)
+                    // === "function"` (the closure itself, not the EffectInst).
+                    // Mirror the `lower_call.rs` var-shaped branch: fetch the
+                    // closure via the zero-arg getter, then dispatch through
+                    // `js_closure_callN` with the user args. Without this every
+                    // `Effect.succeed`/`Effect.runSync` etc. on the native
+                    // `compilePackages: ["effect"]` path returned a closure,
+                    // which `runSync` then read `._tag` off and threw
+                    // `Cannot read properties of undefined`.
+                    //
+                    // SCOPE: only fire when the class_name was registered as a
+                    // namespace via the *named-import-of-namespace-reexport*
+                    // branch (`import { Effect } from "effect"` where effect's
+                    // index.ts has `export * as Effect from "./Effect.js"`).
+                    // Plain `import * as X from "./X.js"` (used in effect's
+                    // INTERNAL modules) deliberately preserves the pre-fix
+                    // direct-call (silently-wrong-but-doesn't-throw) path —
+                    // switching them all over surfaces init-order bugs that
+                    // were hiding behind the silent shape. Those need a
+                    // separate audit.
+                    if ctx.namespace_reexport_named_imports.contains(class_name)
+                        && ctx.imported_vars.contains(method_name)
+                    {
+                        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                        for a in args {
+                            lowered.push(lower_expr(ctx, a)?);
+                        }
+                        if lowered.len() > 16 {
+                            bail!(
+                                "perry-codegen: namespace static-method closure call with {} args (max 16)",
+                                lowered.len()
+                            );
+                        }
+                        ctx.pending_declares.push((fn_name.clone(), DOUBLE, vec![]));
+                        let closure_box = ctx.block().call(DOUBLE, &fn_name, &[]);
+                        let blk = ctx.block();
+                        let closure_handle = unbox_to_i64(blk, &closure_box);
+                        let runtime_fn = format!("js_closure_call{}", lowered.len());
+                        let mut call_args: Vec<(crate::types::LlvmType, &str)> =
+                            vec![(I64, &closure_handle)];
+                        for v in &lowered {
+                            call_args.push((DOUBLE, v.as_str()));
+                        }
+                        return Ok(blk.call(DOUBLE, &runtime_fn, &call_args));
+                    }
                     let mut lowered: Vec<String> = Vec::with_capacity(args.len());
                     for a in args {
                         lowered.push(lower_expr(ctx, a)?);

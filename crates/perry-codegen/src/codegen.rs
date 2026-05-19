@@ -166,6 +166,21 @@ pub struct CompileOptions {
     /// Codegen uses this to know that `X.foo()` should be dispatched as
     /// a cross-module call rather than an object method call.
     pub namespace_imports: Vec<String>,
+    /// Issue #321: subset of `namespace_imports` populated by the
+    /// "named import resolves to a `export * as Foo from "./Foo"`" branch
+    /// in `compile.rs`. When the user wrote `import { Effect } from
+    /// "effect"` and effect's index.ts has `export * as Effect from
+    /// "./Effect.js"`, Effect lands in `namespace_imports` (so member
+    /// dispatch works) AND in this set (so the StaticMethodCall codegen
+    /// arm knows it's safe to route var-shape members through
+    /// `js_closure_callN`). Plain `import * as Effect from "./Effect"`
+    /// (used heavily by effect's INTERNAL modules) populates only
+    /// `namespace_imports`, NOT this set — the pre-existing direct-call
+    /// path preserves their long-standing silently-wrong-but-doesn't-throw
+    /// behavior on var-shape static calls (the right fix there is a
+    /// broader audit; doing it together with the named-import fix
+    /// surfaces init-order issues hiding behind the silent-wrong shape).
+    pub namespace_reexport_named_imports: std::collections::HashSet<String>,
     /// Imported class definitions from other native modules, keyed by
     /// the local alias (or original name when no alias). Each entry
     /// carries the class HIR, the module prefix of its origin, and an
@@ -446,6 +461,8 @@ pub struct ImportedClass {
 /// Built once in `compile_module` from `CompileOptions`.
 pub(crate) struct CrossModuleCtx {
     pub namespace_imports: std::collections::HashSet<String>,
+    /// Issue #321: see `CompileOptions::namespace_reexport_named_imports`.
+    pub namespace_reexport_named_imports: std::collections::HashSet<String>,
     /// Issue #680: per-namespace member resolution. See doc on
     /// `CompileOptions::namespace_member_prefixes`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
@@ -1341,6 +1358,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // Build the cross-module context bundle from CompileOptions.
     let cross_module = CrossModuleCtx {
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
+        namespace_reexport_named_imports: opts.namespace_reexport_named_imports.clone(),
         namespace_member_prefixes: opts.namespace_member_prefixes,
         imported_async_funcs: opts.imported_async_funcs,
         local_async_funcs,
@@ -3764,6 +3782,7 @@ fn compile_function(
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
+        namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
@@ -4155,6 +4174,7 @@ fn compile_closure(
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
+        namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
@@ -4390,6 +4410,7 @@ fn compile_method(
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
+        namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
@@ -4870,6 +4891,7 @@ fn compile_module_entry(
             closure_rest_params: closure_rest_params,
             local_closure_func_ids: HashMap::new(),
             namespace_imports: &cross_module.namespace_imports,
+            namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
@@ -5251,6 +5273,7 @@ fn compile_module_entry(
             closure_rest_params: closure_rest_params,
             local_closure_func_ids: HashMap::new(),
             namespace_imports: &cross_module.namespace_imports,
+            namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
@@ -6093,6 +6116,7 @@ fn compile_static_method(
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
+        namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,

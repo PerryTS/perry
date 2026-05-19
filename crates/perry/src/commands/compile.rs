@@ -4389,6 +4389,14 @@ pub fn run_with_parse_cache(
             let mut namespace_member_prefixes: std::collections::HashMap<(String, String), String> =
                 std::collections::HashMap::new();
             let mut namespace_imports: Vec<String> = Vec::new();
+            // Issue #321: subset of `namespace_imports` populated only by the
+            // named-import-of-namespace-reexport branch below (`import { Effect
+            // } from "effect"` where effect's index.ts has `export * as Effect
+            // from "./Effect.js"`). The codegen's StaticMethodCall arm consults
+            // this to decide whether it can route var-shape members through
+            // `js_closure_callN`; see the field doc in codegen.rs.
+            let mut namespace_reexport_named_imports: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             let mut imported_classes: Vec<perry_codegen::ImportedClass> = Vec::new();
             let mut imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)> = Vec::new();
             let mut imported_async_set: std::collections::HashSet<String> =
@@ -4660,6 +4668,13 @@ pub fn run_with_parse_cache(
                                     break;
                                 };
                                 namespace_imports.push(local_name.clone());
+                                // Issue #321: tag this local as a "named-import-
+                                // of-namespace-reexport" so codegen's
+                                // StaticMethodCall arm knows to route var-shape
+                                // members through `js_closure_callN`. See the
+                                // expr.rs StaticMethodCall comment for why this
+                                // is scoped narrowly.
+                                namespace_reexport_named_imports.insert(local_name.clone());
                                 for (export_name, origin_path) in target_exports {
                                     let origin_prefix =
                                         compute_module_prefix(origin_path, &ctx.project_root);
@@ -4685,6 +4700,28 @@ pub fn run_with_parse_cache(
                                     }
                                     if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
                                         imported_has_rest.insert(export_name.clone());
+                                    }
+                                    // Issue #321: NamespaceReExport members
+                                    // that are var-shaped exports (the
+                                    // canonical `export const succeed = (v) =>
+                                    // ...` shape in effect/Effect.ts and
+                                    // co-equivalent re-export hubs) must land
+                                    // in `imported_vars` so the codegen's
+                                    // StaticMethodCall and namespace-member
+                                    // call sites route through the zero-arg
+                                    // getter + `js_closure_callN`. Without
+                                    // this, `import { Effect } from "effect";
+                                    // Effect.succeed(42)` emitted a 1-arg
+                                    // direct call against the 0-arg getter
+                                    // — the source returned the closure
+                                    // pointer unchanged and `typeof
+                                    // Effect.succeed(42)` was `"function"`,
+                                    // and `runSync(program)` then threw
+                                    // `Cannot read properties of undefined`
+                                    // on `program._tag`. Mirrors the
+                                    // `Namespace { local }` branch above.
+                                    if exported_var_names.contains(&key) {
+                                        imported_vars.insert(export_name.clone());
                                     }
                                     if let Some(class) = exported_classes.get(&key) {
                                         imported_classes.push(perry_codegen::ImportedClass {
@@ -5809,6 +5846,7 @@ pub fn run_with_parse_cache(
                 namespace_member_prefixes,
                 emit_ir_only: bitcode_link,
                 namespace_imports,
+                namespace_reexport_named_imports,
                 imported_classes,
                 imported_enums,
                 imported_async_funcs: imported_async_set,
