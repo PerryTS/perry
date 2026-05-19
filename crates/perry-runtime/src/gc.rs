@@ -821,8 +821,45 @@ struct EvacuationTraceStats {
     retained_forwarded_stub_bytes: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CopiedMinorFallbackReason {
+    None,
+    NotAttempted,
+    BarriersInactive,
+    ConservativeStack,
+    CopyOnlyRoots,
+    MallocRegistryUnavailable,
+    PinnedYoungRoot,
+    PinnedYoungDirtySlot,
+    PinnedYoungTransitive,
+}
+
+impl CopiedMinorFallbackReason {
+    #[inline]
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::NotAttempted => "not_attempted",
+            Self::BarriersInactive => "barriers_inactive",
+            Self::ConservativeStack => "conservative_stack",
+            Self::CopyOnlyRoots => "copy_only_roots",
+            Self::MallocRegistryUnavailable => "malloc_registry_unavailable",
+            Self::PinnedYoungRoot => "pinned_young_root",
+            Self::PinnedYoungDirtySlot => "pinned_young_dirty_slot",
+            Self::PinnedYoungTransitive => "pinned_young_transitive",
+        }
+    }
+}
+
+impl Default for CopiedMinorFallbackReason {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 struct CopyingNurseryTraceStats {
+    eligible: bool,
     copied_objects: usize,
     copied_bytes: usize,
     promoted_objects: usize,
@@ -830,7 +867,8 @@ struct CopyingNurseryTraceStats {
     reset_blocks: usize,
     malloc_validation_lookups: usize,
     malloc_registry_rebuilds: u64,
-    fallback_reason: &'static str,
+    malloc_sweep_due: bool,
+    fallback_reason: CopiedMinorFallbackReason,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1028,7 +1066,7 @@ impl GcCycleTrace {
             evacuation_policy: EvacuationPolicyDecision::default(),
             evacuation: EvacuationTraceStats::default(),
             copying_nursery: CopyingNurseryTraceStats {
-                fallback_reason: "not_attempted",
+                fallback_reason: CopiedMinorFallbackReason::NotAttempted,
                 ..CopyingNurseryTraceStats::default()
             },
             block_persist: BlockPersistTraceStats::default(),
@@ -1092,6 +1130,7 @@ impl GcCycleTrace {
                 "retained_forwarded_stub_bytes": self.evacuation.retained_forwarded_stub_bytes,
             },
             "copying_nursery": {
+                "eligible": self.copying_nursery.eligible,
                 "copied_objects": self.copying_nursery.copied_objects,
                 "copied_bytes": self.copying_nursery.copied_bytes,
                 "promoted_objects": self.copying_nursery.promoted_objects,
@@ -1099,7 +1138,8 @@ impl GcCycleTrace {
                 "reset_blocks": self.copying_nursery.reset_blocks,
                 "malloc_validation_lookups": self.copying_nursery.malloc_validation_lookups,
                 "malloc_registry_rebuilds": self.copying_nursery.malloc_registry_rebuilds,
-                "fallback_reason": self.copying_nursery.fallback_reason,
+                "malloc_sweep_due": self.copying_nursery.malloc_sweep_due,
+                "fallback_reason": self.copying_nursery.fallback_reason.as_str(),
             },
             "evacuation_policy": {
                 "allowed": self.evacuation_policy.allowed,
@@ -1160,7 +1200,13 @@ impl GcCycleTrace {
 
 struct GcCollectOutcome {
     freed_bytes: u64,
+    malloc_swept: bool,
     trace: Option<GcCycleTrace>,
+}
+
+struct CopiedMinorFastPathOutcome {
+    freed_bytes: u64,
+    malloc_swept: bool,
 }
 
 fn gc_last_pause_us() -> u64 {
@@ -1427,7 +1473,9 @@ fn maybe_print_evacuation_policy_diag(
 impl GcCollectOutcome {
     #[inline]
     fn emit_after_current(self) -> u64 {
-        let Self { freed_bytes, trace } = self;
+        let Self {
+            freed_bytes, trace, ..
+        } = self;
         if let Some(trace) = trace {
             trace.emit(GcStepSnapshot::current());
         }
@@ -2239,12 +2287,16 @@ pub fn gc_check_trigger() {
         let floor = new_total.saturating_add(16 * 1024 * 1024);
         let next_trigger = std::cmp::max(capped, floor);
         GC_NEXT_TRIGGER_BYTES.with(|c| c.set(next_trigger));
-        // Rebaseline malloc trigger too — the just-completed collection
-        // swept malloc objects, so the next malloc-count trigger should
-        // be relative to the new survivor count.
-        let survivors = MALLOC_STATE.with(|s| s.borrow().objects.len());
-        let mstep = GC_MALLOC_COUNT_STEP.with(|c| c.get());
-        GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
+        // Rebaseline the malloc-count trigger only if this collection
+        // actually swept malloc objects. Copied-minor arena collections
+        // may skip the malloc sweep while count pressure is still below
+        // its trigger; moving the trigger in that case would postpone
+        // reclamation of already-tracked dead malloc churn.
+        if outcome.malloc_swept {
+            let survivors = MALLOC_STATE.with(|s| s.borrow().objects.len());
+            let mstep = GC_MALLOC_COUNT_STEP.with(|c| c.get());
+            GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
+        }
         outcome.emit_after_current();
         return;
     }
@@ -2267,6 +2319,10 @@ pub fn gc_check_trigger() {
         let pre_count = malloc_count;
         let outcome =
             gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::MallocCount));
+        debug_assert!(
+            outcome.malloc_swept,
+            "malloc-count trigger must sweep malloc objects"
+        );
         let survivors = MALLOC_STATE.with(|s| s.borrow().objects.len());
         // Adapt the malloc-count step based on collection effectiveness.
         //
@@ -2296,7 +2352,9 @@ pub fn gc_check_trigger() {
             // 50-90% freed: keep current step (balanced)
             GC_MALLOC_COUNT_STEP.with(|c| c.set(mstep));
         }
-        GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
+        if outcome.malloc_swept {
+            GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
+        }
         outcome.emit_after_current();
     }
 }
@@ -2448,10 +2506,8 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     // MARK_SEEDS persists across GC cycles. Clear before any try_mark
     // call so trace sees only this cycle's freshly-marked headers.
     clear_mark_seeds();
-    let malloc_sweep_due = copied_minor_malloc_sweep_due(trigger.kind);
-    if let Some(freed_bytes) =
-        gc_collect_minor_copying_fast_path(&mut trace, start, malloc_sweep_due)
-    {
+    if let Some(fast_path) = gc_collect_minor_copying_fast_path(&mut trace, start, trigger.kind) {
+        let freed_bytes = fast_path.freed_bytes;
         let elapsed_us = start.elapsed().as_micros() as u64;
         GC_STATS.with(|stats| {
             let mut stats = stats.borrow_mut();
@@ -2470,7 +2526,11 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         if let Some(trace) = trace.as_mut() {
             trace.pause_us = elapsed_us;
         }
-        return GcCollectOutcome { freed_bytes, trace };
+        return GcCollectOutcome {
+            freed_bytes,
+            malloc_swept: fast_path.malloc_swept,
+            trace,
+        };
     }
     clear_mark_seeds();
     let phase_start = trace_phase_start(&trace);
@@ -2685,7 +2745,11 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     if let Some(trace) = trace.as_mut() {
         trace.pause_us = elapsed_us;
     }
-    GcCollectOutcome { freed_bytes, trace }
+    GcCollectOutcome {
+        freed_bytes,
+        malloc_swept: true,
+        trace,
+    }
 }
 
 #[inline]
@@ -2881,7 +2945,11 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     if let Some(trace) = trace.as_mut() {
         trace.pause_us = elapsed_us;
     }
-    GcCollectOutcome { freed_bytes, trace }
+    GcCollectOutcome {
+        freed_bytes,
+        malloc_swept: true,
+        trace,
+    }
 }
 
 /// A sorted-`Vec`-backed set of valid user-space heap pointers,
@@ -5108,12 +5176,12 @@ impl CopyingPointerSet {
         &self,
         addr: usize,
         possible_malloc: bool,
-    ) -> Result<Option<CopyingPointer>, &'static str> {
+    ) -> Result<Option<CopyingPointer>, CopiedMinorFallbackReason> {
         if let Some(ptr) = self.classify_arena(addr) {
             return Ok(Some(ptr));
         }
         if possible_malloc && !self.malloc_registry_available {
-            return Err("malloc_registry_unavailable");
+            return Err(CopiedMinorFallbackReason::MallocRegistryUnavailable);
         }
         Ok(self.classify_malloc(addr))
     }
@@ -5199,7 +5267,7 @@ impl CopyingPointerSet {
     fn decode_bits_for_preflight(
         &self,
         bits: u64,
-    ) -> Result<Option<(usize, CopyingPointer)>, &'static str> {
+    ) -> Result<Option<(usize, CopyingPointer)>, CopiedMinorFallbackReason> {
         let tag = bits & TAG_MASK;
         if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
             let addr = (bits & POINTER_MASK) as usize;
@@ -5250,14 +5318,14 @@ unsafe fn plausible_gc_header(header: *mut GcHeader, arena: bool) -> bool {
 
 struct CopyingNurseryPreflight {
     ptrs: *const CopyingPointerSet,
-    fallback_reason: Option<&'static str>,
-    pinned_reason: &'static str,
+    fallback_reason: Option<CopiedMinorFallbackReason>,
+    pinned_reason: CopiedMinorFallbackReason,
     worklist: Vec<*mut GcHeader>,
     seen: crate::fast_hash::PtrHashSet<usize>,
 }
 
 impl CopyingNurseryPreflight {
-    fn new(ptrs: &CopyingPointerSet, pinned_reason: &'static str) -> Self {
+    fn new(ptrs: &CopyingPointerSet, pinned_reason: CopiedMinorFallbackReason) -> Self {
         Self {
             ptrs,
             fallback_reason: None,
@@ -5275,7 +5343,7 @@ impl CopyingNurseryPreflight {
         self.check_bits_with_reason(bits, self.pinned_reason);
     }
 
-    fn check_bits_with_reason(&mut self, bits: u64, pinned_reason: &'static str) {
+    fn check_bits_with_reason(&mut self, bits: u64, pinned_reason: CopiedMinorFallbackReason) {
         if self.fallback_reason.is_some() {
             return;
         }
@@ -5290,7 +5358,7 @@ impl CopyingNurseryPreflight {
         self.check_addr_with_reason(addr, self.pinned_reason);
     }
 
-    fn check_addr_with_reason(&mut self, addr: usize, pinned_reason: &'static str) {
+    fn check_addr_with_reason(&mut self, addr: usize, pinned_reason: CopiedMinorFallbackReason) {
         if self.fallback_reason.is_some() {
             return;
         }
@@ -5305,7 +5373,11 @@ impl CopyingNurseryPreflight {
         self.check_ptr_with_reason(ptr, pinned_reason);
     }
 
-    fn check_ptr_with_reason(&mut self, ptr: CopyingPointer, pinned_reason: &'static str) {
+    fn check_ptr_with_reason(
+        &mut self,
+        ptr: CopyingPointer,
+        pinned_reason: CopiedMinorFallbackReason,
+    ) {
         unsafe {
             if matches!(
                 ptr.kind,
@@ -5359,7 +5431,7 @@ impl CopyingNurseryPreflight {
         if slot.is_null() {
             return;
         }
-        self.check_bits_with_reason(*slot, "pinned_young_transitive");
+        self.check_bits_with_reason(*slot, CopiedMinorFallbackReason::PinnedYoungTransitive);
     }
 
     unsafe fn scan_array_fields(&mut self, user_ptr: *mut u8) {
@@ -5530,7 +5602,8 @@ impl CopyingNurseryCollector {
             moved_headers: Vec::new(),
             sticky: StickyRememberedSet::default(),
             stats: CopyingNurseryTraceStats {
-                fallback_reason: "none",
+                eligible: true,
+                fallback_reason: CopiedMinorFallbackReason::None,
                 ..CopyingNurseryTraceStats::default()
             },
             live_from_bytes: 0,
@@ -5907,78 +5980,150 @@ fn scan_remembered_dirty_slots_copying(
     stats
 }
 
-fn copying_static_preflight_reason() -> Option<&'static str> {
-    if !old_to_young_tracking_complete() {
-        return Some("barriers_inactive");
-    }
-    if matches!(
-        conservative_stack_scan_decision(),
-        ConservativeStackScanDecision::Scan
-    ) {
-        return Some("conservative_stack");
-    }
-    if copying_legacy_root_scanners_present() {
-        return Some("copy_only_roots");
-    }
-    None
+struct CopiedMinorEligibility {
+    eligible: bool,
+    fallback_reason: CopiedMinorFallbackReason,
+    malloc_sweep_due: bool,
+    malloc_validation_lookups: usize,
+    malloc_registry_rebuilds: u64,
+    ptrs: Option<CopyingPointerSet>,
 }
 
-fn copying_preflight_reason(ptrs: &CopyingPointerSet) -> Option<&'static str> {
-    let mut checker = CopyingNurseryPreflight::new(ptrs, "pinned_young_root");
-    visit_mutable_root_slots(|slot| unsafe {
-        checker.check_bits(slot.read());
-    });
-    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
-    {
-        let mut visitor = RuntimeRootVisitor::for_copying_check(&mut checker);
-        for scanner in scanners {
-            scanner(&mut visitor);
+impl CopiedMinorEligibility {
+    fn evaluate(trigger_kind: GcTriggerKind) -> Self {
+        let malloc_sweep_due = copied_minor_malloc_sweep_due(trigger_kind);
+        if !old_to_young_tracking_complete() {
+            return Self::fallback(
+                CopiedMinorFallbackReason::BarriersInactive,
+                malloc_sweep_due,
+            );
+        }
+        if matches!(
+            conservative_stack_scan_decision(),
+            ConservativeStackScanDecision::Scan
+        ) {
+            return Self::fallback(
+                CopiedMinorFallbackReason::ConservativeStack,
+                malloc_sweep_due,
+            );
+        }
+        if copying_legacy_root_scanners_present() {
+            return Self::fallback(CopiedMinorFallbackReason::CopyOnlyRoots, malloc_sweep_due);
+        }
+
+        let ptrs = CopyingPointerSet::new();
+        if let Some(reason) = Self::mutable_root_preflight_reason(&ptrs) {
+            return Self::fallback_with_ptrs(reason, malloc_sweep_due, ptrs);
+        }
+        if let Some(reason) = Self::dirty_slot_preflight_reason(&ptrs) {
+            return Self::fallback_with_ptrs(reason, malloc_sweep_due, ptrs);
+        }
+
+        Self {
+            eligible: true,
+            fallback_reason: CopiedMinorFallbackReason::None,
+            malloc_sweep_due,
+            malloc_validation_lookups: ptrs.malloc_validation_lookups(),
+            malloc_registry_rebuilds: ptrs.malloc_registry_rebuilds(),
+            ptrs: Some(ptrs),
         }
     }
-    unsafe {
-        checker.drain();
-    }
-    if checker.fallback_reason.is_some() {
-        return checker.fallback_reason;
+
+    fn fallback(reason: CopiedMinorFallbackReason, malloc_sweep_due: bool) -> Self {
+        Self {
+            eligible: false,
+            fallback_reason: reason,
+            malloc_sweep_due,
+            malloc_validation_lookups: 0,
+            malloc_registry_rebuilds: 0,
+            ptrs: None,
+        }
     }
 
-    let snapshot = remembered_dirty_snapshot();
-    let mut dirty_checker = CopyingNurseryPreflight::new(ptrs, "pinned_young_dirty_slot");
-    scan_remembered_dirty_slots_copying(&snapshot, |slot, _header, _external, _stats| unsafe {
-        dirty_checker.check_bits(*slot);
-    });
-    unsafe {
-        dirty_checker.drain();
+    fn fallback_with_ptrs(
+        reason: CopiedMinorFallbackReason,
+        malloc_sweep_due: bool,
+        ptrs: CopyingPointerSet,
+    ) -> Self {
+        Self {
+            eligible: false,
+            fallback_reason: reason,
+            malloc_sweep_due,
+            malloc_validation_lookups: ptrs.malloc_validation_lookups(),
+            malloc_registry_rebuilds: ptrs.malloc_registry_rebuilds(),
+            ptrs: Some(ptrs),
+        }
     }
-    dirty_checker.fallback_reason
+
+    fn trace_stats(&self) -> CopyingNurseryTraceStats {
+        CopyingNurseryTraceStats {
+            eligible: self.eligible,
+            fallback_reason: self.fallback_reason,
+            malloc_sweep_due: self.malloc_sweep_due,
+            malloc_validation_lookups: self.malloc_validation_lookups,
+            malloc_registry_rebuilds: self.malloc_registry_rebuilds,
+            ..CopyingNurseryTraceStats::default()
+        }
+    }
+
+    fn mutable_root_preflight_reason(
+        ptrs: &CopyingPointerSet,
+    ) -> Option<CopiedMinorFallbackReason> {
+        let mut checker =
+            CopyingNurseryPreflight::new(ptrs, CopiedMinorFallbackReason::PinnedYoungRoot);
+        visit_mutable_root_slots(|slot| unsafe {
+            checker.check_bits(slot.read());
+        });
+        let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        {
+            let mut visitor = RuntimeRootVisitor::for_copying_check(&mut checker);
+            for scanner in scanners {
+                scanner(&mut visitor);
+            }
+        }
+        unsafe {
+            checker.drain();
+        }
+        checker.fallback_reason
+    }
+
+    fn dirty_slot_preflight_reason(ptrs: &CopyingPointerSet) -> Option<CopiedMinorFallbackReason> {
+        let snapshot = remembered_dirty_snapshot();
+        let mut dirty_checker =
+            CopyingNurseryPreflight::new(ptrs, CopiedMinorFallbackReason::PinnedYoungDirtySlot);
+        scan_remembered_dirty_slots_copying(&snapshot, |slot, _header, _external, _stats| unsafe {
+            dirty_checker.check_bits(*slot);
+        });
+        unsafe {
+            dirty_checker.drain();
+        }
+        dirty_checker.fallback_reason
+    }
 }
 
 fn gc_collect_minor_copying_fast_path(
     trace: &mut Option<GcCycleTrace>,
     start: Instant,
-    malloc_sweep_due: bool,
-) -> Option<u64> {
-    if let Some(reason) = copying_static_preflight_reason() {
-        if let Some(trace) = trace.as_mut() {
-            trace.copying_nursery.fallback_reason = reason;
-        }
+    trigger_kind: GcTriggerKind,
+) -> Option<CopiedMinorFastPathOutcome> {
+    let eligibility = CopiedMinorEligibility::evaluate(trigger_kind);
+    if let Some(trace) = trace.as_mut() {
+        trace.copying_nursery = eligibility.trace_stats();
+    }
+    if !eligibility.eligible {
         return None;
     }
-
-    let ptrs = CopyingPointerSet::new();
-    if let Some(reason) = copying_preflight_reason(&ptrs) {
-        if let Some(trace) = trace.as_mut() {
-            trace.copying_nursery.fallback_reason = reason;
-            trace.copying_nursery.malloc_validation_lookups = ptrs.malloc_validation_lookups();
-            trace.copying_nursery.malloc_registry_rebuilds = ptrs.malloc_registry_rebuilds();
-        }
-        return None;
-    }
+    let malloc_sweep_due = eligibility.malloc_sweep_due;
+    let ptrs = eligibility
+        .ptrs
+        .expect("eligible copied-minor decision must carry pointer classifier");
 
     let phase_start = trace_phase_start(trace);
     let from_space_bytes = crate::arena::copying_from_space_in_use_bytes();
     let mut collector = CopyingNurseryCollector::new(ptrs);
-    collector.stats.fallback_reason = "none";
+    collector.stats.eligible = true;
+    collector.stats.fallback_reason = CopiedMinorFallbackReason::None;
+    collector.stats.malloc_sweep_due = malloc_sweep_due;
     collector.stats.reset_blocks += crate::arena::copying_prepare_to_space();
 
     visit_mutable_root_slots(|slot| unsafe {
@@ -6024,6 +6169,13 @@ fn gc_collect_minor_copying_fast_path(
     }
     trace_phase_record(trace, "copying_nursery", phase_start);
 
+    if gc_verify_evacuation_enabled() {
+        let phase_start = trace_phase_start(trace);
+        let valid_ptrs = build_valid_pointer_set();
+        verify_evacuated_no_stale_forwarded_refs(&valid_ptrs);
+        trace_phase_record(trace, "evacuation_verify", phase_start);
+    }
+
     let reset = crate::arena::copying_reset_from_spaces_and_flip();
     collector.stats.reset_blocks += reset.reset_blocks;
     remembered_set_clear();
@@ -6057,7 +6209,10 @@ fn gc_collect_minor_copying_fast_path(
         };
         trace.pause_us = start.elapsed().as_micros() as u64;
     }
-    Some(freed_bytes)
+    Some(CopiedMinorFastPathOutcome {
+        freed_bytes,
+        malloc_swept: malloc_sweep_due,
+    })
 }
 
 fn try_mark_young_value_as_seed(value_bits: u64, valid_ptrs: &ValidPointerSet) -> bool {
@@ -10099,18 +10254,28 @@ mod tests {
         crate::arena::old_arena_page_index_clear_for_tests();
     }
 
+    static COPYING_NURSERY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn copying_nursery_isolation_lock() -> std::sync::MutexGuard<'static, ()> {
+        COPYING_NURSERY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     struct CopyingNurseryTestGuard {
         frame: u64,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl CopyingNurseryTestGuard {
         fn new(slot_count: u32) -> Self {
+            let lock = copying_nursery_isolation_lock();
             reset_shadow_stack();
             reset_global_roots();
             reset_remembered_set();
             js_gc_write_barriers_emitted(1);
             let frame = js_shadow_frame_push(slot_count);
-            Self { frame }
+            Self { frame, _lock: lock }
         }
     }
 
@@ -10154,6 +10319,10 @@ mod tests {
             let current = malloc_object_count();
             GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(current));
         }
+
+        fn make_arena_trigger_due(&self) {
+            GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(0));
+        }
     }
 
     impl Drop for GcTriggerThresholdTestGuard {
@@ -10161,6 +10330,59 @@ mod tests {
             GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(self.next_arena_trigger));
             GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(self.next_malloc_trigger));
             GC_MALLOC_COUNT_STEP.with(|step| step.set(self.malloc_step));
+        }
+    }
+
+    fn collect_minor_trace(trigger_kind: GcTriggerKind) -> GcCycleTrace {
+        gc_collect_minor_with_trigger(GcTriggerSnapshot {
+            kind: trigger_kind,
+            steps_before: Some(GcStepSnapshot::current()),
+        })
+        .trace
+        .expect("test requested GC trace capture")
+    }
+
+    fn assert_copied_minor_trace(
+        trace: &GcCycleTrace,
+        eligible: bool,
+        fallback_reason: CopiedMinorFallbackReason,
+        malloc_sweep_due: bool,
+    ) {
+        assert_eq!(trace.copying_nursery.eligible, eligible);
+        assert_eq!(trace.copying_nursery.fallback_reason, fallback_reason);
+        assert_eq!(trace.copying_nursery.malloc_sweep_due, malloc_sweep_due);
+    }
+
+    static ENV_VAR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &'static str) -> Self {
+            let lock = ENV_VAR_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self {
+                key,
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
         }
     }
 
@@ -10386,6 +10608,57 @@ mod tests {
     }
 
     #[test]
+    fn test_copied_minor_eligibility_falls_back_for_barriers_inactive() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _barrier_guard = GeneratedWriteBarrierTestGuard::inactive();
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+        assert_copied_minor_trace(
+            &trace,
+            false,
+            CopiedMinorFallbackReason::BarriersInactive,
+            false,
+        );
+    }
+
+    #[test]
+    fn test_copied_minor_eligibility_falls_back_for_conservative_stack_scan() {
+        let _isolation = copying_nursery_isolation_lock();
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
+        reset_shadow_stack();
+        reset_global_roots();
+        reset_remembered_set();
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+        assert_copied_minor_trace(
+            &trace,
+            false,
+            CopiedMinorFallbackReason::ConservativeStack,
+            false,
+        );
+    }
+
+    #[test]
+    fn test_copied_minor_eligibility_falls_back_for_copy_only_roots() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::new();
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+        assert_copied_minor_trace(
+            &trace,
+            false,
+            CopiedMinorFallbackReason::CopyOnlyRoots,
+            false,
+        );
+    }
+
+    #[test]
     fn test_copying_minor_rewrites_shadow_and_global_roots() {
         let _guard = CopyingNurseryTestGuard::new(1);
         let shadow_child = young_leaf();
@@ -10406,6 +10679,26 @@ mod tests {
             crate::arena::classify_heap_space(shadow_after),
             crate::arena::active_survivor_space()
         );
+    }
+
+    #[test]
+    fn test_copied_minor_verify_evacuation_env_remains_eligible() {
+        let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let child = young_leaf();
+        js_shadow_slot_set(0, ptr_bits(child));
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert!(
+            trace.phase_us.contains_key("evacuation_verify"),
+            "forced copied-minor verification should run before from-space reset"
+        );
+        assert_ne!(after, child);
+        assert!(crate::arena::pointer_in_nursery(after));
     }
 
     #[test]
@@ -10675,10 +10968,7 @@ mod tests {
         });
         let trace = outcome.trace.expect("test requested GC trace capture");
 
-        assert_eq!(
-            trace.copying_nursery.fallback_reason, "none",
-            "arena-triggered copied-minor GC should remain eligible when malloc sweep is due"
-        );
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, true);
         assert_eq!(
             tracked_malloc_headers_matching(&churn_headers),
             0,
@@ -10752,6 +11042,55 @@ mod tests {
     }
 
     #[test]
+    fn test_gc_check_trigger_copied_minor_without_malloc_sweep_preserves_malloc_trigger() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        deactivate_malloc_registry_for_tests();
+
+        let live_young = young_leaf();
+        js_shadow_slot_set(0, ptr_bits(live_young));
+        let churn_headers = allocate_dead_malloc_churn_headers(48);
+        let tracked_before = tracked_malloc_headers_matching(&churn_headers);
+        assert_eq!(
+            tracked_before,
+            churn_headers.len(),
+            "malloc churn should be tracked before gc_check_trigger"
+        );
+
+        let malloc_count_before = malloc_object_count();
+        let next_malloc_trigger = malloc_count_before + 1;
+        GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(next_malloc_trigger));
+        trigger_guard.make_arena_trigger_due();
+        assert!(
+            !copied_minor_malloc_sweep_due(GcTriggerKind::ArenaBytes),
+            "arena-triggered copied-minor should not sweep malloc while below malloc pressure"
+        );
+
+        let collections_before = gc_collection_count();
+        gc_check_trigger();
+
+        assert!(
+            gc_collection_count() > collections_before,
+            "gc_check_trigger should collect when arena pressure is due"
+        );
+        assert_eq!(
+            tracked_malloc_headers_matching(&churn_headers),
+            tracked_before,
+            "malloc sweep was not due, so dead churn should remain tracked"
+        );
+        assert_eq!(
+            malloc_object_count(),
+            malloc_count_before,
+            "copied-minor collection should not sweep malloc while below malloc pressure"
+        );
+        assert_eq!(
+            GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.get()),
+            next_malloc_trigger,
+            "arena-triggered copied-minor without malloc sweep must preserve the existing malloc trigger"
+        );
+    }
+
+    #[test]
     fn test_copied_minor_malloc_scaling_no_roots_skips_registry_walk() {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -10769,7 +11108,7 @@ mod tests {
         });
         let trace = outcome.trace.expect("test requested GC trace capture");
 
-        assert_eq!(trace.copying_nursery.fallback_reason, "none");
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
         assert_eq!(
             trace.copying_nursery.malloc_validation_lookups, 0,
             "copied-minor should not probe malloc entries when no roots mention malloc"
@@ -10812,7 +11151,7 @@ mod tests {
         });
         let trace = outcome.trace.expect("test requested GC trace capture");
 
-        assert_eq!(trace.copying_nursery.fallback_reason, "none");
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, true);
         assert!(
             trace.copying_nursery.malloc_validation_lookups > 0,
             "active registry should validate the live malloc root"
@@ -10853,9 +11192,11 @@ mod tests {
         });
         let trace = outcome.trace.expect("test requested GC trace capture");
 
-        assert_eq!(
-            trace.copying_nursery.fallback_reason,
-            "malloc_registry_unavailable"
+        assert_copied_minor_trace(
+            &trace,
+            false,
+            CopiedMinorFallbackReason::MallocRegistryUnavailable,
+            false,
         );
         assert_eq!(
             trace.copying_nursery.malloc_registry_rebuilds, 0,
@@ -10872,16 +11213,50 @@ mod tests {
     #[test]
     fn test_copying_minor_falls_back_for_pinned_young_root() {
         let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let child = young_leaf();
         unsafe {
             (*header_from_user_ptr(child as *const u8)).gc_flags |= GC_FLAG_PINNED;
         }
         js_shadow_slot_set(0, ptr_bits(child));
 
-        let _ = gc_collect_minor();
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
         let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
 
+        assert_copied_minor_trace(
+            &trace,
+            false,
+            CopiedMinorFallbackReason::PinnedYoungRoot,
+            false,
+        );
         assert_eq!(after, child);
+        unsafe {
+            (*header_from_user_ptr(child as *const u8)).gc_flags &= !GC_FLAG_PINNED;
+        }
+    }
+
+    #[test]
+    fn test_copying_minor_falls_back_for_pinned_young_dirty_slot() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let child = young_leaf();
+        let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
+        unsafe {
+            *elements = ptr_bits(child);
+            (*header_from_user_ptr(child as *const u8)).gc_flags |= GC_FLAG_PINNED;
+        }
+        js_write_barrier_slot(ptr_bits(old_arr as usize), elements as u64, ptr_bits(child));
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let child_after = unsafe { (*elements & POINTER_MASK) as usize };
+
+        assert_copied_minor_trace(
+            &trace,
+            false,
+            CopiedMinorFallbackReason::PinnedYoungDirtySlot,
+            false,
+        );
+        assert_eq!(child_after, child);
         unsafe {
             (*header_from_user_ptr(child as *const u8)).gc_flags &= !GC_FLAG_PINNED;
         }
@@ -10890,6 +11265,7 @@ mod tests {
     #[test]
     fn test_copying_minor_falls_back_for_transitive_pinned_young_child() {
         let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let arr = crate::array::js_array_alloc(1);
         let child = young_leaf();
         let elements = unsafe {
@@ -10911,10 +11287,16 @@ mod tests {
         }
         js_shadow_slot_set(0, ptr_bits(arr as usize));
 
-        let _ = gc_collect_minor();
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
         let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
         let child_after = unsafe { (*elements & POINTER_MASK) as usize };
 
+        assert_copied_minor_trace(
+            &trace,
+            false,
+            CopiedMinorFallbackReason::PinnedYoungTransitive,
+            false,
+        );
         assert_eq!(
             arr_after, arr as usize,
             "copying nursery must fall back before moving the young parent"
@@ -12937,6 +13319,7 @@ mod tests {
         }
 
         let _reset = ResetGcTestState;
+        let _isolation = copying_nursery_isolation_lock();
         let _barrier_guard = GeneratedWriteBarrierTestGuard::inactive();
         reset_shadow_stack();
         reset_global_roots();
@@ -12996,6 +13379,7 @@ mod tests {
         }
 
         let _reset = ResetGcTestState;
+        let _isolation = copying_nursery_isolation_lock();
         let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
         let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::new();
         reset_shadow_stack();
