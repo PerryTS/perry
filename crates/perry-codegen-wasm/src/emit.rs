@@ -600,6 +600,17 @@ struct WasmModuleEmitter {
     /// WASM function index → expected parameter count.
     /// Used to pad missing arguments with TAG_UNDEFINED for optional params.
     func_param_counts: BTreeMap<u32, usize>,
+    /// Issue #1071: cross-module imported VARIABLE resolution.
+    /// Maps `(consumer_mod_idx, imported_local_name)` → WASM global index
+    /// of the source module's `Stmt::Let` that backs the export. Pre-fix
+    /// `Expr::ExternFuncRef { name }` for an imported `const`/`let` (rather
+    /// than a function) fell through to a `TAG_UNDEFINED` constant because
+    /// `func_name_map` only carries function names. With this map populated
+    /// from each consumer's `Import` × source's `Export::Named` × source's
+    /// module-let globals, the ExternFuncRef value path resolves to a
+    /// `GlobalGet(gidx)` reading the live module-let slot, matching the
+    /// LLVM target's `perry_fn_<src>__<name>()` getter path.
+    imported_var_globals: BTreeMap<(usize, String), u32>,
 }
 
 impl WasmModuleEmitter {
@@ -631,6 +642,7 @@ impl WasmModuleEmitter {
             void_funcs: std::collections::BTreeSet::new(),
             func_param_counts: BTreeMap::new(),
             async_js_code: Vec::new(),
+            imported_var_globals: BTreeMap::new(),
         }
     }
 
@@ -1495,6 +1507,91 @@ impl WasmModuleEmitter {
             );
         }
 
+        // Issue #1071: build cross-module imported-variable → WASM global map.
+        // The HIR lowers `import { FOO } from './m'` value reads (where FOO is
+        // an exported `const`/`let`, not a function) to `Expr::ExternFuncRef {
+        // name: "FOO" }`. Pre-fix this hit `TAG_UNDEFINED` because `name`
+        // wasn't in `func_name_map` (it's a variable, not a function). Now we
+        // resolve `name` to the source module's `Stmt::Let` and reuse its
+        // wasm-global slot from `module_let_globals`. Same flow the LLVM target
+        // achieves via per-export `perry_fn_<src>__<name>()` getter functions.
+        //
+        // Module-path lookup: each `Import` carries `resolved_path` (set by
+        // the driver) and `Module.name` is a relative-from-project-root path.
+        // We compare paths by file-stem match against `Module.name` (which is
+        // a leaf "name.ts" or "subdir/name.ts" string), falling back to a
+        // basename match. Re-exports (`Export::ReExport`) point at another
+        // module by `source`; we don't chase those here — a one-hop re-export
+        // is handled by the source's own exports list (the re-export pass
+        // typically flattens through), and complex chains can be added later
+        // with a visited-set on demand.
+        {
+            // module.name → source module index
+            let name_to_idx: std::collections::HashMap<&str, usize> = modules
+                .iter()
+                .enumerate()
+                .map(|(i, (_, m))| (m.name.as_str(), i))
+                .collect();
+            // For each source module, build a name → wasm global lookup over
+            // its top-level Lets so we can resolve `Export::Named { local }`.
+            let mut src_let_names: Vec<std::collections::HashMap<String, u32>> =
+                Vec::with_capacity(modules.len());
+            for (src_idx, (_, module)) in modules.iter().enumerate() {
+                let mut map: std::collections::HashMap<String, u32> = Default::default();
+                for stmt in &module.init {
+                    if let perry_hir::Stmt::Let { id, name, .. } = stmt {
+                        if let Some(&gidx) = self.module_let_globals.get(&(src_idx, *id)) {
+                            map.insert(name.clone(), gidx);
+                        }
+                    }
+                }
+                src_let_names.push(map);
+            }
+            for (consumer_idx, (_, module)) in modules.iter().enumerate() {
+                for import in &module.imports {
+                    if import.type_only {
+                        continue;
+                    }
+                    // Resolve source module index. Prefer matching `resolved_path`
+                    // against `(path, module)` pairs by stem; fall back to a
+                    // suffix/basename match on `import.source`.
+                    let src_idx_opt = resolve_source_module_idx(modules, import, &name_to_idx);
+                    let Some(src_idx) = src_idx_opt else { continue };
+                    let src_lets = &src_let_names[src_idx];
+                    for spec in &import.specifiers {
+                        if let perry_hir::ir::ImportSpecifier::Named { imported, local } = spec {
+                            // Walk the source module's exports to map the
+                            // public `imported` name back to a source-local
+                            // identifier, then look up that identifier's let.
+                            let src_module = &modules[src_idx].1;
+                            let mut resolved_local: Option<&str> = None;
+                            for export in &src_module.exports {
+                                if let perry_hir::ir::Export::Named {
+                                    local: src_local,
+                                    exported,
+                                } = export
+                                {
+                                    if exported == imported {
+                                        resolved_local = Some(src_local.as_str());
+                                        break;
+                                    }
+                                }
+                            }
+                            // Direct fall-through: if no Export::Named matched
+                            // but a Let with the imported name exists, use it.
+                            // (Some HIR lowering shapes register exports out-of-
+                            // band; this keeps `export const X = ...` robust.)
+                            let key = resolved_local.unwrap_or(imported.as_str());
+                            if let Some(&gidx) = src_lets.get(key) {
+                                self.imported_var_globals
+                                    .insert((consumer_idx, local.clone()), gidx);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Add a NaN-safe temp global for mem_store_slot (Firefox canonicalizes locals)
         self.nan_temp_global = self.num_globals;
         self.num_globals += 1;
@@ -1727,6 +1824,26 @@ impl WasmModuleEmitter {
         // Export all user functions so async JS code can call them by index.
         for idx in self.num_imports..start_idx {
             export_section.export(&format!("__wasm_func_{}", idx), ExportKind::Func, idx);
+        }
+        // Issue #1071: export the globals that back cross-module imported
+        // variables so the async/JS-context emission path (which can't issue
+        // a `global.get` instruction) can read them via
+        // `wasmInstance.exports.__wasm_global_<idx>.value`. We export ALL
+        // module-let globals since they're already named by index and the
+        // export cost is negligible; future asynchrony work that needs the
+        // same boundary read won't have to wire a separate index.
+        {
+            let mut exported_globals: std::collections::BTreeSet<u32> =
+                std::collections::BTreeSet::new();
+            for &gidx in self.module_let_globals.values() {
+                exported_globals.insert(gidx);
+            }
+            for &gidx in self.global_map.values() {
+                exported_globals.insert(gidx);
+            }
+            for gidx in exported_globals {
+                export_section.export(&format!("__wasm_global_{}", gidx), ExportKind::Global, gidx);
+            }
         }
         wasm_module.section(&export_section);
 
@@ -2850,8 +2967,19 @@ impl WasmModuleEmitter {
                 }
             }
             Expr::ExternFuncRef { name, .. } => {
-                // In JS context, look up exported WASM functions
-                if let Some(&func_idx) = self.func_name_map.get(name) {
+                // Issue #1071: prefer imported-variable global over a like-named
+                // function. In JS context the WASM exports include a getter for
+                // each global as `wasmInstance.exports.__wasm_global_<idx>` (the
+                // WASM emitter exports every global by index — see ExportSection
+                // population below). Reading the global returns the i64 NaN-box
+                // bits matching the source module's let slot.
+                let mod_key = (self.current_mod_idx, name.clone());
+                if let Some(&gidx) = self.imported_var_globals.get(&mod_key) {
+                    format!(
+                        "u64ToF64(wasmInstance.exports.__wasm_global_{}.value)",
+                        gidx
+                    )
+                } else if let Some(&func_idx) = self.func_name_map.get(name) {
                     format!("fromJsValue(wasmInstance.exports.__wasm_func_{})", func_idx)
                 } else {
                     "u64ToF64(TAG_UNDEFINED)".to_string()
@@ -7220,8 +7348,18 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
             Expr::ExternFuncRef { name, .. } => {
-                // Look up by function name in the flat function index space
-                if let Some(&func_idx) = self.emitter.func_name_map.get(name) {
+                // Issue #1071: an `ExternFuncRef` used as a value can resolve
+                // either to (a) a cross-module function — wrap as closure with
+                // 0 captures, or (b) a cross-module exported variable — read
+                // the source module's promoted-let global directly. Variables
+                // win when both apply (a let with the same name is closer to
+                // the user's intent than a like-named function); in practice
+                // the lookup tables are disjoint because a HIR symbol can
+                // only be one or the other.
+                let mod_key = (self.emitter.current_mod_idx, name.clone());
+                if let Some(&gidx) = self.emitter.imported_var_globals.get(&mod_key) {
+                    func.instruction(&Instruction::GlobalGet(gidx));
+                } else if let Some(&func_idx) = self.emitter.func_name_map.get(name) {
                     // Create a closure wrapper with 0 captures (like FuncRef)
                     let table_idx = self
                         .emitter
@@ -9449,6 +9587,55 @@ fn collect_module_let_ids(
             *next_global += 1;
         }
     }
+}
+
+/// Issue #1071: resolve an `Import` to its source module's index in the
+/// `modules` vec. The driver populates `import.resolved_path` with an
+/// absolute path; `Module.name` is a relative path from the project root
+/// (e.g. `theme-src.ts` or `subdir/util.ts`). We match by suffix so the
+/// two coordinate systems line up. If `resolved_path` is unset (rare —
+/// happens for stdlib imports + a few JSX-runtime synthetic edges) we
+/// fall back to suffix-matching `import.source` against module names.
+fn resolve_source_module_idx(
+    modules: &[(String, perry_hir::ir::Module)],
+    import: &perry_hir::ir::Import,
+    _name_to_idx: &std::collections::HashMap<&str, usize>,
+) -> Option<usize> {
+    if let Some(ref rp) = import.resolved_path {
+        // Match the longest module-name suffix of the resolved absolute path.
+        // Modules have names like "theme-src.ts" or "sub/util.ts" and the
+        // resolved path looks like "/abs/path/to/project/theme-src.ts".
+        let mut best: Option<(usize, usize)> = None;
+        for (i, (_, m)) in modules.iter().enumerate() {
+            if rp.ends_with(&m.name) {
+                let n = m.name.len();
+                if best.map(|(_, bn)| n > bn).unwrap_or(true) {
+                    best = Some((i, n));
+                }
+            }
+        }
+        if let Some((i, _)) = best {
+            return Some(i);
+        }
+    }
+    // Fallback: match `import.source` suffix (strip leading "./" / "../").
+    let src = import
+        .source
+        .trim_start_matches("./")
+        .trim_start_matches("../");
+    let mut best: Option<(usize, usize)> = None;
+    for (i, (_, m)) in modules.iter().enumerate() {
+        let mn = m.name.as_str();
+        // Match "theme-src" against "theme-src.ts" / "theme-src.tsx".
+        let stem = mn.rsplit_once('.').map(|(s, _)| s).unwrap_or(mn);
+        if stem == src || mn == src {
+            let n = mn.len();
+            if best.map(|(_, bn)| n > bn).unwrap_or(true) {
+                best = Some((i, n));
+            }
+        }
+    }
+    best.map(|(i, _)| i)
 }
 
 fn collect_locals(stmts: &[Stmt], map: &mut BTreeMap<LocalId, u32>, count: &mut u32, offset: u32) {

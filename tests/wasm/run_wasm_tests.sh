@@ -23,6 +23,13 @@ run_test() {
   local expected_file="$DIR/$name.expected"
   local html_file="/tmp/perry_wasm_test_${name}.html"
 
+  # Multi-module convention (issue #1071): a subdirectory `$name/` with an
+  # `entry.ts` and any helper modules. The compiler walks imports from
+  # entry.ts so siblings can be `import {...} from './helper'`.
+  if [ -d "$DIR/$name" ] && [ -f "$DIR/$name/entry.ts" ]; then
+    ts_file="$DIR/$name/entry.ts"
+  fi
+
   if [ ! -f "$ts_file" ]; then
     echo "SKIP $name (no .ts file)"
     return
@@ -98,6 +105,13 @@ echo ""
 for ts_file in "$DIR"/*.ts; do
   name=$(basename "$ts_file" .ts)
   run_test "$name"
+done
+# Multi-module tests live in numbered subdirectories with an `entry.ts`.
+for dir in "$DIR"/*/; do
+  name=$(basename "$dir")
+  if [ -f "$dir/entry.ts" ] && [ ! -f "$DIR/$name.ts" ]; then
+    run_test "$name"
+  fi
 done
 
 echo ""
