@@ -11,3 +11,6 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 scraper = "0.27"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

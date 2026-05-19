@@ -12,3 +12,6 @@ crate-type = ["staticlib", "rlib"]
 perry-ffi.workspace = true
 cron = "0.12"
 chrono = "0.4"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

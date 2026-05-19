@@ -12,3 +12,6 @@ crate-type = ["staticlib", "rlib"]
 perry-ffi.workspace = true
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "chrono"] }
 tokio = { workspace = true }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

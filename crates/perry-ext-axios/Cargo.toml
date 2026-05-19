@@ -12,3 +12,6 @@ crate-type = ["staticlib", "rlib"]
 perry-ffi.workspace = true
 reqwest = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

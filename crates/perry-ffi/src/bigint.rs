@@ -1,5 +1,5 @@
-//! BigInt surface — re-exports of perry-runtime's `BigIntHeader`
-//! plus a thin allocator that wrappers can use to construct
+//! BigInt surface — `perry-ffi`'s canonical `BigIntHeader` plus a
+//! thin allocator that wrappers can use to construct
 //! arbitrary-precision integers without touching runtime internals
 //! directly.
 //!
@@ -14,13 +14,13 @@
 //! cross-cutting breaking change for every wrapper that touched
 //! large integers.
 //!
-//! Today's surface is intentionally minimal: re-export the type
-//! perry-runtime exposes plus a single string-parsing constructor
-//! (which is what every existing wrapper uses). Extras (limb-based
+//! Today's surface is intentionally minimal: expose the ABI type plus
+//! a single string-parsing constructor (which is what every existing
+//! wrapper uses). Extras (limb-based
 //! constructors, arithmetic ops, string-radix parsing) wait until
 //! a real wrapper demands them.
 
-pub use perry_runtime::bigint::{BigIntHeader, BIGINT_LIMBS};
+use crate::{BigIntHeader, BIGINT_LIMBS};
 
 extern "C" {
     /// Parse a decimal-string representation into a fresh
@@ -67,7 +67,7 @@ pub fn read_bigint_limbs(ptr: *const BigIntHeader) -> Option<[u64; BIGINT_LIMBS]
     Some(unsafe { (*ptr).limbs })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "runtime-link"))]
 mod tests {
     use super::*;
 

@@ -12,3 +12,6 @@ crate-type = ["staticlib", "rlib"]
 perry-ffi.workspace = true
 nanoid = "0.5"
 rand = "0.9"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

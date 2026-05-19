@@ -46,7 +46,13 @@
 
 mod async_runtime;
 pub use async_runtime::{
-    nanbox_string_bits, spawn_blocking, spawn_blocking_with_reactor, JsPromise, Promise,
+    nanbox_string_bits, spawn_blocking, spawn_blocking_with_reactor, JsPromise,
+};
+
+mod types;
+pub use types::{
+    ArrayHeader, BigIntHeader, BufferHeader, ClosureHeader, ObjectHeader, Promise, StringHeader,
+    BIGINT_LIMBS,
 };
 
 mod handle;
@@ -59,18 +65,17 @@ pub use handle::{
 mod jsvalue;
 pub use jsvalue::{
     build_object_shape, js_array_alloc, js_array_get, js_array_push, js_array_set,
-    js_object_alloc_with_shape, js_object_get_field, js_object_set_field, ArrayHeader, JsValue,
-    ObjectHeader,
+    js_object_alloc_with_shape, js_object_get_field, js_object_set_field, JsValue,
 };
 
 mod closure;
 pub use closure::{JsClosure, RawClosureHeader};
 
 mod bigint;
-pub use bigint::{alloc_bigint_from_str, read_bigint_limbs, BigIntHeader, BIGINT_LIMBS};
+pub use bigint::{alloc_bigint_from_str, read_bigint_limbs};
 
 mod buffer;
-pub use buffer::{alloc_buffer, read_buffer_bytes, BufferHeader};
+pub use buffer::{alloc_buffer, read_buffer_bytes};
 
 mod json;
 pub use json::json_stringify;
@@ -78,8 +83,12 @@ pub use json::json_stringify;
 mod event_pump;
 pub use event_pump::notify_main_thread;
 
-use perry_runtime::js_string_from_bytes;
-pub use perry_runtime::StringHeader;
+#[cfg(feature = "runtime-link")]
+extern crate perry_runtime as _perry_runtime_link;
+
+extern "C" {
+    fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
+}
 
 /// Opaque handle to a JS string allocated in the Perry arena.
 ///
@@ -143,7 +152,7 @@ pub fn alloc_string(s: &str) -> JsString {
     // copies the bytes into a freshly allocated arena slot, and returns the
     // header pointer. The input slice is borrowed only for the duration of
     // the call.
-    let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    let ptr = unsafe { js_string_from_bytes(s.as_ptr(), s.len() as u32) };
     JsString(ptr)
 }
 
@@ -199,7 +208,7 @@ pub fn read_bytes(handle: JsString) -> Option<&'static [u8]> {
 /// payloads, crypto digests, and other binary-as-string outputs
 /// that perry-stdlib's existing wrappers carry as `*mut StringHeader`.
 pub fn alloc_bytes(bytes: &[u8]) -> JsString {
-    let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    let ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) };
     JsString(ptr)
 }
 
@@ -210,7 +219,7 @@ pub fn alloc_bytes(bytes: &[u8]) -> JsString {
 // change for wrapper authors. The type itself is the same; this is
 // just a stable-named import path.
 
-#[cfg(test)]
+#[cfg(all(test, feature = "runtime-link"))]
 mod tests {
     use super::*;
 

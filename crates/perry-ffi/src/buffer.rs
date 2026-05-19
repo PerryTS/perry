@@ -1,5 +1,5 @@
-//! Buffer surface — re-exports of perry-runtime's `BufferHeader`
-//! plus thin allocator + reader helpers for wrappers that return
+//! Buffer surface — `perry-ffi`'s canonical `BufferHeader` plus thin
+//! allocator + reader helpers for wrappers that return
 //! arbitrary binary bytes (cryptographic digests, image-encoded
 //! payloads, BSON documents, …).
 //!
@@ -16,7 +16,7 @@
 //! a single allocator + a slice-reader. Resize / append / clone
 //! helpers wait for a real wrapper that demands them.
 
-pub use perry_runtime::buffer::BufferHeader;
+use crate::BufferHeader;
 
 extern "C" {
     /// Runtime's stable extern allocator entry point. Single
@@ -89,7 +89,7 @@ pub fn read_buffer_bytes(ptr: *const BufferHeader) -> Option<&'static [u8]> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "runtime-link"))]
 mod tests {
     use super::*;
 

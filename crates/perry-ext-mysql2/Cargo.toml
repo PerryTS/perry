@@ -13,3 +13,6 @@ perry-ffi.workspace = true
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "mysql", "chrono"] }
 tokio = { workspace = true }
 chrono = "0.4"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

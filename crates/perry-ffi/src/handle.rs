@@ -39,7 +39,9 @@
 //! [`with_handle`] which scopes the borrow under a closure.
 
 use std::any::Any;
+use std::ffi::c_void;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Mutex, Once};
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
@@ -55,6 +57,16 @@ pub const INVALID_HANDLE: Handle = 0;
 
 static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> = Lazy::new(DashMap::new);
 static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
+static ROOT_SCANNERS: Lazy<Mutex<Vec<fn(&mut dyn FnMut(f64))>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
+static REGISTER_ROOT_SCANNER_TRAMPOLINE: Once = Once::new();
+
+type PerryFfiRootMarker = extern "C" fn(value: f64, ctx: *mut c_void);
+type PerryFfiRootScanner = extern "C" fn(mark: PerryFfiRootMarker, ctx: *mut c_void);
+
+extern "C" {
+    fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanner);
+}
 
 /// Register `value` under a fresh handle and return the handle.
 ///
@@ -143,8 +155,8 @@ pub fn handle_exists(handle: Handle) -> bool {
 /// between `.on(...)` and `.emit(...)` would sweep the closure
 /// (issue #35 pattern in perry-stdlib).
 ///
-/// Pair with [`gc_register_root_scanner`] (re-exported from
-/// `perry_runtime::gc`) to wire the scanner into perry's GC.
+/// Pair with [`gc_register_root_scanner`] to wire the scanner into
+/// perry's GC.
 pub fn iter_handles_of<T, F>(mut f: F)
 where
     T: 'static + Send + Sync,
@@ -191,7 +203,8 @@ where
 /// is called during every GC mark phase; it should call its `mark`
 /// callback with each NaN-boxed JsValue that should be kept alive.
 ///
-/// Convenience re-export over `perry_runtime::gc::gc_register_root_scanner`.
+/// This registers through `perry_ffi_gc_register_root_scanner`, the stable
+/// C ABI bridge exported by the runtime.
 /// Wrapper authors typically combine this with [`iter_handles_of`]:
 ///
 /// ```ignore
@@ -211,7 +224,23 @@ where
 /// gc_register_root_scanner(scan_my_roots);
 /// ```
 pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
-    perry_runtime::gc::gc_register_root_scanner(scanner);
+    ROOT_SCANNERS
+        .lock()
+        .expect("perry-ffi root scanner registry poisoned")
+        .push(scanner);
+    REGISTER_ROOT_SCANNER_TRAMPOLINE.call_once(|| unsafe {
+        perry_ffi_gc_register_root_scanner(scan_registered_roots);
+    });
+}
+
+extern "C" fn scan_registered_roots(mark: PerryFfiRootMarker, ctx: *mut c_void) {
+    let scanners = ROOT_SCANNERS
+        .lock()
+        .expect("perry-ffi root scanner registry poisoned")
+        .clone();
+    for scanner in scanners {
+        scanner(&mut |value| mark(value, ctx));
+    }
 }
 
 #[cfg(test)]

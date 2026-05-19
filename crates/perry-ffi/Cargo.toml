@@ -7,17 +7,17 @@ description = "Stable FFI surface for native bindings packages that wrap Rust cr
 repository.workspace = true
 
 [dependencies]
-# perry-ffi is a thin re-export layer over perry-runtime — same process,
-# same arena, same GC. The `perry-ffi` semver moves independently from
-# `perry-runtime`; this dep is `path =` for in-tree use, but external
-# wrappers will pull `perry-ffi = "0.5"` from crates.io and link
-# against whichever runtime ships with the perry binary they're loaded
-# into. ABI compatibility is asserted via `perry.nativeLibrary.abiVersion`
-# in package.json (#466 Phase 2).
-perry-runtime.workspace = true
+# Normal native package builds must not embed perry-runtime. The optional
+# dependency exists only for tests/layout assertions that intentionally link
+# against the in-tree runtime.
+perry-runtime = { workspace = true, optional = true }
 
 # Handle registry storage (#466 Phase 5 — `lru-cache`/db wrappers).
 # perry-stdlib uses dashmap internally for the same purpose; sharing
 # the dep keeps the resulting binaries identical in size.
 dashmap = "6"
 once_cell = "1"
+
+[features]
+default = []
+runtime-link = ["dep:perry-runtime"]

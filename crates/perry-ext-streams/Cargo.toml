@@ -11,3 +11,6 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 lazy_static = "1.5"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

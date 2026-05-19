@@ -13,3 +13,6 @@ perry-ffi.workspace = true
 lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"] }
 tokio = { workspace = true }
 uuid = { version = "1.11", features = ["v4"] }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

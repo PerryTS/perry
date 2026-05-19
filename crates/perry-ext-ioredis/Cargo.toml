@@ -13,3 +13,6 @@ perry-ffi.workspace = true
 redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
 tokio = { workspace = true }
 lazy_static = "1.5"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

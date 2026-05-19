@@ -17,3 +17,6 @@ perry-ffi.workspace = true
 # libsqlite3 in the default search path (or where the system one
 # is too old).
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

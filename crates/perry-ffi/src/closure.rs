@@ -37,9 +37,9 @@
 //! the better-sqlite3 wrapper's transaction support for a
 //! reference example (added under #466 Phase 5 followup).
 
-use perry_runtime::ClosureHeader;
+use crate::ClosureHeader;
 
-pub use perry_runtime::ClosureHeader as RawClosureHeader;
+pub use crate::ClosureHeader as RawClosureHeader;
 
 extern "C" {
     fn js_closure_call0(closure: *const ClosureHeader) -> f64;

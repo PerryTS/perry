@@ -31,13 +31,7 @@
 
 use std::ffi::c_void;
 
-use crate::{alloc_string, StringHeader};
-
-/// Re-export the runtime's `Promise` type for `extern "C"`
-/// signatures. Wrapper authors who need to write
-/// `pub extern "C" fn js_my_thing() -> *mut perry_ffi::Promise`
-/// import this rather than reaching into perry-runtime directly.
-pub use perry_runtime::Promise;
+use crate::{alloc_string, Promise, StringHeader};
 
 extern "C" {
     fn perry_ffi_promise_new() -> *mut Promise;

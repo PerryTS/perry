@@ -11,3 +11,6 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 uuid = { version = "1.10", features = ["v1", "v4", "v7"] }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

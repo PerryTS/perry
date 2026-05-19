@@ -58,7 +58,7 @@ pub fn json_stringify(value: JsValue) -> Option<String> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "runtime-link"))]
 mod tests {
     use super::*;
     use crate::alloc_string;

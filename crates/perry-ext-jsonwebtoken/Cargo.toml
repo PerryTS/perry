@@ -24,3 +24,6 @@ jsonwebtoken = { version = "10.4", default-features = false, features = ["rust_c
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = "0.22"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

@@ -10,6 +10,7 @@
 
 use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::cell::{Cell, RefCell};
+use std::ffi::c_void;
 
 /// GC header prepended to every heap allocation.
 /// Callers receive a pointer AFTER this header (ptr + 8).
@@ -232,8 +233,11 @@ thread_local! {
         last_pause_us: 0,
     }) };
 
-    /// Registered root scanner functions (promise queue, timers, etc.)
+    /// Registered Rust root scanner functions (promise queue, timers, etc.)
     static ROOT_SCANNERS: RefCell<Vec<fn(&mut dyn FnMut(f64))>> = RefCell::new(Vec::new());
+
+    /// Registered root scanner functions from perry-ffi/native packages.
+    static FFI_ROOT_SCANNERS: RefCell<Vec<PerryFfiRootScanner>> = RefCell::new(Vec::new());
 
     /// Module-level global variable addresses (registered by codegen)
     static GLOBAL_ROOTS: RefCell<Vec<*mut u64>> = const { RefCell::new(Vec::new()) };
@@ -806,6 +810,21 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
 /// Each scanner is called during the mark phase to discover roots.
 pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
     ROOT_SCANNERS.with(|scanners| {
+        scanners.borrow_mut().push(scanner);
+    });
+}
+
+type PerryFfiRootMarker = extern "C" fn(value: f64, ctx: *mut c_void);
+type PerryFfiRootScanner = extern "C" fn(mark: PerryFfiRootMarker, ctx: *mut c_void);
+
+/// Register a native-package root scanner through a stable C ABI.
+///
+/// `perry-ffi` adapts its Rust-facing `fn(&mut dyn FnMut(f64))`
+/// convenience API to this callback shape so native wrapper archives
+/// can stay runtime-free.
+#[no_mangle]
+pub extern "C" fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanner) {
+    FFI_ROOT_SCANNERS.with(|scanners| {
         scanners.borrow_mut().push(scanner);
     });
 }
@@ -2273,6 +2292,12 @@ fn mark_registered_roots(valid_ptrs: &ValidPointerSet) {
         });
     }
 
+    let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let ctx = valid_ptrs as *const ValidPointerSet as *mut c_void;
+    for scanner in ffi_scanners {
+        scanner(perry_ffi_mark_root, ctx);
+    }
+
     // Singleton closures (no-capture closures cached by `js_closure_alloc_singleton`)
     // are reachable from emitted code via cached pointers, not via JSValue refs the
     // tracer would otherwise find. Mark them explicitly so the sweep doesn't
@@ -2290,6 +2315,14 @@ fn mark_registered_roots(valid_ptrs: &ValidPointerSet) {
             }
         }
     }
+}
+
+extern "C" fn perry_ffi_mark_root(value: f64, ctx: *mut c_void) {
+    if ctx.is_null() {
+        return;
+    }
+    let valid_ptrs = unsafe { &*(ctx as *const ValidPointerSet) };
+    try_mark_value(value.to_bits(), valid_ptrs);
 }
 
 /// Gen-GC Phase C3: mark the remembered set as roots. Old-gen

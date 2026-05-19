@@ -15,3 +15,6 @@ perry-ffi.workspace = true
 # `html` feature (azul-layout, kuchiki, …) — for the v1 surface we
 # only need core text + line drawing, which lives in the base crate.
 printpdf = { version = "0.9", default-features = false }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

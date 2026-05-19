@@ -61,7 +61,7 @@ pub fn notify_main_thread() {
     unsafe { js_notify_main_thread() };
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "runtime-link"))]
 mod tests {
     use super::*;
 

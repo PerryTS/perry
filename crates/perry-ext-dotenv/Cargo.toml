@@ -11,3 +11,6 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

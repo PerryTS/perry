@@ -13,3 +13,6 @@ perry-ffi.workspace = true
 validator = "0.20"
 regex = "1"
 serde_json = { workspace = true }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

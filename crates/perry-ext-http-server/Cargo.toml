@@ -27,3 +27,6 @@ rustls-pemfile = "2"
 serde_json = "1"
 lazy_static = "1.5"
 tokio-tungstenite = { workspace = true }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

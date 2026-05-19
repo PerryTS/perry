@@ -30,12 +30,7 @@
 //! These tag values are part of perry-ffi's stable API — a
 //! perry-runtime renumbering bumps perry-ffi major.
 
-use crate::StringHeader;
-
-// Re-export the runtime types wrappers need to declare in their
-// `extern "C"` signatures — same model as `StringHeader` /
-// `Promise` re-exports elsewhere in this crate.
-pub use perry_runtime::{ArrayHeader, ObjectHeader};
+use crate::{ArrayHeader, ObjectHeader, StringHeader};
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
