@@ -46,6 +46,7 @@ LAYOUT_SCAN_TOTALS = (
 )
 
 FORBIDDEN_TARGET_MALLOC_KINDS = ("string", "closure")
+FORCED_EVACUATION_VERIFIER_WORKLOADS = frozenset(("async_promise_closures",))
 
 DEFAULT_SAFE_FALLBACK_WORKLOADS = (
     "json_roundtrip",
@@ -118,6 +119,42 @@ def parse_workload_spec(spec: str) -> tuple[str, Path]:
     if not trace_file:
         raise ValueError(f"trace file is empty for workload {name!r}")
     return name, Path(trace_file)
+
+
+def parse_target_malloc_kind_allowance(spec: str) -> tuple[str, str, int]:
+    if "=" not in spec:
+        raise ValueError(
+            "target malloc kind allowance must be WORKLOAD:KIND=COUNT: "
+            f"{spec!r}"
+        )
+    left, count_str = spec.split("=", 1)
+    if ":" not in left:
+        raise ValueError(
+            "target malloc kind allowance must be WORKLOAD:KIND=COUNT: "
+            f"{spec!r}"
+        )
+    workload, kind = left.split(":", 1)
+    workload = workload.strip()
+    kind = kind.strip()
+    count_str = count_str.strip()
+    if not workload:
+        raise ValueError(f"target malloc kind allowance workload is empty: {spec!r}")
+    if kind not in FORBIDDEN_TARGET_MALLOC_KINDS:
+        raise ValueError(
+            f"target malloc kind allowance kind must be one of "
+            f"{', '.join(FORBIDDEN_TARGET_MALLOC_KINDS)}: {spec!r}"
+        )
+    try:
+        count = int(count_str, 10)
+    except ValueError as exc:
+        raise ValueError(
+            f"target malloc kind allowance count must be a non-negative integer: {spec!r}"
+        ) from exc
+    if count < 0:
+        raise ValueError(
+            f"target malloc kind allowance count must be a non-negative integer: {spec!r}"
+        )
+    return workload, kind, count
 
 
 def nested_dict(obj: dict[str, Any], *path: str) -> dict[str, Any]:
@@ -205,7 +242,10 @@ def add_totals(dst: dict[str, Any], src: dict[str, Any]) -> None:
 
 
 def target_gates_require_copied_minor(name: str) -> bool:
-    return not name.startswith("old_page_")
+    return (
+        not name.startswith("old_page_")
+        and name not in FORCED_EVACUATION_VERIFIER_WORKLOADS
+    )
 
 
 def record_malloc_kind_allocations(cycle: dict[str, Any], totals: dict[str, Any]) -> None:
@@ -436,6 +476,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fail if default-safe copied-minor fallback evidence uses any fallback path.",
     )
+    parser.add_argument(
+        "--allow-target-malloc-kind",
+        action="append",
+        default=[],
+        metavar="WORKLOAD:KIND=COUNT",
+        help=(
+            "Allow up to COUNT allocations of forbidden malloc KIND for one "
+            "target-collector workload. KIND is string or closure. May be repeated."
+        ),
+    )
     return parser
 
 
@@ -487,7 +537,11 @@ def run_strict_fallback_evidence_gates(
 def run_target_collector_gates(
     workloads: dict[str, dict[str, Any]],
     errors: list[str],
+    malloc_kind_allowances: dict[str, dict[str, int]] | None = None,
 ) -> None:
+    if malloc_kind_allowances is None:
+        malloc_kind_allowances = {}
+
     strict_workloads = {
         name: workload
         for name, workload in workloads.items()
@@ -531,13 +585,15 @@ def run_target_collector_gates(
         )
         if productive == 0:
             errors.append(f"{name}: no copied-minor cycle copied or promoted an object")
+    for name, workload in workloads.items():
         for kind, count in workload["malloc_kind_allocations"].items():
-            if count != 0:
+            allowed = malloc_kind_allowances.get(name, {}).get(kind, 0)
+            if count > allowed:
                 errors.append(
-                    f"{name}: forbidden malloc allocation kind {kind} count={count}"
+                    f"{name}: forbidden malloc allocation kind {kind} count={count} "
+                    f"exceeds allowance={allowed}"
                 )
 
-    for name, workload in workloads.items():
         if workload["missing_layout_scans"] != 0:
             errors.append(
                 f"{name}: missing layout_scans on {workload['missing_layout_scans']} cycle(s)"
@@ -588,6 +644,23 @@ def main(argv: list[str]) -> int:
         workload_names.add(name)
         parsed_workloads.append((name, trace_file))
 
+    malloc_kind_allowances: dict[str, dict[str, int]] = {}
+    for spec in args.allow_target_malloc_kind:
+        try:
+            workload, kind, count = parse_target_malloc_kind_allowance(spec)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if workload not in workload_names:
+            parser.error(
+                f"target malloc kind allowance references unknown workload: {workload}"
+            )
+        existing = malloc_kind_allowances.setdefault(workload, {})
+        if kind in existing:
+            parser.error(
+                f"duplicate target malloc kind allowance for {workload}:{kind}"
+            )
+        existing[kind] = count
+
     workloads: dict[str, dict[str, Any]] = {}
     summary = empty_totals()
     summary["workload_count"] = len(parsed_workloads)
@@ -612,7 +685,7 @@ def main(argv: list[str]) -> int:
     }
 
     if args.target_collector_gates:
-        run_target_collector_gates(workloads, errors)
+        run_target_collector_gates(workloads, errors, malloc_kind_allowances)
         errors.extend(old_page_errors)
     if args.strict_fallback_evidence:
         run_strict_fallback_evidence_gates(workloads, errors)

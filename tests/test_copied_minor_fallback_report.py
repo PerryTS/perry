@@ -34,8 +34,10 @@ def gc_cycle(
     conservative_pinned_bytes=0,
     legacy_pinned_bytes=0,
     malloc_registry_rebuilds=0,
+    malloc_kinds=None,
+    layout_scans=None,
 ):
-    return {
+    cycle = {
         "event": "gc_cycle",
         "conservative_pinned_bytes": conservative_pinned_bytes,
         "legacy_copy_only_scanner_pinned": {
@@ -53,10 +55,32 @@ def gc_cycle(
             "malloc_registry_rebuilds": malloc_registry_rebuilds,
         },
     }
+    if malloc_kinds is not None:
+        cycle["malloc_kinds"] = malloc_kinds
+    if layout_scans is not None:
+        cycle["layout_scans"] = layout_scans
+    return cycle
+
+
+def layout_scans():
+    return {
+        "pointer_slots_read": 1,
+        "masked_pointer_slots_read": 0,
+        "unknown_layout_slots_read": 0,
+        "pointer_free_ranges_skipped": 0,
+        "pointer_free_slots_skipped": 0,
+    }
 
 
 class CopiedMinorFallbackReportTests(unittest.TestCase):
-    def run_report(self, workload_cycles, *, strict=False):
+    def run_report(
+        self,
+        workload_cycles,
+        *,
+        strict=False,
+        target=False,
+        allow_target_malloc_kind=(),
+    ):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             args = []
@@ -71,6 +95,10 @@ class CopiedMinorFallbackReportTests(unittest.TestCase):
             report_file = temp_path / "report.json"
             if strict:
                 args.append("--strict-fallback-evidence")
+            if target:
+                args.append("--target-collector-gates")
+            for allowance in allow_target_malloc_kind:
+                args.extend(["--allow-target-malloc-kind", allowance])
             args.extend(["--out", str(report_file)])
 
             stderr = io.StringIO()
@@ -186,6 +214,118 @@ class CopiedMinorFallbackReportTests(unittest.TestCase):
             1,
         )
         self.assertEqual(report["top_remaining_reason"]["reason"], "copy_only_roots")
+
+    def test_target_gates_fail_forbidden_string_and_closure_malloc_kinds(self):
+        exit_code, stderr, _ = self.run_report(
+            {
+                "string_heavy": [
+                    gc_cycle(
+                        malloc_kinds=[
+                            {"kind": "string", "allocated_count": 2},
+                            {"kind": "closure", "allocated_count": 1},
+                        ],
+                        layout_scans=layout_scans(),
+                    )
+                ]
+            },
+            target=True,
+        )
+
+        self.assertNotEqual(exit_code, 0)
+        self.assertIn(
+            "string_heavy: forbidden malloc allocation kind string count=2 "
+            "exceeds allowance=0",
+            stderr,
+        )
+        self.assertIn(
+            "string_heavy: forbidden malloc allocation kind closure count=1 "
+            "exceeds allowance=0",
+            stderr,
+        )
+
+    def test_target_gates_ignore_non_forbidden_malloc_kinds(self):
+        exit_code, stderr, report = self.run_report(
+            {
+                "default_copying": [
+                    gc_cycle(
+                        malloc_kinds=[
+                            {"kind": "array", "allocated_count": 3},
+                            {"kind": "object", "allocated_count": 5},
+                        ],
+                        layout_scans=layout_scans(),
+                    )
+                ]
+            },
+            target=True,
+        )
+
+        self.assertEqual(exit_code, 0, stderr)
+        self.assertEqual(
+            report["workloads"]["default_copying"]["malloc_kind_allocations"],
+            {"string": 0, "closure": 0},
+        )
+
+    def test_target_gates_honor_documented_malloc_kind_allowances(self):
+        exit_code, stderr, report = self.run_report(
+            {
+                "string_heavy": [
+                    gc_cycle(
+                        malloc_kinds=[
+                            {"kind": "string", "allocated_count": 2},
+                            {"kind": "closure", "allocated_count": 1},
+                        ],
+                        layout_scans=layout_scans(),
+                    )
+                ]
+            },
+            target=True,
+            allow_target_malloc_kind=(
+                "string_heavy:string=2",
+                "string_heavy:closure=1",
+            ),
+        )
+
+        self.assertEqual(exit_code, 0, stderr)
+        self.assertEqual(
+            report["workloads"]["string_heavy"]["malloc_kind_allocations"],
+            {"string": 2, "closure": 1},
+        )
+
+    def test_target_gates_allow_async_forced_evacuation_fallback_trace(self):
+        exit_code, stderr, report = self.run_report(
+            {
+                "async_promise_closures": [
+                    gc_cycle(
+                        "conservative_stack",
+                        eligible=False,
+                        malloc_kinds=[
+                            {"kind": "promise", "allocated_count": 3},
+                            {"kind": "string", "allocated_count": 0},
+                            {"kind": "closure", "allocated_count": 0},
+                        ],
+                        layout_scans=layout_scans(),
+                    )
+                ],
+                "default_copying": [
+                    gc_cycle(
+                        malloc_kinds=[
+                            {"kind": "string", "allocated_count": 0},
+                            {"kind": "closure", "allocated_count": 0},
+                        ],
+                        layout_scans=layout_scans(),
+                    )
+                ],
+            },
+            target=True,
+        )
+
+        self.assertEqual(exit_code, 0, stderr)
+        self.assertEqual(
+            report["workloads"]["async_promise_closures"][
+                "fallback_reason_counts"
+            ]["conservative_stack"],
+            1,
+        )
 
 
 if __name__ == "__main__":

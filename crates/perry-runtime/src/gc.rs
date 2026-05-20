@@ -7449,7 +7449,13 @@ impl CopyingNurseryCollector {
         let old_user = (header as *mut u8).add(GC_HEADER_SIZE);
         let flags = (*header).gc_flags;
         if flags & GC_FLAG_FORWARDED != 0 {
-            return forwarding_address(header) as usize;
+            let forwarded = forwarding_address(header) as usize;
+            // Array growth also uses GC_FLAG_FORWARDED to leave a stable
+            // forwarding stub at the pre-grow address. A root may still point
+            // at that stub when copied-minor starts; following it is not
+            // enough because the current array can still be in from-space and
+            // must itself be marked, moved, and scanned.
+            return self.mark_addr(forwarded).unwrap_or(forwarded);
         }
 
         let total = (*header).size as usize;
@@ -9615,21 +9621,12 @@ fn try_rewrite_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Option<u64> {
             (bits as usize, false)
         }
     };
-    if ptr_addr == 0 || !valid_ptrs.contains(&ptr_addr) {
-        return None;
-    }
-    unsafe {
-        let header = (ptr_addr as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
-        if (*header).gc_flags & GC_FLAG_FORWARDED == 0 {
-            return None;
-        }
-        let new_user = forwarding_address(header) as usize;
-        Some(if is_nanbox {
-            tag | (new_user as u64)
-        } else {
-            new_user as u64
-        })
-    }
+    let new_user = try_rewrite_raw_addr(ptr_addr, valid_ptrs)?;
+    Some(if is_nanbox {
+        tag | (new_user as u64 & POINTER_MASK)
+    } else {
+        new_user as u64
+    })
 }
 
 fn try_rewrite_nanboxed_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Option<u64> {
@@ -9643,16 +9640,29 @@ fn try_rewrite_nanboxed_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Option
 }
 
 fn try_rewrite_raw_addr(ptr_addr: usize, valid_ptrs: &ValidPointerSet) -> Option<usize> {
-    if ptr_addr == 0 || !valid_ptrs.contains(&ptr_addr) {
+    if ptr_addr == 0 {
         return None;
     }
-    unsafe {
-        let header = (ptr_addr as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
-        if (*header).gc_flags & GC_FLAG_FORWARDED == 0 {
-            return None;
+    let mut current = ptr_addr;
+    let mut rewrote = false;
+    for _ in 0..64 {
+        if !valid_ptrs.contains(&current) {
+            return rewrote.then_some(current);
         }
-        Some(forwarding_address(header) as usize)
+        unsafe {
+            let header = (current as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
+            if (*header).gc_flags & GC_FLAG_FORWARDED == 0 {
+                return rewrote.then_some(current);
+            }
+            let next = forwarding_address(header) as usize;
+            if next == 0 || next == current {
+                return rewrote.then_some(current);
+            }
+            current = next;
+            rewrote = true;
+        }
     }
+    rewrote.then_some(current)
 }
 
 #[cold]
@@ -13567,6 +13577,62 @@ mod tests {
     }
 
     #[test]
+    fn test_copying_minor_marks_array_growth_forwarding_target() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let stale_arr = crate::array::js_array_alloc(0);
+        let mut current_arr = stale_arr;
+        let mut first_closure = 0usize;
+
+        for i in 0..50 {
+            let child = young_leaf();
+            let closure =
+                crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 1);
+            crate::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(ptr_bits(child)));
+            if i == 0 {
+                first_closure = closure as usize;
+            }
+            current_arr = crate::array::js_array_push_f64(
+                current_arr,
+                f64::from_bits(ptr_bits(closure as usize)),
+            );
+        }
+
+        assert_ne!(
+            stale_arr, current_arr,
+            "test setup should grow the array and leave a forwarding stub"
+        );
+        js_shadow_slot_set(0, ptr_bits(stale_arr as usize));
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        let first_value_bits =
+            crate::array::js_array_get_f64(arr_after as *const crate::array::ArrayHeader, 0)
+                .to_bits();
+        let closure_after = (first_value_bits & POINTER_MASK) as usize;
+        let closure_header =
+            unsafe { (closure_after as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader };
+        let capture_after_bits = unsafe {
+            let closure = closure_after as *const crate::closure::ClosureHeader;
+            assert_eq!((*closure).type_tag, crate::closure::CLOSURE_MAGIC);
+            let slot = (closure as *const u8)
+                .add(std::mem::size_of::<crate::closure::ClosureHeader>())
+                as *const u64;
+            *slot
+        };
+        let capture_after = (capture_after_bits & POINTER_MASK) as usize;
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_ne!(arr_after, stale_arr as usize);
+        assert_ne!(arr_after, current_arr as usize);
+        assert_ne!(closure_after, first_closure);
+        assert_eq!(unsafe { (*closure_header).obj_type }, GC_TYPE_CLOSURE);
+        assert!(crate::arena::pointer_in_nursery(arr_after));
+        assert!(crate::arena::pointer_in_nursery(closure_after));
+        assert!(crate::arena::pointer_in_nursery(capture_after));
+    }
+
+    #[test]
     fn test_malloc_kind_telemetry_sweep_by_kind() {
         let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         reset_malloc_kind_telemetry_for_tests();
@@ -17005,6 +17071,36 @@ mod tests {
         assert_eq!(
             global_bits, old_user as u64,
             "registered global root slot should be rewritten in place"
+        );
+
+        js_shadow_frame_pop(shadow);
+    }
+
+    #[test]
+    fn test_rewrite_mutable_root_slots_follows_forwarding_chain() {
+        let _guard = ShadowAndGlobalRootResetGuard;
+        reset_shadow_stack();
+
+        let first = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let second = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let valid_ptrs = build_valid_pointer_set();
+        let final_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+        unsafe {
+            set_forwarding_address(header_from_user_ptr(first) as *mut GcHeader, second);
+            set_forwarding_address(header_from_user_ptr(second) as *mut GcHeader, final_user);
+        }
+
+        let shadow_bits = POINTER_TAG | (first as u64 & POINTER_MASK);
+        let expected_bits = POINTER_TAG | (final_user as u64 & POINTER_MASK);
+        let shadow = js_shadow_frame_push(1);
+        js_shadow_slot_set(0, shadow_bits);
+
+        rewrite_mutable_root_slots(&valid_ptrs, None);
+
+        assert_eq!(
+            js_shadow_slot_get(0),
+            expected_bits,
+            "shadow stack slot should be rewritten through every forwarding hop"
         );
 
         js_shadow_frame_pop(shadow);

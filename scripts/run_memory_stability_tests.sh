@@ -782,6 +782,92 @@ for (let batch = 0; batch < 8; batch++) {
 console.log("default_copying:" + total);
 EOF
 
+    cat >"$out_dir/string_heavy.ts" <<'EOF'
+declare function gc(): void;
+
+let total = 0;
+let keep: string[] = [];
+for (let batch = 0; batch < 4; batch++) {
+  keep = [];
+  let text = "heap-string-seed-" + batch + "-abcdefghijklmnopqrstuvwxyz";
+  for (let i = 0; i < 21; i++) {
+    text = text + "|" + batch + ":" + i + ":payload";
+    if ((i % 3) === 0) {
+      keep.push(text);
+    }
+    total += text.length + keep.length;
+  }
+  gc();
+  for (let i = 0; i < keep.length; i++) {
+    total += keep[i].length % 97;
+  }
+  total -= keep.length;
+}
+
+console.log("string_heavy:" + total);
+EOF
+
+    cat >"$out_dir/closure_heavy.ts" <<'EOF'
+declare function gc(): void;
+
+function makeAdder(base: number, bias: any): (x: number) => number {
+  return (x: number): number => base + bias.value + x;
+}
+
+let total = 0;
+let keep: ((x: number) => number)[] = [];
+for (let batch = 0; batch < 5; batch++) {
+  keep = [];
+  for (let i = 0; i < 140; i++) {
+    const base = batch * 100 + i;
+    const bias: any = { value: (base % 13) + batch };
+    keep.push(makeAdder(base, bias));
+  }
+  gc();
+  for (let i = 0; i < keep.length; i++) {
+    total += keep[i](i);
+  }
+  total += batch * 27;
+}
+
+console.log("closure_heavy:" + total);
+EOF
+
+    cat >"$out_dir/async_promise_closures.ts" <<'EOF'
+declare function gc(): void;
+
+async function main(): Promise<number> {
+  let total = 0;
+  for (let batch = 0; batch < 4; batch++) {
+    const workers: (() => Promise<number>)[] = [];
+    for (let i = 0; i < 30; i++) {
+      const captured = batch * 20 + i;
+      const worker = async (): Promise<number> => {
+        const first = captured + 1;
+        const second = first * 2 + batch;
+        return second + captured;
+      };
+      workers.push(worker);
+    }
+    gc();
+    const tasks: Promise<number>[] = [];
+    for (let i = 0; i < workers.length; i++) {
+      tasks.push(workers[i]());
+    }
+    const results = await Promise.all(tasks);
+    for (let i = 0; i < results.length; i++) {
+      total += results[i] + i;
+    }
+    total += batch * 60;
+  }
+  return total;
+}
+
+const result = await main();
+gc();
+console.log("async_promise_closures:" + result);
+EOF
+
     cat >"$out_dir/large_object_barriers.ts" <<'EOF'
 declare function gc(): void;
 
@@ -807,6 +893,7 @@ run_target_collector_gate_workload() {
     local name="$1"
     local ts="$2"
     local expected_result="$3"
+    shift 3
     local bin="$TMPDIR/${name}_target_collector_gate"
     local compile_output="$TMPDIR/${name}_target_collector_gate_compile.$$.$RANDOM"
 
@@ -817,7 +904,7 @@ run_target_collector_gate_workload() {
         return 1
     fi
 
-    run_one "$bin" PERRY_GC_TRACE=1
+    run_one "$bin" PERRY_GC_TRACE=1 "$@"
 
     if [[ "$LAST_EXIT" -ne 0 ]]; then
         printf "  FAIL [target-gc] %-40s exit=%d\n" "$name" "$LAST_EXIT"
@@ -947,6 +1034,9 @@ run_target_collector_architecture_gates() {
 
     local workload_specs=(
         "default_copying|4852|$workloads_dir/default_copying.ts"
+        "string_heavy|17028|$workloads_dir/string_heavy.ts"
+        "closure_heavy|243150|$workloads_dir/closure_heavy.ts"
+        "async_promise_closures|18540|$workloads_dir/async_promise_closures.ts|PERRY_GEN_GC_EVACUATE=0 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
         "large_object_barriers|36052|$workloads_dir/large_object_barriers.ts"
     )
 
@@ -954,9 +1044,16 @@ run_target_collector_architecture_gates() {
     local workload_failed=0
     local spec
     for spec in "${workload_specs[@]}"; do
-        local name expected_result ts
-        IFS='|' read -r name expected_result ts <<<"$spec"
-        if run_target_collector_gate_workload "$name" "$ts" "$expected_result"; then
+        local name expected_result ts runtime_env_str
+        IFS='|' read -r name expected_result ts runtime_env_str <<<"$spec"
+        local runtime_env_args=()
+        if [[ -n "$runtime_env_str" ]]; then
+            # shellcheck disable=SC2206
+            runtime_env_args=($runtime_env_str)
+        fi
+        if run_target_collector_gate_workload \
+            "$name" "$ts" "$expected_result" \
+            "${runtime_env_args[@]+"${runtime_env_args[@]}"}"; then
             report_args+=(--workload "$name=$LAST_STDERR_FILE")
         else
             workload_failed=1
