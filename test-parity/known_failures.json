@@ -224,12 +224,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:dns/promises` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_events": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:events` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_fs": {
     "issue": "793",
     "added": "2026-05-15",
@@ -427,5 +421,11 @@
     "added": "2026-05-18",
     "category": "ci-env",
     "reason": "Brotli decompression path under node:zlib not yet implemented (cf. existing test_parity_zlib module-inventory entry). Same failure observed on #1038 pre-merge \u2014 not a regression."
+  },
+  "node-suite/events/on/async-iterator-basic": {
+    "issue": "1183",
+    "added": "2026-05-20",
+    "category": "module-inventory",
+    "reason": "#1183: node:events granular parity gap — module-level `events.on(emitter, event)` async iterator is not implemented; iterator yields no queued emitted events. This needs a real async-iterator object backed by EventEmitter listener queues rather than a small EventEmitter runtime patch."
   }
 }

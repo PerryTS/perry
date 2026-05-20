@@ -6196,6 +6196,15 @@ unsafe fn get_native_module_constant(
             _ => None,
         },
         "crypto.constants" => crypto_const(property),
+        "events" => match property {
+            "defaultMaxListeners" => Some(10.0),
+            "captureRejections" => Some(f64::from_bits(JSValue::bool(false).bits())),
+            "errorMonitor" => Some(crate::symbol::js_symbol_for(str_val("events.errorMonitor"))),
+            "captureRejectionSymbol" => {
+                Some(crate::symbol::js_symbol_for(str_val("nodejs.rejection")))
+            }
+            _ => None,
+        },
         // `zlib.constants` and the top-level Z_*/DEFLATE/INFLATE shortcuts
         // Node also exposes directly on `require('node:zlib')`.
         "zlib" => match property {
