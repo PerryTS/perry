@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 968 entries across 75 modules
+// Coverage: 969 entries across 75 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1336,6 +1336,8 @@ declare module "streams" {
 declare module "string_decoder" {
   /** stdlib */
   export class StringDecoder { [key: string]: any; }
+  /** stdlib */
+  export const encoding: any;
   /** stdlib */
   export const lastChar: any;
   /** stdlib */
