@@ -35,7 +35,7 @@ jobs:
           ./docs/i18n.sh build-all
           cp docs/CNAME docs/book/CNAME
       - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/book
       - id: deployment

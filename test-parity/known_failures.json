@@ -188,12 +188,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:child_process` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_cluster": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:cluster` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_console": {
     "issue": "793",
     "added": "2026-05-15",

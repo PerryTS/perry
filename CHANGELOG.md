@@ -2,6 +2,12 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1016 — docs(cli): list every real `--target` in `perry compile --help` (#1119)
+
+The clap doc-comment on `CompileArgs.target` listed only `ios-simulator, ios, android, ios-widget, ios-widget-simulator` — omitting `web`, `wasm`, `visionos[-simulator]`, `watchos-widget[-simulator]`, `android-widget`, `wearos-tile`, `windows`, and `linux`, even though `docs/src/cli/flags.md` already documents the full set and `--target web` is the official path for browser-runnable WASM. People scaffolding new web projects against Perry hit `perry compile --help` first, found no `web` target, and assumed it wasn't supported.
+
+Fix is doc-comment-only at `crates/perry/src/commands/compile.rs:327` — list every target the docs already cover, point at `docs/src/cli/flags.md` for the full table. No behavior change.
+
 ## v0.5.1015 — feat(stdlib): implement `node:querystring` (#1151) + fix latent SSO bugs
 
 Lands [TheHypnoo](https://github.com/TheHypnoo)'s `node:querystring` implementation as a direct cherry-pick onto main (PR #1151 went DIRTY against post-#1146 main and the contributor's fork has no "Allow edits by maintainers"). Greenfield: `escape` / `unescape` / `parse` / `stringify` + `decode` / `encode` aliases, six matching `NativeModSig` rows, API-manifest entries, and removal of `test_parity_querystring` from `known_failures.json`. Parity goes byte-for-byte against `node --experimental-strip-types`.

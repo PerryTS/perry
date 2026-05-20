@@ -1840,7 +1840,7 @@ pub(super) const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         method: "parse",
         class_filter: None,
         runtime: "js_querystring_parse",
-        args: &[NA_F64, NA_F64, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1849,7 +1849,7 @@ pub(super) const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         method: "decode",
         class_filter: None,
         runtime: "js_querystring_parse",
-        args: &[NA_F64, NA_F64, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
