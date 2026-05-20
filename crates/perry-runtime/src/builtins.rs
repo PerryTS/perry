@@ -554,8 +554,9 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 } else if gc_type == crate::gc::GC_TYPE_ARRAY {
                     // Array — format as [ elem1, elem2, ... ] matching Node.js util.inspect.
                     // Node's default depth cap is 2: anything more than 2
-                    // levels of nesting collapses to `[Array]`. `%o` raises
-                    // the cap via INSPECT_DEPTH_LIMIT (see js_util_format).
+                    // levels of nesting collapses to `[Array]`. `%o` (`%O`'s
+                    // unbounded-depth sibling) and `console.dir(v, { depth })`
+                    // both override the cap via INSPECT_DEPTH_LIMIT.
                     if depth > inspect_depth_limit() {
                         return "[Array]".to_string();
                     }
@@ -641,7 +642,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 } else if gc_type == crate::gc::GC_TYPE_OBJECT {
                     // Object — check for keys_array. Node's default depth
                     // cap is 2: anything past that collapses to `[Object]`.
-                    // `%o` raises the cap via INSPECT_DEPTH_LIMIT.
+                    // `%o` and `console.dir(v, { depth })` override via
+                    // INSPECT_DEPTH_LIMIT.
                     if depth > inspect_depth_limit() {
                         return "[Object]".to_string();
                     }
@@ -906,8 +908,9 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
 
                     if gc_type == crate::gc::GC_TYPE_ARRAY {
                         // Node's default depth cap: beyond 2 levels of
-                        // nesting, arrays collapse to `[Array]`. `%o` raises
-                        // the cap via INSPECT_DEPTH_LIMIT.
+                        // nesting, arrays collapse to `[Array]`. `%o` and
+                        // `console.dir(v, { depth })` override via
+                        // INSPECT_DEPTH_LIMIT.
                         if depth > inspect_depth_limit() {
                             return "[Array]".to_string();
                         }
@@ -934,8 +937,9 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         }
                     } else if gc_type == crate::gc::GC_TYPE_OBJECT {
                         // Past Node's default depth cap, nested objects
-                        // collapse to the literal token `[Object]`. `%o`
-                        // raises the cap via INSPECT_DEPTH_LIMIT.
+                        // collapse to the literal token `[Object]`. `%o` and
+                        // `console.dir(v, { depth })` override via
+                        // INSPECT_DEPTH_LIMIT.
                         if depth > inspect_depth_limit() {
                             return "[Object]".to_string();
                         }
@@ -2685,6 +2689,90 @@ pub extern "C" fn js_console_clear() {
     if std::io::stdout().is_terminal() {
         print!("\x1b[2J\x1b[H");
     }
+}
+
+/// Decode `options.depth` from a NaN-boxed `console.dir(value, options)`
+/// second arg. Mirrors Node:
+///   - missing key / non-object options → return `None` (caller defaults to 2)
+///   - `null` → `Some(usize::MAX)` (unlimited)
+///   - non-negative integer → that many levels of nesting
+///   - negative or non-finite → clamp to 0 (matches Node's coerce-to-zero)
+///
+/// # Safety
+///
+/// `options_value` must be a valid NaN-boxed JSValue.
+unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize> {
+    let jsval = JSValue::from_bits(options_value.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let ptr: *const crate::array::ArrayHeader = jsval.as_pointer();
+    if ptr.is_null() || (ptr as usize) < 0x10000 || ((ptr as u64) >> 48) != 0 {
+        return None;
+    }
+    // Confirm this is a regular object before dereferencing as ObjectHeader.
+    let gc_header =
+        (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    let obj_ptr = ptr as *const crate::object::ObjectHeader;
+    let keys_array = (*obj_ptr).keys_array;
+    if keys_array.is_null() {
+        return None;
+    }
+    let key_count = crate::array::js_array_length(keys_array) as usize;
+    for i in 0..key_count {
+        let key_val = crate::array::js_array_get(keys_array, i as u32);
+        if !key_val.is_string() {
+            continue;
+        }
+        let key_ptr = key_val.as_string_ptr();
+        if key_ptr.is_null() {
+            continue;
+        }
+        let key_len = (*key_ptr).byte_len as usize;
+        let key_data = (key_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let key_bytes = std::slice::from_raw_parts(key_data, key_len);
+        if key_bytes != b"depth" {
+            continue;
+        }
+        let raw = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
+        let v = JSValue::from_bits(raw.to_bits());
+        if v.is_null() {
+            return Some(usize::MAX);
+        }
+        if v.is_int32() {
+            let n = v.as_int32();
+            return Some(if n < 0 { 0 } else { n as usize });
+        }
+        if v.is_number() {
+            let n = v.as_number();
+            if n.is_nan() {
+                return Some(0);
+            }
+            if n.is_infinite() {
+                return if n > 0.0 { Some(usize::MAX) } else { Some(0) };
+            }
+            let n_i = n as i64;
+            return Some(if n_i < 0 { 0 } else { n_i as usize });
+        }
+        return None;
+    }
+    None
+}
+
+/// `console.dir(value, options)` — formats `value` with the same surface used
+/// by `console.log`, but honors `options.depth` (Node default: 2). Issue #1199.
+///
+/// # Safety
+///
+/// Both args must be valid NaN-boxed JSValues.
+#[no_mangle]
+pub unsafe extern "C" fn js_console_dir_with_options(value: f64, options_value: f64) {
+    let max_depth = decode_dir_depth_option(options_value).unwrap_or(2);
+    let _guard = InspectDepthLimitGuard::new(max_depth);
+    println!("{}", format_jsvalue(value, 0));
 }
 
 // === console.table ===
