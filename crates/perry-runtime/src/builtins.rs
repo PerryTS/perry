@@ -598,7 +598,15 @@ fn format_jsvalue(value: f64, depth: usize) -> String {
                     {
                         format_object_as_json(obj_ptr, depth)
                     } else {
-                        "[object Object]".to_string()
+                        // No keys_array → either a freshly-allocated empty
+                        // object or an object whose keys are not tracked
+                        // through this slot. Node's `console.log` /
+                        // `util.inspect` prints `{}` for empty objects;
+                        // `String(obj)` / template-literal coercion print
+                        // `[object Object]` and go through
+                        // `js_jsvalue_to_string` (a separate path), so
+                        // returning `{}` here doesn't break that contract.
+                        "{}".to_string()
                     }
                 } else if gc_type == crate::gc::GC_TYPE_MAP {
                     "Map {}".to_string()

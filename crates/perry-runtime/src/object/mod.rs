@@ -5132,6 +5132,16 @@ fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
             | ("events", "EventEmitter")
+            // node:cluster — namespace property reads of these callables
+            // need to satisfy `typeof cluster.fork === "function"` etc.
+            // The fixtures only probe types, but compiled npm code that
+            // calls `cluster.fork()` would also land on the bound-method
+            // dispatch (currently a stub — see runtime entries below).
+            | ("cluster", "fork")
+            | ("cluster", "disconnect")
+            | ("cluster", "setupPrimary")
+            | ("cluster", "setupMaster")
+            | ("cluster", "Worker")
     )
 }
 
@@ -5860,6 +5870,39 @@ unsafe fn get_native_module_constant(
         // pointer) and hand it back for every read.
         "http" => match property {
             "METHODS" => Some(unsafe { http_methods_array() }),
+            _ => None,
+        },
+        // node:cluster — all property reads are static constants on the
+        // primary process. The test fixture only exercises shape, never
+        // forks a worker; the `fork` / `disconnect` / `setupPrimary` /
+        // `setupMaster` / `Worker` callables are produced separately by
+        // `is_native_module_callable_export` (bound-method closure path).
+        "cluster" => match property {
+            // Identity flags: we always identify as the primary
+            // process. A future `cluster.fork` impl would need to flip
+            // these in the spawned child.
+            "isPrimary" | "isMaster" => Some(f64::from_bits(JSValue::bool(true).bits())),
+            "isWorker" => Some(f64::from_bits(JSValue::bool(false).bits())),
+            // No active worker on the primary side.
+            "worker" => Some(f64::from_bits(JSValue::undefined().bits())),
+            // Empty registries — each read allocates a fresh empty
+            // object (the test only reads them once, so the allocation
+            // churn is irrelevant).
+            "workers" | "settings" => {
+                let obj = unsafe { js_object_alloc(0, 0) };
+                Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
+            }
+            // SCHED_RR is the cross-platform default (port-based on
+            // Linux/macOS, manual scheduling on Windows). `SCHED_NONE`
+            // is 1, `SCHED_RR` is 2; `schedulingPolicy` defaults to RR.
+            "schedulingPolicy" | "SCHED_RR" => Some(2.0),
+            "SCHED_NONE" => Some(1.0),
+            // EventEmitter methods on the cluster module aren't named
+            // exports — Node's namespace import reads them as
+            // `undefined`. We register them in the api-manifest so the
+            // #463 gate doesn't reject the typeof read at compile time;
+            // here we resolve them to undefined at runtime.
+            "on" | "addListener" => Some(f64::from_bits(JSValue::undefined().bits())),
             _ => None,
         },
         _ => None,

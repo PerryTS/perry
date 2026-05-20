@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 949 entries across 75 modules
+// Coverage: 965 entries across 76 modules
 
 declare module "@perryts/google-auth" {
   /** stdlib */
@@ -124,6 +124,41 @@ declare module "child_process" {
   export function spawn(...args: any[]): any;
   /** stdlib */
   export function spawnSync(...args: any[]): any;
+}
+
+declare module "cluster" {
+  /** stdlib */
+  export class Worker { [key: string]: any; }
+  /** stdlib */
+  export const SCHED_NONE: any;
+  /** stdlib */
+  export const SCHED_RR: any;
+  /** stdlib */
+  export const addListener: any;
+  /** stdlib */
+  export const isMaster: any;
+  /** stdlib */
+  export const isPrimary: any;
+  /** stdlib */
+  export const isWorker: any;
+  /** stdlib */
+  export const on: any;
+  /** stdlib */
+  export const schedulingPolicy: any;
+  /** stdlib */
+  export const settings: any;
+  /** stdlib */
+  export const worker: any;
+  /** stdlib */
+  export const workers: any;
+  /** stdlib */
+  export function disconnect(...args: any[]): any;
+  /** stdlib */
+  export function fork(...args: any[]): any;
+  /** stdlib */
+  export function setupMaster(...args: any[]): any;
+  /** stdlib */
+  export function setupPrimary(...args: any[]): any;
 }
 
 declare module "commander" {

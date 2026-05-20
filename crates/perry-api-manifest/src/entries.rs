@@ -85,6 +85,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "readline",
     "string_decoder",
     "querystring",
+    "cluster",
     "tty",
     "process",
     "perry/tui",
@@ -1861,6 +1862,35 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // at the same address.
     method("querystring", "decode", false, None),
     method("querystring", "encode", false, None),
+    // node:cluster — shape-only surface. The fixture probes
+    // typeof properties + reads constants; we never actually fork.
+    // Methods are wired through `is_native_module_callable_export`
+    // (bound-method closure path) so `typeof cluster.fork === "function"`
+    // holds without us implementing a real fork.
+    method("cluster", "fork", false, None),
+    method("cluster", "disconnect", false, None),
+    method("cluster", "setupPrimary", false, None),
+    method("cluster", "setupMaster", false, None),
+    class("cluster", "Worker"),
+    property("cluster", "isPrimary"),
+    property("cluster", "isMaster"),
+    property("cluster", "isWorker"),
+    property("cluster", "worker"),
+    property("cluster", "workers"),
+    property("cluster", "settings"),
+    property("cluster", "schedulingPolicy"),
+    property("cluster", "SCHED_RR"),
+    property("cluster", "SCHED_NONE"),
+    // `cluster.on` / `cluster.addListener` exist as EventEmitter
+    // prototype methods on the cluster module ITSELF in Node, but
+    // `import * as cluster from "node:cluster"` reads them as named
+    // exports — and there is no `on` / `addListener` named export.
+    // Node's parity fixture prints "undefined" for both. Register them
+    // as properties so the #463 strict gate doesn't bail out at compile
+    // time; `get_native_module_constant` returns `undefined` at
+    // runtime.
+    property("cluster", "on"),
+    property("cluster", "addListener"),
     // ===========================================================
     // #513 Phase A: backfill receiver-less surface for modules that
     // previously had zero entries. Without these, `module_has_any_entries`

@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 949 entries across 75 modules.
+Total: 965 entries across 76 modules.
 
 ## Modules
 
@@ -17,6 +17,7 @@ Total: 949 entries across 75 modules.
 - [`buffer`](#buffer)
 - [`cheerio`](#cheerio)
 - [`child_process`](#child-process)
+- [`cluster`](#cluster)
 - [`commander`](#commander)
 - [`cron`](#cron)
 - [`crypto`](#crypto)
@@ -224,6 +225,33 @@ Total: 949 entries across 75 modules.
 - `fork` — module
 - `spawn` — module
 - `spawnSync` — module
+
+## `cluster`
+
+### Classes
+
+- `Worker`
+
+### Methods
+
+- `disconnect` — module
+- `fork` — module
+- `setupMaster` — module
+- `setupPrimary` — module
+
+### Properties
+
+- `SCHED_NONE`
+- `SCHED_RR`
+- `addListener`
+- `isMaster`
+- `isPrimary`
+- `isWorker`
+- `on`
+- `schedulingPolicy`
+- `settings`
+- `worker`
+- `workers`
 
 ## `commander`
 
