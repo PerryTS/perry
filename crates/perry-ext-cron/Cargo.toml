@@ -15,3 +15,4 @@ chrono = "0.4"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
+perry-runtime.workspace = true

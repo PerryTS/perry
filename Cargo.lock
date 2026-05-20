@@ -5280,6 +5280,7 @@ name = "perry-ext-commander"
 version = "0.5.1018"
 dependencies = [
  "perry-ffi",
+ "perry-runtime",
 ]
 
 [[package]]
@@ -5289,6 +5290,7 @@ dependencies = [
  "chrono",
  "cron",
  "perry-ffi",
+ "perry-runtime",
 ]
 
 [[package]]
@@ -5390,6 +5392,7 @@ dependencies = [
  "lazy_static",
  "perry-ext-ws",
  "perry-ffi",
+ "perry-runtime",
  "rustls",
  "rustls-pemfile",
  "serde_json",
@@ -5471,6 +5474,7 @@ name = "perry-ext-net"
 version = "0.5.1018"
 dependencies = [
  "perry-ffi",
+ "perry-runtime",
  "rustls",
  "rustls-native-certs",
  "tokio",
@@ -5534,6 +5538,7 @@ version = "0.5.1018"
 dependencies = [
  "lazy_static",
  "perry-ffi",
+ "perry-runtime",
 ]
 
 [[package]]
@@ -5561,6 +5566,7 @@ dependencies = [
  "futures-util",
  "lazy_static",
  "perry-ffi",
+ "perry-runtime",
  "tokio",
  "tokio-tungstenite 0.28.0",
 ]

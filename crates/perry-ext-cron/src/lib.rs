@@ -9,9 +9,10 @@
 //!     callbacks via `JsClosure::call0`, and re-arms next deadlines.
 //!   - `js_cron_timer_has_pending()` lets the event loop know whether
 //!     to keep the process alive.
-//!   - GC root scanner pins each job's callback closure pointer so a
-//!     malloc-triggered sweep between scheduling and tick can't free
-//!     it (issue #35 pattern).
+//!   - GC root scanner exposes each job's callback closure pointer so a
+//!     malloc-triggered sweep between scheduling and tick can't free it
+//!     and copied-minor GC can rewrite moved callbacks in place (issue
+//!     #35 pattern).
 //!
 //! Codegen calls `js_cron_timer_tick` and `js_cron_timer_has_pending`
 //! by symbol name, so as long as the `.a` perry-ext-cron produces
@@ -21,8 +22,9 @@
 use chrono::Utc;
 use cron::Schedule;
 use perry_ffi::{
-    alloc_string, gc_register_root_scanner, get_handle, js_array_alloc, js_array_push,
-    register_handle, Handle, JsClosure, JsString, JsValue, RawClosureHeader, StringHeader,
+    alloc_string, gc_register_mutable_root_scanner, get_handle, iter_handles_of_mut,
+    js_array_alloc, js_array_push, register_handle, GcRootVisitor, Handle, JsClosure, JsString,
+    JsValue, RawClosureHeader, StringHeader,
 };
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,7 +33,6 @@ use std::time::Instant;
 
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 
 pub struct CronJobHandle {
     pub schedule: Schedule,
@@ -69,20 +70,21 @@ fn next_cron_instant(schedule: &Schedule) -> Option<Instant> {
 
 fn ensure_gc_scanner_registered() {
     CRON_GC_REGISTERED.call_once(|| {
-        gc_register_root_scanner(scan_cron_roots);
+        gc_register_mutable_root_scanner(scan_cron_roots);
     });
 }
 
-fn scan_cron_roots(mark: &mut dyn FnMut(f64)) {
-    if let Ok(q) = CRON_TIMERS.lock() {
-        for timer in q.iter() {
-            if !timer.cleared && timer.callback != 0 {
-                let boxed =
-                    f64::from_bits(POINTER_TAG | (timer.callback as u64 & 0x0000_FFFF_FFFF_FFFF));
-                mark(boxed);
+fn scan_cron_roots(visitor: &mut GcRootVisitor<'_>) {
+    if let Ok(mut q) = CRON_TIMERS.lock() {
+        for timer in q.iter_mut() {
+            if !timer.cleared {
+                visitor.visit_i64_slot(&mut timer.callback);
             }
         }
     }
+    iter_handles_of_mut::<CronJobHandle, _>(|job| {
+        visitor.visit_i64_slot(&mut job.callback);
+    });
 }
 
 fn remove_cron_timer(id: i64) {
@@ -386,6 +388,88 @@ pub extern "C" fn js_cron_clear_timeout(handle: Handle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_ffi::{drop_handle, get_handle};
+    use std::sync::{Mutex, MutexGuard};
+
+    static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct GcTestGuard {
+        frame: u64,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl GcTestGuard {
+        fn new() -> Self {
+            let lock = GC_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            perry_runtime::gc::js_gc_write_barriers_emitted(1);
+            let frame = perry_runtime::gc::js_shadow_frame_push(0);
+            Self { frame, _lock: lock }
+        }
+    }
+
+    impl Drop for GcTestGuard {
+        fn drop(&mut self) {
+            perry_runtime::gc::js_shadow_frame_pop(self.frame);
+            perry_runtime::gc::js_gc_write_barriers_emitted(0);
+        }
+    }
+
+    fn young_gc_root() -> i64 {
+        perry_runtime::arena::arena_alloc_gc(32, 8, perry_runtime::gc::GC_TYPE_STRING) as i64
+    }
+
+    fn assert_rewritten(before: i64, after: i64) {
+        assert_ne!(after, before);
+        assert!(perry_runtime::arena::pointer_in_nursery(after as usize));
+    }
+
+    #[test]
+    fn gc_mutable_scanner_rewrites_timer_and_stopped_job_roots() {
+        let _guard = GcTestGuard::new();
+        perry_ffi::gc_register_mutable_root_scanner(scan_cron_roots);
+
+        let schedule = Schedule::from_str("0 0 * * * *").expect("valid schedule");
+        let running = Arc::new(AtomicBool::new(true));
+        let timer_callback = young_gc_root();
+        let timer_id = -9_001;
+        CRON_TIMERS.lock().unwrap().push(CronTimer {
+            id: timer_id,
+            schedule: schedule.clone(),
+            callback: timer_callback,
+            next_deadline: Instant::now(),
+            running: running.clone(),
+            cleared: false,
+        });
+
+        let stopped_callback = young_gc_root();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let handle = register_handle(CronJobHandle {
+            schedule,
+            running: stopped,
+            callback: stopped_callback,
+            timer_id: -9_002,
+        });
+
+        let _ = perry_runtime::gc::gc_collect_minor();
+
+        {
+            let timers = CRON_TIMERS.lock().unwrap();
+            let timer = timers
+                .iter()
+                .find(|timer| timer.id == timer_id)
+                .expect("timer should remain live");
+            assert_rewritten(timer_callback, timer.callback);
+            let job = get_handle::<CronJobHandle>(handle).expect("job handle should remain live");
+            assert_rewritten(stopped_callback, job.callback);
+        }
+        CRON_TIMERS
+            .lock()
+            .unwrap()
+            .retain(|timer| timer.id != timer_id);
+        drop_handle(handle);
+    }
 
     #[test]
     fn validate_5_field_cron() {
@@ -410,6 +494,9 @@ mod tests {
 
     #[test]
     fn schedule_then_stop() {
+        let _lock = GC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let s = alloc_string("0 0 * * * *"); // top of every hour
         let h = unsafe { js_cron_schedule(s.as_raw(), 0xDEADBEEF_i64) };
         assert!(h >= 0);
@@ -417,6 +504,7 @@ mod tests {
         assert_eq!(js_cron_timer_has_pending(), 1);
         js_cron_job_stop(h);
         assert_eq!(js_cron_job_is_running(h).to_bits(), TAG_FALSE);
+        drop_handle(h);
     }
 
     #[test]

@@ -28,9 +28,10 @@
 use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
 use perry_ffi::{
-    alloc_string, gc_register_root_scanner, get_handle_mut, iter_handles_of, notify_main_thread,
-    register_handle, spawn_blocking_with_reactor as spawn_blocking, take_handle, Handle, JsClosure,
-    JsString, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
+    alloc_string, gc_register_mutable_root_scanner, get_handle_mut, iter_handles_of_mut,
+    notify_main_thread, register_handle, spawn_blocking_with_reactor as spawn_blocking,
+    take_handle, GcRootVisitor, Handle, JsClosure, JsString, JsValue, ObjectHeader,
+    RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -104,30 +105,24 @@ static WS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 fn ensure_gc_scanner_registered() {
     WS_GC_REGISTERED.call_once(|| {
-        gc_register_root_scanner(scan_ws_roots);
+        gc_register_mutable_root_scanner(scan_ws_roots);
     });
 }
 
-fn scan_ws_roots(mark: &mut dyn FnMut(f64)) {
-    let mark_cb = |cb: i64, mark: &mut dyn FnMut(f64)| {
-        if cb != 0 {
-            let boxed = f64::from_bits(POINTER_TAG | (cb as u64 & POINTER_MASK));
-            mark(boxed);
-        }
-    };
-    if let Ok(per_client) = WS_CLIENT_LISTENERS.lock() {
-        for client in per_client.values() {
-            for cb_vec in client.listeners.values() {
-                for &cb in cb_vec.iter() {
-                    mark_cb(cb, mark);
+fn scan_ws_roots(visitor: &mut GcRootVisitor<'_>) {
+    if let Ok(mut per_client) = WS_CLIENT_LISTENERS.lock() {
+        for client in per_client.values_mut() {
+            for cb_vec in client.listeners.values_mut() {
+                for cb in cb_vec.iter_mut() {
+                    visitor.visit_i64_slot(cb);
                 }
             }
         }
     }
-    iter_handles_of::<WsServerHandle, _>(|server| {
-        for cb_vec in server.listeners.values() {
-            for &cb in cb_vec.iter() {
-                mark_cb(cb, mark);
+    iter_handles_of_mut::<WsServerHandle, _>(|server| {
+        for cb_vec in server.listeners.values_mut() {
+            for cb in cb_vec.iter_mut() {
+                visitor.visit_i64_slot(cb);
             }
         }
     });
@@ -1220,11 +1215,83 @@ fn listeners_on_server(handle: Handle, event: &str) -> Vec<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_ffi::{drop_handle, get_handle, register_handle};
+    use std::sync::{Mutex, MutexGuard};
+
+    static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct GcTestGuard {
+        frame: u64,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl GcTestGuard {
+        fn new() -> Self {
+            let lock = GC_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            perry_runtime::gc::js_gc_write_barriers_emitted(1);
+            let frame = perry_runtime::gc::js_shadow_frame_push(0);
+            Self { frame, _lock: lock }
+        }
+    }
+
+    impl Drop for GcTestGuard {
+        fn drop(&mut self) {
+            perry_runtime::gc::js_shadow_frame_pop(self.frame);
+            perry_runtime::gc::js_gc_write_barriers_emitted(0);
+        }
+    }
+
+    fn young_gc_root() -> i64 {
+        perry_runtime::arena::arena_alloc_gc(32, 8, perry_runtime::gc::GC_TYPE_STRING) as i64
+    }
+
+    fn assert_rewritten(before: i64, after: i64) {
+        assert_ne!(after, before);
+        assert!(perry_runtime::arena::pointer_in_nursery(after as usize));
+    }
 
     #[test]
     fn gc_scanner_registration_idempotent() {
         ensure_gc_scanner_registered();
         ensure_gc_scanner_registered();
+    }
+
+    #[test]
+    fn gc_mutable_scanner_rewrites_client_and_server_listener_roots() {
+        let _guard = GcTestGuard::new();
+        perry_ffi::gc_register_mutable_root_scanner(scan_ws_roots);
+
+        let client_id = usize::MAX - 9_001;
+        let client_callback = young_gc_root();
+        WS_CLIENT_LISTENERS.lock().unwrap().insert(
+            client_id,
+            WsClientListeners {
+                listeners: HashMap::from([("message".to_string(), vec![client_callback])]),
+            },
+        );
+
+        let server_callback = young_gc_root();
+        let server_handle = register_handle(WsServerHandle {
+            listeners: HashMap::from([("connection".to_string(), vec![server_callback])]),
+            port: 0,
+            is_listening: false,
+            client_ids: Vec::new(),
+            shutdown_tx: None,
+        });
+
+        let _ = perry_runtime::gc::gc_collect_minor();
+
+        {
+            let clients = WS_CLIENT_LISTENERS.lock().unwrap();
+            assert_rewritten(client_callback, clients[&client_id].listeners["message"][0]);
+            let server = get_handle::<WsServerHandle>(server_handle)
+                .expect("server handle should remain live");
+            assert_rewritten(server_callback, server.listeners["connection"][0]);
+        }
+        WS_CLIENT_LISTENERS.lock().unwrap().remove(&client_id);
+        drop_handle(server_handle);
     }
 
     #[test]
