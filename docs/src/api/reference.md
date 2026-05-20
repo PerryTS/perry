@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 949 entries across 75 modules.
+Total: 955 entries across 75 modules.
 
 ## Modules
 
@@ -835,10 +835,14 @@ Total: 949 entries across 75 modules.
 ### Methods
 
 - `arch` — module
+- `availableParallelism` — module
 - `cpus` — module
+- `endianness` — module
 - `freemem` — module
 - `homedir` — module
 - `hostname` — module
+- `loadavg` — module
+- `machine` — module
 - `networkInterfaces` — module
 - `platform` — module
 - `release` — module
@@ -847,11 +851,13 @@ Total: 949 entries across 75 modules.
 - `type` — module
 - `uptime` — module
 - `userInfo` — module
+- `version` — module
 
 ### Properties
 
 - `EOL`
 - `constants`
+- `devNull`
 
 ## `path`
 

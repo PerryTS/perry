@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 949 entries across 75 modules
+// Coverage: 955 entries across 75 modules
 
 declare module "@perryts/google-auth" {
   /** stdlib */
@@ -566,15 +566,25 @@ declare module "os" {
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  export const devNull: any;
+  /** stdlib */
   export function arch(...args: any[]): any;
   /** stdlib */
+  export function availableParallelism(...args: any[]): any;
+  /** stdlib */
   export function cpus(...args: any[]): any;
+  /** stdlib */
+  export function endianness(...args: any[]): any;
   /** stdlib */
   export function freemem(...args: any[]): any;
   /** stdlib */
   export function homedir(...args: any[]): any;
   /** stdlib */
   export function hostname(...args: any[]): any;
+  /** stdlib */
+  export function loadavg(...args: any[]): any;
+  /** stdlib */
+  export function machine(...args: any[]): any;
   /** stdlib */
   export function networkInterfaces(...args: any[]): any;
   /** stdlib */
@@ -591,6 +601,8 @@ declare module "os" {
   export function uptime(...args: any[]): any;
   /** stdlib */
   export function userInfo(...args: any[]): any;
+  /** stdlib */
+  export function version(...args: any[]): any;
 }
 
 declare module "path" {
