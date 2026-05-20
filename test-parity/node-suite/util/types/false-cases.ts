@@ -1,0 +1,11 @@
+import * as util from "node:util";
+const isArrayBuffer = util.types.isArrayBuffer;
+const isArrayBufferView = util.types.isArrayBufferView;
+const isTypedArray = util.types.isTypedArray;
+const isMap = util.types.isMap;
+const isSet = util.types.isSet;
+console.log("array-buffer false:", isArrayBuffer({}));
+console.log("array-buffer-view false:", isArrayBufferView({}));
+console.log("typed-array false:", isTypedArray(new DataView(new ArrayBuffer(2))));
+console.log("map false:", isMap({}));
+console.log("set false:", isSet([]));

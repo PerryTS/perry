@@ -540,6 +540,39 @@ pub(crate) fn lower_native_method_call(
         }
     }
 
+    // Node util.types predicate calls lower as receiver-less
+    // NativeMethodCall { module: "util", class_name: Some("types"), ... }.
+    // Route them explicitly so `util.types.isX(value)` does not fall through
+    // to the native-module null-receiver sentinel.
+    if ((module == "util" && class_name == Some("types"))
+        || (module == "util/types" && class_name.is_none()))
+        && object.is_none()
+    {
+        let runtime = match method {
+            "isPromise" => Some("js_util_types_is_promise"),
+            "isArrayBuffer" | "isAnyArrayBuffer" => Some("js_util_types_is_array_buffer"),
+            "isArrayBufferView" => Some("js_util_types_is_array_buffer_view"),
+            "isTypedArray" => Some("js_util_types_is_typed_array"),
+            "isUint8Array" => Some("js_util_types_is_uint8_array"),
+            "isUint16Array" => Some("js_util_types_is_uint16_array"),
+            "isInt32Array" => Some("js_util_types_is_int32_array"),
+            "isFloat64Array" => Some("js_util_types_is_float64_array"),
+            "isMap" => Some("js_util_types_is_map"),
+            "isSet" => Some("js_util_types_is_set"),
+            "isDate" => Some("js_util_types_is_date"),
+            "isRegExp" => Some("js_util_types_is_reg_exp"),
+            _ => None,
+        };
+        if let Some(runtime) = runtime {
+            let value = if let Some(first) = args.first() {
+                lower_expr(ctx, first)?
+            } else {
+                crate::nanbox::double_literal(0.0)
+            };
+            return Ok(ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &value)]));
+        }
+    }
+
     if module == "jsonwebtoken" && method == "sign" && object.is_none() {
         return lower_jsonwebtoken_sign(ctx, args);
     }

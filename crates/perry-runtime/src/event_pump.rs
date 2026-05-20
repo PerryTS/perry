@@ -61,6 +61,16 @@ static PUMP: Pump = Pump {
 ///
 /// `js_wait_for_event` reads `NOTIFIED` first; if true, it consumes it
 /// and returns immediately. Otherwise it takes the mutex + cvar path.
+///
+/// **#1114 nuance**: the NOTIFIED fast-path is **not** treated as "real
+/// progress" for the spin-throttle below — every `js_promise_resolve`,
+/// `js_async_step_chain`, and net/ws/http event push calls
+/// `js_notify_main_thread`, so a hot async tick that does any internal
+/// promise work flips NOTIFIED on every iteration. Counting those as
+/// progress would mean the streak counter can never accumulate, and the
+/// throttle becomes a no-op exactly when it's needed. So the fast-path
+/// leaves the streak untouched (neither increments nor resets it); only
+/// an actual `cvar.wait_timeout` sleep counts as progress.
 static NOTIFIED: AtomicBool = AtomicBool::new(false);
 static WAITER_COUNT: AtomicI64 = AtomicI64::new(0);
 
@@ -88,12 +98,14 @@ const IDLE_CAP_MS: u64 = 1000;
 /// (a real 0 ms `setTimeout`/`setImmediate`, or a just-due timer the
 /// loop body reaps within an iteration or two). So we only throttle a
 /// *sustained* spin: count consecutive immediate budget-0 returns that
-/// saw no notify and no real wait; once the streak crosses
+/// were not separated by a real condvar sleep; once the streak crosses
 /// `SPIN_THROTTLE_AFTER`, sleep `SPIN_THROTTLE_SLEEP` before returning.
 /// That caps a runaway loop at ~1 kHz (≤1 ms added dispatch latency —
 /// well inside Node's own nested-timer clamping) while a normal program
-/// never reaches the threshold. Any notify or real condvar sleep resets
-/// the streak, so the designed sub-µs async hot path is untouched.
+/// never reaches the threshold. A real `cvar.wait_timeout` sleep resets
+/// the streak; the NOTIFIED-fast-path return does **not** (see comment
+/// on `NOTIFIED`), because hot async work flips NOTIFIED every
+/// iteration and would otherwise mask a true wedge.
 ///
 /// Escape hatch: `PERRY_SPIN_THROTTLE=0` (or `off`/`false`) restores the
 /// old pure-spin behaviour for bisection, mirroring `PERRY_GEN_GC` etc.
@@ -161,11 +173,19 @@ pub extern "C" fn js_notify_main_thread() {
 #[no_mangle]
 pub extern "C" fn js_wait_for_event() {
     // FAST PATH: a notify was already issued since the last wait. The
-    // hot async/await steady-state hits this every iteration. A real
-    // notify is genuine progress — clear any accumulated spin streak so
-    // the designed sub-µs async path never trips the #1114 throttle.
+    // hot async/await steady-state hits this every iteration.
+    //
+    // #1114: we deliberately do **not** reset the spin streak here.
+    // `js_notify_main_thread` is called from inside every promise
+    // resolution and every async-step chain, so a tight JobLoop tick
+    // that does any internal async work flips NOTIFIED on essentially
+    // every iteration of the event loop — resetting the streak here
+    // means the throttle can never accumulate enough consecutive
+    // budget==0 returns to fire, and the wedge it's meant to catch
+    // (timer deadline pinned in the past + hot notifies) silently
+    // pegs a core. Only `cvar.wait_timeout` actually sleeping counts
+    // as "progress" for streak-reset purposes.
     if NOTIFIED.swap(false, Ordering::Acquire) {
-        spin_streak_reset();
         return;
     }
 
@@ -200,11 +220,6 @@ pub extern "C" fn js_wait_for_event() {
         }
         return;
     }
-    // We're about to actually wait (or take the under-lock notify
-    // recheck) — that's genuine progress / real blocking, so the spin
-    // streak is broken regardless of which sub-path we exit through.
-    spin_streak_reset();
-
     // Slow path: take the cvar mutex and sleep on it. Mark ourselves
     // as a waiter first so concurrent notifiers go through the
     // mutex+cvar path (they won't see our wait if we registered after
@@ -214,6 +229,9 @@ pub extern "C" fn js_wait_for_event() {
     let mut flag = PUMP.flag.lock().unwrap();
     // Re-check NOTIFIED under the lock — a producer may have set it
     // between our atomic-load above and the WAITER_COUNT increment.
+    // This is equivalent to the fast-path return at the top of the
+    // function (just under the mutex), so — like the fast path — it
+    // does **not** reset the spin streak. #1114.
     if NOTIFIED.swap(false, Ordering::Acquire) || *flag {
         *flag = false;
         WAITER_COUNT.fetch_sub(1, Ordering::Release);
@@ -226,6 +244,10 @@ pub extern "C" fn js_wait_for_event() {
     *new_flag = false;
     WAITER_COUNT.fetch_sub(1, Ordering::Release);
     NOTIFIED.store(false, Ordering::Release);
+    // We actually slept on the cvar (even if the timeout was short or a
+    // spurious wakeup fired) — that's the one path that yielded the
+    // core, so it's the only one allowed to reset the streak.
+    spin_streak_reset();
 }
 
 #[cfg(test)]
@@ -389,20 +411,91 @@ mod tests {
             throttled
         );
 
-        // A real notify clears the streak so the designed sub-µs async
-        // hot path is never throttled: even right after the burst above,
-        // a notify makes the next call return immediately.
+        // A pending notify still returns immediately via the fast path
+        // — the sub-µs async hot path is preserved when there's actual
+        // work to drain — but the streak intentionally persists across
+        // it so an interleaved notify-then-budget==0 wedge can't mask
+        // itself (see `notified_interleave_does_not_mask_wedge` below).
         js_notify_main_thread();
         let t2 = Instant::now();
-        js_wait_for_event(); // consumes NOTIFIED, resets streak
+        js_wait_for_event(); // consumes NOTIFIED, returns immediately
         assert!(
             t2.elapsed() < Duration::from_millis(5),
-            "notify did not reset the spin streak: {:?}",
+            "notify fast-path was not zero-latency: {:?}",
             t2.elapsed()
         );
 
         // Cleanup so the perpetually-due timer can't leak into another
         // serialized test.
+        crate::timer::js_timer_tick();
+        NOTIFIED.swap(false, Ordering::Acquire);
+    }
+
+    /// #1114 regression: the JobLoop-shape wedge interleaves
+    /// `js_notify_main_thread` (from promise resolutions / async-step
+    /// chains during a busy tick) with `budget_ms == 0` returns (from
+    /// a timer/interval deadline that doesn't advance). The original
+    /// throttle reset the streak on every notify fast-path hit, so the
+    /// budget-0 counter could never accumulate to the threshold and
+    /// the throttle was structurally bypassed — CPU pegged at 99 % and
+    /// every HTTP route timed out.
+    ///
+    /// This test alternates notify + budget-0 calls past the threshold
+    /// and asserts that the throttle still fires. With the bug, no
+    /// single post-threshold call ever takes more than a few µs (the
+    /// notify path keeps resetting). With the fix, at least one of the
+    /// budget-0 calls after the warm-up sleeps for the throttle delay.
+    #[test]
+    fn notified_interleave_does_not_mask_wedge() {
+        let _g = SERIAL.lock().unwrap();
+        assert!(
+            spin_throttle_enabled(),
+            "throttle must be on by default for this test"
+        );
+
+        // Perpetually-due timer = budget_ms == 0 on every call.
+        crate::timer::js_set_timeout(0.0);
+
+        let mut throttled = Duration::ZERO;
+        // Retry loop guards against a parallel test pushing a notify
+        // through in the gap between our notify and our wait — a
+        // working throttle yields a ≥700 µs call within a few attempts,
+        // a broken one never does (the streak never accumulates).
+        for _ in 0..8 {
+            NOTIFIED.swap(false, Ordering::Acquire);
+            spin_streak_reset();
+            // Warm-up: alternate notify and wait past the threshold.
+            // Under the original code each notify reset the streak so
+            // the threshold was never crossed; under the fix the
+            // budget-0 streak accumulates uninterrupted.
+            for _ in 0..=SPIN_THROTTLE_AFTER {
+                js_notify_main_thread();
+                js_wait_for_event(); // notify fast-path
+                js_wait_for_event(); // budget==0 path
+            }
+            // One more notify+wait pair, then a measured budget-0 wait.
+            js_notify_main_thread();
+            js_wait_for_event();
+            let t = Instant::now();
+            js_wait_for_event(); // measured budget==0 wait
+            let d = t.elapsed();
+            if d > throttled {
+                throttled = d;
+            }
+            if throttled >= Duration::from_micros(700) {
+                break;
+            }
+        }
+
+        assert!(
+            throttled >= Duration::from_micros(700),
+            "notify-interleaved budget-0 spin was not throttled: best \
+             post-threshold call {:?} — the throttle is bypassed by \
+             the notify fast-path, exactly the #1114 wedge",
+            throttled
+        );
+
+        // Cleanup.
         crate::timer::js_timer_tick();
         NOTIFIED.swap(false, Ordering::Acquire);
     }

@@ -387,7 +387,7 @@ pub extern "C" fn js_console_log_i64(value: i64) {
 /// Print multiple values from an array (console.log with spread support)
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
-fn format_jsvalue(value: f64, depth: usize) -> String {
+pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
     // Prevent stack overflow with deeply nested structures
     if depth > 10 {
         return "[...]".to_string();
@@ -1053,6 +1053,9 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
         // the NaN-box (top bits set), long strings live in a
         // StringHeader. The unified helper handles both.
         let fmt = jsvalue_as_owned_string(first);
+        if length == 1 {
+            return boxed_string(&fmt);
+        }
 
         let mut out = String::with_capacity(fmt.len());
         let mut arg_idx: usize = 1;
@@ -1112,7 +1115,21 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     }
                 }
                 b'j' => {
-                    out.push_str(&format_jsvalue_for_json(val, 0));
+                    // Real JSON.stringify — string-replace post-processing
+                    // of inspect output mangles strings that contain
+                    // ", ", ": ", "{ ", or " }".
+                    unsafe {
+                        let s_ptr = crate::json::js_json_stringify(val, 0);
+                        if s_ptr.is_null() {
+                            out.push_str("undefined");
+                        } else {
+                            let len = (*s_ptr).byte_len as usize;
+                            let data = (s_ptr as *const u8)
+                                .add(std::mem::size_of::<crate::string::StringHeader>());
+                            let bytes = std::slice::from_raw_parts(data, len);
+                            out.push_str(std::str::from_utf8(bytes).unwrap_or(""));
+                        }
+                    }
                 }
                 b'o' | b'O' => {
                     out.push_str(&format_jsvalue(val, 0));
@@ -1139,6 +1156,118 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
         }
 
         boxed_string(&out)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_inspect(value: f64, _options: f64) -> f64 {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    let out = if jv.is_any_string() {
+        let s = jsvalue_string_content(value).unwrap_or_default();
+        format!("'{}'", escape_string(&s))
+    } else {
+        format_jsvalue(value, 0)
+    };
+    let ptr = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
+    f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
+}
+
+#[inline]
+fn looks_like_raw_heap_pointer(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits >> 48) >= 0x7FF8 {
+        return false;
+    }
+    let addr = bits as usize;
+    (0x1000..0x8000_0000_0000usize).contains(&addr) && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
+    let left_value = crate::value::JSValue::from_bits(left.to_bits());
+    let right_value = crate::value::JSValue::from_bits(right.to_bits());
+    let has_tagged_heap_operand = left_value.is_pointer() || right_value.is_pointer();
+    let has_raw_heap_operand =
+        looks_like_raw_heap_pointer(left) || looks_like_raw_heap_pointer(right);
+    let equal = if has_raw_heap_operand {
+        false
+    } else if has_tagged_heap_operand {
+        format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
+    } else {
+        crate::value::js_jsvalue_equals(left, right) != 0
+            || format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
+    };
+    f64::from_bits(crate::value::JSValue::bool(equal).bits())
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_strip_vt_control_characters(value: f64) -> f64 {
+    unsafe {
+        let s_ptr = crate::value::js_jsvalue_to_string(value);
+        let input = if s_ptr.is_null() {
+            String::new()
+        } else {
+            let len = (*s_ptr).byte_len as usize;
+            let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+            let bytes = std::slice::from_raw_parts(data, len);
+            std::str::from_utf8(bytes).unwrap_or("").to_string()
+        };
+        let mut out = String::with_capacity(input.len());
+        let bytes = input.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == 0x1b {
+                let start = i;
+                i += 1;
+                if i < bytes.len() && bytes[i] == b'[' {
+                    i += 1;
+                    while i < bytes.len() {
+                        let b = bytes[i];
+                        i += 1;
+                        if (0x40..=0x7e).contains(&b) {
+                            break;
+                        }
+                    }
+                    continue;
+                } else if i < bytes.len() && bytes[i] == b']' {
+                    i += 1;
+                    while i < bytes.len() {
+                        if bytes[i] == 0x07 {
+                            i += 1;
+                            break;
+                        }
+                        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                            i += 2;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    continue;
+                }
+                out.push_str(&input[start..i]);
+            } else {
+                // Preserve multi-byte UTF-8 sequences: advance by the
+                // full code-point width instead of casting one byte to
+                // char (which mangles non-ASCII, e.g. "café" → "cafÃ©").
+                let lead = bytes[i];
+                let width = if lead < 0x80 {
+                    1
+                } else if lead < 0xc0 {
+                    1 // stray continuation byte; copy verbatim
+                } else if lead < 0xe0 {
+                    2
+                } else if lead < 0xf0 {
+                    3
+                } else {
+                    4
+                };
+                let end = (i + width).min(bytes.len());
+                out.push_str(std::str::from_utf8(&bytes[i..end]).unwrap_or(""));
+                i = end;
+            }
+        }
+        let ptr = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
+        f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
     }
 }
 

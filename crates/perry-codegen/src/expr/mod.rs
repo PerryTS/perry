@@ -9932,6 +9932,44 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
 
+        // #1177: `buf.slice(start?, end?)` on a statically buffer-producing
+        // receiver — emitted by the HIR fold at `expr_call/mod.rs:5396` when
+        // `.slice` is called on `BufferConcat` / `BufferFrom` / a chained
+        // `BufferSlice`. Pre-fix the chained `Buffer.concat(c).slice(0,8)`
+        // shape fell through to generic dynamic dispatch which routed
+        // `.slice` through String.slice semantics on the NaN-boxed Buffer
+        // pointer — producing a "string" with length=8 and all bytes empty.
+        // Folding to `Expr::BufferSlice` here calls `js_buffer_slice` (which
+        // ALWAYS copies bytes via `ptr::copy_nonoverlapping` into a freshly
+        // allocated Buffer registered in BUFFER_REGISTRY) so the result has
+        // its own backing storage independent of the parent's lifetime.
+        Expr::BufferSlice { buffer, start, end } => {
+            let buf_box = lower_expr(ctx, buffer)?;
+            let blk = ctx.block();
+            let buf_handle = unbox_to_i64(blk, &buf_box);
+            // Default start=0, end=buf.length. `js_buffer_slice` itself
+            // handles end-clamping via `.min(len)`, so we can pass i32::MAX
+            // when end is omitted to mean "to the end" — matches how the
+            // Node API treats `buf.slice(start)` (no end → to the end).
+            let start_box = match start {
+                Some(e) => lower_expr(ctx, e)?,
+                None => double_literal(0.0),
+            };
+            let end_box = match end {
+                Some(e) => lower_expr(ctx, e)?,
+                None => double_literal(i32::MAX as f64),
+            };
+            let blk = ctx.block();
+            let start_i32 = blk.fptosi(DOUBLE, &start_box, I32);
+            let end_i32 = blk.fptosi(DOUBLE, &end_box, I32);
+            let result = blk.call(
+                I64,
+                "js_buffer_slice",
+                &[(I64, &buf_handle), (I32, &start_i32), (I32, &end_i32)],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
+
         // -------- BufferIsBuffer --------
         // `Buffer.isBuffer(x)`. Runtime returns i32 (0/1); wrap as NaN-boxed
         // boolean. `js_buffer_is_buffer` already strips NaN-box tags and
