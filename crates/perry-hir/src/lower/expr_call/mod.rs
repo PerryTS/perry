@@ -5395,6 +5395,32 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                             // returns false and JSON.stringify segfaults.
                             "slice" if !args.is_empty() => {
                                 let array_expr = lower_expr(ctx, &member.obj)?;
+                                // #1177: when the receiver is statically Buffer-producing
+                                // (`Buffer.concat(...).slice(0,8)`, `Buffer.from(...).slice(...)`,
+                                // or a chained `.slice(...).slice(...)`), the receiver type isn't
+                                // an `Ident` so the buffer-method block above can't see it. The
+                                // generic Call fallthrough then routes `.slice` through
+                                // `js_native_call_method` which picks String.slice semantics on
+                                // the NaN-boxed Buffer pointer — producing a "string" of length
+                                // 8 with all bytes as spaces/undefined. Fold to `Expr::BufferSlice`
+                                // here so codegen calls `js_buffer_slice` directly. Must come
+                                // BEFORE the Array shapes below so a `BufferConcat`/`BufferFrom`/
+                                // `BufferSlice` receiver is never misrouted to `Expr::ArraySlice`.
+                                if matches!(
+                                    &array_expr,
+                                    Expr::BufferConcat(_)
+                                        | Expr::BufferFrom { .. }
+                                        | Expr::BufferSlice { .. }
+                                ) {
+                                    let mut args_iter = args.into_iter();
+                                    let start = args_iter.next().unwrap();
+                                    let end = args_iter.next();
+                                    return Ok(Expr::BufferSlice {
+                                        buffer: Box::new(array_expr),
+                                        start: Some(Box::new(start)),
+                                        end: end.map(Box::new),
+                                    });
+                                }
                                 if matches!(
                                     &array_expr,
                                     Expr::ArrayMap { .. } | Expr::ArrayFilter { .. } | Expr::ArraySort { .. } |
