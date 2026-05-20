@@ -637,6 +637,35 @@ pub(crate) fn old_page_account_swept_object(
     });
 }
 
+pub(crate) fn old_page_account_promoted_object(
+    header_addr: usize,
+    total_size: usize,
+    pinned: bool,
+) {
+    if header_addr == 0 || total_size == 0 {
+        return;
+    }
+    let overlaps = old_object_page_overlaps(header_addr, total_size);
+    if overlaps.is_empty() {
+        return;
+    }
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        for (page, bytes) in overlaps {
+            let page_meta = meta
+                .entry(page)
+                .or_insert_with(|| OldPageMeta::zero_for_page(page));
+            page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
+            page_meta.live_object_count = page_meta.live_object_count.saturating_add(1);
+            if pinned {
+                page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(bytes);
+                page_meta.pinned_object_count = page_meta.pinned_object_count.saturating_add(1);
+            }
+            page_meta.refresh_policy_bits();
+        }
+    });
+}
+
 pub(crate) fn old_page_account_dirty_slot(slot_addr: usize) {
     if slot_addr == 0 {
         return;

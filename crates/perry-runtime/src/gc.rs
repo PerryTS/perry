@@ -7394,6 +7394,13 @@ impl CopyingNurseryCollector {
             } else {
                 GC_FLAG_HAS_SURVIVED
             };
+        if promote {
+            crate::arena::old_page_account_promoted_object(
+                new_header as usize,
+                total,
+                preserved & GC_FLAG_PINNED != 0,
+            );
+        }
 
         set_forwarding_address(header, new_user);
         (*header).gc_flags &= !GC_FLAG_MARKED;
@@ -7963,7 +7970,6 @@ fn gc_collect_minor_copying_fast_path(
 
     let reset = crate::arena::copying_reset_from_spaces_and_flip();
     collector.stats.reset_blocks += reset.reset_blocks;
-    crate::arena::old_pages_reset_sweep_accounting();
     if let Some(trace) = trace.as_mut() {
         trace.old_pages = crate::arena::old_page_summary();
     }
@@ -15118,6 +15124,136 @@ mod tests {
         let promoted = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
         assert_ne!(promoted, survivor);
         assert!(crate::arena::pointer_in_old_gen(promoted));
+    }
+
+    #[test]
+    fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
+        struct ResetGcTestState {
+            pinned_header: *mut GcHeader,
+        }
+
+        impl Drop for ResetGcTestState {
+            fn drop(&mut self) {
+                reset_shadow_stack();
+                reset_global_roots();
+                reset_remembered_set();
+                clear_marks();
+                clear_mark_seeds();
+                CONS_PINNED.with(|s| s.borrow_mut().clear());
+                if !self.pinned_header.is_null() {
+                    unsafe {
+                        (*self.pinned_header).gc_flags &= !GC_FLAG_PINNED;
+                    }
+                }
+            }
+        }
+
+        let mut reset = ResetGcTestState {
+            pinned_header: std::ptr::null_mut(),
+        };
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        clear_marks();
+        clear_mark_seeds();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+
+        let child = young_leaf();
+        js_shadow_slot_set(0, ptr_bits(child));
+
+        let first_trace = collect_minor_trace(GcTriggerKind::Direct);
+        assert_copied_minor_trace(&first_trace, true, CopiedMinorFallbackReason::None, false);
+        let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert_ne!(survivor, child);
+        assert!(crate::arena::pointer_in_nursery(survivor));
+        let survivor_header = unsafe { header_from_user_ptr(survivor as *const u8) };
+        let survivor_total = unsafe { (*survivor_header).size as usize };
+
+        crate::arena::old_pages_begin_gc_cycle();
+        let live = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        let dead = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        let (live_header, live_total) = old_test_header_and_size(live);
+        let (_dead_header, dead_total) = old_test_header_and_size(dead);
+        let mut fragmented_pages = crate::fast_hash::new_ptr_hash_set();
+        for (page, _) in crate::arena::old_object_page_overlaps(live_header as usize, live_total) {
+            fragmented_pages.insert(page);
+        }
+        for (page, _) in crate::arena::old_object_page_overlaps(dead - GC_HEADER_SIZE, dead_total) {
+            fragmented_pages.insert(page);
+        }
+        let pinned = crate::arena::arena_alloc_gc_old_excluding_pages(
+            40,
+            8,
+            GC_TYPE_STRING,
+            &fragmented_pages,
+        ) as usize;
+        let (pinned_header, pinned_total) = old_test_header_and_size(pinned);
+        reset.pinned_header = pinned_header;
+
+        unsafe {
+            (*survivor_header).gc_flags |= GC_FLAG_MARKED;
+            (*live_header).gc_flags |= GC_FLAG_MARKED;
+            (*pinned_header).gc_flags |= GC_FLAG_PINNED;
+        }
+
+        let sweep = sweep_with_age_bump(false);
+        let before_summary = crate::arena::old_page_summary();
+        let before_selection = select_old_page_defrag_pages(false);
+
+        assert!(
+            sweep.freed_bytes >= dead_total as u64,
+            "seeded dead old object should be observed by sweep accounting"
+        );
+        assert!(
+            before_summary.dead_bytes >= dead_total,
+            "old-page summary should include seeded dead bytes before copied minor"
+        );
+        assert!(
+            before_summary.pinned_bytes >= pinned_total,
+            "old-page summary should include seeded pinned bytes before copied minor"
+        );
+        assert!(
+            before_selection.selected_pages > 0,
+            "seeded unpinned live/dead old page should be selected for defrag"
+        );
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let promoted = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        let promoted_header = unsafe { header_from_user_ptr(promoted as *const u8) };
+        let promoted_total = unsafe { (*promoted_header).size as usize };
+        let promoted_page_count =
+            crate::arena::old_object_page_overlaps(promoted_header as usize, promoted_total).len();
+        let post_summary = crate::arena::old_page_summary();
+        let after_selection = select_old_page_defrag_pages(false);
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_ne!(promoted, survivor);
+        assert!(crate::arena::pointer_in_old_gen(promoted));
+        assert_eq!(promoted_total, survivor_total);
+        assert_eq!(trace.copying_nursery.promoted_objects, 1);
+        assert_eq!(trace.copying_nursery.promoted_bytes, survivor_total);
+        assert_eq!(trace.old_pages, post_summary);
+        assert_eq!(trace.old_pages.dead_bytes, before_summary.dead_bytes);
+        assert_eq!(
+            trace.old_pages.dead_object_count,
+            before_summary.dead_object_count
+        );
+        assert_eq!(trace.old_pages.pinned_bytes, before_summary.pinned_bytes);
+        assert_eq!(
+            trace.old_pages.pinned_object_count,
+            before_summary.pinned_object_count
+        );
+        assert_eq!(
+            post_summary.live_bytes,
+            before_summary.live_bytes + survivor_total
+        );
+        assert_eq!(
+            post_summary.live_object_count,
+            before_summary.live_object_count + promoted_page_count
+        );
+        assert!(
+            after_selection.selected_pages > 0,
+            "copied minor must leave old-page defrag candidates selectable"
+        );
     }
 
     #[test]
