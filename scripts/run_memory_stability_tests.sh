@@ -897,6 +897,49 @@ run_target_collector_pointer_free_trace() {
     return 1
 }
 
+run_unboxed_object_fields_codegen_semantics() {
+    local label="unboxed object field semantics"
+    local bin="$TMPDIR/unboxed_object_fields_codegen_semantics"
+    local compile_output="$TMPDIR/unboxed_object_fields_compile.$$.$RANDOM"
+    local expected_output="$TMPDIR/unboxed_object_fields_expected.$$.$RANDOM"
+    local diff_output="$TMPDIR/unboxed_object_fields_diff.$$.$RANDOM"
+
+    if ! env PERRY_UNBOXED_OBJECT_FIELDS=1 \
+        $PERRY compile --no-cache tests/unboxed_object_fields.ts -o "$bin" \
+        >"$compile_output" 2>&1; then
+        printf "  FAIL [target-gc] %-40s compile failed\n" "$label"
+        sed 's/^/    /' "$compile_output"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+
+    run_one "$bin"
+
+    if [[ "$LAST_EXIT" -ne 0 ]]; then
+        printf "  FAIL [target-gc] %-40s exit=%d\n" "$label" "$LAST_EXIT"
+        sed 's/^/    /' "$LAST_STDERR_FILE"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+
+    printf '%s\n' \
+        '{"x":3.5,"y":4.25}' \
+        '33.8125' \
+        '{"x":{"label":"heap"},"y":4.25}' \
+        'heap' >"$expected_output"
+
+    if ! diff -u "$expected_output" "$LAST_STDOUT_FILE" >"$diff_output"; then
+        printf "  FAIL [target-gc] %-40s stdout mismatch\n" "$label"
+        sed 's/^/    /' "$diff_output"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+
+    printf "  PASS [target-gc] %-40s\n" "$label"
+    PASS=$((PASS + 1))
+    return 0
+}
+
 run_target_collector_architecture_gates() {
     local workloads_dir="$TMPDIR/target_collector_gate_workloads"
     mkdir -p "$workloads_dir"
@@ -1091,6 +1134,9 @@ run_canary "typed shape descriptor canaries" \
     cargo test -p perry-runtime --release test_typed_shape_descriptor
 run_canary "unboxed object canaries" \
     cargo test -p perry-runtime --release test_unboxed_object
+run_canary "typed/unboxed codegen layout installers" \
+    cargo test -p perry-codegen --release --test typed_shape_descriptor --test typed_shape_descriptors -- --test-threads=1
+run_unboxed_object_fields_codegen_semantics
 run_canary "managed string allocation" \
     cargo test -p perry-runtime --release test_small_js_string_alloc_uses_managed_nursery_page
 run_canary "managed closure allocation" \
