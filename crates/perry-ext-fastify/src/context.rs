@@ -34,6 +34,36 @@ extern "C" {
     /// JSON.stringify with type hint. Same as
     /// `perry_ffi::json_stringify` modulo the type-hint argument.
     fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
+
+    /// True if `ptr` (raw POINTER_TAG-masked address) points at a
+    /// `BufferHeader` registered with the runtime's BUFFER_REGISTRY.
+    /// Used to distinguish `Buffer` / `Uint8Array` payloads from
+    /// `StringHeader`-shaped objects when building response bodies.
+    /// Same C-exposed extern perry-ext-http-server uses (see
+    /// `crates/perry-runtime/src/buffer.rs:601`).
+    fn js_buffer_is_buffer(ptr: i64) -> i32;
+}
+
+/// `BufferHeader` mirror — must match `crates/perry-runtime/src/buffer.rs`'s
+/// layout (`{ length: u32, capacity: u32 }`, data immediately after the
+/// 8-byte header). Distinct from `StringHeader` (20-byte header), so a
+/// Buffer must NEVER be read through the string-shaped path.
+#[repr(C)]
+struct BufferHeader {
+    length: u32,
+    capacity: u32,
+}
+
+/// Body type returned by `build_response_body` / `jsvalue_to_response_body`
+/// when the caller needs to pick a sensible default `content-type`.
+/// `Binary` is set when the handler returned a `Buffer` / `Uint8Array`;
+/// the caller defaults its content-type to `application/octet-stream`
+/// instead of `application/json` so binary assets (PNG, WASM, …) ship
+/// untouched (#1120).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BodyKind {
+    Binary,
+    TextOrJson,
 }
 
 static CONTEXT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -386,13 +416,29 @@ pub unsafe extern "C" fn js_fastify_reply_type(ctx_handle: Handle, value: i64) -
 
 /// `reply.send(payload)` — finalize the response. Returns true if the
 /// response was newly sent, false if `ctx.sent` was already true.
+///
+/// When the payload is a `Buffer` / `Uint8Array` and the handler
+/// hasn't pinned a `content-type` yet (`reply.type(...)`), the
+/// response defaults to `application/octet-stream` so binary assets
+/// don't ship as JSON.toString'd bytes (#1120).
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_reply_send(ctx_handle: Handle, data: f64) -> bool {
     if let Some(ctx) = get_handle_mut::<FastifyContext>(ctx_handle) {
         if ctx.sent {
             return false;
         }
-        let body = jsvalue_to_response_body(data);
+        let (body, kind) = jsvalue_to_response_body(data);
+        if kind == BodyKind::Binary
+            && !ctx
+                .response_headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        {
+            ctx.response_headers.push((
+                "content-type".to_string(),
+                "application/octet-stream".to_string(),
+            ));
+        }
         ctx.response_body = Some(body);
         ctx.sent = true;
         return true;
@@ -476,15 +522,51 @@ pub unsafe extern "C" fn js_fastify_ctx_redirect(ctx_handle: Handle, url: i64, s
 // ============================================================================
 
 /// Convert a NaN-boxed JsValue to response bytes. Strings pass through
-/// as-is; everything else gets JSON-stringified.
-pub(crate) unsafe fn jsvalue_to_response_body(value: f64) -> Vec<u8> {
+/// as-is; `Buffer` / `Uint8Array` ships its raw bytes (no UTF-8
+/// round-trip); everything else gets JSON-stringified. The caller
+/// inspects the returned `BodyKind` to pick a default content-type
+/// when the handler didn't set one.
+///
+/// Issue #1120: pre-fix, every non-string value funnelled through
+/// `js_json_stringify`. A returned Buffer surfaced as Buffer.toJSON's
+/// `{"type":"Buffer","data":[...]}` payload (~6× bloat) and the
+/// caller still pushed `application/json` for the content-type.
+pub(crate) unsafe fn jsvalue_to_response_body(value: f64) -> (Vec<u8>, BodyKind) {
     let jsv = JsValue::from_bits(value.to_bits());
     if jsv.is_string() {
         if let Some(s) = extract_jsvalue_string(value) {
-            return s.into_bytes();
+            return (s.into_bytes(), BodyKind::TextOrJson);
         }
     }
-    jsvalue_to_json_string(value).into_bytes()
+    if let Some(bytes) = extract_buffer_bytes(value) {
+        return (bytes, BodyKind::Binary);
+    }
+    (
+        jsvalue_to_json_string(value).into_bytes(),
+        BodyKind::TextOrJson,
+    )
+}
+
+/// Probe BUFFER_REGISTRY for a POINTER_TAG'd value. Returns the raw
+/// bytes of the underlying `BufferHeader` payload if `value` is a
+/// `Buffer` / `Uint8Array`; `None` otherwise. Shared with `server.rs`'s
+/// `build_response_body` (#1120).
+pub(crate) unsafe fn extract_buffer_bytes(value: f64) -> Option<Vec<u8>> {
+    let v = JsValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return None;
+    }
+    let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+    if js_buffer_is_buffer(raw) == 0 {
+        return None;
+    }
+    let buf = raw as *const BufferHeader;
+    if buf.is_null() {
+        return None;
+    }
+    let len = (*buf).length as usize;
+    let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
+    Some(std::slice::from_raw_parts(data, len).to_vec())
 }
 
 /// Serialize a NaN-boxed JsValue as a JSON string.

@@ -29,7 +29,7 @@ use perry_ffi::{
 };
 
 use crate::app::{ClosurePtr, FastifyApp, Route};
-use crate::context::{jsvalue_to_response_body, FastifyContext};
+use crate::context::{extract_buffer_bytes, jsvalue_to_response_body, BodyKind, FastifyContext};
 
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -568,15 +568,34 @@ async fn handle_request(
         Err(_) => None,
     };
 
-    // Match
+    // Match: first try the exact method, then — for HEAD — fall back to
+    // a GET route with the same path. Node fastify auto-handles HEAD
+    // against any registered GET (via `app.head` shadowing) by running
+    // the GET handler and dropping the body before sending. We do the
+    // same: rewrite the method to GET so the handler sees a vanilla
+    // request, then strip the body on the way out (see `head_for_get`
+    // below). #1120 part 2.
     let mut matched_params = HashMap::new();
     let mut found_route = false;
+    let mut head_for_get = false;
     for route in routes.iter() {
         if route.method == method {
             if let Some(params) = route.pattern.match_path(&path) {
                 matched_params = params;
                 found_route = true;
                 break;
+            }
+        }
+    }
+    if !found_route && method == "HEAD" {
+        for route in routes.iter() {
+            if route.method == "GET" {
+                if let Some(params) = route.pattern.match_path(&path) {
+                    matched_params = params;
+                    found_route = true;
+                    head_for_get = true;
+                    break;
+                }
             }
         }
     }
@@ -590,8 +609,17 @@ async fn handle_request(
     }
 
     let (response_tx, response_rx) = oneshot::channel::<FastifyResponse>();
+    // When fronting a GET handler for an inbound HEAD, surface the
+    // method as `GET` to the handler — Node fastify's shadowing
+    // semantics. The body-drop happens below in the hyper response
+    // assembly.
+    let dispatch_method = if head_for_get {
+        "GET".to_string()
+    } else {
+        method.clone()
+    };
     let pending = FastifyPendingRequest {
-        method,
+        method: dispatch_method,
         path,
         headers,
         body,
@@ -611,12 +639,29 @@ async fn handle_request(
 
     match response_rx.await {
         Ok(fr) => {
+            let body_len = fr.body.len();
             let mut builder = Response::builder()
                 .status(StatusCode::from_u16(fr.status).unwrap_or(StatusCode::OK));
+            let mut had_content_length = false;
             for (name, value) in fr.headers {
+                if name.eq_ignore_ascii_case("content-length") {
+                    had_content_length = true;
+                }
                 builder = builder.header(name, value);
             }
-            Ok(builder.body(Full::new(Bytes::from(fr.body))).unwrap())
+            let body_bytes = if head_for_get {
+                // HEAD response: no body on the wire, but expose the
+                // would-have-been size via Content-Length so clients
+                // (curl -I, browsers, monitoring) see what GET would
+                // produce. Mirror of Node fastify's HEAD-on-GET path.
+                if !had_content_length {
+                    builder = builder.header("content-length", body_len.to_string());
+                }
+                Bytes::new()
+            } else {
+                Bytes::from(fr.body)
+            };
+            Ok(builder.body(Full::new(body_bytes)).unwrap())
         }
         Err(_) => Ok(Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -827,22 +872,35 @@ fn process_request(app_handle: Handle, pending: FastifyPendingRequest) {
 
     // Build + send the response.
     if let Some(ctx) = get_handle::<FastifyContext>(ctx_handle) {
+        // Track whether the body came back as binary (Buffer / Uint8Array)
+        // so the default content-type below picks octet-stream over JSON
+        // when the handler didn't pin one via `reply.type(...)` (#1120).
+        let (body, body_kind) = if let Some(b) = ctx.response_body.clone() {
+            // The body was set explicitly by `reply.send(...)`, which
+            // already pushed an `application/octet-stream` default if
+            // the payload was binary and no content-type was pinned.
+            // Treat it as text/json here so we don't override.
+            (b, BodyKind::TextOrJson)
+        } else {
+            unsafe { build_response_body(final_result) }
+        };
         let mut response = FastifyResponse {
             status: ctx.status_code,
             headers: ctx.response_headers.clone(),
-            body: ctx
-                .response_body
-                .clone()
-                .unwrap_or_else(|| unsafe { build_response_body(final_result) }),
+            body,
         };
         if !response
             .headers
             .iter()
-            .any(|(k, _)| k.to_lowercase() == "content-type")
+            .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
         {
+            let ct = match body_kind {
+                BodyKind::Binary => "application/octet-stream",
+                BodyKind::TextOrJson => "application/json",
+            };
             response
                 .headers
-                .push(("content-type".to_string(), "application/json".to_string()));
+                .push(("content-type".to_string(), ct.to_string()));
         }
         let _ = pending.response_tx.send(response);
     }
@@ -984,7 +1042,23 @@ fn handle_error_response(
             if fallback_reason.is_none() {
                 if let Some(ctx) = perry_ffi::get_handle_mut::<FastifyContext>(ctx_handle) {
                     if ctx.response_body.is_none() {
-                        ctx.response_body = Some(unsafe { build_response_body(final_result) });
+                        let (bytes, kind) = unsafe { build_response_body(final_result) };
+                        // #1120: when the hook chain returned a Buffer /
+                        // Uint8Array and no content-type was pinned, default
+                        // to octet-stream so the request finalization step
+                        // doesn't paint over it with `application/json`.
+                        if kind == BodyKind::Binary
+                            && !ctx
+                                .response_headers
+                                .iter()
+                                .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                        {
+                            ctx.response_headers.push((
+                                "content-type".to_string(),
+                                "application/octet-stream".to_string(),
+                            ));
+                        }
+                        ctx.response_body = Some(bytes);
                     }
                 }
                 return;
@@ -1084,7 +1158,7 @@ unsafe fn render_rejection_body(reason: f64) -> Vec<u8> {
     // Strings: wrap the user's message verbatim.
     let jsv = JsValue::from_bits(reason.to_bits());
     if jsv.is_string() {
-        let s = jsvalue_to_response_body(reason);
+        let (s, _) = jsvalue_to_response_body(reason);
         // s is the raw string bytes; embed as a JSON string literal.
         let mut out = b"{\"error\":".to_vec();
         out.push(b'"');
@@ -1116,7 +1190,7 @@ unsafe fn render_rejection_body(reason: f64) -> Vec<u8> {
         }
     }
     // Numbers/bools/null/undefined: best-effort stringification.
-    let body = jsvalue_to_response_body(reason);
+    let (body, _) = jsvalue_to_response_body(reason);
     let mut out = b"{\"error\":".to_vec();
     if body.is_empty() {
         out.extend_from_slice(b"null");
@@ -1181,22 +1255,35 @@ fn push_json_string(out: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 /// Render the handler return value as response bytes. Handlers can
-/// return strings (used as-is), objects/arrays (JSON-stringified),
-/// numbers/bools (toString), or `undefined` (empty `{}`).
-unsafe fn build_response_body(value: f64) -> Vec<u8> {
+/// return strings (used as-is), `Buffer` / `Uint8Array` (raw bytes,
+/// see #1120), objects/arrays (JSON-stringified), numbers/bools
+/// (toString), or `undefined` (empty `{}`). The returned `BodyKind`
+/// signals whether the caller should default `content-type` to
+/// `application/octet-stream` (binary) instead of `application/json`.
+unsafe fn build_response_body(value: f64) -> (Vec<u8>, BodyKind) {
     let jsv = JsValue::from_bits(value.to_bits());
     if jsv.is_undefined() || jsv.is_null() {
-        return b"{}".to_vec();
+        return (b"{}".to_vec(), BodyKind::TextOrJson);
     }
     if jsv.is_string() {
         return jsvalue_to_response_body(value);
+    }
+    // Issue #1120 — Buffer / Uint8Array must ship their raw bytes,
+    // not the Buffer.toJSON `{"type":"Buffer","data":[...]}` form
+    // that `js_json_stringify` produces. Probe BUFFER_REGISTRY
+    // first; only fall through to JSON for non-buffer pointers.
+    if let Some(bytes) = extract_buffer_bytes(value) {
+        return (bytes, BodyKind::Binary);
     }
     if jsv.is_pointer() {
         let str_ptr = js_json_stringify(value, 0);
         if !str_ptr.is_null() {
             let len = (*str_ptr).byte_len as usize;
             let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            return std::slice::from_raw_parts(data_ptr, len).to_vec();
+            return (
+                std::slice::from_raw_parts(data_ptr, len).to_vec(),
+                BodyKind::TextOrJson,
+            );
         }
     }
     // Fallback through the unified path.

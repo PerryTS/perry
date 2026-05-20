@@ -2,6 +2,45 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1017 — fix(stdlib+ext-fastify): #1120 — fastify reply Buffer / Uint8Array bodies + auto-HEAD-for-GET
+
+Closes #1120 end-to-end. Three coordinated behaviors:
+
+### 1. Buffer / Uint8Array bodies ship raw bytes (not Buffer.toJSON)
+
+Returning a `Buffer` (or `Uint8Array`) from a fastify route handler used to be JSON-serialized via `Buffer.toJSON()` — wire payload `{"type":"Buffer","data":[137,80,...]}` — and any `reply.type(...)` the handler had set was overwritten with `application/json`. A 1.3 MB WASM asset served via `reply.type('application/wasm'); return readFileSync('/path/x.wasm');` came out as a multi-megabyte JSON string of decimal byte digits.
+
+Root cause: both perry-ext-fastify and the bundled perry-stdlib fastify funnelled non-string handler returns through `js_json_stringify`, which correctly emits `Buffer.toJSON()` for `Buffer` pointers. The fastify response builder never probed `BUFFER_REGISTRY` to short-circuit binary payloads onto the raw-bytes path that perry-ext-http-server already uses for `res.end(buf)` (closed in #1124).
+
+Fix mirrors #1124's shape across four sites:
+
+- `crates/perry-ext-fastify/src/context.rs` — new `BodyKind` enum (Binary / TextOrJson) + `extract_buffer_bytes(value: f64) -> Option<Vec<u8>>` helper. `jsvalue_to_response_body` returns `(Vec<u8>, BodyKind)`, probing `js_buffer_is_buffer` before the JSON fallback. `js_fastify_reply_send` defaults `content-type` to `application/octet-stream` when the payload is binary and no content-type was pinned via `reply.type(...)`.
+- `crates/perry-ext-fastify/src/server.rs` — `build_response_body` returns `(Vec<u8>, BodyKind)`. `process_request` (the canonical post-handler path) picks the default content-type based on `BodyKind` instead of unconditionally pushing `application/json`. The hook-chain fallback in `handle_error_response` does the same.
+- `crates/perry-stdlib/src/fastify/context.rs` + `server.rs` — same pair of edits for the bundled fastify path. With the v0.5.572 well-known flip, `import 'fastify'` routes to perry-ext-fastify and bundled-fastify is stripped, but the bundled path still ships for callers that don't trigger the flip (e.g. transitive http-server usage).
+
+### 2. Uint8Array constructor-from-array-literal works through the same path
+
+`new Uint8Array([1, 2, 3, 4, 5])` was suspected to bypass `BUFFER_REGISTRY` because the codegen routes it through `js_uint8array_new` → `js_uint8array_from_array` → `buffer_alloc`. Verified empirically: the small-buffer slab path (`<8KB`) is covered by `is_registered_buffer`'s fast slab-range check, so `js_buffer_is_buffer` returns 1 and the new probe lights up correctly. No code change needed beyond the BUFFER_REGISTRY probe in part 1; the regression harness now pins this case.
+
+### 3. Auto-handle HEAD against any registered GET (Node fastify shadowing)
+
+Pre-fix `HEAD /path` against a route registered only as `app.get(...)` returned the default 404 JSON because the route matcher only accepted exact-method matches. Node fastify auto-handles this via `app.head` shadowing — run the GET handler, drop the body, keep `Content-Length`.
+
+Fix in `crates/perry-ext-fastify/src/server.rs::handle_request` and `crates/perry-stdlib/src/fastify/server.rs::handle_request`:
+- Two-pass route match. First pass: exact method. Second pass (only when method is `HEAD`): fall back to a `GET` route on the same path.
+- When the fallback matches, rewrite the dispatch method to `GET` so the handler runs as if Node-style shadowing fired.
+- Strip the body from the hyper response and emit `Content-Length` reflecting the would-have-been body size, so clients (curl `-I`, browsers, monitoring tools) see what `GET` would produce.
+
+### Regression test
+
+`test-files/test_issue_1120_fastify_buffer.ts` + `test-files/run_test_issue_1120.sh` — three assertions per server-fixture boot:
+
+1. `GET /buf` → 8-byte PNG magic body + `application/octet-stream` (Buffer raw bytes, part 1). Pre-fix: Buffer.toJSON + `application/json`.
+2. `GET /u8` → `01 02 03 04 05` body + `application/octet-stream` (Uint8Array raw bytes, part 2). Pre-fix: `{"0":1,"1":2,...}` + `application/json`.
+3. `HEAD /buf` → status 200, empty body, `Content-Length: 8` (part 3). Pre-fix: 404 `{"error":"Not Found"}`.
+
+Validated: harness passes all 3; pre-existing `run_test_issue_1124.sh` (server-side http Buffer body) and `test_issue_1123_listen.ts` (net.createServer accept loop) still pass; `cargo test --release -p perry-ext-fastify -p perry-stdlib` green.
+
 ## v0.5.1016 — docs(cli): list every real `--target` in `perry compile --help` (#1119)
 
 The clap doc-comment on `CompileArgs.target` listed only `ios-simulator, ios, android, ios-widget, ios-widget-simulator` — omitting `web`, `wasm`, `visionos[-simulator]`, `watchos-widget[-simulator]`, `android-widget`, `wearos-tile`, `windows`, and `linux`, even though `docs/src/cli/flags.md` already documents the full set and `--target web` is the official path for browser-runnable WASM. People scaffolding new web projects against Perry hit `perry compile --help` first, found no `web` target, and assumed it wasn't supported.
@@ -18,7 +57,6 @@ Lands [TheHypnoo](https://github.com/TheHypnoo)'s `node:querystring` implementat
 2. **Loose small-handle guard.** The heap-pointer fallback rejected `addr < 0x1000`, admitting any small-handle id in `0x1000..0x10000` and then dereferencing it as a `*const StringHeader`. Bumped to `< 0x10000` to match the rest of the runtime's pointer-vs-handle ceiling (`object.rs`'s small-handle dispatch path uses the same threshold).
 
 Attribution: code authored by TheHypnoo (PR #1151). The SSO/guard fixes are review fixes applied at merge time. PR #1151 itself can be closed; the squash-merge wasn't possible because the contributor's fork doesn't allow maintainer pushes.
-
 ## v0.5.1014 — fix(codegen): restore `IncomingMessage` `__get_statusCode` / `__get_statusMessage` / `__get_headers` rows lost in #1099 squash
 
 The v0.5.1012 fix added three `NativeModSig` rows to `lower_call.rs` so `res.statusCode` on a client-side `IncomingMessage` routes to perry-ext-http's `js_http_status_code` (instead of falling through to the zero-sentinel). #1150 (chore(codegen) #1099 — split `lower_call.rs` into `lower_call/*` submodules) was authored against pre-fix `main`, and its squash-merge resolved the modify/delete conflict by taking the PR's deletion of the file — losing the three rows that had moved into `native_table.rs` via the resolution commit on the PR branch.
