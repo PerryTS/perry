@@ -3,11 +3,152 @@
 
 use anyhow::Result;
 use perry_hir::Expr;
+use perry_types::Type as HirType;
 
 use super::{lower_expr, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::POINTER_MASK_I64;
 use crate::type_analysis::compute_auto_captures;
 use crate::types::{DOUBLE, I32, I64, PTR};
+
+fn expected_interface_property_type(
+    ctx: &FnCtx<'_>,
+    iface: &perry_hir::Interface,
+    key: &str,
+    depth: usize,
+) -> Option<HirType> {
+    if let Some(prop) = iface.properties.iter().find(|prop| prop.name == key) {
+        return Some(prop.ty.clone());
+    }
+    if iface.methods.iter().any(|method| method.name == key) {
+        return Some(HirType::Any);
+    }
+    for ext in &iface.extends {
+        if let Some(ty) = expected_object_property_type(ctx, ext, key, depth + 1) {
+            return Some(ty);
+        }
+    }
+    None
+}
+
+fn expected_class_property_type(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    key: &str,
+    depth: usize,
+) -> Option<HirType> {
+    if depth > 32 {
+        return None;
+    }
+    let class = ctx.classes.get(class_name).copied()?;
+    if let Some(field) = class
+        .fields
+        .iter()
+        .find(|field| field.key_expr.is_none() && field.name == key)
+    {
+        return Some(field.ty.clone());
+    }
+    class
+        .extends_name
+        .as_deref()
+        .and_then(|parent| expected_class_property_type(ctx, parent, key, depth + 1))
+}
+
+fn expected_object_property_type(
+    ctx: &FnCtx<'_>,
+    ty: &HirType,
+    key: &str,
+    depth: usize,
+) -> Option<HirType> {
+    if depth > 32 {
+        return None;
+    }
+    match ty {
+        HirType::Object(obj) => {
+            if obj.index_signature.is_some() {
+                return None;
+            }
+            obj.properties.get(key).map(|prop| prop.ty.clone())
+        }
+        HirType::Named(name) => {
+            if let Some(alias) = ctx.type_aliases.get(name) {
+                if let Some(ty) = expected_object_property_type(ctx, alias, key, depth + 1) {
+                    return Some(ty);
+                }
+            }
+            if let Some(iface) = ctx.interfaces.get(name) {
+                return expected_interface_property_type(ctx, iface, key, depth + 1);
+            }
+            expected_class_property_type(ctx, name, key, depth + 1)
+        }
+        _ => None,
+    }
+}
+
+fn typed_object_literal_layout(
+    ctx: &FnCtx<'_>,
+    props: &[(String, Expr)],
+    expected_ty: Option<&HirType>,
+) -> Option<(u32, Vec<u64>)> {
+    let expected_ty = expected_ty?;
+    let mut words = Vec::new();
+    for (slot, (key, _)) in props.iter().enumerate() {
+        let prop_ty = expected_object_property_type(ctx, expected_ty, key, 0)?;
+        if crate::typed_shape::type_is_pointer_bearing(&prop_ty) {
+            let word = slot / 64;
+            if words.len() <= word {
+                words.resize(word + 1, 0);
+            }
+            words[word] |= 1u64 << (slot % 64);
+        }
+    }
+    Some((
+        props.len() as u32,
+        crate::typed_shape::trim_mask_words(words),
+    ))
+}
+
+fn emit_object_typed_shape_init(
+    ctx: &mut FnCtx<'_>,
+    obj_handle: &str,
+    slot_count: u32,
+    mask_words: &[u64],
+) {
+    let slot_count_str = slot_count.to_string();
+    let mask_word_count_str = mask_words.len().to_string();
+    let mask_ref = if mask_words.is_empty() {
+        "null".to_string()
+    } else {
+        let site_id = ctx.ic_site_counter;
+        ctx.ic_site_counter += 1;
+        let prefix = ctx.strings.module_prefix().to_string();
+        let global_name = if prefix.is_empty() {
+            format!("perry_typed_obj_shape_mask_{}", site_id)
+        } else {
+            format!("perry_typed_obj_shape_mask_{}__{}", prefix, site_id)
+        };
+        let words = mask_words
+            .iter()
+            .map(|word| format!("i64 {}", word))
+            .collect::<Vec<_>>()
+            .join(", ");
+        ctx.typed_parse_rodata.push(format!(
+            "@{} = private unnamed_addr constant [{} x i64] [{}]",
+            global_name,
+            mask_words.len(),
+            words
+        ));
+        format!("@{}", global_name)
+    };
+    ctx.block().call_void(
+        "js_gc_init_typed_shape_layout",
+        &[
+            (I64, obj_handle),
+            (I32, &slot_count_str),
+            (PTR, &mask_ref),
+            (I32, &mask_word_count_str),
+        ],
+    );
+}
 
 /// Lower an object literal `{ k1: v1, k2: v2, … }`.
 ///
@@ -32,10 +173,12 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 pub(crate) fn lower_object_literal(
     ctx: &mut FnCtx<'_>,
     props: &[(String, Expr)],
+    expected_ty: Option<&HirType>,
 ) -> Result<String> {
     let field_count = props.len() as u32;
     let zero_str = "0".to_string();
     let n_str = field_count.to_string();
+    let typed_layout = typed_object_literal_layout(ctx, props, expected_ty);
 
     // Fast path: no closure-with-`this` props. Use the shape-cache allocator
     // and write fields by INDEX — this skips the per-field linear key-search
@@ -117,6 +260,9 @@ pub(crate) fn lower_object_literal(
                 &[(I64, &obj_handle), (I32, &idx_str), (I64, &v_bits)],
             );
         }
+        if let Some((slot_count, mask_words)) = typed_layout.as_ref() {
+            emit_object_typed_shape_init(ctx, &obj_handle, *slot_count, mask_words);
+        }
         return Ok(nanbox_pointer_inline(ctx.block(), &obj_handle));
     }
 
@@ -191,6 +337,10 @@ pub(crate) fn lower_object_literal(
                 ],
             );
         }
+    }
+
+    if let Some((slot_count, mask_words)) = typed_layout.as_ref() {
+        emit_object_typed_shape_init(ctx, &obj_handle, *slot_count, mask_words);
     }
 
     Ok(nanbox_pointer_inline(ctx.block(), &obj_handle))

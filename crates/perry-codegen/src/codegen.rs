@@ -1030,9 +1030,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // js_object_alloc_class_with_keys function entirely on the hot
     // allocation path.
     //
-    // Per-class init data: (global_name, packed_keys_string, total_field_count).
+    // Per-class init data:
+    // (global_name, packed_keys_string, total_field_count, pointer_mask_words).
     // Used by emit_string_pool to emit the build-call sequence.
-    let mut class_keys_init_data: Vec<(String, String, u32)> = Vec::new();
+    let mut class_keys_init_data: Vec<(String, String, u32, Vec<u64>)> = Vec::new();
     let mut class_keys_globals_map: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     for c in &hir.classes {
@@ -1117,7 +1118,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 .entry(alias.clone())
                 .or_insert_with(|| global_name.clone());
         }
-        class_keys_init_data.push((global_name, packed_keys, total_field_count));
+        let (_typed_slot_count, typed_mask_words) =
+            crate::typed_shape::class_typed_layout(&class_table, &c.name);
+        class_keys_init_data.push((
+            global_name,
+            packed_keys,
+            total_field_count,
+            typed_mask_words,
+        ));
     }
     // Same naming convention for IMPORTED class stubs. Pack the field
     // names so the importing module allocates the right inline slot count
@@ -1189,7 +1197,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             packed_keys.push_str(&f.name);
             packed_keys.push('\0');
         }
-        class_keys_init_data.push((global_name, packed_keys, total_field_count));
+        let (_typed_slot_count, typed_mask_words) =
+            crate::typed_shape::class_typed_layout(&class_table, &c.name);
+        class_keys_init_data.push((
+            global_name,
+            packed_keys,
+            total_field_count,
+            typed_mask_words,
+        ));
     }
 
     // Derive __platform__ number from target triple:
@@ -5486,7 +5501,7 @@ fn emit_string_pool(
     llmod: &mut LlModule,
     strings: &StringPool,
     module_prefix: &str,
-    class_keys_init_data: &[(String, String, u32)],
+    class_keys_init_data: &[(String, String, u32, Vec<u64>)],
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
     closure_rest_params: &HashMap<u32, usize>,
@@ -5531,7 +5546,7 @@ fn emit_string_pool(
     // Naming: `@perry_class_keys_packed_<modprefix>__<idx>` so we
     // don't collide with anything else.
     let mut packed_global_names: Vec<String> = Vec::with_capacity(class_keys_init_data.len());
-    for (idx, (_global_name, packed, _fc)) in class_keys_init_data.iter().enumerate() {
+    for (idx, (_global_name, packed, _fc, _mask_words)) in class_keys_init_data.iter().enumerate() {
         if packed.is_empty() {
             packed_global_names.push(String::new());
             continue;
@@ -5579,6 +5594,24 @@ fn emit_string_pool(
         }
     }
 
+    for (global_name, _packed, _field_count, mask_words) in class_keys_init_data.iter() {
+        if mask_words.is_empty() {
+            continue;
+        }
+        let mask_global = crate::typed_shape::mask_global_name_from_keys_global(global_name);
+        let words = mask_words
+            .iter()
+            .map(|word| format!("i64 {}", word))
+            .collect::<Vec<_>>()
+            .join(", ");
+        llmod.add_raw_global(format!(
+            "@{} = private unnamed_addr constant [{} x i64] [{}]",
+            mask_global,
+            mask_words.len(),
+            words
+        ));
+    }
+
     let init_name = format!("__perry_init_strings_{}", module_prefix);
     let init_fn = llmod.define_function(&init_name, VOID, vec![]);
     let _ = init_fn.create_block("entry");
@@ -5606,7 +5639,9 @@ fn emit_string_pool(
     // module init; every `new ClassName()` call from then on does a
     // single global load + inline allocator call (no SHAPE_CACHE
     // lookup, no js_build_class_keys_array overhead).
-    for (idx, (global_name, packed, field_count)) in class_keys_init_data.iter().enumerate() {
+    for (idx, (global_name, packed, field_count, _mask_words)) in
+        class_keys_init_data.iter().enumerate()
+    {
         // Resolve class id from the global name. The global name is
         // `perry_class_keys_<modprefix>__<class>` so we strip the
         // prefix to recover the sanitized class name and look up

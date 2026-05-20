@@ -1619,9 +1619,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     //   js_write_barrier(parent_bits: u64, child_bits: u64)
     //   js_write_barrier_slot(parent_bits: u64, slot_addr: u64, child_bits: u64)
     //   js_gc_note_slot_layout(parent_bits: u64, slot_index: u32, value_bits: u64)
+    //   js_gc_init_typed_shape_layout(obj: u64, slot_count: u32, mask_words: *const u64, mask_word_count: u32)
     module.declare_function("js_write_barrier", VOID, &[I64, I64]);
     module.declare_function("js_write_barrier_slot", VOID, &[I64, I64, I64]);
     module.declare_function("js_gc_note_slot_layout", VOID, &[I64, I32, I64]);
+    module.declare_function("js_gc_init_typed_shape_layout", VOID, &[I64, I32, PTR, I32]);
 
     // Array methods (Phase B.12).
     // - js_array_pop_f64(arr) -> f64    (last element, NaN if empty)

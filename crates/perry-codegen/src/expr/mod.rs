@@ -831,6 +831,17 @@ fn array_store_needs_layout_note(ctx: &FnCtx<'_>, array: &Expr, value: &Expr) ->
     !(expr_has_numeric_pointer_free_array_layout(ctx, array) && is_numeric_expr(ctx, value))
 }
 
+pub(crate) fn lower_expr_with_expected_type(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+    expected_ty: Option<&HirType>,
+) -> Result<String> {
+    match expr {
+        Expr::Object(props) => lower_object_literal(ctx, props, expected_ty),
+        _ => lower_expr(ctx, expr),
+    }
+}
+
 pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         // -------- Literals --------
@@ -2055,7 +2066,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `{ k1: v1, k2: v2, … }` literal: allocate, set each field by
         // name (key string sourced from the StringPool), NaN-box the
         // pointer via js_nanbox_pointer.
-        Expr::Object(props) => lower_object_literal(ctx, props),
+        Expr::Object(props) => lower_object_literal(ctx, props, None),
 
         // -------- Arrays (Phase B.3) --------
         // `[a, b, c]` literal: allocate via js_array_alloc(N), then
