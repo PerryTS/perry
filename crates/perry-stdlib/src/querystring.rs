@@ -28,8 +28,9 @@
 use crate::common::handle::Handle;
 use perry_runtime::array::{js_array_alloc, js_array_length, js_array_push_f64};
 use perry_runtime::{
-    js_object_alloc, js_object_get_field_by_name, js_object_set_field_by_name,
-    js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
+    js_object_alloc, js_object_get_field_by_name, js_object_get_own_field_or_undef,
+    js_object_set_field_by_name, js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader,
+    StringHeader,
 };
 
 // Suppress unused — `Handle` is re-exported for symmetry with other modules.
@@ -265,10 +266,38 @@ fn resolve_max_keys(options: f64) -> Option<usize> {
 ///   - subsequent occurrences push onto the existing array
 unsafe fn push_parsed_pair(obj: *mut ObjectHeader, key: &str, value: &str) {
     let key_hdr = intern_string(key);
-    let existing_bits = js_object_get_field_by_name(obj, key_hdr).bits();
 
     let value_str = intern_string(value);
     let value_f64 = nanbox_string(value_str);
+
+    // #1175: read the OWN-property value rather than going through
+    // `js_object_get_field_by_name` (which walks the prototype chain) for
+    // duplicate detection. The proto walk made keys shadowed on
+    // `Object.prototype` — `constructor` / `toString` / `valueOf` /
+    // `hasOwnProperty` etc., all real-world querystring keys — read back as
+    // the inherited `Function`, the `existing != undefined` arm fired, the
+    // [Function] pointer got misread as an `*mut ArrayHeader` in the
+    // promote-to-array branch, and the actual user value never landed
+    // (`Object.keys` for `parse("a=1&constructor=ctor")` shipped without
+    // `constructor`). Node sidesteps this by parsing onto
+    // `Object.create(null)`; Perry mirrors the observable behavior by
+    // asking explicitly for own-field values.
+    //
+    // Important: we use `js_object_get_own_field_or_undef`, NOT
+    // `js_object_has_own`. The transition-cache stamps a shape-shared
+    // keys_array onto fresh objects whose first-key set hits a cached
+    // null→K1 transition — so a brand-new `obj = {a: "1"}` may end up
+    // with `obj.keys_array` already pointing at `["a", "b"]` (the cached
+    // shape from a previous parse that also went `null → a → b`). Walking
+    // keys_array alone (as `has_own` does) would return TRUE for `b` on
+    // that fresh object even though `field[1]` is still `undefined`.
+    // Reading the actual field slot — which is what the parse path cares
+    // about — returns undefined for the bogus inherited keys but the real
+    // own value for genuinely-set keys.
+    let key_bytes = key.as_bytes();
+    let obj_value = f64::from_bits((obj as u64) | 0x7FFD_0000_0000_0000);
+    let existing_bits =
+        js_object_get_own_field_or_undef(obj_value, key_bytes.as_ptr(), key_bytes.len()).to_bits();
 
     if existing_bits == JSValue::undefined().bits() {
         js_object_set_field_by_name(obj, key_hdr, value_f64);
@@ -277,12 +306,19 @@ unsafe fn push_parsed_pair(obj: *mut ObjectHeader, key: &str, value: &str) {
 
     let top16 = existing_bits >> 48;
     if top16 == 0x7FFD {
-        // POINTER_TAG — likely an array already.
         let addr = (existing_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
         if addr >= 0x1000 {
-            let arr = addr as *mut ArrayHeader;
-            js_array_push_f64(arr, value_f64);
-            return;
+            // Validate it's actually an array (not a Function / Map / etc.
+            // that happened to share the POINTER_TAG and pass the previous
+            // truthy-pointer check). Mirrors the GC-header check in
+            // `append_stringify_value` above.
+            let gc_hdr = (addr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
+                as *const perry_runtime::gc::GcHeader;
+            if (*gc_hdr).obj_type == perry_runtime::gc::GC_TYPE_ARRAY {
+                let arr = addr as *mut ArrayHeader;
+                js_array_push_f64(arr, value_f64);
+                return;
+            }
         }
     }
 
