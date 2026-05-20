@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 937 entries across 74 modules
+// Coverage: 943 entries across 75 modules
 
 declare module "@perryts/google-auth" {
   /** stdlib */
@@ -1209,6 +1209,21 @@ declare module "process" {
   export const version: any;
   /** stdlib */
   export const versions: any;
+}
+
+declare module "querystring" {
+  /** stdlib */
+  export function decode(...args: any[]): any;
+  /** stdlib */
+  export function encode(...args: any[]): any;
+  /** stdlib */
+  export function escape(...args: any[]): any;
+  /** stdlib */
+  export function parse(...args: any[]): any;
+  /** stdlib */
+  export function stringify(...args: any[]): any;
+  /** stdlib */
+  export function unescape(...args: any[]): any;
 }
 
 declare module "rate-limiter-flexible" {
