@@ -1011,6 +1011,24 @@ fn transform_generator_function_with_extra_captures(
                 case_body.push(Stmt::Return(Some(make_iter_result(value.clone(), false))));
             }
             StateExit::Goto(next_state) => {
+                // #1196: a user `return X` inside this state body — at any
+                // depth — must terminate the whole async function, not just
+                // fall through to `next_state`. Mirrors the Yield/Done arms
+                // above. Without the rewrite, `rewrite_returns_to_labeled_break`
+                // later strips the return to `[Expr(X), LabeledBreak]`
+                // (value discarded, IterResult never set). The post-step
+                // code then sees the IterResult left over from the previous
+                // yield (done=false) and re-chains the step closure onto
+                // it via AsyncStepChain — re-entering this same state,
+                // taking the same early-return, and looping forever.
+                // Symptom: ~123 MB arena growth per outer call, GC every
+                // ~250 ms, 90%+ CPU. Triggered when the state body fans
+                // into a Goto (e.g. an `if (...) return X;` immediately
+                // before a `for` loop with `await` inside).
+                if body_contains_return(&case_body) {
+                    prepend_done_before_returns(&mut case_body, done_id);
+                    rewrite_returns_as_done(&mut case_body);
+                }
                 case_body.push(Stmt::Expr(Expr::LocalSet(
                     state_id,
                     Box::new(Expr::Number(*next_state as f64)),
