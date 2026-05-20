@@ -1007,6 +1007,7 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                         | ("fs", "constants")
                                         | ("path", "posix")
                                         | ("path", "win32")
+                                        | ("util", "types")
                                 );
                                 // Unimplemented-API gate (#463) for the chained
                                 // `mod.X.Y()` case. The lower_member gate fires

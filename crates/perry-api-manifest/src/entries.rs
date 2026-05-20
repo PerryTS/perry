@@ -67,6 +67,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "fs",
     "path",
     "util",
+    "util/types",
     "url",
     "lru-cache",
     "commander",
@@ -127,6 +128,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "stream",
     "url",
     "util",
+    "util/types",
     "process",
     "perry/ui",
     "perry/system",
@@ -1953,6 +1955,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "deprecate", false, None),
     method("util", "inherits", false, None),
     method("util", "isDeepStrictEqual", false, None),
+    method("util", "stripVTControlCharacters", false, None),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
     // util.types — Node's runtime type-introspection namespace. Required
@@ -1962,6 +1965,19 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `false` (a safe default — no Perry value type matches Node's
     // privileged BoxedPrimitive/Proxy/external introspection cases).
     property("util", "types"),
+    method("util/types", "isPromise", false, None),
+    method("util/types", "isArrayBuffer", false, None),
+    method("util/types", "isAnyArrayBuffer", false, None),
+    method("util/types", "isArrayBufferView", false, None),
+    method("util/types", "isTypedArray", false, None),
+    method("util/types", "isUint8Array", false, None),
+    method("util/types", "isUint16Array", false, None),
+    method("util/types", "isInt32Array", false, None),
+    method("util/types", "isFloat64Array", false, None),
+    method("util/types", "isMap", false, None),
+    method("util/types", "isSet", false, None),
+    method("util/types", "isDate", false, None),
+    method("util/types", "isRegExp", false, None),
     // --- stream (Web Streams API + Node stream classes — see
     //     perry-stdlib/src/streams.rs and perry-ext-streams) ---
     class("stream", "Readable"),

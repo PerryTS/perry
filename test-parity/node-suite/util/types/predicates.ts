@@ -1,0 +1,11 @@
+import * as util from "node:util";
+const isArrayBuffer = util.types.isArrayBuffer;
+const isArrayBufferView = util.types.isArrayBufferView;
+const isMap = util.types.isMap;
+const isSet = util.types.isSet;
+const isPromise = util.types.isPromise;
+console.log("array-buffer:", isArrayBuffer(new ArrayBuffer(4)));
+console.log("array-buffer-view:", isArrayBufferView(new Uint16Array(4)));
+console.log("map:", isMap(new Map()));
+console.log("set:", isSet(new Set()));
+console.log("promise:", isPromise(Promise.resolve(1)));

@@ -481,6 +481,21 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // bundles the call args into a heap array (same shape as
     // js_console_log_spread) and gets a NaN-boxed string back.
     module.declare_function("js_util_format", DOUBLE, &[I64]);
+    module.declare_function("js_util_inspect", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_promise", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_array_buffer", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_array_buffer_view", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_typed_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_uint8_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_uint16_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_int32_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_float64_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_map", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_set", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_date", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_reg_exp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_getenv", I64, &[I64]);
     module.declare_function("js_console_table", VOID, &[DOUBLE]);
     module.declare_function("js_console_trace", VOID, &[DOUBLE]);

@@ -2861,7 +2861,11 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
             if args.len() == 1 {
                 let arg = &args[0];
                 let is_number_literal = matches!(arg, Expr::Integer(_) | Expr::Number(_));
-                let v = lower_expr(ctx, arg)?;
+                let v = if let Some(v) = lower_util_types_predicate_arg(ctx, arg)? {
+                    v
+                } else {
+                    lower_expr(ctx, arg)?
+                };
                 let runtime_fn = match (property.as_str(), is_number_literal) {
                     ("error", true) => "js_console_error_number",
                     ("error", false) => "js_console_error_dynamic",
@@ -2882,7 +2886,11 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
             let cap = (args.len() as u32).to_string();
             let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
             for arg in args.iter() {
-                let v = lower_expr(ctx, arg)?;
+                let v = if let Some(v) = lower_util_types_predicate_arg(ctx, arg)? {
+                    v
+                } else {
+                    lower_expr(ctx, arg)?
+                };
                 let blk = ctx.block();
                 current_arr = blk.call(
                     I64,
@@ -3171,6 +3179,48 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         variant_name(callee),
         args.len()
     )
+}
+
+fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
+    let Expr::NativeMethodCall {
+        module,
+        class_name,
+        method,
+        object,
+        args,
+        ..
+    } = expr
+    else {
+        return Ok(None);
+    };
+    let is_util_types_namespace = module == "util" && class_name.as_deref() == Some("types");
+    let is_direct_util_types_module = module == "util/types" && class_name.is_none();
+    if (!is_util_types_namespace && !is_direct_util_types_module) || object.is_some() {
+        return Ok(None);
+    }
+    let Some(runtime) = (match method.as_str() {
+        "isPromise" => Some("js_util_types_is_promise"),
+        "isArrayBuffer" | "isAnyArrayBuffer" => Some("js_util_types_is_array_buffer"),
+        "isArrayBufferView" => Some("js_util_types_is_array_buffer_view"),
+        "isTypedArray" => Some("js_util_types_is_typed_array"),
+        "isUint8Array" => Some("js_util_types_is_uint8_array"),
+        "isUint16Array" => Some("js_util_types_is_uint16_array"),
+        "isInt32Array" => Some("js_util_types_is_int32_array"),
+        "isFloat64Array" => Some("js_util_types_is_float64_array"),
+        "isMap" => Some("js_util_types_is_map"),
+        "isSet" => Some("js_util_types_is_set"),
+        "isDate" => Some("js_util_types_is_date"),
+        "isRegExp" => Some("js_util_types_is_reg_exp"),
+        _ => None,
+    }) else {
+        return Ok(None);
+    };
+    let value = if let Some(first) = args.first() {
+        lower_expr(ctx, first)?
+    } else {
+        double_literal(0.0)
+    };
+    Ok(Some(ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &value)])))
 }
 
 /// Lower a `NativeMethodCall { module, method, object, args }` (Phase H.1).
