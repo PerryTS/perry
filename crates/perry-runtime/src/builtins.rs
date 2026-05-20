@@ -613,6 +613,36 @@ pub unsafe extern "C" fn js_register_function_name(
     }
 }
 
+/// Per-thread override for the `showHidden` inspect option. Defaults to
+/// `false` (Node default): `util.inspect` / `console.log` only show
+/// enumerable properties. `console.dir(value, { showHidden: true })`
+/// flips this for the duration of the print so non-enumerable props
+/// surface in `[bracketed]` form. See #1200.
+thread_local! {
+    static INSPECT_SHOW_HIDDEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn inspect_show_hidden() -> bool {
+    INSPECT_SHOW_HIDDEN.with(|c| c.get())
+}
+
+/// RAII guard for `INSPECT_SHOW_HIDDEN`; restores the previous value on
+/// drop so nested format calls don't leak the override.
+pub(crate) struct InspectShowHiddenGuard(bool);
+
+impl InspectShowHiddenGuard {
+    pub(crate) fn new(show: bool) -> Self {
+        let prev = INSPECT_SHOW_HIDDEN.with(|c| c.replace(show));
+        Self(prev)
+    }
+}
+
+impl Drop for InspectShowHiddenGuard {
+    fn drop(&mut self) {
+        INSPECT_SHOW_HIDDEN.with(|c| c.set(self.0));
+    }
+}
+
 /// Print multiple values from an array (console.log with spread support)
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
@@ -983,6 +1013,19 @@ unsafe fn format_object_as_json(
         return "{}".to_string();
     }
 
+    // Honor `Object.defineProperty(..., { enumerable: false })`. By default
+    // we include every key in the `keys_array` (enumerability is rarely
+    // overridden, so the descriptor table is empty — early-out via the
+    // global flag avoids per-key lookups on the common path). When at
+    // least one descriptor exists, consult it per key:
+    //   - enumerable + any case → print as `key: value`
+    //   - non-enumerable + showHidden → print as `[key]: value` (Node-style)
+    //   - non-enumerable + !showHidden → skip
+    // See #1200.
+    let show_hidden = inspect_show_hidden();
+    let descriptors_in_use = crate::object::descriptors_in_use();
+    let obj_addr = obj_ptr as usize;
+
     let mut parts: Vec<String> = Vec::with_capacity(key_count);
 
     for i in 0..key_count {
@@ -1001,13 +1044,32 @@ unsafe fn format_object_as_json(
             continue;
         };
 
+        let is_enumerable = if descriptors_in_use {
+            crate::object::get_property_attrs(obj_addr, &key_str)
+                .map(|a| a.enumerable())
+                .unwrap_or(true)
+        } else {
+            true
+        };
+        if !is_enumerable && !show_hidden {
+            continue;
+        }
+
         // Get the value
         let value = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
         let value_str = format_jsvalue_for_json(value, depth + 1);
 
-        parts.push(format!("{}: {}", key_str, value_str));
+        if is_enumerable {
+            parts.push(format!("{}: {}", key_str, value_str));
+        } else {
+            // Node wraps non-enumerable keys in brackets under showHidden.
+            parts.push(format!("[{}]: {}", key_str, value_str));
+        }
     }
 
+    if parts.is_empty() {
+        return "{}".to_string();
+    }
     format!("{{ {} }}", parts.join(", "))
 }
 
@@ -2977,8 +3039,73 @@ unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize> {
     None
 }
 
+/// Decode `options.showHidden` from a NaN-boxed `console.dir` second arg.
+/// Returns the bool value when present; `None` when the key is missing
+/// or the options arg isn't an object. Node coerces any truthy value to
+/// `true`; we accept either explicit `true`/`false` or non-zero numeric
+/// values to match.
+///
+/// # Safety
+///
+/// `options_value` must be a valid NaN-boxed JSValue.
+unsafe fn decode_dir_show_hidden_option(options_value: f64) -> Option<bool> {
+    let jsval = JSValue::from_bits(options_value.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let ptr: *const crate::array::ArrayHeader = jsval.as_pointer();
+    if ptr.is_null() || (ptr as usize) < 0x10000 || ((ptr as u64) >> 48) != 0 {
+        return None;
+    }
+    let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    let obj_ptr = ptr as *const crate::object::ObjectHeader;
+    let keys_array = (*obj_ptr).keys_array;
+    if keys_array.is_null() {
+        return None;
+    }
+    let key_count = crate::array::js_array_length(keys_array) as usize;
+    for i in 0..key_count {
+        let key_val = crate::array::js_array_get(keys_array, i as u32);
+        if !key_val.is_string() {
+            continue;
+        }
+        let key_ptr = key_val.as_string_ptr();
+        if key_ptr.is_null() {
+            continue;
+        }
+        let key_len = (*key_ptr).byte_len as usize;
+        let key_data = (key_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let key_bytes = std::slice::from_raw_parts(key_data, key_len);
+        if key_bytes != b"showHidden" {
+            continue;
+        }
+        let raw = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
+        let v = JSValue::from_bits(raw.to_bits());
+        if v.is_bool() {
+            return Some(v.as_bool());
+        }
+        if v.is_int32() {
+            return Some(v.as_int32() != 0);
+        }
+        if v.is_number() {
+            let n = v.as_number();
+            return Some(!n.is_nan() && n != 0.0);
+        }
+        if v.is_null() || v.is_undefined() {
+            return Some(false);
+        }
+        // Any other pointer-shaped value is truthy in Node's coercion.
+        return Some(true);
+    }
+    None
+}
+
 /// `console.dir(value, options)` — formats `value` with the same surface used
-/// by `console.log`, but honors `options.depth` (Node default: 2). Issue #1199.
+/// by `console.log`, but honors `options.depth` (Node default: 2; #1199) and
+/// `options.showHidden` (default: false; #1200).
 ///
 /// # Safety
 ///
@@ -2986,7 +3113,9 @@ unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize> {
 #[no_mangle]
 pub unsafe extern "C" fn js_console_dir_with_options(value: f64, options_value: f64) {
     let max_depth = decode_dir_depth_option(options_value).unwrap_or(2);
-    let _guard = InspectDepthLimitGuard::new(max_depth);
+    let show_hidden = decode_dir_show_hidden_option(options_value).unwrap_or(false);
+    let _depth_guard = InspectDepthLimitGuard::new(max_depth);
+    let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
     println!("{}", format_jsvalue(value, 0));
 }
 

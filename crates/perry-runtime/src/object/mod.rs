@@ -380,6 +380,17 @@ thread_local! {
 /// `Relaxed` load (no TLS overhead, no fence on aarch64/x86).
 static GLOBAL_DESCRIPTORS_IN_USE: AtomicBool = AtomicBool::new(false);
 
+/// Has any property descriptor or accessor ever been installed in this
+/// process? Used by inspect/format code paths to skip per-key
+/// descriptor lookups on objects whose enumerability hasn't been
+/// touched (the common case). Relaxed load is fine — false positives
+/// are harmless (just an extra HashMap lookup) and false negatives
+/// can't happen because the store happens before the property is
+/// observable.
+pub(crate) fn descriptors_in_use() -> bool {
+    GLOBAL_DESCRIPTORS_IN_USE.load(Ordering::Relaxed)
+}
+
 /// Look up the property descriptor for (obj, key). Returns None if no entry exists,
 /// in which case the JS default `{ writable: true, enumerable: true, configurable: true }` applies.
 pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
