@@ -829,6 +829,9 @@ pub extern "C" fn js_array_set_f64_extend(
         );
         return arr;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _arr_handle = scope.root_raw_mut_ptr(arr);
+    let value_handle = scope.root_nanbox_f64(value);
     unsafe {
         let length = (*arr).length;
 
@@ -847,6 +850,7 @@ pub extern "C" fn js_array_set_f64_extend(
         } else {
             arr
         };
+        let value = value_handle.get_nanbox_f64();
 
         // Fill any gap with TAG_HOLE so subsequent reads / iteration /
         // JSON.stringify treat them as holes (per ECMA-262 §22.1.3.30
@@ -1014,6 +1018,8 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
     if arr.is_null() {
         return js_array_alloc(min_capacity);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
     unsafe {
         let old_capacity = (*arr).capacity;
         if min_capacity <= old_capacity {
@@ -1027,6 +1033,7 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
 
         // Allocate new from arena and copy old data.
         let new_ptr = arena_alloc_gc(new_size, 8, crate::gc::GC_TYPE_ARRAY) as *mut ArrayHeader;
+        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         ptr::copy_nonoverlapping(arr as *const u8, new_ptr as *mut u8, old_size);
 
         (*new_ptr).capacity = new_capacity;
@@ -1077,6 +1084,9 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
     if arr.is_null() {
         return js_array_alloc(0);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _arr_handle = scope.root_raw_mut_ptr(arr);
+    let value_handle = scope.root_nanbox_f64(value);
     unsafe {
         let length = (*arr).length;
         let capacity = (*arr).capacity;
@@ -1086,6 +1096,7 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
         } else {
             arr
         };
+        let value = value_handle.get_nanbox_f64();
 
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         ptr::write(elements_ptr.add(length as usize), value);
@@ -1116,15 +1127,21 @@ pub extern "C" fn js_array_push_spread_f64(
     if source.is_null() {
         return target;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source_handle = scope.root_raw_const_ptr(source);
     unsafe {
         let src_len = (*source).length;
         if src_len == 0 {
             return target;
         }
-        let src_elements_ptr =
-            (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let mut current = target;
         for i in 0..src_len {
+            let source = clean_arr_ptr(source_handle.get_raw_const_ptr::<ArrayHeader>());
+            if source.is_null() {
+                break;
+            }
+            let src_elements_ptr =
+                (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
             let value = *src_elements_ptr.add(i as usize);
             current = js_array_push_f64(current, value);
         }
@@ -1179,6 +1196,8 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
     if arr.is_null() {
         return;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _arr_handle = scope.root_raw_mut_ptr(arr);
     let n: u32 = if new_length.is_nan() || new_length < 0.0 || new_length > u32::MAX as f64 {
         0
     } else {
@@ -1286,6 +1305,9 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
     if arr.is_null() {
         return js_array_alloc(0);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _arr_handle = scope.root_raw_mut_ptr(arr);
+    let value_handle = scope.root_nanbox_f64(value);
     unsafe {
         let length = (*arr).length;
         let capacity = (*arr).capacity;
@@ -1295,6 +1317,7 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
         } else {
             arr
         };
+        let value = value_handle.get_nanbox_f64();
 
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
 

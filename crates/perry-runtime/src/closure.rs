@@ -279,10 +279,15 @@ pub fn closure_arity(closure: *const ClosureHeader) -> Option<u32> {
 /// NaN-boxed as a pointer. Used by the rest-bundling helper below.
 #[inline(always)]
 unsafe fn build_rest_array(values: &[f64]) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handles: Vec<_> = values
+        .iter()
+        .map(|value| scope.root_nanbox_f64(*value))
+        .collect();
     let arr = crate::array::js_array_alloc(values.len() as u32);
     let mut cur = arr;
-    for v in values {
-        cur = crate::array::js_array_push_f64(cur, *v);
+    for handle in value_handles.iter() {
+        cur = crate::array::js_array_push_f64(cur, handle.get_nanbox_f64());
     }
     f64::from_bits(crate::value::JSValue::pointer(cur as *mut u8).bits())
 }
@@ -312,6 +317,11 @@ unsafe fn dispatch_rest_bundled(
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let k = fixed_arity as usize;
     let provided = args.len();
+    let arg_scope = crate::gc::RuntimeHandleScope::new();
+    let arg_handles: Vec<_> = args
+        .iter()
+        .map(|value| arg_scope.root_nanbox_f64(*value))
+        .collect();
 
     // Bundle args into the rest array.
     //
@@ -336,7 +346,7 @@ unsafe fn dispatch_rest_bundled(
     macro_rules! a {
         ($i:expr) => {
             if $i < provided {
-                args[$i]
+                arg_handles[$i].get_nanbox_f64()
             } else {
                 undef
             }
@@ -763,12 +773,21 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
         CAPTURED_MISS_STREAK.with(|m| m.borrow().get(&(func_ptr as usize)).copied().unwrap_or(0));
     if streak == CAPTURED_DISABLED_SENTINEL {
         crate::promise::bump(&CLOSURE_CAP_SINGLETON_MISS);
+        let capture_scope = crate::gc::RuntimeHandleScope::new();
+        let capture_handles: Vec<_> = captures_slice
+            .iter()
+            .map(|bits| capture_scope.root_heap_word_u64(*bits))
+            .collect();
         let allocated = js_closure_alloc(func_ptr, capture_count);
         if n > 0 && !captures_ptr.is_null() {
+            let rewritten_captures: Vec<u64> = capture_handles
+                .iter()
+                .map(|handle| handle.get_heap_word_u64())
+                .collect();
             unsafe {
                 let dest =
                     (allocated as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut u64;
-                std::ptr::copy_nonoverlapping(captures_ptr, dest, n);
+                std::ptr::copy_nonoverlapping(rewritten_captures.as_ptr(), dest, n);
                 crate::gc::layout_rebuild_from_slots(allocated as *mut u8, dest as *const u64, n);
             }
         }
@@ -808,18 +827,27 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     // Slow path: allocate, populate captures, insert into cache as
     // the most-recent entry. If the slot list is full, drop the
     // least-recent (back of the Vec).
+    let capture_scope = crate::gc::RuntimeHandleScope::new();
+    let capture_handles: Vec<_> = captures_slice
+        .iter()
+        .map(|bits| capture_scope.root_heap_word_u64(*bits))
+        .collect();
     let allocated = js_closure_alloc(func_ptr, capture_count);
+    let rewritten_captures: Vec<u64> = capture_handles
+        .iter()
+        .map(|handle| handle.get_heap_word_u64())
+        .collect();
     if n > 0 && !captures_ptr.is_null() {
         unsafe {
             let dest = (allocated as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut u64;
-            std::ptr::copy_nonoverlapping(captures_ptr, dest, n);
+            std::ptr::copy_nonoverlapping(rewritten_captures.as_ptr(), dest, n);
             crate::gc::layout_rebuild_from_slots(allocated as *mut u8, dest as *const u64, n);
         }
     }
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
         let mut s = s.borrow_mut();
         let slots = s.entry(func_ptr as usize).or_insert_with(Vec::new);
-        slots.insert(0, (captures_slice.to_vec(), allocated));
+        slots.insert(0, (rewritten_captures, allocated));
         if slots.len() > MAX_CAPTURED_CLOSURE_SLOTS {
             slots.truncate(MAX_CAPTURED_CLOSURE_SLOTS);
         }

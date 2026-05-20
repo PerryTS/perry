@@ -420,9 +420,21 @@ pub extern "C" fn js_string_append(
         if !is_valid_string_ptr(src) {
             return js_string_from_bytes(ptr::null(), 0);
         }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let src_handle = scope.root_string_ptr(src);
         let src_blen = unsafe { (*src).byte_len };
-        let src_data = string_data(src);
-        return js_string_from_bytes(src_data, src_blen);
+        let new_ptr = js_string_from_bytes_with_capacity(ptr::null(), 0, src_blen);
+        let src = src_handle.get_raw_const_ptr::<StringHeader>();
+        if is_valid_string_ptr(src) {
+            unsafe {
+                let src_data = string_data(src);
+                let new_data = (new_ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
+                ptr::copy_nonoverlapping(src_data, new_data, src_blen as usize);
+                (*new_ptr).byte_len = src_blen;
+                (*new_ptr).utf16_len = (*src).utf16_len;
+            }
+        }
+        return new_ptr;
     }
 
     if !is_valid_string_ptr(src) {
@@ -434,6 +446,10 @@ pub extern "C" fn js_string_append(
     if std::ptr::eq(dest, src) {
         return js_string_concat(dest as *const StringHeader, src);
     }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let dest_handle = scope.root_string_ptr(dest as *const StringHeader);
+    let src_handle = scope.root_string_ptr(src);
 
     unsafe {
         let dest_blen = (*dest).byte_len;
@@ -470,6 +486,8 @@ pub extern "C" fn js_string_append(
         // is safe: old string becomes garbage for the next GC cycle.
         let new_cap = (new_blen * 2).max(32);
         let new_ptr = js_string_from_bytes_with_capacity(ptr::null(), 0, new_cap);
+        let dest = dest_handle.get_raw_mut_ptr::<StringHeader>();
+        let src = src_handle.get_raw_const_ptr::<StringHeader>();
 
         // Copy old dest content
         let new_data = (new_ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
@@ -661,6 +679,10 @@ pub extern "C" fn js_string_concat(
     a: *const StringHeader,
     b: *const StringHeader,
 ) -> *mut StringHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a_handle = scope.root_string_ptr(a);
+    let b_handle = scope.root_string_ptr(b);
+
     // Snapshot all validity-gated reads from `a` in one pass. For invalid
     // pointers this stays at the zero-defaults so the rest of the function
     // sees a "behaves like an empty string" view.
@@ -702,6 +724,8 @@ pub extern "C" fn js_string_concat(
 
     let raw = string_arena_alloc(total_size);
     let ptr = raw as *mut StringHeader;
+    let a = a_handle.get_raw_const_ptr::<StringHeader>();
+    let b = b_handle.get_raw_const_ptr::<StringHeader>();
 
     unsafe {
         (*ptr).utf16_len = u16len_a + u16len_b;
@@ -878,9 +902,11 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
     // for any f64 string representation (max ~24 chars).
     let mut num_bufs: [[u8; 32]; MAX_PARTS] = [[0u8; 32]; MAX_PARTS];
     // For each part: (ptr, len, flags). ptr is either a pointer into
-    // num_bufs[i] (numeric path) or string_data(s) (string path); len
-    // is the byte count; flags carries STRING_FLAG_HAS_LONE_SURROGATES
+    // num_bufs[i] (numeric path) or null for a rooted string handle;
+    // len is the byte count; flags carries STRING_FLAG_HAS_LONE_SURROGATES
     // if the part is a string with that flag set.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut piece_string_handles = [None; MAX_PARTS];
     let mut piece_ptrs: [*const u8; MAX_PARTS] = [std::ptr::null(); MAX_PARTS];
     let mut piece_lens: [u32; MAX_PARTS] = [0; MAX_PARTS];
     let mut piece_u16: [u32; MAX_PARTS] = [0; MAX_PARTS];
@@ -905,8 +931,7 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
                 let u16len = unsafe { (*ptr).utf16_len };
                 let flags = unsafe { (*ptr).flags };
                 if blen > 0 {
-                    piece_ptrs[i] =
-                        unsafe { (ptr as *const u8).add(std::mem::size_of::<StringHeader>()) };
+                    piece_string_handles[i] = Some(scope.root_string_ptr(ptr));
                     piece_lens[i] = blen;
                     piece_u16[i] = u16len;
                     piece_flags |= flags;
@@ -926,8 +951,7 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
                 let u16len = unsafe { (*s).utf16_len };
                 let flags = unsafe { (*s).flags };
                 if blen > 0 {
-                    piece_ptrs[i] =
-                        unsafe { (s as *const u8).add(std::mem::size_of::<StringHeader>()) };
+                    piece_string_handles[i] = Some(scope.root_string_ptr(s));
                     piece_lens[i] = blen;
                     piece_u16[i] = u16len;
                     piece_flags |= flags;
@@ -976,8 +1000,7 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
             let u16len = unsafe { (*s).utf16_len };
             let flags = unsafe { (*s).flags };
             if blen > 0 {
-                piece_ptrs[i] =
-                    unsafe { (s as *const u8).add(std::mem::size_of::<StringHeader>()) };
+                piece_string_handles[i] = Some(scope.root_string_ptr(s));
                 piece_lens[i] = blen;
                 piece_u16[i] = u16len;
                 piece_flags |= flags;
@@ -1002,7 +1025,16 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
         let mut cursor = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
         for i in 0..n {
             let l = piece_lens[i] as usize;
-            if l > 0 && !piece_ptrs[i].is_null() {
+            if l == 0 {
+                continue;
+            }
+            if let Some(handle) = piece_string_handles[i] {
+                let piece = handle.get_raw_const_ptr::<StringHeader>();
+                if is_valid_string_ptr(piece) {
+                    ptr::copy_nonoverlapping(string_data(piece), cursor, l);
+                    cursor = cursor.add(l);
+                }
+            } else if !piece_ptrs[i].is_null() {
                 ptr::copy_nonoverlapping(piece_ptrs[i], cursor, l);
                 cursor = cursor.add(l);
             }

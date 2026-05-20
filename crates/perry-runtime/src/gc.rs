@@ -12,6 +12,7 @@ use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::ffi::c_void;
+use std::marker::PhantomData;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Mutex, MutexGuard, OnceLock,
@@ -399,6 +400,13 @@ const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 
 pub type MutableRootScanner = for<'a> fn(&mut RuntimeRootVisitor<'a>);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeHandleSlot {
+    Nanbox(u64),
+    RawTagged { addr: usize, tag: u64 },
+    HeapWord(u64),
+}
+
 /// GC statistics
 pub struct GcStats {
     pub collection_count: u64,
@@ -503,6 +511,10 @@ thread_local! {
 
     /// Module-level global variable addresses (registered by codegen)
     static GLOBAL_ROOTS: RefCell<Vec<*mut u64>> = const { RefCell::new(Vec::new()) };
+
+    /// Transient runtime-owned roots for helper frames that allocate
+    /// before their inputs are stored in stable heap/shadow locations.
+    static RUNTIME_HANDLE_STACK: RefCell<Vec<RuntimeHandleSlot>> = const { RefCell::new(Vec::new()) };
 
     /// Pointer-slot masks for arrays, object fields/overflow fields, and
     /// closure captures. Keyed by user pointer (payload address after GcHeader).
@@ -4945,6 +4957,197 @@ impl<'a> RuntimeRootVisitor<'a> {
     }
 }
 
+/// Scoped owner for transient runtime handles.
+///
+/// Handles are mutable GC roots for values that live only in a runtime
+/// helper's local variables while that helper may allocate. Dropping the
+/// scope removes every handle created from it.
+pub struct RuntimeHandleScope {
+    base: usize,
+}
+
+impl RuntimeHandleScope {
+    pub fn new() -> Self {
+        let base = RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len());
+        Self { base }
+    }
+
+    #[inline]
+    fn push<'scope>(&'scope self, slot: RuntimeHandleSlot) -> RuntimeHandle<'scope> {
+        let index = RUNTIME_HANDLE_STACK.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            let index = stack.len();
+            stack.push(slot);
+            index
+        });
+        RuntimeHandle {
+            index,
+            _scope: PhantomData,
+        }
+    }
+
+    pub fn root_nanbox_f64<'scope>(&'scope self, value: f64) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::Nanbox(value.to_bits()))
+    }
+
+    pub fn root_nanbox_u64<'scope>(&'scope self, bits: u64) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::Nanbox(bits))
+    }
+
+    pub fn root_heap_word_u64<'scope>(&'scope self, bits: u64) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::HeapWord(bits))
+    }
+
+    pub fn root_raw_mut_ptr<'scope, T>(&'scope self, ptr: *mut T) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::RawTagged {
+            addr: ptr as usize,
+            tag: POINTER_TAG,
+        })
+    }
+
+    pub fn root_raw_const_ptr<'scope, T>(&'scope self, ptr: *const T) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::RawTagged {
+            addr: ptr as usize,
+            tag: POINTER_TAG,
+        })
+    }
+
+    pub fn root_string_ptr<'scope>(
+        &'scope self,
+        ptr: *const crate::StringHeader,
+    ) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::RawTagged {
+            addr: ptr as usize,
+            tag: STRING_TAG,
+        })
+    }
+
+    pub fn root_bigint_ptr<'scope, T>(&'scope self, ptr: *const T) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::RawTagged {
+            addr: ptr as usize,
+            tag: BIGINT_TAG,
+        })
+    }
+
+    #[cfg(test)]
+    fn active_len_for_tests() -> usize {
+        RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len())
+    }
+}
+
+impl Default for RuntimeHandleScope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for RuntimeHandleScope {
+    fn drop(&mut self) {
+        RUNTIME_HANDLE_STACK.with(|stack| {
+            stack.borrow_mut().truncate(self.base);
+        });
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct RuntimeHandle<'scope> {
+    index: usize,
+    _scope: PhantomData<&'scope RuntimeHandleScope>,
+}
+
+impl<'scope> RuntimeHandle<'scope> {
+    #[inline]
+    fn with_slot<R>(&self, f: impl FnOnce(RuntimeHandleSlot) -> R) -> R {
+        RUNTIME_HANDLE_STACK.with(|stack| {
+            let stack = stack.borrow();
+            let slot = *stack
+                .get(self.index)
+                .expect("runtime handle used after its scope was dropped");
+            f(slot)
+        })
+    }
+
+    #[inline]
+    fn with_slot_mut<R>(&self, f: impl FnOnce(&mut RuntimeHandleSlot) -> R) -> R {
+        RUNTIME_HANDLE_STACK.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            let slot = stack
+                .get_mut(self.index)
+                .expect("runtime handle used after its scope was dropped");
+            f(slot)
+        })
+    }
+
+    pub fn get_nanbox_f64(&self) -> f64 {
+        f64::from_bits(self.get_nanbox_u64())
+    }
+
+    pub fn get_nanbox_u64(&self) -> u64 {
+        self.with_slot(|slot| match slot {
+            RuntimeHandleSlot::Nanbox(bits) => bits,
+            _ => panic!("runtime handle kind mismatch: expected NaN-boxed value"),
+        })
+    }
+
+    pub fn set_nanbox_f64(&self, value: f64) {
+        self.set_nanbox_u64(value.to_bits());
+    }
+
+    pub fn set_nanbox_u64(&self, bits: u64) {
+        self.with_slot_mut(|slot| match slot {
+            RuntimeHandleSlot::Nanbox(current) => *current = bits,
+            _ => panic!("runtime handle kind mismatch: expected NaN-boxed value"),
+        });
+    }
+
+    pub fn get_heap_word_u64(&self) -> u64 {
+        self.with_slot(|slot| match slot {
+            RuntimeHandleSlot::HeapWord(bits) => bits,
+            _ => panic!("runtime handle kind mismatch: expected heap word"),
+        })
+    }
+
+    pub fn set_heap_word_u64(&self, bits: u64) {
+        self.with_slot_mut(|slot| match slot {
+            RuntimeHandleSlot::HeapWord(current) => *current = bits,
+            _ => panic!("runtime handle kind mismatch: expected heap word"),
+        });
+    }
+
+    pub fn get_raw_mut_ptr<T>(&self) -> *mut T {
+        self.with_slot(|slot| match slot {
+            RuntimeHandleSlot::RawTagged { addr, .. } => addr as *mut T,
+            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
+        })
+    }
+
+    pub fn get_raw_const_ptr<T>(&self) -> *const T {
+        self.with_slot(|slot| match slot {
+            RuntimeHandleSlot::RawTagged { addr, .. } => addr as *const T,
+            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
+        })
+    }
+}
+
+fn scan_runtime_handle_roots_mut(visitor: &mut RuntimeRootVisitor<'_>) {
+    RUNTIME_HANDLE_STACK.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        for slot in stack.iter_mut() {
+            match slot {
+                RuntimeHandleSlot::Nanbox(bits) => {
+                    visitor.visit_nanbox_u64_slot(bits);
+                }
+                RuntimeHandleSlot::RawTagged { addr, tag } => {
+                    visitor.visit_tagged_usize_slot(addr, *tag);
+                }
+                RuntimeHandleSlot::HeapWord(bits) => {
+                    visitor.visit_heap_word_u64_slot(bits);
+                }
+            }
+        }
+    });
+}
+
 #[inline]
 fn atomic_store_ordering(ordering: std::sync::atomic::Ordering) -> std::sync::atomic::Ordering {
     match ordering {
@@ -9260,6 +9463,7 @@ pub fn shadow_stack_root_scanner(mark: &mut dyn FnMut(f64)) {
 
 /// Initialize GC root scanners. Called once at runtime startup.
 pub fn gc_init() {
+    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
     gc_register_mutable_root_scanner(promise_mutable_root_scanner);
     gc_register_mutable_root_scanner(timer_mutable_root_scanner);
     gc_register_mutable_root_scanner(exception_mutable_root_scanner);
@@ -11027,6 +11231,23 @@ mod tests {
 
     fn ptr_bits(addr: usize) -> u64 {
         POINTER_TAG | (addr as u64 & POINTER_MASK)
+    }
+
+    fn string_bits(addr: usize) -> u64 {
+        STRING_TAG | (addr as u64 & POINTER_MASK)
+    }
+
+    unsafe fn assert_string_bytes(ptr: *const crate::StringHeader, expected: &[u8]) {
+        assert!(!ptr.is_null(), "expected non-null string pointer");
+        assert_eq!((*ptr).byte_len as usize, expected.len());
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let bytes = std::slice::from_raw_parts(data, expected.len());
+        assert_eq!(bytes, expected);
+    }
+
+    fn force_next_general_arena_alloc_slow() {
+        const TEST_BLOCK_SIZE: usize = 1024 * 1024;
+        let _ = crate::arena::arena_alloc_gc(TEST_BLOCK_SIZE - GC_HEADER_SIZE, 8, GC_TYPE_STRING);
     }
 
     fn old_page_dirty_for(page: usize) -> bool {
@@ -13453,6 +13674,270 @@ mod tests {
 
         RuntimeRootVisitor::for_rewrite(&valid_ptrs).visit_metadata_usize_slot(&mut metadata);
         assert_eq!(metadata, old_user as usize);
+    }
+
+    #[test]
+    fn test_transient_runtime_handle_slots_mark_and_rewrite() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let nanbox_f64_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let nanbox_u64_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let raw_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let raw_string_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING);
+        let heap_word_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let valid_ptrs = build_valid_pointer_set();
+
+        let old_nanbox_f64 = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+        let old_nanbox_u64 = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+        let old_raw = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+        let old_raw_string = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_STRING);
+        let old_heap_word = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+        unsafe {
+            set_forwarding_address(
+                header_from_user_ptr(nanbox_f64_user) as *mut GcHeader,
+                old_nanbox_f64,
+            );
+            set_forwarding_address(
+                header_from_user_ptr(nanbox_u64_user) as *mut GcHeader,
+                old_nanbox_u64,
+            );
+            set_forwarding_address(header_from_user_ptr(raw_user) as *mut GcHeader, old_raw);
+            set_forwarding_address(
+                header_from_user_ptr(raw_string_user) as *mut GcHeader,
+                old_raw_string,
+            );
+            set_forwarding_address(
+                header_from_user_ptr(heap_word_user) as *mut GcHeader,
+                old_heap_word,
+            );
+        }
+
+        let scope = RuntimeHandleScope::new();
+        let nanbox_f64 = scope.root_nanbox_f64(f64::from_bits(ptr_bits(nanbox_f64_user as usize)));
+        let nanbox_u64 = scope.root_nanbox_u64(string_bits(nanbox_u64_user as usize));
+        let raw = scope.root_raw_mut_ptr(raw_user);
+        let raw_string = scope.root_string_ptr(raw_string_user as *const crate::StringHeader);
+        let heap_word = scope.root_heap_word_u64(heap_word_user as u64);
+
+        let mut marker = RuntimeRootVisitor::for_mark(&valid_ptrs);
+        scan_runtime_handle_roots_mut(&mut marker);
+        unsafe {
+            assert_ne!(
+                (*header_from_user_ptr(nanbox_f64_user)).gc_flags & GC_FLAG_MARKED,
+                0
+            );
+            assert_ne!(
+                (*header_from_user_ptr(nanbox_u64_user)).gc_flags & GC_FLAG_MARKED,
+                0
+            );
+            assert_ne!(
+                (*header_from_user_ptr(raw_user)).gc_flags & GC_FLAG_MARKED,
+                0
+            );
+            assert_ne!(
+                (*header_from_user_ptr(raw_string_user)).gc_flags & GC_FLAG_MARKED,
+                0
+            );
+            assert_ne!(
+                (*header_from_user_ptr(heap_word_user)).gc_flags & GC_FLAG_MARKED,
+                0
+            );
+        }
+
+        let mut rewriter = RuntimeRootVisitor::for_rewrite(&valid_ptrs);
+        scan_runtime_handle_roots_mut(&mut rewriter);
+
+        assert_eq!(
+            nanbox_f64.get_nanbox_f64().to_bits(),
+            ptr_bits(old_nanbox_f64 as usize)
+        );
+        assert_eq!(
+            nanbox_u64.get_nanbox_u64(),
+            string_bits(old_nanbox_u64 as usize)
+        );
+        assert_eq!(raw.get_raw_mut_ptr::<u8>(), old_raw);
+        assert_eq!(
+            raw_string.get_raw_const_ptr::<crate::StringHeader>() as *mut u8,
+            old_raw_string
+        );
+        assert_eq!(heap_word.get_heap_word_u64(), old_heap_word as u64);
+    }
+
+    #[test]
+    fn test_transient_runtime_handle_scope_drop_removes_roots() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let header = unsafe { header_from_user_ptr(user) as *mut GcHeader };
+        let valid_ptrs = build_valid_pointer_set();
+
+        {
+            let scope = RuntimeHandleScope::new();
+            let _handle = scope.root_nanbox_u64(ptr_bits(user as usize));
+            assert!(RuntimeHandleScope::active_len_for_tests() > 0);
+        }
+        assert_eq!(RuntimeHandleScope::active_len_for_tests(), 0);
+
+        let mut marker = RuntimeRootVisitor::for_mark(&valid_ptrs);
+        scan_runtime_handle_roots_mut(&mut marker);
+        unsafe {
+            assert_eq!(
+                (*header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "dropped handle scopes must not retain transient roots"
+            );
+        }
+    }
+
+    #[test]
+    fn test_transient_runtime_handle_string_concat_gc() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+
+        let left_bytes = vec![b'a'; 600_000];
+        let right_bytes = vec![b'b'; 600_000];
+        let left =
+            crate::string::js_string_from_bytes(left_bytes.as_ptr(), left_bytes.len() as u32);
+        let right =
+            crate::string::js_string_from_bytes(right_bytes.as_ptr(), right_bytes.len() as u32);
+
+        trigger_guard.make_arena_trigger_due();
+        let before = gc_collection_count();
+        let result = crate::string::js_string_concat(left, right);
+
+        assert!(
+            gc_collection_count() > before,
+            "concat allocation should trigger copied-minor GC"
+        );
+        unsafe {
+            assert_eq!((*result).byte_len, 1_200_000);
+            let data = (result as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            assert_eq!(*data, b'a');
+            assert_eq!(*data.add(599_999), b'a');
+            assert_eq!(*data.add(600_000), b'b');
+            assert_eq!(*data.add(1_199_999), b'b');
+        }
+    }
+
+    #[test]
+    fn test_transient_runtime_handle_array_push_gc() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+
+        let arr = crate::array::js_array_alloc_with_length(200_000);
+        let value = crate::string::js_string_from_bytes(b"array-payload".as_ptr(), 13);
+        let value_bits = string_bits(value as usize);
+
+        trigger_guard.make_arena_trigger_due();
+        let before = gc_collection_count();
+        let grown = crate::array::js_array_push_f64(arr, f64::from_bits(value_bits));
+
+        assert!(
+            gc_collection_count() > before,
+            "array grow should trigger copied-minor GC"
+        );
+        unsafe {
+            assert_eq!((*grown).length, 200_001);
+            let elements =
+                (grown as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const u64;
+            let stored = *elements.add(200_000);
+            assert_eq!(stored & TAG_MASK, STRING_TAG);
+            let stored_ptr = (stored & POINTER_MASK) as *const crate::StringHeader;
+            assert_ne!(stored_ptr as usize, value as usize);
+            assert_string_bytes(stored_ptr, b"array-payload");
+        }
+    }
+
+    #[test]
+    fn test_transient_runtime_handle_object_set_gc() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+
+        let obj = crate::object::js_object_alloc(0, 1);
+        js_shadow_slot_set(0, ptr_bits(obj as usize));
+        let key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
+        let value = crate::string::js_string_from_bytes(b"object-payload".as_ptr(), 14);
+        force_next_general_arena_alloc_slow();
+
+        trigger_guard.make_arena_trigger_due();
+        let before = gc_collection_count();
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key,
+            f64::from_bits(string_bits(value as usize)),
+        );
+
+        assert!(
+            gc_collection_count() > before,
+            "keys-array allocation should trigger copied-minor GC"
+        );
+        let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+        unsafe {
+            assert!(!(*obj_after).keys_array.is_null());
+            let stored_value = crate::object::js_object_get_field(obj_after, 0).bits();
+            assert_eq!(stored_value & TAG_MASK, STRING_TAG);
+            let stored_value_ptr = (stored_value & POINTER_MASK) as *const crate::StringHeader;
+            assert_ne!(stored_value_ptr as usize, value as usize);
+            assert_string_bytes(stored_value_ptr, b"object-payload");
+
+            let key_value = crate::array::js_array_get((*obj_after).keys_array, 0).bits();
+            assert_eq!(key_value & TAG_MASK, STRING_TAG);
+            let stored_key_ptr = (key_value & POINTER_MASK) as *const crate::StringHeader;
+            assert_ne!(stored_key_ptr as usize, key as usize);
+            assert_string_bytes(stored_key_ptr, b"name");
+        }
+    }
+
+    #[test]
+    fn test_transient_runtime_handle_closure_captures_gc() {
+        extern "C" fn captured_func(_closure: *const crate::closure::ClosureHeader) -> f64 {
+            0.0
+        }
+
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+        crate::closure::test_clear_singleton_closure_caches();
+
+        let captured = crate::string::js_string_from_bytes(b"closure-payload".as_ptr(), 15);
+        let captures = [string_bits(captured as usize)];
+
+        trigger_guard.make_arena_trigger_due();
+        let before = gc_collection_count();
+        let closure = crate::closure::js_closure_alloc_with_captures_singleton(
+            captured_func as *const u8,
+            1,
+            captures.as_ptr(),
+        );
+
+        assert!(
+            gc_collection_count() > before,
+            "closure gc_malloc should trigger copied-minor GC"
+        );
+        unsafe {
+            let capture_slot = (closure as *const u8)
+                .add(std::mem::size_of::<crate::closure::ClosureHeader>())
+                as *const u64;
+            let stored = *capture_slot;
+            assert_eq!(stored & TAG_MASK, STRING_TAG);
+            let stored_ptr = (stored & POINTER_MASK) as *const crate::StringHeader;
+            assert_ne!(stored_ptr as usize, captured as usize);
+            assert_string_bytes(stored_ptr, b"closure-payload");
+        }
+
+        let entries = crate::closure::test_captured_singleton_closure_cache_entries(
+            captured_func as *const u8,
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0.len(), 1);
+        assert_ne!(entries[0].0[0], captures[0]);
+        assert_eq!(entries[0].0[0] & TAG_MASK, STRING_TAG);
+        crate::closure::test_clear_singleton_closure_caches();
     }
 
     #[test]

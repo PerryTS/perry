@@ -424,15 +424,29 @@ pub extern "C" fn js_object_define_property(
 /// Ensure a key appears in the object's keys_array. Used by `Object.defineProperty`
 /// so the property is enumerable-filterable and discoverable by `getOwnPropertyNames`
 /// even when the value is undefined or the property is an accessor (no underlying slot).
+#[allow(unused_assignments)]
 unsafe fn ensure_key_in_keys_array(obj: *mut ObjectHeader, key: *const crate::StringHeader) {
     if obj.is_null() || (obj as usize) < 0x1000000 || key.is_null() {
         return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let key_handle = scope.root_string_ptr(key);
+    let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let mut key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+    macro_rules! refresh_define_property_roots {
+        () => {{
+            obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+            key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+        }};
     }
     // If no keys array exists, create one with this key.
     let keys = (*obj).keys_array;
     if keys.is_null() {
         let new_keys = crate::array::js_array_alloc(4);
+        refresh_define_property_roots!();
         let new_keys = crate::array::js_array_push(new_keys, JSValue::string_ptr(key as *mut _));
+        refresh_define_property_roots!();
         set_object_keys_array(obj, new_keys);
         if (*obj).field_count == 0 {
             (*obj).field_count = 1;
@@ -458,6 +472,8 @@ unsafe fn ensure_key_in_keys_array(obj: *mut ObjectHeader, key: *const crate::St
     // Clone shared keys array if needed, then append.
     let owned_keys = if key_count == (*obj).field_count as usize {
         let cloned = crate::array::js_array_alloc(key_count as u32 + 4);
+        refresh_define_property_roots!();
+        let keys = (*obj).keys_array;
         let src_data = (keys as *const u8).add(8) as *const f64;
         let dst_data = (cloned as *mut u8).add(8) as *mut f64;
         for i in 0..key_count {
@@ -470,7 +486,10 @@ unsafe fn ensure_key_in_keys_array(obj: *mut ObjectHeader, key: *const crate::St
     } else {
         keys
     };
+    let owned_keys_handle = scope.root_raw_mut_ptr(owned_keys);
     let new_keys = crate::array::js_array_push(owned_keys, JSValue::string_ptr(key as *mut _));
+    let _owned_keys = owned_keys_handle.get_raw_mut_ptr::<ArrayHeader>();
+    refresh_define_property_roots!();
     set_object_keys_array(obj, new_keys);
     let new_index = key_count as u32;
     if new_index >= (*obj).field_count {
@@ -1138,12 +1157,15 @@ pub extern "C" fn js_create_namespace(
             // Fallback to undefined — should never happen but defensive.
             return f64::from_bits(0x7FFC_0000_0000_0001);
         }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_handle = scope.root_raw_mut_ptr(obj);
 
         // Initialize an empty keys array so `js_object_set_field_by_name`
         // can append to it. Pre-populating the keys array AND calling
         // set_field_by_name would double every key — the property
         // setter's "add key to keys_array" step runs unconditionally.
         let keys_arr = crate::array::js_array_alloc(0);
+        let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         js_object_set_keys(obj, keys_arr);
 
         // Set each (key, value) pair on the object. We route through
@@ -1161,11 +1183,13 @@ pub extern "C" fn js_create_namespace(
             // (which expects a real `StringHeader*`) gets a valid
             // pointer. Pre-SSO-only would crash on >7-byte export names.
             let key_hdr = crate::string::js_string_from_bytes(key_data, key_len_u);
+            obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
             let val = *values.add(i);
             js_object_set_field_by_name(obj, key_hdr, val);
         }
 
         // NaN-box POINTER_TAG and return.
+        obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let bits = (obj as u64) | 0x7FFD_0000_0000_0000;
         f64::from_bits(bits)
     }
