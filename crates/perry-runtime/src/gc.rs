@@ -3,7 +3,7 @@
 //! Design:
 //! - 8-byte GcHeader prepended to every heap allocation (invisible to callers)
 //! - Arena objects (arrays/objects): discovered by walking arena blocks linearly (zero per-alloc tracking cost)
-//! - Explicit malloc objects (closures/promises/maps/errors and compatibility residents): tracked in MALLOC_STATE
+//! - Explicit malloc objects (promises/maps/errors, large closures, and compatibility residents): tracked in MALLOC_STATE
 //! - Mark phase: precise thread-local roots + optional conservative stack scan + type-specific tracing
 //! - Sweep phase: free malloc objects; arena objects added to free list for reuse
 //! - Trigger: only checked on new arena block allocation or explicit gc() call
@@ -4793,6 +4793,18 @@ impl<'a> RuntimeRootVisitor<'a> {
         }
     }
 
+    /// True during post-move fixup/verification passes where
+    /// metadata-only pointer keys can be rewritten without making those
+    /// keys roots.
+    pub fn is_metadata_rewrite_phase(&self) -> bool {
+        matches!(
+            &self.mode,
+            RuntimeRootVisitMode::Rewrite { .. }
+                | RuntimeRootVisitMode::CopyingRewrite { .. }
+                | RuntimeRootVisitMode::Verify { .. }
+        )
+    }
+
     #[inline]
     fn visit_nanbox_bits(&mut self, bits: u64) -> Option<u64> {
         match &mut self.mode {
@@ -5987,6 +5999,9 @@ unsafe fn scan_dirty_closure_slots(
 ) {
     let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
     scan_dirty_gc_child_slots(header, dirty_pages, stats, visit_slot);
+    crate::closure::visit_closure_dynamic_prop_value_slots_mut(user_ptr as usize, |slot| {
+        scan_dirty_slot(slot, dirty_pages, stats, visit_slot);
+    });
 }
 
 unsafe fn scan_dirty_promise_slots(
@@ -6403,7 +6418,8 @@ impl CopyingNurseryPreflight {
     unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
         match (*header).obj_type {
-            GC_TYPE_ARRAY | GC_TYPE_OBJECT | GC_TYPE_CLOSURE => self.scan_gc_child_fields(header),
+            GC_TYPE_ARRAY | GC_TYPE_OBJECT => self.scan_gc_child_fields(header),
+            GC_TYPE_CLOSURE => self.scan_closure_fields(header, user_ptr),
             GC_TYPE_PROMISE => self.scan_promise_fields(user_ptr),
             GC_TYPE_ERROR => self.scan_error_fields(user_ptr),
             GC_TYPE_MAP => self.scan_map_fields(user_ptr),
@@ -6419,6 +6435,16 @@ impl CopyingNurseryPreflight {
                 self.scan_slot(slot as *const u64);
             }
         }
+    }
+
+    unsafe fn scan_closure_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
+        self.scan_gc_child_fields(header);
+        crate::closure::visit_closure_dynamic_prop_values_mut(user_ptr as usize, |value| {
+            self.check_bits_with_reason(
+                value.to_bits(),
+                CopiedMinorFallbackReason::PinnedYoungTransitive,
+            );
+        });
     }
 
     unsafe fn scan_slot(&mut self, slot: *const u64) {
@@ -6668,6 +6694,9 @@ impl CopyingNurseryCollector {
 
         set_forwarding_address(header, new_user);
         (*header).gc_flags &= !GC_FLAG_MARKED;
+        if (*header).obj_type == GC_TYPE_CLOSURE {
+            crate::closure::closure_dynamic_props_owner_moved(old_user as usize, new_user as usize);
+        }
 
         self.worklist.push(new_header);
         self.moved_headers.push(new_header);
@@ -6725,7 +6754,8 @@ impl CopyingNurseryCollector {
     unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
         match (*header).obj_type {
-            GC_TYPE_ARRAY | GC_TYPE_OBJECT | GC_TYPE_CLOSURE => self.scan_gc_child_fields(header),
+            GC_TYPE_ARRAY | GC_TYPE_OBJECT => self.scan_gc_child_fields(header),
+            GC_TYPE_CLOSURE => self.scan_closure_fields(header, user_ptr),
             GC_TYPE_PROMISE => self.scan_promise_fields(header, user_ptr),
             GC_TYPE_ERROR => self.scan_error_fields(header, user_ptr),
             GC_TYPE_MAP => self.scan_map_fields(header, user_ptr),
@@ -6741,6 +6771,13 @@ impl CopyingNurseryCollector {
                 self.visit_slot_with_parent(slot, header, false);
             }
         }
+    }
+
+    unsafe fn scan_closure_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
+        self.scan_gc_child_fields(header);
+        crate::closure::visit_closure_dynamic_prop_value_slots_mut(user_ptr as usize, |slot| {
+            self.visit_slot_with_parent(slot, header, true);
+        });
     }
 
     unsafe fn scan_promise_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
@@ -7738,6 +7775,9 @@ unsafe fn trace_closure(
 ) {
     let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
     trace_gc_child_slots(header, valid_ptrs, worklist);
+    crate::closure::visit_closure_dynamic_prop_values_mut(user_ptr as usize, |value| {
+        mark_field_into_worklist(value.to_bits(), valid_ptrs, worklist);
+    });
 }
 
 /// Trace promise fields
@@ -8564,6 +8604,12 @@ fn evacuate_tenured_nursery_objects_collecting(
             (*new_header)._reserved = (*header)._reserved;
             layout_transfer(user_ptr, new_user);
             (*new_header).gc_flags |= GC_FLAG_MARKED;
+            if (*header).obj_type == GC_TYPE_CLOSURE {
+                crate::closure::closure_dynamic_props_owner_moved(
+                    user_ptr as usize,
+                    new_user as usize,
+                );
+            }
             // Carry TENURED forward — the new copy is logically
             // the same object, just relocated. Without this the
             // age-bump pass on the next cycle would treat it as
@@ -8659,6 +8705,12 @@ fn evacuate_selected_old_pages_collecting(
             (*new_header).gc_flags |= GC_FLAG_MARKED
                 | GC_FLAG_TENURED
                 | (flags & (GC_FLAG_SHAPE_SHARED | GC_FLAG_INTERNED));
+            if (*header).obj_type == GC_TYPE_CLOSURE {
+                crate::closure::closure_dynamic_props_owner_moved(
+                    user_ptr as usize,
+                    new_user as usize,
+                );
+            }
 
             evacuated_original_headers.push(header);
             evacuated_new_headers.push(new_header);
@@ -8856,6 +8908,9 @@ unsafe fn rewrite_map_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
 unsafe fn rewrite_closure_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
     let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
     rewrite_gc_child_slots(header, valid_ptrs);
+    crate::closure::visit_closure_dynamic_prop_value_slots_mut(user_ptr as usize, |slot| {
+        rewrite_slot(slot, valid_ptrs);
+    });
 }
 
 unsafe fn rewrite_promise_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
@@ -9188,6 +9243,9 @@ unsafe fn verify_map_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, sur
 unsafe fn verify_closure_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
     let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
     verify_gc_child_slots(header, valid_ptrs, surface);
+    crate::closure::visit_closure_dynamic_prop_value_slots_mut(user_ptr as usize, |slot| {
+        verify_slot(slot as *const u64, valid_ptrs, surface);
+    });
 }
 
 unsafe fn verify_promise_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
@@ -9884,6 +9942,7 @@ pub fn gc_init() {
     // capture heap words, so copied-minor must rewrite them after moving
     // captured young values or future cache hits miss on stale addresses.
     gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
+    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
     // perry/tui hook + state slot pools — they store raw NaN-boxed
     // value bits but the GC has no other way to know which slots hold
     // heap pointers (arrays/objects/strings stashed via setState /
@@ -10738,8 +10797,17 @@ mod tests {
     }
 
     fn lock_safe_runtime_scanner_closure() -> (*mut u8, u64, f64) {
-        let ptr = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0)
-            as *mut u8;
+        let ptr = gc_malloc(
+            std::mem::size_of::<crate::closure::ClosureHeader>(),
+            GC_TYPE_CLOSURE,
+        );
+        unsafe {
+            let closure = ptr as *mut crate::closure::ClosureHeader;
+            (*closure).func_ptr = test_no_capture_singleton_func as *const u8;
+            (*closure).capture_count = 0;
+            (*closure).type_tag = crate::closure::CLOSURE_MAGIC;
+            layout_init_pointer_free(ptr);
+        }
         let bits = POINTER_TAG | (ptr as u64 & POINTER_MASK);
         (ptr, bits, f64::from_bits(bits))
     }
@@ -11806,6 +11874,112 @@ mod tests {
             }
         }
         ptr
+    }
+
+    #[test]
+    fn test_small_js_closure_alloc_uses_managed_nursery_page() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let closure =
+            crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 2);
+        let header = unsafe { header_from_user_ptr(closure as *const u8) };
+
+        unsafe {
+            assert_eq!((*header).obj_type, GC_TYPE_CLOSURE);
+            assert_ne!((*header).gc_flags & GC_FLAG_ARENA, 0);
+        }
+        assert_eq!(
+            crate::arena::classify_heap_generation(closure as usize),
+            crate::arena::HeapGeneration::Nursery
+        );
+        assert!(
+            !malloc_user_ptr_tracked(closure as *mut u8),
+            "ordinary closures should not be tracked in MALLOC_STATE"
+        );
+    }
+
+    #[test]
+    fn test_large_js_closure_alloc_remains_malloc_tracked() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let max_managed_captures = (LARGE_OBJECT_THRESHOLD_BYTES
+            - GC_HEADER_SIZE
+            - std::mem::size_of::<crate::closure::ClosureHeader>())
+            / std::mem::size_of::<u64>();
+        let closure = crate::closure::js_closure_alloc(
+            test_captured_singleton_func as *const u8,
+            (max_managed_captures + 1) as u32,
+        );
+        let header = unsafe { header_from_user_ptr(closure as *const u8) };
+
+        unsafe {
+            assert_eq!((*header).obj_type, GC_TYPE_CLOSURE);
+            assert_eq!((*header).gc_flags & GC_FLAG_ARENA, 0);
+        }
+        assert!(
+            malloc_user_ptr_tracked(closure as *mut u8),
+            "large closure environments should keep the explicit gc_malloc path"
+        );
+    }
+
+    #[test]
+    fn test_old_managed_closure_capture_write_dirties_old_page() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let child = young_leaf();
+        let payload =
+            std::mem::size_of::<crate::closure::ClosureHeader>() + std::mem::size_of::<u64>();
+        let closure = crate::arena::arena_alloc_gc_old(
+            payload,
+            std::mem::align_of::<crate::closure::ClosureHeader>(),
+            GC_TYPE_CLOSURE,
+        ) as *mut crate::closure::ClosureHeader;
+        unsafe {
+            (*closure).func_ptr = test_captured_singleton_func as *const u8;
+            (*closure).capture_count = 1;
+            (*closure).type_tag = crate::closure::CLOSURE_MAGIC;
+            layout_init_pointer_free(closure as *mut u8);
+        }
+        let slot = unsafe {
+            (closure as *mut u8).add(std::mem::size_of::<crate::closure::ClosureHeader>())
+                as *mut u64
+        };
+        let page = crate::arena::generation_page_for_addr(slot as usize);
+        crate::arena::old_page_clear_dirty(page);
+        assert!(!old_page_dirty_for(page));
+
+        crate::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(ptr_bits(child)));
+
+        assert!(old_page_dirty_for(page));
+        assert!(remembered_set_size() > 0);
+    }
+
+    #[test]
+    fn test_copying_minor_relocates_managed_closure_and_rewrites_capture() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let child = young_leaf();
+        let closure =
+            crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 1);
+        crate::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(ptr_bits(child)));
+        js_shadow_slot_set(0, ptr_bits(closure as usize));
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let closure_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        let capture_after_bits = unsafe {
+            let slot = (closure_after as *const u8)
+                .add(std::mem::size_of::<crate::closure::ClosureHeader>())
+                as *const u64;
+            *slot
+        };
+        let capture_after = (capture_after_bits & POINTER_MASK) as usize;
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_ne!(closure_after, closure as usize);
+        assert_ne!(capture_after, child);
+        assert!(crate::arena::pointer_in_nursery(closure_after));
+        assert!(crate::arena::pointer_in_nursery(capture_after));
+        assert!(
+            trace.copying_nursery.copied_objects >= 2,
+            "managed closure and captured child should both move"
+        );
     }
 
     #[test]
@@ -13229,13 +13403,36 @@ mod tests {
         js_shadow_slot_set(0, 0);
         let _ = gc_collect_minor();
 
+        let no_capture_after = crate::closure::test_singleton_closure_cache_entry(no_capture_func)
+            .expect("no-capture singleton cache should remain populated");
+        assert_ne!(
+            no_capture_after, no_capture,
+            "managed no-capture singleton should be rewritten after copied-minor"
+        );
         assert_eq!(
             crate::closure::js_closure_alloc_singleton(no_capture_func),
-            no_capture,
+            no_capture_after,
             "no-capture singleton should remain a cache hit across copied-minor"
         );
 
-        let capture_after_bits = unsafe { *capture_slot };
+        let after_entries =
+            crate::closure::test_captured_singleton_closure_cache_entries(captured_func);
+        assert_eq!(after_entries.len(), 1);
+        let captured_after = after_entries[0].1;
+        assert_eq!(
+            crate::arena::classify_heap_space(captured_after as usize),
+            crate::arena::active_survivor_space()
+        );
+        assert_ne!(
+            captured_after, captured,
+            "captured singleton closure should be rewritten after copied-minor"
+        );
+
+        let capture_after_slot = unsafe {
+            (captured_after as *mut u8).add(std::mem::size_of::<crate::closure::ClosureHeader>())
+                as *mut u64
+        };
+        let capture_after_bits = unsafe { *capture_after_slot };
         let capture_after = (capture_after_bits & POINTER_MASK) as usize;
         assert_ne!(
             capture_after, captured_value,
@@ -13246,10 +13443,7 @@ mod tests {
             crate::arena::active_survivor_space()
         );
 
-        let after_entries =
-            crate::closure::test_captured_singleton_closure_cache_entries(captured_func);
-        assert_eq!(after_entries.len(), 1);
-        assert_eq!(after_entries[0].1, captured);
+        assert_eq!(after_entries[0].1, captured_after);
         assert_eq!(
             after_entries[0].0,
             vec![capture_after_bits],
@@ -13263,7 +13457,7 @@ mod tests {
                 1,
                 rewritten_captures.as_ptr(),
             ),
-            captured,
+            captured_after,
             "future cache lookups should hit with the rewritten capture key"
         );
     }
@@ -15043,6 +15237,7 @@ mod tests {
         let captured = crate::string::js_string_from_bytes(b"closure-payload".as_ptr(), 15);
         let captures = [string_bits(captured as usize)];
 
+        force_next_general_arena_alloc_slow();
         trigger_guard.make_arena_trigger_due();
         let before = gc_collection_count();
         let closure = crate::closure::js_closure_alloc_with_captures_singleton(
@@ -15053,7 +15248,7 @@ mod tests {
 
         assert!(
             gc_collection_count() > before,
-            "closure gc_malloc should trigger copied-minor GC"
+            "closure arena allocation should trigger copied-minor GC"
         );
         unsafe {
             let capture_slot = (closure as *const u8)

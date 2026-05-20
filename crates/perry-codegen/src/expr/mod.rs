@@ -4714,7 +4714,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // keys on (func_ptr, capture_bits…) so distinct capture
             // values still produce distinct closures; identical
             // (func, captures) at a hot call site re-uses the cached
-            // ClosureHeader and skips gc_malloc + gc_check_trigger.
+            // ClosureHeader and skips per-evaluation closure allocation.
             //
             // We skip the captured-singleton path for closures whose
             // body mutates an unboxed capture: those want fresh
@@ -7676,7 +7676,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // FuncRef wrappers always have 0 captures, so we can route
             // through the singleton-cached allocator: same func_ptr always
             // yields the same ClosureHeader. Eliminates the per-evaluation
-            // gc_malloc + gc_check_trigger that was the dominant cost in
+            // closure allocation that was the dominant cost in
             // tight loops which pass a function as a callback.
             let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
             Ok(nanbox_pointer_inline(blk, &closure_handle))

@@ -206,7 +206,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_closure_alloc", I64, &[PTR, I32]);
     // Singleton-cached variant for non-capturing closures and FuncRef
     // wrappers — same `func_ptr` returns the same cached ClosureHeader,
-    // skipping gc_malloc + gc_check_trigger on the hot loop. See
+    // skipping per-evaluation closure allocation on the hot loop. See
     // `crates/perry-runtime/src/closure.rs::js_closure_alloc_singleton`.
     module.declare_function("js_closure_alloc_singleton", I64, &[PTR]);
     // Singleton-cached variant for closures with captures, keyed by
