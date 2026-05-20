@@ -732,6 +732,7 @@ run_copied_minor_fallback_report() {
     local parser_output="$TMPDIR/copied_minor_fallback_report_parser.$$.$RANDOM"
     if "$PYTHON" scripts/copied_minor_fallback_report.py \
         "${report_args[@]}" \
+        --strict-fallback-evidence \
         --out "$report_out" >"$parser_output" 2>&1; then
         local top_summary
         top_summary=$("$PYTHON" - "$report_out" <<'PY'

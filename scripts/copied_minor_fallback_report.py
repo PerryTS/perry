@@ -47,6 +47,14 @@ LAYOUT_SCAN_TOTALS = (
 
 FORBIDDEN_TARGET_MALLOC_KINDS = ("string", "closure")
 
+DEFAULT_SAFE_FALLBACK_WORKLOADS = (
+    "json_roundtrip",
+    "string_churn",
+    "object_property_churn",
+    "mixed_request_shaping",
+)
+DEFAULT_SAFE_FALLBACK_WORKLOAD_SET = set(DEFAULT_SAFE_FALLBACK_WORKLOADS)
+
 
 def empty_reason_counts() -> dict[str, int]:
     return {reason: 0 for reason in KNOWN_FALLBACK_REASONS}
@@ -423,7 +431,57 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fail strict target-collector architecture gates for named trace workloads.",
     )
+    parser.add_argument(
+        "--strict-fallback-evidence",
+        action="store_true",
+        help="Fail if default-safe copied-minor fallback evidence uses any fallback path.",
+    )
     return parser
+
+
+def run_strict_fallback_evidence_gates(
+    workloads: dict[str, dict[str, Any]],
+    errors: list[str],
+) -> None:
+    strict_workloads = {
+        name: workload
+        for name, workload in workloads.items()
+        if name in DEFAULT_SAFE_FALLBACK_WORKLOAD_SET
+    }
+    if not strict_workloads:
+        errors.append(
+            "strict fallback evidence requires at least one known default-safe workload"
+        )
+
+    for name, workload in strict_workloads.items():
+        reason_counts = workload["fallback_reason_counts"]
+        non_none = {
+            reason: count
+            for reason, count in reason_counts.items()
+            if reason != "none" and count > 0
+        }
+        if non_none:
+            errors.append(f"{name}: fallback reasons other than none: {non_none}")
+        if workload["copying_nursery"]["ineligible_cycles"] > 0:
+            errors.append(
+                f"{name}: copied-minor ineligible cycles="
+                f"{workload['copying_nursery']['ineligible_cycles']}"
+            )
+        if workload["conservative_pinned_bytes"] != 0:
+            errors.append(
+                f"{name}: conservative_pinned_bytes="
+                f"{workload['conservative_pinned_bytes']}, want 0"
+            )
+        legacy_pinned = workload["legacy_copy_only_scanner_pinned"]["bytes"]
+        if legacy_pinned != 0:
+            errors.append(
+                f"{name}: legacy_copy_only_scanner_pinned.bytes={legacy_pinned}, want 0"
+            )
+        if workload["copying_nursery"]["malloc_registry_rebuilds"] != 0:
+            errors.append(
+                f"{name}: malloc_registry_rebuilds="
+                f"{workload['copying_nursery']['malloc_registry_rebuilds']}, want 0"
+            )
 
 
 def run_target_collector_gates(
@@ -556,6 +614,8 @@ def main(argv: list[str]) -> int:
     if args.target_collector_gates:
         run_target_collector_gates(workloads, errors)
         errors.extend(old_page_errors)
+    if args.strict_fallback_evidence:
+        run_strict_fallback_evidence_gates(workloads, errors)
 
     write_report(report, args.out)
 
