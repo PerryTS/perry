@@ -2999,6 +2999,46 @@ impl SH for Expr {
                 date.as_ref().hash(h);
                 value.as_ref().hash(h);
             }
+            Expr::DateSetFullYear { date, value } => {
+                tag(h, 478);
+                date.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
+            Expr::DateSetMonth { date, value } => {
+                tag(h, 479);
+                date.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
+            Expr::DateSetDate { date, value } => {
+                tag(h, 480);
+                date.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
+            Expr::DateSetHours { date, value } => {
+                tag(h, 481);
+                date.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
+            Expr::DateSetMinutes { date, value } => {
+                tag(h, 482);
+                date.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
+            Expr::DateSetSeconds { date, value } => {
+                tag(h, 483);
+                date.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
+            Expr::DateSetMilliseconds { date, value } => {
+                tag(h, 484);
+                date.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
+            Expr::DateSetTime { date, value } => {
+                tag(h, 485);
+                date.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
             Expr::DateValueOf(e) => {
                 tag(h, 338);
                 e.as_ref().hash(h);

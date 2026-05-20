@@ -3605,9 +3605,16 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                 let date_expr = lower_expr(ctx, &member.obj)?;
                                 return Ok(Expr::DateToJSON(Box::new(date_expr)));
                             }
-                            // UTC setters — mutate the local variable in place
+                            // UTC setters — mutate the local variable in place.
+                            // Local-time setters (#1187) live in the same arm —
+                            // pre-fix `setHours` / `setDate` / etc. fell through
+                            // and surfaced as `(number).setHours is not a
+                            // function` at runtime because Date is stored as a
+                            // raw f64 with no method table.
                             "setUTCFullYear" | "setUTCMonth" | "setUTCDate" | "setUTCHours"
-                            | "setUTCMinutes" | "setUTCSeconds" | "setUTCMilliseconds" => {
+                            | "setUTCMinutes" | "setUTCSeconds" | "setUTCMilliseconds"
+                            | "setFullYear" | "setMonth" | "setDate" | "setHours"
+                            | "setMinutes" | "setSeconds" | "setMilliseconds" | "setTime" => {
                                 if !args.is_empty() {
                                     let value_expr = args.into_iter().next().unwrap();
                                     let date_expr = lower_expr(ctx, &member.obj)?;
@@ -3637,6 +3644,38 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                             value: Box::new(value_expr),
                                         },
                                         "setUTCMilliseconds" => Expr::DateSetUtcMilliseconds {
+                                            date: Box::new(date_expr.clone()),
+                                            value: Box::new(value_expr),
+                                        },
+                                        "setFullYear" => Expr::DateSetFullYear {
+                                            date: Box::new(date_expr.clone()),
+                                            value: Box::new(value_expr),
+                                        },
+                                        "setMonth" => Expr::DateSetMonth {
+                                            date: Box::new(date_expr.clone()),
+                                            value: Box::new(value_expr),
+                                        },
+                                        "setDate" => Expr::DateSetDate {
+                                            date: Box::new(date_expr.clone()),
+                                            value: Box::new(value_expr),
+                                        },
+                                        "setHours" => Expr::DateSetHours {
+                                            date: Box::new(date_expr.clone()),
+                                            value: Box::new(value_expr),
+                                        },
+                                        "setMinutes" => Expr::DateSetMinutes {
+                                            date: Box::new(date_expr.clone()),
+                                            value: Box::new(value_expr),
+                                        },
+                                        "setSeconds" => Expr::DateSetSeconds {
+                                            date: Box::new(date_expr.clone()),
+                                            value: Box::new(value_expr),
+                                        },
+                                        "setMilliseconds" => Expr::DateSetMilliseconds {
+                                            date: Box::new(date_expr.clone()),
+                                            value: Box::new(value_expr),
+                                        },
+                                        "setTime" => Expr::DateSetTime {
                                             date: Box::new(date_expr.clone()),
                                             value: Box::new(value_expr),
                                         },

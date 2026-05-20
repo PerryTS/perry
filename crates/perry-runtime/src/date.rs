@@ -875,6 +875,164 @@ pub extern "C" fn js_date_set_utc_milliseconds(timestamp: f64, value: f64) -> f6
     )
 }
 
+// --- Local-time setters (#1187) ---
+//
+// `setHours` / `setDate` / `setMonth` / `setFullYear` / etc. interpret their
+// argument in the running process's *local* timezone, so the rebuild has to
+// round-trip through `timestamp_to_local_components`. The local-clock
+// components get reassembled with the requested component swapped, then we
+// subtract the tz offset at that instant to land back at a true UTC epoch.
+// Mirrors the conversion in `js_date_new_local_components`. NaN passes
+// through untouched so an Invalid Date stays an Invalid Date.
+
+fn rebuild_local_with(
+    timestamp: f64,
+    year: Option<i32>,
+    month: Option<u32>,
+    day: Option<u32>,
+    hour: Option<u32>,
+    minute: Option<u32>,
+    second: Option<u32>,
+    millisecond: Option<i64>,
+) -> f64 {
+    if timestamp.is_nan() {
+        return timestamp;
+    }
+    let ts_ms = timestamp as i64;
+    let secs = ts_ms.div_euclid(1000);
+    let cur_ms = ts_ms.rem_euclid(1000);
+    let (cy, cm, cd, ch, cmi, cs, _) = timestamp_to_local_components(secs);
+    let new_year = year.unwrap_or(cy);
+    let new_month = month.unwrap_or(cm);
+    let new_day = day.unwrap_or(cd);
+    let new_hour = hour.unwrap_or(ch);
+    let new_minute = minute.unwrap_or(cmi);
+    let new_second = second.unwrap_or(cs);
+    let new_ms = millisecond.unwrap_or(cur_ms);
+    let local_secs = components_to_timestamp(
+        new_year, new_month, new_day, new_hour, new_minute, new_second,
+    );
+    let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(local_secs);
+    let utc_secs = local_secs - tz_offset;
+    let result = (utc_secs * 1000 + new_ms) as f64;
+    let result = date_or_invalid(result);
+    if !result.is_nan() {
+        register_date_bits(result.to_bits());
+    }
+    result
+}
+
+#[no_mangle]
+pub extern "C" fn js_date_set_full_year(timestamp: f64, value: f64) -> f64 {
+    rebuild_local_with(
+        timestamp,
+        Some(value as i32),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_date_set_month(timestamp: f64, value: f64) -> f64 {
+    // JS months are 0-based; components_to_timestamp wants 1-based.
+    rebuild_local_with(
+        timestamp,
+        None,
+        Some(value as u32 + 1),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_date_set_date(timestamp: f64, value: f64) -> f64 {
+    rebuild_local_with(
+        timestamp,
+        None,
+        None,
+        Some(value as u32),
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_date_set_hours(timestamp: f64, value: f64) -> f64 {
+    rebuild_local_with(
+        timestamp,
+        None,
+        None,
+        None,
+        Some(value as u32),
+        None,
+        None,
+        None,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_date_set_minutes(timestamp: f64, value: f64) -> f64 {
+    rebuild_local_with(
+        timestamp,
+        None,
+        None,
+        None,
+        None,
+        Some(value as u32),
+        None,
+        None,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_date_set_seconds(timestamp: f64, value: f64) -> f64 {
+    rebuild_local_with(
+        timestamp,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(value as u32),
+        None,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_date_set_milliseconds(timestamp: f64, value: f64) -> f64 {
+    rebuild_local_with(
+        timestamp,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(value as i64),
+    )
+}
+
+/// `date.setTime(ms)` — replace the entire time value. NaN in produces an
+/// Invalid Date; otherwise the new ms timestamp is registered so future
+/// `instanceof Date` checks succeed.
+#[no_mangle]
+pub extern "C" fn js_date_set_time(_timestamp: f64, value: f64) -> f64 {
+    let result = date_or_invalid(value);
+    if !result.is_nan() {
+        register_date_bits(result.to_bits());
+    }
+    result
+}
+
 // --- String-returning Date methods ---
 
 const WEEKDAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

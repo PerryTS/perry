@@ -2200,6 +2200,14 @@ impl JsEmitter {
             Expr::DateSetUtcMinutes { date, value } => { self.emit_expr(date); self.output.push_str(".setUTCMinutes("); self.emit_expr(value); self.output.push(')'); }
             Expr::DateSetUtcSeconds { date, value } => { self.emit_expr(date); self.output.push_str(".setUTCSeconds("); self.emit_expr(value); self.output.push(')'); }
             Expr::DateSetUtcMilliseconds { date, value } => { self.emit_expr(date); self.output.push_str(".setUTCMilliseconds("); self.emit_expr(value); self.output.push(')'); }
+            Expr::DateSetFullYear { date, value } => { self.emit_expr(date); self.output.push_str(".setFullYear("); self.emit_expr(value); self.output.push(')'); }
+            Expr::DateSetMonth { date, value } => { self.emit_expr(date); self.output.push_str(".setMonth("); self.emit_expr(value); self.output.push(')'); }
+            Expr::DateSetDate { date, value } => { self.emit_expr(date); self.output.push_str(".setDate("); self.emit_expr(value); self.output.push(')'); }
+            Expr::DateSetHours { date, value } => { self.emit_expr(date); self.output.push_str(".setHours("); self.emit_expr(value); self.output.push(')'); }
+            Expr::DateSetMinutes { date, value } => { self.emit_expr(date); self.output.push_str(".setMinutes("); self.emit_expr(value); self.output.push(')'); }
+            Expr::DateSetSeconds { date, value } => { self.emit_expr(date); self.output.push_str(".setSeconds("); self.emit_expr(value); self.output.push(')'); }
+            Expr::DateSetMilliseconds { date, value } => { self.emit_expr(date); self.output.push_str(".setMilliseconds("); self.emit_expr(value); self.output.push(')'); }
+            Expr::DateSetTime { date, value } => { self.emit_expr(date); self.output.push_str(".setTime("); self.emit_expr(value); self.output.push(')'); }
             Expr::DateValueOf(d) => { self.emit_expr(d); self.output.push_str(".valueOf()"); }
             Expr::DateToDateString(d) => { self.emit_expr(d); self.output.push_str(".toDateString()"); }
             Expr::DateToTimeString(d) => { self.emit_expr(d); self.output.push_str(".toTimeString()"); }

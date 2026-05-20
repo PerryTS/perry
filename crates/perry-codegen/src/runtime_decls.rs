@@ -872,6 +872,15 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_date_set_utc_minutes", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_date_set_utc_seconds", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_date_set_utc_milliseconds", DOUBLE, &[DOUBLE, DOUBLE]);
+    // Local-time setters (#1187).
+    module.declare_function("js_date_set_full_year", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_date_set_month", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_date_set_date", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_date_set_hours", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_date_set_minutes", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_date_set_seconds", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_date_set_milliseconds", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_date_set_time", DOUBLE, &[DOUBLE, DOUBLE]);
     // Math extras (stubs in expr.rs had fallen through to no-op/passthrough).
     module.declare_function("js_math_clz32", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_cbrt", DOUBLE, &[DOUBLE]);

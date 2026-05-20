@@ -754,7 +754,15 @@ where
         | Expr::DateSetUtcHours { date, value }
         | Expr::DateSetUtcMinutes { date, value }
         | Expr::DateSetUtcSeconds { date, value }
-        | Expr::DateSetUtcMilliseconds { date, value } => {
+        | Expr::DateSetUtcMilliseconds { date, value }
+        | Expr::DateSetFullYear { date, value }
+        | Expr::DateSetMonth { date, value }
+        | Expr::DateSetDate { date, value }
+        | Expr::DateSetHours { date, value }
+        | Expr::DateSetMinutes { date, value }
+        | Expr::DateSetSeconds { date, value }
+        | Expr::DateSetMilliseconds { date, value }
+        | Expr::DateSetTime { date, value } => {
             f(date);
             f(value);
         }
@@ -2100,7 +2108,15 @@ where
         | Expr::DateSetUtcHours { date, value }
         | Expr::DateSetUtcMinutes { date, value }
         | Expr::DateSetUtcSeconds { date, value }
-        | Expr::DateSetUtcMilliseconds { date, value } => {
+        | Expr::DateSetUtcMilliseconds { date, value }
+        | Expr::DateSetFullYear { date, value }
+        | Expr::DateSetMonth { date, value }
+        | Expr::DateSetDate { date, value }
+        | Expr::DateSetHours { date, value }
+        | Expr::DateSetMinutes { date, value }
+        | Expr::DateSetSeconds { date, value }
+        | Expr::DateSetMilliseconds { date, value }
+        | Expr::DateSetTime { date, value } => {
             f(date);
             f(value);
         }

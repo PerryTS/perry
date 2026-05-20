@@ -2308,6 +2308,40 @@ pub enum Expr {
         value: Box<Expr>,
     },
 
+    // Date setters (local-time variants) — return the new timestamp (#1187)
+    DateSetFullYear {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetMonth {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetDate {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetHours {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetMinutes {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetSeconds {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetMilliseconds {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetTime {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+
     // Date misc
     DateValueOf(Box<Expr>),      // date.valueOf() -> number (same as getTime)
     DateToDateString(Box<Expr>), // date.toDateString() -> string
