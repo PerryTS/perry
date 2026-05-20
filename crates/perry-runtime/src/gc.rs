@@ -163,6 +163,10 @@ pub const GC_LAYOUT_STATE_MASK: u16 = 0xC000;
 const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
 pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
 const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
+// Side masks are a win for larger layouts, but a memory tax for the tiny
+// mixed objects that dominate JSON churn. Keep small pointer-bearing layouts
+// in UNKNOWN state so tracing falls back to the legacy full-slot walk.
+const GC_LAYOUT_SIDE_MASK_MIN_SLOTS: usize = 16;
 
 #[derive(Clone)]
 enum LayoutSlotMask {
@@ -3318,6 +3322,27 @@ unsafe fn layout_header_for_user(user_ptr: usize) -> Option<*mut GcHeader> {
     matches!(obj_type, GC_TYPE_ARRAY | GC_TYPE_OBJECT | GC_TYPE_CLOSURE).then_some(header)
 }
 
+unsafe fn layout_slot_capacity_for_user(header: *const GcHeader, user_ptr: usize) -> usize {
+    match (*header).obj_type {
+        GC_TYPE_ARRAY => (*(user_ptr as *const crate::array::ArrayHeader)).length as usize,
+        GC_TYPE_OBJECT => (*(user_ptr as *const crate::object::ObjectHeader)).field_count as usize,
+        GC_TYPE_CLOSURE => crate::closure::real_capture_count(
+            (*(user_ptr as *const crate::closure::ClosureHeader)).capture_count,
+        ) as usize,
+        _ => 0,
+    }
+}
+
+#[inline]
+unsafe fn layout_side_mask_worth_tracking(
+    header: *const GcHeader,
+    user_ptr: usize,
+    slot_index: usize,
+) -> bool {
+    slot_index >= GC_LAYOUT_SIDE_MASK_MIN_SLOTS
+        || layout_slot_capacity_for_user(header, user_ptr) >= GC_LAYOUT_SIDE_MASK_MIN_SLOTS
+}
+
 pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
@@ -3372,11 +3397,18 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         LAYOUT_SLOT_MASKS.with(|m| {
             let mut masks = m.borrow_mut();
             if pointer {
-                let mask = masks
-                    .entry(parent_user)
-                    .or_insert_with(|| LayoutSlotMask::Inline(0));
-                mask.set_slot(slot_index);
-                set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+                if let Some(mask) = masks.get_mut(&parent_user) {
+                    mask.set_slot(slot_index);
+                } else if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE
+                    && layout_side_mask_worth_tracking(header, parent_user, slot_index)
+                {
+                    let mut mask = LayoutSlotMask::Inline(0);
+                    mask.set_slot(slot_index);
+                    masks.insert(parent_user, mask);
+                    set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+                } else {
+                    set_layout_state(header, GC_LAYOUT_UNKNOWN);
+                }
             } else if let Some(mask) = masks.get_mut(&parent_user) {
                 mask.clear_slot(slot_index);
                 if mask.is_empty() {
@@ -3423,6 +3455,11 @@ pub(crate) unsafe fn layout_rebuild_from_slots(
 
     if mask.is_empty() {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+        LAYOUT_SLOT_MASKS.with(|m| {
+            m.borrow_mut().remove(&(user_ptr as usize));
+        });
+    } else if slot_count < GC_LAYOUT_SIDE_MASK_MIN_SLOTS {
+        set_layout_state(header, GC_LAYOUT_UNKNOWN);
         LAYOUT_SLOT_MASKS.with(|m| {
             m.borrow_mut().remove(&(user_ptr as usize));
         });
@@ -9165,7 +9202,7 @@ mod tests {
     }
 
     #[test]
-    fn test_layout_mask_mixed_array_marks_only_pointer_slots_and_clears() {
+    fn test_layout_mask_small_mixed_array_falls_back_to_full_scan() {
         clear_marks();
         clear_mark_seeds();
 
@@ -9180,7 +9217,7 @@ mod tests {
         );
         crate::array::js_array_set_f64(arr, 2, 3.0);
 
-        assert_eq!(test_layout_pointer_slot_count(arr as usize, 3), Some(1));
+        assert_eq!(test_layout_pointer_slot_count(arr as usize, 3), None);
 
         let valid_ptrs = build_valid_pointer_set();
         let mut worklist = Vec::new();
@@ -9189,10 +9226,10 @@ mod tests {
             trace_array(arr as *mut u8, &valid_ptrs, &mut worklist);
             assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
         }
-        assert_eq!(test_trace_slot_reads(), 1);
+        assert_eq!(test_trace_slot_reads(), 3);
 
         crate::array::js_array_set_f64(arr, 1, 2.0);
-        assert_eq!(test_layout_pointer_slot_count(arr as usize, 3), Some(0));
+        assert_eq!(test_layout_pointer_slot_count(arr as usize, 3), None);
 
         clear_marks();
         clear_mark_seeds();
@@ -9255,7 +9292,7 @@ mod tests {
         );
         crate::object::js_object_set_field(obj, 2, crate::value::JSValue::number(3.0));
 
-        assert_eq!(test_layout_pointer_slot_count(obj as usize, 3), Some(1));
+        assert_eq!(test_layout_pointer_slot_count(obj as usize, 3), None);
         let valid_ptrs = build_valid_pointer_set();
         let mut worklist = Vec::new();
         test_reset_trace_slot_reads();
@@ -9263,7 +9300,7 @@ mod tests {
             trace_object(obj as *mut u8, &valid_ptrs, &mut worklist);
             assert_ne!((*object_child_header).gc_flags & GC_FLAG_MARKED, 0);
         }
-        assert_eq!(test_trace_slot_reads(), 1);
+        assert_eq!(test_trace_slot_reads(), 3);
 
         let closure_child =
             crate::string::js_string_from_bytes(b"closure-child".as_ptr(), 13) as *mut u8;
@@ -9277,7 +9314,7 @@ mod tests {
         );
         crate::closure::js_closure_set_capture_f64(closure, 2, 30.0);
 
-        assert_eq!(test_layout_pointer_slot_count(closure as usize, 3), Some(1));
+        assert_eq!(test_layout_pointer_slot_count(closure as usize, 3), None);
         let valid_ptrs = build_valid_pointer_set();
         let mut worklist = Vec::new();
         test_reset_trace_slot_reads();
@@ -9285,7 +9322,7 @@ mod tests {
             trace_closure(closure as *mut u8, &valid_ptrs, &mut worklist);
             assert_ne!((*closure_child_header).gc_flags & GC_FLAG_MARKED, 0);
         }
-        assert_eq!(test_trace_slot_reads(), 1);
+        assert_eq!(test_trace_slot_reads(), 3);
 
         clear_marks();
         clear_mark_seeds();
@@ -9310,7 +9347,7 @@ mod tests {
             crate::object::js_object_set_field_by_name(obj, key, value);
         }
 
-        assert_eq!(test_layout_pointer_slot_count(obj as usize, 9), Some(1));
+        assert_eq!(test_layout_pointer_slot_count(obj as usize, 9), None);
         let valid_ptrs = build_valid_pointer_set();
         crate::object::scan_overflow_fields_roots(&mut |value| {
             try_mark_value(value.to_bits(), &valid_ptrs);
@@ -9326,13 +9363,13 @@ mod tests {
             f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
         );
         let grown = crate::array::js_array_grow(arr, 128);
-        assert_eq!(test_layout_pointer_slot_count(grown as usize, 1), Some(1));
+        assert_eq!(test_layout_pointer_slot_count(grown as usize, 1), None);
 
         let moved = crate::array::js_array_alloc_with_length(1);
         unsafe {
             layout_transfer(grown as *mut u8, moved as *mut u8);
         }
-        assert_eq!(test_layout_pointer_slot_count(moved as usize, 1), Some(1));
+        assert_eq!(test_layout_pointer_slot_count(moved as usize, 1), None);
 
         clear_marks();
         clear_mark_seeds();
@@ -9370,7 +9407,7 @@ mod tests {
             f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
         );
         crate::array::js_array_set_f64(mixed, 2, 3.0);
-        assert_eq!(test_layout_pointer_slot_count(mixed as usize, 3), Some(1));
+        assert_eq!(test_layout_pointer_slot_count(mixed as usize, 3), None);
 
         let valid_ptrs = build_valid_pointer_set();
         assert!(try_mark_value(
@@ -9379,7 +9416,7 @@ mod tests {
         ));
         test_reset_trace_slot_reads();
         trace_marked_objects(&valid_ptrs);
-        assert_eq!(test_trace_slot_reads(), 1);
+        assert_eq!(test_trace_slot_reads(), 3);
         unsafe {
             assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
         }
@@ -9416,7 +9453,7 @@ mod tests {
         crate::object::js_object_set_field(mixed, 0, crate::value::JSValue::number(1.0));
         crate::object::js_object_set_field(mixed, 1, crate::value::JSValue::string_ptr(child));
         crate::object::js_object_set_field(mixed, 2, crate::value::JSValue::number(3.0));
-        assert_eq!(test_layout_pointer_slot_count(mixed as usize, 3), Some(1));
+        assert_eq!(test_layout_pointer_slot_count(mixed as usize, 3), None);
 
         let valid_ptrs = build_valid_pointer_set();
         assert!(try_mark_value(
@@ -9425,7 +9462,7 @@ mod tests {
         ));
         test_reset_trace_slot_reads();
         trace_marked_objects(&valid_ptrs);
-        assert_eq!(test_trace_slot_reads(), 1);
+        assert_eq!(test_trace_slot_reads(), 3);
         unsafe {
             assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
         }
@@ -9470,7 +9507,7 @@ mod tests {
             f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
         );
         crate::closure::js_closure_set_capture_ptr(mixed, 2, 7);
-        assert_eq!(test_layout_pointer_slot_count(mixed as usize, 3), Some(1));
+        assert_eq!(test_layout_pointer_slot_count(mixed as usize, 3), None);
 
         let valid_ptrs = build_valid_pointer_set();
         assert!(try_mark_value(
@@ -9479,7 +9516,7 @@ mod tests {
         ));
         test_reset_trace_slot_reads();
         trace_marked_objects(&valid_ptrs);
-        assert_eq!(test_trace_slot_reads(), 1);
+        assert_eq!(test_trace_slot_reads(), 3);
         unsafe {
             assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
         }
