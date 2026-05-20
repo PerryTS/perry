@@ -108,7 +108,7 @@ static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 /// `cron.rs::ensure_gc_scanner_registered`.
 fn ensure_gc_scanner_registered() {
     NET_GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_root_scanner(scan_net_roots);
+        perry_runtime::gc::gc_register_mutable_root_scanner(scan_net_roots_mut);
     });
 }
 
@@ -122,17 +122,18 @@ fn ensure_gc_scanner_registered() {
 /// next `js_closure_call1` would dereference freed memory. This was a
 /// latent bug until v0.5.25 made GC fire during synchronous decode
 /// loops (issue #35).
+#[allow(dead_code)]
 fn scan_net_roots(mark: &mut dyn FnMut(f64)) {
-    if let Ok(listeners) = NET_LISTENERS.lock() {
-        for per_socket in listeners.values() {
-            for cb_vec in per_socket.values() {
-                for &cb in cb_vec.iter() {
-                    if cb != 0 {
-                        let boxed = f64::from_bits(
-                            0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF),
-                        );
-                        mark(boxed);
-                    }
+    let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_net_roots_mut(&mut visitor);
+}
+
+fn scan_net_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    if let Ok(mut listeners) = NET_LISTENERS.lock() {
+        for per_socket in listeners.values_mut() {
+            for cb_vec in per_socket.values_mut() {
+                for cb in cb_vec.iter_mut() {
+                    visitor.visit_i64_slot(cb);
                 }
             }
         }
@@ -1088,4 +1089,31 @@ pub fn js_net_has_active_handles() -> i32 {
 /// or inside a struct field).
 pub fn is_net_socket_handle(handle: i64) -> bool {
     NET_SOCKETS.lock().unwrap().contains_key(&handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_scanner_emits_socket_listeners() {
+        {
+            let mut listeners = NET_LISTENERS.lock().unwrap();
+            listeners.clear();
+            listeners.insert(
+                7,
+                HashMap::from([
+                    ("data".to_string(), vec![0x1234_5678]),
+                    ("error".to_string(), vec![0x2345_6780]),
+                ]),
+            );
+        }
+
+        let mut emitted = Vec::new();
+        scan_net_roots(&mut |value| emitted.push(value.to_bits()));
+
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x1234_5678)));
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x2345_6780)));
+        NET_LISTENERS.lock().unwrap().clear();
+    }
 }

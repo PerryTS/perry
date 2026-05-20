@@ -125,6 +125,22 @@ where
     }
 }
 
+/// Walk every registered handle whose value downcasts to `T`, calling
+/// `f(&mut T)` for each match. Mutable GC root scanners use this to
+/// expose stdlib-owned handle slots so copied minor GC can rewrite moved
+/// references in place.
+pub fn for_each_handle_mut_of<T, F>(mut f: F)
+where
+    T: 'static + Send + Sync,
+    F: FnMut(&mut T),
+{
+    for mut entry in HANDLES.iter_mut() {
+        if let Some(v) = entry.value_mut().downcast_mut::<T>() {
+            f(v);
+        }
+    }
+}
+
 /// Clone a handle's value if it implements Clone
 pub fn clone_handle<T: 'static + Send + Sync + Clone>(handle: Handle) -> Option<Handle> {
     HANDLES.get(&handle).and_then(|entry| {

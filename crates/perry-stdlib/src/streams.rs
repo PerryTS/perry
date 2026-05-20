@@ -37,7 +37,6 @@ const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -142,78 +141,74 @@ static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 /// shape as `ws.rs::ensure_gc_scanner_registered`.
 fn ensure_gc_registered() {
     GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_root_scanner(scan_stream_roots);
+        perry_runtime::gc::gc_register_mutable_root_scanner(scan_stream_roots_mut);
     });
 }
 
+#[allow(dead_code)]
 fn scan_stream_roots(mark: &mut dyn FnMut(f64)) {
-    let mark_cb = |cb: i64, mark: &mut dyn FnMut(f64)| {
-        if cb != 0 {
-            let boxed = f64::from_bits(POINTER_TAG | (cb as u64 & POINTER_MASK));
-            mark(boxed);
-        }
-    };
-    let mark_promise = |p: *mut Promise, mark: &mut dyn FnMut(f64)| {
-        let raw = p as i64;
-        if raw != 0 {
-            let boxed = f64::from_bits(POINTER_TAG | (raw as u64 & POINTER_MASK));
-            mark(boxed);
-        }
-    };
-    let mark_chunk = |bits: u64, mark: &mut dyn FnMut(f64)| {
-        let top = bits >> 48;
-        if top == 0x7FFD || top == 0x7FFF {
-            mark(f64::from_bits(bits));
-        }
-    };
+    let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_stream_roots_mut(&mut visitor);
+}
 
-    if let Ok(map) = READABLE_STREAMS.lock() {
-        for s in map.values() {
-            mark_cb(s.start_cb, mark);
-            mark_cb(s.pull_cb, mark);
-            mark_cb(s.cancel_cb, mark);
-            for &c in s.chunks.iter() {
-                mark_chunk(c, mark);
+fn visit_stream_value_slot(
+    visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>,
+    slot: &mut u64,
+) {
+    let top = *slot >> 48;
+    if top == 0x7FFD || top == 0x7FFF {
+        visitor.visit_nanbox_u64_slot(slot);
+    }
+}
+
+fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    if let Ok(mut map) = READABLE_STREAMS.lock() {
+        for s in map.values_mut() {
+            visitor.visit_i64_slot(&mut s.start_cb);
+            visitor.visit_i64_slot(&mut s.pull_cb);
+            visitor.visit_i64_slot(&mut s.cancel_cb);
+            for c in s.chunks.iter_mut() {
+                visit_stream_value_slot(visitor, c);
             }
-            for &p in s.pending_reads.iter() {
-                mark_promise(p, mark);
+            for p in s.pending_reads.iter_mut() {
+                visitor.visit_raw_mut_ptr_slot(p);
             }
             if s.state == ReadableState::Errored {
-                mark_chunk(s.error_value, mark);
+                visit_stream_value_slot(visitor, &mut s.error_value);
             }
         }
     }
-    if let Ok(map) = WRITABLE_STREAMS.lock() {
-        for s in map.values() {
-            mark_cb(s.write_cb, mark);
-            mark_cb(s.close_cb, mark);
-            mark_cb(s.abort_cb, mark);
-            for (chunk, p) in s.write_queue.iter() {
-                mark_chunk(*chunk, mark);
-                mark_promise(*p, mark);
+    if let Ok(mut map) = WRITABLE_STREAMS.lock() {
+        for s in map.values_mut() {
+            visitor.visit_i64_slot(&mut s.write_cb);
+            visitor.visit_i64_slot(&mut s.close_cb);
+            visitor.visit_i64_slot(&mut s.abort_cb);
+            for (chunk, p) in s.write_queue.iter_mut() {
+                visit_stream_value_slot(visitor, chunk);
+                visitor.visit_raw_mut_ptr_slot(p);
             }
-            mark_promise(s.ready_promise, mark);
-            mark_promise(s.closed_promise, mark);
+            visitor.visit_raw_mut_ptr_slot(&mut s.ready_promise);
+            visitor.visit_raw_mut_ptr_slot(&mut s.closed_promise);
             if s.state == WritableState::Errored {
-                mark_chunk(s.error_value, mark);
+                visit_stream_value_slot(visitor, &mut s.error_value);
             }
         }
     }
-    if let Ok(map) = TRANSFORM_STREAMS.lock() {
-        for t in map.values() {
-            mark_cb(t.transform_cb, mark);
-            mark_cb(t.flush_cb, mark);
+    if let Ok(mut map) = TRANSFORM_STREAMS.lock() {
+        for t in map.values_mut() {
+            visitor.visit_i64_slot(&mut t.transform_cb);
+            visitor.visit_i64_slot(&mut t.flush_cb);
         }
     }
-    if let Ok(map) = READERS.lock() {
-        for r in map.values() {
-            mark_promise(r.closed_promise, mark);
+    if let Ok(mut map) = READERS.lock() {
+        for r in map.values_mut() {
+            visitor.visit_raw_mut_ptr_slot(&mut r.closed_promise);
         }
     }
-    if let Ok(map) = WRITERS.lock() {
-        for w in map.values() {
-            mark_promise(w.closed_promise, mark);
-            mark_promise(w.ready_promise, mark);
+    if let Ok(mut map) = WRITERS.lock() {
+        for w in map.values_mut() {
+            visitor.visit_raw_mut_ptr_slot(&mut w.closed_promise);
+            visitor.visit_raw_mut_ptr_slot(&mut w.ready_promise);
         }
     }
 }
@@ -1493,4 +1488,43 @@ pub fn drain_readable_into_bytes(stream_id: usize) -> Vec<u8> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_scanner_emits_callbacks_chunks_and_promises() {
+        {
+            let mut readable = READABLE_STREAMS.lock().unwrap();
+            readable.clear();
+            readable.insert(
+                1,
+                ReadableStreamData {
+                    state: ReadableState::Errored,
+                    chunks: VecDeque::from([0x7FFD_0000_0000_1234]),
+                    pending_reads: VecDeque::from([0x2345_6780 as *mut Promise]),
+                    start_cb: 0x3456_7890,
+                    pull_cb: 0,
+                    cancel_cb: 0,
+                    high_water_mark: 1.0,
+                    pulling: false,
+                    started: false,
+                    reader_handle: None,
+                    error_value: 0x7FFF_0000_0000_4567,
+                    canceled: false,
+                },
+            );
+        }
+
+        let mut emitted = Vec::new();
+        scan_stream_roots(&mut |value| emitted.push(value.to_bits()));
+
+        assert!(emitted.contains(&0x7FFD_0000_0000_1234));
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x2345_6780)));
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x3456_7890)));
+        assert!(emitted.contains(&0x7FFF_0000_0000_4567));
+        READABLE_STREAMS.lock().unwrap().clear();
+    }
 }

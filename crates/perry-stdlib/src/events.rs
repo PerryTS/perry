@@ -37,7 +37,7 @@ fn bool_to_js(value: bool) -> f64 {
     }
 }
 
-use crate::common::{for_each_handle_of, get_handle_mut, register_handle, Handle};
+use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
 
 /// One registered listener: a raw closure pointer (i64 to satisfy
 /// Send + Sync — the underlying ClosureHeader is GC-managed) plus a
@@ -84,32 +84,28 @@ static EVENTS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 /// closure — same root cause as issue #35 for net.Socket listeners.
 fn ensure_gc_scanner_registered() {
     EVENTS_GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_root_scanner(scan_events_roots);
+        perry_runtime::gc::gc_register_mutable_root_scanner(scan_events_roots_mut);
     });
 }
 
 /// GC root scanner for EventEmitter listener closures and pending
 /// `events.once` promises.
+#[allow(dead_code)]
 fn scan_events_roots(mark: &mut dyn FnMut(f64)) {
-    for_each_handle_of::<EventEmitterHandle, _>(|emitter| {
-        for listeners in emitter.events.values() {
-            for l in listeners.iter() {
-                if l.callback != 0 {
-                    let boxed = f64::from_bits(
-                        0x7FFD_0000_0000_0000 | (l.callback as u64 & 0x0000_FFFF_FFFF_FFFF),
-                    );
-                    mark(boxed);
-                }
+    let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_events_roots_mut(&mut visitor);
+}
+
+fn scan_events_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    for_each_handle_mut_of::<EventEmitterHandle, _>(|emitter| {
+        for listeners in emitter.events.values_mut() {
+            for l in listeners.iter_mut() {
+                visitor.visit_i64_slot(&mut l.callback);
             }
         }
-        for proms in emitter.pending_once_promises.values() {
-            for &p in proms.iter() {
-                if !p.is_null() {
-                    let boxed = f64::from_bits(
-                        0x7FFD_0000_0000_0000 | ((p as u64) & 0x0000_FFFF_FFFF_FFFF),
-                    );
-                    mark(boxed);
-                }
+        for proms in emitter.pending_once_promises.values_mut() {
+            for p in proms.iter_mut() {
+                visitor.visit_raw_mut_ptr_slot(p);
             }
         }
     });
@@ -719,4 +715,28 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
         }
     }
     f64::from_bits(TAG_UNDEFINED_F64_BITS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_scanner_emits_listeners_and_pending_promises() {
+        let mut emitter = EventEmitterHandle::new();
+        emitter.add_listener("data", 0x1234_5678, false, false);
+        emitter
+            .pending_once_promises
+            .entry("ready".to_string())
+            .or_default()
+            .push(0x2345_6780 as *mut Promise);
+        let handle = register_handle(emitter);
+
+        let mut emitted = Vec::new();
+        scan_events_roots(&mut |value| emitted.push(value.to_bits()));
+
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x1234_5678)));
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x2345_6780)));
+        crate::common::drop_handle(handle);
+    }
 }

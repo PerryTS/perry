@@ -1000,6 +1000,13 @@ struct CopyingNurseryTraceStats {
 
 #[derive(Clone, Copy, Default)]
 struct LegacyRootTraceStats {
+    registered_rust_scanners: usize,
+    registered_ffi_scanners: usize,
+    emitted_roots: usize,
+    emitted_young_roots: usize,
+    emitted_old_roots: usize,
+    emitted_malloc_roots: usize,
+    malformed_roots: usize,
     pinned_roots: usize,
     pinned_bytes: usize,
 }
@@ -1272,6 +1279,13 @@ impl GcCycleTrace {
             "conservative_pinned": self.conservative_pinned,
             "conservative_pinned_bytes": self.conservative_pinned_bytes,
             "legacy_copy_only_scanner_pinned": {
+                "registered_rust_scanners": self.legacy_copy_only_scanner_pinned.registered_rust_scanners,
+                "registered_ffi_scanners": self.legacy_copy_only_scanner_pinned.registered_ffi_scanners,
+                "emitted_roots": self.legacy_copy_only_scanner_pinned.emitted_roots,
+                "emitted_young_roots": self.legacy_copy_only_scanner_pinned.emitted_young_roots,
+                "emitted_old_roots": self.legacy_copy_only_scanner_pinned.emitted_old_roots,
+                "emitted_malloc_roots": self.legacy_copy_only_scanner_pinned.emitted_malloc_roots,
+                "malformed_roots": self.legacy_copy_only_scanner_pinned.malformed_roots,
                 "roots": self.legacy_copy_only_scanner_pinned.pinned_roots,
                 "bytes": self.legacy_copy_only_scanner_pinned.pinned_bytes,
             },
@@ -5113,6 +5127,27 @@ fn mark_copy_only_scanner_bits(
     None
 }
 
+#[inline]
+fn record_copy_only_scanner_mark_emission(
+    bits: u64,
+    valid_ptrs: &ValidPointerSet,
+    legacy_stats: &mut LegacyRootTraceStats,
+) {
+    legacy_stats.emitted_roots += 1;
+    let Some(header) = nanboxed_root_header(bits, valid_ptrs) else {
+        legacy_stats.malformed_roots += 1;
+        return;
+    };
+    let user = unsafe { (header as *mut u8).add(GC_HEADER_SIZE) as usize };
+    if crate::arena::pointer_in_nursery(user) {
+        legacy_stats.emitted_young_roots += 1;
+    } else if MALLOC_STATE.with(|s| s.borrow().objects.iter().any(|&tracked| tracked == header)) {
+        legacy_stats.emitted_malloc_roots += 1;
+    } else {
+        legacy_stats.emitted_old_roots += 1;
+    }
+}
+
 struct RegisteredRootMarkContext {
     valid_ptrs: *const ValidPointerSet,
     pin_discoveries: bool,
@@ -5138,9 +5173,13 @@ fn mark_registered_roots(
     let mut legacy_stats = LegacyRootTraceStats::default();
     // Collect scanners first to avoid borrow conflicts
     let scanners: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    legacy_stats.registered_rust_scanners = scanners.len();
+    legacy_stats.registered_ffi_scanners = ffi_scanners.len();
 
     for scanner in scanners {
         scanner(&mut |value: f64| {
+            record_copy_only_scanner_mark_emission(value.to_bits(), valid_ptrs, &mut legacy_stats);
             if let Some(bytes) =
                 mark_copy_only_scanner_bits(value.to_bits(), valid_ptrs, pin_discoveries)
             {
@@ -5150,7 +5189,6 @@ fn mark_registered_roots(
         });
     }
 
-    let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
     let mut ctx = RegisteredRootMarkContext {
         valid_ptrs: valid_ptrs as *const ValidPointerSet,
         pin_discoveries,
@@ -5172,6 +5210,15 @@ extern "C" fn perry_ffi_mark_root(value: f64, ctx: *mut c_void) {
         return;
     }
     let valid_ptrs = unsafe { &*ctx.valid_ptrs };
+    if !ctx.legacy_stats.is_null() {
+        unsafe {
+            record_copy_only_scanner_mark_emission(
+                value.to_bits(),
+                valid_ptrs,
+                &mut *ctx.legacy_stats,
+            );
+        }
+    }
     if let Some(bytes) =
         mark_copy_only_scanner_bits(value.to_bits(), valid_ptrs, ctx.pin_discoveries)
     {
@@ -5648,7 +5695,7 @@ struct CopyingPointer {
 }
 
 struct CopyingPointerSet {
-    malloc_registry_available: bool,
+    malloc_registry_available: Cell<bool>,
     malloc_validation_lookups: Cell<usize>,
     malloc_registry_rebuild_count_start: u64,
 }
@@ -5659,7 +5706,7 @@ impl CopyingPointerSet {
             MALLOC_STATE.with(|s| s.borrow().malloc_registry_available());
         let malloc_registry_rebuild_count_start = MALLOC_REGISTRY_REBUILD_COUNT.with(|c| c.get());
         Self {
-            malloc_registry_available,
+            malloc_registry_available: Cell::new(malloc_registry_available),
             malloc_validation_lookups: Cell::new(0),
             malloc_registry_rebuild_count_start,
         }
@@ -5680,7 +5727,7 @@ impl CopyingPointerSet {
         if let Some(ptr) = self.classify_arena(addr) {
             return Ok(Some(ptr));
         }
-        if possible_malloc && !self.malloc_registry_available {
+        if possible_malloc && !self.malloc_registry_available.get() {
             return Err(CopiedMinorFallbackReason::MallocRegistryUnavailable);
         }
         Ok(self.classify_malloc(addr))
@@ -5725,7 +5772,7 @@ impl CopyingPointerSet {
 
     #[inline]
     fn classify_malloc(&self, addr: usize) -> Option<CopyingPointer> {
-        if addr < GC_HEADER_SIZE || !self.malloc_registry_available {
+        if addr < GC_HEADER_SIZE || !self.malloc_registry_available.get() {
             return None;
         }
         let header = unsafe { header_from_user_ptr(addr as *const u8) };
@@ -5745,6 +5792,19 @@ impl CopyingPointerSet {
                 kind: CopyingPointerKind::Malloc,
             })
         })
+    }
+
+    fn ensure_malloc_registry_for_copy_only_preflight(&self) {
+        if self.malloc_registry_available.get() {
+            return;
+        }
+        MALLOC_STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            ensure_set_built(&mut s);
+            if s.malloc_registry_available() {
+                self.malloc_registry_available.set(true);
+            }
+        });
     }
 
     #[inline]
@@ -6334,11 +6394,6 @@ impl CopyingNurseryCollector {
     }
 }
 
-fn copying_legacy_root_scanners_present() -> bool {
-    ROOT_SCANNERS.with(|s| !s.borrow().is_empty())
-        || FFI_ROOT_SCANNERS.with(|s| !s.borrow().is_empty())
-}
-
 fn scan_remembered_dirty_slots_copying(
     snapshot: &RememberedDirtySnapshot,
     mut visit: impl FnMut(*mut u64, *mut GcHeader, bool, &mut RememberedSetTraceStats),
@@ -6396,12 +6451,91 @@ fn scan_remembered_dirty_slots_copying(
     stats
 }
 
+struct CopyOnlyRootPreflight<'a> {
+    ptrs: &'a CopyingPointerSet,
+    fallback_reason: Option<CopiedMinorFallbackReason>,
+    stats: LegacyRootTraceStats,
+}
+
+impl<'a> CopyOnlyRootPreflight<'a> {
+    fn new(
+        ptrs: &'a CopyingPointerSet,
+        registered_rust_scanners: usize,
+        registered_ffi_scanners: usize,
+    ) -> Self {
+        Self {
+            ptrs,
+            fallback_reason: None,
+            stats: LegacyRootTraceStats {
+                registered_rust_scanners,
+                registered_ffi_scanners,
+                ..LegacyRootTraceStats::default()
+            },
+        }
+    }
+
+    fn check_bits(&mut self, bits: u64) {
+        self.stats.emitted_roots += 1;
+        let Some(addr) = self.decode_copy_only_addr(bits) else {
+            return;
+        };
+        let Some(ptr) = self.ptrs.classify_arena(addr) else {
+            self.ptrs.ensure_malloc_registry_for_copy_only_preflight();
+            if self.ptrs.classify_malloc(addr).is_some() {
+                self.stats.emitted_malloc_roots += 1;
+                self.fallback_reason = Some(CopiedMinorFallbackReason::CopyOnlyRoots);
+            } else {
+                self.stats.malformed_roots += 1;
+            }
+            return;
+        };
+
+        match ptr.kind {
+            CopyingPointerKind::Eden
+            | CopyingPointerKind::FromSurvivor
+            | CopyingPointerKind::ToSurvivor => {
+                self.stats.emitted_young_roots += 1;
+                self.fallback_reason = Some(CopiedMinorFallbackReason::CopyOnlyRoots);
+            }
+            CopyingPointerKind::Longlived | CopyingPointerKind::Old => {
+                self.stats.emitted_old_roots += 1;
+            }
+            CopyingPointerKind::Malloc => unreachable!("malloc roots are classified separately"),
+        }
+    }
+
+    fn decode_copy_only_addr(&mut self, bits: u64) -> Option<usize> {
+        let tag = bits & TAG_MASK;
+        if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
+            let addr = (bits & POINTER_MASK) as usize;
+            return (addr != 0).then_some(addr);
+        }
+        if tag >= 0x7FF8_0000_0000_0000 {
+            return None;
+        }
+        if !CopyingPointerSet::raw_pointer_candidate(bits) {
+            return None;
+        }
+        Some(bits as usize)
+    }
+}
+
+extern "C" fn perry_ffi_copy_only_preflight_root(value: f64, ctx: *mut c_void) {
+    if ctx.is_null() {
+        return;
+    }
+    unsafe {
+        (*(ctx as *mut CopyOnlyRootPreflight<'_>)).check_bits(value.to_bits());
+    }
+}
+
 struct CopiedMinorEligibility {
     eligible: bool,
     fallback_reason: CopiedMinorFallbackReason,
     malloc_sweep_due: bool,
     malloc_validation_lookups: usize,
     malloc_registry_rebuilds: u64,
+    legacy_root_stats: LegacyRootTraceStats,
     ptrs: Option<CopyingPointerSet>,
 }
 
@@ -6423,16 +6557,31 @@ impl CopiedMinorEligibility {
                 malloc_sweep_due,
             );
         }
-        if copying_legacy_root_scanners_present() {
-            return Self::fallback(CopiedMinorFallbackReason::CopyOnlyRoots, malloc_sweep_due);
-        }
-
         let ptrs = CopyingPointerSet::new();
+        let (copy_only_reason, legacy_root_stats) = Self::copy_only_root_preflight_reason(&ptrs);
+        if let Some(reason) = copy_only_reason {
+            return Self::fallback_with_ptrs_and_legacy(
+                reason,
+                malloc_sweep_due,
+                ptrs,
+                legacy_root_stats,
+            );
+        }
         if let Some(reason) = Self::mutable_root_preflight_reason(&ptrs) {
-            return Self::fallback_with_ptrs(reason, malloc_sweep_due, ptrs);
+            return Self::fallback_with_ptrs_and_legacy(
+                reason,
+                malloc_sweep_due,
+                ptrs,
+                legacy_root_stats,
+            );
         }
         if let Some(reason) = Self::dirty_slot_preflight_reason(&ptrs) {
-            return Self::fallback_with_ptrs(reason, malloc_sweep_due, ptrs);
+            return Self::fallback_with_ptrs_and_legacy(
+                reason,
+                malloc_sweep_due,
+                ptrs,
+                legacy_root_stats,
+            );
         }
 
         Self {
@@ -6441,6 +6590,7 @@ impl CopiedMinorEligibility {
             malloc_sweep_due,
             malloc_validation_lookups: ptrs.malloc_validation_lookups(),
             malloc_registry_rebuilds: ptrs.malloc_registry_rebuilds(),
+            legacy_root_stats,
             ptrs: Some(ptrs),
         }
     }
@@ -6452,14 +6602,16 @@ impl CopiedMinorEligibility {
             malloc_sweep_due,
             malloc_validation_lookups: 0,
             malloc_registry_rebuilds: 0,
+            legacy_root_stats: LegacyRootTraceStats::default(),
             ptrs: None,
         }
     }
 
-    fn fallback_with_ptrs(
+    fn fallback_with_ptrs_and_legacy(
         reason: CopiedMinorFallbackReason,
         malloc_sweep_due: bool,
         ptrs: CopyingPointerSet,
+        legacy_root_stats: LegacyRootTraceStats,
     ) -> Self {
         Self {
             eligible: false,
@@ -6467,6 +6619,7 @@ impl CopiedMinorEligibility {
             malloc_sweep_due,
             malloc_validation_lookups: ptrs.malloc_validation_lookups(),
             malloc_registry_rebuilds: ptrs.malloc_registry_rebuilds(),
+            legacy_root_stats,
             ptrs: Some(ptrs),
         }
     }
@@ -6480,6 +6633,27 @@ impl CopiedMinorEligibility {
             malloc_registry_rebuilds: self.malloc_registry_rebuilds,
             ..CopyingNurseryTraceStats::default()
         }
+    }
+
+    fn copy_only_root_preflight_reason(
+        ptrs: &CopyingPointerSet,
+    ) -> (Option<CopiedMinorFallbackReason>, LegacyRootTraceStats) {
+        let scanners: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let mut preflight = CopyOnlyRootPreflight::new(ptrs, scanners.len(), ffi_scanners.len());
+
+        for scanner in scanners {
+            scanner(&mut |value: f64| {
+                preflight.check_bits(value.to_bits());
+            });
+        }
+
+        let ctx = &mut preflight as *mut CopyOnlyRootPreflight<'_> as *mut c_void;
+        for scanner in ffi_scanners {
+            scanner(perry_ffi_copy_only_preflight_root, ctx);
+        }
+
+        (preflight.fallback_reason, preflight.stats)
     }
 
     fn mutable_root_preflight_reason(
@@ -6525,6 +6699,7 @@ fn gc_collect_minor_copying_fast_path(
     let eligibility = CopiedMinorEligibility::evaluate(trigger_kind);
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = eligibility.trace_stats();
+        trace.legacy_copy_only_scanner_pinned = eligibility.legacy_root_stats;
     }
     if !eligibility.eligible {
         return None;
@@ -10764,28 +10939,84 @@ mod tests {
         }
     }
 
-    fn noop_copy_only_root_scanner(_mark: &mut dyn FnMut(f64)) {}
+    thread_local! {
+        static TEST_COPY_ONLY_ROOTS: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn test_copy_only_root_scanner(mark: &mut dyn FnMut(f64)) {
+        TEST_COPY_ONLY_ROOTS.with(|roots| {
+            for &value in roots.borrow().iter() {
+                mark(value);
+            }
+        });
+    }
+
+    extern "C" fn test_ffi_copy_only_root_scanner(mark: PerryFfiRootMarker, ctx: *mut c_void) {
+        TEST_COPY_ONLY_ROOTS.with(|roots| {
+            for &value in roots.borrow().iter() {
+                mark(value, ctx);
+            }
+        });
+    }
+
+    enum TemporaryCopyOnlyRootScannerKind {
+        Rust,
+        Ffi,
+    }
 
     struct TemporaryCopyOnlyRootScanner {
-        previous_len: usize,
+        previous_rust_len: usize,
+        previous_ffi_len: usize,
+        previous_roots: Vec<f64>,
     }
 
     impl TemporaryCopyOnlyRootScanner {
-        fn new() -> Self {
-            let previous_len = ROOT_SCANNERS.with(|scanners| {
-                let mut scanners = scanners.borrow_mut();
-                let previous_len = scanners.len();
-                scanners.push(noop_copy_only_root_scanner);
-                previous_len
+        fn rust_bits(bits: &[u64]) -> Self {
+            Self::new(TemporaryCopyOnlyRootScannerKind::Rust, bits)
+        }
+
+        fn ffi_bits(bits: &[u64]) -> Self {
+            Self::new(TemporaryCopyOnlyRootScannerKind::Ffi, bits)
+        }
+
+        fn new(kind: TemporaryCopyOnlyRootScannerKind, bits: &[u64]) -> Self {
+            let previous_roots = TEST_COPY_ONLY_ROOTS.with(|roots| {
+                roots.replace(bits.iter().copied().map(f64::from_bits).collect::<Vec<_>>())
             });
-            Self { previous_len }
+            let previous_rust_len = ROOT_SCANNERS.with(|scanners| {
+                let mut scanners = scanners.borrow_mut();
+                let previous_rust_len = scanners.len();
+                if matches!(kind, TemporaryCopyOnlyRootScannerKind::Rust) {
+                    scanners.push(test_copy_only_root_scanner);
+                }
+                previous_rust_len
+            });
+            let previous_ffi_len = FFI_ROOT_SCANNERS.with(|scanners| {
+                let mut scanners = scanners.borrow_mut();
+                let previous_ffi_len = scanners.len();
+                if matches!(kind, TemporaryCopyOnlyRootScannerKind::Ffi) {
+                    scanners.push(test_ffi_copy_only_root_scanner);
+                }
+                previous_ffi_len
+            });
+            Self {
+                previous_rust_len,
+                previous_ffi_len,
+                previous_roots,
+            }
         }
     }
 
     impl Drop for TemporaryCopyOnlyRootScanner {
         fn drop(&mut self) {
             ROOT_SCANNERS.with(|scanners| {
-                scanners.borrow_mut().truncate(self.previous_len);
+                scanners.borrow_mut().truncate(self.previous_rust_len);
+            });
+            FFI_ROOT_SCANNERS.with(|scanners| {
+                scanners.borrow_mut().truncate(self.previous_ffi_len);
+            });
+            TEST_COPY_ONLY_ROOTS.with(|roots| {
+                roots.replace(std::mem::take(&mut self.previous_roots));
             });
         }
     }
@@ -11304,10 +11535,29 @@ mod tests {
     }
 
     #[test]
-    fn test_copied_minor_eligibility_falls_back_for_copy_only_roots() {
+    fn test_copied_minor_eligibility_empty_copy_only_scanner_stays_eligible() {
         let _guard = CopyingNurseryTestGuard::new(0);
         let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::new();
+        let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[]);
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_eq!(
+            trace
+                .legacy_copy_only_scanner_pinned
+                .registered_rust_scanners,
+            1
+        );
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 0);
+    }
+
+    #[test]
+    fn test_copied_minor_eligibility_falls_back_for_live_young_rust_copy_only_root() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let child = young_leaf();
+        let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[ptr_bits(child)]);
 
         let trace = collect_minor_trace(GcTriggerKind::Direct);
 
@@ -11316,6 +11566,97 @@ mod tests {
             false,
             CopiedMinorFallbackReason::CopyOnlyRoots,
             false,
+        );
+        assert_eq!(
+            trace
+                .legacy_copy_only_scanner_pinned
+                .registered_rust_scanners,
+            1
+        );
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 1);
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_young_roots, 1);
+    }
+
+    #[test]
+    fn test_copied_minor_eligibility_falls_back_for_live_young_ffi_copy_only_root() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let child = young_leaf();
+        let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::ffi_bits(&[ptr_bits(child)]);
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+        assert_copied_minor_trace(
+            &trace,
+            false,
+            CopiedMinorFallbackReason::CopyOnlyRoots,
+            false,
+        );
+        assert_eq!(
+            trace
+                .legacy_copy_only_scanner_pinned
+                .registered_ffi_scanners,
+            1
+        );
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 1);
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_young_roots, 1);
+    }
+
+    #[test]
+    fn test_copied_minor_eligibility_old_only_copy_only_root_stays_eligible() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let old = crate::arena::arena_alloc_gc_old(32, 8, GC_TYPE_OBJECT) as usize;
+        let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[ptr_bits(old)]);
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 1);
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_old_roots, 1);
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_young_roots, 0);
+    }
+
+    #[test]
+    fn test_copied_minor_eligibility_malformed_copy_only_root_stays_eligible() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _copy_only_root_guard =
+            TemporaryCopyOnlyRootScanner::rust_bits(&[0x7FFD_0000_0000_1000]);
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 1);
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.malformed_roots, 1);
+    }
+
+    #[test]
+    fn test_copied_minor_eligibility_falls_back_for_malloc_copy_only_root() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let live_malloc = gc_malloc(
+            std::mem::size_of::<crate::closure::ClosureHeader>(),
+            GC_TYPE_CLOSURE,
+        );
+        unsafe {
+            init_test_closure(live_malloc);
+        }
+        let _copy_only_root_guard =
+            TemporaryCopyOnlyRootScanner::rust_bits(&[ptr_bits(live_malloc as usize)]);
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+        assert_copied_minor_trace(
+            &trace,
+            false,
+            CopiedMinorFallbackReason::CopyOnlyRoots,
+            false,
+        );
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 1);
+        assert_eq!(
+            trace.legacy_copy_only_scanner_pinned.emitted_malloc_roots,
+            1
         );
     }
 
@@ -14161,7 +14502,6 @@ mod tests {
         let _reset = ResetGcTestState;
         let _isolation = copying_nursery_isolation_lock();
         let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
-        let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::new();
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
@@ -14182,6 +14522,7 @@ mod tests {
         let parent_user = parent as usize;
         let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };
         let child_header = unsafe { header_from_user_ptr(child as *const u8) };
+        let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[ptr_bits(child)]);
 
         unsafe {
             *fields = ptr_bits(child);

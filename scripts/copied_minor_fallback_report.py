@@ -45,6 +45,13 @@ def empty_totals() -> dict[str, Any]:
         "fallback_reason_counts": empty_reason_counts(),
         "conservative_pinned_bytes": 0,
         "legacy_copy_only_scanner_pinned": {
+            "registered_rust_scanners": 0,
+            "registered_ffi_scanners": 0,
+            "emitted_roots": 0,
+            "emitted_young_roots": 0,
+            "emitted_old_roots": 0,
+            "emitted_malloc_roots": 0,
+            "malformed_roots": 0,
             "roots": 0,
             "bytes": 0,
         },
@@ -112,12 +119,20 @@ def add_totals(dst: dict[str, Any], src: dict[str, Any]) -> None:
     for reason in KNOWN_FALLBACK_REASONS:
         dst["fallback_reason_counts"][reason] += src["fallback_reason_counts"][reason]
     dst["conservative_pinned_bytes"] += src["conservative_pinned_bytes"]
-    dst["legacy_copy_only_scanner_pinned"]["roots"] += src[
-        "legacy_copy_only_scanner_pinned"
-    ]["roots"]
-    dst["legacy_copy_only_scanner_pinned"]["bytes"] += src[
-        "legacy_copy_only_scanner_pinned"
-    ]["bytes"]
+    for field in (
+        "registered_rust_scanners",
+        "registered_ffi_scanners",
+        "emitted_roots",
+        "emitted_young_roots",
+        "emitted_old_roots",
+        "emitted_malloc_roots",
+        "malformed_roots",
+        "roots",
+        "bytes",
+    ):
+        dst["legacy_copy_only_scanner_pinned"][field] += src[
+            "legacy_copy_only_scanner_pinned"
+        ][field]
     for field in COPYING_NURSERY_TOTALS:
         dst["copying_nursery"][field] += src["copying_nursery"][field]
 
@@ -160,12 +175,20 @@ def aggregate_workload(
         )
 
         legacy_pinned = nested_dict(cycle, "legacy_copy_only_scanner_pinned")
-        totals["legacy_copy_only_scanner_pinned"]["roots"] += non_negative_int(
-            legacy_pinned, "roots"
-        )
-        totals["legacy_copy_only_scanner_pinned"]["bytes"] += non_negative_int(
-            legacy_pinned, "bytes"
-        )
+        for field in (
+            "registered_rust_scanners",
+            "registered_ffi_scanners",
+            "emitted_roots",
+            "emitted_young_roots",
+            "emitted_old_roots",
+            "emitted_malloc_roots",
+            "malformed_roots",
+            "roots",
+            "bytes",
+        ):
+            totals["legacy_copy_only_scanner_pinned"][field] += non_negative_int(
+                legacy_pinned, field
+            )
 
         for field in COPYING_NURSERY_TOTALS:
             totals["copying_nursery"][field] += non_negative_int(copying_nursery, field)
