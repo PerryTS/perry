@@ -64,9 +64,16 @@ use std::collections::{HashMap, HashSet};
 /// allocation. The NavStack lowering needs both: each call site spawns a
 /// closure (one fresh `FuncId`) holding `1 + N` fresh local bindings (host
 /// + one per route).
+///
+/// Also carries `string_consts`, a `LocalId → &'static str` style env of
+/// same-module `const X = "literal"` bindings. `try_rewrite_navstack` uses
+/// it to const-fold `name: ROUTE_X` into `name: "x"` so the canonical
+/// route-table pattern (route names factored into a shared `routes.ts`)
+/// doesn't silently bail to the 0-arg `NavStack()` stub. See #1135.
 struct FreshIds {
     next_local: LocalId,
     next_func: FuncId,
+    string_consts: HashMap<LocalId, String>,
 }
 
 impl FreshIds {
@@ -123,11 +130,41 @@ pub fn run(module: &mut Module) {
     let mut fresh = FreshIds {
         next_local: compute_max_local_id(module).saturating_add(1),
         next_func: compute_max_func_id(module).saturating_add(1),
+        string_consts: collect_module_string_consts(&module.init),
     };
     rewrite_stmts(&mut module.init, &bindings, &mut fresh);
     for func in module.functions.iter_mut() {
         rewrite_stmts(&mut func.body, &bindings, &mut fresh);
     }
+}
+
+/// #1135 — collect same-module `const X = "literal"` bindings from the
+/// top level of `module.init`. The map is consulted in `try_rewrite_navstack`
+/// to fold `name: ROUTE_X` route entries into the literal string the rewrite
+/// requires, so factoring route names into shared constants (the obvious,
+/// idiomatic pattern) doesn't silently fall through to the empty 0-arg
+/// `NavStack()` stub.
+///
+/// Scope: top-level of `module.init` only. Nested-scope `const`s would need
+/// scope tracking we don't have here and the `let __nav_route_N = body`
+/// scope is built fresh anyway, so nothing inside would be in scope at the
+/// NavStack call site. Imported `const`s from a sibling module aren't
+/// resolved either — that needs cross-module info — but the bail warning
+/// (below) names the local id so the diagnostic is non-silent.
+fn collect_module_string_consts(init: &[Stmt]) -> HashMap<LocalId, String> {
+    let mut env = HashMap::new();
+    for stmt in init {
+        if let Stmt::Let {
+            id,
+            init: Some(Expr::String(s)),
+            mutable: false,
+            ..
+        } = stmt
+        {
+            env.insert(*id, s.clone());
+        }
+    }
+    env
 }
 
 /// Walk the entire module to find the highest `LocalId` already in use.
@@ -886,17 +923,22 @@ fn try_rewrite_foreach(
 /// in expression position (the `body:` of an `App({body: NavStack(...)})`
 /// config), so we can't hoist the construction to surrounding statements.
 ///
-/// Routes with non-string `name` literals or shapes other than the canonical
-/// `{ name: string, body: Widget }` object literal silently bail and the
-/// original NavStack call falls through to its 0-arg dispatch (no routing
-/// behavior — same as today's pre-fix behavior, but at least no compile
-/// error). Refs #535.
+/// Routes with non-string `name` literals (after const-fold) or shapes other
+/// than the canonical `{ name: string, body: Widget }` object literal bail
+/// and the original NavStack call falls through to its 0-arg dispatch (no
+/// routing behavior — a plain `UIView` with no routes registered). #1135
+/// promoted that fallthrough from silent to a `Warning: NavStack(...)` line
+/// so an empty container isn't a zero-diagnostic failure mode anymore. Refs
+/// #535 / #1135.
 fn try_rewrite_navstack(
     e: &Expr,
     bindings: &HashMap<LocalId, StateBinding>,
     fresh: &mut FreshIds,
 ) -> Option<Expr> {
-    let (state_id, route_array) = match e {
+    // Detect the 2-arg shape first. Only when the call IS the documented
+    // 2-arg NavStack and *we* fail to rewrite it do we emit a warning —
+    // anything else is some other expression, not our concern.
+    let (state_arg, route_array_arg) = match e {
         Expr::NativeMethodCall {
             module,
             method,
@@ -904,19 +946,41 @@ fn try_rewrite_navstack(
             args,
             ..
         } if module == "perry/ui" && method == "NavStack" && args.len() == 2 => {
-            let state_id = match &args[0] {
-                Expr::LocalGet(id) => *id,
-                _ => return None,
-            };
-            let route_array = match &args[1] {
-                Expr::Array(items) => items,
-                _ => return None,
-            };
-            (state_id, route_array)
+            (&args[0], &args[1])
         }
         _ => return None,
     };
-    let binding = bindings.get(&state_id)?;
+
+    let state_id = match state_arg {
+        Expr::LocalGet(id) => *id,
+        other => {
+            warn_navstack_bail(&format!(
+                "first arg must be a `state<string>(...)` local binding, got {}",
+                expr_kind_for_diag(other)
+            ));
+            return None;
+        }
+    };
+    let route_array = match route_array_arg {
+        Expr::Array(items) => items,
+        other => {
+            warn_navstack_bail(&format!(
+                "second arg must be a literal array of `{{name, body}}` route entries, got {}",
+                expr_kind_for_diag(other)
+            ));
+            return None;
+        }
+    };
+    let binding = match bindings.get(&state_id) {
+        Some(b) => b,
+        None => {
+            warn_navstack_bail(&format!(
+                "first arg (local #{state_id}) is not a `state<T>()` binding declared in this module — \
+                 NavStack only knows how to drive state created via `state<string>(initial)` here"
+            ));
+            return None;
+        }
+    };
     let synth_id = binding.synth_id.clone();
 
     // Extract (name, body) pairs from each route. Route entries are HIR
@@ -925,22 +989,42 @@ fn try_rewrite_navstack(
     // body: ...}` (see lower_decl.rs's anon-shape harvest). We don't try
     // to handle other shapes (spread, dynamic property keys) — they bail.
     let mut routes: Vec<(String, Expr)> = Vec::with_capacity(route_array.len());
-    for route in route_array {
+    for (idx, route) in route_array.iter().enumerate() {
         let shape_args = match route {
             Expr::New { args, .. } => args,
-            _ => return None,
+            other => {
+                warn_navstack_bail(&format!(
+                    "route #{idx} must be a `{{name, body}}` object literal, got {}",
+                    expr_kind_for_diag(other)
+                ));
+                return None;
+            }
         };
         if shape_args.len() != 2 {
+            warn_navstack_bail(&format!(
+                "route #{idx} must be a 2-field `{{name, body}}` object literal (no extra fields, no spread), got {} fields",
+                shape_args.len()
+            ));
             return None;
         }
-        let name = match &shape_args[0] {
-            Expr::String(s) => s.clone(),
-            _ => return None,
+        let name = match resolve_route_name(&shape_args[0], &fresh.string_consts) {
+            Some(s) => s,
+            None => {
+                warn_navstack_bail(&format!(
+                    "route #{idx} `name` must be a string literal or a same-module `const X = \"…\"` (covered by #1135 const-fold), \
+                     got {}. Imported route-name constants currently need to be inlined to a string literal at the NavStack call site.",
+                    expr_kind_for_diag(&shape_args[0])
+                ));
+                return None;
+            }
         };
         let body = shape_args[1].clone();
         routes.push((name, body));
     }
     if routes.is_empty() {
+        warn_navstack_bail(
+            "routes array is empty — NavStack(state, []) has no branches to register",
+        );
         return None;
     }
 
@@ -1012,6 +1096,64 @@ fn try_rewrite_navstack(
         args: vec![],
         type_args: vec![],
     })
+}
+
+/// #1135 — resolve a route `name` slot to a literal string, accepting
+/// either a direct `Expr::String` or a `LocalGet` of a same-module
+/// `const X = "literal"` binding (the canonical "factor route names into
+/// a shared constants file" pattern). Returns `None` for anything else —
+/// the caller emits a warning that names the unresolved kind.
+fn resolve_route_name(
+    name_expr: &Expr,
+    string_consts: &HashMap<LocalId, String>,
+) -> Option<String> {
+    match name_expr {
+        Expr::String(s) => Some(s.clone()),
+        Expr::LocalGet(id) => string_consts.get(id).cloned(),
+        _ => None,
+    }
+}
+
+/// #1135 — emit a user-visible warning when a `NavStack(state, routes)`
+/// call site matches the documented 2-arg shape but fails one of the
+/// rewrite invariants. The pre-fix behavior was to silently fall through
+/// to the 0-arg `NavStack()` stub (a blank `UIView` with no routes), which
+/// surfaced as a completely empty screen with zero compile diagnostics.
+fn warn_navstack_bail(reason: &str) {
+    eprintln!(
+        "  Warning: NavStack(state, routes) skipped state-driven lowering ({reason}). \
+         The call will fall through to the 0-arg `NavStack()` stub (empty container, no routing). \
+         See https://github.com/PerryTS/perry/issues/1135"
+    );
+}
+
+/// #1135 — short label for the unexpected expression kind that caused the
+/// rewrite to bail, so the warning is actually useful at a glance.
+fn expr_kind_for_diag(e: &Expr) -> &'static str {
+    match e {
+        Expr::String(_) => "a string literal (this should have matched — file an issue)",
+        Expr::Number(_) | Expr::Integer(_) => "a number literal",
+        Expr::Bool(_) => "a boolean literal",
+        Expr::Null => "null",
+        Expr::Undefined => "undefined",
+        Expr::LocalGet(_) => "a non-string local (not a `const X = \"...\"` in this module)",
+        Expr::GlobalGet(_) => {
+            "a module-global read (imported binding) — inline as a string literal"
+        }
+        Expr::Call { .. } | Expr::CallSpread { .. } => "a function call",
+        Expr::Closure { .. } => "a closure",
+        Expr::PropertyGet { .. } => "a property access (e.g. `routes.HOME`)",
+        Expr::Array(_) | Expr::ArraySpread(_) => "an array literal",
+        Expr::Object(_) | Expr::ObjectSpread { .. } => "an object literal",
+        Expr::New { .. } | Expr::NewDynamic { .. } => "a `new` / object-literal expression",
+        Expr::NativeMethodCall { .. } => "a native method call",
+        Expr::Binary { .. } | Expr::Compare { .. } | Expr::Logical { .. } => {
+            "a binary expression (string concat / comparison)"
+        }
+        Expr::Unary { .. } => "a unary expression",
+        Expr::Conditional { .. } => "a ternary",
+        _ => "an unsupported expression kind",
+    }
 }
 
 /// Attempt to rewrite `e` if it matches a state access on a known

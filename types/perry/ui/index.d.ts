@@ -422,6 +422,30 @@ export function Section(title: string, children: Widget[]): Widget;
  *
  * The no-arg form is the legacy stub from Phase 1 — keep using it on
  * platforms that haven't shipped the multi-page emission yet.
+ *
+ * **Route shape requirements** (#1135): each route entry must be a 2-field
+ * `{ name, body }` object literal at the call site (no spread, no extra
+ * fields). The `name` value must be either a string literal or a
+ * same-module `const X = "literal"` binding — the desugar pass const-folds
+ * the local back to its initializer so the canonical "factor route names
+ * into a shared constants file" pattern Just Works:
+ *
+ * ```ts
+ * const ROUTE_HOME = "home";
+ * const ROUTE_DETAIL = "detail";
+ * NavStack(route, [
+ *   { name: ROUTE_HOME, body: ... },     // OK — const-folded
+ *   { name: ROUTE_DETAIL, body: ... },   // OK — const-folded
+ * ])
+ * ```
+ *
+ * Imported `const`s from a sibling module (`import { ROUTE_HOME } from
+ * "./routes"`) are NOT resolved across modules today; they must be inlined
+ * to a string literal at the NavStack call site. When the rewrite bails
+ * for any reason, the compiler now emits a `Warning: NavStack(state,
+ * routes) skipped state-driven lowering (…)` line — pre-#1135 the call
+ * fell through silently to the 0-arg `NavStack()` stub and rendered as a
+ * completely blank screen with no diagnostic.
  */
 export function NavStack(): Widget;
 export function NavStack(
