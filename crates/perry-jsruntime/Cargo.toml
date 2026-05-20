@@ -59,7 +59,7 @@ sha2 = "0.10"
 # `crypto.createHash(...).update(...).digest('hex')` path returns real
 # hashes instead of empty strings — load-bearing for NestJS's
 # `ModuleTokenFactory` (#1021).
-sha1 = "0.10"
+sha1 = "0.11"
 md-5 = "0.10"
 
 [features]

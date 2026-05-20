@@ -315,7 +315,7 @@ rusqlite = { version = "0.32.1", features = ["bundled"], optional = true }
 
 # Crypto
 sha2 = { version = "0.10", optional = true }
-sha1 = { version = "0.10", optional = true }
+sha1 = { version = "0.11", optional = true }
 md-5 = { version = "0.10", optional = true }
 hex = { version = "0.4", optional = true }
 hmac = { version = "0.12", optional = true }
