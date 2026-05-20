@@ -380,6 +380,40 @@ pub(super) const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         ret: NR_VOID,
     },
     // ========== Node assert ==========
+    // Root-callable `assert(value, message?)` — HIR lowers
+    // `import assert from "node:assert"; assert(x, m)` to a
+    // `NativeMethodCall { module: "assert", method: "default" }`.
+    // Route it to `js_assert_ok` (Node's default export aliases
+    // `assert.ok`). Same for `node:assert/strict`.
+    NativeModSig {
+        module: "assert",
+        has_receiver: false,
+        method: "default",
+        class_filter: None,
+        runtime: "js_assert_ok",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "assert/strict",
+        has_receiver: false,
+        method: "default",
+        class_filter: None,
+        runtime: "js_assert_ok",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    // `assert.strict(value, msg?)` — the `.strict` namespace itself is
+    // callable and behaves like `assert.strict.ok`.
+    NativeModSig {
+        module: "assert",
+        has_receiver: false,
+        method: "strict",
+        class_filter: None,
+        runtime: "js_assert_ok",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
     NativeModSig {
         module: "assert",
         has_receiver: false,

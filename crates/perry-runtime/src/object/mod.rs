@@ -5059,7 +5059,13 @@ fn make_assertion_error(
     operator: &str,
     generated: bool,
 ) -> f64 {
-    let obj = js_object_alloc(0, 8);
+    // One-shot registration so AssertionError instances satisfy
+    // `instanceof Error` (see `instanceof.rs`: extends_builtin_error path).
+    static REGISTER_ASSERTION_ERROR: std::sync::Once = std::sync::Once::new();
+    REGISTER_ASSERTION_ERROR.call_once(|| {
+        js_register_class_extends_error(crate::error::CLASS_ID_ASSERTION_ERROR);
+    });
+    let obj = js_object_alloc(crate::error::CLASS_ID_ASSERTION_ERROR, 8);
     unsafe {
         let set = |key: &str, value: f64| {
             let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
@@ -5317,6 +5323,56 @@ pub extern "C" fn js_assert_does_not_match(actual: f64, expected: f64, message: 
     )
 }
 
+/// `new assert.AssertionError({actual, expected, operator, message, ...})`
+/// constructor. Reuses `make_assertion_error` so the resulting object
+/// carries the `CLASS_ID_ASSERTION_ERROR` class id, satisfies
+/// `instanceof Error`, and has the standard `actual` / `expected` /
+/// `operator` / `code` / `message` / `generatedMessage` fields Node
+/// attaches. Unspecified fields default to `undefined`. When `message`
+/// is missing, the operator-derived "<actual> <op> <expected>" default
+/// is left to the caller (Node's behaviour computes a stringy summary
+/// — we currently default to the operator string itself, which matches
+/// what Perry's failing-assert helpers produce).
+#[no_mangle]
+pub extern "C" fn js_assert_assertion_error_ctor(options: f64) -> f64 {
+    let undef = undefined_f64();
+    let opts_is_obj = {
+        let jv = crate::value::JSValue::from_bits(options.to_bits());
+        jv.is_pointer() && !jv.as_pointer::<u8>().is_null()
+    };
+    let (actual, expected, operator_str, message, generated) = if opts_is_obj {
+        unsafe {
+            let read = |key: &str| -> f64 {
+                let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+                let obj_ptr = crate::value::JSValue::from_bits(options.to_bits())
+                    .as_pointer::<ObjectHeader>();
+                let v = crate::object::js_object_get_field_by_name_f64(obj_ptr, key_ptr);
+                f64::from_bits(v.to_bits())
+            };
+            let actual = read("actual");
+            let expected = read("expected");
+            let operator_v = read("operator");
+            let message_v = read("message");
+            let operator_str = if is_null_or_undefined(operator_v) {
+                String::new()
+            } else {
+                value_to_string(operator_v)
+            };
+            let (msg, generated) = if is_null_or_undefined(message_v) {
+                // Default to the operator name so the resulting message is
+                // non-empty; users typically pass an explicit message.
+                (operator_str.clone(), true)
+            } else {
+                (value_to_string(message_v), false)
+            };
+            (actual, expected, operator_str, msg, generated)
+        }
+    } else {
+        (undef, undef, String::new(), String::new(), true)
+    };
+    make_assertion_error(message, actual, expected, &operator_str, generated)
+}
+
 #[no_mangle]
 pub extern "C" fn js_assert_if_error(value: f64) -> f64 {
     if is_null_or_undefined(value) {
@@ -5521,6 +5577,10 @@ unsafe fn dispatch_native_module_method(
             return f64::from_bits(JSValue::undefined().bits());
         }
         // ── assert module ──
+        // Root-callable `assert(x, msg)` / `assert.strict(x, msg)` —
+        // HIR lowers these to method "default".
+        ("assert", "default") | ("assert/strict", "default") => js_assert_ok(arg(0), arg(1)),
+        ("assert", "strict") => js_assert_ok(arg(0), arg(1)),
         ("assert", "ok") | ("assert/strict", "ok") => js_assert_ok(arg(0), arg(1)),
         ("assert", "fail") | ("assert/strict", "fail") => js_assert_fail(arg(0)),
         ("assert", "equal") => js_assert_equal(arg(0), arg(1), arg(2)),

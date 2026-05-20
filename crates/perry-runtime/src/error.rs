@@ -24,6 +24,12 @@ pub const CLASS_ID_RANGE_ERROR: u32 = 0xFFFF0011;
 pub const CLASS_ID_REFERENCE_ERROR: u32 = 0xFFFF0012;
 pub const CLASS_ID_SYNTAX_ERROR: u32 = 0xFFFF0013;
 pub const CLASS_ID_AGGREGATE_ERROR: u32 = 0xFFFF0014;
+/// AssertionError is a plain ObjectHeader (so it can carry the extra
+/// `actual` / `expected` / `operator` / `code` / `generatedMessage`
+/// fields Node attaches), but it is registered via
+/// `js_register_class_extends_error` at runtime init so
+/// `err instanceof Error` returns true on a thrown AssertionError.
+pub const CLASS_ID_ASSERTION_ERROR: u32 = 0xFFFF0020;
 
 /// Error object header
 #[repr(C)]

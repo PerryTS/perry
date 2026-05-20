@@ -4941,6 +4941,36 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // `new assert.AssertionError(options)` — Node's `assert`
+            // exposes a real constructor that accepts a `{actual,
+            // expected, operator, message, generatedMessage}` options
+            // bag and produces an AssertionError instance that
+            // satisfies `instanceof Error`. Route to the runtime
+            // helper directly so user code doesn't have to call
+            // through a synthesized closure (the helper lives in
+            // perry-runtime/src/object/mod.rs and reuses the same
+            // make_assertion_error path the failing-assert helpers
+            // already use, so the resulting instance has the same
+            // class_id-extends-Error registration).
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if property == "AssertionError" {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "assert" || mod_name == "assert/strict" {
+                            let opts = if args.is_empty() {
+                                "double 0x7FFC000000000001".to_string()
+                            } else {
+                                lower_expr(ctx, &args[0])?
+                            };
+                            return Ok(ctx.block().call(
+                                DOUBLE,
+                                "js_assert_assertion_error_ctor",
+                                &[(DOUBLE, &opts)],
+                            ));
+                        }
+                    }
+                }
+            }
+
             // Refs #740: `new O.Inner(args)` where `O` is an object
             // literal whose `Inner` field was initialized from a class
             // expression. The Stmt::Let lowering populates

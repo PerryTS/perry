@@ -1,4 +1,10 @@
 import assert from "node:assert";
 
-try { assert.ok(false); } catch (err) { console.log("ok generated:", (err as { generatedMessage?: boolean; operator?: string }).generatedMessage, (err as { operator?: string }).operator); }
-try { assert.ok(false, "manual"); } catch (err) { console.log("ok manual:", (err as { generatedMessage?: boolean; operator?: string }).generatedMessage, (err as Error).message); }
+try { assert.ok(false); } catch (err) {
+  const e = err as { generatedMessage?: boolean; operator?: string; code?: string };
+  console.log("ok generated:", e.generatedMessage, e.operator, e.code);
+}
+try { assert.ok(false, "manual"); } catch (err) {
+  const e = err as { generatedMessage?: boolean; operator?: string; code?: string; message: string };
+  console.log("ok manual:", e.generatedMessage, e.operator, e.code, e.message === "manual");
+}

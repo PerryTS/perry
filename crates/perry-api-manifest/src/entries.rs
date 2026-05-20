@@ -2028,8 +2028,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert", "match", false, None),
     method("assert", "doesNotMatch", false, None),
     method("assert", "ifError", false, None),
+    method("assert", "default", false, None),
+    method("assert", "strict", false, None),
     property("assert", "strict"),
     class("assert", "CallTracker"),
+    class("assert", "AssertionError"),
     method("assert/strict", "ok", false, None),
     method("assert/strict", "fail", false, None),
     method("assert/strict", "equal", false, None),
@@ -2043,6 +2046,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert/strict", "match", false, None),
     method("assert/strict", "doesNotMatch", false, None),
     method("assert/strict", "ifError", false, None),
+    method("assert/strict", "default", false, None),
+    class("assert/strict", "AssertionError"),
     // --- stream (Web Streams API + Node stream classes — see
     //     perry-stdlib/src/streams.rs and perry-ext-streams) ---
     class("stream", "Readable"),
