@@ -168,6 +168,26 @@ fn top_level_shadow_module(name: &str) -> Module {
     }
 }
 
+fn top_level_loop_shadow_module() -> Module {
+    let mut module = top_level_shadow_module("entry_loop_shadow.ts");
+    module.init = vec![Stmt::For {
+        init: None,
+        condition: Some(Expr::Bool(false)),
+        update: None,
+        body: vec![
+            Stmt::Let {
+                id: 20,
+                name: "loop_value".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::LocalGet(20)),
+        ],
+    }];
+    module
+}
+
 fn function_slice<'a>(ir: &'a str, name: &str) -> &'a str {
     let define_marker = format!("@{}(", name);
     let define_start = ir
@@ -324,4 +344,27 @@ fn non_entry_module_init_body_gets_post_init_shadow_frame() {
         init_ir.contains("call void @js_shadow_frame_pop"),
         "non-entry init returns should pop the top-level shadow frame"
     );
+}
+
+#[test]
+fn top_level_loop_body_shadow_slots_clear_each_iteration() {
+    let ir =
+        String::from_utf8(compile_module(&top_level_loop_shadow_module(), entry_opts()).unwrap())
+            .expect("LLVM IR should be UTF-8");
+    let main_ir = function_slice(&ir, "main");
+
+    let body_write = main_ir
+        .find("call void @js_shadow_slot_set(i32 0, i64 %")
+        .expect("loop-body pointer local should write its shadow slot");
+    let body_clear = main_ir[body_write..]
+        .find("call void @js_shadow_slot_set(i32 0, i64 0)")
+        .map(|offset| body_write + offset)
+        .expect("loop-body shadow slot should be cleared before the next iteration");
+    let loop_backedge = main_ir[body_clear..]
+        .find("br label %for.update")
+        .map(|offset| body_clear + offset)
+        .expect("for body should branch to update after clearing loop-body slots");
+
+    assert!(body_write < body_clear);
+    assert!(body_clear < loop_backedge);
 }

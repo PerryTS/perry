@@ -98,7 +98,11 @@ fn emit_shadow_clears_after_stmt(ctx: &mut FnCtx<'_>, stmt_idx: usize) {
     let Some(slots) = ctx.shadow_slot_clears_after_stmt.get(&stmt_idx).cloned() else {
         return;
     };
-    for slot_idx in slots {
+    emit_shadow_slot_clears(ctx, &slots);
+}
+
+fn emit_shadow_slot_clears(ctx: &mut FnCtx<'_>, slots: &[u32]) {
+    for &slot_idx in slots {
         crate::expr::emit_shadow_slot_clear(ctx, slot_idx);
     }
 }
@@ -1506,6 +1510,7 @@ fn lower_for(
     // Body block.
     ctx.current_block = body_idx;
     lower_stmts(ctx, body)?;
+    clear_loop_body_shadow_slots(ctx, body);
     // Issue #74: insert an empty `asm sideeffect` in bodies whose
     // statements are all LLVM-pure (local-only arithmetic, no calls,
     // no heap mutation). Without this, clang -O3's loop-deletion
@@ -1555,6 +1560,18 @@ fn lower_for(
     // Exit block — subsequent statements continue here.
     ctx.current_block = exit_idx;
     Ok(())
+}
+
+fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
+    if ctx.block().is_terminated() || ctx.shadow_slot_map.is_empty() {
+        return;
+    }
+    let slots =
+        crate::collectors::collect_declared_shadow_slots_in_stmts(body, &ctx.shadow_slot_map);
+    if slots.is_empty() {
+        return;
+    }
+    emit_shadow_slot_clears(ctx, &slots);
 }
 
 /// Inspect a `for` loop's condition expression and body, and return
@@ -1965,6 +1982,7 @@ fn lower_while(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr, body: &[Stmt]) 
 
     ctx.current_block = body_idx;
     lower_stmts(ctx, body)?;
+    clear_loop_body_shadow_slots(ctx, body);
     // Issue #74: see lower_for for rationale.
     if !ctx.block().is_terminated() && body_needs_asm_barrier(body) {
         ctx.block().asm_sideeffect_barrier();
@@ -2006,6 +2024,7 @@ fn lower_do_while(ctx: &mut FnCtx<'_>, body: &[Stmt], condition: &perry_hir::Exp
 
     ctx.current_block = body_idx;
     lower_stmts(ctx, body)?;
+    clear_loop_body_shadow_slots(ctx, body);
     // Issue #74: see lower_for for rationale.
     if !ctx.block().is_terminated() && body_needs_asm_barrier(body) {
         ctx.block().asm_sideeffect_barrier();

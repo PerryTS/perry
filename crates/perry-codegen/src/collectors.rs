@@ -1375,6 +1375,26 @@ pub(crate) fn collect_shadow_slot_clear_points(
     clear_after
 }
 
+pub(crate) fn collect_declared_shadow_slots_in_stmts(
+    stmts: &[perry_hir::Stmt],
+    shadow_slot_map: &std::collections::HashMap<u32, u32>,
+) -> Vec<u32> {
+    if shadow_slot_map.is_empty() {
+        return Vec::new();
+    }
+    let mut locals = Vec::new();
+    for stmt in stmts {
+        collect_declared_shadow_locals_in_stmt(stmt, shadow_slot_map, &mut locals);
+    }
+    let mut slots: Vec<u32> = locals
+        .into_iter()
+        .filter_map(|local_id| shadow_slot_map.get(&local_id).copied())
+        .collect();
+    slots.sort_unstable();
+    slots.dedup();
+    slots
+}
+
 fn collect_declared_shadow_locals_in_stmt(
     stmt: &perry_hir::Stmt,
     shadow_slot_map: &std::collections::HashMap<u32, u32>,
