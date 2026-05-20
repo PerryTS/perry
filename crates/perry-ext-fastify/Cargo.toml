@@ -10,11 +10,19 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
+# #1113: cross-crate WS upgrade handoff. perry-ext-ws exposes
+# `register_external_ws_stream<S>(WebSocketStream<S>) -> i64`; we call
+# it from upgrade::handle_fastify_websocket_upgrade so the fastify
+# `app.server.on("upgrade", …)` path produces a ws_id usable through
+# the rest of the perry-ext-ws FFI surface. Mirrors the proven
+# perry-ext-http-server (#577 Phase 4) dependency.
+perry-ext-ws = { path = "../perry-ext-ws" }
 hyper = { version = "1.4", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
 http-body-util = "0.1"
 bytes = "1.5"
 tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
 serde_json = "1"
 lazy_static = "1.5"
 

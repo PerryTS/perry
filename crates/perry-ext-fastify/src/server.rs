@@ -24,8 +24,8 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 use perry_ffi::{
-    alloc_string, get_handle, get_handle_mut, iter_handle_ids_of, iter_handles_of, register_handle,
-    Handle, JsClosure, JsValue, RawClosureHeader, StringHeader,
+    alloc_string, get_handle, get_handle_mut, iter_handle_ids_of, register_handle, Handle,
+    JsClosure, JsValue, RawClosureHeader, StringHeader,
 };
 
 use crate::app::{ClosurePtr, FastifyApp, Route};
@@ -158,11 +158,29 @@ pub struct FastifyServerHandle {
     /// references but the pump needs `&mut` access to `try_recv` and
     /// we can't statically prove the pump is the only mutator.
     pub request_rx: Mutex<Option<mpsc::Receiver<FastifyPendingRequest>>>,
+    /// #1113 — WebSocket upgrade events queued from the hyper accept
+    /// task once `hyper::upgrade::on` resolves and the upgraded stream
+    /// has been registered with `perry_ext_ws::register_external_ws_stream`.
+    /// Drained alongside `request_rx` in `js_fastify_process_pending`.
+    pub upgrade_rx: Mutex<Option<mpsc::Receiver<FastifyPendingUpgrade>>>,
     /// True between `listen()` and `close()`. The
     /// `js_fastify_has_active` extern returns 1 while any server has
     /// this set, keeping the runtime's main event loop alive until the
     /// user explicitly closes the server.
     pub listening: AtomicBool,
+}
+
+/// #1113 — pending WebSocket upgrade ready to fire the fastify
+/// `app.server.on("upgrade", …)` handlers. Sent by the hyper accept
+/// task after `hyper::upgrade::on` resolves and the upgraded stream
+/// has been registered with `perry_ext_ws::register_external_ws_stream`.
+/// Mirror of perry-ext-http-server's `HttpPendingUpgrade`.
+pub struct FastifyPendingUpgrade {
+    pub app_handle: Handle,
+    /// NaN-boxed (POINTER_TAG) bits of the minimal request object
+    /// built on the accept task before the upgrade resolves.
+    pub req_handle: i64,
+    pub ws_id: i64,
 }
 
 /// Pending request waiting for the TS handler to produce a response.
@@ -203,8 +221,12 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
     let port = extract_port(opts);
 
     let (request_tx, request_rx) = mpsc::channel::<FastifyPendingRequest>(1024);
+    // #1113 — separate channel for WebSocket upgrade events so a busy
+    // request stream can't starve them (mirror of perry-ext-http-server).
+    let (upgrade_tx, upgrade_rx) = mpsc::channel::<FastifyPendingUpgrade>(256);
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
     let request_tx = Arc::new(request_tx);
+    let upgrade_tx = Arc::new(upgrade_tx);
 
     // Snapshot the current routes for the server task — routes added
     // after `listen()` returns are not picked up by this snapshot
@@ -222,6 +244,7 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
     js_gc_enter_unsafe_zone();
 
     let request_tx_for_spawn = request_tx.clone();
+    let upgrade_tx_for_spawn = upgrade_tx.clone();
     let routes_for_spawn = routes_arc.clone();
 
     perry_ffi::spawn_blocking(move || {
@@ -242,17 +265,24 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
                             Ok((stream, _)) => {
                                 let io = TokioIo::new(stream);
                                 let request_tx = request_tx_for_spawn.clone();
+                                let upgrade_tx = upgrade_tx_for_spawn.clone();
                                 let routes = routes_for_spawn.clone();
                                 tokio::spawn(async move {
                                     let service = service_fn(move |req: Request<Incoming>| {
                                         let request_tx = request_tx.clone();
+                                        let upgrade_tx = upgrade_tx.clone();
                                         let routes = routes.clone();
                                         async move {
-                                            handle_request(req, request_tx, routes).await
+                                            handle_request(app_handle, req, request_tx, upgrade_tx, routes).await
                                         }
                                     });
+                                    // #1113: `.with_upgrades()` is REQUIRED for
+                                    // `hyper::upgrade::on(&mut req)` to resolve.
+                                    // Without it the upgrade future never
+                                    // completes and the WS handshake stalls.
                                     if let Err(e) = http1::Builder::new()
                                         .serve_connection(io, service)
+                                        .with_upgrades()
                                         .await
                                     {
                                         // perry#924: hyper surfaces every malformed
@@ -287,6 +317,7 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
         app_handle,
         shutdown_tx: Some(shutdown_tx),
         request_rx: Mutex::new(Some(request_rx)),
+        upgrade_rx: Mutex::new(Some(upgrade_rx)),
         listening: AtomicBool::new(true),
     });
 
@@ -330,6 +361,7 @@ pub unsafe extern "C" fn js_fastify_close(server_handle: Handle) -> bool {
     if let Some(server) = get_handle_mut::<FastifyServerHandle>(server_handle) {
         server.listening.store(false, Ordering::Release);
         *server.request_rx.lock().unwrap() = None;
+        *server.upgrade_rx.lock().unwrap() = None;
         if let Some(tx) = server.shutdown_tx.take() {
             let _ = tx.send(());
         }
@@ -369,16 +401,41 @@ pub unsafe extern "C" fn js_fastify_app_close(app_handle: Handle) {
 /// `js_node_http_server_process_pending`, etc.).
 #[no_mangle]
 pub extern "C" fn js_fastify_process_pending() -> i32 {
-    let mut server_handles: Vec<Handle> = Vec::new();
+    // #1114: called every iteration of the generated event loop AND
+    // every inline `await` poll loop. A fresh `Vec<Handle>` per call is
+    // a high-frequency alloc/free that shows up as GC `madvise`
+    // page-churn under sustained async load (the wedge signature).
+    // Reuse a per-thread scratch buffer; move it out (not borrow it)
+    // across `process_request` since that dispatches user TS which can
+    // re-enter this pump. Mirror of the bundled `perry-stdlib::fastify`
+    // fix — either crate can be live depending on the well-known flip.
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<Vec<Handle>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut server_handles = SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    server_handles.clear();
     iter_handle_ids_of::<FastifyServerHandle, _>(|id| {
         server_handles.push(id);
     });
     let mut count = 0i32;
-    for h in server_handles {
+    for &h in server_handles.iter() {
         let app_handle = match get_handle::<FastifyServerHandle>(h) {
             Some(s) => s.app_handle,
             None => continue,
         };
+        // #1113 — drain WebSocket upgrades FIRST so a busy request
+        // stream can't starve them (mirror of perry-ext-http-server's
+        // `js_node_http_server_process_pending`).
+        while let Some(up) = try_recv_fastify_upgrade(h) {
+            crate::upgrade::fire_fastify_upgrade_listeners(
+                up.app_handle,
+                up.req_handle,
+                up.ws_id,
+                Vec::new(),
+            );
+            count += 1;
+        }
         loop {
             let pending = match get_handle::<FastifyServerHandle>(h) {
                 Some(s) => {
@@ -398,13 +455,33 @@ pub extern "C" fn js_fastify_process_pending() -> i32 {
             count += 1;
         }
     }
+    server_handles.clear();
+    SCRATCH.with(|s| {
+        let mut slot = s.borrow_mut();
+        if server_handles.capacity() >= slot.capacity() {
+            *slot = server_handles;
+        }
+    });
     count
 }
 
+/// #1113 — non-blocking try_recv for a pending WebSocket upgrade.
+/// Mirror of perry-ext-http-server's `try_recv_upgrade`.
+fn try_recv_fastify_upgrade(server_handle: Handle) -> Option<FastifyPendingUpgrade> {
+    if let Some(s) = get_handle::<FastifyServerHandle>(server_handle) {
+        let mut guard = s.upgrade_rx.lock().unwrap();
+        if let Some(rx) = guard.as_mut() {
+            return rx.try_recv().ok();
+        }
+    }
+    None
+}
+
 /// Reports whether any registered fastify server is currently in the
-/// "listening" state. Wired into perry-stdlib's
-/// `js_stdlib_has_active_handles` so the runtime's main event loop
-/// keeps running until the user explicitly closes every server.
+/// "listening" state OR has a non-empty upgrade queue. Wired into
+/// perry-stdlib's `js_stdlib_has_active_handles` so the runtime's main
+/// event loop keeps running until the user explicitly closes every
+/// server and every queued upgrade has been drained.
 #[no_mangle]
 pub extern "C" fn js_fastify_has_active() -> i32 {
     let mut active = 0i32;
@@ -412,6 +489,17 @@ pub extern "C" fn js_fastify_has_active() -> i32 {
         if let Some(s) = get_handle::<FastifyServerHandle>(id) {
             if s.listening.load(Ordering::Acquire) {
                 active = 1;
+            }
+            // Even after close(), the upgrade channel may still hold
+            // queued items the pump needs to drain on a later tick
+            // before the program can exit cleanly (mirror of
+            // perry-ext-http-server's `server_is_active`).
+            if let Ok(guard) = s.upgrade_rx.lock() {
+                if let Some(rx) = guard.as_ref() {
+                    if !rx.is_closed() && rx.len() > 0 {
+                        active = 1;
+                    }
+                }
             }
         }
     });
@@ -425,8 +513,10 @@ pub extern "C" fn js_fastify_has_active() -> i32 {
 /// Hyper service function — match the route, hand the request to the
 /// main thread via mpsc, await the response.
 async fn handle_request(
+    app_handle: Handle,
     req: Request<Incoming>,
     request_tx: Arc<mpsc::Sender<FastifyPendingRequest>>,
+    upgrade_tx: Arc<mpsc::Sender<FastifyPendingUpgrade>>,
     routes: Arc<Vec<Route>>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().to_string();
@@ -443,7 +533,7 @@ async fn handle_request(
         }
     }
 
-    // #1113: detect HTTP Upgrade requests. The user's pattern
+    // #1113: detect WebSocket upgrade requests. The user's pattern
     //
     //   import { WebSocketServer } from "ws";
     //   const wss = new WebSocketServer({ noServer: true });
@@ -452,45 +542,18 @@ async fn handle_request(
     //   });
     //
     // expects the fastify accept loop to surface upgrade requests via
-    // `app.server`'s registered `"upgrade"` handler. Today we only
-    // RECORD that the handler list exists (in
-    // `FastifyApp::upgrade_handlers`) — invoking it would need to
-    // bypass hyper's normal response flow, call
-    // `hyper::upgrade::on(req)` to get the raw upgraded IO, and hand
-    // a Node-compatible `req` / `socket` / `head` triple back to
-    // TypeScript so `wss.handleUpgrade(...)` can complete the WS
-    // handshake on the same socket. That's a substantial follow-up;
-    // for now we emit a one-line diagnostic so a user who's wired
-    // `app.server.on("upgrade", …)` sees clearly that the request
-    // arrived but went unhandled, then return a 501.
-    if headers
-        .get("upgrade")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
-    {
-        let mut any_handler_registered = false;
-        iter_handles_of::<FastifyApp, _>(|app| {
-            if !app.upgrade_handlers.is_empty() {
-                any_handler_registered = true;
-            }
-        });
-        if any_handler_registered {
-            eprintln!(
-                "[fastify] HTTP Upgrade requested (Upgrade: {}) — \
-                 `app.server.on(\"upgrade\", …)` handlers are registered \
-                 but bidirectional WebSocket upgrade dispatch through \
-                 hyper isn't yet wired (#1113 follow-up). Use \
-                 perry-ext-ws on a separate port for now.",
-                headers.get("upgrade").map(String::as_str).unwrap_or("?")
-            );
-            return Ok(Response::builder()
-                .status(StatusCode::NOT_IMPLEMENTED)
-                .header("content-type", "application/json")
-                .body(Full::new(Bytes::from(
-                    "{\"error\":\"WebSocket upgrade via fastify.server not yet implemented (perry #1113)\"}",
-                )))
-                .unwrap());
-        }
+    // `app.server`'s registered `"upgrade"` handler. Branch into the
+    // handshake path: build the 101 response synchronously and spawn
+    // a task that awaits hyper's upgraded stream, completes the
+    // tungstenite server handshake, registers the WebSocketStream
+    // with perry-ext-ws, and queues a `FastifyPendingUpgrade` for the
+    // main-thread pump to fire the registered handlers. Mirror of
+    // perry-ext-http-server's #577 Phase 4 path.
+    if crate::upgrade::is_websocket_upgrade(&req) {
+        return handle_fastify_websocket_upgrade(
+            app_handle, req, method, path, headers, upgrade_tx,
+        )
+        .await;
     }
 
     let body = match req.collect().await {
@@ -560,6 +623,72 @@ async fn handle_request(
             .body(Full::new(Bytes::from("Handler error")))
             .unwrap()),
     }
+}
+
+/// #1113 — WebSocket upgrade dispatch (mirror of perry-ext-http-server's
+/// `handle_websocket_upgrade`, issue #577 Phase 4).
+///
+/// Synchronously builds the 101 response (so hyper drives the protocol
+/// switch) and spawns a tokio task that awaits the upgraded stream,
+/// finishes the handshake server-side via
+/// `tokio_tungstenite::WebSocketStream::from_raw_socket`, registers
+/// the stream with perry-ext-ws, and queues a `FastifyPendingUpgrade`
+/// on the per-server channel; the main-thread pump fires the
+/// `app.server.on("upgrade", …)` handlers with `(req, ws_id, head)`.
+async fn handle_fastify_websocket_upgrade(
+    app_handle: Handle,
+    mut req: Request<Incoming>,
+    method: String,
+    path: String,
+    headers: HashMap<String, String>,
+    upgrade_tx: Arc<mpsc::Sender<FastifyPendingUpgrade>>,
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    // Compute the Sec-WebSocket-Accept value before consuming req.
+    let accept_value = req
+        .headers()
+        .get("sec-websocket-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|k| tokio_tungstenite::tungstenite::handshake::derive_accept_key(k.as_bytes()))
+        .unwrap_or_default();
+
+    // Build the minimal request object NOW (on the accept task,
+    // before the upgrade resolves) so it carries method/url/headers.
+    // It is a real pointer-tagged object so `typeof req === "object"`.
+    let req_bits =
+        unsafe { crate::upgrade::build_request_object(&method, &path, &headers) }.to_bits() as i64;
+
+    // Spawn a task that waits for hyper to perform the protocol
+    // switch, completes the tungstenite handshake, and hands the
+    // resulting stream to perry-ext-ws.
+    tokio::spawn(async move {
+        let upgraded = match hyper::upgrade::on(&mut req).await {
+            Ok(u) => u,
+            Err(_) => return,
+        };
+        let io = TokioIo::new(upgraded);
+        let ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            io,
+            tokio_tungstenite::tungstenite::protocol::Role::Server,
+            None,
+        )
+        .await;
+        let ws_id = perry_ext_ws::register_external_ws_stream(ws);
+        let pending = FastifyPendingUpgrade {
+            app_handle,
+            req_handle: req_bits,
+            ws_id,
+        };
+        let _ = upgrade_tx.send(pending).await;
+        perry_ffi::notify_main_thread();
+    });
+
+    Ok(Response::builder()
+        .status(101)
+        .header("upgrade", "websocket")
+        .header("connection", "Upgrade")
+        .header("sec-websocket-accept", accept_value)
+        .body(Full::new(Bytes::new()))
+        .unwrap())
 }
 
 /// Process one request — fire hooks, call route handler, send the

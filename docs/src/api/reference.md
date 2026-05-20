@@ -1463,6 +1463,7 @@ Total: 942 entries across 74 modules.
 - `close` — instance
 - `close` — instance *(class: `Client`)*
 - `closeClient` — module
+- `handleUpgrade` — instance
 - `on` — instance
 - `on` — instance *(class: `Client`)*
 - `send` — instance

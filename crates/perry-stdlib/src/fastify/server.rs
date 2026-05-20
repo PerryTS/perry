@@ -392,13 +392,30 @@ async fn handle_request(
 pub fn js_fastify_process_pending() -> i32 {
     // Snapshot handle ids so we don't hold a DashMap iterator across
     // the dispatch — handler calls may register/drop other handles.
-    let mut server_handles: Vec<Handle> = Vec::new();
+    //
+    // #1114: this pump runs on EVERY iteration of the generated event
+    // loop AND every iteration of every inline `await` poll loop (it is
+    // called from `js_stdlib_process_pending`). A fresh `Vec<Handle>`
+    // per call is a high-frequency heap alloc/free that surfaces as GC
+    // `madvise` page-churn under sustained async load — the #1114 wedge
+    // signature. Reuse a per-thread scratch buffer so steady state is
+    // allocation-free. The buffer is moved out (not borrowed) across
+    // `process_fastify_request` because that dispatches user TS, which
+    // can re-enter this pump via an inline `await`; a re-entrant call
+    // just gets a fresh empty Vec, and the outer call restores its
+    // capacity-retaining buffer on the way out.
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<Vec<Handle>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut server_handles = SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    server_handles.clear();
     crate::common::iter_handle_ids_of::<FastifyServerHandle, _>(|id| {
         server_handles.push(id);
     });
 
     let mut count = 0i32;
-    for h in server_handles {
+    for &h in server_handles.iter() {
         // Snapshot the app handle inside the borrow scope.
         let app_handle = match get_handle::<FastifyServerHandle>(h) {
             Some(s) => s.app_handle,
@@ -429,6 +446,17 @@ pub fn js_fastify_process_pending() -> i32 {
             count += 1;
         }
     }
+
+    // Return the (capacity-retaining) buffer to the thread-local so the
+    // next tick reuses it. A re-entrant call during dispatch may have
+    // left a grown buffer behind — keep whichever has more capacity.
+    server_handles.clear();
+    SCRATCH.with(|s| {
+        let mut slot = s.borrow_mut();
+        if server_handles.capacity() >= slot.capacity() {
+            *slot = server_handles;
+        }
+    });
     count
 }
 

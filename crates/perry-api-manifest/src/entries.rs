@@ -472,6 +472,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("ws", "on", true, None),
     method("ws", "send", true, None),
     method("ws", "close", true, None),
+    // #1113 — `wss.handleUpgrade(req, socket, head, cb)` for a
+    // `new WebSocketServer({ noServer: true })`.
+    method("ws", "handleUpgrade", true, None),
     // Issue #577 Phase 4 — Client-class methods for the upgrade-path wsId.
     method("ws", "on", true, Some("Client")),
     method("ws", "addListener", true, Some("Client")),

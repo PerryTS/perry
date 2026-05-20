@@ -618,10 +618,34 @@ pub unsafe extern "C" fn js_ws_on(
 // ── Server ────────────────────────────────────────────────────────
 
 /// `new WebSocketServer({ port })` — sync ctor; spawns the accept loop.
+///
+/// #1113: `new WebSocketServer({ noServer: true })` must NOT bind a
+/// TCP port or spawn the accept loop — it's a passive registry whose
+/// connections arrive exclusively via `wss.handleUpgrade(...)` driven
+/// by a host server's `'upgrade'` event (fastify's `app.server` or
+/// `node:http`). For that shape we register a listener-only handle and
+/// return early; `WS_ACTIVE_SERVERS` is left untouched so a noServer
+/// wss doesn't keep the event loop alive on its own (the host server's
+/// has-active gate — `js_fastify_has_active` — does that).
 #[no_mangle]
 pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
     ensure_gc_scanner_registered();
     let port = extract_port(opts_f64);
+    let no_server = extract_no_server(opts_f64);
+
+    if no_server || port == 0 {
+        // Listener-only handle — no bind, no accept loop, no shutdown
+        // channel (nothing to shut down). Connections are injected via
+        // `js_ws_handle_upgrade`.
+        return register_handle(WsServerHandle {
+            listeners: HashMap::new(),
+            port: 0,
+            is_listening: false,
+            client_ids: Vec::new(),
+            shutdown_tx: None,
+        });
+    }
+
     let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<()>();
     let server_handle = register_handle(WsServerHandle {
         listeners: HashMap::new(),
@@ -734,6 +758,48 @@ fn extract_port(opts_f64: f64) -> u16 {
         opts_f64 as u16
     } else {
         0
+    }
+}
+
+/// #1113 — detect `new WebSocketServer({ noServer: true })`.
+///
+/// perry-ffi exposes only positional object-field reads
+/// (`js_object_get_field(ptr, idx)`), not name-based lookup, so we
+/// can't read the `noServer` key by name. Heuristic: an options
+/// object that carries a `true` boolean field AND no positive numeric
+/// port field is a `noServer` config. (A real `{ port: N }` config
+/// has a positive number in field 0 — `extract_port` handles that;
+/// a `{ noServer: true }` config has no port and a `true` boolean.)
+/// `js_ws_server_new` additionally treats "object with no positive
+/// port" as noServer, so this is a belt-and-suspenders signal that
+/// also catches `{ noServer: true, ...other }` shapes regardless of
+/// field order.
+fn extract_no_server(opts_f64: f64) -> bool {
+    let bits = opts_f64.to_bits();
+    if (bits & TAG_MASK) != POINTER_TAG {
+        return false;
+    }
+    let ptr = (bits & POINTER_MASK) as *const ObjectHeader;
+    if ptr.is_null() {
+        return false;
+    }
+    unsafe {
+        let n = (*ptr).field_count;
+        let mut saw_true = false;
+        let mut saw_positive_port = false;
+        for i in 0..n {
+            let v = perry_ffi::js_object_get_field(ptr, i);
+            if v.is_bool() && v.to_bool() {
+                saw_true = true;
+            }
+            if v.is_number() {
+                let num = v.to_number();
+                if num.is_finite() && num > 0.0 {
+                    saw_positive_port = true;
+                }
+            }
+        }
+        saw_true && !saw_positive_port
     }
 }
 
@@ -893,6 +959,90 @@ where
     );
     drive_server_client_io(ws_id, ws_stream, rx);
     ws_id as i64
+}
+
+/// #1113 — `wss.handleUpgrade(req, socket, head, cb)` for a
+/// `new WebSocketServer({ noServer: true })`.
+///
+/// The handshake + per-client IO loop already happened: the host
+/// server's accept task (fastify's `handle_fastify_websocket_upgrade`
+/// or perry-ext-http-server's `handle_websocket_upgrade`) drove
+/// `hyper::upgrade::on`, completed the tungstenite server handshake,
+/// and called `register_external_ws_stream` (which spawned
+/// `drive_server_client_io`). By the time the user's `'upgrade'`
+/// handler runs and calls `wss.handleUpgrade(...)`, `ws_id` is already
+/// a live connection. This function is purely the JS-visible
+/// re-dispatch shim — it does NOT register another stream or perform
+/// another handshake.
+///
+/// Steps (mirror `WebSocketServer({port})`'s per-connection wiring):
+///   1. Decode `ws_id` from the POINTER_TAG-boxed `ws_id_f64`.
+///   2. Adopt the connection under this server (`WS_CLIENT_PARENT_SERVER`
+///      + `client_ids`) so server-level `wss.on('message'|'close', …)`
+///      handlers route, and the GC scanner pins the right listeners.
+///   3. Invoke the user's `cb(socket)` with `socket === ws_id_f64`
+///      (the same NaN-boxed id `wss.on('connection', (ws) => …)` gets,
+///      so `ws.send(...)` / `ws.on(...)` dispatch through the Client
+///      class arm).
+///   4. Also push `PendingWsEvent::Connection` so a separately
+///      registered `wss.on('connection', cb)` fires through the pump.
+///
+/// `req_f64` / `head_f64` are accepted for API shape parity (Node's
+/// `handleUpgrade(request, socket, head, callback)`); they're not
+/// consumed here — the request metadata was already surfaced to the
+/// `'upgrade'` handler.
+///
+/// # Safety
+/// `cb`, when non-zero, must be a valid NaN-boxed / raw closure
+/// pointer. `ws_id_f64` must be a POINTER_TAG-boxed ws id produced by
+/// the host server's upgrade path.
+#[no_mangle]
+pub unsafe extern "C" fn js_ws_handle_upgrade(
+    server_handle: i64,
+    _req_f64: f64,
+    ws_id_f64: f64,
+    _head_f64: f64,
+    cb: i64,
+) -> i64 {
+    ensure_gc_scanner_registered();
+    // `ws_id_f64` is POINTER_TAG-boxed (the host upgrade path encodes
+    // it as `POINTER_TAG | (ws_id & POINTER_MASK)` so codegen's
+    // unbox_to_i64 round-trips it). Extract the low-48 bits.
+    let ws_id = (ws_id_f64.to_bits() & POINTER_MASK) as usize;
+    if ws_id == 0 {
+        return server_handle;
+    }
+
+    WS_CLIENT_PARENT_SERVER
+        .lock()
+        .unwrap()
+        .insert(ws_id, server_handle);
+    if let Some(s) = get_handle_mut::<WsServerHandle>(server_handle) {
+        if !s.client_ids.contains(&ws_id) {
+            s.client_ids.push(ws_id);
+        }
+    }
+
+    if cb != 0 {
+        // Accept either a NaN-boxed POINTER_TAG closure or a raw
+        // pointer (same dual-shape the rest of the crate handles).
+        let raw = if (cb as u64 & TAG_MASK) == POINTER_TAG {
+            (cb as u64 & POINTER_MASK) as *const RawClosureHeader
+        } else {
+            cb as *const RawClosureHeader
+        };
+        let closure = JsClosure::from_raw(raw);
+        if !closure.is_null() {
+            let _ = closure.call1(ws_id_f64);
+        }
+    }
+
+    // Also fire a Connection event so a `wss.on('connection', cb)`
+    // registered separately from `handleUpgrade`'s inline callback
+    // still runs through the normal pump.
+    push_ws_event(PendingWsEvent::Connection(server_handle, ws_id));
+    notify_main_thread();
+    server_handle
 }
 
 // ── Event-loop tick ───────────────────────────────────────────────

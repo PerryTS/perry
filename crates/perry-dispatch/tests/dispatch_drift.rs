@@ -118,7 +118,9 @@ fn runtime_symbols_appear_in_js_and_wasm_emit() {
         .expect("perry-dispatch lives under crates/");
 
     let js_emit_path = crates_root.join("perry-codegen-js/src/emit.rs");
-    let wasm_emit_path = crates_root.join("perry-codegen-wasm/src/emit.rs");
+    // #1102: `emit.rs` was split into a directory module — the canonical
+    // dispatch-wiring lookup now lives in `emit/mod.rs`.
+    let wasm_emit_path = crates_root.join("perry-codegen-wasm/src/emit/mod.rs");
 
     let js_src = std::fs::read_to_string(&js_emit_path)
         .expect("JS emit source must be readable from the workspace");

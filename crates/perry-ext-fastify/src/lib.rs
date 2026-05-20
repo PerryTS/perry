@@ -65,6 +65,7 @@ mod app;
 mod context;
 mod router;
 mod server;
+mod upgrade;
 
 pub use app::*;
 pub use context::*;
