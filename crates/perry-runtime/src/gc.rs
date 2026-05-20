@@ -720,6 +720,32 @@ thread_local! {
     /// to compute the suppressed window's arena growth.
     static GC_PRE_SUPPRESS_BYTES: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+
+    /// Non-generational full GC cannot compact a block that still contains
+    /// the just-returned parse result. When tiny parse churn crosses the
+    /// in-use pressure guard, collect at the next parse boundary instead of
+    /// immediately after the current parse, so the previous result has had a
+    /// chance to fall out of the shadow roots.
+    static GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+const GC_SUPPRESSED_TINY_PARSE_BYTES: usize = 1024 * 1024;
+const GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES: usize = 48 * 1024 * 1024;
+const GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES: usize = 24 * 1024 * 1024;
+
+fn gc_suppressed_parse_is_tiny(parse_growth: usize) -> bool {
+    parse_growth <= GC_SUPPRESSED_TINY_PARSE_BYTES
+}
+
+fn gc_bump_arena_trigger_target(bytes_now: usize, step: usize, is_tiny_parse: bool) -> usize {
+    let bytes_step = step.min(GC_THRESHOLD_INITIAL_BYTES);
+    let target = bytes_now.saturating_add(bytes_step);
+    if is_tiny_parse {
+        target.min(GC_TRIGGER_ABSOLUTE_CEILING)
+    } else {
+        target
+    }
 }
 
 /// Initial step for the malloc-count-based GC trigger. Adaptive: doubles
@@ -2685,6 +2711,12 @@ pub extern "C" fn js_gc_register_global_root(ptr: i64) {
 /// Suppress GC triggers. While suppressed, `gc_check_trigger` is a no-op.
 /// Used by JSON.parse to avoid mid-parse GC cycles.
 pub fn gc_suppress() {
+    if !gen_gc_enabled()
+        && crate::arena::arena_in_use_bytes()
+            >= GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES
+    {
+        crate::arena::arena_start_fresh_general_block();
+    }
     // Issue #745: snapshot arena_total at suppress-start so the
     // matching `gc_bump_malloc_trigger` can size the suppressed
     // window's parse growth and gate the bytes-trigger bump on it.
@@ -2716,27 +2748,83 @@ pub fn gc_unsuppress() {
 /// of four.
 pub fn gc_bump_malloc_trigger() {
     let current = MALLOC_STATE.with(|s| s.borrow().objects.len());
+    use crate::arena::arena_total_bytes;
+    let bytes_now = arena_total_bytes();
+    let is_tiny_parse = gc_bump_malloc_trigger_with_snapshot(current, bytes_now);
+    if is_tiny_parse {
+        let use_gen_gc = gen_gc_enabled();
+        let in_use_trigger = if use_gen_gc {
+            GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES
+        } else {
+            GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES
+        };
+        if crate::arena::arena_in_use_bytes() < in_use_trigger {
+            return;
+        }
+        if use_gen_gc {
+            if !defer_gc_request(DeferredGcRequest::Collect(GcTriggerKind::ArenaBytes)) {
+                gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(
+                    GcTriggerKind::ArenaBytes,
+                ))
+                .emit_after_current();
+            }
+        } else {
+            crate::arena::arena_start_fresh_general_block();
+            GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
+        }
+    }
+}
+
+/// Run a full collection that was armed by tiny JSON parse churn.
+///
+/// This is separate from the raise-only post-parse trigger bump. Full
+/// mark-sweep needs the collection to happen before the next suppressed parse,
+/// not immediately after the previous one, otherwise the parse result is still
+/// rooted and every churn block looks partially live.
+pub fn gc_collect_pending_suppressed_parse() {
+    let pending = GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| {
+        let was_pending = pending.get();
+        pending.set(false);
+        was_pending
+    });
+    if !pending {
+        return;
+    }
+    if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0 {
+        GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
+        return;
+    }
+
+    let total = crate::arena::arena_total_bytes();
+    GC_NEXT_TRIGGER_BYTES.with(|trigger| {
+        if trigger.get() > total {
+            trigger.set(total);
+        }
+    });
+    gc_check_trigger();
+}
+
+fn gc_bump_malloc_trigger_with_snapshot(current: usize, bytes_now: usize) -> bool {
     let step = GC_MALLOC_COUNT_STEP.with(|c| c.get());
     GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(current + step));
 
-    use crate::arena::arena_total_bytes;
-    let bytes_now = arena_total_bytes();
     let pre_suppress = GC_PRE_SUPPRESS_BYTES.with(|c| c.get());
     let parse_growth = bytes_now.saturating_sub(pre_suppress);
 
     // Issue #745: gate the bytes-trigger bump on the suppressed
     // window's parse size, with two regimes:
     //
-    //   * Tiny parses (< 1 MB of arena growth) — the
+    //   * Tiny parses (<= 1 MB of arena growth) — the
     //     `test_memory_json_churn` shape: 5 k iters × ~13 KB per
-    //     parse into a fragmented arena, where every block holds
-    //     both live and dead objects so a GC sweep would find 91 %+
-    //     bytes dead but reclaim *zero* blocks, then step-double
-    //     and cascade RSS up. Always bump here — the original
-    //     bytes-bump (commit 56818086) correctly deferred GC
-    //     indefinitely on this shape, and we preserve that.
+    //     parse into a fragmented arena, where a small parse can still
+    //     force one fresh 1 MB block while GC is suppressed. Allow
+    //     repeated bumps here, but clamp them to the collector's
+    //     absolute trigger ceiling so a tiny parse loop cannot keep
+    //     ratcheting the next GC beyond the RSS guardrail. If a
+    //     suppressed parse crosses the trigger, the next pre-parse or
+    //     normal allocation check sees the trigger still due.
     //
-    //   * Medium-or-larger parses (>= 1 MB) — the
+    //   * Medium-or-larger parses (> 1 MB) — the
     //     `json_pipeline_full` and `json_polyglot` shapes: once per
     //     GC cycle, bump the trigger to grant the post-parse
     //     workload a `step` of headroom. The flag clears in
@@ -2754,16 +2842,13 @@ pub fn gc_bump_malloc_trigger() {
     // hundreds of MB of headroom. The original optimization measured
     // `step` at INITIAL on the first call (no prior GC), so the cap
     // is a no-op for the `json_pipeline_full` workload.
-    const TINY_PARSE_BYTES: usize = 1024 * 1024;
-    let is_tiny_parse = parse_growth < TINY_PARSE_BYTES;
+    let is_tiny_parse = gc_suppressed_parse_is_tiny(parse_growth);
     if !is_tiny_parse && GC_TRIGGER_BUMPED.with(|c| c.get()) {
-        return;
+        return false;
     }
 
-    let bytes_step = GC_STEP_BYTES
-        .with(|c| c.get())
-        .min(GC_THRESHOLD_INITIAL_BYTES);
-    let bytes_trigger = bytes_now.saturating_add(bytes_step);
+    let bytes_step = GC_STEP_BYTES.with(|c| c.get());
+    let bytes_trigger = gc_bump_arena_trigger_target(bytes_now, bytes_step, is_tiny_parse);
     // Only raise — never lower — so this can't accidentally trip a
     // pending collection that the existing trigger had already armed.
     GC_NEXT_TRIGGER_BYTES.with(|c| {
@@ -2774,6 +2859,7 @@ pub fn gc_bump_malloc_trigger() {
             }
         }
     });
+    is_tiny_parse
 }
 
 /// Check if GC should run. Called only when a new arena block is allocated.
@@ -8545,44 +8631,51 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
                 }
                 return;
             }
-            // Retained FORWARDED objects must keep their containing block alive.
-            // `trace_array` short-circuits on FORWARDED (it pushes the
-            // forwarding TARGET onto the worklist instead of marking the
-            // stub itself), so array-growth stubs reach sweep as
-            // MARKED == 0 even though their first 8 bytes hold a
-            // load-bearing forwarding pointer. GC-evacuation originals
-            // are different: they are tracked explicitly and have
-            // FORWARDED cleared after reference rewrite/verification, so
-            // they fall through to the dead-object path below. If a
-            // retained array-growth stub's block ends up with zero MARKED objects,
-            // `arena_reset_empty_blocks` wipes it to offset=0, the
-            // forwarding chain breaks, and `clean_arr_ptr` on any stale
-            // old-array reference returns null. ECS demo-simple's `pipeline`
-            // forEach hits this when `archetypesByComponent`'s value
-            // array was reached via a forwarded chain — the next query
-            // call's Map.get pointed at wiped memory and forEach
-            // iterated zero entities. Treat FORWARDED as live for the
-            // block-keep gate; the old payload is just an 8-byte
-            // forwarding pointer, harmless to retain. Count only
-            // reset-eligible general-nursery stubs in diagnostics because
-            // those are the stubs that can keep a nursery block resident.
+            // Retained FORWARDED objects keep their containing block alive only
+            // when the stub itself was reached this cycle, or when it sits in
+            // the same recent-block safety window as arena reset. Older
+            // unmarked stubs are stale array-growth remnants; retaining all of
+            // them pins one object in nearly every JSON-churn block and prevents
+            // RSS from falling after sweep.
             if flags & GC_FLAG_FORWARDED != 0 {
-                if block_idx >= old_block_start {
-                    crate::arena::old_page_account_swept_object(
-                        header as usize,
-                        (*header).size as usize,
-                        true,
-                        false,
-                    );
+                let retain_stub = flags & GC_FLAG_MARKED != 0
+                    || (block_idx < resettable_general_n
+                        && crate::arena::general_block_in_recent_window(block_idx));
+                if retain_stub {
+                    if block_idx >= old_block_start {
+                        crate::arena::old_page_account_swept_object(
+                            header as usize,
+                            (*header).size as usize,
+                            true,
+                            false,
+                        );
+                    }
+                    if block_idx < resettable_general_n {
+                        retained_forwarded_stub_objects += 1;
+                        retained_forwarded_stub_bytes += (*header).size as usize;
+                    }
+                    if block_idx < block_has_live.len() {
+                        block_has_live[block_idx] = true;
+                    }
+                    (*header).gc_flags = flags & !GC_FLAG_MARKED;
+                } else {
+                    let total_size = (*header).size as usize;
+                    if block_idx >= old_block_start {
+                        crate::arena::old_page_account_swept_object(
+                            header as usize,
+                            total_size,
+                            false,
+                            false,
+                        );
+                    }
+                    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+                    freed_bytes += total_size as u64;
+                    layout_clear_for_ptr(user_ptr as usize);
+                    if overflow_active && (*header).obj_type == GC_TYPE_OBJECT {
+                        crate::object::clear_overflow_for_ptr(user_ptr as usize);
+                    }
+                    (*header).gc_flags = flags & !(GC_FLAG_FORWARDED | GC_FLAG_MARKED);
                 }
-                if block_idx < resettable_general_n {
-                    retained_forwarded_stub_objects += 1;
-                    retained_forwarded_stub_bytes += (*header).size as usize;
-                }
-                if block_idx < block_has_live.len() {
-                    block_has_live[block_idx] = true;
-                }
-                (*header).gc_flags = flags & !GC_FLAG_MARKED;
                 return;
             }
             if flags & GC_FLAG_MARKED == 0 {
@@ -12397,6 +12490,176 @@ mod tests {
             GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(self.next_malloc_trigger));
             GC_MALLOC_COUNT_STEP.with(|step| step.set(self.malloc_step));
         }
+    }
+
+    struct GcBumpTriggerTestGuard {
+        next_arena_trigger: usize,
+        arena_step: usize,
+        next_malloc_trigger: usize,
+        malloc_step: usize,
+        trigger_bumped: bool,
+        pre_suppress_bytes: usize,
+    }
+
+    impl GcBumpTriggerTestGuard {
+        fn new(next_arena_trigger: usize, arena_step: usize) -> Self {
+            let previous = Self {
+                next_arena_trigger: GC_NEXT_TRIGGER_BYTES.with(|trigger| {
+                    let previous = trigger.get();
+                    trigger.set(next_arena_trigger);
+                    previous
+                }),
+                arena_step: GC_STEP_BYTES.with(|step| {
+                    let previous = step.get();
+                    step.set(arena_step);
+                    previous
+                }),
+                next_malloc_trigger: GC_NEXT_MALLOC_TRIGGER.with(|trigger| {
+                    let previous = trigger.get();
+                    trigger.set(usize::MAX);
+                    previous
+                }),
+                malloc_step: GC_MALLOC_COUNT_STEP.with(|step| step.get()),
+                trigger_bumped: GC_TRIGGER_BUMPED.with(|bumped| {
+                    let previous = bumped.get();
+                    bumped.set(false);
+                    previous
+                }),
+                pre_suppress_bytes: GC_PRE_SUPPRESS_BYTES.with(|bytes| bytes.get()),
+            };
+            GC_PRE_SUPPRESS_BYTES.with(|bytes| bytes.set(0));
+            previous
+        }
+
+        fn set_pre_suppress(bytes: usize) {
+            GC_PRE_SUPPRESS_BYTES.with(|pre| pre.set(bytes));
+        }
+
+        fn next_arena_trigger() -> usize {
+            GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.get())
+        }
+
+        fn trigger_bumped() -> bool {
+            GC_TRIGGER_BUMPED.with(|bumped| bumped.get())
+        }
+
+        fn reset_cycle_bump() {
+            GC_TRIGGER_BUMPED.with(|bumped| bumped.set(false));
+        }
+    }
+
+    impl Drop for GcBumpTriggerTestGuard {
+        fn drop(&mut self) {
+            GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(self.next_arena_trigger));
+            GC_STEP_BYTES.with(|step| step.set(self.arena_step));
+            GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(self.next_malloc_trigger));
+            GC_MALLOC_COUNT_STEP.with(|step| step.set(self.malloc_step));
+            GC_TRIGGER_BUMPED.with(|bumped| bumped.set(self.trigger_bumped));
+            GC_PRE_SUPPRESS_BYTES.with(|bytes| bytes.set(self.pre_suppress_bytes));
+        }
+    }
+
+    #[test]
+    fn test_gc_bump_tiny_parse_caps_arena_trigger_at_collector_ceiling() {
+        let _guard = GcBumpTriggerTestGuard::new(0, GC_THRESHOLD_INITIAL_BYTES);
+        let bytes_now = GC_TRIGGER_ABSOLUTE_CEILING - 1024;
+        GcBumpTriggerTestGuard::set_pre_suppress(bytes_now);
+
+        assert!(gc_bump_malloc_trigger_with_snapshot(0, bytes_now));
+
+        assert_eq!(
+            GcBumpTriggerTestGuard::next_arena_trigger(),
+            GC_TRIGGER_ABSOLUTE_CEILING
+        );
+        assert!(
+            !GcBumpTriggerTestGuard::trigger_bumped(),
+            "tiny parses must not consume the medium/large per-cycle bump"
+        );
+    }
+
+    #[test]
+    fn test_gc_bump_repeated_tiny_parses_cannot_exceed_collector_ceiling() {
+        let _guard = GcBumpTriggerTestGuard::new(
+            GC_TRIGGER_ABSOLUTE_CEILING - (2 * 1024 * 1024),
+            GC_THRESHOLD_INITIAL_BYTES,
+        );
+
+        let first_bytes_now = GC_TRIGGER_ABSOLUTE_CEILING - 1024;
+        GcBumpTriggerTestGuard::set_pre_suppress(first_bytes_now);
+        assert!(gc_bump_malloc_trigger_with_snapshot(0, first_bytes_now));
+        assert_eq!(
+            GcBumpTriggerTestGuard::next_arena_trigger(),
+            GC_TRIGGER_ABSOLUTE_CEILING
+        );
+
+        let later_bytes_now = GC_TRIGGER_ABSOLUTE_CEILING + (32 * 1024 * 1024);
+        GcBumpTriggerTestGuard::set_pre_suppress(later_bytes_now);
+        assert!(gc_bump_malloc_trigger_with_snapshot(0, later_bytes_now));
+
+        assert_eq!(
+            GcBumpTriggerTestGuard::next_arena_trigger(),
+            GC_TRIGGER_ABSOLUTE_CEILING
+        );
+    }
+
+    #[test]
+    fn test_gc_bump_one_block_parse_uses_tiny_ceiling() {
+        let _guard = GcBumpTriggerTestGuard::new(0, GC_THRESHOLD_INITIAL_BYTES);
+        let bytes_now = GC_TRIGGER_ABSOLUTE_CEILING + GC_SUPPRESSED_TINY_PARSE_BYTES;
+        GcBumpTriggerTestGuard::set_pre_suppress(bytes_now - GC_SUPPRESSED_TINY_PARSE_BYTES);
+
+        assert!(gc_bump_malloc_trigger_with_snapshot(0, bytes_now));
+
+        assert_eq!(
+            GcBumpTriggerTestGuard::next_arena_trigger(),
+            GC_TRIGGER_ABSOLUTE_CEILING
+        );
+        assert!(!GcBumpTriggerTestGuard::trigger_bumped());
+    }
+
+    #[test]
+    fn test_gc_bump_medium_parse_allows_one_arena_bump_per_gc_cycle() {
+        let _guard = GcBumpTriggerTestGuard::new(0, GC_THRESHOLD_INITIAL_BYTES);
+        let first_bytes_now = 2 * GC_SUPPRESSED_TINY_PARSE_BYTES;
+        let first_expected = first_bytes_now + GC_THRESHOLD_INITIAL_BYTES;
+
+        GcBumpTriggerTestGuard::set_pre_suppress(0);
+        assert!(!gc_bump_malloc_trigger_with_snapshot(0, first_bytes_now));
+        assert_eq!(GcBumpTriggerTestGuard::next_arena_trigger(), first_expected);
+        assert!(GcBumpTriggerTestGuard::trigger_bumped());
+
+        let later_bytes_now = first_expected + (16 * 1024 * 1024);
+        assert!(!gc_bump_malloc_trigger_with_snapshot(0, later_bytes_now));
+        assert_eq!(
+            GcBumpTriggerTestGuard::next_arena_trigger(),
+            first_expected,
+            "second medium/large bump in the same cycle must be ignored"
+        );
+
+        GcBumpTriggerTestGuard::reset_cycle_bump();
+        let second_expected = later_bytes_now + GC_THRESHOLD_INITIAL_BYTES;
+        assert!(!gc_bump_malloc_trigger_with_snapshot(0, later_bytes_now));
+        assert_eq!(
+            GcBumpTriggerTestGuard::next_arena_trigger(),
+            second_expected
+        );
+        assert!(GcBumpTriggerTestGuard::trigger_bumped());
+    }
+
+    #[test]
+    fn test_gc_bump_never_lowers_existing_arena_trigger() {
+        let existing_trigger = GC_TRIGGER_ABSOLUTE_CEILING + (32 * 1024 * 1024);
+        let _guard = GcBumpTriggerTestGuard::new(existing_trigger, GC_THRESHOLD_INITIAL_BYTES);
+        let bytes_now = GC_TRIGGER_ABSOLUTE_CEILING + (16 * 1024 * 1024);
+        GcBumpTriggerTestGuard::set_pre_suppress(bytes_now);
+
+        assert!(gc_bump_malloc_trigger_with_snapshot(0, bytes_now));
+
+        assert_eq!(
+            GcBumpTriggerTestGuard::next_arena_trigger(),
+            existing_trigger
+        );
+        assert!(!GcBumpTriggerTestGuard::trigger_bumped());
     }
 
     fn collect_minor_trace(trigger_kind: GcTriggerKind) -> GcCycleTrace {
@@ -17221,6 +17484,10 @@ mod tests {
         let total = unsafe { (*stub_header).size as usize };
         unsafe {
             set_forwarding_address(stub_header, target);
+            (*stub_header).gc_flags |= GC_FLAG_MARKED;
+        }
+        for _ in 0..90_000 {
+            let _ = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
         }
 
         let sweep = sweep_with_age_bump(false);
@@ -17239,6 +17506,34 @@ mod tests {
                 "sweep must not clear array-growth forwarding stubs"
             );
             (*stub_header).gc_flags &= !GC_FLAG_FORWARDED;
+        }
+    }
+
+    #[test]
+    fn test_sweep_reclaims_unreached_old_forwarded_stub() {
+        clear_marks();
+        let stub = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY);
+        let target = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY);
+        let stub_header = unsafe { header_from_user_ptr(stub) as *mut GcHeader };
+        let total = unsafe { (*stub_header).size as usize };
+        unsafe {
+            set_forwarding_address(stub_header, target);
+        }
+        for _ in 0..90_000 {
+            let _ = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        }
+
+        let sweep = sweep_with_age_bump(false);
+        assert!(
+            sweep.freed_bytes >= total as u64,
+            "unreached old forwarding stub should be reclaimable"
+        );
+        unsafe {
+            assert_eq!(
+                (*stub_header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "sweep should release stale unreachable forwarding stubs"
+            );
         }
     }
 

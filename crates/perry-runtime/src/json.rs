@@ -1093,18 +1093,17 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
 
+    crate::gc::gc_collect_pending_suppressed_parse();
+
     // Issue #179 Step 2 Phase 1 → default-on: tape-based lazy parse
     // is now the default for top-level arrays on blobs larger than
     // the size threshold. v0.5.209 runtime adaptive handling (walk
     // cursor + cumulative-walk threshold + sparse cache + force-
-    // materialize-on-mutate) means lazy no longer loses on any
-    // measured access pattern for non-trivial blobs. The blob-size
-    // threshold avoids tape-build overhead on small parses where
-    // direct is measurably faster. #437 showed the 21 KB
-    // honest_bench JSON pipeline fixture paying lazy-header +
-    // forced-materialization overhead while still iterating every
-    // record, so auto-mode now waits for a larger blob before using
-    // the tape path.
+    // materialize-on-mutate) means lazy is safe for non-tiny blobs.
+    // The lower bound keeps tape-build overhead off sub-1 KB parses;
+    // #437 briefly raised it for a 21 KB iterate-all fixture, but
+    // #1090 restores 1 KB so RSS-sensitive parse-churn loops use the
+    // tape path once payloads are larger than the direct tiny case.
     //
     // Escape hatches: `PERRY_JSON_TAPE=0` forces the direct parser
     // for every parse (correctness fallback if a workload hits an
@@ -1123,21 +1122,19 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     // single tree build. The cumulative walk-steps trigger in
     // `lazy_get` only catches *random* access, not sequential.
     //
-    // The auto-mode size window: lazy fires above 64 KB (small
-    // parses don't pay the tape build) and below 16 MB (large
+    // The auto-mode size window: lazy fires at 1 KB and above (tiny
+    // parses don't pay the tape build) and below 16 MB (very large
     // blobs are dominated by the iterate-all idiom in practice —
     // 108 MB honest_bench full fixture, server log dumps, dataset
     // ETL — and the direct parser's tree-build is faster end-to-
-    // end than tape + materialize). The upper bound was tuned
-    // against the honest_bench small (21 KB → direct, avoids
-    // lazy+materialize overhead on iterate-all) and full (108 MB →
-    // direct, ~3.3 s) fixtures; intermediate sizes need
-    // re-evaluation when their workload shape is known.
+    // end than tape + materialize). The upper bound keeps those
+    // very large cases direct while the restored lower bound keeps
+    // JSON churn bounded for sub-collector-scale payloads.
     //
     // Escape hatch via PERRY_JSON_TAPE=1 (force lazy regardless
     // of size, useful for testing) / =0 (force direct, useful as
     // a correctness fallback).
-    const LAZY_MIN_BLOB_BYTES: usize = 64 * 1024;
+    const LAZY_MIN_BLOB_BYTES: usize = 1024;
     const LAZY_MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
     let tape_mode = tape_mode_from_env();
     let use_tape = match tape_mode {
@@ -1187,12 +1184,12 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     let result = parser.parse_value();
     parse_root_push(result);
 
-    // Re-enable GC. Bump the malloc trigger so the freshly-created parse
-    // tree (which is still live) doesn't cause an immediate expensive GC
-    // on the next allocation.
-    parse_root_restore(text_root);
+    // Re-enable GC and rebaseline triggers while the result is still
+    // rooted. Tiny parse-churn pressure may collect here; keeping the
+    // parse roots until after the bump protects the value being returned.
     crate::gc::gc_unsuppress();
     crate::gc::gc_bump_malloc_trigger();
+    parse_root_restore(text_root);
 
     // Keep key intern cache across parses — scan_parse_roots marks cached
     // strings as GC roots so they survive collection. This saves ~10k
@@ -1265,12 +1262,13 @@ fn tape_mode_from_env() -> TapeMode {
 /// the caller can fall through to the direct parser.
 ///
 /// Wraps the tape path in the same GC-safety contract as the direct
-/// parser (gc_check_trigger → suppress → parse → unsuppress → bump
-/// malloc trigger + cache trim) so it's a drop-in replacement behind
-/// the feature flag.
+/// parser (pending parse-boundary collection → gc_check_trigger →
+/// suppress → parse → unsuppress → bump malloc trigger + cache trim) so
+/// it's a drop-in replacement behind the feature flag.
 unsafe fn try_parse_via_tape(text_ptr: *const StringHeader, bytes: &[u8]) -> Option<JSValue> {
     let tape = crate::json_tape::build_tape(bytes)?;
 
+    crate::gc::gc_collect_pending_suppressed_parse();
     crate::gc::gc_check_trigger();
     crate::gc::gc_suppress();
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
@@ -1292,9 +1290,9 @@ unsafe fn try_parse_via_tape(text_ptr: *const StringHeader, bytes: &[u8]) -> Opt
         };
     parse_root_push(result);
 
-    parse_root_restore(text_root);
     crate::gc::gc_unsuppress();
     crate::gc::gc_bump_malloc_trigger();
+    parse_root_restore(text_root);
 
     PARSE_KEY_CACHE.with(|c| {
         let cache = c.borrow();
@@ -1361,6 +1359,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
 
     // Same pre-parse cleanup + GC suppression as `js_json_parse` —
     // keeps the typed path on the same GC-safety contract.
+    crate::gc::gc_collect_pending_suppressed_parse();
     crate::gc::gc_check_trigger();
     crate::gc::gc_suppress();
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
@@ -1369,9 +1368,9 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     let result = parser.parse_array_typed();
     parse_root_push(result);
 
-    parse_root_restore(text_root);
     crate::gc::gc_unsuppress();
     crate::gc::gc_bump_malloc_trigger();
+    parse_root_restore(text_root);
 
     PARSE_KEY_CACHE.with(|c| {
         let cache = c.borrow();

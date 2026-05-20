@@ -181,7 +181,7 @@ NaN).
 | bench_sso_strings (direct) | 290 ms / 123 MB | 150 ms / 76 MB | **-48% time, -38% RSS** |
 
 SSO is most visible on workloads that:
-- Fall through to the direct parser (< 64 KB blobs, >16 MB blobs in auto-mode, non-array roots, `PERRY_JSON_TAPE=0`).
+- Fall through to the direct parser (<1 KB blobs, >16 MB blobs in auto-mode, non-array roots, `PERRY_JSON_TAPE=0`).
 - Hit indexed access on a lazy result (force-materialize invokes `materialize_string_value`).
 - Contain many short string values (enum strings, status codes, short IDs).
 

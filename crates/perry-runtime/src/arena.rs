@@ -49,6 +49,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 ///   iteration as it did with 16 × 8 MB blocks — the adaptive step
 ///   shrinks appropriately on the first productive collection.
 const BLOCK_SIZE: usize = 1024 * 1024;
+const FRESH_GENERAL_BLOCK_MIN_USED_BYTES: usize = 256 * 1024;
 const GENERATION_PAGE_SHIFT: usize = 12;
 // Generation classification wants exact range answers, but it does
 // not need a separate hash entry for every 4 KiB remembered-set card.
@@ -1232,6 +1233,38 @@ pub fn sync_inline_arena_state() {
     });
 }
 
+/// Move subsequent general-arena allocations onto a fresh block when the
+/// active block is occupied enough that phase mixing would pin meaningful RSS.
+///
+/// This is intentionally a phase-boundary tool, not an allocation fast path.
+/// The non-generational collector cannot compact a block that mixes a live
+/// JSON source string with dead parse/build objects, so JSON.parse uses this
+/// to keep source-building, parse, and post-parse allocation phases from
+/// sharing a busy 1 MB block under full mark-sweep fallback. Tiny parse loops
+/// with explicit GCs often return to an almost-empty current block; forcing a
+/// fresh block there only raises the process RSS high-water mark.
+pub fn arena_start_fresh_general_block() {
+    INLINE_STATE.with(|inline_s| unsafe {
+        let inline = &mut *inline_s.get();
+        ARENA.with(|a| {
+            let arena = &mut *(*a).get();
+            if !inline.data.is_null() {
+                arena.blocks[arena.current].offset = inline.offset;
+            }
+            if arena.blocks[arena.current].offset < FRESH_GENERAL_BLOCK_MIN_USED_BYTES {
+                return;
+            }
+            arena.install_fresh_block(BLOCK_SIZE);
+            if !inline.data.is_null() {
+                let block = &arena.blocks[arena.current];
+                inline.data = block.data;
+                inline.offset = block.offset;
+                inline.size = block.size;
+            }
+        });
+    });
+}
+
 /// Allocate memory from the thread-local arena
 /// This is very fast - just a pointer bump in the common case
 ///
@@ -2029,6 +2062,20 @@ pub fn arena_block_count() -> usize {
 #[inline]
 pub fn general_block_count() -> usize {
     ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() })
+}
+
+/// Whether a general-arena block is in the caller-saved-register safety
+/// window used by `arena_reset_empty_blocks`.
+#[inline]
+pub(crate) fn general_block_in_recent_window(block_idx: usize) -> bool {
+    ARENA.with(|arena| unsafe {
+        let arena = &*arena.get();
+        if block_idx >= arena.blocks.len() {
+            return false;
+        }
+        let keep_low = arena.current.saturating_sub(4);
+        block_idx >= keep_low && block_idx <= arena.current
+    })
 }
 
 /// Boundary between longlived and old-gen blocks. Indices
