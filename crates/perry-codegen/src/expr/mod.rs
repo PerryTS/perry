@@ -9795,47 +9795,37 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::DateSetMonth { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_month",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_set_month", &[(DOUBLE, &d), (DOUBLE, &v)]))
         }
         Expr::DateSetDate { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_date",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_set_date", &[(DOUBLE, &d), (DOUBLE, &v)]))
         }
         Expr::DateSetHours { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_hours",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_set_hours", &[(DOUBLE, &d), (DOUBLE, &v)]))
         }
         Expr::DateSetMinutes { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_minutes",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_set_minutes", &[(DOUBLE, &d), (DOUBLE, &v)]))
         }
         Expr::DateSetSeconds { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_seconds",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_set_seconds", &[(DOUBLE, &d), (DOUBLE, &v)]))
         }
         Expr::DateSetMilliseconds { date, value } => {
             let d = lower_expr(ctx, date)?;
@@ -9849,11 +9839,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::DateSetTime { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_time",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_set_time", &[(DOUBLE, &d), (DOUBLE, &v)]))
         }
         Expr::ArrayIsArray(o) => {
             // Fast path: static type is definitively array → emit
