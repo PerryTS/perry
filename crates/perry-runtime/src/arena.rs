@@ -52,9 +52,10 @@ const BLOCK_SIZE: usize = 1024 * 1024;
 const GENERATION_PAGE_SHIFT: usize = 12;
 // Generation classification wants exact range answers, but it does
 // not need a separate hash entry for every 4 KiB remembered-set card.
-// A 64 KiB bucket keeps lookup bounded while avoiding thousands of
-// metadata entries for low-pressure nursery churn before the first GC.
-const GENERATION_CLASS_SHIFT: usize = 16;
+// A 1 MiB bucket matches the arena block scale, keeps lookup bounded,
+// and avoids thousands of metadata entries for low-pressure nursery
+// churn before the first GC.
+const GENERATION_CLASS_SHIFT: usize = 20;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HeapGeneration {
