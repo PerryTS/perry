@@ -86,8 +86,12 @@ pub(crate) unsafe fn build_request_object(
 
     let keys = ["method", "url", "headers"];
     let (packed, shape_id) = build_object_shape(&keys);
-    let obj: *mut ObjectHeader =
-        js_object_alloc_with_shape(shape_id, keys.len() as u32, packed.as_ptr(), packed.len() as u32);
+    let obj: *mut ObjectHeader = js_object_alloc_with_shape(
+        shape_id,
+        keys.len() as u32,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
     if obj.is_null() {
         return undefined;
     }

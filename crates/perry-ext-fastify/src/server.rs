@@ -551,12 +551,7 @@ async fn handle_request(
     // perry-ext-http-server's #577 Phase 4 path.
     if crate::upgrade::is_websocket_upgrade(&req) {
         return handle_fastify_websocket_upgrade(
-            app_handle,
-            req,
-            method,
-            path,
-            headers,
-            upgrade_tx,
+            app_handle, req, method, path, headers, upgrade_tx,
         )
         .await;
     }
@@ -659,8 +654,8 @@ async fn handle_fastify_websocket_upgrade(
     // Build the minimal request object NOW (on the accept task,
     // before the upgrade resolves) so it carries method/url/headers.
     // It is a real pointer-tagged object so `typeof req === "object"`.
-    let req_bits = unsafe { crate::upgrade::build_request_object(&method, &path, &headers) }
-        .to_bits() as i64;
+    let req_bits =
+        unsafe { crate::upgrade::build_request_object(&method, &path, &headers) }.to_bits() as i64;
 
     // Spawn a task that waits for hyper to perform the protocol
     // switch, completes the tungstenite handshake, and hands the
