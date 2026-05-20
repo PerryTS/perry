@@ -944,6 +944,11 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                                     Box::new(to),
                                                 ));
                                             }
+                                            "resolve" if args.is_empty() => {
+                                                return Ok(Expr::PathResolve(Box::new(
+                                                    Expr::String(String::new()),
+                                                )));
+                                            }
                                             "resolve" if !args.is_empty() => {
                                                 let mut it = args.into_iter();
                                                 let first = it.next().unwrap();
@@ -2391,6 +2396,11 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                     }
                                 }
                                 "resolve" => {
+                                    if args.is_empty() {
+                                        return Ok(Expr::PathResolve(Box::new(Expr::String(
+                                            String::new(),
+                                        ))));
+                                    }
                                     if !args.is_empty() {
                                         // path.resolve(a, b, c): per Node, a later
                                         // absolute segment resets the accumulation —
@@ -6221,6 +6231,11 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                 }
                             }
                             "resolve" => {
+                                if args.is_empty() {
+                                    return Ok(Expr::PathResolve(Box::new(Expr::String(
+                                        String::new(),
+                                    ))));
+                                }
                                 if !args.is_empty() {
                                     let mut iter = args.into_iter();
                                     let first = iter.next().unwrap();

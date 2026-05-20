@@ -21,6 +21,22 @@ fn string_to_js(s: &str) -> *mut StringHeader {
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
 
+fn resolve_posix_str(path_str: &str) -> String {
+    if path_str.is_empty() {
+        return std::env::current_dir()
+            .map(|cwd| cwd.to_string_lossy().to_string())
+            .unwrap_or_default();
+    }
+    if Path::new(path_str).is_absolute() {
+        normalize_str(path_str)
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => normalize_str(&format!("{}/{}", cwd.to_string_lossy(), path_str)),
+            Err(_) => normalize_str(path_str),
+        }
+    }
+}
+
 /// Join two path segments. Node's `path.join` concatenates with `/` and
 /// normalizes — it does NOT reset on an absolute segment (that's
 /// `path.resolve`'s job). We can't use Rust's `Path::join` because it
@@ -154,6 +170,14 @@ pub extern "C" fn js_path_dirname(path_ptr: *const StringHeader) -> *mut StringH
         if path_str.chars().all(|c| c == '/') {
             return string_to_js("/");
         }
+        // Node preserves exactly two leading slashes for the dirname of
+        // `//foo` on POSIX.
+        if path_str.starts_with("//")
+            && !path_str.starts_with("///")
+            && !path_str[2..].contains('/')
+        {
+            return string_to_js("//");
+        }
 
         let path = Path::new(&path_str);
         match path.parent() {
@@ -232,6 +256,13 @@ pub extern "C" fn js_path_resolve(path_ptr: *const StringHeader) -> *mut StringH
             Some(s) => s,
             None => return string_to_js(""),
         };
+
+        if path_str.is_empty() {
+            return match std::env::current_dir() {
+                Ok(cwd) => string_to_js(&cwd.to_string_lossy()),
+                Err(_) => string_to_js(""),
+            };
+        }
 
         match std::fs::canonicalize(&path_str) {
             Ok(abs_path) => string_to_js(&abs_path.to_string_lossy()),
@@ -314,8 +345,8 @@ pub extern "C" fn js_path_relative(
     unsafe {
         let from = string_from_header(from_ptr).unwrap_or_default();
         let to = string_from_header(to_ptr).unwrap_or_default();
-        let from_norm = normalize_str(&from);
-        let to_norm = normalize_str(&to);
+        let from_norm = resolve_posix_str(&from);
+        let to_norm = resolve_posix_str(&to);
         let from_segs: Vec<&str> = from_norm.split('/').filter(|s| !s.is_empty()).collect();
         let to_segs: Vec<&str> = to_norm.split('/').filter(|s| !s.is_empty()).collect();
         let common = from_segs
@@ -347,7 +378,10 @@ pub extern "C" fn js_path_basename_ext(
             Some(name) => name.to_string_lossy().to_string(),
             None => return string_to_js(""),
         };
-        if !ext_str.is_empty() && base.ends_with(&ext_str) && base.len() > ext_str.len() {
+        if !ext_str.is_empty()
+            && base.ends_with(&ext_str)
+            && (base.len() > ext_str.len() || !path_str.contains('/'))
+        {
             string_to_js(&base[..base.len() - ext_str.len()])
         } else {
             string_to_js(&base)
@@ -365,9 +399,15 @@ pub extern "C" fn js_path_parse(path_ptr: *const StringHeader) -> *mut crate::ob
     let p = Path::new(&path_str);
 
     let root = if path_str.starts_with('/') { "/" } else { "" }.to_string();
-    let dir = match p.parent() {
-        Some(parent) => parent.to_string_lossy().to_string(),
-        None => String::new(),
+    let dir = if !root.is_empty() && path_str.chars().all(|c| c == '/') {
+        // Node's path.parse("/") preserves the root as the dir as well:
+        // { root: "/", dir: "/", base: "", ext: "", name: "" }.
+        root.clone()
+    } else {
+        match p.parent() {
+            Some(parent) => parent.to_string_lossy().to_string(),
+            None => String::new(),
+        }
     };
     let base = match p.file_name() {
         Some(b) => b.to_string_lossy().to_string(),
@@ -423,11 +463,22 @@ pub extern "C" fn js_path_format(obj_f64: f64) -> *mut StringHeader {
     let dir = get_str("dir");
     let root = get_str("root");
     let base = get_str("base");
+    let name = get_str("name");
+    let mut ext = get_str("ext");
+    // Node inserts the separator dot when `ext` is provided without
+    // one: path.format({ name: "file", ext: "txt" }) === "file.txt".
+    if !ext.is_empty() && !ext.starts_with('.') {
+        ext.insert(0, '.');
+    }
+    let has_tail = !base.is_empty() || !name.is_empty() || !ext.is_empty();
 
     // dir takes precedence over root; name+ext fallback when base missing
     let mut result = if !dir.is_empty() {
         let mut s = dir.clone();
-        if !s.ends_with('/') {
+        // Node always inserts a separator between dir and base, even when
+        // dir already ends with `/`. If there is no tail, keep dir as-is
+        // (path.format(path.parse("/")) === "/").
+        if has_tail {
             s.push('/');
         }
         s
@@ -444,8 +495,6 @@ pub extern "C" fn js_path_format(obj_f64: f64) -> *mut StringHeader {
     if !base.is_empty() {
         result.push_str(&base);
     } else {
-        let name = get_str("name");
-        let ext = get_str("ext");
         result.push_str(&name);
         result.push_str(&ext);
     }
