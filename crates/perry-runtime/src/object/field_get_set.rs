@@ -825,6 +825,21 @@ pub extern "C" fn js_object_get_field_by_name(
             // returned undefined.
             if (raw as usize) > 0 && (raw as usize) < 0x100000 {
                 if !key.is_null() {
+                    unsafe {
+                        let key_ptr =
+                            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let key_len = (*key).byte_len as usize;
+                        let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                        if is_timer_handle_method_key(key_bytes)
+                            && crate::timer::is_known_timer_id(raw as i64)
+                        {
+                            let this_f64 = f64::from_bits(
+                                crate::value::js_nanbox_pointer(raw as i64).to_bits(),
+                            );
+                            let result = super::js_class_method_bind(this_f64, key_ptr, key_len);
+                            return JSValue::from_bits(result.to_bits());
+                        }
+                    }
                     // Drizzle-sqlite blocker: synth `data.constructor` for
                     // small-handle native instances so drizzle's
                     // `isConfig(data)` duck-type via
@@ -871,6 +886,19 @@ pub extern "C" fn js_object_get_field_by_name(
     // when the codegen passes a raw i64 handle through the slow path.
     if (obj as usize) < 0x100000 {
         if !key.is_null() {
+            unsafe {
+                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let key_len = (*key).byte_len as usize;
+                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                if is_timer_handle_method_key(key_bytes)
+                    && crate::timer::is_known_timer_id(obj as i64)
+                {
+                    let this_f64 =
+                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                    let result = super::js_class_method_bind(this_f64, key_ptr, key_len);
+                    return JSValue::from_bits(result.to_bits());
+                }
+            }
             let dispatch = unsafe { HANDLE_PROPERTY_DISPATCH };
             if let Some(dispatch) = dispatch {
                 unsafe {
@@ -1614,6 +1642,19 @@ pub extern "C" fn js_object_get_field_by_name_f64(
     }
     let value = js_object_get_field_by_name(obj, key);
     f64::from_bits(value.bits())
+}
+
+fn is_timer_handle_method_key(key: &[u8]) -> bool {
+    matches!(
+        key,
+        b"ref"
+            | b"unref"
+            | b"hasRef"
+            | b"refresh"
+            | b"close"
+            | b"__perry_dispose__"
+            | b"@@__perry_wk_toPrimitive"
+    )
 }
 
 /// Monomorphic inline cache miss handler (issue #51).

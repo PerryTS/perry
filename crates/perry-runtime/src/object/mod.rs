@@ -2794,6 +2794,58 @@ pub unsafe extern "C" fn js_native_call_method(
         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
     }
 
+    // Node timer handles are represented in Perry as small integer ids
+    // NaN-boxed as pointers. Provide the common Timeout/Immediate methods
+    // directly so `timeout.ref().unref().hasRef()` style probes behave like
+    // Node without having to allocate a full JS wrapper object per timer.
+    //
+    // Gated on (a) tag == POINTER_TAG (0x7FFD) to avoid catching strings /
+    // int32 / nullish tags, and (b) the id being a known timer so unrelated
+    // small handles (UI widgets, drizzle, native instances) fall through
+    // to the normal dispatch.
+    {
+        let bits = object.to_bits();
+        let top16 = bits >> 48;
+        if top16 == 0x7FFD {
+            let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+            if crate::timer::is_known_timer_id(id) {
+                match method_name {
+                    "ref" => {
+                        crate::timer::js_timer_ref(id);
+                        return object;
+                    }
+                    "unref" => {
+                        crate::timer::js_timer_unref(id);
+                        return object;
+                    }
+                    "hasRef" => {
+                        return if crate::timer::js_timer_has_ref(id) != 0 {
+                            f64::from_bits(JSValue::bool(true).bits())
+                        } else {
+                            f64::from_bits(JSValue::bool(false).bits())
+                        };
+                    }
+                    "refresh" => {
+                        crate::timer::js_timer_refresh(id);
+                        return object;
+                    }
+                    "close" => {
+                        crate::timer::clearTimeout(id);
+                        crate::timer::clearInterval(id);
+                        return object;
+                    }
+                    "__perry_dispose__" => {
+                        crate::timer::clearTimeout(id);
+                        crate::timer::clearInterval(id);
+                        return f64::from_bits(JSValue::undefined().bits());
+                    }
+                    "@@__perry_wk_toPrimitive" | "valueOf" => return id as f64,
+                    _ => {}
+                }
+            }
+        }
+    }
+
     // Symbols: Symbol.for() pointers are Box-leaked (no GcHeader), so the
     // ObjectHeader path below would dereference garbage. Detect symbols
     // up front via the side-table.
@@ -5012,6 +5064,93 @@ unsafe fn dispatch_native_module_method(
     };
 
     match (module_name, method_name) {
+        // ── timers module ──
+        ("timers", "setTimeout") if args_len >= 2 => {
+            let cb = arg(0);
+            let delay = arg(1);
+            let cb_handle = {
+                let bits = cb.to_bits();
+                if (bits >> 48) >= 0x7FF8 {
+                    (bits & 0x0000_FFFF_FFFF_FFFF) as i64
+                } else {
+                    bits as i64
+                }
+            };
+            if args_len > 2 {
+                let extra_ptr = unsafe { args_ptr.add(2) };
+                return f64::from_bits(
+                    JSValue::pointer(crate::timer::js_set_timeout_callback_args(
+                        cb_handle,
+                        delay,
+                        extra_ptr,
+                        (args_len - 2) as i32,
+                    ) as *mut u8)
+                    .bits(),
+                );
+            }
+            return f64::from_bits(JSValue::pointer(
+                crate::timer::js_set_timeout_callback(cb_handle, delay) as *mut u8,
+            ).bits());
+        }
+        ("timers", "setImmediate") if args_len >= 1 => {
+            let cb = arg(0);
+            let cb_handle = {
+                let bits = cb.to_bits();
+                if (bits >> 48) >= 0x7FF8 {
+                    (bits & 0x0000_FFFF_FFFF_FFFF) as i64
+                } else {
+                    bits as i64
+                }
+            };
+            if args_len > 1 {
+                let extra_ptr = unsafe { args_ptr.add(1) };
+                return f64::from_bits(
+                    JSValue::pointer(crate::timer::js_set_immediate_callback_args(
+                        cb_handle,
+                        extra_ptr,
+                        (args_len - 1) as i32,
+                    ) as *mut u8)
+                    .bits(),
+                );
+            }
+            return f64::from_bits(
+                JSValue::pointer(crate::timer::js_set_immediate_callback(cb_handle) as *mut u8)
+                    .bits(),
+            );
+        }
+        ("timers", "setInterval") if args_len >= 2 => {
+            let cb = arg(0);
+            let delay = arg(1);
+            let bits = cb.to_bits();
+            let cb_handle = if (bits >> 48) >= 0x7FF8 {
+                (bits & 0x0000_FFFF_FFFF_FFFF) as i64
+            } else {
+                bits as i64
+            };
+            return f64::from_bits(
+                JSValue::pointer(crate::timer::setInterval(cb_handle, delay) as *mut u8).bits(),
+            );
+        }
+        ("timers", "clearTimeout") | ("timers", "clearImmediate") if args_len >= 1 => {
+            let id_bits = arg(0).to_bits();
+            let id = if (id_bits >> 48) >= 0x7FF8 {
+                (id_bits & 0x0000_FFFF_FFFF_FFFF) as i64
+            } else {
+                id_bits as i64
+            };
+            crate::timer::clearTimeout(id);
+            return f64::from_bits(JSValue::undefined().bits());
+        }
+        ("timers", "clearInterval") if args_len >= 1 => {
+            let id_bits = arg(0).to_bits();
+            let id = if (id_bits >> 48) >= 0x7FF8 {
+                (id_bits & 0x0000_FFFF_FFFF_FFFF) as i64
+            } else {
+                id_bits as i64
+            };
+            crate::timer::clearInterval(id);
+            return f64::from_bits(JSValue::undefined().bits());
+        }
         // ── fs module (args are NaN-boxed f64, booleans return as i32→f64) ──
         ("fs", "existsSync") => bool_to_f64(crate::fs::js_fs_exists_sync(arg(0))),
         ("fs", "readFileSync") => str_to_f64(crate::fs::js_fs_read_file_sync(arg(0))),
@@ -5473,6 +5612,15 @@ fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
             | ("util.types", "isDate")
             | ("util.types", "isRegExp")
             | ("util/types", "isPromise")
+            | ("timers", "setTimeout")
+            | ("timers", "clearTimeout")
+            | ("timers", "setInterval")
+            | ("timers", "clearInterval")
+            | ("timers", "setImmediate")
+            | ("timers", "clearImmediate")
+            | ("timers/promises", "setTimeout")
+            | ("timers/promises", "setImmediate")
+            | ("timers/promises", "setInterval")
             | ("util/types", "isArrayBuffer")
             | ("util/types", "isAnyArrayBuffer")
             | ("util/types", "isArrayBufferView")

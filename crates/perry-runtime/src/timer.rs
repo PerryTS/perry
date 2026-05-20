@@ -8,6 +8,7 @@
 //! timer pump fires on the UI thread.
 
 use crate::promise::{js_promise_new, js_promise_resolve, Promise};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -158,6 +159,9 @@ struct CallbackTimer {
     id: i64,
     /// When this timer should fire
     deadline: Instant,
+    /// Original delay (preserved so `refresh()` can reschedule with the
+    /// same delay, matching Node's `Timeout.refresh()` semantics).
+    delay_ms: u64,
     /// The closure pointer to call
     callback: i64,
     /// Trailing arguments to forward to the callback when it fires.
@@ -180,7 +184,101 @@ struct CallbackTimer {
 unsafe impl Send for CallbackTimer {}
 
 static CALLBACK_TIMERS: Mutex<Vec<CallbackTimer>> = Mutex::new(Vec::new());
-static NEXT_CALLBACK_TIMER_ID: Mutex<i64> = Mutex::new(1);
+// Shared id counter across callback timers AND intervals so a handle id is
+// globally unique. Node treats Timeout/Interval as the same internal Timer
+// type, so `clearTimeout(intervalHandle)` and `clearInterval(timeoutHandle)`
+// are tolerated. With independent counters per queue (the previous design),
+// id collisions across queues could cause `clearTimeout(intId)` to also
+// clobber an unrelated Timeout with the same numeric id.
+static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
+static TIMER_REF_STATES: Mutex<Option<HashMap<i64, bool>>> = Mutex::new(None);
+
+fn next_timer_id() -> i64 {
+    let mut next = NEXT_TIMER_ID.lock().unwrap();
+    let current = *next;
+    *next += 1;
+    current
+}
+
+fn set_timer_ref_state(id: i64, has_ref: bool) {
+    let mut slot = TIMER_REF_STATES.lock().unwrap();
+    let map = slot.get_or_insert_with(HashMap::new);
+    map.insert(id, has_ref);
+}
+
+/// Whether `id` corresponds to a timer that was scheduled by this runtime
+/// (active or already cleared). Used by the small-handle method/property
+/// fast paths in `object/*.rs` and by `js_number_coerce` to decide whether
+/// to apply Timeout-shaped semantics to a NaN-boxed small pointer. Without
+/// this gate, any small handle (UI widget, drizzle, etc.) would accidentally
+/// route through timer dispatch.
+///
+/// Entries in `TIMER_REF_STATES` are inserted at schedule time and never
+/// removed — clearing a timer marks it cleared in the queue but keeps the
+/// id registered as "this was a timer" so post-clear `.hasRef()` / `+timer`
+/// / `.unref()` still route through timer dispatch (Node keeps the
+/// Timeout object alive after `clearTimeout` and methods still work).
+pub fn is_known_timer_id(id: i64) -> bool {
+    if id <= 0 {
+        return false;
+    }
+    TIMER_REF_STATES
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|map| map.contains_key(&id))
+        .unwrap_or(false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_timer_has_ref(timer_id: i64) -> i32 {
+    // Node's `Timeout.hasRef()` returns the current ref state, which is
+    // `true` by default and stays `true` after `clearTimeout` unless the
+    // user explicitly called `.unref()` on the handle. Default `true` for
+    // any non-timer id is harmless since the dispatcher gates on
+    // `is_known_timer_id` first.
+    TIMER_REF_STATES
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|map| map.get(&timer_id).copied())
+        .unwrap_or(true) as i32
+}
+
+#[no_mangle]
+pub extern "C" fn js_timer_ref(timer_id: i64) {
+    set_timer_ref_state(timer_id, true);
+}
+
+#[no_mangle]
+pub extern "C" fn js_timer_unref(timer_id: i64) {
+    set_timer_ref_state(timer_id, false);
+}
+
+/// Reschedule a Timeout (or revive a cleared one) using its original
+/// delay, matching Node's `Timeout.refresh()` semantics. For intervals,
+/// resets the next-deadline cursor to one full interval from now.
+#[no_mangle]
+pub extern "C" fn js_timer_refresh(timer_id: i64) {
+    let now = Instant::now();
+
+    {
+        let mut timers = CALLBACK_TIMERS.lock().unwrap();
+        if let Some(timer) = timers.iter_mut().find(|t| t.id == timer_id) {
+            timer.deadline = now + Duration::from_millis(timer.delay_ms);
+            timer.cleared = false;
+            set_timer_ref_state(timer_id, true);
+            return;
+        }
+    }
+
+    let mut intervals = INTERVAL_TIMERS.lock().unwrap();
+    if let Some(timer) = intervals.iter_mut().find(|t| t.id == timer_id) {
+        timer.next_deadline = now + Duration::from_millis(timer.interval_ms);
+        timer.cleared = false;
+        set_timer_ref_state(timer_id, true);
+    }
+}
 
 /// JS-style setTimeout that takes a callback function and delay
 /// The callback is a closure pointer that will be called with no arguments
@@ -198,15 +296,10 @@ pub extern "C" fn js_set_immediate_callback(callback: i64) -> i64 {
 fn schedule_callback_timer(callback: i64, delay_ms: f64, args: Vec<f64>, type_name: &str) -> i64 {
     ensure_initialized();
 
-    let delay = Duration::from_millis(delay_ms.max(0.0) as u64);
-    let deadline = Instant::now() + delay;
+    let delay_ms = delay_ms.max(0.0) as u64;
+    let deadline = Instant::now() + Duration::from_millis(delay_ms);
 
-    let id = {
-        let mut next = NEXT_CALLBACK_TIMER_ID.lock().unwrap();
-        let current = *next;
-        *next += 1;
-        current
-    };
+    let id = next_timer_id();
 
     let ids = crate::async_hooks::init_resource(
         type_name,
@@ -217,6 +310,7 @@ fn schedule_callback_timer(callback: i64, delay_ms: f64, args: Vec<f64>, type_na
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
         id,
         deadline,
+        delay_ms,
         callback,
         args,
         context: crate::async_context::capture_context(),
@@ -224,6 +318,7 @@ fn schedule_callback_timer(callback: i64, delay_ms: f64, args: Vec<f64>, type_na
         trigger_async_id: ids.trigger_async_id,
         cleared: false,
     });
+    set_timer_ref_state(id, true);
 
     id
 }
@@ -390,17 +485,30 @@ pub extern "C" fn js_callback_timer_next_deadline() -> f64 {
         .unwrap_or(-1.0)
 }
 
-/// Clear a callback timer by ID
+/// Clear a callback timer by ID. Also clears the interval queue so
+/// Node's interchangeable `clearTimeout(intervalHandle)` shape works.
+/// The shared id pool means at most one of the two queues actually holds
+/// the id, so cross-queue cancellation is safe.
 #[no_mangle]
 pub extern "C" fn clearTimeout(timer_id: i64) {
-    let mut timers = CALLBACK_TIMERS.lock().unwrap();
-    for timer in timers.iter_mut() {
+    {
+        let mut timers = CALLBACK_TIMERS.lock().unwrap();
+        for timer in timers.iter_mut() {
+            if timer.id == timer_id {
+                timer.cleared = true;
+                break;
+            }
+        }
+        timers.retain(|t| !t.cleared);
+    }
+    let mut intervals = INTERVAL_TIMERS.lock().unwrap();
+    for timer in intervals.iter_mut() {
         if timer.id == timer_id {
             timer.cleared = true;
             break;
         }
     }
-    timers.retain(|t| !t.cleared);
+    intervals.retain(|t| !t.cleared);
 }
 
 // ============================================================================
@@ -427,7 +535,6 @@ struct IntervalTimer {
 unsafe impl Send for IntervalTimer {}
 
 static INTERVAL_TIMERS: Mutex<Vec<IntervalTimer>> = Mutex::new(Vec::new());
-static NEXT_INTERVAL_ID: Mutex<i64> = Mutex::new(1);
 
 /// JS-style setInterval that takes a callback function and interval
 /// The callback is a closure pointer that will be called repeatedly
@@ -439,12 +546,7 @@ pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {
     let interval = interval_ms.max(0.0) as u64;
     let next_deadline = Instant::now() + Duration::from_millis(interval);
 
-    let id = {
-        let mut next = NEXT_INTERVAL_ID.lock().unwrap();
-        let current = *next;
-        *next += 1;
-        current
-    };
+    let id = next_timer_id();
 
     INTERVAL_TIMERS.lock().unwrap().push(IntervalTimer {
         id,
@@ -454,21 +556,34 @@ pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {
         context: crate::async_context::capture_context(),
         cleared: false,
     });
+    set_timer_ref_state(id, true);
 
     id
 }
 
-/// Clear an interval timer by ID
+/// Clear an interval timer by ID. Also clears the callback-timer queue
+/// so Node's interchangeable `clearInterval(timeoutHandle)` shape works
+/// (see `clearTimeout` doc for the symmetric rationale).
 #[no_mangle]
 pub extern "C" fn clearInterval(interval_id: i64) {
-    let mut timers = INTERVAL_TIMERS.lock().unwrap();
-    for timer in timers.iter_mut() {
+    {
+        let mut timers = INTERVAL_TIMERS.lock().unwrap();
+        for timer in timers.iter_mut() {
+            if timer.id == interval_id {
+                timer.cleared = true;
+                break;
+            }
+        }
+        timers.retain(|t| !t.cleared);
+    }
+    let mut callbacks = CALLBACK_TIMERS.lock().unwrap();
+    for timer in callbacks.iter_mut() {
         if timer.id == interval_id {
             timer.cleared = true;
             break;
         }
     }
-    timers.retain(|t| !t.cleared);
+    callbacks.retain(|t| !t.cleared);
 }
 
 /// Process any expired interval timers
@@ -627,6 +742,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
         id: TEST_CALLBACK_TIMER_ID,
         deadline,
+        delay_ms: 86_400_000,
         callback,
         args: vec![arg],
         context: context.clone(),

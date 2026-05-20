@@ -1842,6 +1842,16 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         let ptr = jsval.as_bigint_ptr();
         crate::bigint::js_bigint_to_f64(ptr)
     } else if jsval.is_pointer() {
+        let id = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+        // Timer handles coerce numerically to their internal id (matches
+        // Node's `+timeout` shape — Node returns `_idleTimeout`, Perry
+        // returns the handle id; both are numbers and both are stable
+        // identifiers, so test assertions like `typeof x === "number"`
+        // hold). Gate on the timer registry so unrelated small handles
+        // (UI widgets, drizzle, etc.) still fall through to toPrimitive.
+        if id > 0 && id < 0x100000 && crate::timer::is_known_timer_id(id) {
+            return id as f64;
+        }
         // Object → consult [Symbol.toPrimitive]("number") first; if the
         // object has a custom toPrimitive method, recurse with the result.
         // Otherwise returns NaN.
