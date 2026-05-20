@@ -384,6 +384,60 @@ pub extern "C" fn js_console_log_i64(value: i64) {
     println!("{}", value);
 }
 
+/// Format a BigInt JSValue as its Node literal form (digits + `n`),
+/// e.g. `5n`, `-12345678901234567890n`. Returns `"0n"` on a null ptr
+/// rather than panicking so the formatter stays infallible.
+pub(crate) fn format_bigint_literal(val: f64) -> String {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(val.to_bits());
+    let ptr = jv.as_bigint_ptr();
+    if ptr.is_null() {
+        return "0n".to_string();
+    }
+    unsafe {
+        let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+        if str_ptr.is_null() {
+            return "0n".to_string();
+        }
+        let len = (*str_ptr).byte_len as usize;
+        let data = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let bytes = std::slice::from_raw_parts(data, len);
+        let num_str = std::str::from_utf8(bytes).unwrap_or("0");
+        format!("{}n", num_str)
+    }
+}
+
+/// Per-thread override for the depth at which nested objects/arrays
+/// collapse to `[Object]` / `[Array]`. Defaults to Node's `util.inspect`
+/// default of 2. The `%o` format specifier raises this temporarily so
+/// `console.log("%o", deep)` renders deeper than `%O` / a bare arg
+/// (Node distinguishes them: `%o` is effectively unbounded, `%O` uses
+/// the default cap of 2).
+thread_local! {
+    static INSPECT_DEPTH_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(2) };
+}
+
+pub(crate) fn inspect_depth_limit() -> usize {
+    INSPECT_DEPTH_LIMIT.with(|c| c.get())
+}
+
+/// RAII guard that sets the per-thread inspect depth limit for the
+/// lifetime of the guard and restores the previous value on drop.
+pub(crate) struct InspectDepthLimitGuard(usize);
+
+impl InspectDepthLimitGuard {
+    pub(crate) fn new(limit: usize) -> Self {
+        let prev = INSPECT_DEPTH_LIMIT.with(|c| c.replace(limit));
+        Self(prev)
+    }
+}
+
+impl Drop for InspectDepthLimitGuard {
+    fn drop(&mut self) {
+        INSPECT_DEPTH_LIMIT.with(|c| c.set(self.0));
+    }
+}
+
 /// Print multiple values from an array (console.log with spread support)
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
@@ -500,8 +554,9 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 } else if gc_type == crate::gc::GC_TYPE_ARRAY {
                     // Array — format as [ elem1, elem2, ... ] matching Node.js util.inspect.
                     // Node's default depth cap is 2: anything more than 2
-                    // levels of nesting collapses to `[Array]`.
-                    if depth > 2 {
+                    // levels of nesting collapses to `[Array]`. `%o` raises
+                    // the cap via INSPECT_DEPTH_LIMIT (see js_util_format).
+                    if depth > inspect_depth_limit() {
                         return "[Array]".to_string();
                     }
                     let maybe_arr = ptr;
@@ -586,7 +641,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 } else if gc_type == crate::gc::GC_TYPE_OBJECT {
                     // Object — check for keys_array. Node's default depth
                     // cap is 2: anything past that collapses to `[Object]`.
-                    if depth > 2 {
+                    // `%o` raises the cap via INSPECT_DEPTH_LIMIT.
+                    if depth > inspect_depth_limit() {
                         return "[Object]".to_string();
                     }
                     let obj_ptr = ptr as *const crate::object::ObjectHeader;
@@ -850,8 +906,9 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
 
                     if gc_type == crate::gc::GC_TYPE_ARRAY {
                         // Node's default depth cap: beyond 2 levels of
-                        // nesting, arrays collapse to `[Array]`.
-                        if depth > 2 {
+                        // nesting, arrays collapse to `[Array]`. `%o` raises
+                        // the cap via INSPECT_DEPTH_LIMIT.
+                        if depth > inspect_depth_limit() {
                             return "[Array]".to_string();
                         }
                         let maybe_arr = ptr;
@@ -877,8 +934,9 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         }
                     } else if gc_type == crate::gc::GC_TYPE_OBJECT {
                         // Past Node's default depth cap, nested objects
-                        // collapse to the literal token `[Object]`.
-                        if depth > 2 {
+                        // collapse to the literal token `[Object]`. `%o`
+                        // raises the cap via INSPECT_DEPTH_LIMIT.
+                        if depth > inspect_depth_limit() {
                             return "[Object]".to_string();
                         }
                         let obj_ptr = ptr as *const crate::object::ObjectHeader;
@@ -1099,45 +1157,67 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     out.push_str(&jsvalue_as_owned_string(val));
                 }
                 b'd' | b'i' => {
-                    let f = if jv.is_int32() {
-                        jv.as_int32() as f64
-                    } else if jv.is_any_string()
-                        && jsvalue_string_content(val)
-                            .map(|s| s.is_empty())
-                            .unwrap_or(false)
-                    {
-                        f64::NAN
+                    // Node preserves the BigInt `n` suffix for `%d` / `%i`
+                    // (e.g. `util.format("%d", 5n)` → `"5n"`).
+                    if jv.is_bigint() {
+                        out.push_str(&format_bigint_literal(val));
                     } else {
-                        js_number_coerce(val)
-                    };
-                    if f.is_nan() {
-                        out.push_str("NaN");
-                    } else {
-                        let t = f.trunc();
-                        if t == 0.0 && f.is_sign_negative() {
-                            out.push_str("-0");
+                        let f = if jv.is_int32() {
+                            jv.as_int32() as f64
+                        } else if jv.is_any_string()
+                            && jsvalue_string_content(val)
+                                .map(|s| s.is_empty())
+                                .unwrap_or(false)
+                        {
+                            f64::NAN
                         } else {
-                            // Integer-truncated, matching Node.
-                            out.push_str(&(t as i64).to_string());
+                            js_number_coerce(val)
+                        };
+                        if f.is_nan() {
+                            out.push_str("NaN");
+                        } else {
+                            let t = f.trunc();
+                            if t == 0.0 && f.is_sign_negative() {
+                                out.push_str("-0");
+                            } else {
+                                // Integer-truncated, matching Node.
+                                out.push_str(&(t as i64).to_string());
+                            }
                         }
                     }
                 }
                 b'f' => {
-                    let f = if jv.is_int32() {
-                        jv.as_int32() as f64
-                    } else if jv.is_any_string()
-                        && jsvalue_string_content(val)
-                            .map(|s| s.is_empty())
-                            .unwrap_or(false)
-                    {
-                        f64::NAN
+                    // Node coerces BigInt lossily to Number for `%f`
+                    // (`util.format("%f", 5n)` → `"5"`), dropping the `n`.
+                    if jv.is_bigint() {
+                        let ptr = jv.as_bigint_ptr();
+                        let f = if ptr.is_null() {
+                            f64::NAN
+                        } else {
+                            crate::bigint::js_bigint_to_f64(ptr)
+                        };
+                        if f.is_nan() {
+                            out.push_str("NaN");
+                        } else {
+                            out.push_str(&format_finite_number_js(f));
+                        }
                     } else {
-                        js_number_coerce(val)
-                    };
-                    if f.is_nan() {
-                        out.push_str("NaN");
-                    } else {
-                        out.push_str(&format_finite_number_js(f));
+                        let f = if jv.is_int32() {
+                            jv.as_int32() as f64
+                        } else if jv.is_any_string()
+                            && jsvalue_string_content(val)
+                                .map(|s| s.is_empty())
+                                .unwrap_or(false)
+                        {
+                            f64::NAN
+                        } else {
+                            js_number_coerce(val)
+                        };
+                        if f.is_nan() {
+                            out.push_str("NaN");
+                        } else {
+                            out.push_str(&format_finite_number_js(f));
+                        }
                     }
                 }
                 b'j' => {
@@ -1157,7 +1237,17 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                         }
                     }
                 }
-                b'o' | b'O' => {
+                b'o' => {
+                    // Node's `%o` uses an effectively unbounded inspect
+                    // depth (showHidden + showProxy with no depth cap on
+                    // the typical fixtures used in the parity suite), so
+                    // raise the per-thread depth limit just for this call.
+                    let _guard = InspectDepthLimitGuard::new(usize::MAX);
+                    out.push_str(&format_jsvalue(val, 0));
+                }
+                b'O' => {
+                    // `%O` keeps the default depth cap (2) — matching
+                    // Node's `util.inspect` default options.
                     out.push_str(&format_jsvalue(val, 0));
                 }
                 b'c' => {

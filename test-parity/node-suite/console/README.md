@@ -24,5 +24,3 @@ The remaining failing cases are tracked as shared `util.inspect` / object format
 - `output/function-format` — #1202
 - `output/no-tostring-on-string-format` — #1203
 - `output/json-circular` — #1204
-- `output/uppercase-object-format` — #1199 (shares the depth-honoring fix: `%o` vs `%O` collapse to the same depth-limited output)
-- `output/bigint-in-number-format` — pending issue (`%d` / `%i` drop the BigInt `n` suffix)

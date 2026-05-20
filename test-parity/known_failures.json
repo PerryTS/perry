@@ -26,12 +26,6 @@
     "category": "bug-open",
     "reason": "node:console granular parity: console.dir(value, { showHidden: true }) does not render hidden properties with Node-compatible inspect notation. Flips to PASS when #1200 lands."
   },
-  "node-suite/console/output/bigint-in-number-format": {
-    "issue": null,
-    "added": "2026-05-20",
-    "category": "gap-bisect",
-    "reason": "node:console granular parity: `%d` / `%i` formatters drop the BigInt `n` suffix (Perry prints `5`, Node prints `5n`). `%f` matching is correct (`5` on both). Pending issue file; flips to PASS when the BigInt branch of the integer-formatter preserves the literal."
-  },
   "node-suite/console/output/function-format": {
     "issue": "1202",
     "added": "2026-05-20",
@@ -43,12 +37,6 @@
     "added": "2026-05-20",
     "category": "bug-open",
     "reason": "node:console granular parity: circular object formatting lacks Node-compatible <ref> / [Circular] tracking. Flips to PASS when #1204 lands."
-  },
-  "node-suite/console/output/uppercase-object-format": {
-    "issue": "1199",
-    "added": "2026-05-20",
-    "category": "bug-open",
-    "reason": "node:console granular parity: `%o` and `%O` collapse to the same depth-limited inspect output. Node distinguishes the two (`%o` uses an effectively unbounded depth, `%O` uses depth 2). Shares the depth-honoring fix with #1199; flips to PASS when the inspect path honors per-specifier depth."
   },
   "node-suite/console/output/no-tostring-on-string-format": {
     "issue": "1203",
