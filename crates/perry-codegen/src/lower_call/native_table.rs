@@ -1755,7 +1755,7 @@ pub(super) const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         method: "emit",
         class_filter: None,
         runtime: "js_event_emitter_emit",
-        args: &[NA_STR, NA_F64],
+        args: &[NA_STR, NA_VARARGS],
         ret: NR_F64,
     },
     NativeModSig {
@@ -1832,7 +1832,7 @@ pub(super) const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         method: "listenerCount",
         class_filter: None,
         runtime: "js_event_emitter_listener_count",
-        args: &[NA_STR],
+        args: &[NA_STR, NA_PTR],
         ret: NR_F64,
     },
     NativeModSig {
@@ -1896,6 +1896,15 @@ pub(super) const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
     NativeModSig {
         module: "events",
         has_receiver: false,
+        method: "addAbortListener",
+        class_filter: None,
+        runtime: "js_events_add_abort_listener",
+        args: &[NA_PTR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "events",
+        has_receiver: false,
         method: "getEventListeners",
         class_filter: None,
         runtime: "js_events_get_event_listeners",
@@ -1926,7 +1935,7 @@ pub(super) const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         method: "setMaxListeners",
         class_filter: None,
         runtime: "js_events_set_max_listeners",
-        args: &[NA_F64, NA_PTR],
+        args: &[NA_F64, NA_VARARGS],
         ret: NR_F64,
     },
     // ========== StringDecoder (issue #848) ==========

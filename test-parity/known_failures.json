@@ -224,12 +224,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:dns/promises` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_events": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:events` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_fs": {
     "issue": "793",
     "added": "2026-05-15",
@@ -433,5 +427,11 @@
     "added": "2026-05-20",
     "category": "module-inventory",
     "reason": "#1182: Perry decodes split valid UTF-16LE surrogate pairs, but runtime strings are UTF-8 and cannot preserve Node's lone surrogate code units returned by end(). Flips to PASS when raw UTF-16 lone-surrogate semantics are modeled or normalized."
+  },
+  "node-suite/events/on/async-iterator-basic": {
+    "issue": "1183",
+    "added": "2026-05-20",
+    "category": "module-inventory",
+    "reason": "#1183: node:events granular parity gap — module-level `events.on(emitter, event)` async iterator is not implemented; iterator yields no queued emitted events. This needs a real async-iterator object backed by EventEmitter listener queues rather than a small EventEmitter runtime patch."
   }
 }
