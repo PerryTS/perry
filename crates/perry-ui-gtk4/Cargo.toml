@@ -29,7 +29,7 @@ libshumate = "0.6"
 webkit6 = "=0.4"
 # Persistent WebView userDataFolder (#658 v2-B) — XDG-aware data/cache
 # dir resolution for `ephemeral: false`. Pure-Rust crate, no system deps.
-dirs = "5"
+dirs = "6"
 # perry/media — GStreamer playbin for streaming audio playback (#351).
 gstreamer = "0.25"
 # perry/media — MPRIS D-Bus exposure for GNOME / KDE / playerctl /
