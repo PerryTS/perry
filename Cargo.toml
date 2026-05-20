@@ -224,7 +224,7 @@ toml = "1.1"
 # Terminal UI
 indicatif = "0.17"
 console = "0.16"
-dialoguer = "0.11"
+dialoguer = "0.12"
 
 # File system
 walkdir = "2.4"
