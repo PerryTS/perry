@@ -1203,6 +1203,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         }
                     }
                 }
+                if module_name == "buffer" || module_name == "node:buffer" {
+                    if let Some(method) = method_name {
+                        if matches!(method, "constants" | "kMaxLength" | "kStringMaxLength") {
+                            return Ok(Expr::PropertyGet {
+                                object: Box::new(Expr::NativeModuleRef("buffer".to_string())),
+                                property: method.to_string(),
+                            });
+                        }
+                    }
+                }
                 // Special handling for worker_threads named imports
                 if module_name == "worker_threads" {
                     if let Some(method) = method_name {

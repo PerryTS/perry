@@ -10045,6 +10045,14 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(i32_bool_to_nanbox(blk, &i32_result))
         }
 
+        // -------- BufferIsEncoding --------
+        Expr::BufferIsEncoding(operand) => {
+            let v_box = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            let i32_result = blk.call(I32, "js_buffer_is_encoding", &[(DOUBLE, &v_box)]);
+            Ok(i32_bool_to_nanbox(blk, &i32_result))
+        }
+
         // -------- StaticPluginResolve stub --------
         Expr::StaticPluginResolve(_) => Ok(double_literal(0.0)),
 
@@ -10382,6 +10390,29 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
+        Expr::BufferFromArrayBuffer {
+            data,
+            byte_offset,
+            length,
+        } => {
+            let data_box = lower_expr(ctx, data)?;
+            let offset_box = lower_expr(ctx, byte_offset)?;
+            let len_i32 = if let Some(len_expr) = length {
+                let len_box = lower_expr(ctx, len_expr)?;
+                ctx.block().fptosi(DOUBLE, &len_box, I32)
+            } else {
+                "-1".to_string()
+            };
+            let blk = ctx.block();
+            let data_i64 = blk.bitcast_double_to_i64(&data_box);
+            let offset_i32 = blk.fptosi(DOUBLE, &offset_box, I32);
+            let buf_handle = blk.call(
+                I64,
+                "js_buffer_from_arraybuffer_slice",
+                &[(I64, &data_i64), (I32, &offset_i32), (I32, &len_i32)],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
         // Issue #630: `Buffer.allocUnsafe(size)` — fast-path allocator
         // (no zero-fill). The runtime helper returns a raw `*mut
         // BufferHeader`; NaN-box with POINTER_TAG so downstream
@@ -10400,11 +10431,19 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // a `encoding === "hex"` / `"base64"` arg would need a separate
         // helper but those aren't in the issue's repro. Returns i32;
         // sitofp to f64 for the Number return.
-        Expr::BufferByteLength(s) => {
-            let s_box = lower_expr(ctx, s)?;
+        Expr::BufferByteLength { data, encoding } => {
+            let data_box = lower_expr(ctx, data)?;
+            let enc_box = if let Some(enc) = encoding {
+                lower_expr(ctx, enc)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
             let blk = ctx.block();
-            let s_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &s_box)]);
-            let len_i32 = blk.call(I32, "js_buffer_byte_length", &[(I64, &s_handle)]);
+            let len_i32 = blk.call(
+                I32,
+                "js_buffer_byte_length_value",
+                &[(DOUBLE, &data_box), (DOUBLE, &enc_box)],
+            );
             Ok(blk.sitofp(I32, &len_i32, DOUBLE))
         }
 

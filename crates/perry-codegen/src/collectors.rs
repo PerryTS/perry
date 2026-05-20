@@ -1035,6 +1035,17 @@ pub(crate) fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32
                 walk(e, out);
             }
         }
+        Expr::BufferFromArrayBuffer {
+            data,
+            byte_offset,
+            length,
+        } => {
+            walk(data, out);
+            walk(byte_offset, out);
+            if let Some(e) = length {
+                walk(e, out);
+            }
+        }
         Expr::BufferAlloc { size, fill } => {
             walk(size, out);
             if let Some(f) = fill {
@@ -3629,6 +3640,17 @@ fn collect_localset_ids_in_expr_filtered(
         Expr::BufferFrom { data, encoding } => {
             walk(data, out);
             if let Some(e) = encoding {
+                walk(e, out);
+            }
+        }
+        Expr::BufferFromArrayBuffer {
+            data,
+            byte_offset,
+            length,
+        } => {
+            walk(data, out);
+            walk(byte_offset, out);
+            if let Some(e) = length {
                 walk(e, out);
             }
         }

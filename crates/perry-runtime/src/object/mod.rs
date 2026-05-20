@@ -4606,7 +4606,10 @@ pub unsafe fn dispatch_buffer_method(
             crate::buffer::js_buffer_write(buf_ptr, str_ptr, offset, enc) as f64
         }
         "fill" => {
-            let result = crate::buffer::js_buffer_fill(buf_ptr, arg_i32(0));
+            let len = (*buf_ptr).length as i32;
+            let start = if args.len() >= 2 { arg_i32(1) } else { 0 };
+            let end = if args.len() >= 3 { arg_i32(2) } else { len };
+            let result = crate::buffer::js_buffer_fill_range(buf_ptr, arg_i32(0), start, end);
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "equals" => {
@@ -4640,11 +4643,15 @@ pub unsafe fn dispatch_buffer_method(
             arg_or_zero(0),
             arg_i32(1),
         )),
-        "lastIndexOf" => i32_num(crate::buffer::js_buffer_index_of(
-            buf_f64,
-            arg_or_zero(0),
-            arg_i32(1),
-        )),
+        "lastIndexOf" => {
+            let len = (*buf_ptr).length as i32;
+            let start = if args.len() >= 2 { arg_i32(1) } else { len - 1 };
+            i32_num(crate::buffer::js_buffer_last_index_of(
+                buf_f64,
+                arg_or_zero(0),
+                start,
+            ))
+        }
         "includes" => i32_bool(crate::buffer::js_buffer_includes(
             buf_f64,
             arg_or_zero(0),
@@ -6174,6 +6181,20 @@ unsafe fn get_native_module_constant(
             _ => fs_const(property),
         },
         "fs.constants" => fs_const(property),
+        "buffer" => match property {
+            "constants" => Some(create_sub_namespace("buffer.constants")),
+            // Match Node's common 64-bit max Buffer length value. Perry won't
+            // actually allocate buffers this large, but shape/value parity lets
+            // packages feature-detect the Buffer surface without falling over.
+            "kMaxLength" => Some(4294967296.0),
+            "kStringMaxLength" => Some(536870888.0),
+            _ => None,
+        },
+        "buffer.constants" => match property {
+            "MAX_LENGTH" => Some(4294967296.0),
+            "MAX_STRING_LENGTH" => Some(536870888.0),
+            _ => None,
+        },
         "os" => match property {
             "EOL" => {
                 if cfg!(windows) {

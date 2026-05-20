@@ -706,6 +706,17 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(enc, assigned);
             }
         }
+        Expr::BufferFromArrayBuffer {
+            data,
+            byte_offset,
+            length,
+        } => {
+            collect_assigned_locals_expr(data, assigned);
+            collect_assigned_locals_expr(byte_offset, assigned);
+            if let Some(len) = length {
+                collect_assigned_locals_expr(len, assigned);
+            }
+        }
         Expr::BufferAlloc { size, fill } => {
             collect_assigned_locals_expr(size, assigned);
             if let Some(f) = fill {
@@ -715,9 +726,15 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         Expr::BufferAllocUnsafe(expr)
         | Expr::BufferConcat(expr)
         | Expr::BufferIsBuffer(expr)
-        | Expr::BufferByteLength(expr)
+        | Expr::BufferIsEncoding(expr)
         | Expr::BufferLength(expr) => {
             collect_assigned_locals_expr(expr, assigned);
+        }
+        Expr::BufferByteLength { data, encoding } => {
+            collect_assigned_locals_expr(data, assigned);
+            if let Some(enc) = encoding {
+                collect_assigned_locals_expr(enc, assigned);
+            }
         }
         Expr::BufferToString { buffer, encoding } => {
             collect_assigned_locals_expr(buffer, assigned);

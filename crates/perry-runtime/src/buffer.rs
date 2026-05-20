@@ -361,7 +361,7 @@ pub extern "C" fn js_buffer_from_array(arr_ptr: *const ArrayHeader) -> *mut Buff
             let byte = if top16 == 0x7FFE {
                 // INT32_TAG: lower 32 bits are an i32
                 ((bits as u32) & 0xFF) as u8
-            } else if top16 < 0x7FF8 || (top16 == 0x7FF8 && bits == 0x7FF8_0000_0000_0000) {
+            } else if !val.is_nan() {
                 // Raw double — convert via i64 to handle negatives correctly
                 ((val as i64) & 0xFF) as u8
             } else {
@@ -371,6 +371,48 @@ pub extern "C" fn js_buffer_from_array(arr_ptr: *const ArrayHeader) -> *mut Buff
         }
 
         buf
+    }
+}
+
+/// `Buffer.from(arrayBuffer, byteOffset, length?)` — deterministic subset.
+/// Perry currently models ArrayBuffer storage as a BufferHeader; this returns
+/// a copied Buffer for the requested byte range. Shared backing-store views
+/// remain a separate larger parity task.
+#[no_mangle]
+pub extern "C" fn js_buffer_from_arraybuffer_slice(
+    value_bits: i64,
+    byte_offset: i32,
+    length: i32,
+) -> *mut BufferHeader {
+    let bits = value_bits as u64;
+    let raw = if bits >> 48 >= 0x7FF8 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else {
+        bits as usize
+    };
+    if raw < 0x1000 || !is_registered_buffer(raw) {
+        return buffer_alloc(0);
+    }
+    unsafe {
+        let src = raw as *const BufferHeader;
+        let src_len = (*src).length as i32;
+        let start = byte_offset.max(0).min(src_len);
+        let available = src_len - start;
+        let take = if length < 0 {
+            available
+        } else {
+            length.max(0).min(available)
+        };
+        let dst = buffer_alloc(take as u32);
+        (*dst).length = take as u32;
+        if take > 0 {
+            ptr::copy_nonoverlapping(
+                buffer_data(src).add(start as usize),
+                buffer_data_mut(dst),
+                take as usize,
+            );
+        }
+        dst
     }
 }
 
@@ -502,6 +544,18 @@ pub extern "C" fn js_buffer_alloc(size: i32, fill: i32) -> *mut BufferHeader {
 /// Implements Uint8Array.prototype.fill(value)
 #[no_mangle]
 pub extern "C" fn js_buffer_fill(buf: *mut BufferHeader, value: i32) -> *mut BufferHeader {
+    js_buffer_fill_range(buf, value, 0, i32::MAX)
+}
+
+/// Fill an existing buffer with a byte value over a clamped [start, end) range.
+/// Implements the deterministic numeric subset of Buffer.prototype.fill.
+#[no_mangle]
+pub extern "C" fn js_buffer_fill_range(
+    buf: *mut BufferHeader,
+    value: i32,
+    start: i32,
+    end: i32,
+) -> *mut BufferHeader {
     if buf.is_null() || (buf as u64) < 0x1000 {
         return buf;
     }
@@ -517,8 +571,21 @@ pub extern "C" fn js_buffer_fill(buf: *mut BufferHeader, value: i32) -> *mut Buf
     };
     unsafe {
         let len = (*buf).length as usize;
+        let start = if start < 0 {
+            ((len as i32) + start).max(0) as usize
+        } else {
+            (start as usize).min(len)
+        };
+        let end = if end < 0 {
+            ((len as i32) + end).max(0) as usize
+        } else {
+            (end as usize).min(len)
+        };
+        if start >= end {
+            return buf;
+        }
         let data = buffer_data_mut(buf);
-        ptr::write_bytes(data, value as u8, len);
+        ptr::write_bytes(data.add(start), value as u8, end - start);
     }
     buf
 }
@@ -616,6 +683,44 @@ pub extern "C" fn js_buffer_is_buffer(ptr: i64) -> i32 {
     }
 }
 
+/// Check if a value is a Node Buffer encoding name.
+#[no_mangle]
+pub extern "C" fn js_buffer_is_encoding(value: f64) -> i32 {
+    let str_ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
+        return 0;
+    }
+    unsafe {
+        let len = (*str_ptr).byte_len as usize;
+        if len == 0 || len > 32 {
+            return 0;
+        }
+        let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let bytes = std::slice::from_raw_parts(data_ptr, len);
+        fn eq_ascii_lower(a: &[u8], b: &[u8]) -> bool {
+            if a.len() != b.len() {
+                return false;
+            }
+            a.iter()
+                .zip(b.iter())
+                .all(|(x, y)| x.to_ascii_lowercase() == *y)
+        }
+        let ok = eq_ascii_lower(bytes, b"utf8")
+            || eq_ascii_lower(bytes, b"utf-8")
+            || eq_ascii_lower(bytes, b"hex")
+            || eq_ascii_lower(bytes, b"base64")
+            || eq_ascii_lower(bytes, b"base64url")
+            || eq_ascii_lower(bytes, b"ascii")
+            || eq_ascii_lower(bytes, b"latin1")
+            || eq_ascii_lower(bytes, b"binary")
+            || eq_ascii_lower(bytes, b"ucs2")
+            || eq_ascii_lower(bytes, b"ucs-2")
+            || eq_ascii_lower(bytes, b"utf16le")
+            || eq_ascii_lower(bytes, b"utf-16le");
+        ok as i32
+    }
+}
+
 /// Get the byte length of a string (when encoded to UTF-8)
 #[no_mangle]
 pub extern "C" fn js_buffer_byte_length(str_ptr: *const StringHeader) -> i32 {
@@ -623,6 +728,76 @@ pub extern "C" fn js_buffer_byte_length(str_ptr: *const StringHeader) -> i32 {
         return 0;
     }
     unsafe { (*str_ptr).byte_len as i32 }
+}
+
+/// Node-style `Buffer.byteLength(value, encoding?)`.
+#[no_mangle]
+pub extern "C" fn js_buffer_byte_length_value(value: f64, encoding: f64) -> i32 {
+    let bits = value.to_bits();
+    let jsval = crate::JSValue::from_bits(bits);
+
+    let raw_ptr = if jsval.is_pointer() || jsval.is_string() {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
+        bits as usize
+    } else {
+        0
+    };
+    if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
+        return unsafe { (*(raw_ptr as *const BufferHeader)).length as i32 };
+    }
+
+    let str_ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
+        return 0;
+    }
+
+    unsafe {
+        let len = (*str_ptr).byte_len as usize;
+        let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let bytes = std::slice::from_raw_parts(data_ptr, len);
+
+        let enc_ptr = crate::value::js_get_string_pointer_unified(encoding) as *const StringHeader;
+        let enc_bytes = if enc_ptr.is_null() || (enc_ptr as usize) < 0x1000 {
+            &[][..]
+        } else {
+            let enc_len = (*enc_ptr).byte_len as usize;
+            let enc_data = (enc_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+            std::slice::from_raw_parts(enc_data, enc_len)
+        };
+        fn eq_ascii_lower(a: &[u8], b: &[u8]) -> bool {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b.iter())
+                    .all(|(x, y)| x.to_ascii_lowercase() == *y)
+        }
+
+        if eq_ascii_lower(enc_bytes, b"hex") {
+            return (len / 2) as i32;
+        }
+        if eq_ascii_lower(enc_bytes, b"base64") || eq_ascii_lower(enc_bytes, b"base64url") {
+            let decoded = base64_decode_into_buffer(bytes);
+            return (*decoded).length as i32;
+        }
+        if eq_ascii_lower(enc_bytes, b"ascii")
+            || eq_ascii_lower(enc_bytes, b"latin1")
+            || eq_ascii_lower(enc_bytes, b"binary")
+        {
+            return std::str::from_utf8(bytes)
+                .map(|s| s.chars().count() as i32)
+                .unwrap_or(len as i32);
+        }
+        if eq_ascii_lower(enc_bytes, b"ucs2")
+            || eq_ascii_lower(enc_bytes, b"ucs-2")
+            || eq_ascii_lower(enc_bytes, b"utf16le")
+            || eq_ascii_lower(enc_bytes, b"utf-16le")
+        {
+            return std::str::from_utf8(bytes)
+                .map(|s| (s.encode_utf16().count() * 2) as i32)
+                .unwrap_or((len * 2) as i32);
+        }
+        len as i32
+    }
 }
 
 /// Convert a buffer slice to a string. Honors the optional `start`/`end`
@@ -1151,6 +1326,79 @@ fn buffer_index_of_bytes(buf: *const BufferHeader, needle: &[u8], start: i32) ->
     }
 }
 
+/// Reverse search for a byte sequence in a buffer.
+fn buffer_last_index_of_bytes(buf: *const BufferHeader, needle: &[u8], start: i32) -> i32 {
+    if buf.is_null() {
+        return -1;
+    }
+    unsafe {
+        let len = (*buf).length as usize;
+        let data = std::slice::from_raw_parts(buffer_data(buf), len);
+        if needle.is_empty() {
+            return if start < 0 {
+                ((len as i32) + start).clamp(0, len as i32)
+            } else {
+                (start as usize).min(len) as i32
+            };
+        }
+        if needle.len() > len {
+            return -1;
+        }
+        let max_start = len - needle.len();
+        let from = if start < 0 {
+            ((len as i32) + start).max(0) as usize
+        } else {
+            (start as usize).min(max_start)
+        };
+        for i in (0..=from).rev() {
+            if &data[i..i + needle.len()] == needle {
+                return i as i32;
+            }
+        }
+        -1
+    }
+}
+
+fn buffer_search_needle(buf: *const BufferHeader, needle: f64) -> Option<Vec<u8>> {
+    if buf.is_null() {
+        return None;
+    }
+    let needle_bits = needle.to_bits();
+    let top16 = needle_bits >> 48;
+
+    let raw_ptr = if top16 >= 0x7FF8 {
+        (needle_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if top16 == 0 && needle_bits >= 0x1000 {
+        needle_bits as usize
+    } else {
+        0
+    };
+    if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
+        let other = raw_ptr as *const BufferHeader;
+        return unsafe {
+            Some(std::slice::from_raw_parts(buffer_data(other), (*other).length as usize).to_vec())
+        };
+    }
+    if top16 == 0x7FFF {
+        let str_ptr = (needle_bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
+        if !str_ptr.is_null() {
+            return unsafe {
+                let len = (*str_ptr).byte_len as usize;
+                let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                Some(std::slice::from_raw_parts(data_ptr, len).to_vec())
+            };
+        }
+    }
+    let byte_val = if top16 == 0x7FFE {
+        (needle_bits as u32) & 0xFF
+    } else if top16 < 0x7FF8 || (top16 == 0x7FF8 && needle_bits == 0x7FF8_0000_0000_0000) {
+        ((needle as i64) & 0xFF) as u32
+    } else {
+        return None;
+    };
+    Some(vec![byte_val as u8])
+}
+
 /// `buf.indexOf(needle, start?)` where `needle` is a string, buffer,
 /// or numeric byte value (NaN-boxed value).
 #[no_mangle]
@@ -1200,6 +1448,17 @@ pub extern "C" fn js_buffer_index_of(buf_ptr: f64, needle: f64, start: i32) -> i
     };
     let byte = [byte_val as u8];
     buffer_index_of_bytes(buf, &byte, start)
+}
+
+/// `buf.lastIndexOf(needle, start?)` where `needle` is a string, buffer,
+/// or numeric byte value (NaN-boxed value).
+#[no_mangle]
+pub extern "C" fn js_buffer_last_index_of(buf_ptr: f64, needle: f64, start: i32) -> i32 {
+    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
+    let Some(bytes) = buffer_search_needle(buf, needle) else {
+        return -1;
+    };
+    buffer_last_index_of_bytes(buf, &bytes, start)
 }
 
 /// `buf.includes(needle, start?)` — boolean i32.
@@ -1879,6 +2138,10 @@ fn hex_decode_into_buffer(input: &[u8]) -> *mut BufferHeader {
             if hi < 16 && lo < 16 {
                 *dst.add(written) = (hi << 4) | lo;
                 written += 1;
+            } else {
+                // Node stops hex decoding at the first non-hex pair instead
+                // of skipping over invalid bytes (e.g. "abxxcd" -> "ab").
+                break;
             }
             i += 2;
         }

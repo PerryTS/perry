@@ -2051,10 +2051,16 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     //     already registered above) ---
     method("buffer", "alloc", false, None),
     method("buffer", "allocUnsafe", false, None),
+    method("buffer", "allocUnsafeSlow", false, None),
     method("buffer", "from", false, None),
+    method("buffer", "of", false, None),
     method("buffer", "concat", false, None),
     method("buffer", "isBuffer", false, None),
+    method("buffer", "isEncoding", false, None),
     method("buffer", "byteLength", false, None),
+    property("buffer", "constants"),
+    property("buffer", "kMaxLength"),
+    property("buffer", "kStringMaxLength"),
     // --- url (additional helpers) ---
     method("url", "fileURLToPath", false, None),
     method("url", "pathToFileURL", false, None),

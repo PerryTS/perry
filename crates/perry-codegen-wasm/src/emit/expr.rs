@@ -3994,6 +3994,31 @@ impl<'a> FuncEmitCtx<'a> {
                 }));
                 self.emit_memcall(func, "buffer_from_string", 2);
             }
+            Expr::BufferFromArrayBuffer {
+                data,
+                byte_offset,
+                length,
+            } => {
+                self.emit_expr(func, data);
+                self.emit_expr(func, byte_offset);
+                if let Some(len) = length {
+                    self.emit_expr(func, len);
+                } else {
+                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                }
+                self.emit_frame_begin(func, 3);
+                for slot in (0..3).rev() {
+                    func.instruction(&Instruction::LocalSet(self.temp_local));
+                    self.emit_slot_addr(func, slot);
+                    func.instruction(&Instruction::LocalGet(self.temp_local));
+                    func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                }
+                self.emit_memcall(func, "buffer_from_string", 3);
+            }
             Expr::BufferToString { buffer, encoding } => {
                 self.emit_expr(func, buffer);
                 if let Some(enc) = encoding {
@@ -4233,7 +4258,10 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
                 func.instruction(&Instruction::End);
             }
-            Expr::BufferByteLength(val) => {
+            Expr::BufferByteLength {
+                data: val,
+                encoding: _,
+            } => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, val);
                 self.emit_memcall(func, "buffer_byte_length", 1);

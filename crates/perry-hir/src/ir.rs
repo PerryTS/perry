@@ -1890,6 +1890,12 @@ pub enum Expr {
         data: Box<Expr>,
         encoding: Option<Box<Expr>>,
     },
+    BufferFromArrayBuffer {
+        // Buffer.from(arrayBuffer, byteOffset, length?) -> Buffer
+        data: Box<Expr>,
+        byte_offset: Box<Expr>,
+        length: Option<Box<Expr>>,
+    },
     BufferAlloc {
         // Buffer.alloc(size, fill?) -> Buffer
         size: Box<Expr>,
@@ -1898,7 +1904,11 @@ pub enum Expr {
     BufferAllocUnsafe(Box<Expr>), // Buffer.allocUnsafe(size) -> Buffer
     BufferConcat(Box<Expr>),      // Buffer.concat(list) -> Buffer
     BufferIsBuffer(Box<Expr>),    // Buffer.isBuffer(obj) -> boolean
-    BufferByteLength(Box<Expr>),  // Buffer.byteLength(string) -> number
+    BufferIsEncoding(Box<Expr>),  // Buffer.isEncoding(encoding) -> boolean
+    BufferByteLength {
+        data: Box<Expr>,
+        encoding: Option<Box<Expr>>,
+    }, // Buffer.byteLength(value, encoding?) -> number
     BufferToString {
         // buffer.toString(encoding?) -> string
         buffer: Box<Expr>,

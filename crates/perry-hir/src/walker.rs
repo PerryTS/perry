@@ -240,7 +240,7 @@ where
         | Expr::BufferAllocUnsafe(v)
         | Expr::BufferConcat(v)
         | Expr::BufferIsBuffer(v)
-        | Expr::BufferByteLength(v)
+        | Expr::BufferIsEncoding(v)
         | Expr::BufferLength(v)
         | Expr::Uint8ArrayFrom(v)
         | Expr::Uint8ArrayLength(v)
@@ -922,10 +922,27 @@ where
                 f(e);
             }
         }
+        Expr::BufferFromArrayBuffer {
+            data,
+            byte_offset,
+            length,
+        } => {
+            f(data);
+            f(byte_offset);
+            if let Some(e) = length {
+                f(e);
+            }
+        }
         Expr::BufferAlloc { size, fill } => {
             f(size);
             if let Some(v) = fill {
                 f(v);
+            }
+        }
+        Expr::BufferByteLength { data, encoding } => {
+            f(data);
+            if let Some(e) = encoding {
+                f(e);
             }
         }
         Expr::BufferToString { buffer, encoding } => {
@@ -1640,7 +1657,7 @@ where
         | Expr::BufferAllocUnsafe(v)
         | Expr::BufferConcat(v)
         | Expr::BufferIsBuffer(v)
-        | Expr::BufferByteLength(v)
+        | Expr::BufferIsEncoding(v)
         | Expr::BufferLength(v)
         | Expr::Uint8ArrayFrom(v)
         | Expr::Uint8ArrayLength(v)
@@ -2306,10 +2323,27 @@ where
                 f(e);
             }
         }
+        Expr::BufferFromArrayBuffer {
+            data,
+            byte_offset,
+            length,
+        } => {
+            f(data);
+            f(byte_offset);
+            if let Some(e) = length {
+                f(e);
+            }
+        }
         Expr::BufferAlloc { size, fill } => {
             f(size);
             if let Some(v) = fill {
                 f(v);
+            }
+        }
+        Expr::BufferByteLength { data, encoding } => {
+            f(data);
+            if let Some(e) = encoding {
+                f(e);
             }
         }
         Expr::BufferToString { buffer, encoding } => {

@@ -1592,6 +1592,21 @@ impl JsEmitter {
                 self.output.push(')');
                 let _ = encoding; // encoding not used in simple polyfill
             }
+            Expr::BufferFromArrayBuffer {
+                data,
+                byte_offset,
+                length,
+            } => {
+                self.output.push_str("new Uint8Array(");
+                self.emit_expr(data);
+                self.output.push_str(", ");
+                self.emit_expr(byte_offset);
+                if let Some(len) = length {
+                    self.output.push_str(", ");
+                    self.emit_expr(len);
+                }
+                self.output.push(')');
+            }
             Expr::BufferAlloc { size, fill } => {
                 self.output.push_str("new Uint8Array(");
                 self.emit_expr(size);
@@ -1618,10 +1633,11 @@ impl JsEmitter {
                 self.emit_expr(obj);
                 self.output.push_str(" instanceof Uint8Array)");
             }
-            Expr::BufferByteLength(s) => {
+            Expr::BufferByteLength { data, encoding } => {
                 self.output.push_str("new TextEncoder().encode(");
-                self.emit_expr(s);
+                self.emit_expr(data);
                 self.output.push_str(").length");
+                let _ = encoding;
             }
             Expr::BufferToString { buffer, .. } => {
                 self.output.push_str("new TextDecoder().decode(");

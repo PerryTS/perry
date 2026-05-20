@@ -1252,6 +1252,18 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                             match method_name {
                                 "from" => {
                                     let data = args.first().cloned().unwrap_or(Expr::Undefined);
+                                    if args.len() >= 2
+                                        && !matches!(args.get(1), Some(Expr::String(_)))
+                                    {
+                                        let byte_offset =
+                                            args.get(1).cloned().unwrap_or(Expr::Number(0.0));
+                                        let length = args.get(2).cloned().map(Box::new);
+                                        return Ok(Expr::BufferFromArrayBuffer {
+                                            data: Box::new(data),
+                                            byte_offset: Box::new(byte_offset),
+                                            length,
+                                        });
+                                    }
                                     let encoding = args.get(1).cloned().map(Box::new);
                                     return Ok(Expr::BufferFrom {
                                         data: Box::new(data),
@@ -1266,7 +1278,7 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                         fill,
                                     });
                                 }
-                                "allocUnsafe" => {
+                                "allocUnsafe" | "allocUnsafeSlow" => {
                                     let size = args.first().cloned().unwrap_or(Expr::Number(0.0));
                                     return Ok(Expr::BufferAllocUnsafe(Box::new(size)));
                                 }
@@ -1274,16 +1286,30 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                     let list = args.first().cloned().unwrap_or(Expr::Array(vec![]));
                                     return Ok(Expr::BufferConcat(Box::new(list)));
                                 }
+                                "of" => {
+                                    return Ok(Expr::BufferFrom {
+                                        data: Box::new(Expr::Array(args)),
+                                        encoding: None,
+                                    });
+                                }
                                 "isBuffer" => {
                                     let obj = args.first().cloned().unwrap_or(Expr::Undefined);
                                     return Ok(Expr::BufferIsBuffer(Box::new(obj)));
+                                }
+                                "isEncoding" => {
+                                    let obj = args.first().cloned().unwrap_or(Expr::Undefined);
+                                    return Ok(Expr::BufferIsEncoding(Box::new(obj)));
                                 }
                                 "byteLength" => {
                                     let data = args
                                         .first()
                                         .cloned()
                                         .unwrap_or(Expr::String("".to_string()));
-                                    return Ok(Expr::BufferByteLength(Box::new(data)));
+                                    let encoding = args.get(1).cloned().map(Box::new);
+                                    return Ok(Expr::BufferByteLength {
+                                        data: Box::new(data),
+                                        encoding,
+                                    });
                                 }
                                 // `Buffer.compare(a, b)` → `a.compare(b)` instance call
                                 // (handled by runtime buffer dispatch).
@@ -3225,6 +3251,18 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                             match method_name {
                                 "from" => {
                                     let data = args.first().cloned().unwrap_or(Expr::Undefined);
+                                    if args.len() >= 2
+                                        && !matches!(args.get(1), Some(Expr::String(_)))
+                                    {
+                                        let byte_offset =
+                                            args.get(1).cloned().unwrap_or(Expr::Number(0.0));
+                                        let length = args.get(2).cloned().map(Box::new);
+                                        return Ok(Expr::BufferFromArrayBuffer {
+                                            data: Box::new(data),
+                                            byte_offset: Box::new(byte_offset),
+                                            length,
+                                        });
+                                    }
                                     let encoding = args.get(1).cloned().map(Box::new);
                                     return Ok(Expr::BufferFrom {
                                         data: Box::new(data),
@@ -3242,7 +3280,7 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                         });
                                     }
                                 }
-                                "allocUnsafe" => {
+                                "allocUnsafe" | "allocUnsafeSlow" => {
                                     if !args.is_empty() {
                                         return Ok(Expr::BufferAllocUnsafe(Box::new(
                                             args.into_iter().next().unwrap(),
@@ -3256,6 +3294,12 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                         )));
                                     }
                                 }
+                                "of" => {
+                                    return Ok(Expr::BufferFrom {
+                                        data: Box::new(Expr::Array(args)),
+                                        encoding: None,
+                                    });
+                                }
                                 "isBuffer" => {
                                     if !args.is_empty() {
                                         return Ok(Expr::BufferIsBuffer(Box::new(
@@ -3263,11 +3307,22 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                         )));
                                     }
                                 }
-                                "byteLength" => {
+                                "isEncoding" => {
                                     if !args.is_empty() {
-                                        return Ok(Expr::BufferByteLength(Box::new(
+                                        return Ok(Expr::BufferIsEncoding(Box::new(
                                             args.into_iter().next().unwrap(),
                                         )));
+                                    }
+                                }
+                                "byteLength" => {
+                                    if !args.is_empty() {
+                                        let mut it = args.into_iter();
+                                        let data = it.next().unwrap();
+                                        let encoding = it.next().map(Box::new);
+                                        return Ok(Expr::BufferByteLength {
+                                            data: Box::new(data),
+                                            encoding,
+                                        });
                                     }
                                 }
                                 // `Buffer.compare(a, b)` returns -1/0/1. The runtime

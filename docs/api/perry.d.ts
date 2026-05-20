@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 992 entries across 76 modules
+// Coverage: 988 entries across 76 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -82,9 +82,17 @@ declare module "buffer" {
   /** stdlib */
   export class Buffer { [key: string]: any; }
   /** stdlib */
+  export const constants: any;
+  /** stdlib */
+  export const kMaxLength: any;
+  /** stdlib */
+  export const kStringMaxLength: any;
+  /** stdlib */
   export function alloc(...args: any[]): any;
   /** stdlib */
   export function allocUnsafe(...args: any[]): any;
+  /** stdlib */
+  export function allocUnsafeSlow(...args: any[]): any;
   /** stdlib */
   export function byteLength(...args: any[]): any;
   /** stdlib */
@@ -93,6 +101,10 @@ declare module "buffer" {
   export function from(...args: any[]): any;
   /** stdlib */
   export function isBuffer(...args: any[]): any;
+  /** stdlib */
+  export function isEncoding(...args: any[]): any;
+  /** stdlib */
+  export function of(...args: any[]): any;
 }
 
 declare module "cheerio" {
@@ -256,17 +268,7 @@ declare module "events" {
   /** stdlib */
   export class EventEmitter { [key: string]: any; }
   /** stdlib */
-  export const captureRejectionSymbol: any;
-  /** stdlib */
-  export const captureRejections: any;
-  /** stdlib */
-  export const defaultMaxListeners: any;
-  /** stdlib */
-  export const errorMonitor: any;
-  /** stdlib */
   export function EventEmitter(...args: any[]): any;
-  /** stdlib */
-  export function addAbortListener(...args: any[]): any;
   /** stdlib */
   export function getEventListeners(...args: any[]): any;
   /** stdlib */
@@ -1347,8 +1349,6 @@ declare module "string_decoder" {
   /** stdlib */
   export class StringDecoder { [key: string]: any; }
   /** stdlib */
-  export const encoding: any;
-  /** stdlib */
   export const lastChar: any;
   /** stdlib */
   export const lastNeed: any;
@@ -1381,10 +1381,6 @@ declare module "url" {
   /** stdlib */
   export class URLSearchParams { [key: string]: any; }
   /** stdlib */
-  export function domainToASCII(...args: any[]): any;
-  /** stdlib */
-  export function domainToUnicode(...args: any[]): any;
-  /** stdlib */
   export function fileURLToPath(...args: any[]): any;
   /** stdlib */
   export function format(...args: any[]): any;
@@ -1392,10 +1388,6 @@ declare module "url" {
   export function parse(...args: any[]): any;
   /** stdlib */
   export function pathToFileURL(...args: any[]): any;
-  /** stdlib */
-  export function resolve(...args: any[]): any;
-  /** stdlib */
-  export function urlToHttpOptions(...args: any[]): any;
 }
 
 declare module "util" {

@@ -221,6 +221,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // fall through to the dynamic-array codegen which reads f64 elements
         // from the underlying storage as if they were JS values.
         Expr::BufferFrom { .. }
+        | Expr::BufferFromArrayBuffer { .. }
         | Expr::BufferAlloc { .. }
         | Expr::BufferAllocUnsafe(_)
         | Expr::BufferConcat(_)

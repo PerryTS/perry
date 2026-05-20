@@ -1309,6 +1309,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("clearTimeout", VOID, &[I64]);
     module.declare_function("clearInterval", VOID, &[I64]);
     module.declare_function("js_buffer_from_array", I64, &[I64]);
+    module.declare_function("js_buffer_from_arraybuffer_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_buffer_length", I32, &[I64]);
     module.declare_function("js_buffer_get", I32, &[I64, I32]);
     // console.time/count runtime functions.
@@ -2112,12 +2113,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // ========== Buffer ==========
     module.declare_function("js_buffer_alloc_unsafe", I64, &[I32]);
     module.declare_function("js_buffer_byte_length", I32, &[I64]);
+    module.declare_function("js_buffer_byte_length_value", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_buffer_concat", I64, &[I64]);
     module.declare_function("js_buffer_copy", I32, &[I64, I64, I32, I32, I32]);
     module.declare_function("js_buffer_equals", I32, &[I64, I64]);
     module.declare_function("js_buffer_fill", I64, &[I64, I32]);
     module.declare_function("js_buffer_from_value", I64, &[I64, I32]);
     module.declare_function("js_buffer_is_buffer", I32, &[I64]);
+    module.declare_function("js_buffer_is_encoding", I32, &[DOUBLE]);
     module.declare_function("js_buffer_print", VOID, &[I64]);
     module.declare_function("js_buffer_set", VOID, &[I64, I32, I32]);
     module.declare_function("js_buffer_set_from", VOID, &[I64, I64, I32]);

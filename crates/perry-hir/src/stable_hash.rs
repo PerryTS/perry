@@ -2341,6 +2341,16 @@ impl SH for Expr {
                 data.as_ref().hash(h);
                 encoding.hash(h);
             }
+            Expr::BufferFromArrayBuffer {
+                data,
+                byte_offset,
+                length,
+            } => {
+                tag(h, 11220);
+                data.as_ref().hash(h);
+                byte_offset.as_ref().hash(h);
+                length.hash(h);
+            }
             Expr::BufferAlloc { size, fill } => {
                 tag(h, 216);
                 size.as_ref().hash(h);
@@ -2358,9 +2368,14 @@ impl SH for Expr {
                 tag(h, 219);
                 e.as_ref().hash(h);
             }
-            Expr::BufferByteLength(e) => {
-                tag(h, 220);
+            Expr::BufferIsEncoding(e) => {
+                tag(h, 11219);
                 e.as_ref().hash(h);
+            }
+            Expr::BufferByteLength { data, encoding } => {
+                tag(h, 220);
+                data.as_ref().hash(h);
+                encoding.hash(h);
             }
             Expr::BufferToString { buffer, encoding } => {
                 tag(h, 221);
