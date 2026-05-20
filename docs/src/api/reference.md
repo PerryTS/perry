@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 936 entries across 74 modules.
+Total: 942 entries across 74 modules.
 
 ## Modules
 
@@ -511,10 +511,13 @@ Total: 936 entries across 74 modules.
 - `__get_aborted` — instance *(class: `IncomingMessage`)*
 - `__get_complete` — instance *(class: `IncomingMessage`)*
 - `__get_destroyed` — instance *(class: `IncomingMessage`)*
+- `__get_headers` — instance *(class: `IncomingMessage`)*
 - `__get_headersSent` — instance *(class: `ServerResponse`)*
 - `__get_httpVersion` — instance *(class: `IncomingMessage`)*
 - `__get_method` — instance *(class: `IncomingMessage`)*
+- `__get_statusCode` — instance *(class: `IncomingMessage`)*
 - `__get_statusCode` — instance *(class: `ServerResponse`)*
+- `__get_statusMessage` — instance *(class: `IncomingMessage`)*
 - `__get_url` — instance *(class: `IncomingMessage`)*
 - `__get_writableEnded` — instance *(class: `ServerResponse`)*
 - `__get_writableFinished` — instance *(class: `ServerResponse`)*
@@ -535,6 +538,7 @@ Total: 936 entries across 74 modules.
 - `getHeader` — instance *(class: `ServerResponse`)*
 - `getStatus` — instance *(class: `ServerResponse`)*
 - `hasHeader` — instance *(class: `ServerResponse`)*
+- `headers` — instance *(class: `IncomingMessage`)*
 - `httpVersion` — instance *(class: `IncomingMessage`)*
 - `listen` — instance *(class: `HttpServer`)*
 - `method` — instance *(class: `IncomingMessage`)*
@@ -549,6 +553,8 @@ Total: 936 entries across 74 modules.
 - `setHeader` — instance *(class: `ServerResponse`)*
 - `setStatus` — instance *(class: `ServerResponse`)*
 - `setTimeout` — instance *(class: `ClientRequest`)*
+- `statusCode` — instance *(class: `IncomingMessage`)*
+- `statusMessage` — instance *(class: `IncomingMessage`)*
 - `url` — instance *(class: `IncomingMessage`)*
 - `write` — instance *(class: `ServerResponse`)*
 - `writeContinue` — instance *(class: `ServerResponse`)*
