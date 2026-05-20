@@ -56,6 +56,7 @@ const GENERATION_PAGE_SHIFT: usize = 12;
 // and avoids thousands of metadata entries for low-pressure nursery
 // churn before the first GC.
 const GENERATION_CLASS_SHIFT: usize = 20;
+const GENERATION_PAGE_SIZE: usize = 1 << GENERATION_PAGE_SHIFT;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HeapGeneration {
@@ -182,6 +183,41 @@ impl Hasher for IdentityHasher {
 
 type PageGenerationMap = HashMap<usize, PageGenerationSlot, BuildHasherDefault<IdentityHasher>>;
 type OldGenPageObjectMap = crate::fast_hash::PtrHashMap<usize, Vec<usize>>;
+type OldGenPageMetaMap = crate::fast_hash::PtrHashMap<usize, OldPageMeta>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OldPageMeta {
+    pub(crate) page_base: usize,
+    pub(crate) page_end: usize,
+    pub(crate) allocated_bytes: usize,
+    pub(crate) live_bytes: usize,
+    pub(crate) object_count: usize,
+    pub(crate) pinned_bytes: usize,
+    pub(crate) dirty: bool,
+    pub(crate) evacuation_eligible: bool,
+}
+
+impl OldPageMeta {
+    #[inline]
+    fn zero_for_page(page: usize) -> Self {
+        let page_base = generation_page_base(page);
+        Self {
+            page_base,
+            page_end: page_base + GENERATION_PAGE_SIZE,
+            allocated_bytes: 0,
+            live_bytes: 0,
+            object_count: 0,
+            pinned_bytes: 0,
+            dirty: false,
+            evacuation_eligible: false,
+        }
+    }
+
+    #[inline]
+    fn refresh_policy_bits(&mut self) {
+        self.evacuation_eligible = self.live_bytes > 0 && self.pinned_bytes == 0;
+    }
+}
 
 thread_local! {
     static PAGE_GENERATIONS: RefCell<PageGenerationMap> =
@@ -191,6 +227,9 @@ thread_local! {
         const { Cell::new(PageGenerationCache::empty()) };
 
     static OLD_GEN_PAGE_OBJECTS: RefCell<OldGenPageObjectMap> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
+    static OLD_GEN_PAGE_META: RefCell<OldGenPageMetaMap> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
@@ -205,8 +244,47 @@ fn generation_class_key_for_addr(addr: usize) -> usize {
 }
 
 #[inline]
+fn generation_page_base(page: usize) -> usize {
+    page << GENERATION_PAGE_SHIFT
+}
+
+#[inline]
 fn invalidate_generation_cache() {
     PAGE_GENERATION_CACHE.with(|cache| cache.set(PageGenerationCache::empty()));
+}
+
+fn register_old_block_pages(base: usize, size: usize) {
+    if base == 0 || size == 0 {
+        return;
+    }
+    let end = base + size;
+    let first_page = generation_page_for_addr(base);
+    let last_page = generation_page_for_addr(end - 1);
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        for page in first_page..=last_page {
+            meta.entry(page)
+                .or_insert_with(|| OldPageMeta::zero_for_page(page));
+        }
+    });
+}
+
+fn unregister_old_block_pages(pages: &[usize]) {
+    if pages.is_empty() {
+        return;
+    }
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        for &page in pages {
+            meta.remove(&page);
+        }
+    });
+    OLD_GEN_PAGE_OBJECTS.with(|index| {
+        let mut index = index.borrow_mut();
+        for &page in pages {
+            index.remove(&page);
+        }
+    });
 }
 
 fn register_block_space(base: usize, size: usize, generation: HeapGeneration, space: HeapSpace) {
@@ -233,6 +311,9 @@ fn register_block_space(base: usize, size: usize, generation: HeapGeneration, sp
             }
         }
     });
+    if matches!(generation, HeapGeneration::Old) {
+        register_old_block_pages(base, size);
+    }
     invalidate_generation_cache();
 }
 
@@ -243,6 +324,7 @@ fn unregister_block_generation(base: usize, size: usize) {
     let end = base + size;
     let first_key = generation_class_key_for_addr(base);
     let last_key = generation_class_key_for_addr(end - 1);
+    let mut removed_old_block = false;
     PAGE_GENERATIONS.with(|pages| {
         let mut pages = pages.borrow_mut();
         for key in first_key..=last_key {
@@ -251,10 +333,19 @@ fn unregister_block_generation(base: usize, size: usize) {
             if let Some(slot) = pages.get_mut(&key) {
                 match slot {
                     PageGenerationSlot::Single(range) => {
-                        remove_page = range.base == base && range.end == end;
+                        if range.base == base && range.end == end {
+                            removed_old_block |= matches!(range.generation, HeapGeneration::Old);
+                            remove_page = true;
+                        }
                     }
                     PageGenerationSlot::Multiple(ranges) => {
-                        ranges.retain(|range| !(range.base == base && range.end == end));
+                        ranges.retain(|range| {
+                            let remove = range.base == base && range.end == end;
+                            if remove && matches!(range.generation, HeapGeneration::Old) {
+                                removed_old_block = true;
+                            }
+                            !remove
+                        });
                         if ranges.is_empty() {
                             remove_page = true;
                         } else if ranges.len() == 1 {
@@ -270,6 +361,12 @@ fn unregister_block_generation(base: usize, size: usize) {
             }
         }
     });
+    if removed_old_block {
+        let first_page = generation_page_for_addr(base);
+        let last_page = generation_page_for_addr(end - 1);
+        let old_pages_to_unregister: Vec<usize> = (first_page..=last_page).collect();
+        unregister_old_block_pages(&old_pages_to_unregister);
+    }
     invalidate_generation_cache();
 }
 
@@ -337,21 +434,108 @@ pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
     }
 }
 
+fn old_object_page_overlaps(header_addr: usize, total_size: usize) -> Vec<(usize, usize)> {
+    if header_addr == 0 || total_size == 0 {
+        return Vec::new();
+    }
+    let object_end = header_addr + total_size;
+    let first_page = generation_page_for_addr(header_addr);
+    let last_page = generation_page_for_addr(object_end - 1);
+    let mut overlaps = Vec::with_capacity(last_page - first_page + 1);
+    for page in first_page..=last_page {
+        let page_base = generation_page_base(page);
+        let page_end = page_base + GENERATION_PAGE_SIZE;
+        let overlap_start = header_addr.max(page_base);
+        let overlap_end = object_end.min(page_end);
+        if overlap_start < overlap_end {
+            overlaps.push((page, overlap_end - overlap_start));
+        }
+    }
+    overlaps
+}
+
+#[inline]
+fn old_object_is_pinned(header_addr: usize) -> bool {
+    if header_addr == 0 {
+        return false;
+    }
+    let header = header_addr as *const crate::gc::GcHeader;
+    unsafe { (*header).gc_flags & crate::gc::GC_FLAG_PINNED != 0 }
+}
+
+fn update_old_page_meta_for_object(page_updates: &[(usize, usize)], pinned: bool, adding: bool) {
+    if page_updates.is_empty() {
+        return;
+    }
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        for &(page, bytes) in page_updates {
+            let page_meta = meta
+                .entry(page)
+                .or_insert_with(|| OldPageMeta::zero_for_page(page));
+            if adding {
+                page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_add(bytes);
+                page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
+                page_meta.object_count = page_meta.object_count.saturating_add(1);
+                if pinned {
+                    page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(bytes);
+                }
+            } else {
+                page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_sub(bytes);
+                page_meta.live_bytes = page_meta.live_bytes.saturating_sub(bytes);
+                page_meta.object_count = page_meta.object_count.saturating_sub(1);
+                if pinned {
+                    page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_sub(bytes);
+                }
+            }
+            page_meta.refresh_policy_bits();
+        }
+    });
+}
+
 fn register_old_object_pages(header_addr: usize, total_size: usize) {
     if header_addr == 0 || total_size == 0 {
         return;
     }
-    let first_page = generation_page_for_addr(header_addr);
-    let last_page = generation_page_for_addr(header_addr + total_size - 1);
+    let overlaps = old_object_page_overlaps(header_addr, total_size);
+    let mut added_pages = Vec::with_capacity(overlaps.len());
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
-        for page in first_page..=last_page {
+        for &(page, bytes) in &overlaps {
             let headers = index.entry(page).or_insert_with(Vec::new);
             if !headers.contains(&header_addr) {
                 headers.push(header_addr);
+                added_pages.push((page, bytes));
             }
         }
     });
+    update_old_page_meta_for_object(&added_pages, old_object_is_pinned(header_addr), true);
+}
+
+#[allow(dead_code)]
+pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize) {
+    if header_addr == 0 || total_size == 0 {
+        return;
+    }
+    let overlaps = old_object_page_overlaps(header_addr, total_size);
+    let mut removed_pages = Vec::with_capacity(overlaps.len());
+    OLD_GEN_PAGE_OBJECTS.with(|index| {
+        let mut index = index.borrow_mut();
+        for &(page, bytes) in &overlaps {
+            let mut remove_page = false;
+            if let Some(headers) = index.get_mut(&page) {
+                if let Some(pos) = headers.iter().position(|&addr| addr == header_addr) {
+                    headers.swap_remove(pos);
+                    removed_pages.push((page, bytes));
+                }
+                remove_page = headers.is_empty();
+            }
+            if remove_page {
+                index.remove(&page);
+            }
+        }
+    });
+    update_old_page_meta_for_object(&removed_pages, old_object_is_pinned(header_addr), false);
 }
 
 pub(crate) fn old_arena_walk_objects_on_pages(
@@ -384,9 +568,30 @@ pub(crate) fn old_arena_walk_objects_on_pages(
     count
 }
 
+pub(crate) fn old_page_mark_dirty(page: usize) {
+    OLD_GEN_PAGE_META.with(|meta| {
+        if let Some(page_meta) = meta.borrow_mut().get_mut(&page) {
+            page_meta.dirty = true;
+        }
+    });
+}
+
+pub(crate) fn old_page_clear_dirty(page: usize) {
+    OLD_GEN_PAGE_META.with(|meta| {
+        if let Some(page_meta) = meta.borrow_mut().get_mut(&page) {
+            page_meta.dirty = false;
+        }
+    });
+}
+
 #[cfg(test)]
 pub(crate) fn old_arena_page_index_clear_for_tests() {
     OLD_GEN_PAGE_OBJECTS.with(|index| index.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(crate) fn old_page_meta_for_tests(page: usize) -> Option<OldPageMeta> {
+    OLD_GEN_PAGE_META.with(|meta| meta.borrow().get(&page).copied())
 }
 
 /// Create a block of at least the given size (for oversized allocations)
@@ -2043,6 +2248,167 @@ mod tests {
         block_has_live[current] = true;
         let stats = arena_reset_empty_blocks(&block_has_live);
         (candidate, base, size, stats)
+    }
+
+    fn page_range_for(base: usize, size: usize) -> std::ops::RangeInclusive<usize> {
+        generation_page_for_addr(base)..=generation_page_for_addr(base + size - 1)
+    }
+
+    fn old_page_meta(page: usize) -> OldPageMeta {
+        old_page_meta_for_tests(page).expect("old page metadata should be registered")
+    }
+
+    fn old_header_and_size(user_ptr: usize) -> (usize, usize) {
+        let header_addr = user_ptr - GC_HEADER_SIZE;
+        let total_size = unsafe { (*(header_addr as *const GcHeader)).size as usize };
+        (header_addr, total_size)
+    }
+
+    fn synthetic_old_block_range() -> (usize, usize) {
+        (0x4000_0000_0000usize, GENERATION_PAGE_SIZE * 3)
+    }
+
+    #[test]
+    fn old_page_metadata_registers_old_block_pages() {
+        run_with_fresh_arenas(|| {
+            OLD_ARENA.with(|a| unsafe {
+                let arena = &*a.get();
+                let block = &arena.blocks[arena.current];
+                for page in page_range_for(block.data as usize, block.size) {
+                    let meta = old_page_meta(page);
+                    assert_eq!(meta.page_base, generation_page_base(page));
+                    assert_eq!(
+                        meta.page_end,
+                        generation_page_base(page) + GENERATION_PAGE_SIZE
+                    );
+                    assert_eq!(meta.allocated_bytes, 0);
+                    assert_eq!(meta.live_bytes, 0);
+                    assert_eq!(meta.object_count, 0);
+                    assert_eq!(meta.pinned_bytes, 0);
+                    assert!(!meta.dirty);
+                    assert!(!meta.evacuation_eligible);
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn old_page_metadata_tracks_old_object_allocation() {
+        run_with_fresh_arenas(|| {
+            let old_ptr = arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+            let (header_addr, total_size) = old_header_and_size(old_ptr);
+            let overlaps = old_object_page_overlaps(header_addr, total_size);
+
+            let mut total_overlap = 0usize;
+            for (page, bytes) in overlaps {
+                total_overlap += bytes;
+                let meta = old_page_meta(page);
+                assert_eq!(meta.allocated_bytes, bytes);
+                assert_eq!(meta.live_bytes, bytes);
+                assert_eq!(meta.object_count, 1);
+                assert_eq!(meta.pinned_bytes, 0);
+                assert!(!meta.dirty);
+                assert!(meta.evacuation_eligible);
+            }
+            assert_eq!(total_overlap, total_size);
+        });
+    }
+
+    #[test]
+    fn old_page_metadata_reregisters_after_block_metadata_removal() {
+        run_with_fresh_arenas(|| {
+            let (base, size) = synthetic_old_block_range();
+            register_block_space(base, size, HeapGeneration::Old, HeapSpace::Old);
+            let pages: Vec<usize> = page_range_for(base, size).collect();
+            assert!(pages
+                .iter()
+                .all(|&page| old_page_meta_for_tests(page).is_some()));
+
+            unregister_block_generation(base, size);
+            assert!(
+                pages
+                    .iter()
+                    .all(|&page| old_page_meta_for_tests(page).is_none()),
+                "old page metadata should be removed with the old block"
+            );
+
+            register_block_space(base, size, HeapGeneration::Old, HeapSpace::Old);
+            for &page in &pages {
+                let meta = old_page_meta(page);
+                assert_eq!(meta.allocated_bytes, 0);
+                assert_eq!(meta.live_bytes, 0);
+                assert_eq!(meta.object_count, 0);
+            }
+            unregister_block_generation(base, size);
+        });
+    }
+
+    #[test]
+    fn old_page_metadata_distributes_multi_page_object_bytes_and_indexes_pages() {
+        run_with_fresh_arenas(|| {
+            let old_ptr =
+                arena_alloc_gc_old(GENERATION_PAGE_SIZE * 2 + 77, 8, GC_TYPE_STRING) as usize;
+            let (header_addr, total_size) = old_header_and_size(old_ptr);
+            let overlaps = old_object_page_overlaps(header_addr, total_size);
+            assert!(
+                overlaps.len() > 1,
+                "test allocation should span multiple old pages"
+            );
+
+            let mut pages = crate::fast_hash::new_ptr_hash_set();
+            let mut total_overlap = 0usize;
+            for &(page, bytes) in &overlaps {
+                pages.insert(page);
+                total_overlap += bytes;
+                let meta = old_page_meta(page);
+                assert_eq!(meta.allocated_bytes, bytes);
+                assert_eq!(meta.live_bytes, bytes);
+                assert_eq!(meta.object_count, 1);
+                assert_eq!(meta.pinned_bytes, 0);
+                assert!(meta.evacuation_eligible);
+            }
+            assert_eq!(total_overlap, total_size);
+
+            let mut visited = Vec::new();
+            let count = old_arena_walk_objects_on_pages(&pages, |header| {
+                visited.push(header as usize);
+            });
+            assert_eq!(count, 1);
+            assert_eq!(visited, vec![header_addr]);
+        });
+    }
+
+    #[test]
+    fn old_page_metadata_removes_object_and_block_metadata() {
+        run_with_fresh_arenas(|| {
+            let old_ptr = arena_alloc_gc_old(96, 8, GC_TYPE_STRING) as usize;
+            let (header_addr, total_size) = old_header_and_size(old_ptr);
+            let overlaps = old_object_page_overlaps(header_addr, total_size);
+            let mut pages = crate::fast_hash::new_ptr_hash_set();
+            for &(page, _) in &overlaps {
+                pages.insert(page);
+            }
+            unregister_old_object_pages(header_addr, total_size);
+            for &(page, _) in &overlaps {
+                let meta = old_page_meta(page);
+                assert_eq!(meta.allocated_bytes, 0);
+                assert_eq!(meta.live_bytes, 0);
+                assert_eq!(meta.object_count, 0);
+                assert!(!meta.evacuation_eligible);
+            }
+            assert_eq!(old_arena_walk_objects_on_pages(&pages, |_| {}), 0);
+
+            let (base, size) = synthetic_old_block_range();
+            register_block_space(base, size, HeapGeneration::Old, HeapSpace::Old);
+            let block_pages: Vec<usize> = page_range_for(base, size).collect();
+            assert!(block_pages
+                .iter()
+                .all(|&page| old_page_meta_for_tests(page).is_some()));
+            unregister_block_generation(base, size);
+            assert!(block_pages
+                .iter()
+                .all(|&page| old_page_meta_for_tests(page).is_none()));
+        });
     }
 
     #[test]

@@ -8997,6 +8997,7 @@ fn mark_dirty_old_page(page: usize) -> bool {
     bump_write_barrier_trace_counter(BarrierTraceCounter::DirtyPageMarkAttempts);
     DIRTY_OLD_PAGES.with(|s| {
         let inserted = s.borrow_mut().insert(page);
+        crate::arena::old_page_mark_dirty(page);
         if inserted {
             bump_write_barrier_trace_counter(BarrierTraceCounter::NewDirtyPages);
         }
@@ -9109,7 +9110,13 @@ pub fn remembered_set_size() -> usize {
 /// minor GC after the rs-scan completes (Phase C3). Test-only
 /// for now to enable test isolation.
 pub fn remembered_set_clear() {
-    DIRTY_OLD_PAGES.with(|s| s.borrow_mut().clear());
+    DIRTY_OLD_PAGES.with(|s| {
+        let mut pages = s.borrow_mut();
+        for &page in pages.iter() {
+            crate::arena::old_page_clear_dirty(page);
+        }
+        pages.clear();
+    });
     EXTERNAL_DIRTY_SLOT_PAGES.with(|s| s.borrow_mut().clear());
     REMEMBERED_SET.with(|s| s.borrow_mut().clear());
 }
@@ -10594,9 +10601,7 @@ mod tests {
     /// Helper for write-barrier tests: clear the remembered set
     /// to a known-empty state.
     fn reset_remembered_set() {
-        DIRTY_OLD_PAGES.with(|s| s.borrow_mut().clear());
-        EXTERNAL_DIRTY_SLOT_PAGES.with(|s| s.borrow_mut().clear());
-        REMEMBERED_SET.with(|s| s.borrow_mut().clear());
+        remembered_set_clear();
         crate::arena::old_arena_page_index_clear_for_tests();
     }
 
@@ -10802,6 +10807,12 @@ mod tests {
 
     fn ptr_bits(addr: usize) -> u64 {
         POINTER_TAG | (addr as u64 & POINTER_MASK)
+    }
+
+    fn old_page_dirty_for(page: usize) -> bool {
+        crate::arena::old_page_meta_for_tests(page)
+            .map(|meta| meta.dirty)
+            .unwrap_or(false)
     }
 
     fn arena_block_index_for_user(user: usize) -> Option<usize> {
@@ -12099,12 +12110,18 @@ mod tests {
         let old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
         let parent_nanbox = POINTER_TAG | (old as u64);
         let child_nanbox = POINTER_TAG | (young as u64);
+        let dirty_page = crate::arena::generation_page_for_addr(old - GC_HEADER_SIZE);
         assert_eq!(remembered_set_size(), 0);
+        assert!(!old_page_dirty_for(dirty_page));
         js_write_barrier(parent_nanbox, child_nanbox);
         assert_eq!(
             remembered_set_size(),
             1,
             "old→young write must dirty the remembered page"
+        );
+        assert!(
+            old_page_dirty_for(dirty_page),
+            "old-page metadata should mirror the remembered dirty page"
         );
         // Same write again should NOT double-count (dirty pages dedup).
         js_write_barrier(parent_nanbox, child_nanbox);
@@ -12113,6 +12130,7 @@ mod tests {
             1,
             "duplicate barrier call must dedup the dirty page"
         );
+        assert!(old_page_dirty_for(dirty_page));
     }
 
     #[test]
@@ -12123,12 +12141,18 @@ mod tests {
         unsafe {
             *fields = POINTER_TAG | young as u64;
         }
+        let dirty_page = crate::arena::generation_page_for_addr(fields as usize);
+        assert!(!old_page_dirty_for(dirty_page));
         js_write_barrier_slot(
             POINTER_TAG | old_obj as u64,
             fields as u64,
             POINTER_TAG | young as u64,
         );
         assert_eq!(remembered_dirty_page_count(), 1);
+        assert!(
+            old_page_dirty_for(dirty_page),
+            "old-page metadata should mirror the remembered dirty page"
+        );
         js_write_barrier_slot(
             POINTER_TAG | old_obj as u64,
             fields as u64,
@@ -12139,6 +12163,7 @@ mod tests {
             1,
             "same dirty page should be logged once"
         );
+        assert!(old_page_dirty_for(dirty_page));
     }
 
     #[test]
@@ -12223,10 +12248,16 @@ mod tests {
         reset_remembered_set();
         let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
         let old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+        let dirty_page = crate::arena::generation_page_for_addr(old - GC_HEADER_SIZE);
         js_write_barrier(POINTER_TAG | (old as u64), POINTER_TAG | (young as u64));
         assert_eq!(remembered_set_size(), 1);
+        assert!(old_page_dirty_for(dirty_page));
         remembered_set_clear();
         assert_eq!(remembered_set_size(), 0);
+        assert!(
+            !old_page_dirty_for(dirty_page),
+            "old-page metadata dirty bit should clear with the remembered set"
+        );
     }
 
     #[test]
@@ -12234,15 +12265,21 @@ mod tests {
         reset_remembered_set();
         let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
         let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+        let dirty_page = crate::arena::generation_page_for_addr(fields as usize);
         js_write_barrier_slot(
             POINTER_TAG | old_obj as u64,
             fields as u64,
             POINTER_TAG | young as u64,
         );
         assert_eq!(remembered_dirty_page_count(), 1);
+        assert!(old_page_dirty_for(dirty_page));
         remembered_set_clear();
         assert_eq!(remembered_dirty_page_count(), 0);
         assert_eq!(remembered_set_size(), 0);
+        assert!(
+            !old_page_dirty_for(dirty_page),
+            "old-page metadata dirty bit should clear with the remembered set"
+        );
     }
 
     #[test]
