@@ -2874,11 +2874,17 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     // movable: heap fields are handled later by the reference-rewrite
     // pass.
     let phase_start = trace_phase_start(&trace);
-    let conservative_root_stats = mark_stack_roots(&valid_ptrs);
+    let conservative_scan_decision = conservative_stack_scan_decision();
+    let conservative_root_stats =
+        mark_stack_roots_for_decision(&valid_ptrs, conservative_scan_decision);
     // CONS_PINNED is only consumed by `evacuate_tenured_nursery_objects`.
     // Stage 1 keeps the low-pressure path from doing the pinning walk.
     let consider_evacuation = evacuation_policy.considered;
-    let conservative_pin_stats = if consider_evacuation {
+    let conservative_pin_stats = if consider_evacuation
+        && matches!(
+            conservative_scan_decision,
+            ConservativeStackScanDecision::Scan
+        ) {
         pin_currently_marked_as_conservative()
     } else {
         ConservativePinTraceStats::default()
@@ -4107,7 +4113,14 @@ fn try_mark_raw_root_addr(addr: usize, valid_ptrs: &ValidPointerSet) -> bool {
 /// still get the legacy fallback; `PERRY_CONSERVATIVE_STACK_SCAN=full`
 /// forces that legacy path for debugging.
 fn mark_stack_roots(valid_ptrs: &ValidPointerSet) -> ConservativeRootTraceStats {
-    match conservative_stack_scan_decision() {
+    mark_stack_roots_for_decision(valid_ptrs, conservative_stack_scan_decision())
+}
+
+fn mark_stack_roots_for_decision(
+    valid_ptrs: &ValidPointerSet,
+    decision: ConservativeStackScanDecision,
+) -> ConservativeRootTraceStats {
+    match decision {
         ConservativeStackScanDecision::Scan => mark_stack_roots_unchecked(valid_ptrs),
         ConservativeStackScanDecision::SkipDisabled
         | ConservativeStackScanDecision::SkipShadowStackActive => {
@@ -11753,6 +11766,21 @@ mod tests {
             CopiedMinorFallbackReason::ConservativeStack,
             false,
         );
+    }
+
+    #[test]
+    fn test_copied_minor_eligibility_active_shadow_frame_skips_conservative_stack_scan() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        assert!(shadow_stack_has_active_frame());
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_eq!(trace.conservative_root_count, 0);
+        assert_eq!(trace.conservative_pinned, 0);
+        assert_eq!(trace.conservative_pinned_bytes, 0);
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.pinned_bytes, 0);
     }
 
     #[test]
