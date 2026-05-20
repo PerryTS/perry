@@ -2206,6 +2206,16 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_ws_on_client_i64", I64, &[I64, I64, I64]);
     module.declare_function("js_ws_server_close", VOID, &[I64]);
     module.declare_function("js_ws_server_new", I64, &[DOUBLE]);
+    // #1113 — `wss.handleUpgrade(req, socket, head, cb)`. Receiver
+    // (the noServer WsServerHandle) is passed as I64 (post-unbox_to_i64
+    // from NATIVE_MODULE_TABLE dispatch, same receiver convention as
+    // `js_ws_on`). req/socket/head are NaN-boxed JSValues (DOUBLE);
+    // cb is the unboxed closure pointer (I64).
+    module.declare_function(
+        "js_ws_handle_upgrade",
+        I64,
+        &[I64, DOUBLE, DOUBLE, DOUBLE, I64],
+    );
     module.declare_function("js_ws_wait_for_message", I64, &[I64, DOUBLE]);
 
     // ========== SQLite ==========
