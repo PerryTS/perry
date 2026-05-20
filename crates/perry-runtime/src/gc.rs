@@ -1113,6 +1113,104 @@ impl ShadowRootTraceStats {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct LayoutScanTraceStats {
+    pointer_slots_read: usize,
+    masked_pointer_slots_read: usize,
+    unknown_layout_slots_read: usize,
+    pointer_free_ranges_skipped: usize,
+    pointer_free_slots_skipped: usize,
+}
+
+impl LayoutScanTraceStats {
+    const fn zero() -> Self {
+        Self {
+            pointer_slots_read: 0,
+            masked_pointer_slots_read: 0,
+            unknown_layout_slots_read: 0,
+            pointer_free_ranges_skipped: 0,
+            pointer_free_slots_skipped: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HeapChildSlotReadKind {
+    Prefix,
+    Masked,
+    Unknown,
+}
+
+thread_local! {
+    static LAYOUT_SCAN_TRACE_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static LAYOUT_SCAN_TRACE_STATS: Cell<LayoutScanTraceStats> =
+        const { Cell::new(LayoutScanTraceStats::zero()) };
+}
+
+#[inline]
+fn begin_layout_scan_trace() {
+    LAYOUT_SCAN_TRACE_STATS.with(|stats| stats.set(LayoutScanTraceStats::zero()));
+    LAYOUT_SCAN_TRACE_ACTIVE.with(|active| active.set(true));
+}
+
+#[inline]
+fn finish_layout_scan_trace() -> LayoutScanTraceStats {
+    LAYOUT_SCAN_TRACE_ACTIVE.with(|active| {
+        if active.replace(false) {
+            LAYOUT_SCAN_TRACE_STATS.with(|stats| {
+                let snapshot = stats.get();
+                stats.set(LayoutScanTraceStats::zero());
+                snapshot
+            })
+        } else {
+            LayoutScanTraceStats::zero()
+        }
+    })
+}
+
+#[inline]
+fn layout_scan_trace_active() -> bool {
+    LAYOUT_SCAN_TRACE_ACTIVE.with(Cell::get)
+}
+
+#[inline]
+fn record_layout_child_slot_read(kind: HeapChildSlotReadKind) {
+    if !layout_scan_trace_active() {
+        return;
+    }
+    LAYOUT_SCAN_TRACE_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.pointer_slots_read = current.pointer_slots_read.saturating_add(1);
+        match kind {
+            HeapChildSlotReadKind::Prefix => {}
+            HeapChildSlotReadKind::Masked => {
+                current.masked_pointer_slots_read =
+                    current.masked_pointer_slots_read.saturating_add(1);
+            }
+            HeapChildSlotReadKind::Unknown => {
+                current.unknown_layout_slots_read =
+                    current.unknown_layout_slots_read.saturating_add(1);
+            }
+        }
+        stats.set(current);
+    });
+}
+
+#[inline]
+fn record_layout_pointer_free_range_skipped(slot_count: usize) {
+    if slot_count == 0 || !layout_scan_trace_active() {
+        return;
+    }
+    LAYOUT_SCAN_TRACE_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.pointer_free_ranges_skipped = current.pointer_free_ranges_skipped.saturating_add(1);
+        current.pointer_free_slots_skipped = current
+            .pointer_free_slots_skipped
+            .saturating_add(slot_count);
+        stats.set(current);
+    });
+}
+
 const MIN_TENURED_NURSERY_BYTES: usize = 16 * 1024 * 1024;
 const MIN_CANDIDATE_BYTES: usize = 8 * 1024 * 1024;
 const MIN_CANDIDATE_RATIO_PCT: u64 = 25;
@@ -1288,6 +1386,7 @@ struct GcCycleTrace {
     conservative_pinned_bytes: usize,
     legacy_copy_only_scanner_pinned: LegacyRootTraceStats,
     shadow_roots: ShadowRootTraceStats,
+    layout_scans: LayoutScanTraceStats,
     evacuation_policy: EvacuationPolicyDecision,
     evacuation: EvacuationTraceStats,
     copying_nursery: CopyingNurseryTraceStats,
@@ -1299,6 +1398,7 @@ struct GcCycleTrace {
 impl GcCycleTrace {
     fn new(collection_kind: GcCollectionKind, trigger: GcTriggerSnapshot) -> Option<Self> {
         let steps_before = trigger.steps_before?;
+        begin_layout_scan_trace();
         let mut phase_us = BTreeMap::new();
         for name in [
             "build_valid_pointer_set",
@@ -1332,6 +1432,7 @@ impl GcCycleTrace {
             conservative_pinned_bytes: 0,
             legacy_copy_only_scanner_pinned: LegacyRootTraceStats::default(),
             shadow_roots: ShadowRootTraceStats::default(),
+            layout_scans: LayoutScanTraceStats::default(),
             evacuation_policy: EvacuationPolicyDecision::default(),
             evacuation: EvacuationTraceStats::default(),
             copying_nursery: CopyingNurseryTraceStats {
@@ -1349,7 +1450,14 @@ impl GcCycleTrace {
         *self.phase_us.entry(name).or_insert(0) += elapsed.as_micros() as u64;
     }
 
-    fn into_json(self, steps_after: GcStepSnapshot) -> serde_json::Value {
+    fn capture_layout_scans(&mut self) {
+        if layout_scan_trace_active() {
+            self.layout_scans = finish_layout_scan_trace();
+        }
+    }
+
+    fn into_json(mut self, steps_after: GcStepSnapshot) -> serde_json::Value {
+        self.capture_layout_scans();
         let arena_after = crate::arena::arena_telemetry_snapshot();
         let malloc_after = malloc_object_count();
         let remembered_set_after = remembered_set_size();
@@ -1417,6 +1525,13 @@ impl GcCycleTrace {
                 "nonzero_slots": self.shadow_roots.nonzero_slots,
                 "pointer_roots": self.shadow_roots.pointer_roots,
                 "rewritten_slots": self.shadow_roots.rewritten_slots,
+            },
+            "layout_scans": {
+                "pointer_slots_read": self.layout_scans.pointer_slots_read,
+                "masked_pointer_slots_read": self.layout_scans.masked_pointer_slots_read,
+                "unknown_layout_slots_read": self.layout_scans.unknown_layout_slots_read,
+                "pointer_free_ranges_skipped": self.layout_scans.pointer_free_ranges_skipped,
+                "pointer_free_slots_skipped": self.layout_scans.pointer_free_slots_skipped,
             },
             "evacuation": {
                 "objects": self.evacuation.objects,
@@ -3041,6 +3156,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         });
         if let Some(trace) = trace.as_mut() {
             trace.pause_us = elapsed_us;
+            trace.capture_layout_scans();
         }
         return GcCollectOutcome {
             freed_bytes,
@@ -3292,6 +3408,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     });
     if let Some(trace) = trace.as_mut() {
         trace.pause_us = elapsed_us;
+        trace.capture_layout_scans();
     }
     GcCollectOutcome {
         freed_bytes,
@@ -3497,6 +3614,7 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     });
     if let Some(trace) = trace.as_mut() {
         trace.pause_us = elapsed_us;
+        trace.capture_layout_scans();
     }
     GcCollectOutcome {
         freed_bytes,
@@ -4253,7 +4371,7 @@ impl HeapSlotRange {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HeapChildSlot {
-    Child(*mut u64),
+    Child(*mut u64, HeapChildSlotReadKind),
     PointerFreeRange(HeapSlotRange),
 }
 
@@ -4315,7 +4433,7 @@ impl Iterator for HeapChildSlotIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(slot) = self.prefix_slot.take() {
-            return Some(HeapChildSlot::Child(slot));
+            return Some(HeapChildSlot::Child(slot, HeapChildSlotReadKind::Prefix));
         }
         match &mut self.selection {
             HeapPayloadSlotSelection::Empty => None,
@@ -4324,13 +4442,17 @@ impl Iterator for HeapChildSlotIterator {
                     None
                 } else {
                     *emitted = true;
+                    record_layout_pointer_free_range_skipped(self.payload.slot_count());
                     Some(HeapChildSlot::PointerFreeRange(self.payload))
                 }
             }
             HeapPayloadSlotSelection::Masked { mask, cursor } => {
                 let index = mask.next_slot_at_or_after(*cursor, self.payload.slot_count())?;
                 *cursor = index + 1;
-                Some(HeapChildSlot::Child(unsafe { self.payload.slot(index) }))
+                Some(HeapChildSlot::Child(
+                    unsafe { self.payload.slot(index) },
+                    HeapChildSlotReadKind::Masked,
+                ))
             }
             HeapPayloadSlotSelection::All { cursor } => {
                 if *cursor >= self.payload.slot_count() {
@@ -4338,7 +4460,10 @@ impl Iterator for HeapChildSlotIterator {
                 }
                 let index = *cursor;
                 *cursor += 1;
-                Some(HeapChildSlot::Child(unsafe { self.payload.slot(index) }))
+                Some(HeapChildSlot::Child(
+                    unsafe { self.payload.slot(index) },
+                    HeapChildSlotReadKind::Unknown,
+                ))
             }
         }
     }
@@ -6047,6 +6172,22 @@ unsafe fn scan_dirty_slot(
     visit_slot(slot, stats);
 }
 
+unsafe fn scan_dirty_slot_with_layout(
+    slot: *mut u64,
+    layout_kind: HeapChildSlotReadKind,
+    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
+    stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
+) {
+    if !dirty_pages_contains_addr(dirty_pages, slot as usize) {
+        return;
+    }
+    record_layout_child_slot_read(layout_kind);
+    stats.dirty_slots_scanned += 1;
+    crate::arena::old_page_account_dirty_slot(slot as usize);
+    visit_slot(slot, stats);
+}
+
 unsafe fn scan_dirty_raw_ptr_slot<T>(
     slot: *const *mut T,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
@@ -6143,6 +6284,69 @@ unsafe fn scan_dirty_slot_range(
     }
 }
 
+unsafe fn scan_dirty_slot_range_with_layout(
+    range: HeapSlotRange,
+    layout_kind: HeapChildSlotReadKind,
+    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
+    stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
+) {
+    if range.slots().is_null() || range.slot_count() == 0 || dirty_pages.is_empty() {
+        return;
+    }
+    const PAGE_SHIFT: usize = 12;
+    const PAGE_SIZE: usize = 1 << PAGE_SHIFT;
+
+    let slots = range.slots();
+    let slot_count = range.slot_count();
+    let slots_start = slots as usize;
+    let Some(slots_bytes) = slot_count.checked_mul(std::mem::size_of::<u64>()) else {
+        return;
+    };
+    let Some(slots_end) = slots_start.checked_add(slots_bytes) else {
+        return;
+    };
+    let mut ranges = Vec::<(usize, usize)>::new();
+    for &page in dirty_pages {
+        let page_start = page << PAGE_SHIFT;
+        let page_end = page_start + PAGE_SIZE;
+        let start = slots_start.max(page_start);
+        let end = slots_end.min(page_end);
+        if start >= end {
+            continue;
+        }
+        let first = (start - slots_start) / std::mem::size_of::<u64>();
+        let last = (end - slots_start).div_ceil(std::mem::size_of::<u64>());
+        ranges.push((first.min(slot_count), last.min(slot_count)));
+    }
+
+    if ranges.is_empty() {
+        return;
+    }
+    ranges.sort_unstable();
+    let mut merged = Vec::<(usize, usize)>::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        if let Some((_, last_end)) = merged.last_mut() {
+            if start <= *last_end {
+                *last_end = (*last_end).max(end);
+                continue;
+            }
+        }
+        merged.push((start, end));
+    }
+
+    for (start, end) in merged {
+        stats.dirty_slot_ranges_scanned += 1;
+        for i in start..end {
+            stats.dirty_slots_scanned += 1;
+            let slot = slots.add(i);
+            record_layout_child_slot_read(layout_kind);
+            crate::arena::old_page_account_dirty_slot(slot as usize);
+            visit_slot(slot, stats);
+        }
+    }
+}
+
 unsafe fn scan_dirty_object_slots(
     header: *mut GcHeader,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
@@ -6171,15 +6375,24 @@ unsafe fn scan_dirty_gc_child_slots(
 ) {
     let mut child_slots = gc_child_slots(header);
     if let Some(slot) = child_slots.take_prefix_child_slot() {
-        scan_dirty_slot(slot, dirty_pages, stats, visit_slot);
+        scan_dirty_slot_with_layout(
+            slot,
+            HeapChildSlotReadKind::Prefix,
+            dirty_pages,
+            stats,
+            visit_slot,
+        );
     }
 
     match child_slots.payload_scan() {
-        HeapPayloadSlotScan::Empty | HeapPayloadSlotScan::PointerFree => {}
+        HeapPayloadSlotScan::Empty => {}
+        HeapPayloadSlotScan::PointerFree => {
+            record_layout_pointer_free_range_skipped(child_slots.payload.slot_count());
+        }
         HeapPayloadSlotScan::All(range) => {
-            scan_dirty_slot_range(
-                range.slots(),
-                range.slot_count(),
+            scan_dirty_slot_range_with_layout(
+                range,
+                HeapChildSlotReadKind::Unknown,
                 dirty_pages,
                 stats,
                 visit_slot,
@@ -6187,8 +6400,8 @@ unsafe fn scan_dirty_gc_child_slots(
         }
         HeapPayloadSlotScan::Masked => {
             for child_slot in child_slots {
-                if let HeapChildSlot::Child(slot) = child_slot {
-                    scan_dirty_slot(slot, dirty_pages, stats, visit_slot);
+                if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
+                    scan_dirty_slot_with_layout(slot, layout_kind, dirty_pages, stats, visit_slot);
                 }
             }
         }
@@ -6655,7 +6868,8 @@ impl CopyingNurseryPreflight {
 
     unsafe fn scan_gc_child_fields(&mut self, header: *mut GcHeader) {
         for child_slot in gc_child_slots(header) {
-            if let HeapChildSlot::Child(slot) = child_slot {
+            if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
+                record_layout_child_slot_read(layout_kind);
                 self.scan_slot(slot as *const u64);
             }
         }
@@ -6991,7 +7205,8 @@ impl CopyingNurseryCollector {
 
     unsafe fn scan_gc_child_fields(&mut self, header: *mut GcHeader) {
         for child_slot in gc_child_slots(header) {
-            if let HeapChildSlot::Child(slot) = child_slot {
+            if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
+                record_layout_child_slot_read(layout_kind);
                 self.visit_slot_with_parent(slot, header, false);
             }
         }
@@ -7517,6 +7732,7 @@ fn gc_collect_minor_copying_fast_path(
             retained_forwarded_stub_bytes: 0,
         };
         trace.pause_us = start.elapsed().as_micros() as u64;
+        trace.capture_layout_scans();
     }
     Some(CopiedMinorFastPathOutcome {
         freed_bytes,
@@ -7841,7 +8057,8 @@ unsafe fn trace_gc_child_slots(
     worklist: &mut Vec<*mut GcHeader>,
 ) {
     for child_slot in gc_child_slots(header) {
-        if let HeapChildSlot::Child(slot) = child_slot {
+        if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
+            record_layout_child_slot_read(layout_kind);
             record_trace_slot_read();
             mark_field_into_worklist(*slot, valid_ptrs, worklist);
         }
@@ -9096,7 +9313,8 @@ unsafe fn verify_slot(slot: *const u64, valid_ptrs: &ValidPointerSet, surface: &
 
 unsafe fn rewrite_gc_child_slots(header: *mut GcHeader, valid_ptrs: &ValidPointerSet) {
     for child_slot in gc_child_slots(header) {
-        if let HeapChildSlot::Child(slot) = child_slot {
+        if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
+            record_layout_child_slot_read(layout_kind);
             rewrite_slot(slot, valid_ptrs);
         }
     }
@@ -9246,7 +9464,8 @@ unsafe fn remember_evacuated_gc_child_slots(
     header: *mut GcHeader,
 ) {
     for child_slot in gc_child_slots(header) {
-        if let HeapChildSlot::Child(slot) = child_slot {
+        if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
+            record_layout_child_slot_read(layout_kind);
             remember_evacuated_old_to_young_slot(sticky, header, slot);
         }
     }
@@ -9434,7 +9653,8 @@ unsafe fn verify_gc_child_slots(
     surface: &str,
 ) {
     for child_slot in gc_child_slots(header) {
-        if let HeapChildSlot::Child(slot) = child_slot {
+        if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
+            record_layout_child_slot_read(layout_kind);
             verify_slot(slot, valid_ptrs, surface);
         }
     }
@@ -10327,7 +10547,7 @@ mod tests {
         unsafe {
             test_heap_child_slots_for_user(user_ptr)
                 .into_iter()
-                .filter(|slot| matches!(slot, HeapChildSlot::Child(_)))
+                .filter(|slot| matches!(slot, HeapChildSlot::Child(_, _)))
                 .count()
         }
     }
@@ -10396,7 +10616,7 @@ mod tests {
         assert_eq!(
             slots
                 .iter()
-                .filter(|slot| matches!(slot, HeapChildSlot::Child(_)))
+                .filter(|slot| matches!(slot, HeapChildSlot::Child(_, _)))
                 .count(),
             0
         );
@@ -10408,6 +10628,62 @@ mod tests {
 
         clear_marks();
         clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_layout_scan_trace_json_counts_pointer_free_slots() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let trace = GcCycleTrace::new(
+            GcCollectionKind::Minor,
+            GcTriggerSnapshot {
+                kind: GcTriggerKind::Direct,
+                steps_before: Some(GcStepSnapshot::current()),
+            },
+        )
+        .expect("test requested GC trace capture");
+        let arr = crate::array::js_array_alloc_with_length(4);
+        for i in 0..4 {
+            crate::array::js_array_set_f64(arr, i, (i + 1) as f64);
+        }
+
+        let valid_ptrs = build_valid_pointer_set();
+        assert!(try_mark_value(
+            POINTER_TAG | (arr as u64 & POINTER_MASK),
+            &valid_ptrs
+        ));
+        trace_marked_objects(&valid_ptrs);
+
+        let event = trace.into_json(GcStepSnapshot::current());
+        let layout_scans = &event["layout_scans"];
+        assert_eq!(layout_scans["pointer_slots_read"].as_u64(), Some(0));
+        assert_eq!(
+            layout_scans["pointer_free_ranges_skipped"].as_u64(),
+            Some(1)
+        );
+        assert_eq!(layout_scans["pointer_free_slots_skipped"].as_u64(), Some(4));
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_pointer_free_target_gate_emits_trace() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+        let arr = crate::array::js_array_alloc_with_length(64);
+        for i in 0..64 {
+            crate::array::js_array_set_f64(arr, i, (i + 1) as f64);
+        }
+        js_shadow_slot_set(0, ptr_bits(arr as usize));
+
+        let _ = gc_collect_minor();
+        let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+
+        assert_ne!(after, arr as usize);
+        assert!(crate::arena::pointer_in_nursery(after));
     }
 
     #[test]
@@ -12496,6 +12772,26 @@ mod tests {
     }
 
     #[test]
+    fn test_small_js_string_alloc_uses_managed_nursery_page() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let string = crate::string::js_string_from_bytes(b"managed-string".as_ptr(), 14);
+        let header = unsafe { header_from_user_ptr(string as *const u8) };
+
+        unsafe {
+            assert_eq!((*header).obj_type, GC_TYPE_STRING);
+            assert_ne!((*header).gc_flags & GC_FLAG_ARENA, 0);
+        }
+        assert_eq!(
+            crate::arena::classify_heap_generation(string as usize),
+            crate::arena::HeapGeneration::Nursery
+        );
+        assert!(
+            !malloc_user_ptr_tracked(string as *mut u8),
+            "ordinary heap strings should not be tracked in MALLOC_STATE"
+        );
+    }
+
+    #[test]
     fn test_small_js_closure_alloc_uses_managed_nursery_page() {
         let _guard = CopyingNurseryTestGuard::new(0);
         let closure =
@@ -13385,6 +13681,78 @@ mod tests {
                 0,
                 "rebuilt remembered set should mark the young child"
             );
+        }
+
+        js_shadow_frame_pop(frame);
+    }
+
+    #[test]
+    fn test_old_page_defrag_target_gate_emits_trace() {
+        struct ResetGcTestState;
+
+        impl Drop for ResetGcTestState {
+            fn drop(&mut self) {
+                reset_shadow_stack();
+                reset_global_roots();
+                reset_remembered_set();
+                clear_marks();
+                clear_mark_seeds();
+                CONS_PINNED.with(|s| s.borrow_mut().clear());
+            }
+        }
+
+        let _reset = ResetGcTestState;
+        let _isolation = copying_nursery_isolation_lock();
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
+        reset_shadow_stack();
+        reset_global_roots();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+        if !gc_force_evacuate_enabled() {
+            return;
+        }
+
+        let (parent, fields) = unsafe { alloc_old_test_object(1) };
+        let parent_user = parent as usize;
+        let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };
+        let _dead = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        unsafe {
+            (*parent_header).gc_flags |= GC_FLAG_MARKED;
+        }
+        let _ = sweep_with_age_bump(false);
+
+        let frame = js_shadow_frame_push(1);
+        let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+        let child_header = unsafe { header_from_user_ptr(child as *const u8) };
+        let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[ptr_bits(child)]);
+        unsafe {
+            *fields = ptr_bits(child);
+        }
+        js_write_barrier_slot(ptr_bits(parent_user), fields as u64, ptr_bits(child));
+        js_shadow_slot_set(0, ptr_bits(parent_user));
+
+        let _ = gc_collect_minor();
+
+        let parent_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert_ne!(
+            parent_after, parent_user,
+            "forced old-page defrag should rewrite the shadow root to the moved parent"
+        );
+        assert!(crate::arena::pointer_in_old_gen(parent_after));
+        assert!(
+            remembered_set_size() > 0,
+            "moved old parent retaining a young child must be re-remembered"
+        );
+
+        clear_marks();
+        let valid_ptrs = build_valid_pointer_set();
+        let stats = mark_remembered_set_roots(&valid_ptrs);
+        assert!(stats.newly_marked > 0);
+        unsafe {
+            assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
         }
 
         js_shadow_frame_pop(frame);

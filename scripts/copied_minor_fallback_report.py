@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Keep in sync with CopiedMinorFallbackReason::as_str in
 # crates/perry-runtime/src/gc.rs.
@@ -32,7 +32,20 @@ COPYING_NURSERY_TOTALS = (
     "copied_bytes",
     "promoted_objects",
     "promoted_bytes",
+    "large_excluded_objects",
+    "large_excluded_bytes",
+    "malloc_registry_rebuilds",
 )
+
+LAYOUT_SCAN_TOTALS = (
+    "pointer_slots_read",
+    "masked_pointer_slots_read",
+    "unknown_layout_slots_read",
+    "pointer_free_ranges_skipped",
+    "pointer_free_slots_skipped",
+)
+
+FORBIDDEN_TARGET_MALLOC_KINDS = ("string", "closure")
 
 
 def empty_reason_counts() -> dict[str, int]:
@@ -60,6 +73,24 @@ def empty_totals() -> dict[str, Any]:
             "copied_bytes": 0,
             "promoted_objects": 0,
             "promoted_bytes": 0,
+            "large_excluded_objects": 0,
+            "large_excluded_bytes": 0,
+            "malloc_registry_rebuilds": 0,
+            "ineligible_cycles": 0,
+        },
+        "layout_scans": {field: 0 for field in LAYOUT_SCAN_TOTALS},
+        "missing_layout_scans": 0,
+        "malloc_kind_allocations": {
+            kind: 0 for kind in FORBIDDEN_TARGET_MALLOC_KINDS
+        },
+        "old_page_accounting": {
+            "checked_cycles": 0,
+            "candidate_pages": 0,
+            "selected_pages": 0,
+            "selected_live_bytes": 0,
+            "reclaimable_bytes": 0,
+            "old_page_moved_bytes": 0,
+            "released_original_bytes": 0,
         },
     }
 
@@ -135,12 +166,113 @@ def add_totals(dst: dict[str, Any], src: dict[str, Any]) -> None:
         ][field]
     for field in COPYING_NURSERY_TOTALS:
         dst["copying_nursery"][field] += src["copying_nursery"][field]
+    dst["copying_nursery"]["ineligible_cycles"] += src["copying_nursery"][
+        "ineligible_cycles"
+    ]
+    for field in LAYOUT_SCAN_TOTALS:
+        dst["layout_scans"][field] += src["layout_scans"][field]
+    dst["missing_layout_scans"] += src["missing_layout_scans"]
+    for kind in FORBIDDEN_TARGET_MALLOC_KINDS:
+        dst["malloc_kind_allocations"][kind] += src["malloc_kind_allocations"][kind]
+    for field in (
+        "checked_cycles",
+        "candidate_pages",
+        "selected_pages",
+        "selected_live_bytes",
+        "reclaimable_bytes",
+        "old_page_moved_bytes",
+        "released_original_bytes",
+    ):
+        dst["old_page_accounting"][field] += src["old_page_accounting"][field]
+
+
+def target_gates_require_copied_minor(name: str) -> bool:
+    return not name.startswith("old_page_")
+
+
+def record_malloc_kind_allocations(cycle: dict[str, Any], totals: dict[str, Any]) -> None:
+    rows = cycle.get("malloc_kinds")
+    if not isinstance(rows, list):
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        kind = row.get("kind")
+        if kind not in FORBIDDEN_TARGET_MALLOC_KINDS:
+            continue
+        totals["malloc_kind_allocations"][kind] += non_negative_int(
+            row, "allocated_count"
+        )
+
+
+def check_old_page_accounting(
+    name: str,
+    line_number: int,
+    cycle: dict[str, Any],
+    totals: dict[str, Any],
+    errors: list[str],
+) -> None:
+    old_pages = nested_dict(cycle, "old_pages")
+    policy = nested_dict(cycle, "evacuation_policy")
+    evacuation = nested_dict(cycle, "evacuation")
+
+    allocated = non_negative_int(old_pages, "allocated_bytes")
+    live = non_negative_int(old_pages, "live_bytes")
+    dead = non_negative_int(old_pages, "dead_bytes")
+    pinned = non_negative_int(old_pages, "pinned_bytes")
+    if allocated > 0:
+        totals["old_page_accounting"]["checked_cycles"] += 1
+        if live + dead != allocated:
+            errors.append(
+                f"{name}:{line_number}: old_pages live_bytes({live}) + "
+                f"dead_bytes({dead}) != allocated_bytes({allocated})"
+            )
+        if pinned > live:
+            errors.append(
+                f"{name}:{line_number}: old_pages pinned_bytes({pinned}) "
+                f"> live_bytes({live})"
+            )
+
+    candidate_pages = non_negative_int(policy, "old_page_candidate_pages")
+    selected_pages = non_negative_int(policy, "old_page_selected_pages")
+    selected_live = non_negative_int(policy, "old_page_selected_live_bytes")
+    reclaimable = non_negative_int(policy, "old_page_reclaimable_bytes")
+    old_page_moved = non_negative_int(evacuation, "old_page_moved_bytes")
+    released = non_negative_int(evacuation, "released_original_bytes")
+
+    totals["old_page_accounting"]["candidate_pages"] += candidate_pages
+    totals["old_page_accounting"]["selected_pages"] += selected_pages
+    totals["old_page_accounting"]["selected_live_bytes"] += selected_live
+    totals["old_page_accounting"]["reclaimable_bytes"] += reclaimable
+    totals["old_page_accounting"]["old_page_moved_bytes"] += old_page_moved
+    totals["old_page_accounting"]["released_original_bytes"] += released
+
+    if selected_pages > candidate_pages:
+        errors.append(
+            f"{name}:{line_number}: old_page_selected_pages({selected_pages}) "
+            f"> old_page_candidate_pages({candidate_pages})"
+        )
+    if selected_pages == 0 and (selected_live > 0 or reclaimable > 0):
+        errors.append(
+            f"{name}:{line_number}: old-page selected bytes reported with no selected pages"
+        )
+    if old_page_moved > selected_live:
+        errors.append(
+            f"{name}:{line_number}: evacuation.old_page_moved_bytes({old_page_moved}) "
+            f"> evacuation_policy.old_page_selected_live_bytes({selected_live})"
+        )
+    if old_page_moved > released:
+        errors.append(
+            f"{name}:{line_number}: evacuation.old_page_moved_bytes({old_page_moved}) "
+            f"> evacuation.released_original_bytes({released})"
+        )
 
 
 def aggregate_workload(
     name: str,
     trace_file: Path,
     unknown_reasons: list[dict[str, Any]],
+    old_page_errors: list[str],
     errors: list[str],
 ) -> dict[str, Any]:
     totals = empty_totals()
@@ -192,6 +324,19 @@ def aggregate_workload(
 
         for field in COPYING_NURSERY_TOTALS:
             totals["copying_nursery"][field] += non_negative_int(copying_nursery, field)
+        if copying_nursery.get("eligible") is not True:
+            totals["copying_nursery"]["ineligible_cycles"] += 1
+
+        layout_scans = nested_dict(cycle, "layout_scans")
+        if layout_scans:
+            for field in LAYOUT_SCAN_TOTALS:
+                totals["layout_scans"][field] += non_negative_int(layout_scans, field)
+        else:
+            totals["missing_layout_scans"] += 1
+
+        record_malloc_kind_allocations(cycle, totals)
+        if name.startswith("old_page_"):
+            check_old_page_accounting(name, line_number, cycle, totals, old_page_errors)
 
     if totals["cycles"] == 0:
         errors.append(f"{name}: no gc_cycle JSON events found in {trace_file}")
@@ -250,7 +395,97 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--out",
         help="Write report JSON to this path. Defaults to stdout.",
     )
+    parser.add_argument(
+        "--target-collector-gates",
+        action="store_true",
+        help="Fail strict target-collector architecture gates for named trace workloads.",
+    )
     return parser
+
+
+def run_target_collector_gates(
+    workloads: dict[str, dict[str, Any]],
+    errors: list[str],
+) -> None:
+    strict_workloads = {
+        name: workload
+        for name, workload in workloads.items()
+        if target_gates_require_copied_minor(name)
+    }
+    if not strict_workloads:
+        errors.append("target collector gates require at least one copied-minor workload")
+
+    for name, workload in strict_workloads.items():
+        reason_counts = workload["fallback_reason_counts"]
+        non_none = {
+            reason: count
+            for reason, count in reason_counts.items()
+            if reason != "none" and count > 0
+        }
+        if non_none:
+            errors.append(f"{name}: fallback reasons other than none: {non_none}")
+        if workload["copying_nursery"]["ineligible_cycles"] > 0:
+            errors.append(
+                f"{name}: copied-minor ineligible cycles="
+                f"{workload['copying_nursery']['ineligible_cycles']}"
+            )
+        if workload["copying_nursery"]["malloc_registry_rebuilds"] != 0:
+            errors.append(
+                f"{name}: malloc_registry_rebuilds="
+                f"{workload['copying_nursery']['malloc_registry_rebuilds']}, want 0"
+            )
+        if workload["conservative_pinned_bytes"] != 0:
+            errors.append(
+                f"{name}: conservative_pinned_bytes="
+                f"{workload['conservative_pinned_bytes']}, want 0"
+            )
+        legacy_pinned = workload["legacy_copy_only_scanner_pinned"]["bytes"]
+        if legacy_pinned != 0:
+            errors.append(
+                f"{name}: legacy_copy_only_scanner_pinned.bytes={legacy_pinned}, want 0"
+            )
+        productive = (
+            workload["copying_nursery"]["copied_objects"]
+            + workload["copying_nursery"]["promoted_objects"]
+        )
+        if productive == 0:
+            errors.append(f"{name}: no copied-minor cycle copied or promoted an object")
+        for kind, count in workload["malloc_kind_allocations"].items():
+            if count != 0:
+                errors.append(
+                    f"{name}: forbidden malloc allocation kind {kind} count={count}"
+                )
+
+    for name, workload in workloads.items():
+        if workload["missing_layout_scans"] != 0:
+            errors.append(
+                f"{name}: missing layout_scans on {workload['missing_layout_scans']} cycle(s)"
+            )
+
+        if "pointer_free" in name:
+            layout = workload["layout_scans"]
+            skipped = layout["pointer_free_slots_skipped"]
+            read = layout["pointer_slots_read"]
+            if skipped == 0:
+                errors.append(f"{name}: no pointer-free slots were skipped")
+            max_expected_reads = max(8, skipped // 8)
+            if read > max_expected_reads:
+                errors.append(
+                    f"{name}: pointer_slots_read={read} exceeds pointer-free "
+                    f"payload allowance {max_expected_reads} for skipped={skipped}"
+                )
+
+        if "large" in name and target_gates_require_copied_minor(name):
+            copying = workload["copying_nursery"]
+            if copying["large_excluded_objects"] == 0 or copying["large_excluded_bytes"] == 0:
+                errors.append(f"{name}: missing large-object exclusion telemetry")
+
+        if name.startswith("old_page_"):
+            old_page = workload["old_page_accounting"]
+            if old_page["selected_pages"] == 0:
+                errors.append(f"{name}: forced old-page workload selected no pages")
+            if old_page["old_page_moved_bytes"] == 0:
+                errors.append(f"{name}: forced old-page workload moved no old-page bytes")
 
 
 def main(argv: list[str]) -> int:
@@ -276,10 +511,13 @@ def main(argv: list[str]) -> int:
     summary = empty_totals()
     summary["workload_count"] = len(parsed_workloads)
     unknown_reasons: list[dict[str, Any]] = []
+    old_page_errors: list[str] = []
     errors: list[str] = []
 
     for name, trace_file in parsed_workloads:
-        workload = aggregate_workload(name, trace_file, unknown_reasons, errors)
+        workload = aggregate_workload(
+            name, trace_file, unknown_reasons, old_page_errors, errors
+        )
         workloads[name] = workload
         add_totals(summary, workload)
 
@@ -288,8 +526,13 @@ def main(argv: list[str]) -> int:
         "workloads": workloads,
         "summary": summary,
         "unknown_reasons": unknown_reasons,
+        "old_page_errors": old_page_errors,
         "top_remaining_reason": top_remaining_reason(summary, workloads),
     }
+
+    if args.target_collector_gates:
+        run_target_collector_gates(workloads, errors)
+        errors.extend(old_page_errors)
 
     write_report(report, args.out)
 

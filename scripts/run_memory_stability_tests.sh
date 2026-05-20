@@ -238,6 +238,7 @@ for idx, cycle in enumerate(cycles):
     reason = nested(cycle, "copying_nursery", "fallback_reason")
     eligible = nested(cycle, "copying_nursery", "eligible")
     shadow_roots = cycle.get("shadow_roots")
+    layout_scans = cycle.get("layout_scans")
     if reason not in allowed_fallback_reasons:
         errors.append(f"cycle {idx}: unexpected fallback_reason={reason!r}")
     if not isinstance(eligible, bool):
@@ -263,6 +264,41 @@ for idx, cycle in enumerate(cycles):
             errors.append(f"cycle {idx}: shadow_roots.pointer_roots={pointers} > nonzero_slots={nonzero}")
         if isinstance(pointers, int) and isinstance(rewritten, int) and rewritten > pointers:
             errors.append(f"cycle {idx}: shadow_roots.rewritten_slots={rewritten} > pointer_roots={pointers}")
+    if not isinstance(layout_scans, dict):
+        errors.append(f"cycle {idx}: layout_scans missing or not an object")
+    else:
+        for field in (
+            "pointer_slots_read",
+            "masked_pointer_slots_read",
+            "unknown_layout_slots_read",
+            "pointer_free_ranges_skipped",
+            "pointer_free_slots_skipped",
+        ):
+            value = layout_scans.get(field)
+            if not isinstance(value, int) or value < 0:
+                errors.append(f"cycle {idx}: layout_scans.{field}={value!r}, want non-negative int")
+        pointer_slots = layout_scans.get("pointer_slots_read", -1)
+        masked_slots = layout_scans.get("masked_pointer_slots_read", -1)
+        unknown_slots = layout_scans.get("unknown_layout_slots_read", -1)
+        pointer_free_ranges = layout_scans.get("pointer_free_ranges_skipped", -1)
+        pointer_free_slots = layout_scans.get("pointer_free_slots_skipped", -1)
+        if (
+            isinstance(pointer_slots, int)
+            and isinstance(masked_slots, int)
+            and isinstance(unknown_slots, int)
+            and masked_slots + unknown_slots > pointer_slots
+        ):
+            errors.append(
+                f"cycle {idx}: layout_scans masked+unknown={masked_slots + unknown_slots} "
+                f"> pointer_slots_read={pointer_slots}"
+            )
+        if (
+            isinstance(pointer_free_ranges, int)
+            and isinstance(pointer_free_slots, int)
+            and pointer_free_ranges > 0
+            and pointer_free_slots == 0
+        ):
+            errors.append(f"cycle {idx}: pointer-free ranges skipped but slots skipped is zero")
 
 if mode in ("copied_minor_precise", "copied_minor_default"):
     for idx, cycle in enumerate(cycles):
@@ -724,6 +760,203 @@ PY
     fi
 }
 
+write_target_collector_gate_workloads() {
+    local out_dir="$1"
+
+    cat >"$out_dir/default_copying.ts" <<'EOF'
+declare function gc(): void;
+
+let total = 0;
+let keep: any[] = [];
+for (let batch = 0; batch < 8; batch++) {
+  keep = [];
+  for (let i = 0; i < 64; i++) {
+    const child: any = { value: batch * 100 + i, next: { score: i * 3 + batch } };
+    keep.push(child);
+  }
+  total += keep.length + keep[0].value + keep[63].next.score;
+  gc();
+}
+
+console.log("default_copying:" + total);
+EOF
+
+    cat >"$out_dir/large_object_barriers.ts" <<'EOF'
+declare function gc(): void;
+
+let checksum = 0;
+let holders: any[] = [];
+for (let batch = 0; batch < 4; batch++) {
+  const child: any = { value: batch + 10 };
+  const parent: any[] = [];
+  for (let i = 0; i < 5000; i++) {
+    parent.push(i + batch);
+  }
+  parent[123] = child;
+  holders = [parent];
+  gc();
+  checksum += holders[0][123].value + holders[0].length + holders[0][4000];
+}
+
+console.log("large_object_barriers:" + checksum);
+EOF
+}
+
+run_target_collector_gate_workload() {
+    local name="$1"
+    local ts="$2"
+    local bin="$TMPDIR/${name}_target_collector_gate"
+    local compile_output="$TMPDIR/${name}_target_collector_gate_compile.$$.$RANDOM"
+
+    if ! $PERRY compile --no-cache "$ts" -o "$bin" >"$compile_output" 2>&1; then
+        printf "  FAIL [target-gc] %-40s compile failed\n" "$name"
+        sed 's/^/    /' "$compile_output"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+
+    run_one "$bin" PERRY_GC_TRACE=1
+
+    if [[ "$LAST_EXIT" -ne 0 ]]; then
+        printf "  FAIL [target-gc] %-40s exit=%d\n" "$name" "$LAST_EXIT"
+        sed 's/^/    /' "$LAST_STDERR_FILE"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+    if ! grep -q "^${name}:" "$LAST_STDOUT_FILE"; then
+        printf "  FAIL [target-gc] %-40s stdout missing workload marker\n" "$name"
+        sed 's/^/    /' "$LAST_STDOUT_FILE"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+
+    printf "  PASS [target-gc] %-40s trace=%s\n" "$name" "$LAST_STDERR_FILE"
+    PASS=$((PASS + 1))
+    return 0
+}
+
+run_target_collector_old_page_trace() {
+    local label="old_page_forced_defrag"
+    LAST_CANARY_OUTPUT_FILE="$TMPDIR/${label}.$$.$RANDOM"
+    LAST_CANARY_EXIT=0
+
+    env PERRY_GC_TRACE=1 PERRY_GC_FORCE_EVACUATE=1 \
+        cargo test -p perry-runtime --release \
+        test_old_page_defrag_target_gate_emits_trace -- --nocapture \
+        >"$LAST_CANARY_OUTPUT_FILE" 2>&1 || LAST_CANARY_EXIT=$?
+
+    if [[ "$LAST_CANARY_EXIT" -eq 0 ]]; then
+        printf "  PASS [target-gc] %-40s trace=%s\n" "$label" "$LAST_CANARY_OUTPUT_FILE"
+        PASS=$((PASS + 1))
+        return 0
+    fi
+
+    printf "  FAIL [target-gc] %-40s exit=%d\n" "$label" "$LAST_CANARY_EXIT"
+    sed 's/^/    /' "$LAST_CANARY_OUTPUT_FILE"
+    FAIL=$((FAIL + 1))
+    return 1
+}
+
+run_target_collector_pointer_free_trace() {
+    local label="pointer_free_numeric"
+    LAST_CANARY_OUTPUT_FILE="$TMPDIR/${label}.$$.$RANDOM"
+    LAST_CANARY_EXIT=0
+
+    env PERRY_GC_TRACE=1 \
+        cargo test -p perry-runtime --release \
+        test_pointer_free_target_gate_emits_trace -- --nocapture \
+        >"$LAST_CANARY_OUTPUT_FILE" 2>&1 || LAST_CANARY_EXIT=$?
+
+    if [[ "$LAST_CANARY_EXIT" -eq 0 ]]; then
+        printf "  PASS [target-gc] %-40s trace=%s\n" "$label" "$LAST_CANARY_OUTPUT_FILE"
+        PASS=$((PASS + 1))
+        return 0
+    fi
+
+    printf "  FAIL [target-gc] %-40s exit=%d\n" "$label" "$LAST_CANARY_EXIT"
+    sed 's/^/    /' "$LAST_CANARY_OUTPUT_FILE"
+    FAIL=$((FAIL + 1))
+    return 1
+}
+
+run_target_collector_architecture_gates() {
+    local workloads_dir="$TMPDIR/target_collector_gate_workloads"
+    mkdir -p "$workloads_dir"
+    write_target_collector_gate_workloads "$workloads_dir"
+
+    local workload_specs=(
+        "default_copying:$workloads_dir/default_copying.ts"
+        "large_object_barriers:$workloads_dir/large_object_barriers.ts"
+    )
+
+    local report_args=()
+    local workload_failed=0
+    local spec
+    for spec in "${workload_specs[@]}"; do
+        local name="${spec%%:*}"
+        local ts="${spec#*:}"
+        if run_target_collector_gate_workload "$name" "$ts"; then
+            report_args+=(--workload "$name=$LAST_STDERR_FILE")
+        else
+            workload_failed=1
+        fi
+    done
+
+    if run_target_collector_pointer_free_trace; then
+        report_args+=(--workload "pointer_free_numeric=$LAST_CANARY_OUTPUT_FILE")
+    else
+        workload_failed=1
+    fi
+
+    if run_target_collector_old_page_trace; then
+        report_args+=(--workload "old_page_forced_defrag=$LAST_CANARY_OUTPUT_FILE")
+    else
+        workload_failed=1
+    fi
+
+    if [[ "$workload_failed" -ne 0 ]]; then
+        return
+    fi
+
+    local report_out="${PERRY_TARGET_COLLECTOR_GATES_OUT:-$TMPDIR/target_collector_gates_report.json}"
+    local parser_output="$TMPDIR/target_collector_gates_parser.$$.$RANDOM"
+    if "$PYTHON" scripts/copied_minor_fallback_report.py \
+        "${report_args[@]}" \
+        --target-collector-gates \
+        --out "$report_out" >"$parser_output" 2>&1; then
+        local gate_summary
+        gate_summary=$("$PYTHON" - "$report_out" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    report = json.load(fh)
+summary = report["summary"]
+copying = summary["copying_nursery"]
+layout = summary["layout_scans"]
+old_page = summary["old_page_accounting"]
+print(
+    "copied_or_promoted="
+    f"{copying['copied_objects'] + copying['promoted_objects']} "
+    f"pointer_free_skipped={layout['pointer_free_slots_skipped']} "
+    f"large_excluded={copying['large_excluded_objects']} "
+    f"old_page_moved_bytes={old_page['old_page_moved_bytes']}"
+)
+PY
+)
+        printf "  PASS [target-gc] %-40s %s report=%s\n" \
+            "architecture stress gates" "$gate_summary" "$report_out"
+        PASS=$((PASS + 1))
+    else
+        printf "  FAIL [target-gc] %-40s\n" "architecture stress gates"
+        sed 's/^/    /' "$parser_output"
+        if [[ -f "$report_out" ]]; then
+            printf "    report=%s\n" "$report_out"
+        fi
+        FAIL=$((FAIL + 1))
+    fi
+}
+
 run_traced_canary() {
     local label="$1"
     local mode="$2"
@@ -822,6 +1055,26 @@ run_traced_canary "barriers inactive telemetry" "barriers_inactive" \
 run_traced_canary "productive evacuation telemetry" "evacuation_productive" \
     env PERRY_GC_TRACE=1 PERRY_GC_FORCE_EVACUATE=1 \
     cargo test -p perry-runtime --release test_evacuated_old_parent_re_remembers_young_child_canary -- --nocapture
+
+echo ""
+echo "=== Target collector architecture gates ==="
+run_canary "copying minor rewrites" \
+    cargo test -p perry-runtime --release test_copying_minor_rewrites
+run_canary "malloc kind telemetry" \
+    cargo test -p perry-runtime --release test_malloc_kind_telemetry
+run_canary "old page accounting/defrag" \
+    cargo test -p perry-runtime --release test_old_page_
+run_canary "layout mask canaries" \
+    cargo test -p perry-runtime --release test_layout_mask
+run_canary "typed shape descriptor canaries" \
+    cargo test -p perry-runtime --release test_typed_shape_descriptor
+run_canary "unboxed object canaries" \
+    cargo test -p perry-runtime --release test_unboxed_object
+run_canary "managed string allocation" \
+    cargo test -p perry-runtime --release test_small_js_string_alloc_uses_managed_nursery_page
+run_canary "managed closure allocation" \
+    cargo test -p perry-runtime --release test_small_js_closure_alloc_uses_managed_nursery_page
+run_target_collector_architecture_gates
 
 echo ""
 echo "=== Copied-minor fallback evidence report ==="
