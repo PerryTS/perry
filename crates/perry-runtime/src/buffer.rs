@@ -783,8 +783,12 @@ pub extern "C" fn js_buffer_byte_length_value(value: f64, encoding: f64) -> i32 
             || eq_ascii_lower(enc_bytes, b"latin1")
             || eq_ascii_lower(enc_bytes, b"binary")
         {
+            // Node's Buffer.byteLength(str, 'ascii'|'latin1'|'binary') returns
+            // the input string's UTF-16 code-unit length (one byte per unit
+            // after the encoding's `& 0xFF` truncation). For astral chars this
+            // is 2, not 1 — so use `encode_utf16().count()`, not `chars().count()`.
             return std::str::from_utf8(bytes)
-                .map(|s| s.chars().count() as i32)
+                .map(|s| s.encode_utf16().count() as i32)
                 .unwrap_or(len as i32);
         }
         if eq_ascii_lower(enc_bytes, b"ucs2")
