@@ -4,6 +4,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_DIR="$SCRIPT_DIR/test-files"
+NODE_SUITE_DIR="$SCRIPT_DIR/test-parity/node-suite"
 OUTPUT_DIR="$SCRIPT_DIR/test-parity/output"
 REPORT_DIR="$SCRIPT_DIR/test-parity/reports"
 
@@ -18,13 +19,32 @@ BACKEND_LABEL="LLVM"
 #   ./run_parity_tests.sh --filter parity_url
 #   ./run_parity_tests.sh --filter parity_     # all parity-inventory tests
 TEST_FILTER=""
+# Optional suite selector. The historical default (`all`) keeps running the
+# top-level test-files/*.ts corpus. The granular `node-suite` selector runs
+# curated Node-compatibility cases under test-parity/node-suite/<module>/...
+# without requiring test_parity_* names.
+TEST_SUITE="all"
+MODULE_FILTER=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --filter) TEST_FILTER="$2"; shift 2 ;;
         --filter=*) TEST_FILTER="${1#--filter=}"; shift ;;
+        --suite) TEST_SUITE="$2"; shift 2 ;;
+        --suite=*) TEST_SUITE="${1#--suite=}"; shift ;;
+        --module) MODULE_FILTER="$2"; shift 2 ;;
+        --module=*) MODULE_FILTER="${1#--module=}"; shift ;;
         *) shift ;;
     esac
 done
+
+case "$TEST_SUITE" in
+    all|parity|smoke|node-suite) ;;
+    *)
+        echo -e "\033[0;31mUnknown suite: $TEST_SUITE\033[0m"
+        echo "Known suites: all, parity, smoke, node-suite"
+        exit 1
+        ;;
+esac
 
 # Colors for output
 RED='\033[0;31m'
@@ -220,6 +240,7 @@ for raw in sys.stdin:
         sed -E '/^\(node:[0-9]+\) \[MODULE_TYPELESS_PACKAGE_JSON\]/d' | \
         sed -E '/^\(node:[0-9]+\) \[DEP[0-9]+\] DeprecationWarning:/d' | \
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: Type Stripping is an experimental feature/d' | \
+        sed -E '/^\(node:[0-9]+\) ExperimentalWarning: glob is an experimental feature/d' | \
         sed -E '/^\(Use `node --trace-deprecation/d' | \
         sed -E '/^Reparsing as ES module because module syntax was detected/d' | \
         sed -E '/^To eliminate this warning, add "type": "module"/d' | \
@@ -278,7 +299,7 @@ fi
 
 echo -e "${GREEN}Compiler and runtime built successfully${NC}"
 echo ""
-echo "Running parity tests (backend: $BACKEND_LABEL)..."
+echo "Running parity tests (backend: $BACKEND_LABEL, suite: $TEST_SUITE${MODULE_FILTER:+, module: $MODULE_FILTER})..."
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -327,7 +348,12 @@ stop_echo_server() {
 
 trap stop_echo_server EXIT
 
-start_echo_server
+# The granular node-suite starts with deterministic module cases (path, url,
+# etc.) that do not need the legacy top-level net echo server. Future net
+# node-suite cases can opt into their own per-test companion lifecycle.
+if [[ "$TEST_SUITE" != "node-suite" ]]; then
+    start_echo_server
+fi
 echo ""
 
 # JSON report data
@@ -337,25 +363,67 @@ LATEST_REPORT="$REPORT_DIR/latest.json"
 # Start JSON array for test results
 TEST_RESULTS="[]"
 
+declare -a TEST_FILES=()
+case "$TEST_SUITE" in
+    all)
+        while IFS= read -r test_file; do
+            TEST_FILES+=("$test_file")
+        done < <(find "$TEST_DIR" -maxdepth 1 -type f -name '*.ts' | sort)
+        ;;
+    parity|smoke)
+        while IFS= read -r test_file; do
+            TEST_FILES+=("$test_file")
+        done < <(find "$TEST_DIR" -maxdepth 1 -type f -name 'test_parity_*.ts' | sort)
+        ;;
+    node-suite)
+        node_suite_search_root="$NODE_SUITE_DIR"
+        if [[ -n "$MODULE_FILTER" ]]; then
+            node_suite_search_root="$NODE_SUITE_DIR/$MODULE_FILTER"
+        fi
+        if [[ -d "$node_suite_search_root" ]]; then
+            while IFS= read -r test_file; do
+                TEST_FILES+=("$test_file")
+            done < <(find "$node_suite_search_root" -type f -name '*.ts' | sort)
+        fi
+        ;;
+    *)
+        echo -e "${RED}Unknown suite: $TEST_SUITE${NC}"
+        echo "Known suites: all, parity, smoke, node-suite"
+        exit 1
+        ;;
+esac
+
+if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
+    echo -e "${YELLOW}No tests matched suite/filter selection${NC}"
+fi
+
 # Run each test
-for test_file in "$TEST_DIR"/*.ts; do
+for test_file in "${TEST_FILES[@]}"; do
     # Skip directories (multi/ folder)
     [[ -d "$test_file" ]] && continue
 
     test_name=$(basename "$test_file" .ts)
+    if [[ "$test_file" == "$NODE_SUITE_DIR"/* ]]; then
+        test_rel="${test_file#"$NODE_SUITE_DIR"/}"
+        test_id="node-suite/${test_rel%.ts}"
+    else
+        test_id="$test_name"
+    fi
 
-    # Optional --filter flag: only run tests whose basename contains it.
-    if [[ -n "$TEST_FILTER" ]] && [[ "$test_name" != *"$TEST_FILTER"* ]]; then
+    # Optional --filter flag: only run tests whose basename or suite id
+    # contains it.
+    if [[ -n "$TEST_FILTER" ]] && [[ "$test_name" != *"$TEST_FILTER"* ]] && [[ "$test_id" != *"$TEST_FILTER"* ]]; then
         continue
     fi
 
-    node_output_file="$OUTPUT_DIR/node/${test_name}.txt"
-    perry_output_file="$OUTPUT_DIR/perry/${test_name}.txt"
-    perry_binary="/tmp/perry_parity_$test_name"
+    safe_test_id="${test_id//\//__}"
+    node_output_file="$OUTPUT_DIR/node/${safe_test_id}.txt"
+    perry_output_file="$OUTPUT_DIR/perry/${safe_test_id}.txt"
+    perry_binary="/tmp/perry_parity_$safe_test_id"
 
     # Check if test should be skipped
     if should_skip "$test_name"; then
-        echo -e "${YELLOW}SKIP${NC}  $test_name (async/timer test)"
+        echo -e "${YELLOW}SKIP${NC}  $test_id (async/timer test)"
         ((SKIPPED++))
         continue
     fi
@@ -388,12 +456,12 @@ for test_file in "$TEST_DIR"/*.ts; do
         # to compile+run Perry and compare against the expected file.
         # Otherwise record NODE_FAIL and skip.
         if ! has_expected_output "$test_name"; then
-            echo -e "${YELLOW}SKIP${NC}  $test_name (Node.js error: exit $node_exit)"
+            echo -e "${YELLOW}SKIP${NC}  $test_id (Node.js error: exit $node_exit)"
             ((NODE_FAIL++))
             [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
             continue
         fi
-        echo -e "${YELLOW}NOTE${NC}  $test_name (Node.js error: exit $node_exit — using expected-output)"
+        echo -e "${YELLOW}NOTE${NC}  $test_id (Node.js error: exit $node_exit — using expected-output)"
     fi
 
     # Save Node.js output
@@ -403,7 +471,7 @@ for test_file in "$TEST_DIR"/*.ts; do
     # (PERRY_ALLOW_UNIMPLEMENTED=1) so unimplemented APIs surface as
     # runtime divergence (the gap signal) instead of hard compile errors.
     compile_env=""
-    if [[ "$test_name" == test_parity_* ]]; then
+    if [[ "$test_name" == test_parity_* || "$test_id" == node-suite/* ]]; then
         compile_env="PERRY_ALLOW_UNIMPLEMENTED=1"
     fi
     # #499: some parity tests transitively pull in `.js` fixtures
@@ -423,16 +491,16 @@ for test_file in "$TEST_DIR"/*.ts; do
     fi
 
     if [[ $compile_exit -ne 0 ]]; then
-        echo -e "${RED}FAIL${NC}  $test_name (compile error)"
+        echo -e "${RED}FAIL${NC}  $test_id (compile error)"
         ((COMPILE_FAIL++))
-        COMPILE_FAILURES+=("$test_name")
+        COMPILE_FAILURES+=("$test_id")
         echo "" > "$perry_output_file"
         # Persist the actual compile stderr so CI artifacts can be inspected
         # to diagnose long-tail compile failures (e.g. the macOS-14 SDK gap
         # tracked as `ci-env` in test-parity/known_failures.json). Pre-fix
         # the parity runner only logged "compile error" with no detail and
         # the macOS-14 family was diagnosed by inference, not data.
-        compile_log="$OUTPUT_DIR/${test_name}.compile_error.log"
+        compile_log="$OUTPUT_DIR/${safe_test_id}.compile_error.log"
         printf "%s\n" "$compile_output" > "$compile_log"
         [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
         continue
@@ -456,13 +524,13 @@ for test_file in "$TEST_DIR"/*.ts; do
         expected_normalized=$(normalize_output "$(cat "$EXPECTED_DIR/${test_name}.txt")")
         perry_normalized=$(normalize_output "$perry_output")
         if [[ "$perry_normalized" == "$expected_normalized" ]]; then
-            echo -e "${GREEN}PASS${NC}  $test_name (expected-output)"
+            echo -e "${GREEN}PASS${NC}  $test_id (expected-output)"
             ((PARITY_PASS++))
             status="pass"
         else
-            echo -e "${RED}FAIL${NC}  $test_name (expected-output mismatch)"
+            echo -e "${RED}FAIL${NC}  $test_id (expected-output mismatch)"
             ((PARITY_FAIL++))
-            PARITY_FAILURES+=("$test_name")
+            PARITY_FAILURES+=("$test_id")
             status="fail"
             echo "       Expected: $(cat "$EXPECTED_DIR/${test_name}.txt" | head -1)"
             echo "       Perry:    $(echo "$perry_output" | head -1)"
@@ -474,13 +542,13 @@ for test_file in "$TEST_DIR"/*.ts; do
 
         # Compare outputs
         if [[ "$node_normalized" == "$perry_normalized" ]]; then
-            echo -e "${GREEN}PASS${NC}  $test_name"
+            echo -e "${GREEN}PASS${NC}  $test_id"
             ((PARITY_PASS++))
             status="pass"
         else
-            echo -e "${RED}FAIL${NC}  $test_name (output mismatch)"
+            echo -e "${RED}FAIL${NC}  $test_id (output mismatch)"
             ((PARITY_FAIL++))
-            PARITY_FAILURES+=("$test_name")
+            PARITY_FAILURES+=("$test_id")
             status="fail"
 
             # Show diff for failures (first few lines)

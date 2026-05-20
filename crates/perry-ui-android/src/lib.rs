@@ -2617,6 +2617,13 @@ pub extern "C" fn perry_ui_bottom_nav_set_unselected_tint_color(
 pub extern "C" fn perry_ui_lazyvstack_set_refresh_control(_handle: i64, _callback: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_lazyvstack_end_refreshing(_handle: i64) {}
+// Matches the iOS stub (perry-ui-ios/src/lib.rs). Without this export, the
+// Android UI lib is missing a symbol that the TS `lazyvstackSetRowHeight`
+// API lowers to, and `dlopen(libperry_app.so)` fails at launch with an
+// UnsatisfiedLinkError. No-op is fine: LinearLayout sizes children by their
+// own measurement; per-row height isn't applied on Android today.
+#[no_mangle]
+pub extern "C" fn perry_ui_lazyvstack_set_row_height(_handle: i64, _height: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_lazyvstack_set_scroll_end_callback(
     _handle: i64,
@@ -2796,6 +2803,7 @@ pub extern "C" fn perry_ui_attributed_text_clear(h: i64) {
 /// Capture the root View as a PNG and return a base64-encoded string.
 /// Returns an empty string if capture is unavailable (e.g. the geisterhand
 /// feature is OFF, the Activity is not attached, or the JNI call fails).
+#[cfg(feature = "geisterhand")]
 #[no_mangle]
 pub extern "C" fn perry_system_take_screenshot() -> i64 {
     extern "C" {
@@ -2813,4 +2821,17 @@ pub extern "C" fn perry_system_take_screenshot() -> i64 {
         libc::free(ptr as *mut libc::c_void);
         js_string_from_bytes(encoded.as_ptr(), encoded.len() as i64) as i64
     }
+}
+
+// Screenshot capture lives in the geisterhand renderer. Under the default
+// Android Views (JNI) backend that module is configured out, so honor the
+// documented contract and return an empty string instead of referencing
+// the absent `crate::screenshot` (which broke the default Android build).
+#[cfg(not(feature = "geisterhand"))]
+#[no_mangle]
+pub extern "C" fn perry_system_take_screenshot() -> i64 {
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
+    }
+    unsafe { js_string_from_bytes(std::ptr::null(), 0) as i64 }
 }

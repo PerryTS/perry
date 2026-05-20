@@ -9882,7 +9882,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let result = blk.call(I64, "js_path_normalize", &[(I64, &p_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
-        Expr::PathResolve(p) => lower_expr(ctx, p),
+        Expr::PathResolve(p) => {
+            let p_box = lower_expr(ctx, p)?;
+            let blk = ctx.block();
+            let p_handle = unbox_to_i64(blk, &p_box);
+            let result = blk.call(I64, "js_path_resolve", &[(I64, &p_handle)]);
+            Ok(nanbox_string_inline(blk, &result))
+        }
         Expr::ObjectCreate(p) => {
             let v = lower_expr(ctx, p)?;
             Ok(ctx
