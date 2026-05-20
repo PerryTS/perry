@@ -50,6 +50,11 @@ use std::hash::{BuildHasherDefault, Hasher};
 ///   shrinks appropriately on the first productive collection.
 const BLOCK_SIZE: usize = 1024 * 1024;
 const GENERATION_PAGE_SHIFT: usize = 12;
+// Generation classification wants exact range answers, but it does
+// not need a separate hash entry for every 4 KiB remembered-set card.
+// A 64 KiB bucket keeps lookup bounded while avoiding thousands of
+// metadata entries for low-pressure nursery churn before the first GC.
+const GENERATION_CLASS_SHIFT: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HeapGeneration {
@@ -130,7 +135,7 @@ impl PageGenerationSlot {
 
 #[derive(Clone, Copy)]
 struct PageGenerationCache {
-    page: usize,
+    key: usize,
     range: PageGenerationRange,
     valid: bool,
 }
@@ -138,7 +143,7 @@ struct PageGenerationCache {
 impl PageGenerationCache {
     const fn empty() -> Self {
         Self {
-            page: 0,
+            key: 0,
             range: PageGenerationRange {
                 base: 0,
                 end: 0,
@@ -194,6 +199,11 @@ pub(crate) fn generation_page_for_addr(addr: usize) -> usize {
 }
 
 #[inline]
+fn generation_class_key_for_addr(addr: usize) -> usize {
+    addr >> GENERATION_CLASS_SHIFT
+}
+
+#[inline]
 fn invalidate_generation_cache() {
     PAGE_GENERATION_CACHE.with(|cache| cache.set(PageGenerationCache::empty()));
 }
@@ -209,12 +219,12 @@ fn register_block_space(base: usize, size: usize, generation: HeapGeneration, sp
         generation,
         space,
     };
-    let first_page = generation_page_for_addr(base);
-    let last_page = generation_page_for_addr(end - 1);
+    let first_key = generation_class_key_for_addr(base);
+    let last_key = generation_class_key_for_addr(end - 1);
     PAGE_GENERATIONS.with(|pages| {
         let mut pages = pages.borrow_mut();
-        for page in first_page..=last_page {
-            match pages.entry(page) {
+        for key in first_key..=last_key {
+            match pages.entry(key) {
                 Entry::Occupied(mut entry) => entry.get_mut().insert(range),
                 Entry::Vacant(entry) => {
                     entry.insert(PageGenerationSlot::Single(range));
@@ -230,14 +240,14 @@ fn unregister_block_generation(base: usize, size: usize) {
         return;
     }
     let end = base + size;
-    let first_page = generation_page_for_addr(base);
-    let last_page = generation_page_for_addr(end - 1);
+    let first_key = generation_class_key_for_addr(base);
+    let last_key = generation_class_key_for_addr(end - 1);
     PAGE_GENERATIONS.with(|pages| {
         let mut pages = pages.borrow_mut();
-        for page in first_page..=last_page {
+        for key in first_key..=last_key {
             let mut remove_page = false;
             let mut replacement = None;
-            if let Some(slot) = pages.get_mut(&page) {
+            if let Some(slot) = pages.get_mut(&key) {
                 match slot {
                     PageGenerationSlot::Single(range) => {
                         remove_page = range.base == base && range.end == end;
@@ -253,9 +263,9 @@ fn unregister_block_generation(base: usize, size: usize) {
                 }
             }
             if remove_page {
-                pages.remove(&page);
+                pages.remove(&key);
             } else if let Some(slot) = replacement {
-                pages.insert(page, slot);
+                pages.insert(key, slot);
             }
         }
     });
@@ -267,10 +277,10 @@ pub(crate) fn classify_heap_generation(addr: usize) -> HeapGeneration {
     if addr == 0 {
         return HeapGeneration::Unknown;
     }
-    let page = generation_page_for_addr(addr);
+    let key = generation_class_key_for_addr(addr);
     if let Some(generation) = PAGE_GENERATION_CACHE.with(|cache| {
         let cached = cache.get();
-        (cached.valid && cached.page == page && cached.range.contains(addr))
+        (cached.valid && cached.key == key && cached.range.contains(addr))
             .then_some(cached.range.generation)
     }) {
         return generation;
@@ -278,12 +288,12 @@ pub(crate) fn classify_heap_generation(addr: usize) -> HeapGeneration {
 
     let found = PAGE_GENERATIONS.with(|pages| {
         let pages = pages.borrow();
-        pages.get(&page).and_then(|slot| slot.find(addr))
+        pages.get(&key).and_then(|slot| slot.find(addr))
     });
     if let Some(range) = found {
         PAGE_GENERATION_CACHE.with(|cache| {
             cache.set(PageGenerationCache {
-                page,
+                key,
                 range,
                 valid: true,
             });
@@ -299,10 +309,10 @@ pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
     if addr == 0 {
         return HeapSpace::Unknown;
     }
-    let page = generation_page_for_addr(addr);
+    let key = generation_class_key_for_addr(addr);
     if let Some(space) = PAGE_GENERATION_CACHE.with(|cache| {
         let cached = cache.get();
-        (cached.valid && cached.page == page && cached.range.contains(addr))
+        (cached.valid && cached.key == key && cached.range.contains(addr))
             .then_some(cached.range.space)
     }) {
         return space;
@@ -310,12 +320,12 @@ pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
 
     let found = PAGE_GENERATIONS.with(|pages| {
         let pages = pages.borrow();
-        pages.get(&page).and_then(|slot| slot.find(addr))
+        pages.get(&key).and_then(|slot| slot.find(addr))
     });
     if let Some(range) = found {
         PAGE_GENERATION_CACHE.with(|cache| {
             cache.set(PageGenerationCache {
-                page,
+                key,
                 range,
                 valid: true,
             });
@@ -1950,15 +1960,16 @@ pub(crate) fn inactive_survivor_space() -> HeapSpace {
 /// Gen-GC Phase C: is `addr` inside any nursery (= general
 /// `ARENA`) block? Hot-path predicate for the write barrier —
 /// "is the child of this store a young-gen pointer?". Backed by
-/// page side metadata so the runtime barrier does not scan every
-/// arena block on each heap store.
+/// range side metadata so the runtime barrier does not scan every
+/// arena block on each heap store, while avoiding per-card metadata
+/// growth on low-pressure nursery churn.
 #[inline]
 pub fn pointer_in_nursery(addr: usize) -> bool {
     classify_heap_space(addr).is_nursery()
 }
 
 /// Gen-GC Phase C: is `addr` inside any old-gen arena block?
-/// Mirror of `pointer_in_nursery`, also backed by page side
+/// Mirror of `pointer_in_nursery`, also backed by range side
 /// metadata.
 #[inline]
 pub fn pointer_in_old_gen(addr: usize) -> bool {
@@ -2050,6 +2061,55 @@ mod tests {
             assert!(!pointer_in_nursery(longlived));
             assert!(!pointer_in_old_gen(longlived));
             assert!(pointer_in_old_gen(old));
+        });
+    }
+
+    #[test]
+    fn generation_metadata_bucket_keeps_exact_range_boundaries() {
+        run_with_fresh_arenas(|| {
+            let bucket_base = 0x0055_0000_0000usize & !((1usize << GENERATION_CLASS_SHIFT) - 1);
+            let nursery_base = bucket_base + 0x1000;
+            let old_base = bucket_base + 0x4000;
+            let range_size = 0x1000;
+
+            register_block_space(
+                nursery_base,
+                range_size,
+                HeapGeneration::Nursery,
+                HeapSpace::NurseryEden,
+            );
+            register_block_space(old_base, range_size, HeapGeneration::Old, HeapSpace::Old);
+
+            assert_eq!(
+                classify_heap_generation(nursery_base + 0x80),
+                HeapGeneration::Nursery
+            );
+            assert_eq!(
+                classify_heap_generation(old_base + 0x80),
+                HeapGeneration::Old
+            );
+            assert_eq!(
+                classify_heap_generation(bucket_base + 0x3000),
+                HeapGeneration::Unknown,
+                "same metadata bucket must not classify holes between exact ranges"
+            );
+
+            unregister_block_generation(nursery_base, range_size);
+            assert_eq!(
+                classify_heap_generation(nursery_base + 0x80),
+                HeapGeneration::Unknown
+            );
+            assert_eq!(
+                classify_heap_generation(old_base + 0x80),
+                HeapGeneration::Old,
+                "removing one range must not remove another range in the same bucket"
+            );
+
+            unregister_block_generation(old_base, range_size);
+            assert_eq!(
+                classify_heap_generation(old_base + 0x80),
+                HeapGeneration::Unknown
+            );
         });
     }
 
