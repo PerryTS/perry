@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 988 entries across 76 modules
+// Coverage: 992 entries across 76 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1381,6 +1381,10 @@ declare module "url" {
   /** stdlib */
   export class URLSearchParams { [key: string]: any; }
   /** stdlib */
+  export function domainToASCII(...args: any[]): any;
+  /** stdlib */
+  export function domainToUnicode(...args: any[]): any;
+  /** stdlib */
   export function fileURLToPath(...args: any[]): any;
   /** stdlib */
   export function format(...args: any[]): any;
@@ -1388,6 +1392,10 @@ declare module "url" {
   export function parse(...args: any[]): any;
   /** stdlib */
   export function pathToFileURL(...args: any[]): any;
+  /** stdlib */
+  export function resolve(...args: any[]): any;
+  /** stdlib */
+  export function urlToHttpOptions(...args: any[]): any;
 }
 
 declare module "util" {
