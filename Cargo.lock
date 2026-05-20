@@ -5328,6 +5328,7 @@ name = "perry-ext-events"
 version = "0.5.1018"
 dependencies = [
  "perry-ffi",
+ "perry-runtime",
 ]
 
 [[package]]
@@ -5348,6 +5349,7 @@ dependencies = [
  "lazy_static",
  "perry-ext-ws",
  "perry-ffi",
+ "perry-runtime",
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.28.0",
@@ -5371,6 +5373,7 @@ dependencies = [
  "lazy_static",
  "perry-ext-http-server",
  "perry-ffi",
+ "perry-runtime",
  "reqwest",
  "serde_json",
  "tokio",

@@ -729,6 +729,10 @@ thread_local! {
     /// Registered root scanner functions from perry-ffi/native packages.
     static FFI_ROOT_SCANNERS: RefCell<Vec<PerryFfiRootScanner>> = RefCell::new(Vec::new());
 
+    /// Registered mutable root scanner functions from perry-ffi/native
+    /// packages. These expose native-owned slots for mark/rewrite passes.
+    static FFI_MUTABLE_ROOT_SCANNERS: RefCell<Vec<PerryFfiMutableRootScanner>> = RefCell::new(Vec::new());
+
     /// Module-level global variable addresses (registered by codegen)
     static GLOBAL_ROOTS: RefCell<Vec<*mut u64>> = const { RefCell::new(Vec::new()) };
 
@@ -2876,6 +2880,16 @@ pub fn gc_register_mutable_root_scanner(scanner: MutableRootScanner) {
 
 type PerryFfiRootMarker = extern "C" fn(value: f64, ctx: *mut c_void);
 type PerryFfiRootScanner = extern "C" fn(mark: PerryFfiRootMarker, ctx: *mut c_void);
+type PerryFfiMutableRootVisitor =
+    extern "C" fn(kind: u32, slot: *mut c_void, ctx: *mut c_void) -> bool;
+type PerryFfiMutableRootScanner =
+    extern "C" fn(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void);
+
+const PERRY_FFI_ROOT_SLOT_I64: u32 = 1;
+const PERRY_FFI_ROOT_SLOT_USIZE: u32 = 2;
+const PERRY_FFI_ROOT_SLOT_RAW_MUT_PTR: u32 = 3;
+const PERRY_FFI_ROOT_SLOT_NANBOX_F64: u32 = 4;
+const PERRY_FFI_ROOT_SLOT_NANBOX_U64: u32 = 5;
 
 /// Register a native-package root scanner through a stable C ABI.
 ///
@@ -2887,6 +2901,20 @@ type PerryFfiRootScanner = extern "C" fn(mark: PerryFfiRootMarker, ctx: *mut c_v
 #[no_mangle]
 pub extern "C" fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanner) {
     FFI_ROOT_SCANNERS.with(|scanners| {
+        scanners.borrow_mut().push(scanner);
+    });
+}
+
+/// Register a native-package root scanner that exposes mutable slots
+/// through the stable C ABI.
+///
+/// Unlike `perry_ffi_gc_register_root_scanner`, this scanner can be
+/// revisited after copied-minor evacuation so native-owned slots are
+/// rewritten to forwarded addresses instead of forcing copy-only
+/// pinning/fallback behavior.
+#[no_mangle]
+pub extern "C" fn perry_ffi_gc_register_mutable_root_scanner(scanner: PerryFfiMutableRootScanner) {
+    FFI_MUTABLE_ROOT_SCANNERS.with(|scanners| {
         scanners.borrow_mut().push(scanner);
     });
 }
@@ -6210,6 +6238,42 @@ struct RegisteredRootMarkContext {
     legacy_stats: *mut LegacyRootTraceStats,
 }
 
+extern "C" fn perry_ffi_visit_mutable_root_slot(
+    kind: u32,
+    slot: *mut c_void,
+    ctx: *mut c_void,
+) -> bool {
+    if slot.is_null() || ctx.is_null() {
+        return false;
+    }
+    let visitor = unsafe { &mut *(ctx as *mut RuntimeRootVisitor<'_>) };
+    unsafe {
+        match kind {
+            PERRY_FFI_ROOT_SLOT_I64 => visitor.visit_i64_slot(&mut *(slot as *mut i64)),
+            PERRY_FFI_ROOT_SLOT_USIZE => visitor.visit_usize_slot(&mut *(slot as *mut usize)),
+            PERRY_FFI_ROOT_SLOT_RAW_MUT_PTR => {
+                visitor.visit_raw_mut_ptr_slot(&mut *(slot as *mut *mut c_void))
+            }
+            PERRY_FFI_ROOT_SLOT_NANBOX_F64 => {
+                visitor.visit_nanbox_f64_slot(&mut *(slot as *mut f64))
+            }
+            PERRY_FFI_ROOT_SLOT_NANBOX_U64 => {
+                visitor.visit_nanbox_u64_slot(&mut *(slot as *mut u64))
+            }
+            _ => false,
+        }
+    }
+}
+
+fn visit_ffi_mutable_registered_roots(visitor: &mut RuntimeRootVisitor<'_>) {
+    let scanners: Vec<PerryFfiMutableRootScanner> =
+        FFI_MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let ctx = visitor as *mut RuntimeRootVisitor<'_> as *mut c_void;
+    for scanner in scanners {
+        scanner(perry_ffi_visit_mutable_root_slot, ctx);
+    }
+}
+
 /// Run registered runtime-owned scanners that expose mutable slots.
 fn mark_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
     let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
@@ -6217,6 +6281,7 @@ fn mark_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
     for scanner in scanners {
         scanner(&mut visitor);
     }
+    visit_ffi_mutable_registered_roots(&mut visitor);
 }
 
 /// Run legacy copy-only root scanners. When evacuation is enabled,
@@ -7877,6 +7942,7 @@ impl CopiedMinorEligibility {
             for scanner in scanners {
                 scanner(&mut visitor);
             }
+            visit_ffi_mutable_registered_roots(&mut visitor);
         }
         unsafe {
             checker.drain();
@@ -7950,6 +8016,7 @@ fn gc_collect_minor_copying_fast_path(
         for scanner in scanners {
             scanner(&mut visitor);
         }
+        visit_ffi_mutable_registered_roots(&mut visitor);
     }
 
     let snapshot = remembered_dirty_snapshot();
@@ -7974,6 +8041,7 @@ fn gc_collect_minor_copying_fast_path(
         for scanner in scanners {
             scanner(&mut visitor);
         }
+        visit_ffi_mutable_registered_roots(&mut visitor);
     }
     trace_phase_record(trace, "copying_nursery", phase_start);
 
@@ -10208,6 +10276,7 @@ fn rewrite_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
     for scanner in scanners {
         scanner(&mut visitor);
     }
+    visit_ffi_mutable_registered_roots(&mut visitor);
 }
 
 fn verify_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
@@ -10232,6 +10301,7 @@ fn verify_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
     for scanner in scanners {
         scanner(&mut visitor);
     }
+    visit_ffi_mutable_registered_roots(&mut visitor);
 }
 
 fn verify_copy_only_scanner_bits(bits: u64, valid_ptrs: &ValidPointerSet, surface: &'static str) {
@@ -13081,6 +13151,96 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct TestFfiMutableRootSlots {
+        i64_slots: Vec<i64>,
+        usize_slots: Vec<usize>,
+        raw_ptr_slots: Vec<*mut u8>,
+        nanbox_f64_slots: Vec<f64>,
+        nanbox_u64_slots: Vec<u64>,
+    }
+
+    thread_local! {
+        static TEST_FFI_MUTABLE_ROOTS: RefCell<TestFfiMutableRootSlots> =
+            RefCell::new(TestFfiMutableRootSlots::default());
+    }
+
+    extern "C" fn test_ffi_mutable_root_scanner(
+        visit: PerryFfiMutableRootVisitor,
+        ctx: *mut c_void,
+    ) {
+        TEST_FFI_MUTABLE_ROOTS.with(|roots| {
+            let mut roots = roots.borrow_mut();
+            for slot in roots.i64_slots.iter_mut() {
+                visit(
+                    PERRY_FFI_ROOT_SLOT_I64,
+                    slot as *mut i64 as *mut c_void,
+                    ctx,
+                );
+            }
+            for slot in roots.usize_slots.iter_mut() {
+                visit(
+                    PERRY_FFI_ROOT_SLOT_USIZE,
+                    slot as *mut usize as *mut c_void,
+                    ctx,
+                );
+            }
+            for slot in roots.raw_ptr_slots.iter_mut() {
+                visit(
+                    PERRY_FFI_ROOT_SLOT_RAW_MUT_PTR,
+                    slot as *mut *mut u8 as *mut c_void,
+                    ctx,
+                );
+            }
+            for slot in roots.nanbox_f64_slots.iter_mut() {
+                visit(
+                    PERRY_FFI_ROOT_SLOT_NANBOX_F64,
+                    slot as *mut f64 as *mut c_void,
+                    ctx,
+                );
+            }
+            for slot in roots.nanbox_u64_slots.iter_mut() {
+                visit(
+                    PERRY_FFI_ROOT_SLOT_NANBOX_U64,
+                    slot as *mut u64 as *mut c_void,
+                    ctx,
+                );
+            }
+        });
+    }
+
+    struct TemporaryFfiMutableRootScanner {
+        previous_len: usize,
+        previous_roots: TestFfiMutableRootSlots,
+    }
+
+    impl TemporaryFfiMutableRootScanner {
+        fn new(slots: TestFfiMutableRootSlots) -> Self {
+            let previous_roots = TEST_FFI_MUTABLE_ROOTS.with(|roots| roots.replace(slots));
+            let previous_len = FFI_MUTABLE_ROOT_SCANNERS.with(|scanners| {
+                let mut scanners = scanners.borrow_mut();
+                let previous_len = scanners.len();
+                scanners.push(test_ffi_mutable_root_scanner);
+                previous_len
+            });
+            Self {
+                previous_len,
+                previous_roots,
+            }
+        }
+    }
+
+    impl Drop for TemporaryFfiMutableRootScanner {
+        fn drop(&mut self) {
+            FFI_MUTABLE_ROOT_SCANNERS.with(|scanners| {
+                scanners.borrow_mut().truncate(self.previous_len);
+            });
+            TEST_FFI_MUTABLE_ROOTS.with(|roots| {
+                roots.replace(std::mem::take(&mut self.previous_roots));
+            });
+        }
+    }
+
     fn young_leaf() -> usize {
         crate::arena::arena_alloc_gc(32, 8, GC_TYPE_STRING) as usize
     }
@@ -14654,6 +14814,107 @@ mod tests {
         );
         assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 1);
         assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_young_roots, 1);
+    }
+
+    #[test]
+    fn test_ffi_mutable_i64_root_is_copied_without_copy_only_fallback() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let child = young_leaf();
+        let _mutable_root_guard = TemporaryFfiMutableRootScanner::new(TestFfiMutableRootSlots {
+            i64_slots: vec![child as i64],
+            ..TestFfiMutableRootSlots::default()
+        });
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let after = TEST_FFI_MUTABLE_ROOTS.with(|roots| roots.borrow().i64_slots[0] as usize);
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_ne!(after, child);
+        assert!(crate::arena::pointer_in_nursery(after));
+        assert_eq!(
+            trace
+                .legacy_copy_only_scanner_pinned
+                .registered_ffi_scanners,
+            0
+        );
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 0);
+    }
+
+    #[test]
+    fn test_ffi_mutable_active_registry_malloc_root_does_not_report_copy_only_roots() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let live_malloc = gc_malloc(
+            std::mem::size_of::<crate::closure::ClosureHeader>(),
+            GC_TYPE_CLOSURE,
+        );
+        unsafe {
+            init_test_closure(live_malloc);
+        }
+        activate_malloc_registry_for_tests();
+        let _mutable_root_guard = TemporaryFfiMutableRootScanner::new(TestFfiMutableRootSlots {
+            raw_ptr_slots: vec![live_malloc],
+            ..TestFfiMutableRootSlots::default()
+        });
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let after = TEST_FFI_MUTABLE_ROOTS.with(|roots| roots.borrow().raw_ptr_slots[0]);
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_eq!(after, live_malloc);
+        assert!(trace.copying_nursery.malloc_validation_lookups > 0);
+        assert_eq!(
+            trace
+                .legacy_copy_only_scanner_pinned
+                .registered_ffi_scanners,
+            0
+        );
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 0);
+    }
+
+    #[test]
+    fn test_ffi_mutable_trampoline_visits_all_slot_kinds() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let i64_root = young_leaf();
+        let usize_root = young_leaf();
+        let raw_root = young_leaf();
+        let f64_root = young_leaf();
+        let u64_root = young_leaf();
+        let _mutable_root_guard = TemporaryFfiMutableRootScanner::new(TestFfiMutableRootSlots {
+            i64_slots: vec![i64_root as i64],
+            usize_slots: vec![usize_root],
+            raw_ptr_slots: vec![raw_root as *mut u8],
+            nanbox_f64_slots: vec![f64::from_bits(ptr_bits(f64_root))],
+            nanbox_u64_slots: vec![ptr_bits(u64_root)],
+        });
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let (i64_after, usize_after, raw_after, f64_after, u64_after) = TEST_FFI_MUTABLE_ROOTS
+            .with(|roots| {
+                let roots = roots.borrow();
+                (
+                    roots.i64_slots[0] as usize,
+                    roots.usize_slots[0],
+                    roots.raw_ptr_slots[0] as usize,
+                    (roots.nanbox_f64_slots[0].to_bits() & POINTER_MASK) as usize,
+                    (roots.nanbox_u64_slots[0] & POINTER_MASK) as usize,
+                )
+            });
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        for (before, after) in [
+            (i64_root, i64_after),
+            (usize_root, usize_after),
+            (raw_root, raw_after),
+            (f64_root, f64_after),
+            (u64_root, u64_after),
+        ] {
+            assert_ne!(after, before);
+            assert!(crate::arena::pointer_in_nursery(after));
+        }
+        assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 0);
     }
 
     #[test]

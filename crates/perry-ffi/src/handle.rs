@@ -39,9 +39,11 @@
 //! [`with_handle`] which scopes the borrow under a closure.
 
 use std::any::Any;
+use std::cell::Cell;
 use std::ffi::c_void;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Mutex, Once};
+use std::sync::Mutex;
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
@@ -59,13 +61,110 @@ static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> = Lazy::new(Da
 static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
 static ROOT_SCANNERS: Lazy<Mutex<Vec<fn(&mut dyn FnMut(f64))>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
-static REGISTER_ROOT_SCANNER_TRAMPOLINE: Once = Once::new();
+static MUTABLE_ROOT_SCANNERS: Lazy<Mutex<Vec<GcMutableRootScanner>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
+
+thread_local! {
+    static ROOT_SCANNER_TRAMPOLINE_REGISTERED: Cell<bool> = const { Cell::new(false) };
+    static MUTABLE_ROOT_SCANNER_TRAMPOLINE_REGISTERED: Cell<bool> = const { Cell::new(false) };
+}
 
 type PerryFfiRootMarker = extern "C" fn(value: f64, ctx: *mut c_void);
 type PerryFfiRootScanner = extern "C" fn(mark: PerryFfiRootMarker, ctx: *mut c_void);
+type PerryFfiMutableRootVisitor =
+    extern "C" fn(kind: u32, slot: *mut c_void, ctx: *mut c_void) -> bool;
+type PerryFfiMutableRootScanner =
+    extern "C" fn(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void);
+
+const FFI_ROOT_SLOT_I64: u32 = 1;
+const FFI_ROOT_SLOT_USIZE: u32 = 2;
+const FFI_ROOT_SLOT_RAW_MUT_PTR: u32 = 3;
+const FFI_ROOT_SLOT_NANBOX_F64: u32 = 4;
+const FFI_ROOT_SLOT_NANBOX_U64: u32 = 5;
 
 extern "C" {
     fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanner);
+    fn perry_ffi_gc_register_mutable_root_scanner(scanner: PerryFfiMutableRootScanner);
+}
+
+/// Function pointer type for native wrappers that expose mutable GC root slots.
+///
+/// Register one with [`gc_register_mutable_root_scanner`]. The scanner should
+/// walk wrapper-owned storage and call the relevant [`GcRootVisitor`] method for
+/// each slot that may hold a Perry heap pointer.
+pub type GcMutableRootScanner = for<'a> fn(&mut GcRootVisitor<'a>);
+
+/// Visitor passed to mutable GC root scanners.
+///
+/// The visitor does not expose runtime internals. Each method forwards the
+/// address of a wrapper-owned slot to Perry's runtime so the GC can mark the
+/// current referent and, during copied-minor evacuation, rewrite the slot to a
+/// forwarded address.
+pub struct GcRootVisitor<'a> {
+    visit: PerryFfiMutableRootVisitor,
+    ctx: *mut c_void,
+    _marker: PhantomData<&'a mut ()>,
+}
+
+impl<'a> GcRootVisitor<'a> {
+    fn new(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void) -> Self {
+        Self {
+            visit,
+            ctx,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Visit a raw heap pointer stored in an `i64` slot.
+    ///
+    /// Returns `true` when the runtime rewrote the slot to a forwarded address.
+    pub fn visit_i64_slot(&mut self, slot: &mut i64) -> bool {
+        (self.visit)(FFI_ROOT_SLOT_I64, slot as *mut i64 as *mut c_void, self.ctx)
+    }
+
+    /// Visit a raw heap pointer stored in a `usize` slot.
+    ///
+    /// Returns `true` when the runtime rewrote the slot to a forwarded address.
+    pub fn visit_usize_slot(&mut self, slot: &mut usize) -> bool {
+        (self.visit)(
+            FFI_ROOT_SLOT_USIZE,
+            slot as *mut usize as *mut c_void,
+            self.ctx,
+        )
+    }
+
+    /// Visit a raw mutable heap pointer slot.
+    ///
+    /// Returns `true` when the runtime rewrote the slot to a forwarded address.
+    pub fn visit_raw_mut_ptr_slot<T>(&mut self, slot: &mut *mut T) -> bool {
+        (self.visit)(
+            FFI_ROOT_SLOT_RAW_MUT_PTR,
+            slot as *mut *mut T as *mut c_void,
+            self.ctx,
+        )
+    }
+
+    /// Visit a NaN-boxed JS value stored as an `f64`.
+    ///
+    /// Returns `true` when the runtime rewrote the slot to a forwarded address.
+    pub fn visit_nanbox_f64_slot(&mut self, slot: &mut f64) -> bool {
+        (self.visit)(
+            FFI_ROOT_SLOT_NANBOX_F64,
+            slot as *mut f64 as *mut c_void,
+            self.ctx,
+        )
+    }
+
+    /// Visit a NaN-boxed JS value stored as raw `u64` bits.
+    ///
+    /// Returns `true` when the runtime rewrote the slot to a forwarded address.
+    pub fn visit_nanbox_u64_slot(&mut self, slot: &mut u64) -> bool {
+        (self.visit)(
+            FFI_ROOT_SLOT_NANBOX_U64,
+            slot as *mut u64 as *mut c_void,
+            self.ctx,
+        )
+    }
 }
 
 /// Register `value` under a fresh handle and return the handle.
@@ -169,6 +268,28 @@ where
     }
 }
 
+/// Visit every registered handle whose stored type matches `T`,
+/// invoking `f(&mut value)` for each.
+///
+/// This is the mutable counterpart to [`iter_handles_of`]. It is intended for
+/// mutable GC scanners that need to hand owned fields to
+/// [`GcRootVisitor`], allowing copied-minor GC to rewrite those fields after
+/// evacuation.
+///
+/// The callback runs while the registry entry is borrowed. Do not remove or
+/// re-register handles from inside `f`.
+pub fn iter_handles_of_mut<T, F>(mut f: F)
+where
+    T: 'static + Send + Sync,
+    F: FnMut(&mut T),
+{
+    for mut entry in HANDLES.iter_mut() {
+        if let Some(v) = entry.value_mut().downcast_mut::<T>() {
+            f(v);
+        }
+    }
+}
+
 /// Visit every registered handle id whose stored type matches `T`,
 /// invoking `f(handle_id)` for each.
 ///
@@ -199,9 +320,14 @@ where
     }
 }
 
-/// Register a GC root scanner with perry's runtime. The scanner
-/// is called during every GC mark phase; it should call its `mark`
-/// callback with each NaN-boxed JsValue that should be kept alive.
+/// Register a legacy copy-only GC root scanner with Perry's runtime.
+///
+/// The scanner is called during every GC mark phase; it should call its `mark`
+/// callback with each NaN-boxed JsValue that should be kept alive. This API
+/// exposes copied values only. During copied-minor evacuation the runtime
+/// cannot rewrite wrapper-owned storage discovered through this API, so live
+/// young roots reported here are treated as copy-only fallback roots. Prefer
+/// [`gc_register_mutable_root_scanner`] for new scanners.
 ///
 /// This registers through `perry_ffi_gc_register_root_scanner`, the stable
 /// C ABI bridge exported by the runtime.
@@ -224,12 +350,66 @@ where
 /// gc_register_root_scanner(scan_my_roots);
 /// ```
 pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
-    ROOT_SCANNERS
-        .lock()
-        .expect("perry-ffi root scanner registry poisoned")
-        .push(scanner);
-    REGISTER_ROOT_SCANNER_TRAMPOLINE.call_once(|| unsafe {
-        perry_ffi_gc_register_root_scanner(scan_registered_roots);
+    {
+        let mut scanners = ROOT_SCANNERS
+            .lock()
+            .expect("perry-ffi root scanner registry poisoned");
+        if !scanners
+            .iter()
+            .any(|registered| *registered as usize == scanner as usize)
+        {
+            scanners.push(scanner);
+        }
+    }
+    ROOT_SCANNER_TRAMPOLINE_REGISTERED.with(|registered| {
+        if !registered.get() {
+            unsafe {
+                perry_ffi_gc_register_root_scanner(scan_registered_roots);
+            }
+            registered.set(true);
+        }
+    });
+}
+
+/// Register a mutable GC root scanner with Perry's runtime.
+///
+/// This is the preferred scanner API for native wrappers that keep Perry heap
+/// pointers in handle-owned Rust fields. Unlike [`gc_register_root_scanner`],
+/// this API exposes the actual slots, so copied-minor GC can rewrite them after
+/// moving young objects.
+///
+/// Wrapper authors typically combine this with [`iter_handles_of_mut`]:
+///
+/// ```ignore
+/// use perry_ffi::{gc_register_mutable_root_scanner, iter_handles_of_mut, GcRootVisitor};
+///
+/// fn scan_my_roots(visitor: &mut GcRootVisitor<'_>) {
+///     iter_handles_of_mut::<MyHandle, _>(|h| {
+///         visitor.visit_i64_slot(&mut h.callback);
+///     });
+/// }
+///
+/// gc_register_mutable_root_scanner(scan_my_roots);
+/// ```
+pub fn gc_register_mutable_root_scanner(scanner: GcMutableRootScanner) {
+    {
+        let mut scanners = MUTABLE_ROOT_SCANNERS
+            .lock()
+            .expect("perry-ffi mutable root scanner registry poisoned");
+        if !scanners
+            .iter()
+            .any(|registered| *registered as usize == scanner as usize)
+        {
+            scanners.push(scanner);
+        }
+    }
+    MUTABLE_ROOT_SCANNER_TRAMPOLINE_REGISTERED.with(|registered| {
+        if !registered.get() {
+            unsafe {
+                perry_ffi_gc_register_mutable_root_scanner(scan_registered_mutable_roots);
+            }
+            registered.set(true);
+        }
     });
 }
 
@@ -240,6 +420,17 @@ extern "C" fn scan_registered_roots(mark: PerryFfiRootMarker, ctx: *mut c_void) 
         .clone();
     for scanner in scanners {
         scanner(&mut |value| mark(value, ctx));
+    }
+}
+
+extern "C" fn scan_registered_mutable_roots(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void) {
+    let scanners = MUTABLE_ROOT_SCANNERS
+        .lock()
+        .expect("perry-ffi mutable root scanner registry poisoned")
+        .clone();
+    let mut visitor = GcRootVisitor::new(visit, ctx);
+    for scanner in scanners {
+        scanner(&mut visitor);
     }
 }
 
@@ -266,6 +457,25 @@ mod tests {
         let n = with_handle::<Counter, _, _>(h, |c| c.0).expect("present");
         assert_eq!(n, 2);
         drop_handle(h);
+    }
+
+    #[test]
+    fn iter_handles_of_mut_updates_matching_values() {
+        struct Counter(u32);
+        let a = register_handle(Counter(1));
+        let b = register_handle(Counter(10));
+        let other = register_handle("not a counter".to_string());
+
+        iter_handles_of_mut::<Counter, _>(|c| c.0 += 1);
+
+        let mut values = Vec::new();
+        iter_handles_of::<Counter, _>(|c| values.push(c.0));
+        values.sort_unstable();
+        assert_eq!(values, vec![2, 11]);
+
+        drop_handle(a);
+        drop_handle(b);
+        drop_handle(other);
     }
 
     #[test]

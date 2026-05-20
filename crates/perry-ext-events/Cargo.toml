@@ -13,3 +13,4 @@ perry-ffi.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
+perry-runtime.workspace = true
