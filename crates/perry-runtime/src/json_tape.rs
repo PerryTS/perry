@@ -1174,6 +1174,8 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
                 materialize_value_slice(tape, bytes, &mut walk_idx)
             };
             *elements_ptr.add(i) = value.bits();
+            (*arr_ptr).length = (i + 1) as u32;
+            crate::array::note_array_slot(arr_ptr, i, value.bits());
             // Advance tape cursor past this element.
             let k = tape[idx].kind;
             if k == KIND_OBJ_START || k == KIND_ARR_START {

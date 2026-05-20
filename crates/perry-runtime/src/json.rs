@@ -3994,6 +3994,7 @@ unsafe fn apply_reviver(
                 let revived_child = apply_reviver(child_val, field_key_f64, reviver);
                 // Write back the revived value
                 *fields_ptr.add(f as usize) = f64::from_bits(revived_child.bits());
+                crate::gc::layout_note_slot(obj as usize, f as usize, revived_child.bits());
             }
         } else {
             // Check if it's an array
@@ -4012,6 +4013,11 @@ unsafe fn apply_reviver(
                         let child_val = JSValue::from_bits(elem_f64.to_bits());
                         let revived_child = apply_reviver(child_val, idx_key_f64, reviver);
                         *elements.add(i as usize) = f64::from_bits(revived_child.bits());
+                        crate::array::note_array_slot(
+                            arr as *mut crate::ArrayHeader,
+                            i as usize,
+                            revived_child.bits(),
+                        );
                     }
                 }
             }

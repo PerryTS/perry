@@ -10436,6 +10436,132 @@ mod tests {
         clear_mark_seeds();
     }
 
+    fn assert_array_root_trace_reads(arr: *mut crate::array::ArrayHeader, expected_reads: usize) {
+        clear_marks();
+        clear_mark_seeds();
+
+        let valid_ptrs = build_valid_pointer_set();
+        assert!(try_mark_value(
+            POINTER_TAG | (arr as u64 & POINTER_MASK),
+            &valid_ptrs
+        ));
+        test_reset_trace_slot_reads();
+        trace_marked_objects(&valid_ptrs);
+        assert_eq!(test_trace_slot_reads(), expected_reads);
+    }
+
+    fn assert_numeric_array_trace_free(arr: *mut crate::array::ArrayHeader, len: usize) {
+        assert_eq!(test_layout_pointer_slot_count(arr as usize, len), Some(0));
+        assert_eq!(test_heap_child_slot_count(arr as *mut u8), 0);
+        assert_array_root_trace_reads(arr, 0);
+    }
+
+    #[test]
+    fn test_array_numeric_producers_stay_pointer_free() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let values = [1.0, 2.5, 3.0, 4.25];
+        let from_f64 = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+        assert_numeric_array_trace_free(from_f64, values.len());
+
+        let keys_src = crate::array::js_array_alloc_with_length(4);
+        for i in 0..4 {
+            crate::array::js_array_set_f64(keys_src, i, (i + 10) as f64);
+        }
+        let keys = crate::array::js_array_keys(keys_src);
+        assert_numeric_array_trace_free(keys, 4);
+
+        let filled = crate::array::js_array_alloc_with_length(4);
+        crate::array::js_array_fill(filled, 42.0);
+        assert_numeric_array_trace_free(filled, 4);
+
+        let cloned = crate::array::js_array_clone(filled);
+        assert_numeric_array_trace_free(cloned, 4);
+
+        let concat_dest = crate::array::js_array_alloc(0);
+        let concatenated = crate::array::js_array_concat(concat_dest, filled);
+        assert_numeric_array_trace_free(concatenated, 4);
+
+        crate::array::js_array_copy_within(concatenated, 1.0, 0.0, 0, 0.0);
+        assert_numeric_array_trace_free(concatenated, 4);
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_array_mixed_bulk_producers_preserve_pointer_layout() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let child = crate::string::js_string_from_bytes(b"bulk-child".as_ptr(), 10) as *mut u8;
+        let child_header = unsafe { header_from_user_ptr(child) };
+        let child_box = f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK));
+
+        let src = crate::array::js_array_alloc_with_length(2);
+        crate::array::js_array_set_f64(src, 0, 1.0);
+        crate::array::js_array_set_f64(src, 1, child_box);
+
+        let cloned = crate::array::js_array_clone(src);
+        assert_eq!(test_layout_pointer_slot_count(cloned as usize, 2), Some(1));
+        assert_array_root_trace_reads(cloned, 1);
+        unsafe {
+            assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
+        clear_marks();
+        clear_mark_seeds();
+
+        let concatenated = crate::array::js_array_concat(crate::array::js_array_alloc(0), src);
+        assert_eq!(
+            test_layout_pointer_slot_count(concatenated as usize, 2),
+            Some(1)
+        );
+        assert_array_root_trace_reads(concatenated, 1);
+        unsafe {
+            assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
+        clear_marks();
+        clear_mark_seeds();
+
+        let set = crate::set::js_set_alloc(4);
+        let set = crate::set::js_set_add(set, child_box);
+        let set_arr = crate::set::js_set_to_array(set);
+        assert_eq!(test_layout_pointer_slot_count(set_arr as usize, 1), Some(1));
+        assert_array_root_trace_reads(set_arr, 1);
+        unsafe {
+            assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
+        clear_marks();
+        clear_mark_seeds();
+
+        let map = crate::map::js_map_alloc(4);
+        let map = crate::map::js_map_set(map, 7.0, child_box);
+        let entries = crate::map::js_map_entries(map);
+        assert_eq!(test_layout_pointer_slot_count(entries as usize, 1), Some(1));
+        let pair_box = crate::array::js_array_get_f64(entries, 0);
+        let pair = (pair_box.to_bits() & POINTER_MASK) as *mut crate::array::ArrayHeader;
+        assert_eq!(test_layout_pointer_slot_count(pair as usize, 2), Some(1));
+        assert_array_root_trace_reads(entries, 2);
+        unsafe {
+            assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
+        clear_marks();
+        clear_mark_seeds();
+
+        let overwritten = crate::array::js_array_alloc_with_length(1);
+        crate::array::js_array_set_f64(overwritten, 0, child_box);
+        assert_eq!(
+            test_layout_pointer_slot_count(overwritten as usize, 1),
+            Some(1)
+        );
+        crate::array::js_array_set_f64(overwritten, 0, 99.0);
+        assert_numeric_array_trace_free(overwritten, 1);
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
     #[test]
     fn test_trace_object_uses_pointer_layout_mask() {
         clear_marks();

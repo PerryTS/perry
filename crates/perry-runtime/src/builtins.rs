@@ -3545,7 +3545,9 @@ pub extern "C" fn js_structured_clone(value: f64) -> f64 {
                         as *mut f64;
                     for i in 0..len as usize {
                         let elem = *elements.add(i);
-                        *elements.add(i) = js_structured_clone(elem);
+                        let cloned = js_structured_clone(elem);
+                        *elements.add(i) = cloned;
+                        crate::array::note_array_slot(new_arr, i, cloned.to_bits());
                     }
                     let new_bits =
                         0x7FFD_0000_0000_0000u64 | (new_arr as u64 & 0x0000_FFFF_FFFF_FFFF);

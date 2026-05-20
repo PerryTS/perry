@@ -2076,6 +2076,7 @@ pub extern "C" fn js_string_to_char_array(s: i64) -> i64 {
             f64::from_bits(crate::value::STRING_TAG | (ch_ptr as u64 & crate::value::POINTER_MASK));
         unsafe {
             *elements.add(i) = nanboxed;
+            crate::array::note_array_slot(arr, i, nanboxed.to_bits());
         }
     }
     arr as i64
@@ -2474,6 +2475,7 @@ pub extern "C" fn js_string_split_n(
             for (i, p) in parts.iter().enumerate() {
                 let nanboxed = STRING_TAG | (*p as u64 & POINTER_MASK);
                 std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
+                crate::array::note_array_slot(arr, i, nanboxed);
             }
         }
         return arr;
@@ -2506,6 +2508,7 @@ pub extern "C" fn js_string_split_n(
             }
             let nanboxed = STRING_TAG | (sh as u64 & POINTER_MASK);
             std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
+            crate::array::note_array_slot(arr, i, nanboxed);
         }
     }
 

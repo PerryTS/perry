@@ -275,14 +275,14 @@ pub(crate) unsafe fn gc_element_slot_range(
 }
 
 #[inline]
-unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
+pub(crate) unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
     crate::gc::layout_note_slot(arr as usize, index, value_bits);
     let slot = array_elements_ptr(arr).add(index) as usize;
     crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
 }
 
 #[inline]
-unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
+pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
     if arr.is_null() {
         return;
     }
