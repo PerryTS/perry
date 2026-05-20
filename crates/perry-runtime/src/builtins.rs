@@ -438,6 +438,72 @@ impl Drop for InspectDepthLimitGuard {
     }
 }
 
+/// Sidecar registry mapping each user-defined function's compiled address
+/// to the JS name it should print as via `console.log` / `util.inspect`.
+/// Codegen emits a `js_register_function_name(func_ptr, name_bytes, len)`
+/// call from `main()` for every named function in `Hir.functions`, so by
+/// the time user code runs the map is fully populated. Functions never
+/// rename, so we accept lossy single-writer semantics (last-write wins on
+/// the rare duplicate). See #1202.
+///
+/// Direct lookup against the symbol table via `dladdr` doesn't work here
+/// because the macOS linker's `-dead_strip` removes the symbol *names* of
+/// perry_fn_* globals (the bodies stay — they're referenced by pointer —
+/// but the symbol entries vanish, so `dli_sname` comes back null).
+fn function_name_registry(
+) -> &'static std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>> {
+    use std::sync::OnceLock;
+    static REGISTRY: OnceLock<
+        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>>,
+    > = OnceLock::new();
+    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Format a JS function/closure for `console.log` / `util.inspect`. Returns
+/// `[Function: <name>]` when codegen has registered a name for the
+/// function pointer, otherwise `[Function (anonymous)]` (matching Node's
+/// output for nameless closures). See #1202.
+fn format_function_for_console(func_ptr: *const u8) -> String {
+    if !func_ptr.is_null() {
+        if let Ok(map) = function_name_registry().lock() {
+            if let Some(name) = map.get(&(func_ptr as usize)) {
+                if !name.is_empty() {
+                    return format!("[Function: {}]", name);
+                }
+            }
+        }
+    }
+    "[Function (anonymous)]".to_string()
+}
+
+/// Codegen-facing entry point: register `func_ptr` as the compiled address
+/// of a JS function called `<name>` (UTF-8, `name_len` bytes, not NUL-
+/// terminated). Idempotent — calling twice with the same `func_ptr`
+/// silently overwrites the prior name.
+///
+/// # Safety
+///
+/// `name_ptr..name_ptr+name_len` must point at a valid UTF-8 byte slice
+/// that outlives the call (we copy it). `func_ptr` may be anything; we
+/// only use it as a map key.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_function_name(
+    func_ptr: *const u8,
+    name_ptr: *const u8,
+    name_len: u32,
+) {
+    if func_ptr.is_null() || name_ptr.is_null() || name_len == 0 {
+        return;
+    }
+    let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
+    let Ok(name) = std::str::from_utf8(bytes) else {
+        return;
+    };
+    if let Ok(mut map) = function_name_registry().lock() {
+        map.insert(func_ptr as usize, std::sync::Arc::from(name));
+    }
+}
+
 /// Print multiple values from an array (console.log with spread support)
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
@@ -667,7 +733,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 } else if gc_type == crate::gc::GC_TYPE_MAP {
                     "Map {}".to_string()
                 } else if gc_type == crate::gc::GC_TYPE_CLOSURE {
-                    "[Function (anonymous)]".to_string()
+                    let closure = ptr as *const crate::closure::ClosureHeader;
+                    format_function_for_console((*closure).func_ptr)
                 } else if gc_type == crate::gc::GC_TYPE_PROMISE {
                     "Promise { <pending> }".to_string()
                 } else {

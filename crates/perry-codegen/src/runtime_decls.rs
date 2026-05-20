@@ -27,6 +27,10 @@ pub fn declare_phase1(module: &mut LlModule) {
     // Handle-method dispatcher wiring (issue #86). Stdlib provides the
     // real impl; when only runtime is linked, it's a no-op stub.
     module.declare_function("js_stdlib_init_dispatch", VOID, &[]);
+    // Function-name registry — populated by `main()` once per top-level
+    // named function so `console.log(named)` prints `[Function: named]`
+    // instead of `[Function (anonymous)]`. See #1202.
+    module.declare_function("js_register_function_name", VOID, &[PTR, PTR, I32]);
 
     // Console.
     module.declare_function("js_console_log_dynamic", VOID, &[DOUBLE]);

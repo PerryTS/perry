@@ -3511,6 +3511,45 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         })
         .collect();
 
+    // Display names so `console.log` / `util.inspect` print `[Function:
+    // <name>]` instead of `[Function (anonymous)]` (#1202). Two kinds:
+    //   (a) Top-level `function name() {}` declarations — keyed against
+    //       the singleton-wrapper address (`__perry_wrap_<name>`),
+    //       because that's what `js_closure_alloc_singleton` stamps into
+    //       ClosureHeader for `FuncRef` references. Skips empty / underscore-
+    //       prefixed synthesized names (factories, iife, lambdas).
+    //   (b) Arrow functions assigned to a binding (`const fn = () => …`)
+    //       — keyed against the inline closure symbol
+    //       `perry_closure_<modprefix>__<func_id>` that `js_closure_alloc`
+    //       stamps into ClosureHeader for inline closures. We only
+    //       harvest top-level `Stmt::Let { init: Closure }` shapes here;
+    //       nested closures keep the anonymous label, matching Node
+    //       (Node uses `inferred-name` only for direct assignments,
+    //       which are exactly these top-level lets).
+    let mut user_fn_display_names: Vec<(String, String)> = hir
+        .functions
+        .iter()
+        .filter_map(|f| {
+            if f.name.is_empty() || f.name.starts_with('_') {
+                return None;
+            }
+            func_names
+                .get(&f.id)
+                .map(|sym| (format!("__perry_wrap_{}", sym), f.name.clone()))
+        })
+        .collect();
+    for stmt in &hir.init {
+        if let perry_hir::Stmt::Let { name, init, .. } = stmt {
+            if name.is_empty() || name.starts_with('_') {
+                continue;
+            }
+            if let Some(perry_hir::Expr::Closure { func_id, .. }) = init {
+                let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
+                user_fn_display_names.push((sym, name.clone()));
+            }
+        }
+    }
+
     emit_string_pool(
         &mut llmod,
         &strings,
@@ -3524,6 +3563,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &closure_synthetic_arguments,
         &user_fn_wrapper_synthetic_arguments,
         &user_fn_wrapper_arity,
+        &user_fn_display_names,
     );
 
     // Emit the buffer alias-scope metadata once per module, covering every
@@ -5519,6 +5559,12 @@ fn emit_string_pool(
     // `user_fn_wrapper_rest` are skipped (those go through the rest
     // registry which already pins arity).
     user_fn_wrapper_arity: &[(String, u32)],
+    // `(wrapper_symbol, display_name)` for every top-level user function
+    // we want `console.log` / `util.inspect` to label with the original
+    // JS name. Each entry produces one `js_register_function_name` call
+    // in `__perry_init_strings_<prefix>` so the registry is populated
+    // before user code runs. See #1202.
+    user_fn_display_names: &[(String, String)],
 ) {
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -5551,6 +5597,20 @@ fn emit_string_pool(
         let name = format!("perry_class_keys_packed_{}__{}", module_prefix, idx);
         llmod.add_named_string_constant(&name, bytes.len() + 1, &lit);
         packed_global_names.push(name);
+    }
+
+    // Pre-allocate string constants for function-name registration. Same
+    // borrow-ordering constraint as the class-name constants below: we
+    // must mint the rodata globals BEFORE `init_fn` claims `&mut llmod`.
+    // Each entry becomes one `js_register_function_name(<sym>, <str>,
+    // <len>)` call inside the init function. See #1202.
+    let mut user_fn_name_constants: Vec<(String, String, usize)> = Vec::new();
+    for (wrapper_sym, display_name) in user_fn_display_names {
+        if wrapper_sym.is_empty() || display_name.is_empty() {
+            continue;
+        }
+        let (const_name, byte_len) = llmod.add_string_constant(display_name);
+        user_fn_name_constants.push((wrapper_sym.clone(), const_name, byte_len));
     }
 
     // Pre-allocate string constants for class-name registration. We need
@@ -5599,6 +5659,22 @@ fn emit_string_pool(
         blk.store(DOUBLE, &nanboxed, &handle_ref);
         let addr_i64 = blk.ptrtoint(&handle_ref, I64);
         blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
+    }
+
+    // Register display names for top-level user functions so
+    // `console.log(myFn)` prints `[Function: myFn]` instead of
+    // `[Function (anonymous)]`. The runtime registry is keyed on the
+    // wrapper's compiled address (`__perry_wrap_<name>`), which is
+    // what `js_closure_alloc_singleton` stamps into ClosureHeader.
+    // See #1202.
+    for (wrapper_sym, name_const, name_len) in &user_fn_name_constants {
+        let wrapper_ref = format!("@{}", wrapper_sym);
+        let name_ref = format!("@{}", name_const);
+        let len_str = name_len.to_string();
+        blk.call_void(
+            "js_register_function_name",
+            &[(PTR, &wrapper_ref), (PTR, &name_ref), (I32, &len_str)],
+        );
     }
 
     // Build per-class keys arrays via js_build_class_keys_array,
