@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1021 entries across 77 modules
+// Coverage: 1010 entries across 78 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -20,6 +20,68 @@ declare module "argon2" {
   export function hash(password: string): any;
   /** stdlib */
   export function verify(hash: string, password: string): any;
+}
+
+declare module "assert" {
+  /** stdlib */
+  export class CallTracker { [key: string]: any; }
+  /** stdlib */
+  export const strict: any;
+  /** stdlib */
+  export function deepEqual(...args: any[]): any;
+  /** stdlib */
+  export function deepStrictEqual(...args: any[]): any;
+  /** stdlib */
+  export function doesNotMatch(...args: any[]): any;
+  /** stdlib */
+  export function equal(...args: any[]): any;
+  /** stdlib */
+  export function fail(...args: any[]): any;
+  /** stdlib */
+  export function ifError(...args: any[]): any;
+  /** stdlib */
+  export function match(...args: any[]): any;
+  /** stdlib */
+  export function notDeepEqual(...args: any[]): any;
+  /** stdlib */
+  export function notDeepStrictEqual(...args: any[]): any;
+  /** stdlib */
+  export function notEqual(...args: any[]): any;
+  /** stdlib */
+  export function notStrictEqual(...args: any[]): any;
+  /** stdlib */
+  export function ok(...args: any[]): any;
+  /** stdlib */
+  export function strictEqual(...args: any[]): any;
+}
+
+declare module "assert/strict" {
+  /** stdlib */
+  export function deepEqual(...args: any[]): any;
+  /** stdlib */
+  export function deepStrictEqual(...args: any[]): any;
+  /** stdlib */
+  export function doesNotMatch(...args: any[]): any;
+  /** stdlib */
+  export function equal(...args: any[]): any;
+  /** stdlib */
+  export function fail(...args: any[]): any;
+  /** stdlib */
+  export function ifError(...args: any[]): any;
+  /** stdlib */
+  export function match(...args: any[]): any;
+  /** stdlib */
+  export function notDeepEqual(...args: any[]): any;
+  /** stdlib */
+  export function notDeepStrictEqual(...args: any[]): any;
+  /** stdlib */
+  export function notEqual(...args: any[]): any;
+  /** stdlib */
+  export function notStrictEqual(...args: any[]): any;
+  /** stdlib */
+  export function ok(...args: any[]): any;
+  /** stdlib */
+  export function strictEqual(...args: any[]): any;
 }
 
 declare module "async_hooks" {
@@ -165,55 +227,6 @@ declare module "cluster" {
 }
 
 declare module "commander" {
-}
-
-declare module "console" {
-  /** stdlib */
-  export class Console { [key: string]: any; }
-  /** stdlib */
-  export function assert(...args: any[]): any;
-  /** stdlib */
-  export function clear(...args: any[]): any;
-  /** stdlib */
-  export function count(...args: any[]): any;
-  /** stdlib */
-  export function countReset(...args: any[]): any;
-  /** stdlib */
-  export function debug(...args: any[]): any;
-  /** stdlib */
-  export function dir(...args: any[]): any;
-  /** stdlib */
-  export function dirxml(...args: any[]): any;
-  /** stdlib */
-  export function error(...args: any[]): any;
-  /** stdlib */
-  export function group(...args: any[]): any;
-  /** stdlib */
-  export function groupCollapsed(...args: any[]): any;
-  /** stdlib */
-  export function groupEnd(...args: any[]): any;
-  /** stdlib */
-  export function info(...args: any[]): any;
-  /** stdlib */
-  export function log(...args: any[]): any;
-  /** stdlib */
-  export function profile(...args: any[]): any;
-  /** stdlib */
-  export function profileEnd(...args: any[]): any;
-  /** stdlib */
-  export function table(...args: any[]): any;
-  /** stdlib */
-  export function time(...args: any[]): any;
-  /** stdlib */
-  export function timeEnd(...args: any[]): any;
-  /** stdlib */
-  export function timeLog(...args: any[]): any;
-  /** stdlib */
-  export function timeStamp(...args: any[]): any;
-  /** stdlib */
-  export function trace(...args: any[]): any;
-  /** stdlib */
-  export function warn(...args: any[]): any;
 }
 
 declare module "cron" {
