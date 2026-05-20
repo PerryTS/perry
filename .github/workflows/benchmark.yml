@@ -83,7 +83,17 @@ jobs:
             | tee .bench-results/output.txt
 
           # Capture status for the summary job
-          if grep -q "REGRESSION" .bench-results/output.txt; then
+          if python3 - <<'PY'
+          import json
+          cur = json.load(open(".bench-results/current.json"))
+          raise SystemExit(0 if any(
+              entry.get("correctness", {}).get("status") == "fail"
+              for entry in cur.get("benchmarks", {}).values()
+          ) else 1)
+          PY
+          then
+            echo "status=invalid" >> "$GITHUB_OUTPUT"
+          elif grep -q "REGRESSION" .bench-results/output.txt; then
             echo "status=regression" >> "$GITHUB_OUTPUT"
           elif grep -q "improvement" .bench-results/output.txt; then
             echo "status=improved" >> "$GITHUB_OUTPUT"
@@ -112,8 +122,30 @@ jobs:
           print(f"- Current commit:  `{cur.get('commit','?')}`")
           print(f"- Runner: macos-14 / median of 3 runs")
           print()
-          print("| Benchmark | Perry (ms) | Node (ms) | Ratio | Perry RAM (KB) | Node RAM (KB) | Δ Speed | Δ RAM |")
-          print("|-----------|-----------:|----------:|------:|---------------:|--------------:|--------:|------:|")
+          def md(value):
+              return str(value).replace("|", "\\|")
+
+          def evidence(correctness):
+              status = correctness.get("status", "unchecked")
+              if status == "fail":
+                  parts = []
+                  expected = correctness.get("expected_lines") or []
+                  actual = correctness.get("actual_lines") or []
+                  if expected:
+                      parts.append("expected " + ", ".join(f"`{md(line)}`" for line in expected))
+                  if actual:
+                      parts.append("actual " + ", ".join(f"`{md(line)}`" for line in actual))
+                  reason = correctness.get("reason")
+                  if reason:
+                      parts.append(md(reason))
+                  return "<br>".join(parts)
+              lines = correctness.get("expected_lines") or correctness.get("actual_lines") or []
+              if lines:
+                  return "<br>".join(f"`{md(line)}`" for line in lines)
+              return md(correctness.get("reason", ""))
+
+          print("| Benchmark | Correctness | Evidence | Perry (ms) | Node (ms) | Ratio | Perry RAM (KB) | Node RAM (KB) | Δ Speed | Δ RAM |")
+          print("|-----------|-------------|----------|-----------:|----------:|------:|---------------:|--------------:|--------:|------:|")
           for name, c in cur["benchmarks"].items():
               b = base.get("benchmarks", {}).get(name, {})
               p_ms = c.get("perry_ms")
@@ -121,17 +153,29 @@ jobs:
               p_rss = c.get("perry_rss_kb", 0)
               n_rss = c.get("node_rss_kb", 0)
               ratio = c.get("speed_ratio", "-")
+              correctness = c.get("correctness", {
+                  "status": "unchecked",
+                  "reference": "none",
+                  "actual_lines": [],
+                  "expected_lines": [],
+                  "reason": "no correctness report",
+              })
+              correctness_status = correctness.get("status", "unchecked")
+              correctness_evidence = evidence(correctness)
               d_speed = "-"
               d_ram = "-"
-              if b.get("perry_ms") and p_ms is not None and b["perry_ms"] > 0:
+              if correctness_status == "fail":
+                  d_speed = "invalid"
+                  d_ram = "invalid"
+              elif b.get("perry_ms") and p_ms is not None and b["perry_ms"] > 0:
                   pct = (p_ms - b["perry_ms"]) / b["perry_ms"] * 100
                   emoji = "🔴" if pct > 20 else ("🟡" if pct > 10 else ("🟢" if pct < -10 else ""))
                   d_speed = f"{emoji} {pct:+.1f}%"
-              if b.get("perry_rss_kb") and p_rss and b["perry_rss_kb"] > 0:
+              if correctness_status != "fail" and b.get("perry_rss_kb") and p_rss and b["perry_rss_kb"] > 0:
                   pct = (p_rss - b["perry_rss_kb"]) / b["perry_rss_kb"] * 100
                   emoji = "🔴" if pct > 30 else ("🟡" if pct > 15 else ("🟢" if pct < -15 else ""))
                   d_ram = f"{emoji} {pct:+.1f}%"
-              print(f"| `{name}` | {p_ms} | {n_ms} | {ratio} | {p_rss} | {n_rss} | {d_speed} | {d_ram} |")
+              print(f"| `{name}` | {correctness_status} | {correctness_evidence} | {p_ms} | {n_ms} | {ratio} | {p_rss} | {n_rss} | {d_speed} | {d_ram} |")
           PY
 
       - name: Upload benchmark results
