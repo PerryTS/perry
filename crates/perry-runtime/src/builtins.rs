@@ -1016,6 +1016,20 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         } else {
                             "[object Object]".to_string()
                         }
+                    } else if gc_type == crate::gc::GC_TYPE_CLOSURE {
+                        // Function-valued object fields used to fall through
+                        // to the `[object Object]` catch-all below, hiding
+                        // both the function name and any user-attached own
+                        // properties (e.g. `console.log({ handler: myFn })`
+                        // collapsed `myFn` to `[object Object]`). Route
+                        // through the same display path `format_jsvalue`'s
+                        // own GC_TYPE_CLOSURE branch uses so the registered
+                        // function name flows out. Refs #1201 (the eventual
+                        // util.inspect.custom Symbol-key support builds on
+                        // this — without it the custom inspector value
+                        // would still print as `[object Object]`).
+                        let closure = ptr as *const crate::closure::ClosureHeader;
+                        format_function_for_console((*closure).func_ptr)
                     } else {
                         "[object Object]".to_string()
                     }
