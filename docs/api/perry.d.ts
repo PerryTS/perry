@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 982 entries across 76 modules
+// Coverage: 987 entries across 76 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -256,7 +256,17 @@ declare module "events" {
   /** stdlib */
   export class EventEmitter { [key: string]: any; }
   /** stdlib */
+  export const captureRejectionSymbol: any;
+  /** stdlib */
+  export const captureRejections: any;
+  /** stdlib */
+  export const defaultMaxListeners: any;
+  /** stdlib */
+  export const errorMonitor: any;
+  /** stdlib */
   export function EventEmitter(...args: any[]): any;
+  /** stdlib */
+  export function addAbortListener(...args: any[]): any;
   /** stdlib */
   export function getEventListeners(...args: any[]): any;
   /** stdlib */
