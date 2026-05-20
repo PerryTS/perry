@@ -6916,17 +6916,21 @@ struct CopyingPointer {
 
 struct CopyingPointerSet {
     malloc_registry_available: Cell<bool>,
+    malloc_registry_empty_at_start: bool,
     malloc_validation_lookups: Cell<usize>,
     malloc_registry_rebuild_count_start: u64,
 }
 
 impl CopyingPointerSet {
     fn new() -> Self {
-        let malloc_registry_available =
-            MALLOC_STATE.with(|s| s.borrow().malloc_registry_available());
+        let (malloc_registry_available, malloc_registry_empty_at_start) = MALLOC_STATE.with(|s| {
+            let s = s.borrow();
+            (s.malloc_registry_available(), s.objects.is_empty())
+        });
         let malloc_registry_rebuild_count_start = MALLOC_REGISTRY_REBUILD_COUNT.with(|c| c.get());
         Self {
             malloc_registry_available: Cell::new(malloc_registry_available),
+            malloc_registry_empty_at_start,
             malloc_validation_lookups: Cell::new(0),
             malloc_registry_rebuild_count_start,
         }
@@ -6948,6 +6952,11 @@ impl CopyingPointerSet {
             return Ok(Some(ptr));
         }
         if possible_malloc && !self.malloc_registry_available.get() {
+            // With no malloc-tracked objects, every non-arena candidate is
+            // exactly rejectable without activating the lazy header registry.
+            if self.malloc_registry_empty_at_start {
+                return Ok(None);
+            }
             return Err(CopiedMinorFallbackReason::MallocRegistryUnavailable);
         }
         Ok(self.classify_malloc(addr))

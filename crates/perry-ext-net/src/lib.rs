@@ -1859,6 +1859,31 @@ mod tests {
         }
     }
 
+    struct NetHandleCleanup {
+        handles: Vec<i64>,
+    }
+
+    impl NetHandleCleanup {
+        fn new(handles: Vec<i64>) -> Self {
+            Self { handles }
+        }
+    }
+
+    impl Drop for NetHandleCleanup {
+        fn drop(&mut self) {
+            let mut listeners = statics::listeners().lock().unwrap();
+            for handle in &self.handles {
+                listeners.remove(handle);
+            }
+            drop(listeners);
+
+            let mut sockets = statics::sockets().lock().unwrap();
+            for handle in &self.handles {
+                sockets.remove(handle);
+            }
+        }
+    }
+
     fn young_gc_root() -> i64 {
         perry_runtime::arena::arena_alloc_gc(32, 8, perry_runtime::gc::GC_TYPE_STRING) as i64
     }
@@ -1874,6 +1899,7 @@ mod tests {
         perry_ffi::gc_register_mutable_root_scanner(scan_net_roots);
 
         let socket_id = -9_001;
+        let _cleanup = NetHandleCleanup::new(vec![socket_id]);
         let callback = young_gc_root();
         {
             let mut listeners = statics::listeners().lock().unwrap();
@@ -1887,12 +1913,19 @@ mod tests {
 
         let _ = perry_runtime::gc::gc_collect_minor();
 
-        {
+        let after = {
             let listeners = statics::listeners().lock().unwrap();
-            let after = listeners[&socket_id]["data"][0];
-            assert_rewritten(callback, after);
-        }
+            listeners
+                .get(&socket_id)
+                .and_then(|per_socket| per_socket.get("data"))
+                .and_then(|callbacks| callbacks.first())
+                .copied()
+        };
         statics::listeners().lock().unwrap().remove(&socket_id);
+        assert_rewritten(
+            callback,
+            after.expect("listener callback should remain registered"),
+        );
     }
 
     /// Issuing two `js_net_socket_alloc()` calls must not panic and must
@@ -1905,6 +1938,7 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let h1 = unsafe { js_net_socket_alloc() };
         let h2 = unsafe { js_net_socket_alloc() };
+        let _cleanup = NetHandleCleanup::new(vec![h1, h2]);
         assert!(h1 > 0);
         assert!(h2 > 0);
         assert_ne!(h1, h2);
@@ -1943,6 +1977,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let h = unsafe { js_net_socket_alloc() };
+        let _cleanup = NetHandleCleanup::new(vec![h]);
         let event = alloc_string("data");
         unsafe {
             js_net_socket_on(h, event.as_raw() as i64, 0xDEADBEEF_i64);
