@@ -102,10 +102,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "redis",
     "rate-limiter-flexible",
     "fetch",
-    // `@perryts/google-auth` — official Google Sign In package
-    // (#674). Bundled wrapper lives in `crates/perry-ext-google-auth`;
-    // d.ts at `types/perry/google-auth/index.d.ts`.
-    "@perryts/google-auth",
     // `@perryts/pdf` — official PDF creation package (#516).
     // Bundled wrapper lives in `crates/perry-ext-pdf`; the producer
     // side companion to the existing PdfView widget. d.ts at
@@ -2437,30 +2433,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),
-    // --- @perryts/google-auth (issue #674) ---
-    // The three FFI entry points exported by crates/perry-ext-google-auth.
-    // Each returns a `Promise<string>` whose resolved value is a
-    // JSON-stringified `GoogleSignInResult`. Listed here so the
-    // manifest's unimplemented-API check (#463) accepts them when a
-    // user writes `import { js_google_auth_sign_in } from "@perryts/google-auth"`.
-    method(
-        "@perryts/google-auth",
-        "js_google_auth_sign_in",
-        false,
-        None,
-    ),
-    method(
-        "@perryts/google-auth",
-        "js_google_auth_silent_sign_in",
-        false,
-        None,
-    ),
-    method(
-        "@perryts/google-auth",
-        "js_google_auth_sign_out",
-        false,
-        None,
-    ),
+    // `@perryts/google-auth` no longer ships in the bundled manifest —
+    // since v0.5.1015 it lives at https://github.com/PerryTS/google-auth
+    // and is installed via `npm install @perryts/google-auth`. The
+    // package's own `perry.nativeLibrary.functions` declares the FFI
+    // surface; the manifest's unimplemented-API check resolves the
+    // import via the standard external-nativeLibrary lookup.
     // --- @perryts/pdf (issue #516) ---
     // Minimal PDF creation API. The five FFI entry points exported
     // by crates/perry-ext-pdf. Param shapes intentionally loose

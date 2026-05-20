@@ -5386,13 +5386,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-google-auth"
-version = "0.5.1016"
-dependencies = [
- "perry-ffi",
-]
-
-[[package]]
 name = "perry-ext-http"
 version = "0.5.1016"
 dependencies = [

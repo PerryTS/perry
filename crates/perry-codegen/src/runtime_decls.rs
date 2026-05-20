@@ -1947,12 +1947,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_bcrypt_hash", I64, &[I64, DOUBLE]);
     module.declare_function("js_bcrypt_hash_sync", I64, &[I64, DOUBLE]);
 
-    // ========== @perryts/google-auth (issue #674) ==========
-    // Returns a `*mut perry_ffi::Promise` (POINTER_TAG'd) which the
-    // codegen NR_PTR path NaN-boxes. All three are zero-arg.
-    module.declare_function("js_google_auth_sign_in", I64, &[]);
-    module.declare_function("js_google_auth_silent_sign_in", I64, &[]);
-    module.declare_function("js_google_auth_sign_out", I64, &[]);
+    // `@perryts/google-auth` is no longer declared centrally — the
+    // signatures come from the installed npm package's
+    // `perry.nativeLibrary.functions` block (see
+    // https://github.com/PerryTS/google-auth) and are added to
+    // `ffi_signatures` on demand by the external-nativeLibrary path.
 
     // ========== perry/ads (issue #867) ==========
     // Four promise-returning entry points (NR_PTR — i64 return,

@@ -1,15 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 965 entries across 76 modules
-
-declare module "@perryts/google-auth" {
-  /** stdlib */
-  export function js_google_auth_sign_in(...args: any[]): any;
-  /** stdlib */
-  export function js_google_auth_sign_out(...args: any[]): any;
-  /** stdlib */
-  export function js_google_auth_silent_sign_in(...args: any[]): any;
-}
+// Coverage: 962 entries across 75 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */

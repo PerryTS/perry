@@ -52,6 +52,22 @@ class PerryActivity : Activity() {
         // Initialize the bridge with this Activity
         PerryBridge.init(this, rootLayout)
 
+        // #1138 — install optional `@perryts/google-auth` Kotlin
+        // bridge if the package is present in the produced APK.
+        // Uses reflection so the call is a no-op when the package
+        // isn't installed (keeps the template build green for apps
+        // that don't depend on Google Sign In).
+        try {
+            val cls = Class.forName("com.perryts.googleauth.PerryGoogleAuth")
+            cls.getMethod("install", android.content.Context::class.java)
+               .invoke(null, this)
+        } catch (_: ClassNotFoundException) {
+            // not installed — fine
+        } catch (e: Throwable) {
+            android.util.Log.w("PerryActivity",
+                "PerryGoogleAuth.install failed: ${e.message}")
+        }
+
         // Issue #583: capture the cold-start URL (if any). Tapping a
         // `myapp://…` link or a Universal-Link `https://yourdomain.com/…`
         // launches us with `intent.data` populated. The bridge holds the
