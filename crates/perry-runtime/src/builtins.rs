@@ -525,18 +525,64 @@ fn function_name_registry(
 /// Format a JS function/closure for `console.log` / `util.inspect`. Returns
 /// `[Function: <name>]` when codegen has registered a name for the
 /// function pointer, otherwise `[Function (anonymous)]` (matching Node's
-/// output for nameless closures). See #1202.
-fn format_function_for_console(func_ptr: *const u8) -> String {
-    if !func_ptr.is_null() {
-        if let Ok(map) = function_name_registry().lock() {
-            if let Some(name) = map.get(&(func_ptr as usize)) {
-                if !name.is_empty() {
-                    return format!("[Function: {}]", name);
-                }
-            }
-        }
+/// output for nameless closures). When the closure carries user-attached
+/// own properties (`func.toString = …`, `func.x = 1`, etc.), append a
+/// Node-style `{ key: value, … }` listing — without invoking any user
+/// coercion hook. Built-in slots (`name`, `prototype`, `length`,
+/// `arguments`, `caller`) are filtered out so the output matches Node's
+/// `util.inspect` for `function f() {}; console.log(f)` (no decoration)
+/// vs. `f.x = 1; console.log(f)` (decorated). See #1202 / #1203.
+fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader) -> String {
+    if closure_ptr.is_null() {
+        return "[Function (anonymous)]".to_string();
     }
-    "[Function (anonymous)]".to_string()
+    let label = unsafe {
+        let func_ptr = (*closure_ptr).func_ptr;
+        if !func_ptr.is_null() {
+            if let Ok(map) = function_name_registry().lock() {
+                if let Some(name) = map.get(&(func_ptr as usize)) {
+                    if !name.is_empty() {
+                        format!("[Function: {}]", name)
+                    } else {
+                        "[Function (anonymous)]".to_string()
+                    }
+                } else {
+                    "[Function (anonymous)]".to_string()
+                }
+            } else {
+                "[Function (anonymous)]".to_string()
+            }
+        } else {
+            "[Function (anonymous)]".to_string()
+        }
+    };
+
+    // Snapshot user-attached own properties and filter out the built-in
+    // function slots that Node hides from `util.inspect`. Node prints
+    // these only when the user reassigned them — but `prototype` and
+    // `name` are runtime-allocated on every function, so always hiding
+    // them yields parity for the common case (`f.x = 1`).
+    let props = crate::closure::closure_dynamic_props_snapshot(closure_ptr as usize);
+    let user_props: Vec<(String, f64)> = props
+        .into_iter()
+        .filter(|(k, _)| {
+            !matches!(
+                k.as_str(),
+                "name" | "prototype" | "length" | "arguments" | "caller"
+            )
+        })
+        .collect();
+    if user_props.is_empty() {
+        return label;
+    }
+    let mut parts: Vec<String> = Vec::with_capacity(user_props.len());
+    for (k, v) in user_props {
+        // `format_jsvalue` skips toString/Symbol.toPrimitive coercion
+        // hooks — exactly what #1203 needs (Node MUST NOT call the
+        // user's `toString` while inspecting).
+        parts.push(format!("{}: {}", k, format_jsvalue(v, 1)));
+    }
+    format!("{} {{ {} }}", label, parts.join(", "))
 }
 
 /// Codegen-facing entry point: register `func_ptr` as the compiled address
@@ -815,8 +861,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 } else if gc_type == crate::gc::GC_TYPE_MAP {
                     "Map {}".to_string()
                 } else if gc_type == crate::gc::GC_TYPE_CLOSURE {
-                    let closure = ptr as *const crate::closure::ClosureHeader;
-                    format_function_for_console((*closure).func_ptr)
+                    format_function_for_console(ptr as *const crate::closure::ClosureHeader)
                 } else if gc_type == crate::gc::GC_TYPE_PROMISE {
                     "Promise { <pending> }".to_string()
                 } else {
@@ -1123,8 +1168,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // through the same display path `format_jsvalue`'s
                         // own GC_TYPE_CLOSURE branch uses so the registered
                         // function name flows out.
-                        let closure = ptr as *const crate::closure::ClosureHeader;
-                        format_function_for_console((*closure).func_ptr)
+                        format_function_for_console(ptr as *const crate::closure::ClosureHeader)
                     } else {
                         "[object Object]".to_string()
                     }

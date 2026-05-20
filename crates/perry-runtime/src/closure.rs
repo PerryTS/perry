@@ -1897,6 +1897,22 @@ pub fn closure_set_dynamic_prop(ptr: usize, prop: &str, value: f64) {
     }
 }
 
+/// Snapshot every dynamic property on a closure as `(name, value)` pairs.
+/// Sorted alphabetically for stable output (`HashMap` iteration order is
+/// non-deterministic). Used by `format_jsvalue` to emit `[Function: f]
+/// { ownProp: value }` for functions with user-attached properties. See
+/// #1203.
+pub fn closure_dynamic_props_snapshot(ptr: usize) -> Vec<(String, f64)> {
+    if let Ok(props) = get_closure_props().lock() {
+        if let Some(map) = props.get(&ptr) {
+            let mut out: Vec<(String, f64)> = map.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            out.sort_by(|a, b| a.0.cmp(&b.0));
+            return out;
+        }
+    }
+    Vec::new()
+}
+
 /// Unbind `this` from a detached method closure.
 ///
 /// When a method is read from an object via PropertyGet (e.g., `const fn = holder.getX`),
