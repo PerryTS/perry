@@ -1578,9 +1578,9 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "6.1.0"
+version = "6.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
 dependencies = [
  "cfg-if",
  "crossbeam-utils",
@@ -5602,7 +5602,7 @@ dependencies = [
 name = "perry-ffi"
 version = "0.5.1016"
 dependencies = [
- "dashmap 6.1.0",
+ "dashmap 6.2.1",
  "once_cell",
  "perry-runtime",
 ]
@@ -5706,7 +5706,7 @@ dependencies = [
  "chrono",
  "clap",
  "cron",
- "dashmap 6.1.0",
+ "dashmap 6.2.1",
  "ed25519-dalek",
  "flate2",
  "futures-util",
@@ -8066,9 +8066,9 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "tar"
-version = "0.4.45"
+version = "0.4.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
 dependencies = [
  "filetime",
  "libc",
