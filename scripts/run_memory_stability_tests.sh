@@ -46,6 +46,282 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+GC_EVIDENCE_ENABLED=0
+GC_EVIDENCE_ROOT="${PERRY_GC_EVIDENCE_DIR:-}"
+GC_EVIDENCE_LOG=""
+GC_EVIDENCE_TRACE_COUNT=0
+GC_EVIDENCE_ARTIFACTS=()
+GC_EVIDENCE_TRACE_ARTIFACTS=()
+GC_EVIDENCE_TRACE_SUMMARY_ARTIFACTS=()
+
+ensure_output_parent() {
+    local path="$1"
+    if [[ -n "$path" ]]; then
+        mkdir -p "$(dirname "$path")"
+    fi
+}
+
+record_gc_evidence_artifact() {
+    local path="$1"
+    if [[ -n "$path" ]]; then
+        GC_EVIDENCE_ARTIFACTS+=("$path")
+    fi
+}
+
+sanitize_gc_evidence_name() {
+    local value="$1"
+    value=$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')
+    value=$(printf '%s' "$value" | sed -E 's/[^a-z0-9._-]+/_/g; s/^_+//; s/_+$//')
+    if [[ -z "$value" ]]; then
+        value="trace"
+    fi
+    printf '%s' "$value"
+}
+
+init_gc_evidence_outputs() {
+    if [[ -n "$GC_EVIDENCE_ROOT" ]]; then
+        GC_EVIDENCE_ENABLED=1
+        mkdir -p \
+            "$GC_EVIDENCE_ROOT/reports" \
+            "$GC_EVIDENCE_ROOT/logs" \
+            "$GC_EVIDENCE_ROOT/traces" \
+            "$GC_EVIDENCE_ROOT/trace-summaries"
+
+        if [[ -z "${PERRY_COPIED_MINOR_FALLBACK_REPORT_OUT:-}" ]]; then
+            PERRY_COPIED_MINOR_FALLBACK_REPORT_OUT="$GC_EVIDENCE_ROOT/reports/copied_minor_fallback_report.json"
+        fi
+        if [[ -z "${PERRY_TARGET_COLLECTOR_GATES_OUT:-}" ]]; then
+            PERRY_TARGET_COLLECTOR_GATES_OUT="$GC_EVIDENCE_ROOT/reports/target_collector_gates_report.json"
+        fi
+        if [[ -z "${PERRY_TEST_SUMMARY_OUT:-}" ]]; then
+            PERRY_TEST_SUMMARY_OUT="$GC_EVIDENCE_ROOT/reports/memory_stability_summary.json"
+        fi
+
+        GC_EVIDENCE_LOG="$GC_EVIDENCE_ROOT/logs/memory-stability.log"
+        : >"$GC_EVIDENCE_LOG"
+        record_gc_evidence_artifact "$GC_EVIDENCE_LOG"
+        exec > >(tee -a "$GC_EVIDENCE_LOG") 2>&1
+    fi
+
+    ensure_output_parent "${PERRY_COPIED_MINOR_FALLBACK_REPORT_OUT:-}"
+    ensure_output_parent "${PERRY_TARGET_COLLECTOR_GATES_OUT:-}"
+    ensure_output_parent "${PERRY_TEST_SUMMARY_OUT:-}"
+
+    record_gc_evidence_artifact "${PERRY_COPIED_MINOR_FALLBACK_REPORT_OUT:-}"
+    record_gc_evidence_artifact "${PERRY_TARGET_COLLECTOR_GATES_OUT:-}"
+    record_gc_evidence_artifact "${PERRY_TEST_SUMMARY_OUT:-}"
+}
+
+copy_gc_trace_evidence() {
+    local group="$1"
+    local label="$2"
+    local trace_file="$3"
+    LAST_EVIDENCE_TRACE_FILE=""
+
+    if [[ "$GC_EVIDENCE_ENABLED" -ne 1 || -z "$trace_file" || ! -f "$trace_file" ]]; then
+        return
+    fi
+
+    local safe_group safe_label dest_dir dest
+    safe_group=$(sanitize_gc_evidence_name "$group")
+    safe_label=$(sanitize_gc_evidence_name "$label")
+    GC_EVIDENCE_TRACE_COUNT=$((GC_EVIDENCE_TRACE_COUNT + 1))
+    dest_dir="$GC_EVIDENCE_ROOT/traces/$safe_group"
+    mkdir -p "$dest_dir"
+    dest=$(printf '%s/%03d_%s.log' "$dest_dir" "$GC_EVIDENCE_TRACE_COUNT" "$safe_label")
+
+    if cp "$trace_file" "$dest"; then
+        LAST_EVIDENCE_TRACE_FILE="$dest"
+        GC_EVIDENCE_TRACE_ARTIFACTS+=("$dest")
+        record_gc_evidence_artifact "$dest"
+    else
+        printf "  WARN [gc-evidence] failed to copy trace %s -> %s\n" "$trace_file" "$dest"
+    fi
+}
+
+write_gc_trace_summary() {
+    local group="$1"
+    local label="$2"
+    local assertion_mode="$3"
+    local status="$4"
+    local trace_file="$5"
+    local copied_trace_file="$6"
+    LAST_EVIDENCE_TRACE_SUMMARY_FILE=""
+
+    if [[ "$GC_EVIDENCE_ENABLED" -ne 1 || -z "$trace_file" || ! -f "$trace_file" ]]; then
+        return
+    fi
+
+    local safe_group safe_label dest_dir dest
+    safe_group=$(sanitize_gc_evidence_name "$group")
+    safe_label=$(sanitize_gc_evidence_name "$label")
+    dest_dir="$GC_EVIDENCE_ROOT/trace-summaries/$safe_group"
+    mkdir -p "$dest_dir"
+    dest=$(printf '%s/%03d_%s.json' "$dest_dir" "$GC_EVIDENCE_TRACE_COUNT" "$safe_label")
+
+    if "$PYTHON" - \
+        "$label" "$assertion_mode" "$status" "$trace_file" "$copied_trace_file" "$dest" <<'PY'; then
+import json
+import sys
+from pathlib import Path
+
+label = sys.argv[1]
+assertion_mode = sys.argv[2]
+status = sys.argv[3]
+trace_file = Path(sys.argv[4])
+copied_trace_file = sys.argv[5]
+out = Path(sys.argv[6])
+
+known_fallback_reasons = (
+    "none",
+    "copy_only_roots",
+    "barriers_inactive",
+    "conservative_stack",
+    "malloc_registry_unavailable",
+    "pinned_young_root",
+    "pinned_young_dirty_slot",
+    "pinned_young_transitive",
+    "not_attempted",
+)
+fallback_reason_counts = {reason: 0 for reason in known_fallback_reasons}
+
+
+def nested(obj, *path, default=None):
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(key, default)
+    return cur
+
+
+def non_negative_int(value):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
+gc_cycle_count = 0
+copied_bytes = 0
+promoted_bytes = 0
+moved_bytes = 0
+old_page_moved_bytes = 0
+
+with trace_file.open("r", encoding="utf-8", errors="replace") as fh:
+    for line in fh:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("event") != "gc_cycle":
+            continue
+
+        gc_cycle_count += 1
+        copying_nursery = nested(event, "copying_nursery", default={})
+        if not isinstance(copying_nursery, dict):
+            copying_nursery = {}
+        reason = copying_nursery.get("fallback_reason")
+        if isinstance(reason, str):
+            fallback_reason_counts.setdefault(reason, 0)
+            fallback_reason_counts[reason] += 1
+        else:
+            fallback_reason_counts.setdefault("_missing", 0)
+            fallback_reason_counts["_missing"] += 1
+
+        copied_bytes += non_negative_int(copying_nursery.get("copied_bytes"))
+        promoted_bytes += non_negative_int(copying_nursery.get("promoted_bytes"))
+        moved_bytes += non_negative_int(nested(event, "evacuation", "moved_bytes", default=0))
+        old_page_moved_bytes += non_negative_int(
+            nested(event, "evacuation", "old_page_moved_bytes", default=0)
+        )
+
+summary = {
+    "schema_version": 1,
+    "workload_label": label,
+    "assertion_mode": assertion_mode,
+    "status": status,
+    "source_trace_path": str(trace_file),
+    "trace_path": copied_trace_file or str(trace_file),
+    "gc_cycle_count": gc_cycle_count,
+    "fallback_reason_counts": fallback_reason_counts,
+    "copied_bytes": copied_bytes,
+    "promoted_bytes": promoted_bytes,
+    "moved_bytes": moved_bytes,
+    "old_page_moved_bytes": old_page_moved_bytes,
+    "byte_totals": {
+        "copied_bytes": copied_bytes,
+        "promoted_bytes": promoted_bytes,
+        "moved_bytes": moved_bytes,
+        "old_page_moved_bytes": old_page_moved_bytes,
+    },
+}
+
+with out.open("w", encoding="utf-8") as fh:
+    json.dump(summary, fh, indent=2)
+    fh.write("\n")
+PY
+        LAST_EVIDENCE_TRACE_SUMMARY_FILE="$dest"
+        GC_EVIDENCE_TRACE_SUMMARY_ARTIFACTS+=("$dest")
+        record_gc_evidence_artifact "$dest"
+    else
+        printf "  WARN [gc-evidence] failed to summarize trace %s\n" "$trace_file"
+    fi
+}
+
+record_gc_trace_evidence() {
+    local group="$1"
+    local label="$2"
+    local assertion_mode="$3"
+    local status="$4"
+    local trace_file="$5"
+
+    if [[ "$GC_EVIDENCE_ENABLED" -ne 1 || -z "$trace_file" || ! -f "$trace_file" ]]; then
+        return
+    fi
+
+    copy_gc_trace_evidence "$group" "$label" "$trace_file"
+    write_gc_trace_summary \
+        "$group" "$label" "$assertion_mode" "$status" \
+        "$trace_file" "$LAST_EVIDENCE_TRACE_FILE"
+}
+
+print_gc_evidence_artifacts() {
+    if [[ "$GC_EVIDENCE_ENABLED" -ne 1 && ${#GC_EVIDENCE_ARTIFACTS[@]} -eq 0 ]]; then
+        return
+    fi
+
+    echo ""
+    echo "=== GC evidence artifacts ==="
+    if [[ "$GC_EVIDENCE_ENABLED" -eq 1 ]]; then
+        echo "  root: $GC_EVIDENCE_ROOT"
+    fi
+    if [[ -n "$GC_EVIDENCE_LOG" ]]; then
+        echo "  log: $GC_EVIDENCE_LOG"
+    fi
+    if [[ -n "${PERRY_COPIED_MINOR_FALLBACK_REPORT_OUT:-}" ]]; then
+        echo "  copied-minor report: $PERRY_COPIED_MINOR_FALLBACK_REPORT_OUT"
+    fi
+    if [[ -n "${PERRY_TARGET_COLLECTOR_GATES_OUT:-}" ]]; then
+        echo "  target-collector report: $PERRY_TARGET_COLLECTOR_GATES_OUT"
+    fi
+    if [[ -n "${PERRY_TEST_SUMMARY_OUT:-}" ]]; then
+        echo "  summary: $PERRY_TEST_SUMMARY_OUT"
+    fi
+    if [[ ${#GC_EVIDENCE_TRACE_ARTIFACTS[@]} -gt 0 ]]; then
+        echo "  traces:"
+        printf '    %s\n' "${GC_EVIDENCE_TRACE_ARTIFACTS[@]}"
+    fi
+    if [[ ${#GC_EVIDENCE_TRACE_SUMMARY_ARTIFACTS[@]} -gt 0 ]]; then
+        echo "  trace summaries:"
+        printf '    %s\n' "${GC_EVIDENCE_TRACE_SUMMARY_ARTIFACTS[@]}"
+    fi
+}
+
+init_gc_evidence_outputs
+
 cargo build --release -p perry-runtime -p perry-stdlib -p perry --quiet
 
 PERRY=./target/release/perry
@@ -61,6 +337,10 @@ LAST_STDOUT_FILE=""
 LAST_STDERR_FILE=""
 LAST_CANARY_EXIT=0
 LAST_CANARY_OUTPUT_FILE=""
+LAST_GC_TRACE_FILE=""
+LAST_TRACE_ASSERT_STATUS=""
+LAST_EVIDENCE_TRACE_FILE=""
+LAST_EVIDENCE_TRACE_SUMMARY_FILE=""
 
 # Run a compiled binary under /usr/bin/time. Cross-platform RSS read
 # (macOS reports bytes, Linux reports KB).
@@ -187,6 +467,7 @@ assert_gc_trace() {
     local trace_file="$2"
     local mode="$3"
     local output_file="$TMPDIR/gc_trace_assert.$$.$RANDOM"
+    LAST_TRACE_ASSERT_STATUS="fail"
 
     if "$PYTHON" - "$mode" "$trace_file" >"$output_file" 2>&1 <<'PY'; then
 import json
@@ -415,10 +696,12 @@ PY
         detail=$(tr '\n' ' ' <"$output_file" | sed 's/[[:space:]]*$//')
         printf "  PASS [gc-trace] %-40s %s\n" "$label" "$detail"
         PASS=$((PASS + 1))
+        LAST_TRACE_ASSERT_STATUS="pass"
     else
         printf "  FAIL [gc-trace] %-40s\n" "$label"
         sed 's/^/    /' "$output_file"
         FAIL=$((FAIL + 1))
+        LAST_TRACE_ASSERT_STATUS="fail"
     fi
 }
 
@@ -426,6 +709,7 @@ run_gc_trace_probe() {
     local ts="$TMPDIR/default_copied_minor_churn.ts"
     local bin="$TMPDIR/default_copied_minor_churn"
     local compile_output="$TMPDIR/default_copied_minor_churn_compile.$$.$RANDOM"
+    LAST_GC_TRACE_FILE=""
 
     cat >"$ts" <<'EOF'
 declare function gc(): void;
@@ -490,21 +774,31 @@ EOF
     fi
 
     run_one "$bin" PERRY_GC_TRACE=1
+    LAST_GC_TRACE_FILE="$LAST_STDERR_FILE"
 
     if [[ "$LAST_EXIT" -ne 0 ]]; then
         printf "  FAIL [gc-trace] %-40s exit=%d\n" "default copied minor churn" "$LAST_EXIT"
         sed 's/^/    /' "$LAST_STDERR_FILE"
+        record_gc_trace_evidence \
+            "gc-trace" "default copied minor churn" "copied_minor_default" "fail" \
+            "$LAST_GC_TRACE_FILE"
         FAIL=$((FAIL + 1))
         return
     fi
     if ! grep -qF "default_copied_minor_churn:3913788" "$LAST_STDOUT_FILE"; then
         printf "  FAIL [gc-trace] %-40s stdout mismatch\n" "default copied minor churn"
         sed 's/^/    /' "$LAST_STDOUT_FILE"
+        record_gc_trace_evidence \
+            "gc-trace" "default copied minor churn" "copied_minor_default" "fail" \
+            "$LAST_GC_TRACE_FILE"
         FAIL=$((FAIL + 1))
         return
     fi
 
     assert_gc_trace "default copied minor churn" "$LAST_STDERR_FILE" "copied_minor_default"
+    record_gc_trace_evidence \
+        "gc-trace" "default copied minor churn" "copied_minor_default" \
+        "$LAST_TRACE_ASSERT_STATUS" "$LAST_GC_TRACE_FILE"
 }
 
 write_copied_minor_fallback_workloads() {
@@ -671,6 +965,7 @@ run_copied_minor_fallback_workload() {
     local ts="$2"
     local bin="$TMPDIR/${name}_copied_minor_fallback"
     local compile_output="$TMPDIR/${name}_copied_minor_fallback_compile.$$.$RANDOM"
+    LAST_GC_TRACE_FILE=""
 
     if ! $PERRY compile --no-cache "$ts" -o "$bin" >"$compile_output" 2>&1; then
         printf "  FAIL [gc-trace] %-40s compile failed\n" "$name"
@@ -680,6 +975,7 @@ run_copied_minor_fallback_workload() {
     fi
 
     run_one "$bin" PERRY_GC_TRACE=1
+    LAST_GC_TRACE_FILE="$LAST_STDERR_FILE"
 
     if [[ "$LAST_EXIT" -ne 0 ]]; then
         printf "  FAIL [gc-trace] %-40s exit=%d\n" "$name" "$LAST_EXIT"
@@ -712,6 +1008,8 @@ run_copied_minor_fallback_report() {
     )
 
     local report_args=()
+    local trace_names=()
+    local trace_files=()
     local workload_failed=0
     local spec
     for spec in "${workload_specs[@]}"; do
@@ -719,21 +1017,34 @@ run_copied_minor_fallback_report() {
         local ts="${spec#*:}"
         if run_copied_minor_fallback_workload "$name" "$ts"; then
             report_args+=(--workload "$name=$LAST_STDERR_FILE")
+            trace_names+=("$name")
+            trace_files+=("$LAST_STDERR_FILE")
         else
             workload_failed=1
+            record_gc_trace_evidence \
+                "copied-minor-fallback" "$name" "strict_fallback_evidence" "fail" \
+                "$LAST_GC_TRACE_FILE"
         fi
     done
 
     if [[ "$workload_failed" -ne 0 ]]; then
+        local i
+        for i in "${!trace_names[@]}"; do
+            record_gc_trace_evidence \
+                "copied-minor-fallback" "${trace_names[$i]}" \
+                "strict_fallback_evidence" "blocked" "${trace_files[$i]}"
+        done
         return
     fi
 
     local report_out="${PERRY_COPIED_MINOR_FALLBACK_REPORT_OUT:-$TMPDIR/copied_minor_fallback_report.json}"
     local parser_output="$TMPDIR/copied_minor_fallback_report_parser.$$.$RANDOM"
+    local report_status="fail"
     if "$PYTHON" scripts/copied_minor_fallback_report.py \
         "${report_args[@]}" \
         --strict-fallback-evidence \
         --out "$report_out" >"$parser_output" 2>&1; then
+        report_status="pass"
         local top_summary
         top_summary=$("$PYTHON" - "$report_out" <<'PY'
 import json
@@ -759,6 +1070,13 @@ PY
         fi
         FAIL=$((FAIL + 1))
     fi
+
+    local i
+    for i in "${!trace_names[@]}"; do
+        record_gc_trace_evidence \
+            "copied-minor-fallback" "${trace_names[$i]}" \
+            "strict_fallback_evidence" "$report_status" "${trace_files[$i]}"
+    done
 }
 
 write_target_collector_gate_workloads() {
@@ -896,6 +1214,7 @@ run_target_collector_gate_workload() {
     shift 3
     local bin="$TMPDIR/${name}_target_collector_gate"
     local compile_output="$TMPDIR/${name}_target_collector_gate_compile.$$.$RANDOM"
+    LAST_GC_TRACE_FILE=""
 
     if ! $PERRY compile --no-cache "$ts" -o "$bin" >"$compile_output" 2>&1; then
         printf "  FAIL [target-gc] %-40s compile failed\n" "$name"
@@ -905,6 +1224,7 @@ run_target_collector_gate_workload() {
     fi
 
     run_one "$bin" PERRY_GC_TRACE=1 "$@"
+    LAST_GC_TRACE_FILE="$LAST_STDERR_FILE"
 
     if [[ "$LAST_EXIT" -ne 0 ]]; then
         printf "  FAIL [target-gc] %-40s exit=%d\n" "$name" "$LAST_EXIT"
@@ -1041,6 +1361,8 @@ run_target_collector_architecture_gates() {
     )
 
     local report_args=()
+    local trace_names=()
+    local trace_files=()
     local workload_failed=0
     local spec
     for spec in "${workload_specs[@]}"; do
@@ -1055,33 +1377,56 @@ run_target_collector_architecture_gates() {
             "$name" "$ts" "$expected_result" \
             "${runtime_env_args[@]+"${runtime_env_args[@]}"}"; then
             report_args+=(--workload "$name=$LAST_STDERR_FILE")
+            trace_names+=("$name")
+            trace_files+=("$LAST_STDERR_FILE")
         else
             workload_failed=1
+            record_gc_trace_evidence \
+                "target-collector" "$name" "target_collector_gates" "fail" \
+                "$LAST_GC_TRACE_FILE"
         fi
     done
 
     if run_target_collector_pointer_free_trace; then
         report_args+=(--workload "pointer_free_numeric=$LAST_CANARY_OUTPUT_FILE")
+        trace_names+=("pointer_free_numeric")
+        trace_files+=("$LAST_CANARY_OUTPUT_FILE")
     else
         workload_failed=1
+        record_gc_trace_evidence \
+            "target-collector" "pointer_free_numeric" "target_collector_gates" "fail" \
+            "$LAST_CANARY_OUTPUT_FILE"
     fi
 
     if run_target_collector_old_page_trace; then
         report_args+=(--workload "old_page_forced_defrag=$LAST_CANARY_OUTPUT_FILE")
+        trace_names+=("old_page_forced_defrag")
+        trace_files+=("$LAST_CANARY_OUTPUT_FILE")
     else
         workload_failed=1
+        record_gc_trace_evidence \
+            "target-collector" "old_page_forced_defrag" "target_collector_gates" "fail" \
+            "$LAST_CANARY_OUTPUT_FILE"
     fi
 
     if [[ "$workload_failed" -ne 0 ]]; then
+        local i
+        for i in "${!trace_names[@]}"; do
+            record_gc_trace_evidence \
+                "target-collector" "${trace_names[$i]}" \
+                "target_collector_gates" "blocked" "${trace_files[$i]}"
+        done
         return
     fi
 
     local report_out="${PERRY_TARGET_COLLECTOR_GATES_OUT:-$TMPDIR/target_collector_gates_report.json}"
     local parser_output="$TMPDIR/target_collector_gates_parser.$$.$RANDOM"
+    local report_status="fail"
     if "$PYTHON" scripts/copied_minor_fallback_report.py \
         "${report_args[@]}" \
         --target-collector-gates \
         --out "$report_out" >"$parser_output" 2>&1; then
+        report_status="pass"
         local gate_summary
         gate_summary=$("$PYTHON" - "$report_out" <<'PY'
 import json
@@ -1116,6 +1461,13 @@ PY
         fi
         FAIL=$((FAIL + 1))
     fi
+
+    local i
+    for i in "${!trace_names[@]}"; do
+        record_gc_trace_evidence \
+            "target-collector" "${trace_names[$i]}" \
+            "target_collector_gates" "$report_status" "${trace_files[$i]}"
+    done
 }
 
 run_traced_canary() {
@@ -1126,6 +1478,12 @@ run_traced_canary() {
     run_canary "$label" "$@"
     if [[ "$LAST_CANARY_EXIT" -eq 0 ]]; then
         assert_gc_trace "$label" "$LAST_CANARY_OUTPUT_FILE" "$mode"
+        record_gc_trace_evidence \
+            "traced-canary" "$label" "$mode" "$LAST_TRACE_ASSERT_STATUS" \
+            "$LAST_CANARY_OUTPUT_FILE"
+    else
+        record_gc_trace_evidence \
+            "traced-canary" "$label" "$mode" "fail" "$LAST_CANARY_OUTPUT_FILE"
     fi
 }
 
@@ -1263,6 +1621,8 @@ if [[ -n "${PERRY_TEST_SUMMARY_OUT:-}" ]]; then
 {"script": "run_memory_stability_tests.sh", "passed": $PASS, "failed": $FAIL, "skipped": 0}
 EOF
 fi
+
+print_gc_evidence_artifacts
 
 if [[ $FAIL -ne 0 ]]; then
     exit 1

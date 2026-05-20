@@ -655,7 +655,17 @@ jobs:
       # availability + RSS reporting differs on Windows runners.
       - name: Memory stability tests
         if: runner.os == 'Linux' || runner.os == 'macOS'
+        env:
+          PERRY_GC_EVIDENCE_DIR: tmp/gc-evidence
         run: ./scripts/run_memory_stability_tests.sh
+
+      - name: Upload GC evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gc-evidence-${{ runner.os }}
+          path: tmp/gc-evidence
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
   # HarmonyOS ArkUI codegen smoke (Phase 2 v9).
