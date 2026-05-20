@@ -46,7 +46,7 @@ regex = "1"
 # Taffy — flexbox / grid layout engine for the perry/tui module
 # (#358 Phase 3). Same crate Bevy and Dioxus use; pure Rust, no FFI.
 taffy = { version = "0.7", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
-fancy-regex = "0.14"
+fancy-regex = "0.18"
 itoa = "1"
 ryu = "1"
 base64 = "0.22"
