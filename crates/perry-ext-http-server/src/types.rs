@@ -34,6 +34,11 @@ pub struct Promise {
 
 /// Extract a port from `{ port }` object, bare number, or fall back.
 /// `default_port` is used when neither shape yields a usable value.
+///
+/// Node treats `0` as a request for an OS-assigned ephemeral port — it's
+/// *not* the "missing value" sentinel. Pre-fix #1121, `extract_port`
+/// returned `default_port` for `listen(0)` so user code that asked for
+/// ephemeral binding ended up clashing on the default 3000 / 8080.
 pub unsafe fn extract_port(opts: f64, default_port: u16) -> u16 {
     let v = JsValue::from_bits(opts.to_bits());
     if v.is_pointer() {
@@ -52,7 +57,7 @@ pub unsafe fn extract_port(opts: f64, default_port: u16) -> u16 {
     }
     if v.is_number() {
         let n = v.to_number();
-        if n > 0.0 {
+        if n.is_finite() && n >= 0.0 && n <= u16::MAX as f64 {
             return n as u16;
         }
     }
@@ -227,4 +232,44 @@ pub(crate) fn read_string_header_bytes(ptr: *mut StringHeader) -> Option<Vec<u8>
 #[allow(dead_code)]
 pub(crate) unsafe fn _force_promise_reason_link(p: *mut Promise) -> f64 {
     js_promise_reason(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_zero_is_kept_for_ephemeral_binding() {
+        // Node semantic: `listen(0)` asks the OS to pick a free port. The
+        // pre-#1121 check (`n > 0.0`) treated 0 as "missing" and fell back
+        // to default_port — so user code that asked for ephemeral binding
+        // collided on the default 3000 / 8080 instead.
+        let port = unsafe { extract_port(0.0_f64, 8080) };
+        assert_eq!(
+            port, 0,
+            "extract_port(0.0) should return 0, not the fallback"
+        );
+    }
+
+    #[test]
+    fn finite_positive_port_is_kept() {
+        let port = unsafe { extract_port(4242.0_f64, 8080) };
+        assert_eq!(port, 4242);
+    }
+
+    #[test]
+    fn negative_or_nan_or_inf_falls_back_to_default() {
+        assert_eq!(unsafe { extract_port(-1.0_f64, 8080) }, 8080);
+        assert_eq!(unsafe { extract_port(f64::NAN, 8080) }, 8080);
+        assert_eq!(unsafe { extract_port(f64::INFINITY, 8080) }, 8080);
+    }
+
+    #[test]
+    fn out_of_range_port_falls_back_to_default() {
+        // Anything above 65535 isn't a valid TCP port — fall back rather
+        // than wrap on the `as u16` cast (which would silently bind on
+        // a wrong, low-numbered port).
+        let port = unsafe { extract_port(70000.0_f64, 8080) };
+        assert_eq!(port, 8080);
+    }
 }
