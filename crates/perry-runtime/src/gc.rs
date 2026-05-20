@@ -66,6 +66,196 @@ pub fn is_large_object_total_size(total_size: usize) -> bool {
     total_size > LARGE_OBJECT_THRESHOLD_BYTES
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GcAllocationPolicy {
+    Arena,
+    Malloc,
+    ArenaOrMalloc,
+    RawOrLargeOldArena,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GcTraceRewriteKind {
+    FieldScanning,
+    Leaf,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GcExternalBytePolicy {
+    None,
+    InlinePayload,
+    SideAllocation,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GcLargeObjectPolicy {
+    OldArenaWhenOverThreshold,
+    MallocTracked,
+    NotApplicable,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GcTypeInfo {
+    pub(crate) type_id: u8,
+    pub(crate) name: &'static str,
+    pub(crate) allocation_policy: GcAllocationPolicy,
+    pub(crate) arena_walkable: bool,
+    pub(crate) trace_rewrite_kind: GcTraceRewriteKind,
+    pub(crate) movable: bool,
+    pub(crate) external_byte_policy: GcExternalBytePolicy,
+    pub(crate) large_object_policy: GcLargeObjectPolicy,
+}
+
+const fn gc_type_info_entry(
+    type_id: u8,
+    name: &'static str,
+    allocation_policy: GcAllocationPolicy,
+    trace_rewrite_kind: GcTraceRewriteKind,
+    movable: bool,
+    external_byte_policy: GcExternalBytePolicy,
+    large_object_policy: GcLargeObjectPolicy,
+) -> GcTypeInfo {
+    GcTypeInfo {
+        type_id,
+        name,
+        allocation_policy,
+        arena_walkable: true,
+        trace_rewrite_kind,
+        movable,
+        external_byte_policy,
+        large_object_policy,
+    }
+}
+
+static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_COUNT] = [
+    None,
+    Some(gc_type_info_entry(
+        GC_TYPE_ARRAY,
+        "array",
+        GcAllocationPolicy::Arena,
+        GcTraceRewriteKind::FieldScanning,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_OBJECT,
+        "object",
+        GcAllocationPolicy::ArenaOrMalloc,
+        GcTraceRewriteKind::FieldScanning,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_STRING,
+        "string",
+        GcAllocationPolicy::ArenaOrMalloc,
+        GcTraceRewriteKind::Leaf,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_CLOSURE,
+        "closure",
+        GcAllocationPolicy::ArenaOrMalloc,
+        GcTraceRewriteKind::FieldScanning,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::MallocTracked,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_PROMISE,
+        "promise",
+        GcAllocationPolicy::Malloc,
+        GcTraceRewriteKind::FieldScanning,
+        true,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::MallocTracked,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_BIGINT,
+        "bigint",
+        GcAllocationPolicy::ArenaOrMalloc,
+        GcTraceRewriteKind::Leaf,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_ERROR,
+        "error",
+        GcAllocationPolicy::Malloc,
+        GcTraceRewriteKind::FieldScanning,
+        true,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::MallocTracked,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_MAP,
+        "map",
+        GcAllocationPolicy::ArenaOrMalloc,
+        GcTraceRewriteKind::FieldScanning,
+        true,
+        GcExternalBytePolicy::SideAllocation,
+        GcLargeObjectPolicy::MallocTracked,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_LAZY_ARRAY,
+        "lazy_array",
+        GcAllocationPolicy::Arena,
+        GcTraceRewriteKind::FieldScanning,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_BUFFER,
+        "buffer",
+        GcAllocationPolicy::RawOrLargeOldArena,
+        GcTraceRewriteKind::Leaf,
+        false,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_TYPED_ARRAY,
+        "typed_array",
+        GcAllocationPolicy::RawOrLargeOldArena,
+        GcTraceRewriteKind::Leaf,
+        false,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+    )),
+];
+
+#[inline]
+pub(crate) fn gc_type_info(obj_type: u8) -> Option<&'static GcTypeInfo> {
+    GC_TYPE_INFO_BY_ID
+        .get(obj_type as usize)
+        .and_then(Option::as_ref)
+}
+
+pub(crate) fn gc_type_infos() -> impl Iterator<Item = &'static GcTypeInfo> {
+    GC_TYPE_INFO_BY_ID.iter().filter_map(Option::as_ref)
+}
+
+#[inline]
+pub(crate) fn gc_type_is_arena_walkable(obj_type: u8) -> bool {
+    gc_type_info(obj_type).is_some_and(|info| info.arena_walkable)
+}
+
+#[inline]
+pub(crate) fn gc_type_is_movable(obj_type: u8) -> bool {
+    gc_type_info(obj_type).is_some_and(|info| info.movable)
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct MallocKindTelemetry {
     allocated_count: u64,
@@ -110,7 +300,7 @@ impl MallocKindTelemetry {
 
 #[inline]
 fn malloc_kind_index(obj_type: u8) -> usize {
-    if (1..=GC_TYPE_MAX).contains(&obj_type) {
+    if gc_type_info(obj_type).is_some() {
         obj_type as usize
     } else {
         MALLOC_KIND_UNKNOWN_INDEX
@@ -119,20 +309,7 @@ fn malloc_kind_index(obj_type: u8) -> usize {
 
 #[inline]
 fn gc_type_name(obj_type: u8) -> &'static str {
-    match obj_type {
-        GC_TYPE_ARRAY => "array",
-        GC_TYPE_OBJECT => "object",
-        GC_TYPE_STRING => "string",
-        GC_TYPE_CLOSURE => "closure",
-        GC_TYPE_PROMISE => "promise",
-        GC_TYPE_BIGINT => "bigint",
-        GC_TYPE_ERROR => "error",
-        GC_TYPE_MAP => "map",
-        GC_TYPE_LAZY_ARRAY => "lazy_array",
-        GC_TYPE_BUFFER => "buffer",
-        GC_TYPE_TYPED_ARRAY => "typed_array",
-        _ => "unknown",
-    }
+    gc_type_info(obj_type).map_or("unknown", |info| info.name)
 }
 
 // Flag constants
@@ -2067,7 +2244,8 @@ fn malloc_kind_telemetry_json_from_snapshot(
     snapshot: [MallocKindTelemetry; MALLOC_KIND_BUCKET_COUNT],
 ) -> serde_json::Value {
     let mut rows = Vec::with_capacity(MALLOC_KIND_BUCKET_COUNT);
-    for obj_type in 1..=GC_TYPE_MAX {
+    for info in gc_type_infos() {
+        let obj_type = info.type_id;
         rows.push(malloc_kind_telemetry_row(
             obj_type,
             snapshot[obj_type as usize],
@@ -6401,6 +6579,7 @@ unsafe fn scan_dirty_slot_range_with_layout(
         if start >= end {
             continue;
         }
+        stats.dirty_slot_pages_considered += 1;
         let first = (start - slots_start) / std::mem::size_of::<u64>();
         let last = (end - slots_start).div_ceil(std::mem::size_of::<u64>());
         ranges.push((first.min(slot_count), last.min(slot_count)));
@@ -6831,7 +7010,7 @@ unsafe fn plausible_gc_header(header: *mut GcHeader, arena: bool) -> bool {
         return false;
     }
     let obj_type = (*header).obj_type;
-    if !(1..=GC_TYPE_MAX).contains(&obj_type) {
+    if gc_type_info(obj_type).is_none() {
         return false;
     }
     let size = (*header).size as usize;
@@ -9108,6 +9287,9 @@ fn evacuate_tenured_nursery_objects_collecting(
             if flags & GC_FLAG_PINNED != 0 {
                 return;
             }
+            if !gc_type_is_movable((*header).obj_type) {
+                return;
+            }
             // Conservative-pinning blocks evacuation.
             if is_conservatively_pinned(header) {
                 return;
@@ -9207,6 +9389,9 @@ fn evacuate_selected_old_pages_collecting(
                 return;
             }
             if flags & GC_FLAG_PINNED != 0 {
+                return;
+            }
+            if !gc_type_is_movable((*header).obj_type) {
                 return;
             }
             if is_conservatively_pinned(header) {
@@ -11845,6 +12030,39 @@ mod tests {
         MALLOC_STATE.with(|s| s.borrow().kind_telemetry[malloc_kind_index(obj_type)])
     }
 
+    #[test]
+    fn test_gc_type_metadata_covers_all_declared_types() {
+        let infos = gc_type_infos().collect::<Vec<_>>();
+        assert_eq!(infos.len(), GC_TYPE_MAX as usize);
+
+        let mut seen = [false; MALLOC_KIND_BUCKET_COUNT];
+        for info in infos {
+            assert_ne!(info.type_id, 0, "unknown is not a declared GC type");
+            assert!(
+                (info.type_id as usize) < MALLOC_KIND_BUCKET_COUNT,
+                "metadata type id out of range: {}",
+                info.type_id
+            );
+            assert!(
+                !seen[info.type_id as usize],
+                "duplicate metadata for {}",
+                info.name
+            );
+            seen[info.type_id as usize] = true;
+            assert_eq!(gc_type_info(info.type_id).copied(), Some(*info));
+            assert_eq!(gc_type_name(info.type_id), info.name);
+        }
+
+        for type_id in 1..MALLOC_KIND_BUCKET_COUNT {
+            assert!(seen[type_id], "missing metadata for GC type {type_id}");
+        }
+
+        assert!(gc_type_is_arena_walkable(GC_TYPE_BUFFER));
+        assert!(gc_type_is_arena_walkable(GC_TYPE_TYPED_ARRAY));
+        assert!(!gc_type_is_movable(GC_TYPE_BUFFER));
+        assert!(!gc_type_is_movable(GC_TYPE_TYPED_ARRAY));
+    }
+
     fn mark_existing_malloc_and_arena_objects_except(excluded: &[usize]) {
         MALLOC_STATE.with(|s| {
             for &tracked in s.borrow().objects.iter() {
@@ -13363,7 +13581,8 @@ mod tests {
             .as_array()
             .expect("malloc_kinds should be an array");
         assert_eq!(rows.len(), MALLOC_KIND_BUCKET_COUNT);
-        for kind in 1..=GC_TYPE_MAX {
+        for info in gc_type_infos() {
+            let kind = info.type_id;
             let row = rows
                 .iter()
                 .find(|row| row["obj_type"].as_u64() == Some(kind as u64))
@@ -13460,6 +13679,87 @@ mod tests {
         let header = unsafe { header_from_user_ptr(user as *const u8) as *mut GcHeader };
         let total = unsafe { (*header).size as usize };
         (header, total)
+    }
+
+    #[test]
+    fn test_large_buffer_and_typed_array_enter_valid_pointer_set() {
+        let _isolation = copying_nursery_isolation_lock();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+
+        let buffer = crate::buffer::buffer_alloc(LARGE_OBJECT_THRESHOLD_BYTES as u32) as usize;
+        let typed_array = crate::typedarray::typed_array_alloc(
+            crate::typedarray::KIND_UINT8,
+            LARGE_OBJECT_THRESHOLD_BYTES as u32,
+        ) as usize;
+        assert!(crate::arena::pointer_in_old_gen(buffer));
+        assert!(crate::arena::pointer_in_old_gen(typed_array));
+
+        let valid_ptrs = build_valid_pointer_set();
+        assert!(
+            valid_ptrs.contains(&buffer),
+            "large old Buffer must be in the valid pointer set"
+        );
+        assert!(
+            valid_ptrs.contains(&typed_array),
+            "large old TypedArray must be in the valid pointer set"
+        );
+
+        let buffer_data = buffer + std::mem::size_of::<crate::buffer::BufferHeader>();
+        let typed_array_data =
+            typed_array + std::mem::size_of::<crate::typedarray::TypedArrayHeader>();
+        assert_eq!(valid_ptrs.enclosing_object(buffer_data), Some(buffer));
+        assert_eq!(
+            valid_ptrs.enclosing_object(typed_array_data),
+            Some(typed_array)
+        );
+
+        clear_marks();
+        remembered_set_clear();
+    }
+
+    #[test]
+    fn test_old_page_sweep_accounting_includes_large_buffer_and_typed_array() {
+        let _isolation = copying_nursery_isolation_lock();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        crate::arena::old_pages_begin_gc_cycle();
+
+        let live_buffer = crate::buffer::buffer_alloc(LARGE_OBJECT_THRESHOLD_BYTES as u32) as usize;
+        let dead_typed_array = crate::typedarray::typed_array_alloc(
+            crate::typedarray::KIND_UINT8,
+            LARGE_OBJECT_THRESHOLD_BYTES as u32,
+        ) as usize;
+        let (live_header, live_total) = old_test_header_and_size(live_buffer);
+        let (_dead_header, dead_total) = old_test_header_and_size(dead_typed_array);
+        unsafe {
+            (*live_header).gc_flags |= GC_FLAG_MARKED;
+        }
+
+        let sweep = sweep_with_age_bump(false);
+        let summary = crate::arena::old_page_summary();
+
+        assert!(
+            sweep.freed_bytes >= dead_total as u64,
+            "dead old TypedArray should use the existing sweep dead decision"
+        );
+        assert_eq!(summary.live_bytes, live_total);
+        assert_eq!(summary.dead_bytes, dead_total);
+        assert_eq!(summary.pinned_bytes, 0);
+        assert_eq!(
+            summary.live_object_count,
+            crate::arena::old_object_page_overlaps(live_header as usize, live_total).len()
+        );
+        assert_eq!(
+            summary.dead_object_count,
+            crate::arena::old_object_page_overlaps(dead_typed_array - GC_HEADER_SIZE, dead_total,)
+                .len()
+        );
+
+        clear_marks();
+        remembered_set_clear();
     }
 
     #[test]
@@ -13870,6 +14170,66 @@ mod tests {
                 "pinned old object address must remain stable"
             );
             (*pinned_header).gc_flags &= !(GC_FLAG_MARKED | GC_FLAG_PINNED);
+        }
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+    }
+
+    #[test]
+    fn test_old_page_defrag_skips_non_movable_buffer_and_typed_array() {
+        let _isolation = copying_nursery_isolation_lock();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+
+        let buffer = crate::buffer::buffer_alloc(LARGE_OBJECT_THRESHOLD_BYTES as u32) as usize;
+        let typed_array = crate::typedarray::typed_array_alloc(
+            crate::typedarray::KIND_UINT8,
+            LARGE_OBJECT_THRESHOLD_BYTES as u32,
+        ) as usize;
+        let (buffer_header, buffer_total) = old_test_header_and_size(buffer);
+        let (typed_array_header, typed_array_total) = old_test_header_and_size(typed_array);
+        let mut selected_pages = crate::fast_hash::new_ptr_hash_set();
+        for (page, _) in
+            crate::arena::old_object_page_overlaps(buffer_header as usize, buffer_total)
+        {
+            selected_pages.insert(page);
+        }
+        for (page, _) in
+            crate::arena::old_object_page_overlaps(typed_array_header as usize, typed_array_total)
+        {
+            selected_pages.insert(page);
+        }
+        unsafe {
+            (*buffer_header).gc_flags |= GC_FLAG_MARKED;
+            (*typed_array_header).gc_flags |= GC_FLAG_MARKED;
+        }
+
+        let mut new_headers = Vec::new();
+        let mut original_headers = Vec::new();
+        let moved = evacuate_selected_old_pages_collecting(
+            &selected_pages,
+            &mut new_headers,
+            &mut original_headers,
+        );
+
+        assert_eq!(moved.old_page_moved_objects, 0);
+        assert_eq!(moved.old_page_moved_bytes, 0);
+        assert!(new_headers.is_empty());
+        assert!(original_headers.is_empty());
+        unsafe {
+            assert_eq!(
+                (*buffer_header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "old Buffer address must remain stable"
+            );
+            assert_eq!(
+                (*typed_array_header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "old TypedArray address must remain stable"
+            );
+            (*buffer_header).gc_flags &= !GC_FLAG_MARKED;
+            (*typed_array_header).gc_flags &= !GC_FLAG_MARKED;
         }
         CONS_PINNED.with(|s| s.borrow_mut().clear());
     }

@@ -1762,7 +1762,7 @@ pub fn arena_walk_objects_addr_sorted(mut callback: impl FnMut(*mut u8)) {
                     break;
                 }
                 let obj_type = (*header).obj_type;
-                if (1..=9).contains(&obj_type) {
+                if crate::gc::gc_type_is_arena_walkable(obj_type) {
                     callback(header_ptr);
                 }
                 offset = aligned + total_size;
@@ -1806,7 +1806,7 @@ pub fn arena_walk_objects(mut callback: impl FnMut(*mut u8)) {
 
                     // Only process if this looks like a valid GC object
                     let obj_type = (*header).obj_type;
-                    if (1..=9).contains(&obj_type) {
+                    if crate::gc::gc_type_is_arena_walkable(obj_type) {
                         callback(header_ptr);
                     }
 
@@ -1867,7 +1867,7 @@ pub fn old_arena_walk_objects(mut callback: impl FnMut(*mut u8)) {
                     }
 
                     let obj_type = (*header).obj_type;
-                    if (1..=9).contains(&obj_type) {
+                    if crate::gc::gc_type_is_arena_walkable(obj_type) {
                         callback(header_ptr);
                     }
 
@@ -1911,7 +1911,7 @@ pub fn arena_walk_objects_with_block_index(mut callback: impl FnMut(*mut u8, usi
                         break;
                     }
                     let obj_type = (*header).obj_type;
-                    if (1..=9).contains(&obj_type) {
+                    if crate::gc::gc_type_is_arena_walkable(obj_type) {
                         callback(header_ptr, block_idx);
                     }
                     offset = aligned + total_size;
@@ -1990,7 +1990,7 @@ pub fn arena_walk_objects_filtered(
                         break;
                     }
                     let obj_type = (*header).obj_type;
-                    if (1..=9).contains(&obj_type) {
+                    if crate::gc::gc_type_is_arena_walkable(obj_type) {
                         callback(header_ptr, block_idx);
                     }
                     offset = aligned + total_size;
@@ -2548,7 +2548,8 @@ pub fn pointer_in_old_gen(addr: usize) -> bool {
 mod tests {
     use super::*;
     use crate::gc::{
-        GcHeader, GC_FLAG_MARKED, GC_FLAG_TENURED, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_STRING,
+        GcHeader, GC_FLAG_MARKED, GC_FLAG_TENURED, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_BUFFER,
+        GC_TYPE_STRING, GC_TYPE_TYPED_ARRAY, LARGE_OBJECT_THRESHOLD_BYTES,
     };
 
     fn general_block_index_for(addr: usize) -> Option<usize> {
@@ -2625,6 +2626,15 @@ mod tests {
         let header_addr = user_ptr - GC_HEADER_SIZE;
         let total_size = unsafe { (*(header_addr as *const GcHeader)).size as usize };
         (header_addr, total_size)
+    }
+
+    fn assert_seen_headers(label: &str, seen: &[usize], expected: &[usize]) {
+        for &header in expected {
+            assert!(
+                seen.contains(&header),
+                "{label} did not visit expected header {header:#x}"
+            );
+        }
     }
 
     fn synthetic_old_block_range() -> (usize, usize) {
@@ -2905,6 +2915,86 @@ mod tests {
                 let meta = old_page_meta(page);
                 assert_eq!(meta.object_count, 1);
             }
+        });
+    }
+
+    #[test]
+    fn large_buffer_and_typed_array_old_objects_are_seen_by_arena_walkers() {
+        run_with_fresh_arenas(|| {
+            let buf = crate::buffer::buffer_alloc(LARGE_OBJECT_THRESHOLD_BYTES as u32) as usize;
+            let ta = crate::typedarray::typed_array_alloc(
+                crate::typedarray::KIND_UINT8,
+                LARGE_OBJECT_THRESHOLD_BYTES as u32,
+            ) as usize;
+            let buf_header = buf - GC_HEADER_SIZE;
+            let ta_header = ta - GC_HEADER_SIZE;
+            let expected = [buf_header, ta_header];
+
+            unsafe {
+                assert_eq!((*(buf_header as *const GcHeader)).obj_type, GC_TYPE_BUFFER);
+                assert_eq!(
+                    (*(ta_header as *const GcHeader)).obj_type,
+                    GC_TYPE_TYPED_ARRAY
+                );
+            }
+            assert!(pointer_in_old_gen(buf));
+            assert!(pointer_in_old_gen(ta));
+
+            let mut normal = Vec::new();
+            arena_walk_objects(|header| {
+                let header = header as usize;
+                if expected.contains(&header) {
+                    normal.push(header);
+                }
+            });
+            assert_seen_headers("arena_walk_objects", &normal, &expected);
+
+            let mut old_only = Vec::new();
+            old_arena_walk_objects(|header| {
+                let header = header as usize;
+                if expected.contains(&header) {
+                    old_only.push(header);
+                }
+            });
+            assert_seen_headers("old_arena_walk_objects", &old_only, &expected);
+
+            let mut addr_sorted = Vec::new();
+            arena_walk_objects_addr_sorted(|header| {
+                let header = header as usize;
+                if expected.contains(&header) {
+                    addr_sorted.push(header);
+                }
+            });
+            assert_seen_headers("arena_walk_objects_addr_sorted", &addr_sorted, &expected);
+
+            let mut indexed = Vec::new();
+            let mut selected_blocks = Vec::new();
+            arena_walk_objects_with_block_index(|header, block_idx| {
+                let header = header as usize;
+                if expected.contains(&header) {
+                    indexed.push(header);
+                    if !selected_blocks.contains(&block_idx) {
+                        selected_blocks.push(block_idx);
+                    }
+                }
+            });
+            assert_seen_headers("arena_walk_objects_with_block_index", &indexed, &expected);
+            assert!(
+                !selected_blocks.is_empty(),
+                "indexed walk should identify target old blocks"
+            );
+
+            let mut filtered = Vec::new();
+            arena_walk_objects_filtered(
+                |block_idx| selected_blocks.contains(&block_idx),
+                |header, _block_idx| {
+                    let header = header as usize;
+                    if expected.contains(&header) {
+                        filtered.push(header);
+                    }
+                },
+            );
+            assert_seen_headers("arena_walk_objects_filtered", &filtered, &expected);
         });
     }
 
