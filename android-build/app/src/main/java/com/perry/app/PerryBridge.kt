@@ -126,6 +126,55 @@ object PerryBridge {
     @JvmStatic
     fun getActivity(): Activity = activity
 
+    // --- Deep links (issue #583) ---
+    //
+    // The Rust side (perry-ui-android/src/deeplinks.rs) registers the JS
+    // handler via `PerryBridge.appOnOpenUrl(key)` and reads the cold-start
+    // URL via `appGetLaunchUrl()`. The Kotlin side owns the Activity-level
+    // intent.data capture (set from PerryActivity.onCreate / onNewIntent)
+    // and dispatches URLs into JS through `nativeInvokeDeepLinkCallback`.
+    //
+    // Without these methods, the JNI `call_static_method("appOnOpenUrl",
+    // "(J)V")` in set_handler() throws NoSuchMethodError → pending JNI
+    // exception → the next JNI op (e.g. NavStack create) aborts the app.
+
+    private var deepLinkCallbackKey: Long = 0L
+    private var pendingLaunchUrl: String = ""
+
+    @JvmStatic
+    fun appOnOpenUrl(callbackKey: Long) {
+        deepLinkCallbackKey = callbackKey
+        // Cold-start replay: if a URL arrived before the handler was
+        // registered, fire it now through the native invoker.
+        val pending = pendingLaunchUrl
+        if (pending.isNotEmpty()) {
+            pendingLaunchUrl = ""
+            try { nativeInvokeDeepLinkCallback(callbackKey, pending, "cold-start") }
+            catch (_: UnsatisfiedLinkError) { /* native lib unloaded — drop */ }
+        }
+    }
+
+    @JvmStatic
+    fun appGetLaunchUrl(): String = pendingLaunchUrl
+
+    /**
+     * Called from PerryActivity for cold-start (onCreate) and warm
+     * (onNewIntent) intents. If the JS handler is already registered
+     * the URL is dispatched immediately; otherwise it's queued for the
+     * cold-start replay path above.
+     */
+    @JvmStatic
+    fun deliverDeepLinkUrl(url: String, source: String) {
+        if (url.isEmpty()) return
+        val key = deepLinkCallbackKey
+        if (key == 0L) {
+            pendingLaunchUrl = url
+            return
+        }
+        try { nativeInvokeDeepLinkCallback(key, url, source) }
+        catch (_: UnsatisfiedLinkError) { /* native lib unloaded — drop */ }
+    }
+
     // --- Content view ---
 
     @JvmStatic
@@ -579,10 +628,8 @@ object PerryBridge {
             uiHandler.post { requestGeolocationPermission(callbackKey) }
             return
         }
-        val granted = ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED
+        val granted = ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (granted) {
             nativeInvokeCallbackWithString(callbackKey, "granted")
         } else {
@@ -1398,8 +1445,8 @@ object PerryBridge {
 
     private inline fun <reified T : android.text.style.CharacterStyle> richTextToggleSpan(
         et: EditText,
-        factory: () -> T,
-        matches: (T) -> Boolean
+        crossinline factory: () -> T,
+        crossinline matches: (T) -> Boolean
     ) {
         uiHandler.post {
             val editable = et.text ?: return@post
@@ -1783,4 +1830,26 @@ object PerryBridge {
 
     @JvmStatic
     external fun nativeMenuItemSelected(menuHandle: Long, index: Int)
+
+    // Push/local notification JNI bridge. Implemented in
+    // perry-ui-android `system.rs` as
+    // `Java_com_perry_app_PerryBridge_nativeNotification*`; declared here so
+    // PerryFirebaseMessagingService / PerryNotificationReceiver can invoke
+    // them (decls were missing, breaking the Android Kotlin build).
+    @JvmStatic
+    external fun nativeNotificationTap(id: String)
+
+    @JvmStatic
+    external fun nativeNotificationToken(token: String)
+
+    @JvmStatic
+    external fun nativeNotificationReceive(payloadJson: String)
+
+    @JvmStatic
+    external fun nativeNotificationBackgroundReceive(payloadJson: String)
+
+    // Implemented in perry-ui-android `callback.rs` as
+    // `Java_com_perry_app_PerryBridge_nativeInvokeDeepLinkCallback`.
+    @JvmStatic
+    external fun nativeInvokeDeepLinkCallback(key: Long, url: String, source: String)
 }

@@ -27,6 +27,13 @@ class PerryActivity : Activity() {
         private const val PERMISSION_REQUEST_CODE = 100
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.data?.toString()?.takeIf { it.isNotEmpty() }?.let {
+            PerryBridge.deliverDeepLinkUrl(it, "warm")
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -51,6 +58,13 @@ class PerryActivity : Activity() {
 
         // Initialize the bridge with this Activity
         PerryBridge.init(this, rootLayout)
+
+        // Capture the cold-start deep-link URL (if any). The JS handler
+        // hasn't been registered yet — PerryBridge.appOnOpenUrl() will
+        // replay this through nativeInvokeDeepLinkCallback once it is.
+        intent?.data?.toString()?.takeIf { it.isNotEmpty() }?.let {
+            PerryBridge.deliverDeepLinkUrl(it, "cold-start")
+        }
 
         // Request any dangerous runtime permissions declared in the manifest
         // before starting native code, so they're available when needed.
