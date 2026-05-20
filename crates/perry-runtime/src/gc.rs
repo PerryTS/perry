@@ -1188,6 +1188,7 @@ struct GcCycleTrace {
     malloc_before: usize,
     remembered_set_before: usize,
     remembered_set: RememberedSetTraceStats,
+    old_pages: crate::arena::OldPageSummary,
     conservative_root_count: usize,
     conservative_pinned: usize,
     conservative_pinned_bytes: usize,
@@ -1231,6 +1232,7 @@ impl GcCycleTrace {
             malloc_before: malloc_object_count(),
             remembered_set_before: remembered_set_size(),
             remembered_set: RememberedSetTraceStats::default(),
+            old_pages: crate::arena::OldPageSummary::default(),
             conservative_root_count: 0,
             conservative_pinned: 0,
             conservative_pinned_bytes: 0,
@@ -1286,6 +1288,21 @@ impl GcCycleTrace {
                 "dirty_slot_pages_considered": self.remembered_set.dirty_slot_pages_considered,
                 "dirty_slot_ranges_scanned": self.remembered_set.dirty_slot_ranges_scanned,
                 "dirty_slots_scanned": self.remembered_set.dirty_slots_scanned,
+            },
+            "old_pages": {
+                "pages": self.old_pages.pages,
+                "allocated_bytes": self.old_pages.allocated_bytes,
+                "live_bytes": self.old_pages.live_bytes,
+                "dead_bytes": self.old_pages.dead_bytes,
+                "pinned_bytes": self.old_pages.pinned_bytes,
+                "object_count": self.old_pages.object_count,
+                "live_object_count": self.old_pages.live_object_count,
+                "dead_object_count": self.old_pages.dead_object_count,
+                "pinned_object_count": self.old_pages.pinned_object_count,
+                "dirty_pages": self.old_pages.dirty_pages,
+                "dirty_slots": self.old_pages.dirty_slots,
+                "fragmented_pages": self.old_pages.fragmented_pages,
+                "evacuation_eligible_pages": self.old_pages.evacuation_eligible_pages,
             },
             "conservative_root_count": self.conservative_root_count,
             "conservative_pinned": self.conservative_pinned,
@@ -2800,6 +2817,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     });
     let mut trace = GcCycleTrace::new(GcCollectionKind::Minor, trigger);
     let start = Instant::now();
+    crate::arena::old_pages_begin_gc_cycle();
     let previous_pause_us = gc_last_pause_us();
     let current_rss_bytes = crate::process::get_rss_bytes();
     let evacuation_policy_allowed = gen_gc_evacuate_enabled();
@@ -3013,6 +3031,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     if let Some(trace) = trace.as_mut() {
         trace.evacuation = evacuation;
         trace.sweep = sweep;
+        trace.old_pages = crate::arena::old_page_summary();
     }
 
     // RS clear — see gc_collect_inner for the rationale.
@@ -3149,6 +3168,7 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     }
     let mut trace = GcCycleTrace::new(GcCollectionKind::Full, trigger);
     let start = Instant::now();
+    crate::arena::old_pages_begin_gc_cycle();
 
     // MARK_SEEDS persists across GC cycles. Clear before any try_mark
     // call so trace sees only this cycle's freshly-marked headers.
@@ -3221,6 +3241,7 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     let freed_bytes = sweep.freed_bytes;
     if let Some(trace) = trace.as_mut() {
         trace.sweep = sweep;
+        trace.old_pages = crate::arena::old_page_summary();
     }
 
     // Gen-GC Phase C3: clear the remembered set after sweep. The
@@ -5605,6 +5626,7 @@ unsafe fn scan_dirty_slot(
         return;
     }
     stats.dirty_slots_scanned += 1;
+    crate::arena::old_page_account_dirty_slot(slot as usize);
     visit_slot(slot, stats);
 }
 
@@ -5636,6 +5658,7 @@ fn scan_dirty_raw_ptr_value_slot(
         return;
     }
     stats.dirty_slots_scanned += 1;
+    crate::arena::old_page_account_dirty_slot(slot as usize);
     visit_slot(slot, stats);
 }
 
@@ -5696,7 +5719,9 @@ unsafe fn scan_dirty_slot_range(
         stats.dirty_slot_ranges_scanned += 1;
         for i in start..end {
             stats.dirty_slots_scanned += 1;
-            visit_slot(slots.add(i), stats);
+            let slot = slots.add(i);
+            crate::arena::old_page_account_dirty_slot(slot as usize);
+            visit_slot(slot, stats);
         }
     }
 }
@@ -6995,6 +7020,10 @@ fn gc_collect_minor_copying_fast_path(
 
     let reset = crate::arena::copying_reset_from_spaces_and_flip();
     collector.stats.reset_blocks += reset.reset_blocks;
+    crate::arena::old_pages_reset_sweep_accounting();
+    if let Some(trace) = trace.as_mut() {
+        trace.old_pages = crate::arena::old_page_summary();
+    }
     remembered_set_clear();
     collector.sticky.restore();
     let malloc_freed_bytes = if malloc_sweep_due {
@@ -7759,6 +7788,8 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
     // is the first non-general index; objects with `block_idx < general_n`
     // are nursery-resident and need the age-bump update.
     let resettable_general_n = crate::arena::general_block_count();
+    let old_block_start = crate::arena::longlived_end();
+    crate::arena::old_pages_reset_sweep_accounting();
 
     // Hoist the OVERFLOW_FIELDS empty check out of the per-dead-object
     // loop. perf-comprehensive's sweep walks ~1.6 M dead arena headers
@@ -7791,6 +7822,14 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
             // off the 1.6 M-object-per-cycle sweep walk.
             if flags == 0 {
                 let total_size = (*header).size as usize;
+                if block_idx >= old_block_start {
+                    crate::arena::old_page_account_swept_object(
+                        header as usize,
+                        total_size,
+                        false,
+                        false,
+                    );
+                }
                 let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
                 layout_clear_for_ptr(user_ptr as usize);
@@ -7800,6 +7839,14 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
                 return;
             }
             if flags & GC_FLAG_PINNED != 0 {
+                if block_idx >= old_block_start {
+                    crate::arena::old_page_account_swept_object(
+                        header as usize,
+                        (*header).size as usize,
+                        true,
+                        true,
+                    );
+                }
                 if block_idx < block_has_live.len() {
                     block_has_live[block_idx] = true;
                 }
@@ -7837,6 +7884,14 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
             // reset-eligible general-nursery stubs in diagnostics because
             // those are the stubs that can keep a nursery block resident.
             if flags & GC_FLAG_FORWARDED != 0 {
+                if block_idx >= old_block_start {
+                    crate::arena::old_page_account_swept_object(
+                        header as usize,
+                        (*header).size as usize,
+                        true,
+                        false,
+                    );
+                }
                 if block_idx < resettable_general_n {
                     retained_forwarded_stub_objects += 1;
                     retained_forwarded_stub_bytes += (*header).size as usize;
@@ -7849,6 +7904,14 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
             }
             if flags & GC_FLAG_MARKED == 0 {
                 let total_size = (*header).size as usize;
+                if block_idx >= old_block_start {
+                    crate::arena::old_page_account_swept_object(
+                        header as usize,
+                        total_size,
+                        false,
+                        false,
+                    );
+                }
                 let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
                 layout_clear_for_ptr(user_ptr as usize);
@@ -7869,6 +7932,14 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
                 // them was costing ~2-3ms per `object_create` GC for
                 // memory bandwidth (700k × 88 bytes = 62MB written).
             } else {
+                if block_idx >= old_block_start {
+                    crate::arena::old_page_account_swept_object(
+                        header as usize,
+                        (*header).size as usize,
+                        true,
+                        false,
+                    );
+                }
                 if block_idx < block_has_live.len() {
                     block_has_live[block_idx] = true;
                 }
@@ -11731,6 +11802,187 @@ mod tests {
             *elements.add(i) = 0;
         }
         (arr, elements)
+    }
+
+    fn old_test_header_and_size(user: usize) -> (*mut GcHeader, usize) {
+        let header = unsafe { header_from_user_ptr(user as *const u8) as *mut GcHeader };
+        let total = unsafe { (*header).size as usize };
+        (header, total)
+    }
+
+    #[test]
+    fn test_old_page_sweep_accounting_live_dead_fragmentation() {
+        let _isolation = copying_nursery_isolation_lock();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        crate::arena::old_pages_begin_gc_cycle();
+
+        let live = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        let dead = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        let (live_header, live_total) = old_test_header_and_size(live);
+        let (_dead_header, dead_total) = old_test_header_and_size(dead);
+        unsafe {
+            (*live_header).gc_flags |= GC_FLAG_MARKED;
+        }
+
+        let sweep = sweep_with_age_bump(false);
+        let summary = crate::arena::old_page_summary();
+
+        assert!(
+            sweep.freed_bytes >= dead_total as u64,
+            "dead old object should use the existing sweep dead decision"
+        );
+        assert_eq!(summary.live_bytes, live_total);
+        assert_eq!(summary.dead_bytes, dead_total);
+        assert_eq!(summary.pinned_bytes, 0);
+        assert_eq!(summary.live_object_count, 1);
+        assert_eq!(summary.dead_object_count, 1);
+        assert_eq!(summary.pinned_object_count, 0);
+        assert_eq!(summary.fragmented_pages, 1);
+        assert_eq!(summary.evacuation_eligible_pages, 1);
+    }
+
+    #[test]
+    fn test_old_page_sweep_accounting_pinned_is_live_and_not_evacuation_eligible() {
+        let _isolation = copying_nursery_isolation_lock();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        crate::arena::old_pages_begin_gc_cycle();
+
+        let pinned = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        let (pinned_header, pinned_total) = old_test_header_and_size(pinned);
+        unsafe {
+            (*pinned_header).gc_flags |= GC_FLAG_PINNED;
+        }
+
+        let _sweep = sweep_with_age_bump(false);
+        let summary = crate::arena::old_page_summary();
+
+        assert_eq!(summary.live_bytes, pinned_total);
+        assert_eq!(summary.dead_bytes, 0);
+        assert_eq!(summary.pinned_bytes, pinned_total);
+        assert_eq!(summary.live_object_count, 1);
+        assert_eq!(summary.pinned_object_count, 1);
+        assert_eq!(summary.evacuation_eligible_pages, 0);
+
+        unsafe {
+            (*pinned_header).gc_flags &= !GC_FLAG_PINNED;
+        }
+    }
+
+    #[test]
+    fn test_old_page_sweep_accounting_spanning_object_distributes_bytes() {
+        let _isolation = copying_nursery_isolation_lock();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        crate::arena::old_pages_begin_gc_cycle();
+
+        let user = crate::arena::arena_alloc_gc_old(4096 * 2 + 77, 8, GC_TYPE_STRING) as usize;
+        let (header, total) = old_test_header_and_size(user);
+        let overlaps = crate::arena::old_object_page_overlaps(header as usize, total);
+        assert!(
+            overlaps.len() > 1,
+            "test object should span more than one old page"
+        );
+        unsafe {
+            (*header).gc_flags |= GC_FLAG_MARKED;
+        }
+
+        let _sweep = sweep_with_age_bump(false);
+        let summary = crate::arena::old_page_summary();
+
+        assert_eq!(summary.live_bytes, total);
+        assert_eq!(summary.dead_bytes, 0);
+        assert_eq!(summary.live_object_count, overlaps.len());
+        assert_eq!(summary.evacuation_eligible_pages, overlaps.len());
+        for (page, bytes) in overlaps {
+            let meta = crate::arena::old_page_meta_for_tests(page)
+                .expect("spanned old page should have metadata");
+            assert_eq!(meta.live_bytes, bytes);
+            assert_eq!(meta.dead_bytes, 0);
+            assert_eq!(meta.live_object_count, 1);
+        }
+    }
+
+    #[test]
+    fn test_dirty_page_scan_accounts_old_page_dirty_slots() {
+        let _isolation = copying_nursery_isolation_lock();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+
+        let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+        let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+        unsafe {
+            *fields = POINTER_TAG | young as u64;
+        }
+        js_write_barrier_slot(
+            POINTER_TAG | old_obj as u64,
+            fields as u64,
+            POINTER_TAG | young as u64,
+        );
+        crate::arena::old_pages_begin_gc_cycle();
+
+        let valid_ptrs = build_valid_pointer_set();
+        let stats = mark_remembered_set_roots(&valid_ptrs);
+        let dirty_page = crate::arena::generation_page_for_addr(fields as usize);
+        let meta = crate::arena::old_page_meta_for_tests(dirty_page)
+            .expect("dirty old page should have metadata");
+        let summary = crate::arena::old_page_summary();
+
+        assert!(
+            stats.dirty_slots_scanned >= 1,
+            "remembered scan should visit at least the written old slot"
+        );
+        assert!(
+            meta.dirty_slots >= 1,
+            "old page metadata should count scanned dirty slots"
+        );
+        assert_eq!(summary.dirty_pages, 1);
+        assert_eq!(summary.dirty_slots, meta.dirty_slots);
+
+        clear_marks();
+        remembered_set_clear();
+    }
+
+    #[test]
+    fn test_old_page_sweep_accounting_trace_json_includes_summary() {
+        let _isolation = copying_nursery_isolation_lock();
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+
+        let pinned = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        let (pinned_header, pinned_total) = old_test_header_and_size(pinned);
+        unsafe {
+            (*pinned_header).gc_flags |= GC_FLAG_PINNED;
+        }
+
+        let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
+            kind: GcTriggerKind::Direct,
+            steps_before: Some(GcStepSnapshot::current()),
+        });
+        let trace = outcome.trace.expect("test requested GC trace capture");
+        let event = trace.into_json(GcStepSnapshot::current());
+        let old_pages = &event["old_pages"];
+
+        assert!(old_pages["pages"].as_u64().unwrap_or(0) > 0);
+        assert_eq!(old_pages["live_bytes"].as_u64(), Some(pinned_total as u64));
+        assert_eq!(
+            old_pages["pinned_bytes"].as_u64(),
+            Some(pinned_total as u64)
+        );
+        assert_eq!(old_pages["dead_bytes"].as_u64(), Some(0));
+        assert_eq!(old_pages["pinned_object_count"].as_u64(), Some(1));
+        assert_eq!(old_pages["evacuation_eligible_pages"].as_u64(), Some(0));
+
+        unsafe {
+            (*pinned_header).gc_flags &= !GC_FLAG_PINNED;
+        }
     }
 
     #[test]

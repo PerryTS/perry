@@ -191,8 +191,13 @@ pub(crate) struct OldPageMeta {
     pub(crate) page_end: usize,
     pub(crate) allocated_bytes: usize,
     pub(crate) live_bytes: usize,
+    pub(crate) dead_bytes: usize,
     pub(crate) object_count: usize,
+    pub(crate) live_object_count: usize,
+    pub(crate) dead_object_count: usize,
     pub(crate) pinned_bytes: usize,
+    pub(crate) pinned_object_count: usize,
+    pub(crate) dirty_slots: usize,
     pub(crate) dirty: bool,
     pub(crate) evacuation_eligible: bool,
 }
@@ -206,17 +211,50 @@ impl OldPageMeta {
             page_end: page_base + GENERATION_PAGE_SIZE,
             allocated_bytes: 0,
             live_bytes: 0,
+            dead_bytes: 0,
             object_count: 0,
+            live_object_count: 0,
+            dead_object_count: 0,
             pinned_bytes: 0,
+            pinned_object_count: 0,
+            dirty_slots: 0,
             dirty: false,
             evacuation_eligible: false,
         }
     }
 
     #[inline]
+    fn reset_cycle_sweep_accounting(&mut self) {
+        self.live_bytes = 0;
+        self.dead_bytes = 0;
+        self.pinned_bytes = 0;
+        self.live_object_count = 0;
+        self.dead_object_count = 0;
+        self.pinned_object_count = 0;
+        self.evacuation_eligible = false;
+    }
+
+    #[inline]
     fn refresh_policy_bits(&mut self) {
         self.evacuation_eligible = self.live_bytes > 0 && self.pinned_bytes == 0;
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct OldPageSummary {
+    pub(crate) pages: usize,
+    pub(crate) allocated_bytes: usize,
+    pub(crate) live_bytes: usize,
+    pub(crate) dead_bytes: usize,
+    pub(crate) pinned_bytes: usize,
+    pub(crate) object_count: usize,
+    pub(crate) live_object_count: usize,
+    pub(crate) dead_object_count: usize,
+    pub(crate) pinned_object_count: usize,
+    pub(crate) dirty_pages: usize,
+    pub(crate) dirty_slots: usize,
+    pub(crate) fragmented_pages: usize,
+    pub(crate) evacuation_eligible_pages: usize,
 }
 
 thread_local! {
@@ -434,7 +472,10 @@ pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
     }
 }
 
-fn old_object_page_overlaps(header_addr: usize, total_size: usize) -> Vec<(usize, usize)> {
+pub(crate) fn old_object_page_overlaps(
+    header_addr: usize,
+    total_size: usize,
+) -> Vec<(usize, usize)> {
     if header_addr == 0 || total_size == 0 {
         return Vec::new();
     }
@@ -454,16 +495,7 @@ fn old_object_page_overlaps(header_addr: usize, total_size: usize) -> Vec<(usize
     overlaps
 }
 
-#[inline]
-fn old_object_is_pinned(header_addr: usize) -> bool {
-    if header_addr == 0 {
-        return false;
-    }
-    let header = header_addr as *const crate::gc::GcHeader;
-    unsafe { (*header).gc_flags & crate::gc::GC_FLAG_PINNED != 0 }
-}
-
-fn update_old_page_meta_for_object(page_updates: &[(usize, usize)], pinned: bool, adding: bool) {
+fn update_old_page_meta_for_object(page_updates: &[(usize, usize)], adding: bool) {
     if page_updates.is_empty() {
         return;
     }
@@ -475,17 +507,12 @@ fn update_old_page_meta_for_object(page_updates: &[(usize, usize)], pinned: bool
                 .or_insert_with(|| OldPageMeta::zero_for_page(page));
             if adding {
                 page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_add(bytes);
-                page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
                 page_meta.object_count = page_meta.object_count.saturating_add(1);
-                if pinned {
-                    page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(bytes);
-                }
             } else {
                 page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_sub(bytes);
-                page_meta.live_bytes = page_meta.live_bytes.saturating_sub(bytes);
                 page_meta.object_count = page_meta.object_count.saturating_sub(1);
-                if pinned {
-                    page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_sub(bytes);
+                if page_meta.allocated_bytes == 0 && page_meta.object_count == 0 {
+                    page_meta.reset_cycle_sweep_accounting();
                 }
             }
             page_meta.refresh_policy_bits();
@@ -509,7 +536,7 @@ fn register_old_object_pages(header_addr: usize, total_size: usize) {
             }
         }
     });
-    update_old_page_meta_for_object(&added_pages, old_object_is_pinned(header_addr), true);
+    update_old_page_meta_for_object(&added_pages, true);
 }
 
 #[allow(dead_code)]
@@ -535,7 +562,110 @@ pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize)
             }
         }
     });
-    update_old_page_meta_for_object(&removed_pages, old_object_is_pinned(header_addr), false);
+    update_old_page_meta_for_object(&removed_pages, false);
+}
+
+pub(crate) fn old_pages_begin_gc_cycle() {
+    OLD_GEN_PAGE_META.with(|meta| {
+        for page_meta in meta.borrow_mut().values_mut() {
+            page_meta.dirty_slots = 0;
+        }
+    });
+}
+
+pub(crate) fn old_pages_reset_sweep_accounting() {
+    OLD_GEN_PAGE_META.with(|meta| {
+        for page_meta in meta.borrow_mut().values_mut() {
+            page_meta.reset_cycle_sweep_accounting();
+        }
+    });
+}
+
+pub(crate) fn old_page_account_swept_object(
+    header_addr: usize,
+    total_size: usize,
+    live: bool,
+    pinned: bool,
+) {
+    if header_addr == 0 || total_size == 0 {
+        return;
+    }
+    let overlaps = old_object_page_overlaps(header_addr, total_size);
+    if overlaps.is_empty() {
+        return;
+    }
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        for (page, bytes) in overlaps {
+            let page_meta = meta
+                .entry(page)
+                .or_insert_with(|| OldPageMeta::zero_for_page(page));
+            if live {
+                page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
+                page_meta.live_object_count = page_meta.live_object_count.saturating_add(1);
+                if pinned {
+                    page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(bytes);
+                    page_meta.pinned_object_count = page_meta.pinned_object_count.saturating_add(1);
+                }
+            } else {
+                page_meta.dead_bytes = page_meta.dead_bytes.saturating_add(bytes);
+                page_meta.dead_object_count = page_meta.dead_object_count.saturating_add(1);
+            }
+            page_meta.refresh_policy_bits();
+        }
+    });
+}
+
+pub(crate) fn old_page_account_dirty_slot(slot_addr: usize) {
+    if slot_addr == 0 {
+        return;
+    }
+    let page = generation_page_for_addr(slot_addr);
+    OLD_GEN_PAGE_META.with(|meta| {
+        if let Some(page_meta) = meta.borrow_mut().get_mut(&page) {
+            page_meta.dirty_slots = page_meta.dirty_slots.saturating_add(1);
+        }
+    });
+}
+
+pub(crate) fn old_page_summary() -> OldPageSummary {
+    OLD_GEN_PAGE_META.with(|meta| {
+        let meta = meta.borrow();
+        let mut summary = OldPageSummary {
+            pages: meta.len(),
+            ..OldPageSummary::default()
+        };
+        for page_meta in meta.values() {
+            summary.allocated_bytes = summary
+                .allocated_bytes
+                .saturating_add(page_meta.allocated_bytes);
+            summary.live_bytes = summary.live_bytes.saturating_add(page_meta.live_bytes);
+            summary.dead_bytes = summary.dead_bytes.saturating_add(page_meta.dead_bytes);
+            summary.pinned_bytes = summary.pinned_bytes.saturating_add(page_meta.pinned_bytes);
+            summary.object_count = summary.object_count.saturating_add(page_meta.object_count);
+            summary.live_object_count = summary
+                .live_object_count
+                .saturating_add(page_meta.live_object_count);
+            summary.dead_object_count = summary
+                .dead_object_count
+                .saturating_add(page_meta.dead_object_count);
+            summary.pinned_object_count = summary
+                .pinned_object_count
+                .saturating_add(page_meta.pinned_object_count);
+            if page_meta.dirty || page_meta.dirty_slots > 0 {
+                summary.dirty_pages = summary.dirty_pages.saturating_add(1);
+            }
+            summary.dirty_slots = summary.dirty_slots.saturating_add(page_meta.dirty_slots);
+            if page_meta.live_bytes > 0 && page_meta.dead_bytes > 0 {
+                summary.fragmented_pages = summary.fragmented_pages.saturating_add(1);
+            }
+            if page_meta.evacuation_eligible {
+                summary.evacuation_eligible_pages =
+                    summary.evacuation_eligible_pages.saturating_add(1);
+            }
+        }
+        summary
+    })
 }
 
 pub(crate) fn old_arena_walk_objects_on_pages(
@@ -2283,8 +2413,13 @@ mod tests {
                     );
                     assert_eq!(meta.allocated_bytes, 0);
                     assert_eq!(meta.live_bytes, 0);
+                    assert_eq!(meta.dead_bytes, 0);
                     assert_eq!(meta.object_count, 0);
+                    assert_eq!(meta.live_object_count, 0);
+                    assert_eq!(meta.dead_object_count, 0);
                     assert_eq!(meta.pinned_bytes, 0);
+                    assert_eq!(meta.pinned_object_count, 0);
+                    assert_eq!(meta.dirty_slots, 0);
                     assert!(!meta.dirty);
                     assert!(!meta.evacuation_eligible);
                 }
@@ -2304,11 +2439,15 @@ mod tests {
                 total_overlap += bytes;
                 let meta = old_page_meta(page);
                 assert_eq!(meta.allocated_bytes, bytes);
-                assert_eq!(meta.live_bytes, bytes);
+                assert_eq!(meta.live_bytes, 0);
+                assert_eq!(meta.dead_bytes, 0);
                 assert_eq!(meta.object_count, 1);
+                assert_eq!(meta.live_object_count, 0);
+                assert_eq!(meta.dead_object_count, 0);
                 assert_eq!(meta.pinned_bytes, 0);
+                assert_eq!(meta.pinned_object_count, 0);
                 assert!(!meta.dirty);
-                assert!(meta.evacuation_eligible);
+                assert!(!meta.evacuation_eligible);
             }
             assert_eq!(total_overlap, total_size);
         });
@@ -2337,7 +2476,10 @@ mod tests {
                 let meta = old_page_meta(page);
                 assert_eq!(meta.allocated_bytes, 0);
                 assert_eq!(meta.live_bytes, 0);
+                assert_eq!(meta.dead_bytes, 0);
                 assert_eq!(meta.object_count, 0);
+                assert_eq!(meta.live_object_count, 0);
+                assert_eq!(meta.dead_object_count, 0);
             }
             unregister_block_generation(base, size);
         });
@@ -2362,10 +2504,14 @@ mod tests {
                 total_overlap += bytes;
                 let meta = old_page_meta(page);
                 assert_eq!(meta.allocated_bytes, bytes);
-                assert_eq!(meta.live_bytes, bytes);
+                assert_eq!(meta.live_bytes, 0);
+                assert_eq!(meta.dead_bytes, 0);
                 assert_eq!(meta.object_count, 1);
+                assert_eq!(meta.live_object_count, 0);
+                assert_eq!(meta.dead_object_count, 0);
                 assert_eq!(meta.pinned_bytes, 0);
-                assert!(meta.evacuation_eligible);
+                assert_eq!(meta.pinned_object_count, 0);
+                assert!(!meta.evacuation_eligible);
             }
             assert_eq!(total_overlap, total_size);
 
@@ -2393,7 +2539,10 @@ mod tests {
                 let meta = old_page_meta(page);
                 assert_eq!(meta.allocated_bytes, 0);
                 assert_eq!(meta.live_bytes, 0);
+                assert_eq!(meta.dead_bytes, 0);
                 assert_eq!(meta.object_count, 0);
+                assert_eq!(meta.live_object_count, 0);
+                assert_eq!(meta.dead_object_count, 0);
                 assert!(!meta.evacuation_eligible);
             }
             assert_eq!(old_arena_walk_objects_on_pages(&pages, |_| {}), 0);
