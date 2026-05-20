@@ -6568,7 +6568,24 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // so callers can invoke via the closure-call ABI. The
             // `__perry_wrap_<fn>` symbol is emitted by compile_module
             // for every user function.
+            //
+            // #1126: when the resolved parent method lives in a DIFFERENT
+            // module (typical with cross-module class inheritance —
+            // rxjs's `OperatorSubscriber extends Subscriber` where
+            // `super.complete` / `super._complete` refer to Subscriber.ts's
+            // methods), the wrapper's `define` lives in the source TU but
+            // is referenced from this consumer TU. LLVM per-TU IR
+            // validation rejects the reference unless we forward-declare
+            // the symbol. Push into `pending_declares` — `declare_function`
+            // dedupes against any later same-TU `define` (`module.rs:67-69`
+            // comment) so this is safe for the same-module case too. The
+            // signature is informational only (runtime dispatches via
+            // ClosureHeader's func_ptr); use the same `(i64)` + 0 doubles
+            // shape the imported-function-ref site at `expr/mod.rs:12331`
+            // uses for unknown-arity imports.
             let wrap_name = format!("__perry_wrap_{}", fn_name);
+            ctx.pending_declares
+                .push((wrap_name.clone(), DOUBLE, vec![I64]));
             let blk = ctx.block();
             let wrap_ptr = format!("@{}", wrap_name);
             let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
