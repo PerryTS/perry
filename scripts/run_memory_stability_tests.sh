@@ -806,6 +806,7 @@ EOF
 run_target_collector_gate_workload() {
     local name="$1"
     local ts="$2"
+    local expected_result="$3"
     local bin="$TMPDIR/${name}_target_collector_gate"
     local compile_output="$TMPDIR/${name}_target_collector_gate_compile.$$.$RANDOM"
 
@@ -824,9 +825,25 @@ run_target_collector_gate_workload() {
         FAIL=$((FAIL + 1))
         return 1
     fi
-    if ! grep -q "^${name}:" "$LAST_STDOUT_FILE"; then
+    local expected_output="${name}:${expected_result}"
+    local actual_output
+    actual_output=$(while IFS= read -r line; do
+        if [[ "$line" == "${name}:"* ]]; then
+            printf "%s\n" "$line"
+        fi
+    done <"$LAST_STDOUT_FILE")
+
+    if [[ -z "$actual_output" ]]; then
         printf "  FAIL [target-gc] %-40s stdout missing workload marker\n" "$name"
         sed 's/^/    /' "$LAST_STDOUT_FILE"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+    if [[ "$actual_output" != "$expected_output" ]]; then
+        printf "  FAIL [target-gc] %-40s stdout mismatch\n" "$name"
+        printf "    expected: %s\n" "$expected_output"
+        printf "    stdout:\n"
+        sed 's/^/      /' "$LAST_STDOUT_FILE"
         FAIL=$((FAIL + 1))
         return 1
     fi
@@ -886,17 +903,17 @@ run_target_collector_architecture_gates() {
     write_target_collector_gate_workloads "$workloads_dir"
 
     local workload_specs=(
-        "default_copying:$workloads_dir/default_copying.ts"
-        "large_object_barriers:$workloads_dir/large_object_barriers.ts"
+        "default_copying|4852|$workloads_dir/default_copying.ts"
+        "large_object_barriers|36052|$workloads_dir/large_object_barriers.ts"
     )
 
     local report_args=()
     local workload_failed=0
     local spec
     for spec in "${workload_specs[@]}"; do
-        local name="${spec%%:*}"
-        local ts="${spec#*:}"
-        if run_target_collector_gate_workload "$name" "$ts"; then
+        local name expected_result ts
+        IFS='|' read -r name expected_result ts <<<"$spec"
+        if run_target_collector_gate_workload "$name" "$ts" "$expected_result"; then
             report_args+=(--workload "$name=$LAST_STDERR_FILE")
         else
             workload_failed=1
