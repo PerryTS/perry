@@ -11113,6 +11113,42 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         args: &[],
         ret: NR_I32,
     },
+    // Closes #769 followup — client-side `res.statusCode` /
+    // `res.statusMessage` / `res.headers` after `http.request(url, cb)`.
+    // The HIR registers the `res` arrow param as ("http",
+    // "IncomingMessage"); these entries route the rewritten
+    // `__get_<prop>` reads to perry-ext-http's accessor (the same
+    // crate that owns the client-IncomingMessage registry the
+    // response queue populates). Pre-fix these properties hit the
+    // `lower_native_method_call` zero-sentinel fall-through and
+    // returned `0`/`""`/undefined no matter what status came back.
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_statusCode",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_status_code",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_statusMessage",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_status_message",
+        args: &[],
+        ret: NR_STR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_headers",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_response_headers",
+        args: &[],
+        ret: NR_F64,
+    },
     NativeModSig {
         module: "http",
         has_receiver: true,

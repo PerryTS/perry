@@ -2,7 +2,7 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
-## v0.5.1012 — fix(fastify,runtime) #1113 #1114: bidirectional WebSocket upgrade on `app.server`; setInterval+async CPU-wedge regression
+## v0.5.1013 — fix(fastify,runtime) #1113 #1114: bidirectional WebSocket upgrade on `app.server`; setInterval+async CPU-wedge regression
 
 Two issues filed against shop-admin on v0.5.1009. #1113's boot-blocking shape was already partially fixed in v0.5.1011 (the boot-unblocking shape); this release finishes #1113 (real WS upgrade dispatch) and fixes the #1114 CPU wedge.
 
@@ -26,6 +26,33 @@ v0.5.1011 shipped the boot-unblocking shape (`typeof app.server === "object"`, `
 Verified end-to-end: the issue's exact pattern (`WebSocketServer({ noServer: true })` + `app.server.on("upgrade", (req,socket,head) => wss.handleUpgrade(...))`) compiles, boots clean, returns `HTTP/1.1 101` with a correct RFC-6455 accept key, the `upgrade` handler fires with an object `req`, the `handleUpgrade` callback fires with the ws connection, and `wss.on("connection")` fires — while normal HTTP routing (`/healthz`) is unaffected by `.with_upgrades()`.
 
 Known limitations (honest): a bare property *read* `typeof app.server.on` still reports `undefined` — `app.server.on(...)` is dispatched as a codegen-routed *call*, not a real bound-method value (pre-existing v0.5.1011 boot-fix shape, separate cosmetic follow-up). The `noServer` detection is a positional heuristic, not name-based. Full persistent-WS-client e2e (message round-trips after upgrade) was not exercised here; the load-bearing dispatch chain (handshake → wsId → listener firing → connection event) is proven.
+## v0.5.1012 — fix(http,hir): #769-followup — client `res.statusCode` after `http.request`
+
+`test_node_http_client_request` was failing parity (and silently regressing the http.request callback surface) because client-side `IncomingMessage` property reads never reached the perry-ext-http accessor.
+
+### Root cause
+
+`http.request(url, (res) => …)` pre-tags `res` as `("http", "IncomingMessage")` (see `pre_scan_node_http_client_callback_params` in `crates/perry-hir/src/lower/expr_call.rs:255`). HIR `expr_member.rs` then maps known IncomingMessage properties to `__get_<prop>` so the codegen routes through `NATIVE_MODULE_TABLE`'s `class_filter = Some("IncomingMessage")` rows — but only `method` / `url` / `httpVersion` / `complete` / `aborted` / `destroyed` were in the rewrite list. `statusCode` / `statusMessage` / `headers` fell through to the `_ => property_name` arm, kept their bare names, and emitted a `NativeMethodCall { module: "http", class_name: Some("IncomingMessage"), method: "statusCode", … }`.
+
+That call then took the `lower_native_method_call` zero-sentinel fall-through (`crates/perry-codegen/src/lower_call/native.rs:2401-2405`) because no `NativeModSig` exists for `(http, IncomingMessage, statusCode)`. The fallthrough lowers args for side-effects and returns `double_literal(0.0)` — so every `res.statusCode` read returned the literal `0` regardless of what the response actually carried. The runtime never saw the read; the `external-http-client-pump` arm in `js_handle_property_dispatch` (which DOES know about perry-ext-http's `js_http_status_code`) is downstream of the HANDLE_PROPERTY_DISPATCH path, and the HIR-level rewrite short-circuited it before it could fire.
+
+Because the test file existed but had no `test-parity/expected/test_node_http_client_request.txt` fixture, the parity job emitted `NEW FAILURES: test_node_http_client_request` on every PR against main since #1133 (8411fd3d). 9 in-flight refactor PRs were red on the same shared failure.
+
+### Fix
+
+Two-line surgical fix in the HIR rewrite + three new codegen entries:
+
+1. `crates/perry-hir/src/lower/expr_member.rs` — add `("IncomingMessage", "statusCode")`, `("IncomingMessage", "statusMessage")`, `("IncomingMessage", "headers")` to the rewrite match arm so they become `__get_statusCode` / `__get_statusMessage` / `__get_headers`.
+2. `crates/perry-codegen/src/lower_call.rs` — three new `NativeModSig` entries with `class_filter = Some("IncomingMessage")` routing to `js_http_status_code` / `js_http_status_message` / `js_http_response_headers` (already declared in `runtime_decls.rs:1771-1778`; the perry-ext-http crate owns the client-IncomingMessage registry).
+
+For server-side `req` (also pre-tagged `IncomingMessage` via `pre_scan_node_http_create_server_params`), accessing these three properties was already returning `0`/`""`/undefined through the same fall-through, so routing to `js_http_status_code` — which returns 0 for handles not in the perry-ext-http registry — is no regression. Node's server-side IncomingMessage exposes these as `undefined` anyway.
+
+### Validation
+
+- `test_node_http_client_request` parity: was missing-expected → now passes (Perry prints `req1 status: 200` / `req2 status: 200` / `req3 status: 200` matching node byte-for-byte).
+- Added `test-parity/expected/test_node_http_client_request.txt` fixture.
+- Regressions: `test_issue_1124_client_buffer`, `test_issue_1124_http_buffer_body`, `test_issue_1131_socket_write_types` all still pass — the existing #1124 / #1131 paths use `chunk.toString("hex")` / `socket.write(…)` rather than `.statusCode`, so they were never affected.
+- `test_parity_http` / `_https` / `_http2` remain in `known_failures.json` (unrelated existing parity failures).
 
 ## v0.5.1011 — fix(compile) #1110 + chore(ffi) #1112: re-export-only FFI manifest collection; runtime-only-link `perry_ffi_*` undef; perry-ffi to crates.io
 
