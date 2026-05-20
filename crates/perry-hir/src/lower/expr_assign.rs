@@ -516,7 +516,17 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             // symptom: `u2.href` reads the original after `u2.pathname = "/x"`).
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let prop_name = prop_ident.sym.as_ref();
-                let url_setter = matches!(prop_name, "pathname" | "search" | "hash");
+                let url_setter = matches!(
+                    prop_name,
+                    "pathname"
+                        | "search"
+                        | "hash"
+                        | "protocol"
+                        | "hostname"
+                        | "port"
+                        | "username"
+                        | "password"
+                );
                 if url_setter {
                     let is_url_recv = match member.obj.as_ref() {
                         ast::Expr::New(new_expr) => matches!(
@@ -541,6 +551,26 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                 value,
                             },
                             "hash" => Expr::UrlSetHash {
+                                url: Box::new(url_expr),
+                                value,
+                            },
+                            "protocol" => Expr::UrlSetProtocol {
+                                url: Box::new(url_expr),
+                                value,
+                            },
+                            "hostname" => Expr::UrlSetHostname {
+                                url: Box::new(url_expr),
+                                value,
+                            },
+                            "port" => Expr::UrlSetPort {
+                                url: Box::new(url_expr),
+                                value,
+                            },
+                            "username" => Expr::UrlSetUsername {
+                                url: Box::new(url_expr),
+                                value,
+                            },
+                            "password" => Expr::UrlSetPassword {
                                 url: Box::new(url_expr),
                                 value,
                             },

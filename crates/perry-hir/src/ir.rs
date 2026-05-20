@@ -2409,6 +2409,11 @@ pub enum Expr {
     /// URL.canParse(input) -> boolean. Issue #650: spec'd static method
     /// added in Node 18. Returns true if `input` parses as a valid URL.
     UrlCanParse(Box<Expr>),
+    /// URL.canParse(input, base) -> boolean.
+    UrlCanParseWithBase {
+        input: Box<Expr>,
+        base: Box<Expr>,
+    },
     /// URL.parse(input) -> URL | null. Issue #650: non-throwing variant
     /// of `new URL()` added in Node 22. Returns null when parsing fails.
     UrlParse(Box<Expr>),
@@ -2438,6 +2443,33 @@ pub enum Expr {
         url: Box<Expr>,
         value: Box<Expr>,
     },
+    /// `urlInstance.protocol = value` — updates protocol and rebuilds href.
+    UrlSetProtocol {
+        url: Box<Expr>,
+        value: Box<Expr>,
+    },
+    /// `urlInstance.hostname = value` — updates hostname + reconstructs host
+    /// (`hostname[:port]`) and rebuilds href.
+    UrlSetHostname {
+        url: Box<Expr>,
+        value: Box<Expr>,
+    },
+    /// `urlInstance.port = value` — updates port + reconstructs host and
+    /// rebuilds href. Empty/default port collapses host back to hostname.
+    UrlSetPort {
+        url: Box<Expr>,
+        value: Box<Expr>,
+    },
+    /// `urlInstance.username = value` — updates userinfo and rebuilds href.
+    UrlSetUsername {
+        url: Box<Expr>,
+        value: Box<Expr>,
+    },
+    /// `urlInstance.password = value` — updates userinfo and rebuilds href.
+    UrlSetPassword {
+        url: Box<Expr>,
+        value: Box<Expr>,
+    },
 
     // URLSearchParams operations
     /// new URLSearchParams(init?)
@@ -2447,10 +2479,12 @@ pub enum Expr {
         params: Box<Expr>,
         name: Box<Expr>,
     },
-    /// params.has(name) -> boolean
+    /// params.has(name) -> boolean. Node 19+ also accepts an optional
+    /// `value` argument matching only when both the name AND value match.
     UrlSearchParamsHas {
         params: Box<Expr>,
         name: Box<Expr>,
+        value: Option<Box<Expr>>,
     },
     /// params.set(name, value)
     UrlSearchParamsSet {
@@ -2464,10 +2498,12 @@ pub enum Expr {
         name: Box<Expr>,
         value: Box<Expr>,
     },
-    /// params.delete(name)
+    /// params.delete(name). Node 19+ also accepts an optional `value`
+    /// argument deleting only entries matching both name AND value.
     UrlSearchParamsDelete {
         params: Box<Expr>,
         name: Box<Expr>,
+        value: Option<Box<Expr>>,
     },
     /// params.toString() -> string
     UrlSearchParamsToString(Box<Expr>),
@@ -2481,6 +2517,17 @@ pub enum Expr {
     /// an iterable per spec; the for-of lowering wraps the receiver in this
     /// node so the standard array-iter path handles the rest. Refs #575.
     UrlSearchParamsEntries(Box<Expr>),
+    /// params.keys() -> string[]
+    UrlSearchParamsKeys(Box<Expr>),
+    /// params.values() -> string[]
+    UrlSearchParamsValues(Box<Expr>),
+    /// params.sort() -> undefined (mutates in place)
+    UrlSearchParamsSort(Box<Expr>),
+    /// params.forEach(callback) -> undefined
+    UrlSearchParamsForEach {
+        params: Box<Expr>,
+        callback: Box<Expr>,
+    },
 
     // Delete operator
     Delete(Box<Expr>), // delete obj.prop or delete obj["prop"] -> bool

@@ -83,7 +83,7 @@ use crate::lower_string_method::lower_string_method;
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{
     is_array_expr, is_global_constructor_expr, is_map_expr, is_promise_expr, is_set_expr,
-    is_string_expr, receiver_class_name,
+    is_string_expr, is_url_search_params_expr, receiver_class_name,
 };
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
@@ -1667,6 +1667,24 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 let blk = ctx.block();
                 let s_handle = unbox_to_i64(blk, &s_box);
                 blk.call_void("js_set_foreach", &[(I64, &s_handle), (DOUBLE, &cb_box)]);
+                return Ok(double_literal(0.0));
+            }
+            // URLSearchParams.forEach((value, key, this) => …). The HIR
+            // variant `Expr::UrlSearchParamsForEach` only fires when the
+            // receiver is a typed-named local; chained access (`u.searchParams
+            // .forEach(...)`) and unannotated `const sp = new URLSearchParams()`
+            // routes flow through this generic Call path. Route both via the
+            // runtime entry so the callback gets the string `(value, key)`
+            // pair instead of `(NaN, 0)` from the Array.forEach fast path.
+            if is_url_search_params_expr(ctx, object) {
+                let p_box = lower_expr(ctx, object)?;
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                let p_handle = unbox_to_i64(blk, &p_box);
+                blk.call_void(
+                    "js_url_search_params_for_each",
+                    &[(I64, &p_handle), (DOUBLE, &cb_box)],
+                );
                 return Ok(double_literal(0.0));
             }
         }

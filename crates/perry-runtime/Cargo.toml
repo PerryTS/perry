@@ -56,6 +56,8 @@ lazy_static = "1.4"
 
 serde_json = "1"
 unicode-normalization = "0.1"
+idna = "1"
+url = "2"
 # Issue #62: mimalloc replaces the system allocator for gc_malloc/arena/etc.
 # macOS `malloc` is ~25-40ns/alloc; mimalloc's per-thread free-list is ~5-10ns.
 # Set as #[global_allocator] in lib.rs, so it covers Rust heap allocations in

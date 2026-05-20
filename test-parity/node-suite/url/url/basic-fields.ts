@@ -1,0 +1,12 @@
+const u = new URL("https://user:pass@example.com:8080/p/q?k=v#frag");
+console.log("hash:", u.hash);
+console.log("host:", u.host);
+console.log("hostname:", u.hostname);
+console.log("href:", u.href);
+console.log("origin:", u.origin);
+console.log("password:", u.password);
+console.log("pathname:", u.pathname);
+console.log("port:", u.port);
+console.log("protocol:", u.protocol);
+console.log("search:", u.search);
+console.log("username:", u.username);

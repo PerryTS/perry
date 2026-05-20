@@ -893,11 +893,17 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::UrlGetHash(url)
         | Expr::UrlGetOrigin(url)
         | Expr::UrlGetSearchParams(url)
-        | Expr::UrlCanParse(url)
         | Expr::UrlParse(url)
         | Expr::UrlInstanceToString(url)
         | Expr::UrlInstanceToJSON(url) => {
             collect_assigned_locals_expr(url, assigned);
+        }
+        Expr::UrlCanParse(url) => {
+            collect_assigned_locals_expr(url, assigned);
+        }
+        Expr::UrlCanParseWithBase { input, base } => {
+            collect_assigned_locals_expr(input, assigned);
+            collect_assigned_locals_expr(base, assigned);
         }
         // URLSearchParams operations
         Expr::UrlSearchParamsNew(init) => {
@@ -906,11 +912,25 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             }
         }
         Expr::UrlSearchParamsGet { params, name }
-        | Expr::UrlSearchParamsHas { params, name }
-        | Expr::UrlSearchParamsDelete { params, name }
         | Expr::UrlSearchParamsGetAll { params, name } => {
             collect_assigned_locals_expr(params, assigned);
             collect_assigned_locals_expr(name, assigned);
+        }
+        Expr::UrlSearchParamsHas {
+            params,
+            name,
+            value,
+        }
+        | Expr::UrlSearchParamsDelete {
+            params,
+            name,
+            value,
+        } => {
+            collect_assigned_locals_expr(params, assigned);
+            collect_assigned_locals_expr(name, assigned);
+            if let Some(v) = value {
+                collect_assigned_locals_expr(v, assigned);
+            }
         }
         Expr::UrlSearchParamsSet {
             params,
@@ -926,7 +946,15 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(name, assigned);
             collect_assigned_locals_expr(value, assigned);
         }
-        Expr::UrlSearchParamsToString(params) | Expr::UrlSearchParamsEntries(params) => {
+        Expr::UrlSearchParamsForEach { params, callback } => {
+            collect_assigned_locals_expr(params, assigned);
+            collect_assigned_locals_expr(callback, assigned);
+        }
+        Expr::UrlSearchParamsToString(params)
+        | Expr::UrlSearchParamsEntries(params)
+        | Expr::UrlSearchParamsKeys(params)
+        | Expr::UrlSearchParamsValues(params)
+        | Expr::UrlSearchParamsSort(params) => {
             collect_assigned_locals_expr(params, assigned);
         }
         Expr::GlobalSet(_, value) => {

@@ -2303,10 +2303,18 @@ impl JsEmitter {
                 self.emit_expr(name);
                 self.output.push(')');
             }
-            Expr::UrlSearchParamsHas { params, name } => {
+            Expr::UrlSearchParamsHas {
+                params,
+                name,
+                value,
+            } => {
                 self.emit_expr(params);
                 self.output.push_str(".has(");
                 self.emit_expr(name);
+                if let Some(v) = value {
+                    self.output.push_str(", ");
+                    self.emit_expr(v);
+                }
                 self.output.push(')');
             }
             Expr::UrlSearchParamsSet { params, name, value } => {
@@ -2325,10 +2333,18 @@ impl JsEmitter {
                 self.emit_expr(value);
                 self.output.push(')');
             }
-            Expr::UrlSearchParamsDelete { params, name } => {
+            Expr::UrlSearchParamsDelete {
+                params,
+                name,
+                value,
+            } => {
                 self.emit_expr(params);
                 self.output.push_str(".delete(");
                 self.emit_expr(name);
+                if let Some(v) = value {
+                    self.output.push_str(", ");
+                    self.emit_expr(v);
+                }
                 self.output.push(')');
             }
             Expr::UrlSearchParamsToString(params) => {

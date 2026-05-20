@@ -5665,6 +5665,7 @@ dependencies = [
  "dirs 5.0.1",
  "fancy-regex",
  "hostname",
+ "idna",
  "itoa",
  "lazy_static",
  "libc",
@@ -5678,6 +5679,7 @@ dependencies = [
  "taffy",
  "thiserror 1.0.69",
  "unicode-normalization",
+ "url",
  "windows-sys 0.61.2",
 ]
 

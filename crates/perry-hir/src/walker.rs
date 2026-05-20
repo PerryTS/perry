@@ -314,6 +314,9 @@ where
         | Expr::UrlInstanceToJSON(v)
         | Expr::UrlSearchParamsToString(v)
         | Expr::UrlSearchParamsEntries(v)
+        | Expr::UrlSearchParamsKeys(v)
+        | Expr::UrlSearchParamsValues(v)
+        | Expr::UrlSearchParamsSort(v)
         | Expr::JsCreateCallback { closure: v, .. }
         | Expr::JsGetExport {
             module_handle: v, ..
@@ -336,6 +339,16 @@ where
         | Expr::ArrayToReversed { array: v }
         | Expr::TemplateRaw(v) => {
             f(v);
+        }
+
+        Expr::UrlCanParseWithBase { input, base } => {
+            f(input);
+            f(base);
+        }
+
+        Expr::UrlSearchParamsForEach { params, callback } => {
+            f(params);
+            f(callback);
         }
 
         Expr::TaggedTemplateStrings { cooked, .. } => {
@@ -801,11 +814,25 @@ where
             }
         }
         Expr::UrlSearchParamsGet { params, name }
-        | Expr::UrlSearchParamsHas { params, name }
-        | Expr::UrlSearchParamsDelete { params, name }
         | Expr::UrlSearchParamsGetAll { params, name } => {
             f(params);
             f(name);
+        }
+        Expr::UrlSearchParamsHas {
+            params,
+            name,
+            value,
+        }
+        | Expr::UrlSearchParamsDelete {
+            params,
+            name,
+            value,
+        } => {
+            f(params);
+            f(name);
+            if let Some(v) = value {
+                f(v);
+            }
         }
         Expr::UrlSearchParamsSet {
             params,
@@ -842,7 +869,12 @@ where
         }
         Expr::UrlSetPathname { url, value }
         | Expr::UrlSetSearch { url, value }
-        | Expr::UrlSetHash { url, value } => {
+        | Expr::UrlSetHash { url, value }
+        | Expr::UrlSetProtocol { url, value }
+        | Expr::UrlSetHostname { url, value }
+        | Expr::UrlSetPort { url, value }
+        | Expr::UrlSetUsername { url, value }
+        | Expr::UrlSetPassword { url, value } => {
             f(url);
             f(value);
         }
@@ -1682,6 +1714,9 @@ where
         | Expr::UrlInstanceToJSON(v)
         | Expr::UrlSearchParamsToString(v)
         | Expr::UrlSearchParamsEntries(v)
+        | Expr::UrlSearchParamsKeys(v)
+        | Expr::UrlSearchParamsValues(v)
+        | Expr::UrlSearchParamsSort(v)
         | Expr::JsCreateCallback { closure: v, .. }
         | Expr::JsGetExport {
             module_handle: v, ..
@@ -1704,6 +1739,16 @@ where
         | Expr::ArrayToReversed { array: v }
         | Expr::TemplateRaw(v) => {
             f(v);
+        }
+
+        Expr::UrlCanParseWithBase { input, base } => {
+            f(input);
+            f(base);
+        }
+
+        Expr::UrlSearchParamsForEach { params, callback } => {
+            f(params);
+            f(callback);
         }
 
         Expr::TaggedTemplateStrings { cooked, .. } => {
@@ -2157,11 +2202,25 @@ where
             }
         }
         Expr::UrlSearchParamsGet { params, name }
-        | Expr::UrlSearchParamsHas { params, name }
-        | Expr::UrlSearchParamsDelete { params, name }
         | Expr::UrlSearchParamsGetAll { params, name } => {
             f(params);
             f(name);
+        }
+        Expr::UrlSearchParamsHas {
+            params,
+            name,
+            value,
+        }
+        | Expr::UrlSearchParamsDelete {
+            params,
+            name,
+            value,
+        } => {
+            f(params);
+            f(name);
+            if let Some(v) = value {
+                f(v);
+            }
         }
         Expr::UrlSearchParamsSet {
             params,
@@ -2196,7 +2255,12 @@ where
         }
         Expr::UrlSetPathname { url, value }
         | Expr::UrlSetSearch { url, value }
-        | Expr::UrlSetHash { url, value } => {
+        | Expr::UrlSetHash { url, value }
+        | Expr::UrlSetProtocol { url, value }
+        | Expr::UrlSetHostname { url, value }
+        | Expr::UrlSetPort { url, value }
+        | Expr::UrlSetUsername { url, value }
+        | Expr::UrlSetPassword { url, value } => {
             f(url);
             f(value);
         }

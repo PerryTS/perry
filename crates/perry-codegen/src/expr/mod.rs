@@ -12953,6 +12953,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // only when the local is typed `URL` / `URLSearchParams` (see
         // `crates/perry-hir/src/lower.rs`), so here we assume the receiver
         // NaN-box holds a POINTER_TAG value we can unbox.
+        Expr::FileURLToPath(url) => {
+            let v = lower_expr(ctx, url)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_url_file_url_to_path", &[(DOUBLE, &v)]))
+        }
+
         Expr::UrlNew { url, base } => {
             let url_v = lower_expr(ctx, url)?;
             let url_ptr =
@@ -13005,11 +13012,21 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // assignment expression semantics).
         Expr::UrlSetPathname { url, value }
         | Expr::UrlSetSearch { url, value }
-        | Expr::UrlSetHash { url, value } => {
+        | Expr::UrlSetHash { url, value }
+        | Expr::UrlSetProtocol { url, value }
+        | Expr::UrlSetHostname { url, value }
+        | Expr::UrlSetPort { url, value }
+        | Expr::UrlSetUsername { url, value }
+        | Expr::UrlSetPassword { url, value } => {
             let runtime_fn = match expr {
                 Expr::UrlSetPathname { .. } => "js_url_set_pathname",
                 Expr::UrlSetSearch { .. } => "js_url_set_search",
                 Expr::UrlSetHash { .. } => "js_url_set_hash",
+                Expr::UrlSetProtocol { .. } => "js_url_set_protocol",
+                Expr::UrlSetHostname { .. } => "js_url_set_hostname",
+                Expr::UrlSetPort { .. } => "js_url_set_port",
+                Expr::UrlSetUsername { .. } => "js_url_set_username",
+                Expr::UrlSetPassword { .. } => "js_url_set_password",
                 _ => unreachable!(),
             };
             let url_v = lower_expr(ctx, url)?;
@@ -13034,6 +13051,32 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let result_i32 = ctx
                 .block()
                 .call(I32, "js_url_can_parse", &[(I64, &str_ptr)]);
+            let blk = ctx.block();
+            let is_true = blk.icmp_ne(I32, &result_i32, "0");
+            let tagged = blk.select(
+                I1,
+                &is_true,
+                I64,
+                crate::nanbox::TAG_TRUE_I64,
+                crate::nanbox::TAG_FALSE_I64,
+            );
+            Ok(blk.bitcast_i64_to_double(&tagged))
+        }
+
+        Expr::UrlCanParseWithBase { input, base } => {
+            let input_v = lower_expr(ctx, input)?;
+            let input_ptr =
+                ctx.block()
+                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &input_v)]);
+            let base_v = lower_expr(ctx, base)?;
+            let base_ptr =
+                ctx.block()
+                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &base_v)]);
+            let result_i32 = ctx.block().call(
+                I32,
+                "js_url_can_parse_with_base",
+                &[(I64, &input_ptr), (I64, &base_ptr)],
+            );
             let blk = ctx.block();
             let is_true = blk.icmp_ne(I32, &result_i32, "0");
             let tagged = blk.select(
@@ -13107,7 +13150,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx.block().bitcast_i64_to_double(&selected))
         }
 
-        Expr::UrlSearchParamsHas { params, name } => {
+        Expr::UrlSearchParamsHas {
+            params,
+            name,
+            value,
+        } => {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
@@ -13117,11 +13164,23 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Runtime returns 0.0 / 1.0 as a plain f64 — not NaN-boxed.
             // Translate to TAG_TRUE / TAG_FALSE so `typeof` and strict-eq
             // behave correctly.
-            let raw = ctx.block().call(
-                DOUBLE,
-                "js_url_search_params_has",
-                &[(I64, &p_ptr), (I64, &n_ptr)],
-            );
+            let raw = if let Some(v_expr) = value {
+                let v_v = lower_expr(ctx, v_expr)?;
+                let v_ptr =
+                    ctx.block()
+                        .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v_v)]);
+                ctx.block().call(
+                    DOUBLE,
+                    "js_url_search_params_has2",
+                    &[(I64, &p_ptr), (I64, &n_ptr), (I64, &v_ptr)],
+                )
+            } else {
+                ctx.block().call(
+                    DOUBLE,
+                    "js_url_search_params_has",
+                    &[(I64, &p_ptr), (I64, &n_ptr)],
+                )
+            };
             let blk = ctx.block();
             let is_true = blk.fcmp("une", &raw, &double_literal(0.0));
             let tagged = blk.select(
@@ -13182,17 +13241,32 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
         }
 
-        Expr::UrlSearchParamsDelete { params, name } => {
+        Expr::UrlSearchParamsDelete {
+            params,
+            name,
+            value,
+        } => {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
             let n_ptr = ctx
                 .block()
                 .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
-            ctx.block().call_void(
-                "js_url_search_params_delete",
-                &[(I64, &p_ptr), (I64, &n_ptr)],
-            );
+            if let Some(v_expr) = value {
+                let v_v = lower_expr(ctx, v_expr)?;
+                let v_ptr =
+                    ctx.block()
+                        .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v_v)]);
+                ctx.block().call_void(
+                    "js_url_search_params_delete2",
+                    &[(I64, &p_ptr), (I64, &n_ptr), (I64, &v_ptr)],
+                );
+            } else {
+                ctx.block().call_void(
+                    "js_url_search_params_delete",
+                    &[(I64, &p_ptr), (I64, &n_ptr)],
+                );
+            }
             Ok(ctx
                 .block()
                 .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
@@ -13217,6 +13291,45 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.block()
                     .call(DOUBLE, "js_url_search_params_entries_arr", &[(I64, &p_ptr)]);
             Ok(arr)
+        }
+
+        Expr::UrlSearchParamsKeys(params) => {
+            let p_v = lower_expr(ctx, params)?;
+            let p_ptr = unbox_to_i64(ctx.block(), &p_v);
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_url_search_params_keys_arr", &[(I64, &p_ptr)]))
+        }
+
+        Expr::UrlSearchParamsValues(params) => {
+            let p_v = lower_expr(ctx, params)?;
+            let p_ptr = unbox_to_i64(ctx.block(), &p_v);
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_url_search_params_values_arr", &[(I64, &p_ptr)]))
+        }
+
+        Expr::UrlSearchParamsSort(params) => {
+            let p_v = lower_expr(ctx, params)?;
+            let p_ptr = unbox_to_i64(ctx.block(), &p_v);
+            ctx.block()
+                .call_void("js_url_search_params_sort", &[(I64, &p_ptr)]);
+            Ok(ctx
+                .block()
+                .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
+        }
+
+        Expr::UrlSearchParamsForEach { params, callback } => {
+            let p_v = lower_expr(ctx, params)?;
+            let p_ptr = unbox_to_i64(ctx.block(), &p_v);
+            let cb_v = lower_expr(ctx, callback)?;
+            ctx.block().call_void(
+                "js_url_search_params_for_each",
+                &[(I64, &p_ptr), (DOUBLE, &cb_v)],
+            );
+            Ok(ctx
+                .block()
+                .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
         }
 
         Expr::UrlSearchParamsGetAll { params, name } => {

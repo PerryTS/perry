@@ -4544,7 +4544,14 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 1, name);
                 self.emit_memcall(func, "searchparams_get", 2);
             }
-            Expr::UrlSearchParamsHas { params, name } => {
+            Expr::UrlSearchParamsHas {
+                params,
+                name,
+                value: _,
+            } => {
+                // WASM backend doesn't yet model the 2-arg `has(name, value)`
+                // variant — drops the optional value and falls back to the
+                // 1-arg shape. Native LLVM backend is conformant.
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, params);
                 self.emit_store_arg(func, 1, name);
@@ -4581,7 +4588,13 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall_void(func, "searchparams_append", 3);
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
-            Expr::UrlSearchParamsDelete { params, name } => {
+            Expr::UrlSearchParamsDelete {
+                params,
+                name,
+                value: _,
+            } => {
+                // WASM backend doesn't yet model `delete(name, value)` —
+                // value arg ignored, falls back to the 1-arg behavior.
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, params);
                 self.emit_store_arg(func, 1, name);

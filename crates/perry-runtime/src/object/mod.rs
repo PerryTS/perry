@@ -5189,6 +5189,16 @@ unsafe fn dispatch_native_module_method(
             let v = JSValue::from_bits(arg(0).to_bits());
             bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
         }
+        // ── url module (module-level functions return NaN-boxed JS values) ──
+        ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0)),
+        ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0)),
+        ("url", "domainToASCII") => crate::url::js_url_domain_to_ascii(arg(0)),
+        ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
+        ("url", "urlToHttpOptions") => crate::url::js_url_to_http_options(arg(0)),
+        ("url", "format") => crate::url::js_url_format(arg(0), arg(1)),
+        ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1)),
+        ("url", "resolve") => crate::url::js_url_legacy_resolve(arg(0), arg(1)),
+
 
         _ => {
             // Method not found on native module — return undefined
@@ -5476,6 +5486,16 @@ fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
             | ("util/types", "isSet")
             | ("util/types", "isDate")
             | ("util/types", "isRegExp")
+            | ("url", "URL")
+            | ("url", "URLSearchParams")
+            | ("url", "fileURLToPath")
+            | ("url", "pathToFileURL")
+            | ("url", "domainToASCII")
+            | ("url", "domainToUnicode")
+            | ("url", "urlToHttpOptions")
+            | ("url", "format")
+            | ("url", "parse")
+            | ("url", "resolve")
     )
 }
 

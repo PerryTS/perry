@@ -32,6 +32,40 @@ fn get_string_content(ptr_f64: f64) -> String {
     }
 }
 
+fn string_from_header(ptr: *mut crate::StringHeader) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data_ptr = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let slice = std::slice::from_raw_parts(data_ptr, len);
+        String::from_utf8_lossy(slice).into_owned()
+    }
+}
+
+fn object_from_f64(value: f64) -> Option<*mut ObjectHeader> {
+    let bits = value.to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) == 0x7FFD_0000_0000_0000 {
+        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+        if !ptr.is_null() {
+            return Some(ptr);
+        }
+    }
+    None
+}
+
+fn object_prop_string(obj: *mut ObjectHeader, key: &str) -> String {
+    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let val = crate::object::js_object_get_field_by_name_f64(obj, key_ptr);
+    get_string_content(val)
+}
+
+fn object_prop_f64(obj: *mut ObjectHeader, key: &str) -> f64 {
+    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    crate::object::js_object_get_field_by_name_f64(obj, key_ptr)
+}
+
 /// Simple URL parser
 /// Returns (protocol, host, hostname, port, pathname, search, hash)
 fn parse_url(url_str: &str) -> (String, String, String, String, String, String, String) {
@@ -40,7 +74,7 @@ fn parse_url(url_str: &str) -> (String, String, String, String, String, String, 
     // non-file branches below, so the initial empty strings were dead
     // writes. Declared without an initial value — Rust will catch any
     // future code path that fails to assign before use.
-    let host: String;
+    let mut host: String;
     let hostname: String;
     let pathname: String;
     let mut port = String::new();
@@ -72,6 +106,32 @@ fn parse_url(url_str: &str) -> (String, String, String, String, String, String, 
         if remaining.starts_with("//") {
             remaining = remaining.strip_prefix("//").unwrap_or(remaining);
         }
+    } else if let Some(colon_idx) = remaining.find(':') {
+        // Non-special opaque scheme: `mailto:`, `data:`, `urn:`, etc. The
+        // characters before the colon must look like a scheme. The whole
+        // remainder is the opaque pathname; host/hostname/port stay empty.
+        let scheme = &remaining[..colon_idx];
+        let scheme_ok = !scheme.is_empty()
+            && scheme
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.');
+        if scheme_ok {
+            protocol = format!("{}:", scheme);
+            pathname = remaining[colon_idx + 1..].to_string();
+            return (
+                protocol,
+                String::new(),
+                String::new(),
+                String::new(),
+                pathname,
+                search,
+                hash,
+            );
+        }
     }
 
     // For file: URLs, the rest is the pathname
@@ -86,8 +146,19 @@ fn parse_url(url_str: &str) -> (String, String, String, String, String, String, 
         host = String::new();
         hostname = String::new();
     } else {
-        // Extract host and pathname
-        if let Some(path_idx) = remaining.find('/') {
+        // Extract host and pathname. IPv6 hostnames are bracketed (`[::1]`);
+        // the `:` inside brackets must not be mistaken for a port separator,
+        // and the path can only start after the closing `]`.
+        let path_search_start = if remaining.starts_with('[') {
+            remaining
+                .find(']')
+                .map(|b| b + 1)
+                .unwrap_or(remaining.len())
+        } else {
+            0
+        };
+        if let Some(rel_idx) = remaining[path_search_start..].find('/') {
+            let path_idx = path_search_start + rel_idx;
             host = remaining[..path_idx].to_string();
             pathname = remaining[path_idx..].to_string();
         } else {
@@ -95,9 +166,21 @@ fn parse_url(url_str: &str) -> (String, String, String, String, String, String, 
             pathname = "/".to_string();
         }
 
-        // Extract hostname and port from host
-        if let Some(port_idx) = host.rfind(':') {
-            // Check if this is actually a port (not part of IPv6)
+        // Extract hostname and port from host. For IPv6 the port (if any)
+        // comes after the closing bracket.
+        if host.starts_with('[') {
+            if let Some(bracket_end) = host.find(']') {
+                let after = &host[bracket_end + 1..];
+                hostname = host[..=bracket_end].to_string();
+                if let Some(p) = after.strip_prefix(':') {
+                    if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) {
+                        port = p.to_string();
+                    }
+                }
+            } else {
+                hostname = host.clone();
+            }
+        } else if let Some(port_idx) = host.rfind(':') {
             let potential_port = &host[port_idx + 1..];
             if potential_port.chars().all(|c| c.is_ascii_digit()) && !potential_port.is_empty() {
                 hostname = host[..port_idx].to_string();
@@ -107,6 +190,19 @@ fn parse_url(url_str: &str) -> (String, String, String, String, String, String, 
             }
         } else {
             hostname = host.clone();
+        }
+
+        // Strip default ports per WHATWG so `https://example.com:443/` →
+        // port "" and host "example.com" (not "example.com:443").
+        let default_port = match protocol.as_str() {
+            "http:" | "ws:" => "80",
+            "https:" | "wss:" => "443",
+            "ftp:" => "21",
+            _ => "",
+        };
+        if !default_port.is_empty() && port == default_port {
+            port.clear();
+            host = hostname.clone();
         }
     }
 
@@ -188,9 +284,29 @@ const URL_USERNAME: u32 = 10;
 const URL_PASSWORD: u32 = 11;
 const URL_FIELD_COUNT: u32 = 12;
 
+/// Percent-encode bytes outside the printable ASCII range (`< 0x20` and
+/// `>= 0x80`). Mirrors the practical effect of the WHATWG path / query
+/// percent-encode set for the common case of Unicode literals in URLs —
+/// e.g. `/café/` → `/caf%C3%A9/`, `?q=á` → `?q=%C3%A1`. ASCII percent
+/// sequences in the input pass through untouched.
+fn encode_non_ascii(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        if !(0x20..0x7F).contains(&b) {
+            out.push_str(&format!("%{:02X}", b));
+        } else {
+            out.push(b as char);
+        }
+    }
+    out
+}
+
 /// Create a URL object from a string
 fn create_url_object(url_string: &str) -> *mut ObjectHeader {
     let (protocol, mut host, mut hostname, port, pathname, search, hash) = parse_url(url_string);
+    let pathname = encode_non_ascii(&pathname);
+    let search = encode_non_ascii(&search);
+    let hash = encode_non_ascii(&hash);
 
     // Issue #650: extract userinfo (`user:pass@`) from `host`. parse_url
     // leaves it as a prefix on host/hostname because the WHATWG authority
@@ -238,9 +354,10 @@ fn create_url_object(url_string: &str) -> *mut ObjectHeader {
         String::new()
     };
     let href = if protocol == "file:" {
-        format!("{}{}{}{}", protocol, pathname, search, hash)
+        format!("{}//{}{}{}", protocol, host, pathname, search) + &hash
     } else if host.is_empty() {
-        format!("{}{}{}", pathname, search, hash)
+        // Opaque schemes (`mailto:`, `data:`, `urn:`) — keep the scheme prefix.
+        format!("{}{}{}{}", protocol, pathname, search, hash)
     } else {
         format!(
             "{}//{}{}{}{}{}",
@@ -299,8 +416,25 @@ fn create_url_object(url_string: &str) -> *mut ObjectHeader {
     let params_obj = create_url_search_params_object(params_entries);
     let params_f64 = crate::value::js_nanbox_pointer(params_obj as i64);
     js_object_set_field_f64(obj, URL_SEARCH_PARAMS, params_f64);
+    // Adopt: subsequent mutations on `url.searchParams` should sync back.
+    js_object_set_field_f64(
+        params_obj,
+        URL_SEARCH_PARAMS_OWNER,
+        crate::value::js_nanbox_pointer(obj as i64),
+    );
 
     obj
+}
+
+/// Build and throw a `TypeError` matching Node's WHATWG-URL parser's
+/// "Invalid URL" exception. Used by `new URL(...)` when the input doesn't
+/// look like a parseable absolute URL.
+fn throw_invalid_url(input: &str) -> ! {
+    let msg = format!("Invalid URL: {}", input);
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_ptr);
+    let err_val = crate::value::js_nanbox_pointer(err as i64);
+    crate::exception::js_throw(err_val);
 }
 
 /// Create a new URL from a string
@@ -317,6 +451,9 @@ pub extern "C" fn js_url_new(url_str: *mut crate::StringHeader) -> *mut ObjectHe
             String::from_utf8_lossy(slice).into_owned()
         }
     };
+    if !is_valid_absolute_url(&url_string) {
+        throw_invalid_url(&url_string);
+    }
     create_url_object(&url_string)
 }
 
@@ -348,6 +485,14 @@ pub extern "C" fn js_url_new_with_base(
             String::from_utf8_lossy(slice).into_owned()
         }
     };
+
+    // Relative URLs require a parseable base; if the base is bogus and the
+    // input isn't itself absolute, the constructor must throw.
+    let url_is_absolute = is_valid_absolute_url(&url_string);
+    let base_is_absolute = is_valid_absolute_url(&base_string);
+    if !url_is_absolute && !base_is_absolute {
+        throw_invalid_url(&url_string);
+    }
 
     // Resolve the URL against the base
     let resolved = resolve_url(&url_string, &base_string);
@@ -386,9 +531,10 @@ unsafe fn rebuild_url_href(url: *mut ObjectHeader) {
         String::new()
     };
     let href = if protocol == "file:" {
-        format!("{}{}{}{}", protocol, pathname, search, hash)
+        format!("{}//{}{}{}", protocol, host, pathname, search) + &hash
     } else if host.is_empty() {
-        format!("{}{}{}", pathname, search, hash)
+        // Opaque schemes (`mailto:`, `data:`, `urn:`) — keep the scheme prefix.
+        format!("{}{}{}{}", protocol, pathname, search, hash)
     } else {
         format!(
             "{}//{}{}{}{}{}",
@@ -463,8 +609,126 @@ pub extern "C" fn js_url_set_search(url: *mut ObjectHeader, value: *mut crate::S
         // Refresh the searchParams object's entries to match the new query.
         let params_entries = parse_query_string(&normalized);
         let new_params = create_url_search_params_object(params_entries);
+        js_object_set_field_f64(
+            new_params,
+            URL_SEARCH_PARAMS_OWNER,
+            crate::value::js_nanbox_pointer(url as i64),
+        );
         let params_f64 = crate::value::js_nanbox_pointer(new_params as i64);
         js_object_set_field_f64(url, URL_SEARCH_PARAMS, params_f64);
+        rebuild_url_href(url);
+    }
+}
+
+/// Read a `*mut StringHeader` (NULL → empty) into a Rust `String`.
+fn string_header_to_string(value: *mut crate::StringHeader) -> String {
+    if value.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*value).byte_len as usize;
+        let data_ptr = (value as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let slice = std::slice::from_raw_parts(data_ptr, len);
+        String::from_utf8_lossy(slice).into_owned()
+    }
+}
+
+/// Recompose `host` (`hostname[:port]`) from the URL's `hostname` and `port`
+/// fields, stripping default ports for known hierarchical schemes.
+unsafe fn rebuild_url_host(url: *mut ObjectHeader) {
+    let protocol = get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
+    let hostname = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOSTNAME));
+    let mut port = get_string_content(crate::object::js_object_get_field_f64(url, URL_PORT));
+    let default_port = match protocol.as_str() {
+        "http:" | "ws:" => "80",
+        "https:" | "wss:" => "443",
+        "ftp:" => "21",
+        _ => "",
+    };
+    if !default_port.is_empty() && port == default_port {
+        port.clear();
+        js_object_set_field_f64(url, URL_PORT, create_string_f64(""));
+    }
+    let host = if port.is_empty() {
+        hostname
+    } else {
+        format!("{}:{}", hostname, port)
+    };
+    js_object_set_field_f64(url, URL_HOST, create_string_f64(&host));
+}
+
+/// `url.protocol = value` — strip trailing `:`-free input to match the
+/// canonical `"scheme:"` form, write the field, then re-derive `host`
+/// (default-port stripping depends on protocol) and `href`.
+#[no_mangle]
+pub extern "C" fn js_url_set_protocol(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let mut raw = string_header_to_string(value);
+    if !raw.ends_with(':') {
+        raw.push(':');
+    }
+    unsafe {
+        js_object_set_field_f64(url, URL_PROTOCOL, create_string_f64(&raw));
+        rebuild_url_host(url);
+        rebuild_url_href(url);
+    }
+}
+
+/// `url.hostname = value` — update hostname and reconstruct host.
+#[no_mangle]
+pub extern "C" fn js_url_set_hostname(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let raw = string_header_to_string(value);
+    unsafe {
+        js_object_set_field_f64(url, URL_HOSTNAME, create_string_f64(&raw));
+        rebuild_url_host(url);
+        rebuild_url_href(url);
+    }
+}
+
+/// `url.port = value` — store as a string (Node normalizes to digits-only).
+/// Empty input clears the port. Reconstructs host afterwards.
+#[no_mangle]
+pub extern "C" fn js_url_set_port(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let raw = string_header_to_string(value);
+    // Per WHATWG: parse leading digit run; anything else discards the new port.
+    let parsed: String = raw.chars().take_while(|c| c.is_ascii_digit()).collect();
+    unsafe {
+        js_object_set_field_f64(url, URL_PORT, create_string_f64(&parsed));
+        rebuild_url_host(url);
+        rebuild_url_href(url);
+    }
+}
+
+/// `url.username = value` — update userinfo and rebuild href.
+#[no_mangle]
+pub extern "C" fn js_url_set_username(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let raw = string_header_to_string(value);
+    unsafe {
+        js_object_set_field_f64(url, URL_USERNAME, create_string_f64(&raw));
+        rebuild_url_href(url);
+    }
+}
+
+/// `url.password = value` — update userinfo and rebuild href.
+#[no_mangle]
+pub extern "C" fn js_url_set_password(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let raw = string_header_to_string(value);
+    unsafe {
+        js_object_set_field_f64(url, URL_PASSWORD, create_string_f64(&raw));
         rebuild_url_href(url);
     }
 }
@@ -517,6 +781,27 @@ pub extern "C" fn js_url_can_parse(input: *mut crate::StringHeader) -> i32 {
         String::from_utf8_lossy(slice).into_owned()
     };
     if is_valid_absolute_url(&s) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_can_parse_with_base(
+    input: *mut crate::StringHeader,
+    base: *mut crate::StringHeader,
+) -> i32 {
+    let input_s = string_from_header(input);
+    let base_s = string_from_header(base);
+    if is_valid_absolute_url(&input_s) {
+        return 1;
+    }
+    if !is_valid_absolute_url(&base_s) || input_s.trim().is_empty() {
+        return 0;
+    }
+    let resolved = resolve_url(&input_s, &base_s);
+    if is_valid_absolute_url(&resolved) {
         1
     } else {
         0
@@ -686,7 +971,34 @@ pub extern "C" fn js_url_get_search_params(url: *mut ObjectHeader) -> f64 {
 
 /// Field indices for URLSearchParams object
 const URL_SEARCH_PARAMS_ENTRIES: u32 = 0; // Array of [key, value] pairs
-const URL_SEARCH_PARAMS_FIELD_COUNT: u32 = 1;
+/// When set to a NaN-boxed URL pointer, mutations on this params object
+/// propagate back to the URL's `search` field and re-derive `href`. Empty
+/// (TAG_UNDEFINED) for free-standing URLSearchParams created via
+/// `new URLSearchParams(...)`.
+const URL_SEARCH_PARAMS_OWNER: u32 = 1;
+const URL_SEARCH_PARAMS_FIELD_COUNT: u32 = 2;
+
+/// Serialize the current entries of `params` back into a URL query string
+/// (with leading `?`), then write it to the owning URL's `search` field and
+/// re-derive `href`. No-op when the params object has no owner URL.
+unsafe fn maybe_sync_params_to_owner(params: *mut ObjectHeader) {
+    let owner_f = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_OWNER);
+    let Some(owner) = object_from_f64(owner_f) else {
+        return;
+    };
+    let entries = get_url_search_params_entries(params);
+    let parts: Vec<String> = entries
+        .iter()
+        .map(|(k, v)| format!("{}={}", url_encode(k), url_encode(v)))
+        .collect();
+    let search = if parts.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", parts.join("&"))
+    };
+    js_object_set_field_f64(owner, URL_SEARCH, create_string_f64(&search));
+    rebuild_url_href(owner);
+}
 
 /// Parse a query string into key-value pairs
 /// Handles formats like "?foo=bar&baz=qux" or "foo=bar&baz=qux"
@@ -763,7 +1075,15 @@ fn create_url_search_params_object(entries: Vec<(String, String)>) -> *mut Objec
     // Create keys array
     let mut keys = js_array_alloc(URL_SEARCH_PARAMS_FIELD_COUNT);
     keys = js_array_push_f64(keys, create_string_f64("_entries"));
+    keys = js_array_push_f64(keys, create_string_f64("_owner"));
     js_object_set_keys(obj, keys);
+    // Owner starts as undefined; the URL constructor sets it when it adopts
+    // this params object as its `.searchParams`.
+    js_object_set_field_f64(
+        obj,
+        URL_SEARCH_PARAMS_OWNER,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
 
     // Create entries array - each entry is a 2-element array [key, value]
     let mut entries_array = js_array_alloc(entries.len() as u32);
@@ -984,7 +1304,10 @@ fn try_read_as_search_params(params: *mut ObjectHeader) -> Option<Vec<(String, S
             return None;
         }
         let keys_len = (*keys_arr).length;
-        if keys_len != 1 {
+        // URLSearchParams objects carry the `_entries` slot (and now `_owner`
+        // for URL-adopted instances). The first slot is always `_entries`;
+        // any extra field beyond that is fine as long as `_entries` leads.
+        if keys_len == 0 {
             return None;
         }
         let key0 = crate::array::js_array_get_f64(keys_arr, 0);
@@ -1145,11 +1468,26 @@ pub extern "C" fn js_url_search_params_set(
         }
     };
 
-    let mut entries = get_url_search_params_entries(params);
+    let entries = get_url_search_params_entries(params);
 
-    // Remove all existing entries with this name, then add the new one
-    entries.retain(|(key, _)| key != &name);
-    entries.push((name, value));
+    // Node replaces the first existing entry in place and removes the
+    // remaining duplicates; if absent, it appends at the end.
+    let mut replaced = false;
+    let mut next = Vec::with_capacity(entries.len().max(1));
+    for (key, val) in entries {
+        if key == name {
+            if !replaced {
+                next.push((name.clone(), value.clone()));
+                replaced = true;
+            }
+        } else {
+            next.push((key, val));
+        }
+    }
+    if !replaced {
+        next.push((name, value));
+    }
+    let entries = next;
 
     // Update the object with new entries
     let mut entries_array = js_array_alloc(entries.len() as u32);
@@ -1162,6 +1500,7 @@ pub extern "C" fn js_url_search_params_set(
     }
     let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
     js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    unsafe { maybe_sync_params_to_owner(params) };
 }
 
 /// Append a value (adds even if name already exists)
@@ -1208,6 +1547,7 @@ pub extern "C" fn js_url_search_params_append(
     }
     let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
     js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    unsafe { maybe_sync_params_to_owner(params) };
 }
 
 /// Delete all entries with a name
@@ -1242,6 +1582,65 @@ pub extern "C" fn js_url_search_params_delete(
     }
     let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
     js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    unsafe { maybe_sync_params_to_owner(params) };
+}
+
+/// Node 19+: `URLSearchParams.has(name, value)` returns true only when both
+/// the name and value match (exact string equality). Falls back to the
+/// 1-arg behavior when `value_str` is null.
+#[no_mangle]
+pub extern "C" fn js_url_search_params_has2(
+    params: *mut ObjectHeader,
+    name_str: *mut crate::StringHeader,
+    value_str: *mut crate::StringHeader,
+) -> f64 {
+    let name = string_header_to_string(name_str);
+    let entries = get_url_search_params_entries(params);
+    let found = if value_str.is_null() {
+        entries.iter().any(|(k, _)| k == &name)
+    } else {
+        let value = string_header_to_string(value_str);
+        entries.iter().any(|(k, v)| k == &name && v == &value)
+    };
+    if found { 1.0 } else { 0.0 }
+}
+
+/// Node 19+: `URLSearchParams.delete(name, value)` — drops only entries
+/// matching BOTH the name and value (exact string equality). Falls back to
+/// the 1-arg behavior when `value_str` is null.
+#[no_mangle]
+pub extern "C" fn js_url_search_params_delete2(
+    params: *mut ObjectHeader,
+    name_str: *mut crate::StringHeader,
+    value_str: *mut crate::StringHeader,
+) {
+    let name = string_header_to_string(name_str);
+    let value_filter: Option<String> = if value_str.is_null() {
+        None
+    } else {
+        Some(string_header_to_string(value_str))
+    };
+    let mut entries = get_url_search_params_entries(params);
+    entries.retain(|(k, v)| {
+        if k != &name {
+            return true;
+        }
+        match &value_filter {
+            Some(want) => v != want,
+            None => false,
+        }
+    });
+    let mut entries_array = js_array_alloc(entries.len() as u32);
+    for (key, val) in entries {
+        let mut pair = js_array_alloc(2);
+        pair = js_array_push_f64(pair, create_string_f64(&key));
+        pair = js_array_push_f64(pair, create_string_f64(&val));
+        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        entries_array = js_array_push_f64(entries_array, pair_f64);
+    }
+    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    unsafe { maybe_sync_params_to_owner(params) };
 }
 
 /// Issue #650: `URLSearchParams.size` getter — returns the number of
@@ -1302,6 +1701,59 @@ pub extern "C" fn js_url_search_params_entries_arr(params: *mut ObjectHeader) ->
         arr = js_array_push_f64(arr, f64::from_bits(pair_bits));
     }
     f64::from_bits(0x7FFD_0000_0000_0000u64 | ((arr as u64) & 0x0000_FFFF_FFFF_FFFF))
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_search_params_keys_arr(params: *mut ObjectHeader) -> f64 {
+    let entries = get_url_search_params_entries(params);
+    let mut arr = js_array_alloc(entries.len() as u32);
+    for (k, _) in entries {
+        arr = js_array_push_f64(arr, create_string_f64(&k));
+    }
+    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((arr as u64) & 0x0000_FFFF_FFFF_FFFF))
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_search_params_values_arr(params: *mut ObjectHeader) -> f64 {
+    let entries = get_url_search_params_entries(params);
+    let mut arr = js_array_alloc(entries.len() as u32);
+    for (_, v) in entries {
+        arr = js_array_push_f64(arr, create_string_f64(&v));
+    }
+    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((arr as u64) & 0x0000_FFFF_FFFF_FFFF))
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_search_params_sort(params: *mut ObjectHeader) {
+    let mut entries = get_url_search_params_entries(params);
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut entries_array = js_array_alloc(entries.len() as u32);
+    for (key, val) in entries {
+        let mut pair = js_array_alloc(2);
+        pair = js_array_push_f64(pair, create_string_f64(&key));
+        pair = js_array_push_f64(pair, create_string_f64(&val));
+        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        entries_array = js_array_push_f64(entries_array, pair_f64);
+    }
+    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    unsafe { maybe_sync_params_to_owner(params) };
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_search_params_for_each(params: *mut ObjectHeader, callback: f64) {
+    let entries = get_url_search_params_entries(params);
+    let this_value = crate::value::js_nanbox_pointer(params as i64);
+    for (key, value) in entries {
+        let args = [
+            create_string_f64(&value),
+            create_string_f64(&key),
+            this_value,
+        ];
+        unsafe {
+            let _ = crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+        }
+    }
 }
 
 /// Get all values for a name
@@ -1555,6 +2007,264 @@ pub extern "C" fn js_url_file_url_to_path(url_f64: f64) -> f64 {
     // Percent-decode the path
     let decoded = url_decode(path);
     create_string_f64(&decoded)
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_path_to_file_url(path_f64: f64) -> f64 {
+    let path = get_string_content(path_f64);
+    let mut encoded = String::new();
+    for b in path.bytes() {
+        match b {
+            b'/' => encoded.push('/'),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(b as char)
+            }
+            _ => encoded.push_str(&format!("%{b:02X}")),
+        }
+    }
+    let href = if encoded.starts_with('/') {
+        format!("file://{}", encoded)
+    } else {
+        format!("file:///{}", encoded)
+    };
+    let obj = create_url_object(&href);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_domain_to_ascii(input_f64: f64) -> f64 {
+    let input = get_string_content(input_f64);
+    let out = idna::domain_to_ascii(&input).unwrap_or_else(|_| String::new());
+    create_string_f64(&out)
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_domain_to_unicode(input_f64: f64) -> f64 {
+    let input = get_string_content(input_f64);
+    let (out, _) = idna::domain_to_unicode(&input);
+    create_string_f64(&out)
+}
+
+fn json_to_value(json: serde_json::Value) -> f64 {
+    let s = json.to_string();
+    let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    unsafe { f64::from_bits(crate::json::js_json_parse(ptr).bits()) }
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_to_http_options(url_f64: f64) -> f64 {
+    let undef_f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let Some(obj) = object_from_f64(url_f64) else {
+        let empty = js_object_alloc(0, 0);
+        return crate::value::js_nanbox_pointer(empty as i64);
+    };
+    let protocol = object_prop_string(obj, "protocol");
+    let hostname = object_prop_string(obj, "hostname");
+    let port_s = object_prop_string(obj, "port");
+    let pathname = object_prop_string(obj, "pathname");
+    let search = object_prop_string(obj, "search");
+    let username = object_prop_string(obj, "username");
+    let password = object_prop_string(obj, "password");
+    let path = format!("{}{}", pathname, search);
+
+    // Per Node, `auth` is undefined when no userinfo; `"user:"` when username
+    // is set but password is empty; `"user:pass"` otherwise. `port` is the
+    // numeric value when set, undefined when empty.
+    let has_userinfo = !username.is_empty() || !password.is_empty();
+    let auth_f64 = if !has_userinfo {
+        undef_f64
+    } else {
+        create_string_f64(&format!("{}:{}", username, password))
+    };
+    let port_f64 = match port_s.parse::<u32>() {
+        Ok(p) => p as f64,
+        Err(_) => undef_f64,
+    };
+
+    let field_count: u32 = 5;
+    let obj_out = js_object_alloc(0, field_count);
+    let mut keys = js_array_alloc(field_count);
+    keys = js_array_push_f64(keys, create_string_f64("protocol"));
+    keys = js_array_push_f64(keys, create_string_f64("hostname"));
+    keys = js_array_push_f64(keys, create_string_f64("port"));
+    keys = js_array_push_f64(keys, create_string_f64("path"));
+    keys = js_array_push_f64(keys, create_string_f64("auth"));
+    js_object_set_keys(obj_out, keys);
+    js_object_set_field_f64(obj_out, 0, create_string_f64(&protocol));
+    js_object_set_field_f64(obj_out, 1, create_string_f64(&hostname));
+    js_object_set_field_f64(obj_out, 2, port_f64);
+    js_object_set_field_f64(obj_out, 3, create_string_f64(&path));
+    js_object_set_field_f64(obj_out, 4, auth_f64);
+    crate::value::js_nanbox_pointer(obj_out as i64)
+}
+
+fn legacy_format_from_object(obj: *mut ObjectHeader) -> String {
+    let protocol = object_prop_string(obj, "protocol");
+    let hostname = object_prop_string(obj, "hostname");
+    let host = object_prop_string(obj, "host");
+    let port = object_prop_string(obj, "port");
+    let pathname = object_prop_string(obj, "pathname");
+    let search = object_prop_string(obj, "search");
+    let hash = object_prop_string(obj, "hash");
+    let auth = object_prop_string(obj, "auth");
+    // Legacy `format()` only emits `//` when `slashes` is truthy OR when the
+    // protocol is one of the slash-bearing built-ins (http/https/ws/wss/ftp).
+    let slashes_val = object_prop_f64(obj, "slashes");
+    let slashes_explicit = slashes_val.to_bits() == 0x7FFC_0000_0000_0004u64;
+    let proto_wants_slashes = matches!(
+        protocol.trim_end_matches(':'),
+        "http" | "https" | "ws" | "wss" | "ftp" | "file"
+    );
+    // Legacy `url.format()`: hierarchical schemes always get `//` regardless
+    // of the `slashes` flag (Node ignores `slashes:false` for http/https/etc.).
+    let use_slashes = slashes_explicit || proto_wants_slashes;
+    let mut out = String::new();
+    if !protocol.is_empty() {
+        out.push_str(&protocol);
+        if !protocol.ends_with(':') {
+            out.push(':');
+        }
+    }
+    let authority = if !host.is_empty() {
+        host
+    } else if !hostname.is_empty() && !port.is_empty() {
+        format!("{hostname}:{port}")
+    } else {
+        hostname
+    };
+    if !authority.is_empty() {
+        if use_slashes {
+            out.push_str("//");
+        }
+        if !auth.is_empty() {
+            out.push_str(&auth);
+            out.push('@');
+        }
+        out.push_str(&authority);
+    }
+    out.push_str(&pathname);
+    if !search.is_empty() {
+        out.push_str(&search);
+    } else {
+        let query = object_prop_f64(obj, "query");
+        if let Some(qobj) = object_from_f64(query) {
+            let keys = crate::object::js_object_keys(qobj as *const ObjectHeader);
+            let len = unsafe { (*keys).length };
+            let mut parts = Vec::new();
+            for i in 0..len {
+                let key_f = crate::array::js_array_get_f64(keys, i);
+                let key = get_string_content(key_f);
+                let val_key = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+                let val = crate::object::js_object_get_field_by_name_f64(qobj, val_key);
+                parts.push(format!(
+                    "{}={}",
+                    url_encode(&key),
+                    url_encode(&get_string_content(val))
+                ));
+            }
+            if !parts.is_empty() {
+                out.push('?');
+                out.push_str(&parts.join("&"));
+            }
+        } else {
+            let q = get_string_content(query);
+            if !q.is_empty() {
+                out.push('?');
+                out.push_str(&q);
+            }
+        }
+    }
+    out.push_str(&hash);
+    out
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_format(value: f64, options: f64) -> f64 {
+    let Some(obj) = object_from_f64(value) else {
+        return create_string_f64("");
+    };
+    let href = object_prop_string(obj, "href");
+    let mut out = if !href.is_empty() {
+        href
+    } else {
+        legacy_format_from_object(obj)
+    };
+    if let Some(opts) = object_from_f64(options) {
+        let false_bits = 0x7FFC_0000_0000_0003u64;
+        if object_prop_f64(opts, "search").to_bits() == false_bits {
+            if let Some(idx) = out.find('?') {
+                out.truncate(idx);
+            }
+        }
+        if object_prop_f64(opts, "fragment").to_bits() == false_bits {
+            if let Some(idx) = out.find('#') {
+                out.truncate(idx);
+            }
+        }
+    }
+    create_string_f64(&out)
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_legacy_parse(input: f64, parse_query_string: f64) -> f64 {
+    let s = get_string_content(input);
+    let (protocol, mut host, mut hostname, port, pathname, search, hash) = parse_url(&s);
+    let mut auth = String::new();
+    if let Some(at_idx) = host.rfind('@') {
+        auth = host[..at_idx].to_string();
+        let rest = host[at_idx + 1..].to_string();
+        host = rest.clone();
+        hostname = if let Some(port_idx) = rest.rfind(':') {
+            let p = &rest[port_idx + 1..];
+            if p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty() {
+                rest[..port_idx].to_string()
+            } else {
+                rest
+            }
+        } else {
+            rest
+        };
+    }
+    let parse_qs = parse_query_string.to_bits() == 0x7FFC_0000_0000_0004u64;
+    let query = if parse_qs {
+        let mut map = serde_json::Map::new();
+        let raw = search.strip_prefix('?').unwrap_or(&search);
+        for part in raw.split('&').filter(|p| !p.is_empty()) {
+            let (k, v) = part.split_once('=').unwrap_or((part, ""));
+            map.insert(url_decode(k), serde_json::Value::String(url_decode(v)));
+        }
+        serde_json::Value::Object(map)
+    } else {
+        serde_json::Value::String(search.strip_prefix('?').unwrap_or(&search).to_string())
+    };
+    json_to_value(serde_json::json!({
+        "protocol": protocol,
+        "host": host,
+        "hostname": hostname,
+        "port": port,
+        "pathname": pathname,
+        "path": format!("{}{}", pathname, search),
+        "search": search,
+        "query": query,
+        "hash": hash,
+        "auth": auth
+    }))
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_legacy_resolve(from: f64, to: f64) -> f64 {
+    let from_s = get_string_content(from);
+    let to_s = get_string_content(to);
+    let resolved = if to_s.starts_with('/') && !is_valid_absolute_url(&from_s) {
+        to_s
+    } else if let Ok(base) = url::Url::parse(&from_s) {
+        base.join(&to_s)
+            .map(|u| u.to_string())
+            .unwrap_or_else(|_| resolve_url(&to_s, &from_s))
+    } else {
+        resolve_url(&to_s, &from_s)
+    };
+    create_string_f64(&resolved)
 }
 
 #[cfg(test)]

@@ -3160,6 +3160,11 @@ impl SH for Expr {
                 tag(h, 365);
                 e.as_ref().hash(h);
             }
+            Expr::UrlCanParseWithBase { input, base } => {
+                tag(h, 700);
+                input.as_ref().hash(h);
+                base.as_ref().hash(h);
+            }
             Expr::UrlParse(e) => {
                 tag(h, 366);
                 e.as_ref().hash(h);
@@ -3187,6 +3192,31 @@ impl SH for Expr {
                 url.as_ref().hash(h);
                 value.as_ref().hash(h);
             }
+            Expr::UrlSetProtocol { url, value } => {
+                tag(h, 465);
+                url.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
+            Expr::UrlSetHostname { url, value } => {
+                tag(h, 466);
+                url.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
+            Expr::UrlSetPort { url, value } => {
+                tag(h, 467);
+                url.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
+            Expr::UrlSetUsername { url, value } => {
+                tag(h, 468);
+                url.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
+            Expr::UrlSetPassword { url, value } => {
+                tag(h, 469);
+                url.as_ref().hash(h);
+                value.as_ref().hash(h);
+            }
             Expr::UrlSearchParamsNew(e) => {
                 tag(h, 372);
                 e.hash(h);
@@ -3196,10 +3226,21 @@ impl SH for Expr {
                 params.as_ref().hash(h);
                 name.as_ref().hash(h);
             }
-            Expr::UrlSearchParamsHas { params, name } => {
+            Expr::UrlSearchParamsHas {
+                params,
+                name,
+                value,
+            } => {
                 tag(h, 374);
                 params.as_ref().hash(h);
                 name.as_ref().hash(h);
+                match value {
+                    Some(v) => {
+                        tag(h, 1);
+                        v.as_ref().hash(h);
+                    }
+                    None => tag(h, 0),
+                }
             }
             Expr::UrlSearchParamsSet {
                 params,
@@ -3221,10 +3262,21 @@ impl SH for Expr {
                 name.as_ref().hash(h);
                 value.as_ref().hash(h);
             }
-            Expr::UrlSearchParamsDelete { params, name } => {
+            Expr::UrlSearchParamsDelete {
+                params,
+                name,
+                value,
+            } => {
                 tag(h, 377);
                 params.as_ref().hash(h);
                 name.as_ref().hash(h);
+                match value {
+                    Some(v) => {
+                        tag(h, 1);
+                        v.as_ref().hash(h);
+                    }
+                    None => tag(h, 0),
+                }
             }
             Expr::UrlSearchParamsToString(e) => {
                 tag(h, 378);
@@ -3238,6 +3290,23 @@ impl SH for Expr {
             Expr::UrlSearchParamsEntries(e) => {
                 tag(h, 380);
                 e.as_ref().hash(h);
+            }
+            Expr::UrlSearchParamsKeys(e) => {
+                tag(h, 701);
+                e.as_ref().hash(h);
+            }
+            Expr::UrlSearchParamsValues(e) => {
+                tag(h, 702);
+                e.as_ref().hash(h);
+            }
+            Expr::UrlSearchParamsSort(e) => {
+                tag(h, 703);
+                e.as_ref().hash(h);
+            }
+            Expr::UrlSearchParamsForEach { params, callback } => {
+                tag(h, 704);
+                params.as_ref().hash(h);
+                callback.as_ref().hash(h);
             }
             Expr::Delete(e) => {
                 tag(h, 381);

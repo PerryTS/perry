@@ -185,6 +185,17 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // method registry instead of the universal fallback. This is
         // the difference between `l.size()` returning the real size
         // and returning undefined for generic class instances.
+        // WHATWG URL constructors — both routes (`new URL(...)` /
+        // `new URL(rel, base)`) go through the dedicated HIR variant
+        // `Expr::UrlNew`, which bypasses the generic `Expr::New` arm
+        // below. Refining to `Named("URL")` lets `u.searchParams.get(k)` and
+        // friends hit the `is_url_search_params_expr` fast paths.
+        Expr::UrlNew { .. } => Some(HirType::Named("URL".to_string())),
+        Expr::UrlSearchParamsNew(_) => Some(HirType::Named("URLSearchParams".to_string())),
+        // `url.searchParams` getter on a typed URL: refining lets a chained
+        // `const sp = url.searchParams; sp.append(...)` keep the typed
+        // dispatch instead of falling through to generic property access.
+        Expr::UrlGetSearchParams(_) => Some(HirType::Named("URLSearchParams".to_string())),
         Expr::New { class_name, .. } => {
             // Resolve through `local_class_aliases` so `let b: any = new Y()`
             // (where `let Y = SomeClass` aliased Y → SomeClass) refines `b`

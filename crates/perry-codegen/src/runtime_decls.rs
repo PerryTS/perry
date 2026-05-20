@@ -2188,11 +2188,19 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_new_with_base", I64, &[I64, I64]);
     // Issue #650: URL.canParse / URL.parse static methods (Node 18+ / 22+).
     module.declare_function("js_url_can_parse", I32, &[I64]);
+    module.declare_function("js_url_can_parse_with_base", I32, &[I64, I64]);
     module.declare_function("js_url_parse", I64, &[I64]);
     // Issue #650: URL setters — mutate field + re-derive href.
     module.declare_function("js_url_set_pathname", VOID, &[I64, I64]);
     module.declare_function("js_url_set_search", VOID, &[I64, I64]);
     module.declare_function("js_url_set_hash", VOID, &[I64, I64]);
+    module.declare_function("js_url_set_protocol", VOID, &[I64, I64]);
+    module.declare_function("js_url_set_hostname", VOID, &[I64, I64]);
+    module.declare_function("js_url_set_port", VOID, &[I64, I64]);
+    module.declare_function("js_url_set_username", VOID, &[I64, I64]);
+    module.declare_function("js_url_set_password", VOID, &[I64, I64]);
+    module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_url_search_params_delete2", VOID, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_append", VOID, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_delete", VOID, &[I64, I64]);
     module.declare_function("js_url_search_params_get", I64, &[I64, I64]);
@@ -2210,6 +2218,17 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // params.entries() / iteration source — returns an already NaN-boxed
     // POINTER_TAG f64 to ArrayHeader<[k, v]> (refs #575).
     module.declare_function("js_url_search_params_entries_arr", DOUBLE, &[I64]);
+    module.declare_function("js_url_search_params_keys_arr", DOUBLE, &[I64]);
+    module.declare_function("js_url_search_params_values_arr", DOUBLE, &[I64]);
+    module.declare_function("js_url_search_params_sort", VOID, &[I64]);
+    module.declare_function("js_url_search_params_for_each", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_path_to_file_url", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_domain_to_ascii", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_domain_to_unicode", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_to_http_options", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_format", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_legacy_parse", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_legacy_resolve", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // ========== WebSocket ==========
     module.declare_function("js_ws_close", VOID, &[I64]);

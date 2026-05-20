@@ -2552,6 +2552,35 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                         ));
                                     } else if args.len() == 1 {
                                         let value = args.into_iter().next().unwrap();
+                                        // `JSON.stringify(url)` should invoke `url.toJSON()`
+                                        // (which returns href) and stringify the resulting
+                                        // string. Perry's runtime JSON stringifier doesn't
+                                        // honor `toJSON` on opaque runtime objects, so
+                                        // intercept the URL case at HIR time. Recognize URL
+                                        // both via the original AST (typed local / direct
+                                        // `new URL`) and via the HIR variants (`UrlNew`,
+                                        // `UrlInstanceToJSON`, …) that earlier passes may
+                                        // already have produced.
+                                        let original_arg = call.args.first().map(|a| a.expr.as_ref());
+                                        let arg_is_url = original_arg
+                                            .map(|e| {
+                                                static_receiver_class(ctx, e) == Some("URL")
+                                            })
+                                            .unwrap_or(false)
+                                            || matches!(
+                                                &value,
+                                                Expr::UrlNew { .. }
+                                                    | Expr::UrlInstanceToJSON(_)
+                                                    | Expr::UrlInstanceToString(_)
+                                            );
+                                        if arg_is_url {
+                                            let href = Expr::UrlInstanceToJSON(Box::new(value));
+                                            return Ok(Expr::JsonStringifyFull(
+                                                Box::new(href),
+                                                Box::new(Expr::Null),
+                                                Box::new(Expr::Null),
+                                            ));
+                                        }
                                         // Route ALL single-arg stringify through JsonStringifyFull
                                         // so the runtime can return TAG_UNDEFINED for undefined input
                                         return Ok(Expr::JsonStringifyFull(
@@ -3425,9 +3454,15 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                         if let ast::MemberProp::Ident(method_ident) = &member.prop {
                             let method_name = method_ident.sym.as_ref();
                             if method_name == "canParse" && !args.is_empty() {
-                                return Ok(Expr::UrlCanParse(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                )));
+                                let mut iter = args.into_iter();
+                                let input = iter.next().unwrap();
+                                if let Some(base) = iter.next() {
+                                    return Ok(Expr::UrlCanParseWithBase {
+                                        input: Box::new(input),
+                                        base: Box::new(base),
+                                    });
+                                }
+                                return Ok(Expr::UrlCanParse(Box::new(input)));
                             }
                             if method_name == "parse" && !args.is_empty() {
                                 return Ok(Expr::UrlParse(Box::new(
@@ -3453,6 +3488,29 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                     Ok(expr) => return Ok(expr),
                                     Err(returned_args) => args = returned_args,
                                 }
+                            }
+                        }
+                    }
+                }
+
+                // Chained `url.searchParams.<method>(args)` where `url` is a
+                // URL-typed local or `new URL(...)`. Without this the call
+                // falls through to generic property dispatch which can't find
+                // `.get`/`.append`/etc. on the searchParams object (it's
+                // backed by an opaque ObjectHeader). Rewrite the inner
+                // `url.searchParams` access to `UrlGetSearchParams(url)` so
+                // the URLSearchParams method dispatch fires.
+                if let ast::Expr::Member(inner) = member.obj.as_ref() {
+                    if matches!(&inner.prop, ast::MemberProp::Ident(p) if p.sym.as_ref() == "searchParams")
+                        && static_receiver_class(ctx, inner.obj.as_ref()) == Some("URL")
+                    {
+                        if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                            let method_name = method_ident.sym.as_ref();
+                            let url_expr = lower_expr(ctx, &inner.obj)?;
+                            let recv = Expr::UrlGetSearchParams(Box::new(url_expr));
+                            match build_url_search_params_method_call(recv, method_name, args) {
+                                Ok(expr) => return Ok(expr),
+                                Err(returned_args) => args = returned_args,
                             }
                         }
                     }
@@ -4095,14 +4153,19 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                         // Issue #542/#543: also reject `Map | undefined` / `Set | undefined`
                                         // so the same array/Map mismatch on for-of doesn't recur for
                                         // forEach calls on optional-Map parameters.
+                                        // URLSearchParams also has its own forEach contract — the
+                                        // callback receives `(value, key, this)` (strings) not the
+                                        // `(item, index)` Array.forEach signature; folding to
+                                        // ArrayForEach here would pass `(NaN, 0)` to the closure.
                                         let recv_ty = ctx.lookup_local_type(&arr_name);
-                                        let is_map_or_set_variant = |ty: &Type| -> bool {
+                                        let is_non_array_collection = |ty: &Type| -> bool {
                                             matches!(ty, Type::Generic { base, .. } if base == "Map" || base == "Set")
+                                                || matches!(ty, Type::Named(n) if n == "URLSearchParams")
                                         };
                                         let is_map_or_set = match recv_ty {
-                                            Some(ty) if is_map_or_set_variant(ty) => true,
+                                            Some(ty) if is_non_array_collection(ty) => true,
                                             Some(Type::Union(variants)) => {
-                                                variants.iter().any(is_map_or_set_variant)
+                                                variants.iter().any(is_non_array_collection)
                                             }
                                             _ => false,
                                         };

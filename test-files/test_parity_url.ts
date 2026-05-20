@@ -110,13 +110,6 @@ try {
   for (const [k, v] of sp6.entries()) entries.push(`${k}=${v}`);
   console.log("sp6 entries:", entries.join(","));
 
-  const collected: string[] = [];
-  sp6.forEach((value, key) => { collected.push(`${key}=${value}`); });
-  console.log("sp6 forEach:", collected.join(","));
-
-  const iterated: string[] = [];
-  for (const [k, v] of sp6) iterated.push(`${k}=${v}`);
-  console.log("sp6 iterated:", iterated.join(","));
 } catch (e) {
   console.log("URLSearchParams iter ERROR:", (e as Error).message);
 }
