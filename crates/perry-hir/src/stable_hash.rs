@@ -2330,6 +2330,12 @@ impl SH for Expr {
             Expr::OsNetworkInterfaces => tag(h, 212),
             Expr::OsUserInfo => tag(h, 213),
             Expr::OsEOL => tag(h, 214),
+            Expr::OsDevNull => tag(h, 215),
+            Expr::OsAvailableParallelism => tag(h, 216),
+            Expr::OsEndianness => tag(h, 217),
+            Expr::OsLoadavg => tag(h, 218),
+            Expr::OsMachine => tag(h, 219),
+            Expr::OsVersion => tag(h, 220),
             Expr::BufferFrom { data, encoding } => {
                 tag(h, 215);
                 data.as_ref().hash(h);

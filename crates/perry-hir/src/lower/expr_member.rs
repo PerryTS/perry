@@ -344,15 +344,17 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
         }
     }
 
-    // Check if this is os.EOL property access
+    // Check if this is os.EOL / os.devNull property access
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let obj_name = obj_ident.sym.as_ref();
         let is_os_module =
             obj_name == "os" || ctx.lookup_builtin_module_alias(obj_name) == Some("os");
         if is_os_module {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                if prop_ident.sym.as_ref() == "EOL" {
-                    return Ok(Expr::OsEOL);
+                match prop_ident.sym.as_ref() {
+                    "EOL" => return Ok(Expr::OsEOL),
+                    "devNull" => return Ok(Expr::OsDevNull),
+                    _ => {}
                 }
             }
         }

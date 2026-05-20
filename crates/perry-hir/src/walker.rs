@@ -116,6 +116,12 @@ where
         | Expr::OsNetworkInterfaces
         | Expr::OsUserInfo
         | Expr::OsEOL
+        | Expr::OsDevNull
+        | Expr::OsAvailableParallelism
+        | Expr::OsEndianness
+        | Expr::OsLoadavg
+        | Expr::OsMachine
+        | Expr::OsVersion
         | Expr::DateNow
         | Expr::MathRandom
         | Expr::MapNew
@@ -1470,6 +1476,12 @@ where
         | Expr::OsNetworkInterfaces
         | Expr::OsUserInfo
         | Expr::OsEOL
+        | Expr::OsDevNull
+        | Expr::OsAvailableParallelism
+        | Expr::OsEndianness
+        | Expr::OsLoadavg
+        | Expr::OsMachine
+        | Expr::OsVersion
         | Expr::DateNow
         | Expr::MathRandom
         | Expr::MapNew

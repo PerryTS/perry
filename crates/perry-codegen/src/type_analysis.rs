@@ -133,6 +133,10 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::OsRelease
         | Expr::OsHostname
         | Expr::OsEOL
+        | Expr::OsDevNull
+        | Expr::OsEndianness
+        | Expr::OsMachine
+        | Expr::OsVersion
         // Date string-returning methods all produce real string handles
         // via js_date_to_*_string. Refining the local lets `dateStr.includes("2024")`
         // hit the string .includes fast path.
@@ -787,7 +791,11 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::OsPlatform
         | Expr::OsRelease
         | Expr::OsHostname
-        | Expr::OsEOL => true,
+        | Expr::OsEOL
+        | Expr::OsDevNull
+        | Expr::OsEndianness
+        | Expr::OsMachine
+        | Expr::OsVersion => true,
         // `.toString()` always returns a string regardless of receiver
         // type, so it's safe to count as definitely-string for concat.
         // Same for other unary string-returning string methods.
@@ -921,7 +929,11 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::OsPlatform
         | Expr::OsRelease
         | Expr::OsHostname
-        | Expr::OsEOL => true,
+        | Expr::OsEOL
+        | Expr::OsDevNull
+        | Expr::OsEndianness
+        | Expr::OsMachine
+        | Expr::OsVersion => true,
         // `obj.toString()` always returns a string. Same for the
         // string-returning method family (trim, trimStart, trimEnd,
         // toLowerCase, toUpperCase, slice, substring, charAt, repeat,

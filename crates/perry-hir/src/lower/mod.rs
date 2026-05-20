@@ -1194,6 +1194,15 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             } else if let Some(id) = ctx.lookup_func(&name) {
                 Ok(Expr::FuncRef(id))
             } else if let Some((module_name, method_name)) = ctx.lookup_native_module(&name) {
+                if module_name == "os" || module_name == "node:os" {
+                    if let Some(method) = method_name {
+                        match method {
+                            "EOL" => return Ok(Expr::OsEOL),
+                            "devNull" => return Ok(Expr::OsDevNull),
+                            _ => {}
+                        }
+                    }
+                }
                 // Special handling for worker_threads named imports
                 if module_name == "worker_threads" {
                     if let Some(method) = method_name {

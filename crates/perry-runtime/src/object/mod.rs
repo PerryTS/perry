@@ -5002,9 +5002,26 @@ unsafe fn dispatch_native_module_method(
         ("os", "type") => str_to_f64(crate::os::js_os_type()),
         ("os", "release") => str_to_f64(crate::os::js_os_release()),
         ("os", "eol") => str_to_f64(crate::os::js_os_eol()),
+        ("os", "devNull") => str_to_f64(crate::os::js_os_dev_null()),
         ("os", "totalmem") => crate::os::js_os_totalmem(),
         ("os", "freemem") => crate::os::js_os_freemem(),
         ("os", "uptime") => crate::os::js_os_uptime(),
+        ("os", "availableParallelism") => crate::os::js_os_available_parallelism(),
+        ("os", "endianness") => str_to_f64(crate::os::js_os_endianness()),
+        ("os", "machine") => str_to_f64(crate::os::js_os_machine()),
+        ("os", "loadavg") => {
+            f64::from_bits(JSValue::pointer(crate::os::js_os_loadavg() as *const u8).bits())
+        }
+        ("os", "version") => str_to_f64(crate::os::js_os_version()),
+        ("os", "cpus") => {
+            f64::from_bits(JSValue::pointer(crate::os::js_os_cpus() as *const u8).bits())
+        }
+        ("os", "networkInterfaces") => f64::from_bits(
+            JSValue::pointer(crate::os::js_os_network_interfaces() as *const u8).bits(),
+        ),
+        ("os", "userInfo") => {
+            f64::from_bits(JSValue::pointer(crate::os::js_os_user_info() as *const u8).bits())
+        }
 
         // ── path module (args are NaN-boxed strings → extract raw StringHeader ptr) ──
         ("path", "dirname") => str_to_f64(crate::path::js_path_dirname(arg_str_ptr(0))),
@@ -5132,6 +5149,24 @@ fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
             | ("events", "EventEmitter")
+            | ("os", "platform")
+            | ("os", "arch")
+            | ("os", "hostname")
+            | ("os", "homedir")
+            | ("os", "tmpdir")
+            | ("os", "totalmem")
+            | ("os", "freemem")
+            | ("os", "uptime")
+            | ("os", "type")
+            | ("os", "release")
+            | ("os", "cpus")
+            | ("os", "networkInterfaces")
+            | ("os", "userInfo")
+            | ("os", "availableParallelism")
+            | ("os", "endianness")
+            | ("os", "loadavg")
+            | ("os", "machine")
+            | ("os", "version")
     )
 }
 
@@ -5817,6 +5852,13 @@ unsafe fn get_native_module_constant(
                     Some(str_val("\r\n"))
                 } else {
                     Some(str_val("\n"))
+                }
+            }
+            "devNull" => {
+                if cfg!(windows) {
+                    Some(str_val("\\\\.\\nul"))
+                } else {
+                    Some(str_val("/dev/null"))
                 }
             }
             "constants" => Some(create_sub_namespace("os.constants")),

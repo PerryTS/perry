@@ -1863,20 +1863,26 @@ pub enum Expr {
     },
 
     // OS operations
-    OsPlatform,          // os.platform() -> string ("darwin", "linux", "win32")
-    OsArch,              // os.arch() -> string ("x64", "arm64", etc.)
-    OsHostname,          // os.hostname() -> string
-    OsHomedir,           // os.homedir() -> string
-    OsTmpdir,            // os.tmpdir() -> string
-    OsTotalmem,          // os.totalmem() -> number (bytes)
-    OsFreemem,           // os.freemem() -> number (bytes)
-    OsUptime,            // os.uptime() -> number (seconds)
-    OsType,              // os.type() -> string ("Darwin", "Linux", "Windows_NT")
-    OsRelease,           // os.release() -> string
-    OsCpus,              // os.cpus() -> array of CPU info objects
-    OsNetworkInterfaces, // os.networkInterfaces() -> object
-    OsUserInfo,          // os.userInfo() -> object
-    OsEOL,               // os.EOL -> string ("\n" or "\r\n")
+    OsPlatform,             // os.platform() -> string ("darwin", "linux", "win32")
+    OsArch,                 // os.arch() -> string ("x64", "arm64", etc.)
+    OsHostname,             // os.hostname() -> string
+    OsHomedir,              // os.homedir() -> string
+    OsTmpdir,               // os.tmpdir() -> string
+    OsTotalmem,             // os.totalmem() -> number (bytes)
+    OsFreemem,              // os.freemem() -> number (bytes)
+    OsUptime,               // os.uptime() -> number (seconds)
+    OsType,                 // os.type() -> string ("Darwin", "Linux", "Windows_NT")
+    OsRelease,              // os.release() -> string
+    OsCpus,                 // os.cpus() -> array of CPU info objects
+    OsNetworkInterfaces,    // os.networkInterfaces() -> object
+    OsUserInfo,             // os.userInfo() -> object
+    OsEOL,                  // os.EOL -> string ("\n" or "\r\n")
+    OsDevNull,              // os.devNull -> string
+    OsAvailableParallelism, // os.availableParallelism() -> number
+    OsEndianness,           // os.endianness() -> string ("LE" or "BE")
+    OsLoadavg,              // os.loadavg() -> number[3]
+    OsMachine,              // os.machine() -> string
+    OsVersion,              // os.version() -> string
 
     // Buffer operations
     BufferFrom {
