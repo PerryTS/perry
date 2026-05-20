@@ -257,16 +257,14 @@ crate = "perry-ext-fastify"
 lib = "perry_ext_fastify"
 tracking = "#466"
 
-# `@perryts/google-auth` — official Google Sign In package
-# (issue #674). iOS/macOS go through the GoogleSignIn SwiftPM
-# SDK; Android uses `androidx.credentials.CredentialManager` +
-# `GetGoogleIdOption`. MVP scope: compiles + links across all 7
-# platform crates with structured-failure placeholders on every
-# target. Real SDK integration follows as a separate change set.
-[bindings."@perryts/google-auth"]
-crate = "perry-ext-google-auth"
-lib = "perry_ext_google_auth"
-tracking = "#674"
+# `@perryts/google-auth` is no longer bundled — extracted to a
+# standalone repo (https://github.com/PerryTS/google-auth) and
+# published as an npm package starting v0.5.1015. The previous
+# in-tree binding (perry-ext-google-auth) only shipped a
+# `not-yet-implemented` stub; the standalone package carries the
+# real GoogleSignIn iOS bridge + CredentialManager Android bridge.
+# Users now `npm install @perryts/google-auth`; perry resolves the
+# native lib through the standard `perry.nativeLibrary` lookup.
 # `@perryts/pdf` — official PDF creation package (issue #516).
 # Companion to the existing PdfView widget (rendering/viewing side
 # already shipped in perry-ui-{ios,visionos,macos}). The producer

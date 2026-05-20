@@ -292,7 +292,7 @@ http-body-util = { version = "0.1", optional = true }
 bytes = { version = "1.5", optional = true }
 # DashMap is used by the always-on handle registry (`common/handle.rs`),
 # so it must NOT be optional — every minimal-stdlib build needs it.
-dashmap = "6.0"
+dashmap = "6.2"
 
 # HTTP Client
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false, optional = true }

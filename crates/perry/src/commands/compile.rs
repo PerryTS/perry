@@ -30,7 +30,7 @@ mod sandbox_buildrs;
 mod strip_dedup;
 mod targets;
 pub mod well_known;
-mod widget_build;
+pub(crate) mod widget_build;
 use bundle_apple::{bundle_for_tvos, bundle_for_visionos, bundle_for_watchos};
 use collect_modules::collect_modules;
 use i18n_emit::{emit_android_i18n_resources, write_i18n_key_registry};
@@ -993,6 +993,75 @@ fn inject_ios_deeplinks(
     ))
 }
 
+/// Issue #1138 — read `[google_auth]` from `perry.toml` and inject the
+/// GoogleSignIn-required keys (`GIDClientID`, `GIDServerClientID`,
+/// `GIDDefaultScopes`) into `info_plist`. The Swift bridge in
+/// `@perryts/google-auth` reads them via `Bundle.main.infoDictionary`.
+///
+/// Returns the mutated plist on success, `None` if the block isn't
+/// present / the read failed. The OAuth-redirect URL scheme
+/// (`com.googleusercontent.apps.<reversed-id>`) must currently be
+/// added by the user through `perry.deepLinks.schemes` in
+/// `package.json` or `[ios.info_plist]` in `perry.toml`; auto-emission
+/// is a follow-up that needs to merge into the existing
+/// `CFBundleURLTypes` array without duplicating the key.
+fn inject_google_auth_info_plist(
+    info_plist: &str,
+    input: &std::path::Path,
+    format: OutputFormat,
+) -> Option<String> {
+    let mut dir = input.canonicalize().ok()?;
+    let mut data: Option<String> = None;
+    for _ in 0..5 {
+        dir = dir.parent()?.to_path_buf();
+        let toml_path = dir.join("perry.toml");
+        if toml_path.exists() {
+            data = fs::read_to_string(&toml_path).ok();
+            break;
+        }
+    }
+    let raw = data?;
+    let doc: toml::Table = raw.parse().ok()?;
+    let ga = doc.get("google_auth")?.as_table()?;
+
+    let mut entries = String::new();
+    if let Some(client) = ga.get("ios_client_id").and_then(|v| v.as_str()) {
+        entries.push_str(&format!(
+            "    <key>GIDClientID</key>\n    <string>{}</string>\n",
+            client
+        ));
+    }
+    if let Some(server) = ga.get("server_client_id").and_then(|v| v.as_str()) {
+        entries.push_str(&format!(
+            "    <key>GIDServerClientID</key>\n    <string>{}</string>\n",
+            server
+        ));
+    }
+    if let Some(scopes) = ga.get("default_scopes").and_then(|v| v.as_array()) {
+        let mut arr = String::from("    <key>GIDDefaultScopes</key>\n    <array>\n");
+        for s in scopes {
+            if let Some(scope) = s.as_str() {
+                arr.push_str(&format!("        <string>{}</string>\n", scope));
+            }
+        }
+        arr.push_str("    </array>\n");
+        entries.push_str(&arr);
+    }
+
+    if entries.is_empty() {
+        return None;
+    }
+
+    if let OutputFormat::Text = format {
+        println!("  google_auth: injected GoogleSignIn Info.plist keys");
+    }
+
+    Some(info_plist.replace(
+        "</dict>\n</plist>",
+        &format!("{}</dict>\n</plist>", entries),
+    ))
+}
+
 /// Cheap CFBundleIdentifier extraction from an in-memory Info.plist string.
 /// We need it for the CFBundleURLName field (Apple's convention is
 /// `<bundle-id>.<scheme>`). Falls back to `perry.deeplink` when the
@@ -1938,27 +2007,31 @@ pub fn run_with_parse_cache(
                 }
             }
 
-            // --- [google_auth] config parsing (issue #674) ---
+            // --- [google_auth] config parsing (issues #674 / #1138) ---
             //
-            // Shape mirrors the issue:
+            // Shape:
             //
             //     [google_auth]
-            //     ios_client_id = "..."
+            //     ios_client_id     = "..."
             //     android_client_id = "..."
-            //     server_client_id = "..."
-            //     default_scopes = ["openid", "email", "profile"]
+            //     server_client_id  = "..."
+            //     default_scopes    = ["openid", "email", "profile"]
             //
-            // MVP scope: validate types + surface a build-time note that
-            // the block was seen. The runtime entry points in
-            // `perry-ext-google-auth` don't yet consume these — they'll
-            // be threaded through Info.plist (iOS/macOS) and
-            // AndroidManifest meta-data (Android) when real SDK
-            // integration lands. Wiring the parse here means user
-            // perry.toml files can carry the config now without
-            // tripping unknown-key warnings later, and lets us catch
-            // type mistakes (`ios_client_id = 42` etc.) at compile
-            // time instead of waiting until the native SDK rejects
-            // them at sign-in time.
+            // The actual injection into the host bundle happens later:
+            //   - iOS / macOS: `inject_google_auth_info_plist` writes
+            //     `GIDClientID` / `GIDServerClientID` / `GIDDefaultScopes`
+            //     into the generated Info.plist; the Swift bridge in
+            //     `@perryts/google-auth` reads them at runtime via
+            //     `Bundle.main.infoDictionary`.
+            //   - Android: `inject_google_auth_strings_xml` (in
+            //     `build_and_run_android`) writes the server clientID
+            //     into `app/src/main/res/values/google_auth.xml`; the
+            //     Kotlin bridge reads it via
+            //     `R.string.google_auth_server_client_id`.
+            // This block validates types up-front so user typos
+            // (`ios_client_id = 42` etc.) surface at compile time
+            // instead of waiting for the native SDK to reject them
+            // at sign-in time.
             if let Some(ga) = doc.get("google_auth").and_then(|v| v.as_table()) {
                 fn warn_non_string(key: &str, ga: &toml::Table) {
                     if let Some(v) = ga.get(key) {
@@ -2003,7 +2076,7 @@ pub fn run_with_parse_cache(
                         .filter(|k| ga.get(**k).and_then(|v| v.as_str()).is_some())
                         .count();
                     println!(
-                        "  google_auth: {} client id(s) configured (issue #674)",
+                        "  google_auth: {} client id(s) configured (#1138)",
                         configured
                     );
                 }
@@ -7609,6 +7682,12 @@ pub fn run_with_parse_cache(
         // automatically when present alongside the .app bundle.
         let info_plist =
             inject_ios_deeplinks(&info_plist, &args.input, &app_dir, format).unwrap_or(info_plist);
+
+        // #1138 — `[google_auth]` block in perry.toml feeds the
+        // GoogleSignIn SDK via Info.plist keys the Swift bridge in
+        // `@perryts/google-auth` reads at runtime.
+        let info_plist =
+            inject_google_auth_info_plist(&info_plist, &args.input, format).unwrap_or(info_plist);
 
         fs::write(app_dir.join("Info.plist"), info_plist)?;
 

@@ -134,6 +134,23 @@ pub fn get_vm() -> &'static JavaVM {
     JAVA_VM.get().expect("JavaVM not initialized")
 }
 
+/// `extern "C"` accessor used by external `perry.nativeLibrary`
+/// crates that need to make JNI calls back into the host app
+/// (`@perryts/google-auth`, future Android bindings). Returns
+/// the raw `*mut JavaVM` cached from `JNI_OnLoad`, or null if
+/// the host hasn't initialized yet. External crates declare this
+/// as a weak extern and gracefully resolve their FFI promises
+/// with a `jvm-unavailable` slug when null comes back, so a
+/// standalone unit-test build that doesn't link perry-ui-android
+/// still resolves cleanly. Issue #1138.
+#[no_mangle]
+pub extern "C" fn perry_android_jvm() -> *mut jni::sys::JavaVM {
+    match JAVA_VM.get() {
+        Some(vm) => vm.get_java_vm_pointer(),
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// Initialize the JNI class/method cache for the current thread.
 /// Must be called after JavaVM is set and from a thread with a valid JNIEnv.
 pub fn init_cache(env: &mut JNIEnv) {

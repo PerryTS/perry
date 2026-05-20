@@ -5035,40 +5035,13 @@ pub(super) const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         args: &[NA_STR, NA_PTR],
         ret: NR_F64,
     },
-    // ========== @perryts/google-auth (issue #674) ==========
-    // Three zero-arg FFI entry points exported by
-    // `crates/perry-ext-google-auth`. Each returns a
-    // `*mut perry_ffi::Promise` which the runtime sees as a
-    // POINTER_TAG'd value — same return shape as bcrypt/argon2
-    // (NR_PTR). MVP returns a JSON-stringified `GoogleSignInResult`;
-    // see issue #674 for the schema and follow-up work.
-    NativeModSig {
-        module: "@perryts/google-auth",
-        has_receiver: false,
-        method: "js_google_auth_sign_in",
-        class_filter: None,
-        runtime: "js_google_auth_sign_in",
-        args: &[],
-        ret: NR_PTR,
-    },
-    NativeModSig {
-        module: "@perryts/google-auth",
-        has_receiver: false,
-        method: "js_google_auth_silent_sign_in",
-        class_filter: None,
-        runtime: "js_google_auth_silent_sign_in",
-        args: &[],
-        ret: NR_PTR,
-    },
-    NativeModSig {
-        module: "@perryts/google-auth",
-        has_receiver: false,
-        method: "js_google_auth_sign_out",
-        class_filter: None,
-        runtime: "js_google_auth_sign_out",
-        args: &[],
-        ret: NR_PTR,
-    },
+    // `@perryts/google-auth` is no longer bundled in perry-stdlib —
+    // since v0.5.1015 the package is published as a standalone npm
+    // module (https://github.com/PerryTS/google-auth). Codegen
+    // dispatches `js_google_auth_*` symbols through `ffi_signatures`
+    // built from the installed package's
+    // `perry.nativeLibrary.functions`, same as any other external
+    // nativeLibrary crate.
     // ========== perry/ads (issue #867) ==========
     // Six FFI entry points exported by `crates/perry-ext-ads`:
     //   - 4 promise-returning load/show pairs for interstitial +
