@@ -1,0 +1,2 @@
+console.time();
+console.timeEnd();

@@ -2110,15 +2110,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if matches!(object.as_ref(), Expr::GlobalGet(_))
                 && (matches!(index.as_ref(), Expr::String(_)) || is_string_expr(ctx, index))
             {
-                let global_box = ctx.block().call(DOUBLE, "js_get_global_this", &[]);
                 let key_box = lower_expr(ctx, index)?;
                 let blk = ctx.block();
-                let obj_handle = unbox_to_i64(blk, &global_box);
                 let key_handle = unbox_str_handle(blk, &key_box);
                 return Ok(blk.call(
                     DOUBLE,
-                    "js_object_get_field_by_name_f64",
-                    &[(I64, &obj_handle), (I64, &key_handle)],
+                    "js_global_or_console_property_by_name",
+                    &[(I64, &key_handle)],
                 ));
             }
             // Uint8ClampedArray reads must use byte-stride load (the
@@ -3566,13 +3564,49 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // arrives. Other property shapes still fall through to
             // `0.0`.
             if matches!(object.as_ref(), Expr::GlobalGet(_)) {
-                if property == "log" {
-                    ctx.pending_declares.push((
-                        "js_console_log_as_closure".to_string(),
+                if matches!(
+                    property.as_str(),
+                    "Console"
+                        | "log"
+                        | "info"
+                        | "debug"
+                        | "error"
+                        | "warn"
+                        | "assert"
+                        | "dir"
+                        | "dirxml"
+                        | "trace"
+                        | "table"
+                        | "clear"
+                        | "count"
+                        | "countReset"
+                        | "time"
+                        | "timeEnd"
+                        | "timeLog"
+                        | "group"
+                        | "groupCollapsed"
+                        | "groupEnd"
+                        | "profile"
+                        | "profileEnd"
+                        | "timeStamp"
+                ) {
+                    let mod_idx = ctx.strings.intern("console");
+                    let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
+                    let mod_len_str = "console".len().to_string();
+                    let prop_idx = ctx.strings.intern(property);
+                    let prop_bytes_global =
+                        format!("@{}", ctx.strings.entry(prop_idx).bytes_global);
+                    let prop_len_str = property.len().to_string();
+                    return Ok(ctx.block().call(
                         DOUBLE,
-                        vec![],
+                        "js_native_module_property_by_name",
+                        &[
+                            (PTR, &mod_bytes_global),
+                            (I64, &mod_len_str),
+                            (PTR, &prop_bytes_global),
+                            (I64, &prop_len_str),
+                        ],
                     ));
-                    return Ok(ctx.block().call(DOUBLE, "js_console_log_as_closure", &[]));
                 }
                 // Built-in constructors / namespaces exposed on globalThis
                 // (`Array`, `Object`, `Math`, `JSON`, ...): route the read
@@ -8722,8 +8756,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let i_f64 = ctx.block().sitofp(I32, &i_cur, DOUBLE);
             ctx.block().call(
                 DOUBLE,
-                "js_closure_call2",
-                &[(I64, &cb_handle), (DOUBLE, &elem), (DOUBLE, &i_f64)],
+                "js_closure_call3",
+                &[
+                    (I64, &cb_handle),
+                    (DOUBLE, &elem),
+                    (DOUBLE, &i_f64),
+                    (DOUBLE, &arr_box),
+                ],
             );
             // i++
             let i_next = ctx.block().add(I32, &i_cur, "1");

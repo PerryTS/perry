@@ -5046,6 +5046,25 @@ unsafe fn dispatch_native_module_method(
         }
         arr
     };
+    let pack_args_from = |start: usize| -> *mut crate::array::ArrayHeader {
+        let len = args_len.saturating_sub(start);
+        let mut arr = crate::array::js_array_alloc(len as u32);
+        for i in start..args_len {
+            arr = crate::array::js_array_push_f64(arr, arg(i));
+        }
+        arr
+    };
+    let label_arg_ptr = |n: usize| -> *const crate::StringHeader {
+        if n >= args_len || args_ptr.is_null() {
+            return std::ptr::null();
+        }
+        let v = arg(n);
+        if JSValue::from_bits(v.to_bits()).is_undefined() {
+            std::ptr::null()
+        } else {
+            crate::builtins::js_string_coerce(v) as *const crate::StringHeader
+        }
+    };
     let bool_tag = |v: bool| -> f64 {
         if v {
             f64::from_bits(0x7FFC_0000_0000_0004)
@@ -5345,6 +5364,82 @@ unsafe fn dispatch_native_module_method(
         ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1)),
         ("url", "resolve") => crate::url::js_url_legacy_resolve(arg(0), arg(1)),
 
+        // ── console module namespace (`node:console` / `console`) ──
+        ("console", "log") | ("console", "info") | ("console", "debug") | ("console", "dirxml") => {
+            crate::builtins::js_console_log_spread(pack_args());
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "error") => {
+            crate::builtins::js_console_error_spread(pack_args());
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "warn") => {
+            crate::builtins::js_console_warn_spread(pack_args());
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "assert") => {
+            crate::builtins::js_console_assert_spread(arg(0), pack_args_from(1) as i64);
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "dir") => {
+            crate::builtins::js_console_log_dynamic(arg(0));
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "trace") => {
+            crate::builtins::js_console_trace_spread(pack_args());
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "table") => {
+            if args_len > 1 {
+                crate::builtins::js_console_table_with_properties(arg(0), arg(1));
+            } else {
+                crate::builtins::js_console_table(arg(0));
+            }
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "clear") => {
+            crate::builtins::js_console_clear();
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "count") => {
+            crate::builtins::js_console_count_value(arg(0));
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "countReset") => {
+            crate::builtins::js_console_count_reset_value(arg(0));
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "time") => {
+            crate::builtins::js_console_time_value(arg(0));
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "timeEnd") => {
+            crate::builtins::js_console_time_end_value(arg(0));
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "timeLog") => {
+            if args_len > 1 {
+                crate::builtins::js_console_time_log_spread(arg(0), pack_args_from(1));
+            } else {
+                crate::builtins::js_console_time_log_value(arg(0));
+            }
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "group") | ("console", "groupCollapsed") => {
+            if args_len > 0 {
+                crate::builtins::js_console_log_dynamic(arg(0));
+            }
+            crate::builtins::js_console_group_begin();
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "groupEnd") => {
+            crate::builtins::js_console_group_end();
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        ("console", "profile") | ("console", "profileEnd") | ("console", "timeStamp") => {
+            f64::from_bits(JSValue::undefined().bits())
+        }
+
         _ => {
             // Method not found on native module — return undefined
             f64::from_bits(JSValue::undefined().bits())
@@ -5536,9 +5631,19 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         crate::closure::js_closure_set_capture_f64(closure, 0, ns);
         crate::closure::js_closure_set_capture_ptr(closure, 1, heap_name as i64);
         crate::closure::js_closure_set_capture_ptr(closure, 2, property_name_len as i64);
+        set_bound_native_closure_name(closure, property_name);
         return crate::value::js_nanbox_pointer(closure as i64);
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+pub(crate) fn set_bound_native_closure_name(
+    closure: *mut crate::closure::ClosureHeader,
+    name: &str,
+) {
+    let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let name_value = f64::from_bits(JSValue::string_ptr(ptr).bits());
+    crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
 }
 
 /// Whitelist of (module, property) pairs for which property-read should
@@ -5650,6 +5755,29 @@ fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
             | ("url", "format")
             | ("url", "parse")
             | ("url", "resolve")
+            | ("console", "Console")
+            | ("console", "log")
+            | ("console", "info")
+            | ("console", "debug")
+            | ("console", "error")
+            | ("console", "warn")
+            | ("console", "assert")
+            | ("console", "dir")
+            | ("console", "dirxml")
+            | ("console", "trace")
+            | ("console", "table")
+            | ("console", "clear")
+            | ("console", "count")
+            | ("console", "countReset")
+            | ("console", "time")
+            | ("console", "timeEnd")
+            | ("console", "timeLog")
+            | ("console", "group")
+            | ("console", "groupCollapsed")
+            | ("console", "groupEnd")
+            | ("console", "profile")
+            | ("console", "profileEnd")
+            | ("console", "timeStamp")
     )
 }
 
@@ -5697,6 +5825,7 @@ pub extern "C" fn js_native_module_bind_method(
     crate::closure::js_closure_set_capture_f64(closure, 0, namespace_obj);
     crate::closure::js_closure_set_capture_ptr(closure, 1, heap_name as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 2, property_name_len as i64);
+    set_bound_native_closure_name(closure, property_name);
 
     crate::value::js_nanbox_pointer(closure as i64)
 }
@@ -6834,6 +6963,34 @@ pub extern "C" fn js_get_global_this() -> f64 {
     crate::value::js_nanbox_pointer(ptr)
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn js_global_or_console_property_by_name(
+    key: *const crate::StringHeader,
+) -> f64 {
+    if !key.is_null() {
+        let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let key_len = (*key).byte_len as usize;
+        let property_name =
+            std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
+        if is_native_module_callable_export("console", property_name) {
+            return js_native_module_property_by_name(
+                b"console".as_ptr(),
+                "console".len(),
+                key_ptr,
+                key_len,
+            );
+        }
+    }
+
+    let global_box = js_get_global_this();
+    let global = crate::value::JSValue::from_bits(global_box.to_bits());
+    if global.is_pointer() {
+        let obj = global.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+        return js_object_get_field_by_name_f64(obj, key);
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 /// JS built-in constructor names exposed on `globalThis`. Pre-populated by
 /// the singleton init in `js_get_global_this` so libraries that read these
 /// off the global (lodash's `var Array = context.Array; var arrayProto =
@@ -6897,7 +7054,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
 /// JS built-in namespaces (typeof === "object", not "function"). Same
 /// shape on the singleton — a backing object with `prototype` so chained
 /// reads degrade gracefully — but typeof reports "object".
-pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &["Math", "JSON", "Reflect"];
+pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &["console", "Math", "JSON", "Reflect"];
 
 /// No-op thunk used as the function body for the singleton globalThis
 /// built-in constructor values. Lets `globalThis.Array` carry a real
@@ -7094,14 +7251,18 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     }
     // Namespaces: plain ObjectHeader so typeof is "object" per spec.
     for name in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied() {
-        let ns_obj = js_object_alloc(0, 0);
-        if ns_obj.is_null() {
-            continue;
-        }
         let name_bytes = name.as_bytes();
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
-        let ns_value = crate::value::js_nanbox_pointer(ns_obj as i64);
+        let ns_value = if name == "console" {
+            js_create_native_module_namespace(name_bytes.as_ptr(), name_bytes.len())
+        } else {
+            let ns_obj = js_object_alloc(0, 0);
+            if ns_obj.is_null() {
+                continue;
+            }
+            crate::value::js_nanbox_pointer(ns_obj as i64)
+        };
         js_object_set_field_by_name(singleton, name_key, ns_value);
     }
 }

@@ -2304,9 +2304,12 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
 
         for i in 0..length as usize {
             let element = *elements_ptr.add(i);
-            // Pass both element and index to match JS forEach(element, index, array) semantics.
-            // Using call2 prevents x86_64 SIGSEGV from garbage in the uninitialized index register.
-            js_closure_call2(callback, element, i as f64);
+            // JS forEach passes (element, index, array). The callback
+            // dispatch path now supports call3 safely, so bound native
+            // methods like `array.forEach(console.log)` can observe the
+            // source array just like Node.
+            let arr_value = f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits());
+            js_closure_call3(callback, element, i as f64, arr_value);
         }
     }
 }

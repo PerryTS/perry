@@ -1281,6 +1281,7 @@ pub extern "C" fn js_object_get_field_by_name(
                     crate::closure::js_closure_set_capture_f64(closure, 0, nb_ptr);
                     crate::closure::js_closure_set_capture_ptr(closure, 1, heap_name as i64);
                     crate::closure::js_closure_set_capture_ptr(closure, 2, prop_bytes.len() as i64);
+                    super::set_bound_native_closure_name(closure, property_name);
                     return JSValue::from_bits(
                         crate::value::js_nanbox_pointer(closure as i64).to_bits(),
                     );

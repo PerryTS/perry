@@ -427,7 +427,6 @@ jobs:
             test_parity_buffer \
             test_parity_child_process \
             test_parity_cluster \
-            test_parity_console \
             test_parity_crypto \
             test_parity_dgram \
             test_parity_diagnostics_channel \

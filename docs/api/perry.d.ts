@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 998 entries across 76 modules
+// Coverage: 1021 entries across 77 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -165,6 +165,55 @@ declare module "cluster" {
 }
 
 declare module "commander" {
+}
+
+declare module "console" {
+  /** stdlib */
+  export class Console { [key: string]: any; }
+  /** stdlib */
+  export function assert(...args: any[]): any;
+  /** stdlib */
+  export function clear(...args: any[]): any;
+  /** stdlib */
+  export function count(...args: any[]): any;
+  /** stdlib */
+  export function countReset(...args: any[]): any;
+  /** stdlib */
+  export function debug(...args: any[]): any;
+  /** stdlib */
+  export function dir(...args: any[]): any;
+  /** stdlib */
+  export function dirxml(...args: any[]): any;
+  /** stdlib */
+  export function error(...args: any[]): any;
+  /** stdlib */
+  export function group(...args: any[]): any;
+  /** stdlib */
+  export function groupCollapsed(...args: any[]): any;
+  /** stdlib */
+  export function groupEnd(...args: any[]): any;
+  /** stdlib */
+  export function info(...args: any[]): any;
+  /** stdlib */
+  export function log(...args: any[]): any;
+  /** stdlib */
+  export function profile(...args: any[]): any;
+  /** stdlib */
+  export function profileEnd(...args: any[]): any;
+  /** stdlib */
+  export function table(...args: any[]): any;
+  /** stdlib */
+  export function time(...args: any[]): any;
+  /** stdlib */
+  export function timeEnd(...args: any[]): any;
+  /** stdlib */
+  export function timeLog(...args: any[]): any;
+  /** stdlib */
+  export function timeStamp(...args: any[]): any;
+  /** stdlib */
+  export function trace(...args: any[]): any;
+  /** stdlib */
+  export function warn(...args: any[]): any;
 }
 
 declare module "cron" {

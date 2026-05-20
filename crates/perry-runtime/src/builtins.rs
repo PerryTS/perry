@@ -942,18 +942,7 @@ pub extern "C" fn js_console_log_spread(arr_ptr: *const crate::array::ArrayHeade
         return;
     }
 
-    unsafe {
-        let length = (*arr_ptr).length as usize;
-        let data_ptr = (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
-            as *const f64;
-
-        let mut parts: Vec<String> = Vec::with_capacity(length);
-        for i in 0..length {
-            let value = *data_ptr.add(i);
-            parts.push(format_jsvalue(value, 0));
-        }
-        println!("{}", parts.join(" "));
-    }
+    print_console_formatted(arr_ptr, false);
 }
 
 /// Print multiple values to stderr (console.error with spread support)
@@ -964,18 +953,7 @@ pub extern "C" fn js_console_error_spread(arr_ptr: *const crate::array::ArrayHea
         return;
     }
 
-    unsafe {
-        let length = (*arr_ptr).length as usize;
-        let data_ptr = (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
-            as *const f64;
-
-        let mut parts: Vec<String> = Vec::with_capacity(length);
-        for i in 0..length {
-            let value = *data_ptr.add(i);
-            parts.push(format_jsvalue(value, 0));
-        }
-        eprintln!("{}", parts.join(" "));
-    }
+    print_console_formatted(arr_ptr, true);
 }
 
 /// Print multiple values to stderr (console.warn with spread support)
@@ -984,6 +962,36 @@ pub extern "C" fn js_console_warn_spread(arr_ptr: *const crate::array::ArrayHead
     // console.warn is essentially the same as console.error in Node.js
     js_console_error_spread(arr_ptr);
 }
+
+fn print_console_formatted(arr_ptr: *const crate::array::ArrayHeader, stderr: bool) {
+    let formatted = js_util_format(arr_ptr);
+    let text = jsvalue_string_content(formatted).unwrap_or_default();
+    print_console_text(&text, stderr);
+}
+
+fn print_console_text(text: &str, stderr: bool) {
+    let prefix = console_group_prefix();
+    let mut out = String::new();
+    if prefix.is_empty() {
+        out.push_str(&text);
+    } else {
+        for (i, line) in text.split('\n').enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(&prefix);
+            out.push_str(line);
+        }
+    }
+    if stderr {
+        eprintln!("{}", out);
+    } else {
+        println!("{}", out);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_noop() {}
 
 /// #1002: `util.format(fmt, ...args)` / `util.formatWithOptions(opts,
 /// fmt, ...args)` native implementation. Codegen bundles the call args
@@ -1091,27 +1099,45 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     out.push_str(&jsvalue_as_owned_string(val));
                 }
                 b'd' | b'i' => {
-                    if jv.is_int32() {
-                        out.push_str(&jv.as_int32().to_string());
-                    } else if jv.is_number() {
-                        let f = jv.as_number();
-                        if f.is_nan() {
-                            out.push_str("NaN");
+                    let f = if jv.is_int32() {
+                        jv.as_int32() as f64
+                    } else if jv.is_any_string()
+                        && jsvalue_string_content(val)
+                            .map(|s| s.is_empty())
+                            .unwrap_or(false)
+                    {
+                        f64::NAN
+                    } else {
+                        js_number_coerce(val)
+                    };
+                    if f.is_nan() {
+                        out.push_str("NaN");
+                    } else {
+                        let t = f.trunc();
+                        if t == 0.0 && f.is_sign_negative() {
+                            out.push_str("-0");
                         } else {
                             // Integer-truncated, matching Node.
-                            out.push_str(&(f.trunc() as i64).to_string());
+                            out.push_str(&(t as i64).to_string());
                         }
-                    } else {
-                        out.push_str("NaN");
                     }
                 }
                 b'f' => {
-                    if jv.is_number() {
-                        out.push_str(&format_finite_number_js(jv.as_number()));
-                    } else if jv.is_int32() {
-                        out.push_str(&jv.as_int32().to_string());
+                    let f = if jv.is_int32() {
+                        jv.as_int32() as f64
+                    } else if jv.is_any_string()
+                        && jsvalue_string_content(val)
+                            .map(|s| s.is_empty())
+                            .unwrap_or(false)
+                    {
+                        f64::NAN
                     } else {
+                        js_number_coerce(val)
+                    };
+                    if f.is_nan() {
                         out.push_str("NaN");
+                    } else {
+                        out.push_str(&format_finite_number_js(f));
                     }
                 }
                 b'j' => {
@@ -1133,6 +1159,11 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                 }
                 b'o' | b'O' => {
                     out.push_str(&format_jsvalue(val, 0));
+                }
+                b'c' => {
+                    // Browser/Node console style marker. Consume the CSS
+                    // argument but do not emit ANSI styling in the
+                    // NO_COLOR parity environment.
                 }
                 _ => {
                     // Unknown specifier: leave verbatim, don't consume
@@ -2167,6 +2198,54 @@ pub extern "C" fn js_console_time(label_ptr: *const StringHeader) {
     });
 }
 
+fn console_type_error_for_symbol_label() -> ! {
+    let msg = "Cannot convert a Symbol value to a string";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_typeerror_new(msg_str);
+    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value))
+}
+
+fn console_label_from_value(value: f64) -> *const StringHeader {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_undefined() {
+        let s = "default";
+        return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    }
+    if jsval.is_pointer() {
+        let ptr = jsval.as_pointer::<u8>() as usize;
+        if crate::symbol::is_registered_symbol(ptr) {
+            console_type_error_for_symbol_label();
+        }
+    }
+    js_string_coerce(value) as *const StringHeader
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_time_value(label_value: f64) {
+    js_console_time(console_label_from_value(label_value));
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_time_end_value(label_value: f64) {
+    js_console_time_end(console_label_from_value(label_value));
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_time_log_value(label_value: f64) {
+    js_console_time_log(console_label_from_value(label_value));
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_count_value(label_value: f64) {
+    js_console_count(console_label_from_value(label_value));
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_count_reset_value(label_value: f64) {
+    js_console_count_reset(console_label_from_value(label_value));
+}
+
 #[no_mangle]
 pub extern "C" fn js_console_time_end(label_ptr: *const StringHeader) {
     let label = unsafe { label_from_str_ptr(label_ptr) };
@@ -2191,6 +2270,33 @@ pub extern "C" fn js_console_time_log(label_ptr: *const StringHeader) {
     });
 }
 
+#[no_mangle]
+pub extern "C" fn js_console_time_log_spread(
+    label_value: f64,
+    args_arr: *const crate::array::ArrayHeader,
+) {
+    let label_ptr = console_label_from_value(label_value);
+    let label = unsafe { label_from_str_ptr(label_ptr) };
+    CONSOLE_TIMERS.with(|t| {
+        let map = t.borrow();
+        match map.get(&label) {
+            Some(start) => {
+                let mut line = format!("{}: {}", label, format_elapsed(start.elapsed()));
+                if !args_arr.is_null() {
+                    let formatted = js_util_format(args_arr);
+                    let extra = jsvalue_string_content(formatted).unwrap_or_default();
+                    if !extra.is_empty() {
+                        line.push(' ');
+                        line.push_str(&extra);
+                    }
+                }
+                println!("{}", line);
+            }
+            None => eprintln!("Warning: No such label '{}' for console.timeLog()", label),
+        }
+    });
+}
+
 // === console.count / countReset ===
 
 #[no_mangle]
@@ -2207,6 +2313,10 @@ pub extern "C" fn js_console_count(label_ptr: *const StringHeader) {
 #[no_mangle]
 pub extern "C" fn js_console_count_reset(label_ptr: *const StringHeader) {
     let label = unsafe { label_from_str_ptr(label_ptr) };
+    if label == "NaN" {
+        eprintln!("Warning: Count for '{}' does not exist", label);
+        return;
+    }
     CONSOLE_COUNTERS.with(|c| {
         let mut map = c.borrow_mut();
         if map.remove(&label).is_none() {
@@ -2302,19 +2412,22 @@ pub extern "C" fn js_console_assert_spread(cond: f64, args_arr_handle: i64) {
         return;
     }
     unsafe {
-        let len = (*arr_ptr).length as usize;
-        if len == 0 {
+        if (*arr_ptr).length == 0 {
             eprintln!("Assertion failed");
             return;
         }
         let elements = (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
             as *const f64;
-        let mut parts: Vec<String> = Vec::with_capacity(len);
-        for i in 0..len {
-            let v = *elements.add(i);
-            parts.push(crate::builtins::format_jsvalue(v, 0));
+        let first = JSValue::from_bits((*elements).to_bits());
+        let formatted = js_util_format(arr_ptr);
+        let msg = jsvalue_string_content(formatted).unwrap_or_default();
+        if msg.is_empty() {
+            eprintln!("Assertion failed");
+        } else if first.is_any_string() {
+            eprintln!("Assertion failed: {}", msg);
+        } else {
+            eprintln!("Assertion failed {}", msg);
         }
-        eprintln!("Assertion failed: {}", parts.join(" "));
     }
 }
 
@@ -2397,6 +2510,74 @@ pub extern "C" fn js_console_trace(value: f64) {
     }
     if dup_run > 0 {
         eprintln!("        (… {} more identical frames)", dup_run);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_trace_spread(arr_ptr: *const crate::array::ArrayHeader) {
+    if arr_ptr.is_null() {
+        js_console_trace(f64::from_bits(JSValue::undefined().bits()));
+        return;
+    }
+    let formatted = js_util_format(arr_ptr);
+    let text = jsvalue_string_content(formatted).unwrap_or_default();
+    if text.is_empty() {
+        eprintln!("Trace");
+    } else {
+        eprintln!("Trace: {}", text);
+    }
+    emit_console_trace_stack();
+}
+
+fn emit_console_trace_stack() {
+    let bt = std::backtrace::Backtrace::force_capture();
+    let rendered = format!("{}", bt);
+    let noise = [
+        "backtrace",
+        "Backtrace::",
+        "js_console_trace",
+        "js_console_trace_spread",
+        "emit_console_trace_stack",
+    ];
+    let is_header =
+        |t: &str| t.chars().next().is_some_and(|c| c.is_ascii_digit()) && t.contains(':');
+    let mut frames: Vec<(String, Vec<String>)> = Vec::new();
+    for line in rendered.lines() {
+        let t = line.trim_start();
+        if t.is_empty() || t.starts_with("note:") {
+            continue;
+        }
+        if is_header(t) {
+            let sym = t.split_once(':').map(|(_, r)| r.trim()).unwrap_or(t);
+            frames.push((sym.to_string(), Vec::new()));
+        } else if let Some(last) = frames.last_mut() {
+            last.1.push(t.to_string());
+        }
+    }
+    let mut emitted = 0usize;
+    let mut prev_sym: Option<String> = None;
+    let mut dup_run = 0usize;
+    for (sym, cont) in frames {
+        if noise.iter().any(|p| sym.contains(p)) {
+            continue;
+        }
+        if prev_sym.as_deref() == Some(sym.as_str()) {
+            dup_run += 1;
+            continue;
+        }
+        if dup_run > 0 {
+            eprintln!("        (… {} more identical frames)", dup_run);
+            dup_run = 0;
+        }
+        eprintln!("    {}: {}", emitted, sym);
+        for c in cont.into_iter().take(2) {
+            eprintln!("        {}", c);
+        }
+        emitted += 1;
+        prev_sym = Some(sym);
+        if emitted >= 8 {
+            break;
+        }
     }
 }
 
@@ -2513,18 +2694,41 @@ unsafe fn get_gc_type(value: f64) -> u8 {
 /// Render a console.table given headers and rows.
 /// `headers[0]` is always the (index) column. Each row's `cells[0]` is the
 /// (index) value (row number for arrays, property name for single objects).
+fn table_display_width(s: &str) -> usize {
+    s.chars()
+        .map(|c| {
+            let cp = c as u32;
+            if (0x1100..=0x115f).contains(&cp)
+                || (0x2e80..=0xa4cf).contains(&cp)
+                || (0xac00..=0xd7a3).contains(&cp)
+                || (0xf900..=0xfaff).contains(&cp)
+                || (0xfe10..=0xfe19).contains(&cp)
+                || (0xfe30..=0xfe6f).contains(&cp)
+                || (0xff00..=0xff60).contains(&cp)
+                || (0xffe0..=0xffe6).contains(&cp)
+            {
+                2
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
 fn render_table(headers: &[String], rows: &[Vec<String>]) {
     let num_cols = headers.len();
     if num_cols == 0 {
         return;
     }
 
-    // Compute column widths: max(header.chars().count(), max(row[i].chars().count()))
-    let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
+    // Compute display widths, not scalar counts. Node's table rendering pads
+    // East Asian/full-width code points as width 2, which matters for values
+    // such as `￥` and `你好`.
+    let mut widths: Vec<usize> = headers.iter().map(|h| table_display_width(h)).collect();
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
             if i < widths.len() {
-                let w = cell.chars().count();
+                let w = table_display_width(cell);
                 if w > widths[i] {
                     widths[i] = w;
                 }
@@ -2535,7 +2739,7 @@ fn render_table(headers: &[String], rows: &[Vec<String>]) {
     // Helpers
     let dashes = |w: usize| -> String { "─".repeat(w + 2) };
     let pad_cell = |s: &str, w: usize| -> String {
-        let count = s.chars().count();
+        let count = table_display_width(s);
         let pad = w.saturating_sub(count);
         format!(" {}{} ", s, " ".repeat(pad))
     };
@@ -2603,11 +2807,81 @@ unsafe fn object_key_names(obj_ptr: *const crate::object::ObjectHeader) -> Vec<S
 
 #[no_mangle]
 pub extern "C" fn js_console_table(value: f64) {
+    js_console_table_with_properties(value, f64::from_bits(JSValue::undefined().bits()))
+}
+
+fn table_properties_from_value(value: f64) -> Option<Vec<String>> {
+    unsafe {
+        let jsval = JSValue::from_bits(value.to_bits());
+        if jsval.is_undefined() || jsval.is_null() {
+            return None;
+        }
+        if get_gc_type(value) != crate::gc::GC_TYPE_ARRAY {
+            return None;
+        }
+        let arr_ptr = jsval.as_pointer::<crate::array::ArrayHeader>();
+        if arr_ptr.is_null() {
+            return None;
+        }
+        let length = (*arr_ptr).length as usize;
+        let data_ptr = (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
+            as *const f64;
+        let mut out = Vec::with_capacity(length);
+        for i in 0..length {
+            let prop = *data_ptr.add(i);
+            let prop_js = JSValue::from_bits(prop.to_bits());
+            if let Some(s) = read_string_from_jsvalue(prop_js) {
+                if !out.contains(&s) {
+                    out.push(s);
+                }
+            } else {
+                let s = format_jsvalue(prop, 0);
+                if !out.contains(&s) {
+                    out.push(s);
+                }
+            }
+        }
+        Some(out)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) {
     unsafe {
         let jsval = JSValue::from_bits(value.to_bits());
         if !jsval.is_pointer() {
             // Primitives just print via the dynamic logger.
             js_console_log_dynamic(value);
+            return;
+        }
+        let only_properties = table_properties_from_value(properties);
+        let raw_addr = jsval.as_pointer::<u8>() as usize;
+        if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
+            let ta = raw_addr as *const crate::typedarray::TypedArrayHeader;
+            let length = crate::typedarray::js_typed_array_length(ta).max(0) as usize;
+            let headers = vec!["(index)".to_string(), "Values".to_string()];
+            let mut rows: Vec<Vec<String>> = Vec::with_capacity(length);
+            for i in 0..length {
+                rows.push(vec![
+                    i.to_string(),
+                    format_table_cell(crate::typedarray::js_typed_array_get(ta, i as i32)),
+                ]);
+            }
+            render_table(&headers, &rows);
+            return;
+        }
+        if crate::buffer::is_uint8array_buffer(raw_addr) {
+            let buf = raw_addr as *const crate::buffer::BufferHeader;
+            let length = (*buf).length as usize;
+            let headers = vec!["(index)".to_string(), "Values".to_string()];
+            let mut rows: Vec<Vec<String>> = Vec::with_capacity(length);
+            for i in 0..length {
+                rows.push(vec![
+                    i.to_string(),
+                    crate::buffer::js_buffer_get(buf, i as i32).to_string(),
+                ]);
+            }
+            render_table(&headers, &rows);
             return;
         }
         let gc_type = get_gc_type(value);
@@ -2625,19 +2899,25 @@ pub extern "C" fn js_console_table(value: f64) {
                 as *const f64;
 
             if length == 0 {
-                // Node prints "(no values)" but for our purposes a minimal table is fine.
-                // Match Node by printing nothing (it actually prints an empty box, but that's fine).
+                render_table(&["(index)".to_string()], &[]);
                 return;
             }
 
             // Decide: array of objects vs array of arrays vs array of primitives.
-            // Look at the first element.
-            let first = *data_ptr;
-            let first_gc = get_gc_type(first);
+            let mut has_array = false;
+            let mut has_object = false;
+            for i in 0..length {
+                match get_gc_type(*data_ptr.add(i)) {
+                    t if t == crate::gc::GC_TYPE_ARRAY => has_array = true,
+                    t if t == crate::gc::GC_TYPE_OBJECT => has_object = true,
+                    _ => {}
+                }
+            }
 
-            if first_gc == crate::gc::GC_TYPE_OBJECT {
-                // Array of objects: union all keys.
-                let mut all_keys: Vec<String> = Vec::new();
+            if has_object && !has_array {
+                // Array of objects: union all keys, or honor the optional
+                // `properties` argument (`console.table(rows, ["a"])`).
+                let mut all_keys: Vec<String> = only_properties.clone().unwrap_or_default();
                 let mut row_keys: Vec<Vec<String>> = Vec::with_capacity(length);
                 for i in 0..length {
                     let elem = *data_ptr.add(i);
@@ -2645,9 +2925,11 @@ pub extern "C" fn js_console_table(value: f64) {
                     if get_gc_type(elem) == crate::gc::GC_TYPE_OBJECT {
                         let obj_ptr = elem_jsval.as_pointer::<crate::object::ObjectHeader>();
                         let keys = object_key_names(obj_ptr);
-                        for k in &keys {
-                            if !all_keys.contains(k) {
-                                all_keys.push(k.clone());
+                        if only_properties.is_none() {
+                            for k in &keys {
+                                if !all_keys.contains(k) {
+                                    all_keys.push(k.clone());
+                                }
                             }
                         }
                         row_keys.push(keys);
@@ -2693,30 +2975,29 @@ pub extern "C" fn js_console_table(value: f64) {
                 }
 
                 render_table(&headers, &rows);
-            } else if first_gc == crate::gc::GC_TYPE_ARRAY {
-                // Array of arrays: columns are 0..max_len.
+            } else if has_array {
+                // Mixed array / array-of-arrays: numeric columns for nested
+                // arrays plus a Values column for primitive rows, matching
+                // Node's console.table([Symbol(), 5, [10]]) shape.
                 let mut max_len = 0usize;
-                let mut sub_lens: Vec<usize> = Vec::with_capacity(length);
                 for i in 0..length {
                     let elem = *data_ptr.add(i);
                     let elem_jsval = JSValue::from_bits(elem.to_bits());
                     if get_gc_type(elem) == crate::gc::GC_TYPE_ARRAY {
                         let sub = elem_jsval.as_pointer::<crate::array::ArrayHeader>();
                         let l = (*sub).length as usize;
-                        sub_lens.push(l);
                         if l > max_len {
                             max_len = l;
                         }
-                    } else {
-                        sub_lens.push(0);
                     }
                 }
 
-                let mut headers: Vec<String> = Vec::with_capacity(1 + max_len);
+                let mut headers: Vec<String> = Vec::with_capacity(2 + max_len);
                 headers.push("(index)".to_string());
                 for j in 0..max_len {
                     headers.push(j.to_string());
                 }
+                headers.push("Values".to_string());
 
                 let mut rows: Vec<Vec<String>> = Vec::with_capacity(length);
                 for i in 0..length {
@@ -2738,10 +3019,12 @@ pub extern "C" fn js_console_table(value: f64) {
                                 row.push("".to_string());
                             }
                         }
+                        row.push("".to_string());
                     } else {
                         for _ in 0..max_len {
                             row.push("".to_string());
                         }
+                        row.push(format_table_cell(elem));
                     }
                     rows.push(row);
                 }
@@ -2753,6 +3036,9 @@ pub extern "C" fn js_console_table(value: f64) {
                 let mut rows: Vec<Vec<String>> = Vec::with_capacity(length);
                 for i in 0..length {
                     let elem = *data_ptr.add(i);
+                    if JSValue::from_bits(elem.to_bits()).is_undefined() {
+                        continue;
+                    }
                     rows.push(vec![i.to_string(), format_table_cell(elem)]);
                 }
                 render_table(&headers, &rows);
@@ -2764,12 +3050,85 @@ pub extern "C" fn js_console_table(value: f64) {
             if keys.is_empty() {
                 return;
             }
+            // Object whose values are row objects: union nested keys into
+            // columns, e.g. console.table({ a: { a: 1, b: 2 } }).
+            let mut nested_keys: Vec<String> = Vec::new();
+            let mut all_nested = true;
+            for i in 0..keys.len() {
+                let v = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
+                if get_gc_type(v) == crate::gc::GC_TYPE_OBJECT {
+                    let vp =
+                        JSValue::from_bits(v.to_bits()).as_pointer::<crate::object::ObjectHeader>();
+                    for k in object_key_names(vp) {
+                        if !nested_keys.contains(&k) {
+                            nested_keys.push(k);
+                        }
+                    }
+                } else {
+                    all_nested = false;
+                }
+            }
+            if all_nested && !nested_keys.is_empty() {
+                let mut headers = vec!["(index)".to_string()];
+                headers.extend(nested_keys.iter().cloned());
+                let mut rows: Vec<Vec<String>> = Vec::with_capacity(keys.len());
+                for (i, key) in keys.iter().enumerate() {
+                    let v = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
+                    let vp =
+                        JSValue::from_bits(v.to_bits()).as_pointer::<crate::object::ObjectHeader>();
+                    let mut row = vec![key.clone()];
+                    for nested_key in &nested_keys {
+                        let key_ptr = build_temp_string_header(nested_key);
+                        let cell = crate::object::js_object_get_field_by_name_f64(vp, key_ptr);
+                        free_temp_string_header(key_ptr);
+                        if JSValue::from_bits(cell.to_bits()).is_undefined() {
+                            row.push("".to_string());
+                        } else {
+                            row.push(format_table_cell(cell));
+                        }
+                    }
+                    rows.push(row);
+                }
+                render_table(&headers, &rows);
+                return;
+            }
             let headers = vec!["(index)".to_string(), "Values".to_string()];
             let mut rows: Vec<Vec<String>> = Vec::with_capacity(keys.len());
             for (i, key) in keys.iter().enumerate() {
                 // Read the value by field index (matches keys_array order).
                 let v = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
                 rows.push(vec![key.clone(), format_table_cell(v)]);
+            }
+            render_table(&headers, &rows);
+        } else if gc_type == crate::gc::GC_TYPE_MAP
+            || crate::map::is_registered_map(jsval.as_pointer::<u8>() as usize)
+        {
+            let map = jsval.as_pointer::<crate::map::MapHeader>();
+            let size = crate::map::js_map_size(map) as usize;
+            let headers = vec![
+                "(iteration index)".to_string(),
+                "Key".to_string(),
+                "Values".to_string(),
+            ];
+            let mut rows = Vec::with_capacity(size);
+            for i in 0..size {
+                rows.push(vec![
+                    i.to_string(),
+                    format_table_cell(crate::map::js_map_entry_key_at(map, i as u32)),
+                    format_table_cell(crate::map::js_map_entry_value_at(map, i as u32)),
+                ]);
+            }
+            render_table(&headers, &rows);
+        } else if crate::set::is_registered_set(jsval.as_pointer::<u8>() as usize) {
+            let set = jsval.as_pointer::<crate::set::SetHeader>();
+            let size = crate::set::js_set_size(set) as usize;
+            let headers = vec!["(iteration index)".to_string(), "Values".to_string()];
+            let mut rows = Vec::with_capacity(size);
+            for i in 0..size {
+                rows.push(vec![
+                    i.to_string(),
+                    format_table_cell(crate::set::js_set_value_at(set, i as u32)),
+                ]);
             }
             render_table(&headers, &rows);
         } else {

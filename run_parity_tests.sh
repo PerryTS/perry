@@ -259,7 +259,14 @@ for raw in sys.stdin:
         # test_gap_console_methods which have no work between start and end).
         # The optional [[:space:]]* handles Node.js v18's "N.NNN ms" format
         # (space before unit); v22 produces "N.NNNms" without.
-        sed -E 's/^([^:]+): [0-9]+(\.[0-9]+)?[[:space:]]*(μs|ms|s)$/\1: <timer>/g' | \
+        # The first pass also covers console.timeLog(label, ...data), where
+        # Node prints extra payload after the duration.
+        sed -E 's/^([^:]*): [0-9]+(\.[0-9]+)?[[:space:]]*(μs|ms|s)( .*)$/\1: <timer>\4/g' | \
+        sed -E 's/^([^:]*): [0-9]+(\.[0-9]+)?[[:space:]]*(μs|ms|s)$/\1: <timer>/g' | \
+        # Normalize console warning delivery: Node emits process warnings on
+        # stderr after the script body, while Perry writes the equivalent
+        # warning eagerly at the call site.
+        sed -E '/^(\(node:[0-9]+\) )?Warning: (Count for .* does not exist|No such label .* for console\.(timeLog|timeEnd)\(\)|Label .* already exists for console\.time\(\))/d' | \
         # Normalize console.trace output: strip stack frame lines so only
         # the "Trace: <message>" header survives for comparison.
         # Node.js emits "    at <symbol> (<location>)" JS stack frames;

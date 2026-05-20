@@ -2700,6 +2700,10 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                         ctx.block().call_void("js_console_clear", &[]);
                         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
+                    "group" | "groupCollapsed" => {
+                        ctx.block().call_void("js_console_group_begin", &[]);
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                    }
                     "count" | "countReset" | "time" | "timeEnd" | "timeLog" => {
                         // Fall through to the dedicated handler below
                         // which calls the runtime with the implicit
@@ -2724,6 +2728,11 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                             .call_void("js_console_error_spread", &[(I64, "0")]);
                         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
+                    "trace" => {
+                        let val = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        ctx.block().call_void("js_console_trace", &[(DOUBLE, &val)]);
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                    }
                     _ => {
                         // Other zero-arg console.* methods (dir, assert,
                         // etc.) — print nothing.
@@ -2746,19 +2755,39 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
             // optional message and emits a native backtrace to stderr
             // (issue #20).
             if property == "trace" {
-                let val: String = if args.is_empty() {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                if args.is_empty() {
+                    let val = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    ctx.block().call_void("js_console_trace", &[(DOUBLE, &val)]);
                 } else {
-                    lower_expr(ctx, &args[0])?
-                };
-                ctx.block().call_void("js_console_trace", &[(DOUBLE, &val)]);
+                    let cap = (args.len() as u32).to_string();
+                    let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                    for arg in args.iter() {
+                        let v = lower_expr(ctx, arg)?;
+                        let blk = ctx.block();
+                        current_arr = blk.call(
+                            I64,
+                            "js_array_push_f64",
+                            &[(I64, &current_arr), (DOUBLE, &v)],
+                        );
+                    }
+                    ctx.block()
+                        .call_void("js_console_trace_spread", &[(I64, &current_arr)]);
+                }
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
-            // console.table(data) — dedicated table renderer.
-            if property == "table" && args.len() == 1 {
+            // console.table(data[, properties]) — dedicated table renderer.
+            if property == "table" && (args.len() == 1 || args.len() == 2) {
                 let v = lower_expr(ctx, &args[0])?;
-                ctx.block().call_void("js_console_table", &[(DOUBLE, &v)]);
-                return Ok("0.0".to_string());
+                if args.len() == 2 {
+                    let props = lower_expr(ctx, &args[1])?;
+                    ctx.block().call_void(
+                        "js_console_table_with_properties",
+                        &[(DOUBLE, &v), (DOUBLE, &props)],
+                    );
+                } else {
+                    ctx.block().call_void("js_console_table", &[(DOUBLE, &v)]);
+                }
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             // console.time(label) / timeEnd(label) / timeLog(label) —
             // dedicated timer functions that track per-label Instants
@@ -2768,21 +2797,37 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
             if matches!(
                 property.as_str(),
                 "time" | "timeEnd" | "timeLog" | "count" | "countReset"
-            ) && args.len() == 1
+            ) && !args.is_empty()
             {
                 let v = lower_expr(ctx, &args[0])?;
-                let blk = ctx.block();
-                let handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v)]);
+                if property == "timeLog" && args.len() > 1 {
+                    let cap = ((args.len() - 1) as u32).to_string();
+                    let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                    for arg in args.iter().skip(1) {
+                        let extra = lower_expr(ctx, arg)?;
+                        let blk = ctx.block();
+                        current_arr = blk.call(
+                            I64,
+                            "js_array_push_f64",
+                            &[(I64, &current_arr), (DOUBLE, &extra)],
+                        );
+                    }
+                    ctx.block().call_void(
+                        "js_console_time_log_spread",
+                        &[(DOUBLE, &v), (I64, &current_arr)],
+                    );
+                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                }
                 let runtime_fn = match property.as_str() {
-                    "time" => "js_console_time",
-                    "timeEnd" => "js_console_time_end",
-                    "timeLog" => "js_console_time_log",
-                    "count" => "js_console_count",
-                    "countReset" => "js_console_count_reset",
+                    "time" => "js_console_time_value",
+                    "timeEnd" => "js_console_time_end_value",
+                    "timeLog" => "js_console_time_log_value",
+                    "count" => "js_console_count_value",
+                    "countReset" => "js_console_count_reset_value",
                     _ => unreachable!(),
                 };
-                blk.call_void(runtime_fn, &[(I64, &handle)]);
-                return Ok("0.0".to_string());
+                ctx.block().call_void(runtime_fn, &[(DOUBLE, &v)]);
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             // Zero-arg time* / count* use the default label "default".
             if matches!(
@@ -2804,7 +2849,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     _ => unreachable!(),
                 };
                 blk.call_void(runtime_fn, &[(I64, &handle)]);
-                return Ok("0.0".to_string());
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             // console.assert(cond[, ...messages]) — runtime helper
             // checks the condition and only prints "Assertion failed: msg"
@@ -2824,18 +2869,9 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 } else {
                     lower_expr(ctx, &args[0])?
                 };
-                if args.len() <= 2 {
-                    let msg_handle = if args.len() == 2 {
-                        let msg_v = lower_expr(ctx, &args[1])?;
-                        let blk = ctx.block();
-                        blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &msg_v)])
-                    } else {
-                        "0".to_string()
-                    };
-                    ctx.block().call_void(
-                        "js_console_assert",
-                        &[(DOUBLE, &cond_v), (I64, &msg_handle)],
-                    );
+                if args.len() <= 1 {
+                    ctx.block()
+                        .call_void("js_console_assert", &[(DOUBLE, &cond_v), (I64, "0")]);
                 } else {
                     // Multi-arg messages: bundle args[1..] into a heap
                     // array and call the spread variant.
@@ -2878,22 +2914,24 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
             // routes to its matching runtime fn (and stream).
             if args.len() == 1 {
                 let arg = &args[0];
-                let is_number_literal = matches!(arg, Expr::Integer(_) | Expr::Number(_));
                 let v = if let Some(v) = lower_util_types_predicate_arg(ctx, arg)? {
                     v
                 } else {
                     lower_expr(ctx, arg)?
                 };
-                let runtime_fn = match (property.as_str(), is_number_literal) {
-                    ("error", true) => "js_console_error_number",
-                    ("error", false) => "js_console_error_dynamic",
-                    ("warn", true) => "js_console_warn_number",
-                    ("warn", false) => "js_console_warn_dynamic",
-                    (_, true) => "js_console_log_number",
-                    (_, false) => "js_console_log_dynamic",
+                let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, "1")]);
+                current_arr = ctx.block().call(
+                    I64,
+                    "js_array_push_f64",
+                    &[(I64, &current_arr), (DOUBLE, &v)],
+                );
+                let runtime_fn = match property.as_str() {
+                    "warn" => "js_console_warn_spread",
+                    "error" => "js_console_error_spread",
+                    _ => "js_console_log_spread",
                 };
-                ctx.block().call_void(runtime_fn, &[(DOUBLE, &v)]);
-                return Ok("0.0".to_string());
+                ctx.block().call_void(runtime_fn, &[(I64, &current_arr)]);
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             // Multi-arg: bundle all args into a heap array and call
             // js_console_log_spread, which uses the runtime's
@@ -2922,7 +2960,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 _ => "js_console_log_spread",
             };
             ctx.block().call_void(runtime_fn, &[(I64, &current_arr)]);
-            return Ok("0.0".to_string());
+            return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
         }
     }
 

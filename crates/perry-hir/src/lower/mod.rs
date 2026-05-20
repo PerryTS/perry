@@ -1238,6 +1238,12 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         }
                     }
                 }
+                if let Some(method) = method_name {
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
+                        property: method.to_string(),
+                    });
+                }
                 // Native module reference (e.g., mysql from 'mysql2/promise')
                 Ok(Expr::NativeModuleRef(module_name.to_string()))
             } else if let Some(orig_name) = ctx.lookup_imported_func(&name) {
@@ -1789,8 +1795,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 let elements = array
                     .elems
                     .iter()
-                    .filter_map(|elem| elem.as_ref())
-                    .map(|elem| lower_expr(ctx, &elem.expr))
+                    .map(|elem| match elem.as_ref() {
+                        Some(elem) => lower_expr(ctx, &elem.expr),
+                        None => Ok(Expr::Undefined),
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Expr::Array(elements))
             }

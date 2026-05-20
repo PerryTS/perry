@@ -498,7 +498,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_reg_exp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_getenv", I64, &[I64]);
     module.declare_function("js_console_table", VOID, &[DOUBLE]);
+    module.declare_function("js_console_table_with_properties", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_console_trace", VOID, &[DOUBLE]);
+    module.declare_function("js_console_trace_spread", VOID, &[I64]);
     // process.* — see `perry-runtime/src/os.rs` and `perry-runtime/src/process.rs`.
     // Most process accessors return raw pointers (I64) that the call site
     // must NaN-box. The ones that return already-boxed f64 values
@@ -996,6 +998,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // The codegen IndexGet/IndexSet paths on `Expr::GlobalGet` route
     // through this helper.
     module.declare_function("js_get_global_this", DOUBLE, &[]);
+    module.declare_function("js_global_or_console_property_by_name", DOUBLE, &[I64]);
     // Refs #420: register a static computed-key Symbol field on a class.
     // Called from `init_static_fields` for each `static [Symbol.X] = init`.
     module.declare_function(
@@ -1316,11 +1319,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_console_time", VOID, &[I64]);
     module.declare_function("js_console_time_end", VOID, &[I64]);
     module.declare_function("js_console_time_log", VOID, &[I64]);
+    module.declare_function("js_console_time_value", VOID, &[DOUBLE]);
+    module.declare_function("js_console_time_end_value", VOID, &[DOUBLE]);
+    module.declare_function("js_console_time_log_value", VOID, &[DOUBLE]);
+    module.declare_function("js_console_time_log_spread", VOID, &[DOUBLE, I64]);
     module.declare_function("js_console_count", VOID, &[I64]);
     module.declare_function("js_console_count_reset", VOID, &[I64]);
+    module.declare_function("js_console_count_value", VOID, &[DOUBLE]);
+    module.declare_function("js_console_count_reset_value", VOID, &[DOUBLE]);
     module.declare_function("js_console_group_begin", VOID, &[]);
     module.declare_function("js_console_group_end", VOID, &[]);
     module.declare_function("js_console_clear", VOID, &[]);
+    module.declare_function("js_console_noop", VOID, &[]);
     // Universal PropertyGet method dispatch fallback — routes
     // `recv.method(args)` to the runtime's dispatcher when no static
     // codegen path fires. Used by Map/Set methods on plain object fields.

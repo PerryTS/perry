@@ -159,6 +159,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Response"
             | "FinalizationRegistry"
             // Namespaces (typeof === "object" in spec).
+            | "console"
             | "Math"
             | "JSON"
             | "Reflect"
@@ -171,7 +172,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
 /// namespaces — they keep `typeof === "object"` via the existing match
 /// arms.
 pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
-    is_global_this_builtin_name(name) && !matches!(name, "Math" | "JSON" | "Reflect")
+    is_global_this_builtin_name(name) && !matches!(name, "console" | "Math" | "JSON" | "Reflect")
 }
 
 /// SSO-safe variant of `unbox_to_i64` for NaN-boxed string operands.
