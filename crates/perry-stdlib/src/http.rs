@@ -758,16 +758,28 @@ pub unsafe extern "C" fn js_http_response_headers(handle: Handle) -> f64 {
 /// Process pending HTTP events on the main thread.
 /// Called from js_stdlib_process_pending().
 /// Returns number of events processed.
+///
+/// #1114 followup: same per-tick scratch-Vec discipline as the fastify
+/// (e538caa7), net, and ws pumps. Called every event-loop iteration +
+/// every inline `await` poll iteration; the original
+/// `Vec::drain(..).collect()` was a per-call heap alloc that contributed
+/// to the GC `madvise` churn under sustained HTTP client traffic.
 #[no_mangle]
 pub unsafe extern "C" fn js_http_process_pending() -> i32 {
-    let events: Vec<PendingHttpEvent> = {
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<Vec<PendingHttpEvent>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut events = SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    events.clear();
+    {
         let mut guard = HTTP_PENDING_EVENTS.lock().unwrap();
-        guard.drain(..).collect()
-    };
+        events.append(&mut *guard);
+    }
 
     let count = events.len() as i32;
 
-    for event in events {
+    for event in events.drain(..) {
         match event {
             PendingHttpEvent::Response {
                 request_handle,
@@ -887,6 +899,16 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
             }
         }
     }
+
+    // Restore the (capacity-retaining) buffer to the thread-local so the
+    // next tick reuses it. A re-entrant pump call during dispatch may
+    // have left a grown buffer in the slot — keep whichever is larger.
+    SCRATCH.with(|s| {
+        let mut slot = s.borrow_mut();
+        if events.capacity() >= slot.capacity() {
+            *slot = events;
+        }
+    });
 
     count
 }

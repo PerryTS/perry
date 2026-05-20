@@ -1565,15 +1565,32 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
 /// happens HERE on the main thread, never in the tokio read task.
 ///
 /// Returns the number of events fired in this pass.
+///
+/// #1114 followup (mysql wedge): this pump runs on EVERY iteration of
+/// the generated event loop AND every iteration of every inline `await`
+/// poll loop. `@perryts/mysql` (pure-TS driver) drives all its bytes
+/// through `net.Socket`, so under a `setInterval` + async-query JobLoop
+/// this function is the dominant per-tick path. The original
+/// `Vec::drain(..).collect()` allocated a fresh Vec every call
+/// (mirroring the fastify wedge that e538caa7 fixed) → GC `madvise`
+/// page-churn. Reuse a per-thread scratch buffer (moved out across
+/// dispatch so a re-entrant pump from inside a user callback is safe;
+/// capacity retained → zero steady-state allocation).
 #[no_mangle]
 pub unsafe extern "C" fn js_net_process_pending() -> i32 {
-    let events: Vec<PendingNetEvent> = {
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<Vec<PendingNetEvent>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut events = SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    events.clear();
+    {
         let mut g = statics::pending_events().lock().unwrap();
-        g.drain(..).collect()
-    };
+        events.append(&mut *g);
+    }
     let count = events.len() as i32;
 
-    for ev in events {
+    for ev in events.drain(..) {
         match ev {
             PendingNetEvent::Connect(id) => {
                 for cb in listeners_for(id, "connect") {
@@ -1715,6 +1732,16 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
             }
         }
     }
+
+    // Restore the (capacity-retaining) buffer to the thread-local so the
+    // next tick reuses it. A re-entrant pump call during dispatch may
+    // have left a grown buffer in the slot — keep whichever is larger.
+    SCRATCH.with(|s| {
+        let mut slot = s.borrow_mut();
+        if events.capacity() >= slot.capacity() {
+            *slot = events;
+        }
+    });
 
     count
 }

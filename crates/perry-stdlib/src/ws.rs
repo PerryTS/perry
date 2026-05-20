@@ -1139,17 +1139,32 @@ pub fn js_ws_has_active_handles() -> i32 {
 /// Process pending WebSocket events (called from js_stdlib_process_pending)
 /// Drains the event queue and invokes closures on the main thread.
 /// Returns number of events processed.
+///
+/// #1114 followup: same per-tick scratch-Vec discipline as the fastify
+/// (e538caa7) and net (this PR) pumps. Called every event-loop iteration
+/// + every inline `await` poll iteration; the original
+/// `Vec::drain(..).collect()` was a per-call heap alloc that contributed
+/// to the GC `madvise` churn observed under shop-admin's realtime WS
+/// broker + JobLoop combo. Reuse a per-thread scratch buffer (moved out
+/// across dispatch so a re-entrant pump from inside a user callback is
+/// safe).
 #[cfg(not(target_os = "ios"))]
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
-    let events: Vec<PendingWsEvent> = {
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<Vec<PendingWsEvent>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut events = SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    events.clear();
+    {
         let mut guard = WS_PENDING_EVENTS.lock().unwrap();
-        guard.drain(..).collect()
-    };
+        events.append(&mut *guard);
+    }
 
     let count = events.len() as i32;
 
-    for event in events {
+    for event in events.drain(..) {
         match event {
             PendingWsEvent::Connection(server_handle, client_ws_id) => {
                 // Get 'connection' listeners from server
@@ -1316,6 +1331,16 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
             }
         }
     }
+
+    // Restore the (capacity-retaining) buffer to the thread-local so the
+    // next tick reuses it. A re-entrant pump call during dispatch may
+    // have left a grown buffer in the slot — keep whichever is larger.
+    SCRATCH.with(|s| {
+        let mut slot = s.borrow_mut();
+        if events.capacity() >= slot.capacity() {
+            *slot = events;
+        }
+    });
 
     count
 }
