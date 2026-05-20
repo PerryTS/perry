@@ -337,11 +337,11 @@ pub const GC_FLAG_INTERNED: u8 = 0x10;
 /// pointer machinery), but the trace pretends they're old-gen.
 /// True compacting evacuation lands in Phase C4b.
 pub const GC_FLAG_TENURED: u8 = 0x20;
-/// Gen-GC Phase C4: object has survived exactly one minor GC.
-/// Set during the post-trace age-bump pass; on the next minor GC,
-/// the age-bump pass observes this flag and promotes the object
-/// to TENURED. Two-bit aging (HAS_SURVIVED → TENURED) gives
-/// PROMOTION_AGE=2 without needing a counter field.
+/// Gen-GC Phase C4: object has survived at least one minor GC.
+/// The non-copying minor path still uses this as its one-bit
+/// pre-tenure state; the copied-nursery path stores its exact
+/// short age in `_reserved` so loop-carried transients get one
+/// extra survivor cycle before old-gen promotion.
 pub const GC_FLAG_HAS_SURVIVED: u8 = 0x40;
 /// Object's user payload begins with a forwarding address. The new
 /// address is stored in the **user-payload's first 8 bytes**
@@ -416,6 +416,13 @@ pub unsafe fn set_forwarding_address(header: *mut GcHeader, new_user_addr: *mut 
 pub const OBJ_FLAG_FROZEN: u16 = 0x01;
 pub const OBJ_FLAG_SEALED: u16 = 0x02;
 pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
+
+// Copied-nursery survival age stored in otherwise-unused low
+// GcHeader._reserved bits. Bits 0..2 remain object freeze/seal flags
+// and bits 14..15 remain layout state.
+const GC_COPY_SURVIVAL_AGE_SHIFT: usize = 3;
+const GC_COPY_SURVIVAL_AGE_MASK: u16 = 0x0038;
+const GC_COPY_PROMOTION_SURVIVALS: u8 = 4;
 
 // Pointer-slot layout state stored in the high bits of GcHeader._reserved.
 // Low bits remain object freeze/seal/preventExtensions flags.
@@ -987,6 +994,8 @@ impl GcCollectionKind {
 enum GcTriggerKind {
     ArenaBytes,
     MallocCount,
+    OldGenBytes,
+    SurvivorPromotionBytes,
     Manual,
     Direct,
 }
@@ -997,6 +1006,8 @@ impl GcTriggerKind {
         match self {
             GcTriggerKind::ArenaBytes => "arena_bytes",
             GcTriggerKind::MallocCount => "malloc_count",
+            GcTriggerKind::OldGenBytes => "old_gen_bytes",
+            GcTriggerKind::SurvivorPromotionBytes => "survivor_promotion_bytes",
             GcTriggerKind::Manual => "manual",
             GcTriggerKind::Direct => "direct",
         }
@@ -1009,6 +1020,7 @@ enum DeferredGcRequest {
     CheckTrigger,
     DirectMinor,
     Collect(GcTriggerKind),
+    FullCollect(GcTriggerKind),
 }
 
 impl DeferredGcRequest {
@@ -1021,6 +1033,8 @@ impl DeferredGcRequest {
             (Collect(GcTriggerKind::Manual), _) | (_, Collect(GcTriggerKind::Manual)) => {
                 Collect(GcTriggerKind::Manual)
             }
+            (FullCollect(kind), _) => FullCollect(kind),
+            (_, FullCollect(kind)) => FullCollect(kind),
             (Collect(kind), _) => Collect(kind),
             (_, Collect(kind)) => Collect(kind),
             (DirectMinor, _) | (_, DirectMinor) => DirectMinor,
@@ -1071,7 +1085,13 @@ thread_local! {
     static GC_ROOT_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
     static GC_DEFERRED_REQUEST: Cell<DeferredGcRequest> =
         const { Cell::new(DeferredGcRequest::None) };
+    static GC_OLD_RECLAIM_PENDING: Cell<bool> = const { Cell::new(false) };
+    static GC_LAST_OLD_RECLAIM_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
 }
+
+const GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES: usize = 48 * 1024 * 1024;
+const GC_OLD_GEN_RECLAIM_GROWTH_BYTES: usize = 32 * 1024 * 1024;
+const GC_COPY_PROMOTION_HANDOFF_MIN_BYTES: usize = 24 * 1024 * 1024;
 
 /// Guard returned by `lock_gc_root_registry`.
 ///
@@ -1177,6 +1197,10 @@ fn flush_deferred_gc_request() {
         }
         DeferredGcRequest::Collect(kind) => {
             gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(kind)).emit_after_current();
+        }
+        DeferredGcRequest::FullCollect(kind) => {
+            gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(kind))
+                .emit_after_current();
         }
     }
 }
@@ -3002,6 +3026,10 @@ pub fn gc_bump_malloc_trigger() {
 /// not immediately after the previous one, otherwise the parse result is still
 /// rooted and every churn block looks partially live.
 pub fn gc_collect_pending_suppressed_parse() {
+    if gc_collect_pending_old_reclaim() {
+        return;
+    }
+
     let pending = GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| {
         let was_pending = pending.get();
         pending.set(false);
@@ -3022,6 +3050,111 @@ pub fn gc_collect_pending_suppressed_parse() {
         }
     });
     gc_check_trigger();
+}
+
+/// Schedule a collection for the next JSON.parse boundary.
+///
+/// Direct parse + stringify churn creates a full JS object graph, then walks it
+/// immediately. If the arena trigger fires during that stringify, copied-minor
+/// has to copy the just-parsed tree even though it dies at the end of the loop
+/// body. Deferring the collection to the next parse boundary lets the caller's
+/// loop-scope roots clear first, so the collector reclaims the previous tree
+/// without promoting or repeatedly copying transient JSON data.
+pub fn gc_schedule_parse_boundary_collection_if_pressure() {
+    if !gen_gc_enabled() {
+        return;
+    }
+    if crate::arena::arena_in_use_bytes() < GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES {
+        return;
+    }
+    GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
+}
+
+#[inline]
+fn old_reclaim_pressure_due(old_in_use: usize, baseline: usize) -> bool {
+    (old_in_use >= GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES
+        && baseline < GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES)
+        || old_in_use.saturating_sub(baseline) >= GC_OLD_GEN_RECLAIM_GROWTH_BYTES
+}
+
+#[inline]
+fn copied_minor_promotion_handoff_pressure_due(
+    promotable_bytes: usize,
+    old_in_use: usize,
+    baseline: usize,
+) -> bool {
+    promotable_bytes >= GC_COPY_PROMOTION_HANDOFF_MIN_BYTES
+        && old_reclaim_pressure_due(old_in_use.saturating_add(promotable_bytes), baseline)
+}
+
+fn copied_minor_promotable_active_survivor_bytes() -> usize {
+    let active_range = crate::arena::active_survivor_block_index_range();
+    let mut promotable = 0usize;
+    crate::arena::arena_walk_objects_with_block_index(|header_ptr, block_idx| {
+        if !active_range.contains(&block_idx) {
+            return;
+        }
+        let header = header_ptr as *mut GcHeader;
+        unsafe {
+            let flags = (*header).gc_flags;
+            if flags & GC_FLAG_FORWARDED != 0 {
+                return;
+            }
+            let prior_age = copied_survival_age((*header)._reserved, flags);
+            let next_age = prior_age.saturating_add(1);
+            if flags & GC_FLAG_TENURED != 0 || next_age >= GC_COPY_PROMOTION_SURVIVALS {
+                promotable = promotable.saturating_add((*header).size as usize);
+            }
+        }
+    });
+    promotable
+}
+
+fn copied_minor_promotion_handoff_due(trigger_kind: GcTriggerKind) -> bool {
+    if !matches!(
+        trigger_kind,
+        GcTriggerKind::ArenaBytes | GcTriggerKind::MallocCount
+    ) {
+        return false;
+    }
+    if crate::arena::copying_active_survivor_in_use_bytes() < GC_COPY_PROMOTION_HANDOFF_MIN_BYTES {
+        return false;
+    }
+    let promotable = copied_minor_promotable_active_survivor_bytes();
+    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
+    copied_minor_promotion_handoff_pressure_due(promotable, old_in_use, baseline)
+}
+
+fn maybe_schedule_old_reclaim_after_copied_minor() {
+    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
+    if old_reclaim_pressure_due(old_in_use, baseline) {
+        GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
+    }
+}
+
+fn finish_full_old_reclaim_baseline() {
+    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+}
+
+fn gc_collect_pending_old_reclaim() -> bool {
+    if !GC_OLD_RECLAIM_PENDING.with(|pending| pending.get()) {
+        return false;
+    }
+    if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0 {
+        return false;
+    }
+    if defer_gc_request(DeferredGcRequest::FullCollect(GcTriggerKind::OldGenBytes)) {
+        return false;
+    }
+
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::OldGenBytes))
+        .emit_after_current();
+    true
 }
 
 fn gc_bump_malloc_trigger_with_snapshot(current: usize, bytes_now: usize) -> bool {
@@ -3091,6 +3224,9 @@ pub fn gc_check_trigger() {
         return;
     }
     if defer_gc_request(DeferredGcRequest::CheckTrigger) {
+        return;
+    }
+    if gc_collect_pending_old_reclaim() {
         return;
     }
     use crate::arena::arena_total_bytes;
@@ -3428,6 +3564,20 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         f.set(prev | GC_FLAG_IN_ALLOC);
         prev & GC_FLAG_IN_ALLOC
     });
+    if copied_minor_promotion_handoff_due(trigger.kind) {
+        let outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
+            GcTriggerKind::SurvivorPromotionBytes,
+        ));
+        GC_FLAGS.with(|f| {
+            let cur = f.get();
+            if prev_in_alloc != 0 {
+                f.set(cur | GC_FLAG_IN_ALLOC);
+            } else {
+                f.set(cur & !GC_FLAG_IN_ALLOC);
+            }
+        });
+        return outcome;
+    }
     let mut trace = GcCycleTrace::new(GcCollectionKind::Minor, trigger);
     let start = Instant::now();
     crate::arena::old_pages_begin_gc_cycle();
@@ -3807,6 +3957,11 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     if gen_gc_enabled() {
         return gc_collect_minor_with_trigger(trigger);
     }
+    gc_collect_full_mark_sweep_with_trigger(trigger)
+}
+
+fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    GC_TRIGGER_BUMPED.with(|c| c.set(false));
     let mut trace = GcCycleTrace::new(GcCollectionKind::Full, trigger);
     let start = Instant::now();
     crate::arena::old_pages_begin_gc_cycle();
@@ -3877,7 +4032,7 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     // The sweep walk clears mark bits on surviving objects inline,
     // eliminating 2 redundant heap walks (arena + malloc).
     let phase_start = trace_phase_start(&trace);
-    let sweep = sweep_with_age_bump(false);
+    let sweep = sweep_with_age_bump_and_old_reclaim(false, true);
     trace_phase_record(&mut trace, "sweep", phase_start);
     let freed_bytes = sweep.freed_bytes;
     if let Some(trace) = trace.as_mut() {
@@ -3924,6 +4079,7 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         trace.pause_us = elapsed_us;
         trace.capture_layout_scans();
     }
+    finish_full_old_reclaim_baseline();
     GcCollectOutcome {
         freed_bytes,
         malloc_swept: true,
@@ -4225,6 +4381,28 @@ unsafe fn set_layout_state(header: *mut GcHeader, state: u16) {
 }
 
 #[inline]
+fn copied_survival_age(reserved: u16, flags: u8) -> u8 {
+    if flags & GC_FLAG_TENURED != 0 {
+        return GC_COPY_PROMOTION_SURVIVALS;
+    }
+    let encoded = ((reserved & GC_COPY_SURVIVAL_AGE_MASK) >> GC_COPY_SURVIVAL_AGE_SHIFT) as u8;
+    if encoded != 0 {
+        return encoded;
+    }
+    if flags & GC_FLAG_HAS_SURVIVED != 0 {
+        1
+    } else {
+        0
+    }
+}
+
+#[inline]
+fn reserved_with_copied_survival_age(reserved: u16, age: u8) -> u16 {
+    let capped = age.min(7) as u16;
+    (reserved & !GC_COPY_SURVIVAL_AGE_MASK) | (capped << GC_COPY_SURVIVAL_AGE_SHIFT)
+}
+
+#[inline]
 fn strip_nanbox_user_ptr(bits: u64) -> usize {
     if (bits >> 48) >= 0x7FF8 {
         (bits & POINTER_MASK) as usize
@@ -4278,8 +4456,10 @@ unsafe fn layout_side_mask_worth_tracking(
     user_ptr: usize,
     slot_index: usize,
 ) -> bool {
+    let slot_capacity = layout_slot_capacity_for_user(header, user_ptr);
     slot_index >= GC_LAYOUT_SIDE_MASK_MIN_SLOTS
-        || layout_slot_capacity_for_user(header, user_ptr) >= GC_LAYOUT_SIDE_MASK_MIN_SLOTS
+        || slot_capacity >= GC_LAYOUT_SIDE_MASK_MIN_SLOTS
+        || ((*header).obj_type == GC_TYPE_ARRAY && slot_capacity <= 1 && slot_index == 0)
 }
 
 pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
@@ -4299,7 +4479,14 @@ pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
+    let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
+    if state == GC_LAYOUT_UNKNOWN {
+        return;
+    }
     set_layout_state(header, GC_LAYOUT_UNKNOWN);
+    if state == GC_LAYOUT_POINTER_FREE {
+        return;
+    }
     LAYOUT_SLOT_MASKS.with(|m| {
         m.borrow_mut().remove(&(user_ptr as usize));
     });
@@ -4362,6 +4549,15 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 layout_set_typed_unknown(header, parent_user);
                 return;
             }
+            return;
+        }
+        let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
+        if state == GC_LAYOUT_SIDE_MASK
+            && (*header).obj_type == GC_TYPE_ARRAY
+            && layout_slot_capacity_for_user(header, parent_user) < GC_LAYOUT_SIDE_MASK_MIN_SLOTS
+            && !layout_side_mask_worth_tracking(header, parent_user, slot_index)
+        {
+            layout_set_typed_unknown(header, parent_user);
             return;
         }
         if !pointer && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
@@ -4535,10 +4731,11 @@ pub extern "C" fn js_gc_init_unboxed_object_layout(
     }
 }
 
-pub(crate) unsafe fn layout_rebuild_from_slots(
+unsafe fn layout_rebuild_from_slots_with_policy(
     user_ptr: *mut u8,
     slots: *const u64,
     slot_count: usize,
+    exact_small_mixed: bool,
 ) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
@@ -4570,7 +4767,7 @@ pub(crate) unsafe fn layout_rebuild_from_slots(
         LAYOUT_SLOT_MASKS.with(|m| {
             m.borrow_mut().remove(&(user_ptr as usize));
         });
-    } else if slot_count < GC_LAYOUT_SIDE_MASK_MIN_SLOTS {
+    } else if !exact_small_mixed && slot_count != 1 && slot_count < GC_LAYOUT_SIDE_MASK_MIN_SLOTS {
         set_layout_state(header, GC_LAYOUT_UNKNOWN);
         LAYOUT_SLOT_MASKS.with(|m| {
             m.borrow_mut().remove(&(user_ptr as usize));
@@ -4581,6 +4778,22 @@ pub(crate) unsafe fn layout_rebuild_from_slots(
             m.borrow_mut().insert(user_ptr as usize, mask);
         });
     }
+}
+
+pub(crate) unsafe fn layout_rebuild_from_slots(
+    user_ptr: *mut u8,
+    slots: *const u64,
+    slot_count: usize,
+) {
+    layout_rebuild_from_slots_with_policy(user_ptr, slots, slot_count, false);
+}
+
+pub(crate) unsafe fn layout_rebuild_exact_from_slots(
+    user_ptr: *mut u8,
+    slots: *const u64,
+    slot_count: usize,
+) {
+    layout_rebuild_from_slots_with_policy(user_ptr, slots, slot_count, true);
 }
 
 pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
@@ -7469,8 +7682,9 @@ impl CopyingNurseryCollector {
 
         let total = (*header).size as usize;
         let payload = total - GC_HEADER_SIZE;
-        let promote = matches!(ptr.kind, CopyingPointerKind::FromSurvivor)
-            || flags & (GC_FLAG_HAS_SURVIVED | GC_FLAG_TENURED) != 0;
+        let prior_age = copied_survival_age((*header)._reserved, flags);
+        let next_age = prior_age.saturating_add(1);
+        let promote = flags & GC_FLAG_TENURED != 0 || next_age >= GC_COPY_PROMOTION_SURVIVALS;
         let new_user = if promote {
             crate::arena::arena_alloc_gc_old(payload, 8, (*header).obj_type)
         } else {
@@ -7479,7 +7693,14 @@ impl CopyingNurseryCollector {
         std::ptr::copy_nonoverlapping(old_user, new_user, payload);
 
         let new_header = header_from_user_ptr(new_user);
-        (*new_header)._reserved = (*header)._reserved;
+        (*new_header)._reserved = reserved_with_copied_survival_age(
+            (*header)._reserved,
+            if promote {
+                GC_COPY_PROMOTION_SURVIVALS
+            } else {
+                next_age
+            },
+        );
         layout_transfer(old_user, new_user);
         let preserved = flags & (GC_FLAG_SHAPE_SHARED | GC_FLAG_INTERNED | GC_FLAG_PINNED);
         (*new_header).gc_flags = GC_FLAG_ARENA
@@ -8107,6 +8328,7 @@ fn gc_collect_minor_copying_fast_path(
         trace.pause_us = start.elapsed().as_micros() as u64;
         trace.capture_layout_scans();
     }
+    maybe_schedule_old_reclaim_after_copied_minor();
     Some(CopiedMinorFastPathOutcome {
         freed_bytes,
         malloc_swept: malloc_sweep_due,
@@ -8792,6 +9014,20 @@ fn sweep_malloc_objects() -> u64 {
 /// in the original standalone age-bump pass (which used `pointer_in_old_gen`
 /// for the same gate).
 fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
+    sweep_with_age_bump_and_old_reclaim(do_age_bump, false)
+}
+
+unsafe fn invalidate_dead_old_arena_header(header: *mut GcHeader, total_size: usize) {
+    crate::arena::unregister_old_object_pages(header as usize, total_size);
+    (*header).obj_type = 0;
+    (*header).gc_flags = 0;
+    (*header)._reserved = 0;
+}
+
+fn sweep_with_age_bump_and_old_reclaim(
+    do_age_bump: bool,
+    reclaim_dead_old_blocks: bool,
+) -> SweepTraceStats {
     let mut freed_bytes = sweep_malloc_objects();
     let mut retained_forwarded_stub_objects: usize = 0;
     let mut retained_forwarded_stub_bytes: usize = 0;
@@ -8878,7 +9114,8 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
             // off the 1.6 M-object-per-cycle sweep walk.
             if flags == 0 {
                 let total_size = (*header).size as usize;
-                if block_idx >= old_block_start {
+                let dead_old = block_idx >= old_block_start;
+                if dead_old {
                     crate::arena::old_page_account_swept_object(
                         header as usize,
                         total_size,
@@ -8891,6 +9128,9 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
                 layout_clear_for_ptr(user_ptr as usize);
                 if overflow_active && (*header).obj_type == GC_TYPE_OBJECT {
                     crate::object::clear_overflow_for_ptr(user_ptr as usize);
+                }
+                if reclaim_dead_old_blocks && dead_old {
+                    invalidate_dead_old_arena_header(header, total_size);
                 }
                 return;
             }
@@ -8947,7 +9187,8 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
                     (*header).gc_flags = flags & !GC_FLAG_MARKED;
                 } else {
                     let total_size = (*header).size as usize;
-                    if block_idx >= old_block_start {
+                    let dead_old = block_idx >= old_block_start;
+                    if dead_old {
                         crate::arena::old_page_account_swept_object(
                             header as usize,
                             total_size,
@@ -8961,13 +9202,18 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
                     if overflow_active && (*header).obj_type == GC_TYPE_OBJECT {
                         crate::object::clear_overflow_for_ptr(user_ptr as usize);
                     }
-                    (*header).gc_flags = flags & !(GC_FLAG_FORWARDED | GC_FLAG_MARKED);
+                    if reclaim_dead_old_blocks && dead_old {
+                        invalidate_dead_old_arena_header(header, total_size);
+                    } else {
+                        (*header).gc_flags = flags & !(GC_FLAG_FORWARDED | GC_FLAG_MARKED);
+                    }
                 }
                 return;
             }
             if flags & GC_FLAG_MARKED == 0 {
                 let total_size = (*header).size as usize;
-                if block_idx >= old_block_start {
+                let dead_old = block_idx >= old_block_start;
+                if dead_old {
                     crate::arena::old_page_account_swept_object(
                         header as usize,
                         total_size,
@@ -8994,6 +9240,9 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
                 // can never trigger a false positive — and zeroing
                 // them was costing ~2-3ms per `object_create` GC for
                 // memory bandwidth (700k × 88 bytes = 62MB written).
+                if reclaim_dead_old_blocks && dead_old {
+                    invalidate_dead_old_arena_header(header, total_size);
+                }
             } else {
                 if block_idx >= old_block_start {
                     crate::arena::old_page_account_swept_object(
@@ -9040,7 +9289,35 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
             retained_forwarded_stub_objects,
         );
     }
-    let reset = crate::arena::arena_reset_empty_blocks(&block_has_live);
+    let nursery_reset = crate::arena::arena_reset_empty_blocks(&block_has_live);
+    let survivor_reset = if reclaim_dead_old_blocks {
+        crate::arena::survivor_arena_reclaim_dead_blocks(&block_has_live)
+    } else {
+        crate::arena::ArenaResetStats::default()
+    };
+    let old_reset = if reclaim_dead_old_blocks {
+        crate::arena::old_arena_reclaim_dead_blocks(&block_has_live)
+    } else {
+        crate::arena::ArenaResetStats::default()
+    };
+    let reset = crate::arena::ArenaResetStats {
+        reset_blocks: nursery_reset
+            .reset_blocks
+            .saturating_add(survivor_reset.reset_blocks)
+            .saturating_add(old_reset.reset_blocks),
+        reusable_bytes: nursery_reset
+            .reusable_bytes
+            .saturating_add(survivor_reset.reusable_bytes)
+            .saturating_add(old_reset.reusable_bytes),
+        deallocated_blocks: nursery_reset
+            .deallocated_blocks
+            .saturating_add(survivor_reset.deallocated_blocks)
+            .saturating_add(old_reset.deallocated_blocks),
+        deallocated_bytes: nursery_reset
+            .deallocated_bytes
+            .saturating_add(survivor_reset.deallocated_bytes)
+            .saturating_add(old_reset.deallocated_bytes),
+    };
 
     SweepTraceStats {
         dead_bytes: freed_bytes,
@@ -11466,13 +11743,13 @@ mod tests {
             f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
         );
         let grown = crate::array::js_array_grow(arr, 128);
-        assert_eq!(test_layout_pointer_slot_count(grown as usize, 1), None);
+        assert_eq!(test_layout_pointer_slot_count(grown as usize, 1), Some(1));
 
         let moved = crate::array::js_array_alloc_with_length(1);
         unsafe {
             layout_transfer(grown as *mut u8, moved as *mut u8);
         }
-        assert_eq!(test_layout_pointer_slot_count(moved as usize, 1), None);
+        assert_eq!(test_layout_pointer_slot_count(moved as usize, 1), Some(1));
 
         clear_marks();
         clear_mark_seeds();
@@ -12997,6 +13274,50 @@ mod tests {
         assert!(!GcBumpTriggerTestGuard::trigger_bumped());
     }
 
+    #[test]
+    fn test_old_reclaim_pressure_uses_threshold_and_growth() {
+        assert!(!old_reclaim_pressure_due(
+            GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES - 1,
+            GC_OLD_GEN_RECLAIM_GROWTH_BYTES,
+        ));
+        assert!(old_reclaim_pressure_due(
+            GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
+            GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES - 1,
+        ));
+        assert!(!old_reclaim_pressure_due(
+            GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES + 1,
+            GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
+        ));
+        assert!(old_reclaim_pressure_due(
+            GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES + GC_OLD_GEN_RECLAIM_GROWTH_BYTES,
+            GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
+        ));
+    }
+
+    #[test]
+    fn test_copying_minor_promotion_handoff_uses_predicted_old_pressure() {
+        assert!(!copied_minor_promotion_handoff_pressure_due(
+            GC_COPY_PROMOTION_HANDOFF_MIN_BYTES - 1,
+            GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
+            0,
+        ));
+        assert!(copied_minor_promotion_handoff_pressure_due(
+            GC_COPY_PROMOTION_HANDOFF_MIN_BYTES,
+            GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES - GC_COPY_PROMOTION_HANDOFF_MIN_BYTES,
+            0,
+        ));
+        assert!(copied_minor_promotion_handoff_pressure_due(
+            26 * 1024 * 1024,
+            20 * 1024 * 1024,
+            8 * 1024 * 1024,
+        ));
+        assert!(!copied_minor_promotion_handoff_pressure_due(
+            26 * 1024 * 1024,
+            20 * 1024 * 1024,
+            20 * 1024 * 1024,
+        ));
+    }
+
     fn collect_minor_trace(trigger_kind: GcTriggerKind) -> GcCycleTrace {
         gc_collect_minor_with_trigger(GcTriggerSnapshot {
             kind: trigger_kind,
@@ -13586,6 +13907,97 @@ mod tests {
     }
 
     #[test]
+    fn test_copying_minor_preserves_dynamic_object_values_after_numeric_first_growth() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+        let id_key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
+        let name_key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
+        let child_key = crate::string::js_string_from_bytes(b"child".as_ptr(), 5);
+        let nested_key = crate::string::js_string_from_bytes(b"nested".as_ptr(), 6);
+
+        let template = crate::object::js_object_alloc(0, 0);
+        let template_name = crate::string::js_string_from_bytes(b"template".as_ptr(), 8);
+        let template_child = crate::object::js_object_alloc(0, 0);
+        crate::object::js_object_set_field_by_name(template, id_key, 1.0);
+        crate::object::js_object_set_field_by_name(
+            template,
+            name_key,
+            f64::from_bits(string_bits(template_name as usize)),
+        );
+        crate::object::js_object_set_field_by_name(
+            template,
+            child_key,
+            f64::from_bits(ptr_bits(template_child as usize)),
+        );
+
+        let obj = crate::object::js_object_alloc(0, 0);
+        let name_value = crate::string::js_string_from_bytes(b"roundtrip".as_ptr(), 9);
+        let child = crate::object::js_object_alloc(0, 0);
+        let nested_value = crate::string::js_string_from_bytes(b"retained".as_ptr(), 8);
+        crate::object::js_object_set_field_by_name(
+            child,
+            nested_key,
+            f64::from_bits(string_bits(nested_value as usize)),
+        );
+        crate::object::js_object_set_field_by_name(obj, id_key, 1.0);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            name_key,
+            f64::from_bits(string_bits(name_value as usize)),
+        );
+        crate::object::js_object_set_field_by_name(
+            obj,
+            child_key,
+            f64::from_bits(ptr_bits(child as usize)),
+        );
+        js_shadow_slot_set(0, ptr_bits(obj as usize));
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let obj_after =
+            (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::object::ObjectHeader;
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_ne!(obj_after as usize, obj as usize);
+        unsafe {
+            let keys = (*obj_after).keys_array;
+            assert!(!keys.is_null());
+            assert_eq!(crate::array::js_array_length(keys), 3);
+            let key0 = crate::array::js_array_get(keys, 0);
+            let key1 = crate::array::js_array_get(keys, 1);
+            let key2 = crate::array::js_array_get(keys, 2);
+            assert!(key0.is_string());
+            assert!(key1.is_string());
+            assert!(key2.is_string());
+            assert_string_bytes(key0.as_string_ptr(), b"id");
+            assert_string_bytes(key1.as_string_ptr(), b"name");
+            assert_string_bytes(key2.as_string_ptr(), b"child");
+        }
+
+        let id_lookup = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
+        let name_lookup = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
+        let child_lookup = crate::string::js_string_from_bytes(b"child".as_ptr(), 5);
+        let nested_lookup = crate::string::js_string_from_bytes(b"nested".as_ptr(), 6);
+        let id_value = crate::object::js_object_get_field_by_name(obj_after, id_lookup);
+        let name_value = crate::object::js_object_get_field_by_name(obj_after, name_lookup);
+        let child_value = crate::object::js_object_get_field_by_name(obj_after, child_lookup);
+
+        assert_eq!(f64::from_bits(id_value.bits()), 1.0);
+        assert!(name_value.is_string());
+        unsafe {
+            assert_string_bytes(name_value.as_string_ptr(), b"roundtrip");
+        }
+        assert!(child_value.is_pointer());
+        let child_after = (child_value.bits() & POINTER_MASK) as *const crate::object::ObjectHeader;
+        assert_ne!(child_after as usize, child as usize);
+        let nested_after = crate::object::js_object_get_field_by_name(child_after, nested_lookup);
+        assert!(nested_after.is_string());
+        unsafe {
+            assert_string_bytes(nested_after.as_string_ptr(), b"retained");
+        }
+    }
+
+    #[test]
     fn test_copying_minor_marks_array_growth_forwarding_target() {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -14110,6 +14522,64 @@ mod tests {
 
         clear_marks();
         remembered_set_clear();
+    }
+
+    #[test]
+    fn test_full_sweep_reclaims_dead_old_block_and_clears_page_index() {
+        let _isolation = copying_nursery_isolation_lock();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        crate::arena::old_pages_begin_gc_cycle();
+
+        let live = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        let dead = crate::arena::arena_alloc_gc_old(2 * 1024 * 1024, 8, GC_TYPE_STRING) as usize;
+        let (live_header, _live_total) = old_test_header_and_size(live);
+        let (dead_header, dead_total) = old_test_header_and_size(dead);
+        let mut dead_pages = crate::fast_hash::new_ptr_hash_set();
+        for (page, _) in crate::arena::old_object_page_overlaps(dead_header as usize, dead_total) {
+            dead_pages.insert(page);
+        }
+        unsafe {
+            (*live_header).gc_flags |= GC_FLAG_MARKED;
+        }
+        let old_before = crate::arena::old_gen_in_use_bytes();
+
+        let sweep = sweep_with_age_bump_and_old_reclaim(false, true);
+        let summary = crate::arena::old_page_summary();
+        let old_after = crate::arena::old_gen_in_use_bytes();
+
+        assert!(
+            sweep.freed_bytes >= dead_total as u64,
+            "dead old object should be swept before block reclaim"
+        );
+        assert!(
+            old_after < old_before,
+            "dead old block reset/deallocation should lower old in-use bytes"
+        );
+        assert!(
+            sweep.reusable_bytes > 0 || sweep.returned_bytes > 0,
+            "dead old block should be reset for reuse or returned"
+        );
+        assert!(
+            summary.reusable_bytes > 0 || summary.returned_bytes > 0,
+            "old-page summary should expose current-cycle reclaim telemetry"
+        );
+        assert_eq!(
+            crate::arena::old_arena_walk_objects_on_pages(&dead_pages, |_| {}),
+            0,
+            "dead old block pages must not retain stale object-index entries"
+        );
+        for page in dead_pages {
+            assert!(
+                crate::arena::old_page_meta_for_tests(page).is_none(),
+                "dead old block page metadata should be cleared"
+            );
+        }
+        unsafe {
+            assert_eq!((*live_header).obj_type, GC_TYPE_STRING);
+            assert_eq!((*live_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
     }
 
     #[test]
@@ -15562,7 +16032,7 @@ mod tests {
     }
 
     #[test]
-    fn test_copying_minor_promotes_survivor_on_second_survival() {
+    fn test_copying_minor_promotes_survivor_on_fourth_survival() {
         let _guard = CopyingNurseryTestGuard::new(1);
         let child = young_leaf();
         js_shadow_slot_set(0, ptr_bits(child));
@@ -15572,8 +16042,18 @@ mod tests {
         assert!(crate::arena::pointer_in_nursery(survivor));
 
         let _ = gc_collect_minor();
+        let survivor_second = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert_ne!(survivor_second, survivor);
+        assert!(crate::arena::pointer_in_nursery(survivor_second));
+
+        let _ = gc_collect_minor();
+        let survivor_third = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert_ne!(survivor_third, survivor_second);
+        assert!(crate::arena::pointer_in_nursery(survivor_third));
+
+        let _ = gc_collect_minor();
         let promoted = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-        assert_ne!(promoted, survivor);
+        assert_ne!(promoted, survivor_third);
         assert!(crate::arena::pointer_in_old_gen(promoted));
     }
 
@@ -15616,6 +16096,19 @@ mod tests {
         let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
         assert_ne!(survivor, child);
         assert!(crate::arena::pointer_in_nursery(survivor));
+
+        let second_trace = collect_minor_trace(GcTriggerKind::Direct);
+        assert_copied_minor_trace(&second_trace, true, CopiedMinorFallbackReason::None, false);
+        assert_eq!(second_trace.copying_nursery.promoted_objects, 0);
+        let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert!(crate::arena::pointer_in_nursery(survivor));
+
+        let third_trace = collect_minor_trace(GcTriggerKind::Direct);
+        assert_copied_minor_trace(&third_trace, true, CopiedMinorFallbackReason::None, false);
+        assert_eq!(third_trace.copying_nursery.promoted_objects, 0);
+        let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert!(crate::arena::pointer_in_nursery(survivor));
+
         let survivor_header = unsafe { header_from_user_ptr(survivor as *const u8) };
         let survivor_total = unsafe { (*survivor_header).size as usize };
 
@@ -15708,7 +16201,7 @@ mod tests {
     }
 
     #[test]
-    fn test_copying_minor_sticky_old_to_survivor_edge_promotes_next_cycle() {
+    fn test_copying_minor_sticky_old_to_survivor_edge_promotes_on_fourth_cycle() {
         let _guard = CopyingNurseryTestGuard::new(0);
         let child = young_leaf();
         let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
@@ -15720,6 +16213,16 @@ mod tests {
         let _ = gc_collect_minor();
         let survivor = unsafe { (*elements & POINTER_MASK) as usize };
         assert!(crate::arena::pointer_in_nursery(survivor));
+        assert!(remembered_set_size() > 0);
+
+        let _ = gc_collect_minor();
+        let survivor_second = unsafe { (*elements & POINTER_MASK) as usize };
+        assert!(crate::arena::pointer_in_nursery(survivor_second));
+        assert!(remembered_set_size() > 0);
+
+        let _ = gc_collect_minor();
+        let survivor_third = unsafe { (*elements & POINTER_MASK) as usize };
+        assert!(crate::arena::pointer_in_nursery(survivor_third));
         assert!(remembered_set_size() > 0);
 
         let _ = gc_collect_minor();

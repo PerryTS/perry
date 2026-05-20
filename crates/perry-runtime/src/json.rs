@@ -5,10 +5,7 @@
 //! only use JSON don't need to link the full stdlib.
 
 use crate::string::js_string_from_ascii_bytes;
-use crate::{
-    js_array_alloc, js_array_push, js_object_alloc, js_object_set_keys, js_string_from_bytes,
-    JSValue, StringHeader,
-};
+use crate::{js_array_alloc, js_array_push, js_string_from_bytes, JSValue, StringHeader};
 use std::cell::RefCell;
 use std::fmt::Write as FmtWrite;
 
@@ -49,6 +46,18 @@ thread_local! {
     pub(crate) static PARSE_KEY_CACHE: RefCell<std::collections::HashMap<Vec<u8>, *const StringHeader>> =
         RefCell::new(std::collections::HashMap::new());
 
+    /// Shared keys_array cache for direct JSON.parse objects.
+    ///
+    /// The generic object setter builds a shape one property at a time. For
+    /// homogeneous JSON records that means every parsed object participates in
+    /// the transition-cache machinery before field values are written. The tape
+    /// path avoids that churn by materializing from a compact token stream; the
+    /// direct parser needs the same shape sharing so `PERRY_JSON_TAPE=0` does
+    /// not manufacture short-lived keys arrays and forwarding stubs in old
+    /// pages.
+    static PARSE_SHAPE_CACHE: RefCell<Vec<ParseShapeCacheEntry>> =
+        const { RefCell::new(Vec::new()) };
+
     /// Reentrancy depth counter for JSON.stringify (issue #67). 0 means
     /// no call in progress; ≥1 means a reentrant (toJSON callback) path.
     /// Used to skip the shape_cache save/restore dance for the common
@@ -71,6 +80,13 @@ thread_local! {
     static PARSE_ROOTS: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
 }
 
+struct ParseShapeCacheEntry {
+    keys: Vec<*const StringHeader>,
+    keys_array: *mut crate::ArrayHeader,
+}
+
+const PARSE_SHAPE_CACHE_CAP: usize = 256;
+
 #[inline]
 fn parse_root_push(v: JSValue) -> usize {
     PARSE_ROOTS.with(|r| {
@@ -91,6 +107,26 @@ fn parse_root_set(idx: usize, v: JSValue) {
 }
 
 #[inline]
+fn parse_root_get(idx: usize) -> JSValue {
+    PARSE_ROOTS.with(|r| {
+        r.borrow()
+            .get(idx)
+            .map(|slot| JSValue::from_bits(slot.to_bits()))
+            .unwrap_or_else(JSValue::undefined)
+    })
+}
+
+#[inline]
+fn parse_root_object_ptr(idx: usize) -> *mut crate::ObjectHeader {
+    (parse_root_get(idx).bits() & POINTER_MASK) as *mut crate::ObjectHeader
+}
+
+#[inline]
+fn parse_root_array_ptr(idx: usize) -> *mut crate::ArrayHeader {
+    (parse_root_get(idx).bits() & POINTER_MASK) as *mut crate::ArrayHeader
+}
+
+#[inline]
 fn parse_root_save_len() -> usize {
     PARSE_ROOTS.with(|r| r.borrow().len())
 }
@@ -98,6 +134,64 @@ fn parse_root_save_len() -> usize {
 #[inline]
 fn parse_root_restore(len: usize) {
     PARSE_ROOTS.with(|r| r.borrow_mut().truncate(len));
+}
+
+#[inline]
+fn cached_parse_key_ptr(key_bytes: &[u8]) -> *const StringHeader {
+    let cached = PARSE_KEY_CACHE.with(|c| c.borrow().get(key_bytes).copied());
+    if let Some(ptr) = cached {
+        return ptr;
+    }
+
+    // Issue #179: allocate cached key strings in the longlived arena. They
+    // are rooted by `scan_parse_roots_mut` and reused across repeated parses
+    // of homogeneous JSON records.
+    let ptr =
+        crate::string::js_string_from_bytes_longlived(key_bytes.as_ptr(), key_bytes.len() as u32);
+    PARSE_KEY_CACHE.with(|c| {
+        c.borrow_mut().insert(key_bytes.to_vec(), ptr);
+    });
+    ptr
+}
+
+#[inline]
+unsafe fn parse_shape_keys_array(keys: &[*const StringHeader]) -> *mut crate::ArrayHeader {
+    PARSE_SHAPE_CACHE.with(|cache| {
+        {
+            let cache = cache.borrow();
+            for entry in cache.iter().rev() {
+                if entry.keys.len() == keys.len()
+                    && entry
+                        .keys
+                        .iter()
+                        .zip(keys.iter())
+                        .all(|(a, b)| std::ptr::eq(*a, *b))
+                {
+                    return entry.keys_array;
+                }
+            }
+        }
+
+        let arr = crate::array::js_array_alloc_with_length_longlived(keys.len() as u32);
+        let elements_ptr =
+            (arr as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
+        for (i, &key_ptr) in keys.iter().enumerate() {
+            let bits = crate::value::STRING_TAG | (key_ptr as u64 & crate::value::POINTER_MASK);
+            *elements_ptr.add(i) = f64::from_bits(bits);
+            crate::gc::layout_note_slot(arr as usize, i, bits);
+        }
+        let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
+
+        let mut cache = cache.borrow_mut();
+        if cache.len() < PARSE_SHAPE_CACHE_CAP {
+            cache.push(ParseShapeCacheEntry {
+                keys: keys.to_vec(),
+                keys_array: arr,
+            });
+        }
+        arr
+    })
 }
 
 /// Take the shared scratch buffer (or allocate a fresh one on reentrancy).
@@ -223,6 +317,14 @@ pub fn scan_parse_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     PARSE_KEY_CACHE.with(|c| {
         for ptr in c.borrow_mut().values_mut() {
             visitor.visit_tagged_raw_const_ptr_slot(ptr, crate::value::STRING_TAG);
+        }
+    });
+    PARSE_SHAPE_CACHE.with(|c| {
+        for entry in c.borrow_mut().iter_mut() {
+            visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);
+            for key in entry.keys.iter_mut() {
+                visitor.visit_tagged_raw_const_ptr_slot(key, crate::value::STRING_TAG);
+            }
         }
     });
 }
@@ -651,7 +753,7 @@ impl<'a> DirectParser<'a> {
         // Pre-allocate with the known keys_array + field count. No
         // shape cache lookup — the shape is already in the cache from
         // the one-time build at parse entry.
-        let js_obj = crate::object::js_object_alloc_class_inline_keys(
+        let mut js_obj = crate::object::js_object_alloc_class_inline_keys(
             0, // class_id 0 = plain object (not a class instance)
             0, // parent_class_id
             shape.field_count,
@@ -660,13 +762,13 @@ impl<'a> DirectParser<'a> {
         // Initialize all fields to undefined so JSON with missing
         // fields returns `undefined` for absent properties (matches
         // spec: access to absent own property returns undefined).
-        let fields_ptr =
-            (js_obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
         let alloc_field_count = std::cmp::max(shape.field_count as usize, 8);
         for i in 0..alloc_field_count {
+            let fields_ptr =
+                (js_obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
             std::ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
-        let _obj_slot = parse_root_push(JSValue::object_ptr(js_obj as *mut u8));
+        let obj_slot = parse_root_push(JSValue::object_ptr(js_obj as *mut u8));
 
         // Fast path: track the expected next-field index. Each
         // iteration: if the incoming key matches `expected_keys[idx]`,
@@ -696,6 +798,7 @@ impl<'a> DirectParser<'a> {
             // shape (shape is one-level deep by design in Step 1b).
             let value = self.parse_value_generic();
             parse_root_push(value);
+            js_obj = parse_root_object_ptr(obj_slot);
 
             let key_bytes = key.as_bytes();
 
@@ -714,9 +817,18 @@ impl<'a> DirectParser<'a> {
                             // Match — direct field write.
                             let alloc_limit = alloc_field_count;
                             if fast_idx < alloc_limit {
-                                std::ptr::write(
-                                    fields_ptr.add(fast_idx),
-                                    JSValue::from_bits(value.bits()),
+                                let slot_idx = fast_idx;
+                                let value_bits = value.bits();
+                                let fields_ptr = (js_obj as *mut u8)
+                                    .add(std::mem::size_of::<crate::ObjectHeader>())
+                                    as *mut JSValue;
+                                let slot = fields_ptr.add(slot_idx);
+                                std::ptr::write(slot, JSValue::from_bits(value_bits));
+                                crate::gc::layout_note_slot(js_obj as usize, slot_idx, value_bits);
+                                crate::gc::runtime_write_barrier_slot(
+                                    js_obj as usize,
+                                    slot as usize,
+                                    value_bits,
                                 );
                                 fast_idx += 1;
                                 took_fast = true;
@@ -737,19 +849,8 @@ impl<'a> DirectParser<'a> {
                 //
                 // Key interning: check PARSE_KEY_CACHE first (same
                 // path as generic parse_object).
-                let cached = PARSE_KEY_CACHE.with(|c| c.borrow().get(key_bytes).copied());
-                let key_ptr = if let Some(p) = cached {
-                    p
-                } else {
-                    let ptr = crate::string::js_string_from_bytes_longlived(
-                        key_bytes.as_ptr(),
-                        key_bytes.len() as u32,
-                    );
-                    PARSE_KEY_CACHE.with(|c| {
-                        c.borrow_mut().insert(key_bytes.to_vec(), ptr);
-                    });
-                    ptr
-                };
+                let key_ptr = cached_parse_key_ptr(key_bytes);
+                js_obj = parse_root_object_ptr(obj_slot);
                 crate::object::js_object_set_field_by_name(
                     js_obj,
                     key_ptr as *mut StringHeader,
@@ -767,6 +868,7 @@ impl<'a> DirectParser<'a> {
             }
         }
         self.expect(b'}');
+        js_obj = parse_root_object_ptr(obj_slot);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_obj as *mut u8)
     }
@@ -808,6 +910,7 @@ impl<'a> DirectParser<'a> {
             } else {
                 self.parse_value_generic()
             };
+            js_arr = parse_root_array_ptr(arr_slot);
             parse_root_push(value);
             js_arr = js_array_push(js_arr, value);
             parse_root_set(arr_slot, JSValue::object_ptr(js_arr as *mut u8));
@@ -820,6 +923,7 @@ impl<'a> DirectParser<'a> {
             }
         }
         self.expect(b']');
+        js_arr = parse_root_array_ptr(arr_slot);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_arr as *mut u8)
     }
@@ -860,21 +964,20 @@ impl<'a> DirectParser<'a> {
 
         if self.peek() == Some(b'}') {
             self.advance();
-            let js_obj = js_object_alloc(0, 0);
-            let keys_arr = js_array_alloc(0);
-            js_object_set_keys(js_obj, keys_arr);
+            let keys: [*const StringHeader; 0] = [];
+            let keys_arr = parse_shape_keys_array(&keys);
+            let js_obj = crate::object::js_object_alloc_class_inline_keys(0, 0, 0, keys_arr);
+            let fields_ptr =
+                (js_obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
+            for i in 0..8 {
+                std::ptr::write(fields_ptr.add(i), JSValue::undefined());
+            }
+            parse_root_restore(saved_roots);
             return JSValue::object_ptr(js_obj as *mut u8);
         }
 
-        // Incremental build: allocate the object upfront and set fields
-        // as we parse them (no intermediate Vec). Combined with key
-        // interning (PARSE_KEY_CACHE) and transition-cache shape sharing
-        // (js_object_set_field_by_name), this gives:
-        //  - First record of each schema: N key allocs + N transitions.
-        //  - Subsequent records: 0 key allocs + N transition hits.
-        //  - Zero Rust-heap Vec allocations per record.
-        let js_obj = js_object_alloc(0, 0);
-        let _obj_slot = parse_root_push(JSValue::object_ptr(js_obj as *mut u8));
+        let mut keys: Vec<*const StringHeader> = Vec::new();
+        let mut values: Vec<JSValue> = Vec::new();
 
         loop {
             self.skip_whitespace();
@@ -893,32 +996,13 @@ impl<'a> DirectParser<'a> {
             parse_root_push(value);
 
             let key_bytes = key.as_bytes();
-            // Two-phase lookup: check cache with immutable borrow first,
-            // then allocate OUTSIDE the borrow (js_string_from_bytes can
-            // trigger GC → scan_parse_roots → borrow() on same RefCell).
-            let cached = PARSE_KEY_CACHE.with(|c| c.borrow().get(key_bytes).copied());
-            let key_ptr = if let Some(p) = cached {
-                p
+            let key_ptr = cached_parse_key_ptr(key_bytes);
+            if let Some(existing) = keys.iter().position(|&ptr| ptr == key_ptr) {
+                values[existing] = value;
             } else {
-                // Issue #179: allocate cached key strings in the longlived
-                // arena. They're held by PARSE_KEY_CACHE (+ scan_parse_roots)
-                // for the program's lifetime and must not co-locate with
-                // per-iteration parse output or the block-persistence pass
-                // pins all adjacent dead objects live.
-                let ptr = crate::string::js_string_from_bytes_longlived(
-                    key_bytes.as_ptr(),
-                    key_bytes.len() as u32,
-                );
-                PARSE_KEY_CACHE.with(|c| {
-                    c.borrow_mut().insert(key_bytes.to_vec(), ptr);
-                });
-                ptr
-            };
-            crate::object::js_object_set_field_by_name(
-                js_obj,
-                key_ptr as *mut StringHeader,
-                f64::from_bits(value.bits()),
-            );
+                keys.push(key_ptr);
+                values.push(value);
+            }
 
             self.skip_whitespace();
             if self.peek() == Some(b',') {
@@ -928,6 +1012,22 @@ impl<'a> DirectParser<'a> {
             }
         }
         self.expect(b'}');
+        let field_count = keys.len() as u32;
+        let keys_arr = parse_shape_keys_array(&keys);
+        let js_obj = crate::object::js_object_alloc_class_inline_keys(0, 0, field_count, keys_arr);
+        let alloc_field_count = std::cmp::max(field_count as usize, 8);
+        let fields_ptr =
+            (js_obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
+        for i in 0..alloc_field_count {
+            std::ptr::write(fields_ptr.add(i), JSValue::undefined());
+        }
+        for (i, value) in values.iter().enumerate() {
+            let value_bits = value.bits();
+            let slot = fields_ptr.add(i);
+            std::ptr::write(slot, JSValue::from_bits(value_bits));
+            crate::gc::layout_note_slot(js_obj as usize, i, value_bits);
+            crate::gc::runtime_write_barrier_slot(js_obj as usize, slot as usize, value_bits);
+        }
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_obj as *mut u8)
     }
@@ -948,6 +1048,7 @@ impl<'a> DirectParser<'a> {
 
         loop {
             let value = self.parse_value();
+            js_arr = parse_root_array_ptr(arr_slot);
             // Root value before push — js_array_push may grow (arena alloc → GC)
             // and value's heap ptr lives only in a caller-saved register here.
             parse_root_push(value);
@@ -964,6 +1065,7 @@ impl<'a> DirectParser<'a> {
             }
         }
         self.expect(b']');
+        js_arr = parse_root_array_ptr(arr_slot);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_arr as *mut u8)
     }
@@ -1189,6 +1291,7 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     // parse roots until after the bump protects the value being returned.
     crate::gc::gc_unsuppress();
     crate::gc::gc_bump_malloc_trigger();
+    crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
     parse_root_restore(text_root);
 
     // Keep key intern cache across parses — scan_parse_roots marks cached
@@ -4052,6 +4155,42 @@ pub unsafe extern "C" fn js_json_parse_with_reviver(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_parse_shared_shape_preserves_duplicate_key_semantics() {
+        let input = br#"{"a":1,"a":2,"b":{"c":3}}"#;
+        let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let value = unsafe { js_json_parse(text) };
+        let obj = (value.bits() & POINTER_MASK) as *const crate::ObjectHeader;
+        let key_a = js_string_from_bytes(b"a".as_ptr(), 1);
+        let key_b = js_string_from_bytes(b"b".as_ptr(), 1);
+
+        unsafe {
+            assert_eq!((*(*obj).keys_array).length, 2);
+        }
+        let a = crate::object::js_object_get_field_by_name(obj, key_a);
+        assert_eq!(f64::from_bits(a.bits()), 2.0);
+
+        let b = crate::object::js_object_get_field_by_name(obj, key_b);
+        assert!(b.is_pointer());
+        let nested = (b.bits() & POINTER_MASK) as *const crate::ObjectHeader;
+        unsafe {
+            assert_eq!((*(*nested).keys_array).length, 1);
+        }
+    }
+
+    #[test]
+    fn direct_parse_shared_shape_roundtrips_array_records() {
+        let input = br#"[{"id":1,"name":"item_1","nested":{"x":1,"y":2}},{"id":2,"name":"item_2","nested":{"x":2,"y":4}}]"#;
+        let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let value = unsafe { js_json_parse(text) };
+        let output = unsafe { js_json_stringify(f64::from_bits(value.bits()), TYPE_UNKNOWN) };
+
+        assert_eq!(
+            unsafe { str_from_header(output).unwrap() },
+            std::str::from_utf8(input).unwrap()
+        );
+    }
 
     #[test]
     fn stringify_non_ascii_output_keeps_utf16_len_distinct_from_bytes() {

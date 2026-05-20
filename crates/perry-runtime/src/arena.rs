@@ -275,6 +275,9 @@ thread_local! {
 
     static OLD_GEN_PAGE_META: RefCell<OldGenPageMetaMap> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
+    static OLD_GEN_RECLAIM_REUSABLE_BYTES: Cell<usize> = const { Cell::new(0) };
+    static OLD_GEN_RECLAIM_RETURNED_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
 #[inline]
@@ -594,6 +597,8 @@ pub(crate) fn old_pages_begin_gc_cycle() {
             page_meta.dirty_slots = 0;
         }
     });
+    OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.set(0));
+    OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.set(0));
 }
 
 pub(crate) fn old_pages_reset_sweep_accounting() {
@@ -716,6 +721,8 @@ pub(crate) fn old_page_summary() -> OldPageSummary {
                     summary.evacuation_eligible_pages.saturating_add(1);
             }
         }
+        summary.reusable_bytes = OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.get());
+        summary.returned_bytes = OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.get());
         summary
     })
 }
@@ -1141,11 +1148,10 @@ thread_local! {
     /// extends to a third region.
     ///
     /// Old-arena blocks are never reset by `arena_reset_empty_blocks`
-    /// (same lifetime contract as longlived blocks — promotion
-    /// implies "expected to live indefinitely"), and never feed
-    /// the inline bump allocator. Major GC will eventually mark-
-    /// sweep them in Phase C+; today they accumulate forever
-    /// because nothing allocates into them.
+    /// (same lifetime contract as longlived blocks from the nursery
+    /// reset path), and never feed the inline bump allocator. Full
+    /// mark-sweep can reclaim completely dead old blocks through the
+    /// dedicated old-arena reset/deallocation path.
     static OLD_ARENA: UnsafeCell<Arena> =
         UnsafeCell::new(Arena::new(HeapGeneration::Old, HeapSpace::Old));
 
@@ -2181,6 +2187,14 @@ pub(crate) fn copying_prepare_to_space() -> usize {
     with_survivor_arena_mut(idx, reset_region_to_zero).0
 }
 
+/// Bytes currently allocated in the active survivor from-space.
+pub(crate) fn copying_active_survivor_in_use_bytes() -> usize {
+    let active = ACTIVE_SURVIVOR.with(|active| active.get());
+    with_survivor_arena(active, |arena| {
+        arena.blocks.iter().map(|b| b.offset).sum::<usize>()
+    })
+}
+
 /// Bytes currently allocated in Eden plus the active survivor from-space.
 pub(crate) fn copying_from_space_in_use_bytes() -> usize {
     sync_inline_arena_state();
@@ -2193,6 +2207,17 @@ pub(crate) fn copying_from_space_in_use_bytes() -> usize {
         arena.blocks.iter().map(|b| b.offset).sum::<usize>()
     });
     eden + survivor
+}
+
+pub(crate) fn active_survivor_block_index_range() -> std::ops::Range<usize> {
+    let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
+    let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });
+    let survivor1_n = SURVIVOR_ARENA_1.with(|a| unsafe { (*a.get()).blocks.len() });
+    match ACTIVE_SURVIVOR.with(|active| active.get()) {
+        0 => general_n..general_n + survivor0_n,
+        1 => general_n + survivor0_n..general_n + survivor0_n + survivor1_n,
+        _ => general_n..general_n,
+    }
 }
 
 /// Reset Eden and the active survivor from-space, then flip the survivor
@@ -2492,6 +2517,200 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
     })
 }
 
+pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaResetStats {
+    let old_block_start = longlived_end();
+    let stats = OLD_ARENA.with(|arena| unsafe {
+        let arena = &mut *arena.get();
+        let original_current = arena.current;
+        let mut stats = ArenaResetStats::default();
+        let mut changed = false;
+
+        for (i, block) in arena.blocks.iter_mut().enumerate() {
+            if block.data.is_null() {
+                continue;
+            }
+
+            let block_idx = old_block_start + i;
+            if block_has_live.get(block_idx).copied().unwrap_or(false) {
+                block.dead_cycles = 0;
+                continue;
+            }
+
+            let base = block.data as usize;
+            let size = block.size;
+            let used = block.offset;
+            let first_page = generation_page_for_addr(base);
+            let last_page = generation_page_for_addr(base + size - 1);
+            let pages: Vec<usize> = (first_page..=last_page).collect();
+            unregister_old_block_pages(&pages);
+
+            if used != 0 {
+                stats.reset_blocks = stats.reset_blocks.saturating_add(1);
+            }
+            block.offset = 0;
+            block.dead_cycles = 0;
+            changed = true;
+
+            // Keep the current old allocation target mapped and reusable.
+            // Arena::alloc assumes `current` points at a non-tombstone block.
+            if i == original_current {
+                stats.reusable_bytes = stats.reusable_bytes.saturating_add(used);
+                continue;
+            }
+
+            let layout = Layout::from_size_align(size, 16).unwrap();
+            unregister_block_generation(base, size);
+            std::alloc::dealloc(block.data, layout);
+            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            block.data = std::ptr::null_mut();
+            block.size = 0;
+            block.offset = 0;
+            block.dead_cycles = 0;
+            stats.deallocated_blocks = stats.deallocated_blocks.saturating_add(1);
+            stats.deallocated_bytes = stats.deallocated_bytes.saturating_add(size);
+        }
+
+        if changed {
+            if let Some((idx, _)) = arena
+                .blocks
+                .iter()
+                .enumerate()
+                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
+            {
+                arena.current = idx;
+            } else if arena
+                .blocks
+                .get(arena.current)
+                .map(|block| block.data.is_null())
+                .unwrap_or(true)
+            {
+                if let Some((idx, _)) = arena
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .find(|(_, block)| !block.data.is_null())
+                {
+                    arena.current = idx;
+                }
+            }
+        }
+
+        stats
+    });
+
+    OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.set(stats.reusable_bytes));
+    OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.set(stats.deallocated_bytes));
+    stats
+}
+
+fn reclaim_dead_survivor_arena_blocks(
+    arena_idx: usize,
+    block_start: usize,
+    block_has_live: &[bool],
+) -> ArenaResetStats {
+    with_survivor_arena_mut(arena_idx, |arena| unsafe {
+        let keep_idx = arena
+            .blocks
+            .get(arena.current)
+            .filter(|block| !block.data.is_null())
+            .map(|_| arena.current)
+            .or_else(|| {
+                arena
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .find(|(_, block)| !block.data.is_null())
+                    .map(|(i, _)| i)
+            });
+        let mut stats = ArenaResetStats::default();
+        let mut changed = false;
+
+        for (i, block) in arena.blocks.iter_mut().enumerate() {
+            if block.data.is_null() {
+                continue;
+            }
+
+            let block_idx = block_start + i;
+            if block_has_live.get(block_idx).copied().unwrap_or(false) {
+                block.dead_cycles = 0;
+                continue;
+            }
+
+            let used = block.offset;
+            if used != 0 {
+                stats.reset_blocks = stats.reset_blocks.saturating_add(1);
+            }
+            block.offset = 0;
+            block.dead_cycles = 0;
+            changed = true;
+
+            // Keep one allocation target per survivor semispace mapped so
+            // Arena::alloc never observes a tombstoned current block.
+            if Some(i) == keep_idx {
+                stats.reusable_bytes = stats.reusable_bytes.saturating_add(used);
+                continue;
+            }
+
+            let base = block.data as usize;
+            let size = block.size;
+            let layout = Layout::from_size_align(size, 16).unwrap();
+            unregister_block_generation(base, size);
+            std::alloc::dealloc(block.data, layout);
+            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            block.data = std::ptr::null_mut();
+            block.size = 0;
+            block.offset = 0;
+            block.dead_cycles = 0;
+            stats.deallocated_blocks = stats.deallocated_blocks.saturating_add(1);
+            stats.deallocated_bytes = stats.deallocated_bytes.saturating_add(size);
+        }
+
+        if changed {
+            if let Some((idx, _)) = arena
+                .blocks
+                .iter()
+                .enumerate()
+                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
+            {
+                arena.current = idx;
+            } else if arena
+                .blocks
+                .get(arena.current)
+                .map(|block| block.data.is_null())
+                .unwrap_or(true)
+            {
+                if let Some((idx, _)) = arena
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .find(|(_, block)| !block.data.is_null())
+                {
+                    arena.current = idx;
+                }
+            }
+        }
+
+        stats
+    })
+}
+
+pub(crate) fn survivor_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaResetStats {
+    let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
+    let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });
+    let stats0 = reclaim_dead_survivor_arena_blocks(0, general_n, block_has_live);
+    let stats1 = reclaim_dead_survivor_arena_blocks(1, general_n + survivor0_n, block_has_live);
+    ArenaResetStats {
+        reset_blocks: stats0.reset_blocks.saturating_add(stats1.reset_blocks),
+        reusable_bytes: stats0.reusable_bytes.saturating_add(stats1.reusable_bytes),
+        deallocated_blocks: stats0
+            .deallocated_blocks
+            .saturating_add(stats1.deallocated_blocks),
+        deallocated_bytes: stats0
+            .deallocated_bytes
+            .saturating_add(stats1.deallocated_bytes),
+    }
+}
+
 /// Get arena memory statistics: (heap_used, heap_total)
 /// heap_used = total bytes allocated across all blocks
 /// heap_total = total bytes reserved across all blocks
@@ -2701,6 +2920,39 @@ mod tests {
         block_has_live[current] = true;
         let stats = arena_reset_empty_blocks(&block_has_live);
         (candidate, base, size, before_offset, stats)
+    }
+
+    #[test]
+    fn survivor_reclaim_resets_dead_blocks() {
+        run_with_fresh_arenas(|| {
+            let baseline = arena_telemetry_snapshot();
+            let _dead = arena_alloc_gc_survivor(2 * 1024 * 1024, 8, GC_TYPE_STRING);
+            let after_alloc = arena_telemetry_snapshot();
+            let survivor_in_use = after_alloc
+                .survivor0
+                .in_use_bytes
+                .saturating_add(after_alloc.survivor1.in_use_bytes);
+            assert!(
+                survivor_in_use > baseline.survivor0.in_use_bytes + baseline.survivor1.in_use_bytes,
+                "test allocation should occupy a survivor semispace"
+            );
+
+            let block_has_live = vec![false; arena_block_count()];
+            let stats = survivor_arena_reclaim_dead_blocks(&block_has_live);
+            let after_reclaim = arena_telemetry_snapshot();
+            let survivor_after = after_reclaim
+                .survivor0
+                .in_use_bytes
+                .saturating_add(after_reclaim.survivor1.in_use_bytes);
+
+            assert_eq!(survivor_after, 0);
+            assert!(stats.reset_blocks > 0);
+            assert!(stats.reusable_bytes > 0 || stats.deallocated_bytes > 0);
+            assert!(
+                after_reclaim.total_reserved_bytes <= after_alloc.total_reserved_bytes,
+                "dead survivor blocks should become reusable or be returned"
+            );
+        });
     }
 
     fn page_range_for(base: usize, size: usize) -> std::ops::RangeInclusive<usize> {

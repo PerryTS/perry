@@ -303,6 +303,27 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
 }
 
 #[inline]
+pub(crate) unsafe fn rebuild_array_layout_exact(arr: *mut ArrayHeader) {
+    if arr.is_null() {
+        return;
+    }
+    let length = (*arr).length as usize;
+    let capacity = (*arr).capacity as usize;
+    if length > capacity || length > 16_000_000 {
+        crate::gc::layout_mark_unknown(arr as *mut u8);
+        return;
+    }
+    crate::gc::layout_rebuild_exact_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
+    if crate::arena::pointer_in_old_gen(arr as usize) {
+        let slots = array_elements_ptr(arr);
+        for i in 0..length {
+            let slot = slots.add(i);
+            crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
+        }
+    }
+}
+
+#[inline]
 unsafe fn replay_array_growth_write_barriers(arr: *mut ArrayHeader) {
     if arr.is_null() || !crate::arena::pointer_in_old_gen(arr as usize) {
         return;
@@ -1774,7 +1795,7 @@ pub extern "C" fn js_array_concat(
                 src_len as usize,
             );
             (*result).length = new_len;
-            rebuild_array_layout(result);
+            rebuild_array_layout_exact(result);
             return result;
         }
 
@@ -2287,7 +2308,7 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                 (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
             (*result).length = len;
-            rebuild_array_layout(result);
+            rebuild_array_layout_exact(result);
         }
         result
     }

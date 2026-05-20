@@ -684,7 +684,7 @@ struct TransitionEntry {
     key_ptr: usize,   // offset 8 — interned string pointer (pointer identity)
     next_keys: usize, // offset 16
     slot_idx: u32,    // offset 24
-    _pad: u32,        // offset 28, pad to 32 bytes
+    target_len: u32,  // offset 28, nonzero when target was validated at insert
 }
 
 const TRANSITION_CACHE_SIZE: usize = 16384;
@@ -705,7 +705,7 @@ static mut TRANSITION_CACHE_GLOBAL: [TransitionEntry; TRANSITION_CACHE_SIZE] = [
     key_ptr: 0,
     next_keys: 0,
     slot_idx: 0,
-    _pad: 0,
+    target_len: 0,
 };
     TRANSITION_CACHE_SIZE];
 
@@ -745,17 +745,13 @@ fn transition_cache_slot(prev_keys: usize, key_ptr: usize) -> usize {
 
 /// Transition cache lookup using interned string pointer identity.
 ///
-/// On HIT we stamp the returned keys_array with `GC_FLAG_SHAPE_SHARED`
-/// because the caller is about to reuse it for a SECOND object — any
-/// future extension on either object must now clone-before-mutate. The
-/// stamping happens here (lazily, on the first second-user lookup)
-/// instead of in `transition_cache_insert` (eagerly, on every new
-/// shape), which was the source of an O(N²) build-then-fill cost:
-/// when a single object builds N unique keys, the old eager-stamp
-/// forced a full clone of the keys_array on EVERY insert (10k inserts
-/// → 50M total array entries copied). With lazy stamping, single-owner
-/// shapes stay un-stamped and the per-insert clone is avoided —
-/// 10k-key build drops from 20 s to milliseconds.
+/// On HIT we ensure the returned keys_array has
+/// `GC_FLAG_SHAPE_SHARED` because the caller is about to reuse it for
+/// a SECOND object — any future extension on either object must now
+/// clone-before-mutate. We eagerly stabilize small dynamic shapes on
+/// insert so repeated row-object builders get valid cache targets;
+/// larger shapes stay lazy to avoid O(N²) prefix cloning for one-off
+/// dictionaries and are validated on lookup.
 #[inline(always)]
 fn transition_cache_lookup(
     prev_keys: usize,
@@ -765,24 +761,44 @@ fn transition_cache_lookup(
     let slot = transition_cache_slot(prev_keys, kp);
     let entry = unsafe { TRANSITION_CACHE_GLOBAL[slot] };
     if entry.next_keys != 0 && entry.prev_keys == prev_keys && entry.key_ptr == kp {
+        let expected_len = entry.slot_idx.checked_add(1)?;
+        if entry.target_len == expected_len {
+            return Some((entry.next_keys, entry.slot_idx));
+        }
         // Stamp SHAPE_SHARED on the returned keys_array — this is the
         // moment we observe that a SECOND object is reusing the
         // pre-existing shape. Both this caller and the original
         // owner (whose keys_array points at the same memory) must
         // now treat the array as shared.
         unsafe {
-            let gc_header = (entry.next_keys as *const u8).wrapping_sub(crate::gc::GC_HEADER_SIZE)
-                as *mut crate::gc::GcHeader;
-            if entry.next_keys >= crate::gc::GC_HEADER_SIZE
-                && (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
-            {
-                (*gc_header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
+            if !transition_cache_stamp_shape_shared(entry.next_keys) {
+                return None;
+            }
+            let keys = entry.next_keys as *const ArrayHeader;
+            if (*keys).length != expected_len || (*keys).length > (*keys).capacity {
+                return None;
             }
         }
         Some((entry.next_keys, entry.slot_idx))
     } else {
         None
     }
+}
+
+const TRANSITION_CACHE_EAGER_SHARE_MAX_SLOT: u32 = 64;
+
+#[inline(always)]
+unsafe fn transition_cache_stamp_shape_shared(next_keys: usize) -> bool {
+    if next_keys < crate::gc::GC_HEADER_SIZE {
+        return false;
+    }
+    let gc_header = (next_keys as *const u8).wrapping_sub(crate::gc::GC_HEADER_SIZE)
+        as *mut crate::gc::GcHeader;
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        return false;
+    }
+    (*gc_header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
+    true
 }
 
 fn transition_cache_insert(
@@ -796,20 +812,29 @@ fn transition_cache_insert(
     }
     let kp = interned_key as usize;
     let slot = transition_cache_slot(prev_keys, kp);
+    let mut target_len = 0;
     unsafe {
+        if slot_idx < TRANSITION_CACHE_EAGER_SHARE_MAX_SLOT
+            && transition_cache_stamp_shape_shared(next_keys)
+        {
+            let expected_len = slot_idx.saturating_add(1);
+            let keys = next_keys as *const ArrayHeader;
+            if (*keys).length == expected_len && (*keys).length <= (*keys).capacity {
+                target_len = expected_len;
+            }
+        }
         TRANSITION_CACHE_GLOBAL[slot] = TransitionEntry {
             prev_keys,
             key_ptr: kp,
             next_keys,
             slot_idx,
-            _pad: 0,
+            target_len,
         };
     }
-    // NOTE: we deliberately do NOT stamp `GC_FLAG_SHAPE_SHARED` here.
-    // The stamp moves to `transition_cache_lookup` so it only fires
-    // when a second object actually reuses the shape — single-owner
-    // build-then-fill (the common dict-construction pattern) stays
-    // unshared and avoids the per-insert clone of the keys_array.
+    // Small dynamic shapes are stabilized eagerly because otherwise
+    // the original builder can grow the cached target in place and
+    // force future lookups to reject it. Large one-off dictionaries
+    // stay lazy to avoid cloning every growing prefix.
 }
 
 /// GC root scanner for the transition cache. Same contract as
@@ -842,7 +867,7 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
                         key_ptr: 0,
                         next_keys: 0,
                         slot_idx: 0,
-                        _pad: 0,
+                        target_len: 0,
                     };
                 }
             }
@@ -960,7 +985,7 @@ pub(crate) fn test_seed_transition_cache_root(next_keys: usize) {
             key_ptr: 0,
             next_keys,
             slot_idx: 0,
-            _pad: 0,
+            target_len: 0,
         };
     }
 }
@@ -978,7 +1003,7 @@ pub(crate) fn test_clear_transition_cache_root() {
             key_ptr: 0,
             next_keys: 0,
             slot_idx: 0,
-            _pad: 0,
+            target_len: 0,
         };
     }
 }
@@ -2608,6 +2633,19 @@ pub(super) unsafe fn note_object_field_slot(
     value_bits: u64,
 ) {
     crate::gc::layout_note_slot(obj as usize, field_index, value_bits);
+}
+
+#[inline]
+pub(super) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
+    if obj.is_null() || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return;
+    }
+    let header = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    let state = (*header)._reserved & crate::gc::GC_LAYOUT_STATE_MASK;
+    if state == 0 || state == crate::gc::GC_LAYOUT_POINTER_FREE {
+        return;
+    }
+    crate::gc::layout_mark_unknown(obj as *mut u8);
 }
 
 pub(crate) unsafe fn gc_keys_array_slot(obj: *mut ObjectHeader) -> Option<*mut u64> {
@@ -7254,6 +7292,32 @@ mod tests {
         assert_eq!(f0.as_number(), 123.0);
 
         js_object_free(obj);
+    }
+
+    #[test]
+    fn transition_cache_lookup_rejects_mutated_edge_target() {
+        let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
+        let keys = crate::array::js_array_alloc(4);
+        let keys = crate::array::js_array_push(keys, JSValue::string_ptr(key));
+        let keys = crate::array::js_array_push(keys, JSValue::string_ptr(key));
+
+        transition_cache_insert(0, key, keys as usize, 0);
+
+        assert!(
+            transition_cache_lookup(0, key).is_none(),
+            "slot 0 cache edge must not hit after its keys array grows past length 1"
+        );
+
+        let slot = transition_cache_slot(0, key as usize);
+        unsafe {
+            TRANSITION_CACHE_GLOBAL[slot] = TransitionEntry {
+                prev_keys: 0,
+                key_ptr: 0,
+                next_keys: 0,
+                slot_idx: 0,
+                target_len: 0,
+            };
+        }
     }
 }
 
