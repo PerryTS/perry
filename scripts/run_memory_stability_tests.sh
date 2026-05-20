@@ -536,10 +536,13 @@ run_benchmark_gate() {
 }
 
 echo "=== Memory-leak regression tests (RSS plateau under sustained alloc) ==="
-# Limits ~50-70% above measured baseline on macOS arm64. CI runners
-# may differ slightly; loosen a limit here rather than in the .ts.
+# Limits ~50-70% above measured baseline on macOS arm64 unless noted.
+# CI runners may differ slightly; loosen a limit here rather than in
+# the .ts. JSON churn is intentionally low-pressure enough that it may
+# not trigger a GC cycle at all; keep this as a broad RSS stability
+# guard and rely on the GC-trace gates below for copied-minor proof.
 run_test test-files/test_memory_long_lived_loop.ts 100 "done, lastId=199999"
-run_test test-files/test_memory_json_churn.ts      250 "done, checksum=637747500"
+run_test test-files/test_memory_json_churn.ts      320 "done, checksum=637747500"
 run_test test-files/test_memory_string_churn.ts    100 "done, total=9577780"
 run_test test-files/test_memory_closure_churn.ts    50 "done, sum=15004649874"
 
