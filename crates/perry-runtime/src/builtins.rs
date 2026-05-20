@@ -2711,8 +2711,7 @@ unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize> {
         return None;
     }
     // Confirm this is a regular object before dereferencing as ObjectHeader.
-    let gc_header =
-        (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
         return None;
     }
