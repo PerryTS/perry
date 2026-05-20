@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Keep in sync with CopiedMinorFallbackReason::as_str in
 # crates/perry-runtime/src/gc.rs.
@@ -85,12 +85,17 @@ def empty_totals() -> dict[str, Any]:
         },
         "old_page_accounting": {
             "checked_cycles": 0,
+            "dead_bytes": 0,
+            "reusable_bytes": 0,
+            "returned_bytes": 0,
             "candidate_pages": 0,
             "selected_pages": 0,
             "selected_live_bytes": 0,
             "reclaimable_bytes": 0,
             "old_page_moved_bytes": 0,
             "released_original_bytes": 0,
+            "released_original_reusable_bytes": 0,
+            "released_original_returned_bytes": 0,
         },
     }
 
@@ -176,12 +181,17 @@ def add_totals(dst: dict[str, Any], src: dict[str, Any]) -> None:
         dst["malloc_kind_allocations"][kind] += src["malloc_kind_allocations"][kind]
     for field in (
         "checked_cycles",
+        "dead_bytes",
+        "reusable_bytes",
+        "returned_bytes",
         "candidate_pages",
         "selected_pages",
         "selected_live_bytes",
         "reclaimable_bytes",
         "old_page_moved_bytes",
         "released_original_bytes",
+        "released_original_reusable_bytes",
+        "released_original_returned_bytes",
     ):
         dst["old_page_accounting"][field] += src["old_page_accounting"][field]
 
@@ -219,6 +229,8 @@ def check_old_page_accounting(
     allocated = non_negative_int(old_pages, "allocated_bytes")
     live = non_negative_int(old_pages, "live_bytes")
     dead = non_negative_int(old_pages, "dead_bytes")
+    reusable = non_negative_int(old_pages, "reusable_bytes")
+    returned = non_negative_int(old_pages, "returned_bytes")
     pinned = non_negative_int(old_pages, "pinned_bytes")
     if allocated > 0:
         totals["old_page_accounting"]["checked_cycles"] += 1
@@ -232,6 +244,9 @@ def check_old_page_accounting(
                 f"{name}:{line_number}: old_pages pinned_bytes({pinned}) "
                 f"> live_bytes({live})"
             )
+    totals["old_page_accounting"]["dead_bytes"] += dead
+    totals["old_page_accounting"]["reusable_bytes"] += reusable
+    totals["old_page_accounting"]["returned_bytes"] += returned
 
     candidate_pages = non_negative_int(policy, "old_page_candidate_pages")
     selected_pages = non_negative_int(policy, "old_page_selected_pages")
@@ -239,6 +254,8 @@ def check_old_page_accounting(
     reclaimable = non_negative_int(policy, "old_page_reclaimable_bytes")
     old_page_moved = non_negative_int(evacuation, "old_page_moved_bytes")
     released = non_negative_int(evacuation, "released_original_bytes")
+    released_reusable = non_negative_int(evacuation, "released_original_reusable_bytes")
+    released_returned = non_negative_int(evacuation, "released_original_returned_bytes")
 
     totals["old_page_accounting"]["candidate_pages"] += candidate_pages
     totals["old_page_accounting"]["selected_pages"] += selected_pages
@@ -246,6 +263,12 @@ def check_old_page_accounting(
     totals["old_page_accounting"]["reclaimable_bytes"] += reclaimable
     totals["old_page_accounting"]["old_page_moved_bytes"] += old_page_moved
     totals["old_page_accounting"]["released_original_bytes"] += released
+    totals["old_page_accounting"][
+        "released_original_reusable_bytes"
+    ] += released_reusable
+    totals["old_page_accounting"][
+        "released_original_returned_bytes"
+    ] += released_returned
 
     if selected_pages > candidate_pages:
         errors.append(

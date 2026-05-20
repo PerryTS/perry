@@ -940,7 +940,10 @@ print(
     f"{copying['copied_objects'] + copying['promoted_objects']} "
     f"pointer_free_skipped={layout['pointer_free_slots_skipped']} "
     f"large_excluded={copying['large_excluded_objects']} "
-    f"old_page_moved_bytes={old_page['old_page_moved_bytes']}"
+    f"old_page_moved_bytes={old_page['old_page_moved_bytes']} "
+    f"old_page_dead_bytes={old_page['dead_bytes']} "
+    f"old_page_reusable_bytes={old_page['reusable_bytes']} "
+    f"old_page_returned_bytes={old_page['returned_bytes']}"
 )
 PY
 )

@@ -250,6 +250,8 @@ pub(crate) struct OldPageSummary {
     pub(crate) allocated_bytes: usize,
     pub(crate) live_bytes: usize,
     pub(crate) dead_bytes: usize,
+    pub(crate) reusable_bytes: usize,
+    pub(crate) returned_bytes: usize,
     pub(crate) pinned_bytes: usize,
     pub(crate) object_count: usize,
     pub(crate) live_object_count: usize,
@@ -1681,6 +1683,7 @@ pub(crate) struct ArenaTelemetrySnapshot {
 #[derive(Clone, Copy, Default)]
 pub struct ArenaResetStats {
     pub reset_blocks: usize,
+    pub reusable_bytes: usize,
     pub deallocated_blocks: usize,
     pub deallocated_bytes: usize,
 }
@@ -2154,26 +2157,28 @@ pub fn arena_reset_all_blocks_to_zero() {
     });
 }
 
-fn reset_region_to_zero(arena: &mut Arena) -> usize {
+fn reset_region_to_zero(arena: &mut Arena) -> (usize, usize) {
     let mut reset_blocks = 0usize;
+    let mut reusable_bytes = 0usize;
     for block in arena.blocks.iter_mut() {
         if block.data.is_null() {
             continue;
         }
         if block.offset != 0 {
             reset_blocks += 1;
+            reusable_bytes = reusable_bytes.saturating_add(block.offset);
         }
         block.offset = 0;
         block.dead_cycles = 0;
     }
     arena.current = 0;
-    reset_blocks
+    (reset_blocks, reusable_bytes)
 }
 
 /// Reset the inactive survivor semispace before a copying minor starts.
 pub(crate) fn copying_prepare_to_space() -> usize {
     let idx = inactive_survivor_index();
-    with_survivor_arena_mut(idx, reset_region_to_zero)
+    with_survivor_arena_mut(idx, reset_region_to_zero).0
 }
 
 /// Bytes currently allocated in Eden plus the active survivor from-space.
@@ -2195,9 +2200,12 @@ pub(crate) fn copying_from_space_in_use_bytes() -> usize {
 pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
     sync_inline_arena_state();
     let mut reset_blocks = 0usize;
+    let mut reusable_bytes = 0usize;
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
-        reset_blocks += reset_region_to_zero(arena);
+        let (blocks, bytes) = reset_region_to_zero(arena);
+        reset_blocks += blocks;
+        reusable_bytes = reusable_bytes.saturating_add(bytes);
         crate::gc::ARENA_FREE_LIST.with(|fl| fl.borrow_mut().clear());
         crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
         INLINE_STATE.with(|s| {
@@ -2212,11 +2220,14 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
     });
 
     let active = ACTIVE_SURVIVOR.with(|active| active.get());
-    reset_blocks += with_survivor_arena_mut(active, reset_region_to_zero);
+    let (blocks, bytes) = with_survivor_arena_mut(active, reset_region_to_zero);
+    reset_blocks += blocks;
+    reusable_bytes = reusable_bytes.saturating_add(bytes);
     ACTIVE_SURVIVOR.with(|active_cell| active_cell.set(1 - active));
 
     ArenaResetStats {
         reset_blocks,
+        reusable_bytes,
         deallocated_blocks: 0,
         deallocated_bytes: 0,
     }
@@ -2246,7 +2257,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
     // root-tracked caches.
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
-        let mut reset_block_ranges: Vec<(usize, usize)> = Vec::new();
+        let mut reset_block_ranges: Vec<(usize, usize, usize)> = Vec::new();
         // Issue #73: never reset the current block or the four blocks
         // immediately before it. Those are the most recent allocation
         // targets — they contain freshly-allocated objects whose
@@ -2308,7 +2319,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
             // (`keep_low..=current`) still get the full "never reset"
             // protection above, which is where the scan-miss risk
             // actually lives.
-            reset_block_ranges.push((block.data as usize, block.size));
+            reset_block_ranges.push((block.data as usize, block.size, block.offset));
             block.offset = 0;
             // Don't write dead_cycles — the dealloc-candidate loop
             // below sees offset==0 + outside-recent-window and
@@ -2325,7 +2336,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
                     let p = ptr as usize;
                     !reset_block_ranges
                         .iter()
-                        .any(|&(base, size)| p >= base && p < base + size)
+                        .any(|&(base, size, _)| p >= base && p < base + size)
                 });
                 if fl.is_empty() {
                     crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
@@ -2398,8 +2409,18 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
         let reset_blocks = reset_block_ranges.len();
         let deallocated_blocks = deallocated_ranges.len();
         let deallocated_bytes: usize = deallocated_ranges.iter().map(|&(_, s)| s).sum();
+        let reusable_bytes: usize = reset_block_ranges
+            .iter()
+            .filter(|&&(base, _, _)| {
+                !deallocated_ranges
+                    .iter()
+                    .any(|&(deallocated_base, _)| deallocated_base == base)
+            })
+            .map(|&(_, _, used)| used)
+            .sum();
         let stats = ArenaResetStats {
             reset_blocks,
+            reusable_bytes,
             deallocated_blocks,
             deallocated_bytes,
         };
@@ -2641,6 +2662,45 @@ mod tests {
         block_has_live[current] = true;
         let stats = arena_reset_empty_blocks(&block_has_live);
         (candidate, base, size, stats)
+    }
+
+    fn reset_single_reclaimable_nursery_block(
+        dead_cycles_before: u32,
+    ) -> (usize, usize, usize, usize, ArenaResetStats) {
+        let mut blocks = Vec::new();
+        for _ in 0..6 {
+            let ptr = arena_alloc(BLOCK_SIZE, 8) as usize;
+            let idx = general_block_index_for(ptr).expect("allocation should be in nursery");
+            blocks.push(idx);
+        }
+        blocks.sort_unstable();
+        blocks.dedup();
+        assert_eq!(
+            blocks.len(),
+            6,
+            "test setup should force six distinct nursery blocks"
+        );
+
+        let current = ARENA.with(|a| unsafe { (&*a.get()).current });
+        let keep_low = current.saturating_sub(4);
+        let candidate = blocks
+            .into_iter()
+            .find(|&idx| idx < keep_low)
+            .expect("test setup should leave exactly one block outside the keep window");
+
+        let (base, size, before_offset) = ARENA.with(|a| unsafe {
+            let arena = &mut *a.get();
+            let block = &mut arena.blocks[candidate];
+            assert!(!block.data.is_null());
+            assert!(block.offset > 0);
+            block.dead_cycles = dead_cycles_before;
+            (block.data as usize, block.size, block.offset)
+        });
+
+        let mut block_has_live = vec![false; arena_block_count()];
+        block_has_live[current] = true;
+        let stats = arena_reset_empty_blocks(&block_has_live);
+        (candidate, base, size, before_offset, stats)
     }
 
     fn page_range_for(base: usize, size: usize) -> std::ops::RangeInclusive<usize> {
@@ -3049,6 +3109,23 @@ mod tests {
     }
 
     #[test]
+    fn generation_metadata_arena_reset_stats_reports_reusable_bytes_for_retained_reset_blocks() {
+        run_with_fresh_arenas(|| {
+            let (idx, _base, _size, before_offset, stats) =
+                reset_single_reclaimable_nursery_block(0);
+            assert_eq!(stats.reset_blocks, 1);
+            assert_eq!(stats.reusable_bytes, before_offset);
+            assert_eq!(stats.deallocated_blocks, 0);
+            assert_eq!(stats.deallocated_bytes, 0);
+            ARENA.with(|a| unsafe {
+                let arena = &*a.get();
+                assert!(!arena.blocks[idx].data.is_null());
+                assert_eq!(arena.blocks[idx].offset, 0);
+            });
+        });
+    }
+
+    #[test]
     fn generation_metadata_removed_on_nursery_block_deallocation() {
         run_with_fresh_arenas(|| {
             let (idx, base, _size, stats) = reset_old_nursery_block(1);
@@ -3063,6 +3140,24 @@ mod tests {
             });
             assert_eq!(classify_heap_generation(base), HeapGeneration::Unknown);
             assert!(!pointer_in_nursery(base));
+        });
+    }
+
+    #[test]
+    fn generation_metadata_arena_reset_stats_reports_deallocated_blocks_as_returned_not_reusable() {
+        run_with_fresh_arenas(|| {
+            let (idx, base, size, _before_offset, stats) =
+                reset_single_reclaimable_nursery_block(1);
+            assert_eq!(stats.reset_blocks, 1);
+            assert_eq!(stats.reusable_bytes, 0);
+            assert_eq!(stats.deallocated_blocks, 1);
+            assert_eq!(stats.deallocated_bytes, size);
+            ARENA.with(|a| unsafe {
+                let arena = &*a.get();
+                assert!(arena.blocks[idx].data.is_null());
+                assert_eq!(arena.blocks[idx].size, 0);
+            });
+            assert_eq!(classify_heap_generation(base), HeapGeneration::Unknown);
         });
     }
 

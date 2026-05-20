@@ -1211,6 +1211,8 @@ struct EvacuationTraceStats {
     old_page_moved_bytes: usize,
     released_original_objects: usize,
     released_original_bytes: usize,
+    released_original_reusable_bytes: usize,
+    released_original_returned_bytes: usize,
     retained_forwarded_stub_objects: usize,
     retained_forwarded_stub_bytes: usize,
 }
@@ -1520,9 +1522,14 @@ impl Default for EvacuationPolicyDecision {
 
 #[derive(Clone, Copy, Default)]
 struct SweepTraceStats {
+    dead_bytes: u64,
+    // Compatibility alias for dead_bytes.
     freed_bytes: u64,
+    reusable_bytes: usize,
+    returned_bytes: usize,
     reset_blocks: usize,
     deallocated_blocks: usize,
+    // Compatibility alias for returned_bytes.
     deallocated_bytes: usize,
     retained_forwarded_stub_objects: usize,
     retained_forwarded_stub_bytes: usize,
@@ -1699,6 +1706,8 @@ impl GcCycleTrace {
                 "allocated_bytes": self.old_pages.allocated_bytes,
                 "live_bytes": self.old_pages.live_bytes,
                 "dead_bytes": self.old_pages.dead_bytes,
+                "reusable_bytes": self.old_pages.reusable_bytes,
+                "returned_bytes": self.old_pages.returned_bytes,
                 "pinned_bytes": self.old_pages.pinned_bytes,
                 "object_count": self.old_pages.object_count,
                 "live_object_count": self.old_pages.live_object_count,
@@ -1745,6 +1754,8 @@ impl GcCycleTrace {
                 "old_page_moved_bytes": self.evacuation.old_page_moved_bytes,
                 "released_original_objects": self.evacuation.released_original_objects,
                 "released_original_bytes": self.evacuation.released_original_bytes,
+                "released_original_reusable_bytes": self.evacuation.released_original_reusable_bytes,
+                "released_original_returned_bytes": self.evacuation.released_original_returned_bytes,
                 "retained_forwarded_stub_objects": self.evacuation.retained_forwarded_stub_objects,
                 "retained_forwarded_stub_bytes": self.evacuation.retained_forwarded_stub_bytes,
             },
@@ -1794,7 +1805,10 @@ impl GcCycleTrace {
                 "marked_objects": self.block_persist.marked_objects,
             },
             "sweep": {
+                "dead_bytes": self.sweep.dead_bytes,
                 "freed_bytes": self.sweep.freed_bytes,
+                "reusable_bytes": self.sweep.reusable_bytes,
+                "returned_bytes": self.sweep.returned_bytes,
                 "reset_blocks": self.sweep.reset_blocks,
                 "deallocated_blocks": self.sweep.deallocated_blocks,
                 "deallocated_bytes": self.sweep.deallocated_bytes,
@@ -3610,6 +3624,8 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
             let released = release_evacuated_original_forwarding_stubs(&evacuated_original_headers);
             evacuation.released_original_objects = released.released_original_objects;
             evacuation.released_original_bytes = released.released_original_bytes;
+            evacuation.released_original_reusable_bytes = released.released_original_reusable_bytes;
+            evacuation.released_original_returned_bytes = released.released_original_returned_bytes;
         }
     }
 
@@ -7995,10 +8011,13 @@ fn gc_collect_minor_copying_fast_path(
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = collector.stats;
         trace.sweep = SweepTraceStats {
+            dead_bytes: freed_bytes,
             freed_bytes,
+            reusable_bytes: reset.reusable_bytes,
+            returned_bytes: reset.deallocated_bytes,
             reset_blocks: reset.reset_blocks,
-            deallocated_blocks: 0,
-            deallocated_bytes: 0,
+            deallocated_blocks: reset.deallocated_blocks,
+            deallocated_bytes: reset.deallocated_bytes,
             retained_forwarded_stub_objects: 0,
             retained_forwarded_stub_bytes: 0,
         };
@@ -8941,7 +8960,10 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
     let reset = crate::arena::arena_reset_empty_blocks(&block_has_live);
 
     SweepTraceStats {
+        dead_bytes: freed_bytes,
         freed_bytes,
+        reusable_bytes: reset.reusable_bytes,
+        returned_bytes: reset.deallocated_bytes,
         reset_blocks: reset.reset_blocks,
         deallocated_blocks: reset.deallocated_blocks,
         deallocated_bytes: reset.deallocated_bytes,
@@ -13753,6 +13775,8 @@ mod tests {
         );
         assert_eq!(summary.live_bytes, live_total);
         assert_eq!(summary.dead_bytes, dead_total);
+        assert_eq!(summary.reusable_bytes, 0);
+        assert_eq!(summary.returned_bytes, 0);
         assert_eq!(summary.pinned_bytes, 0);
         assert_eq!(
             summary.live_object_count,
@@ -13793,12 +13817,64 @@ mod tests {
         );
         assert_eq!(summary.live_bytes, live_total);
         assert_eq!(summary.dead_bytes, dead_total);
+        assert_eq!(summary.reusable_bytes, 0);
+        assert_eq!(summary.returned_bytes, 0);
         assert_eq!(summary.pinned_bytes, 0);
         assert_eq!(summary.live_object_count, 1);
         assert_eq!(summary.dead_object_count, 1);
         assert_eq!(summary.pinned_object_count, 0);
         assert_eq!(summary.fragmented_pages, 1);
         assert_eq!(summary.evacuation_eligible_pages, 1);
+    }
+
+    #[test]
+    fn test_old_page_reclamation_telemetry_dead_old_object_not_reusable_or_returned() {
+        let _isolation = copying_nursery_isolation_lock();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        crate::arena::old_pages_begin_gc_cycle();
+
+        let dead = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        let (_dead_header, dead_total) = old_test_header_and_size(dead);
+
+        let sweep = sweep_with_age_bump(false);
+        let summary = crate::arena::old_page_summary();
+
+        assert!(summary.dead_bytes >= dead_total);
+        assert_eq!(summary.reusable_bytes, 0);
+        assert_eq!(summary.returned_bytes, 0);
+        assert!(sweep.dead_bytes >= dead_total as u64);
+        assert_eq!(sweep.reusable_bytes, 0);
+        assert_eq!(sweep.returned_bytes, 0);
+
+        clear_marks();
+        remembered_set_clear();
+    }
+
+    #[test]
+    fn test_old_page_reclamation_telemetry_dead_large_object_not_reusable_or_returned() {
+        let _isolation = copying_nursery_isolation_lock();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        crate::arena::old_pages_begin_gc_cycle();
+
+        let dead_buffer = crate::buffer::buffer_alloc(LARGE_OBJECT_THRESHOLD_BYTES as u32) as usize;
+        let (_dead_header, dead_total) = old_test_header_and_size(dead_buffer);
+
+        let sweep = sweep_with_age_bump(false);
+        let summary = crate::arena::old_page_summary();
+
+        assert!(summary.dead_bytes >= dead_total);
+        assert_eq!(summary.reusable_bytes, 0);
+        assert_eq!(summary.returned_bytes, 0);
+        assert!(sweep.dead_bytes >= dead_total as u64);
+        assert_eq!(sweep.reusable_bytes, 0);
+        assert_eq!(sweep.returned_bytes, 0);
+
+        clear_marks();
+        remembered_set_clear();
     }
 
     #[test]
@@ -13935,8 +14011,21 @@ mod tests {
             Some(pinned_total as u64)
         );
         assert_eq!(old_pages["dead_bytes"].as_u64(), Some(0));
+        assert_eq!(old_pages["reusable_bytes"].as_u64(), Some(0));
+        assert_eq!(old_pages["returned_bytes"].as_u64(), Some(0));
         assert_eq!(old_pages["pinned_object_count"].as_u64(), Some(1));
         assert_eq!(old_pages["evacuation_eligible_pages"].as_u64(), Some(0));
+        assert!(event["sweep"]["dead_bytes"].as_u64().is_some());
+        assert!(event["sweep"]["reusable_bytes"].as_u64().is_some());
+        assert!(event["sweep"]["returned_bytes"].as_u64().is_some());
+        assert_eq!(
+            event["evacuation"]["released_original_reusable_bytes"].as_u64(),
+            Some(0)
+        );
+        assert_eq!(
+            event["evacuation"]["released_original_returned_bytes"].as_u64(),
+            Some(0)
+        );
 
         unsafe {
             (*pinned_header).gc_flags &= !GC_FLAG_PINNED;
@@ -14054,6 +14143,8 @@ mod tests {
 
         let released = release_evacuated_original_forwarding_stubs(&original_headers);
         assert_eq!(released.released_original_objects, 1);
+        assert_eq!(released.released_original_reusable_bytes, 0);
+        assert_eq!(released.released_original_returned_bytes, 0);
         clear_marks();
         CONS_PINNED.with(|s| s.borrow_mut().clear());
     }
@@ -14406,6 +14497,13 @@ mod tests {
         trace.evacuation_policy.snapshot.old_page_reclaimable_bytes = 192;
         trace.evacuation.old_page_moved_objects = 1;
         trace.evacuation.old_page_moved_bytes = 64;
+        trace.evacuation.released_original_objects = 1;
+        trace.evacuation.released_original_bytes = 64;
+        trace.sweep.dead_bytes = 192;
+        trace.sweep.freed_bytes = 192;
+        trace.sweep.reusable_bytes = 128;
+        trace.sweep.returned_bytes = 32;
+        trace.sweep.deallocated_bytes = 32;
 
         let event = trace.into_json(GcStepSnapshot::current());
 
@@ -14421,6 +14519,23 @@ mod tests {
             event["evacuation"]["old_page_moved_bytes"].as_u64(),
             Some(64)
         );
+        assert_eq!(
+            event["evacuation"]["released_original_bytes"].as_u64(),
+            Some(64)
+        );
+        assert_eq!(
+            event["evacuation"]["released_original_reusable_bytes"].as_u64(),
+            Some(0)
+        );
+        assert_eq!(
+            event["evacuation"]["released_original_returned_bytes"].as_u64(),
+            Some(0)
+        );
+        assert_eq!(event["sweep"]["dead_bytes"].as_u64(), Some(192));
+        assert_eq!(event["sweep"]["freed_bytes"].as_u64(), Some(192));
+        assert_eq!(event["sweep"]["reusable_bytes"].as_u64(), Some(128));
+        assert_eq!(event["sweep"]["returned_bytes"].as_u64(), Some(32));
+        assert_eq!(event["sweep"]["deallocated_bytes"].as_u64(), Some(32));
     }
 
     #[test]
@@ -17955,6 +18070,8 @@ mod tests {
         let released = release_evacuated_original_forwarding_stubs(&evacuated_original_headers);
         assert_eq!(released.released_original_objects, 1);
         assert_eq!(released.released_original_bytes, total);
+        assert_eq!(released.released_original_reusable_bytes, 0);
+        assert_eq!(released.released_original_returned_bytes, 0);
         unsafe {
             assert_eq!(
                 (*header).gc_flags & GC_FLAG_FORWARDED,
@@ -17964,6 +18081,7 @@ mod tests {
         }
 
         let sweep = sweep_with_age_bump(false);
+        assert_eq!(sweep.dead_bytes, sweep.freed_bytes);
         assert!(
             sweep.freed_bytes >= total as u64,
             "released evacuation original should contribute to sweep reclaimable bytes"
