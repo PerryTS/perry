@@ -2610,6 +2610,27 @@ pub(super) unsafe fn note_object_field_slot(
     crate::gc::layout_note_slot(obj as usize, field_index, value_bits);
 }
 
+pub(crate) unsafe fn gc_keys_array_slot(obj: *mut ObjectHeader) -> Option<*mut u64> {
+    if obj.is_null() || (*obj).keys_array.is_null() {
+        return None;
+    }
+    Some(&mut (*obj).keys_array as *mut _ as *mut u64)
+}
+
+pub(crate) unsafe fn gc_field_slot_range(
+    obj: *mut ObjectHeader,
+) -> Option<crate::gc::HeapSlotRange> {
+    if obj.is_null() {
+        return None;
+    }
+    let field_count = (*obj).field_count as usize;
+    if field_count > 1_000_000 {
+        return None;
+    }
+    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+    Some(crate::gc::HeapSlotRange::new(fields, field_count))
+}
+
 #[inline]
 pub(super) unsafe fn rebuild_object_field_layout(obj: *mut ObjectHeader, slot_count: usize) {
     let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;

@@ -549,6 +549,20 @@ pub struct ClosureHeader {
     pub type_tag: u32,
 }
 
+pub(crate) unsafe fn gc_capture_slot_range(
+    closure: *mut ClosureHeader,
+) -> Option<crate::gc::HeapSlotRange> {
+    if closure.is_null() {
+        return None;
+    }
+    let capture_count = real_capture_count((*closure).capture_count) as usize;
+    if capture_count > 1_000_000 {
+        return None;
+    }
+    let captures = (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut u64;
+    Some(crate::gc::HeapSlotRange::new(captures, capture_count))
+}
+
 /// Allocate a closure with space for captured values.
 /// The high bit of `capture_count` may contain CAPTURES_THIS_FLAG to indicate
 /// that slot 0 is reserved for `this`. The flag is preserved in the header

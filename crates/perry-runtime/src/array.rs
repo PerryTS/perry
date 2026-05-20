@@ -257,6 +257,23 @@ unsafe fn array_elements_ptr(arr: *mut ArrayHeader) -> *mut u64 {
     (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64
 }
 
+pub(crate) unsafe fn gc_element_slot_range(
+    arr: *mut ArrayHeader,
+) -> Option<crate::gc::HeapSlotRange> {
+    if arr.is_null() {
+        return None;
+    }
+    let length = (*arr).length as usize;
+    let capacity = (*arr).capacity as usize;
+    if length > capacity || length > 16_000_000 {
+        return None;
+    }
+    Some(crate::gc::HeapSlotRange::new(
+        array_elements_ptr(arr),
+        length,
+    ))
+}
+
 #[inline]
 unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
     crate::gc::layout_note_slot(arr as usize, index, value_bits);
