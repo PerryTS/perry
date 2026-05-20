@@ -86,7 +86,7 @@ Perry uses two-bit aging encoded in `gc_flags` (`gc.rs:64`):
 
 `PROMOTION_AGE = 2`. The two-bit scheme avoids needing a counter field in the header.
 
-By default, tenured objects stay physically where they are in the nursery — promotion is a flag flip, not a copy. An optional **evacuation pass** (`PERRY_GEN_GC_EVACUATE=1`) copies tenured non-pinned objects into `OLD_ARENA` and rewrites all references to point at the new locations. Evacuation is correctness-safe and complete, but defaults off because on workloads where nothing tenures it's pure overhead.
+Tenured objects initially stay physically where they are in the nursery — promotion is a flag flip, not a copy. A telemetry-driven **evacuation policy** copies tenured non-pinned objects into `OLD_ARENA` and rewrites all references to point at the new locations only when generated write barriers are active and nursery/RSS pressure plus measured movable candidates justify the extra work. Low-pressure cycles, cycles with no movable candidates, and cycles without generated write barriers skip evacuation and reference rewriting.
 
 ### Write barriers and the remembered set
 
@@ -94,7 +94,7 @@ Generational collectors have one fundamental problem: if an old-gen object point
 
 The fix is a **write barrier**: every time a pointer field is written, the runtime checks "is this old → young?" and, if so, records the parent in a **remembered set**. Minor GCs treat remembered-set entries as additional roots.
 
-In Perry, the runtime barrier is always present: `js_write_barrier(parent, child)` (`gc.rs:3773`). Whether codegen emits a call to it on every pointer store is gated by `PERRY_WRITE_BARRIERS=1` (default off — barrier emission costs cycles even when the barrier is trivially a no-op, and on workloads that don't tenure old objects there are no old → young writes to record anyway). When the flag is off, the runtime falls back to scanning more conservatively.
+In Perry, the runtime barrier is always present: `js_write_barrier(parent, child)` (`gc.rs:3773`). Codegen emits write-barrier calls by default so copied minor GC and evacuation can rely on exact dirty-page data. Set `PERRY_WRITE_BARRIERS=0`/`off`/`false` during compile to suppress generated barrier calls for benchmark/debug bisection; at runtime, the same setting disables runtime exact helper barriers. Copied-minor and evacuation then treat barrier data as inactive and fall back to conservative paths.
 
 ## Triggers and tuning
 
@@ -113,9 +113,11 @@ Idle nursery blocks observed empty for 2 GC cycles are `dealloc`'d back to the O
 | Env var | Effect |
 |---|---|
 | `PERRY_GEN_GC=0` / `off` / `false` | Disable generational mode; fall back to full mark-sweep (intended for bisection only). |
-| `PERRY_GEN_GC_EVACUATE=1` | Enable the copying evacuation pass for tenured objects. |
-| `PERRY_WRITE_BARRIERS=1` | Tell codegen to emit `js_write_barrier` calls on pointer stores. |
-| `PERRY_GC_DIAG=1` | Print per-cycle diagnostics (live bytes, freed bytes, time, pin count). |
+| `PERRY_GEN_GC_EVACUATE=0` / `off` / `false` | Disable policy evacuation. `=1` / `on` / `true` is accepted as "allow the auto-policy", not as unconditional evacuation. |
+| `PERRY_GC_FORCE_EVACUATE=1` | With generated write barriers active and policy evacuation allowed, stress-copy every marked non-pinned nursery object instead of only tenured survivors. |
+| `PERRY_GC_VERIFY_EVACUATION=1` | After an evacuation that actually forwards objects, panic if any mutable live slot still points at a forwarded nursery object after rewrite. |
+| `PERRY_WRITE_BARRIERS=0` / `off` / `false` | Disable codegen-emitted write barriers at compile time and runtime exact helper barriers at runtime for benchmark/debug bisection. Unset, `=1`, `=on`, and `=true` keep barriers enabled. |
+| `PERRY_GC_DIAG=1` | Print per-cycle diagnostics, including one evacuation-policy line for cycles where evacuation was considered and for `barriers_inactive` skips. |
 
 ## Why this design
 

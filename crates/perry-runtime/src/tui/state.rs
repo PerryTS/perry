@@ -39,12 +39,14 @@ static SLOTS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 /// Pre-fix only numeric-state demos worked; storing an array reference
 /// then triggering allocation freed it (#679 follow-up).
 pub fn scan_state_slot_roots(mark: &mut dyn FnMut(f64)) {
-    let s = match SLOTS.try_lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
-    for bits in s.iter() {
-        mark(f64::from_bits(*bits));
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_state_slot_roots_mut(&mut visitor);
+}
+
+pub fn scan_state_slot_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
+    for bits in s.iter_mut() {
+        visitor.visit_nanbox_u64_slot(bits);
     }
 }
 
@@ -52,7 +54,7 @@ pub fn scan_state_slot_roots(mark: &mut dyn FnMut(f64)) {
 /// JSValue bits). Returns the slot index as the handle.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_state_alloc(initial: f64) -> i64 {
-    let mut s = SLOTS.lock().unwrap();
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     let h = s.len() as i64;
     s.push(initial.to_bits());
     h
@@ -62,7 +64,7 @@ pub extern "C" fn js_perry_tui_state_alloc(initial: f64) -> i64 {
 /// handles return undefined.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_state_get(handle: i64) -> f64 {
-    let s = SLOTS.lock().unwrap();
+    let s = crate::gc::lock_gc_root_registry(&SLOTS);
     match s.get(handle as usize) {
         Some(bits) => f64::from_bits(*bits),
         None => f64::from_bits(0x7FFC_0000_0000_0001), // TAG_UNDEFINED
@@ -74,7 +76,7 @@ pub extern "C" fn js_perry_tui_state_get(handle: i64) -> f64 {
 /// handles silently no-op.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_state_set(handle: i64, value: f64) -> f64 {
-    let mut s = SLOTS.lock().unwrap();
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     if let Some(slot) = s.get_mut(handle as usize) {
         let new_bits = value.to_bits();
         if *slot != new_bits {
@@ -83,6 +85,18 @@ pub extern "C" fn js_perry_tui_state_set(handle: i64, value: f64) -> f64 {
         }
     }
     f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+#[cfg(test)]
+pub(crate) fn test_reset_state_slots() {
+    crate::gc::lock_gc_root_registry(&SLOTS).clear();
+    STATE_DIRTY.store(false, Ordering::Release);
+}
+
+#[cfg(test)]
+pub(crate) fn test_with_state_slots_locked<R>(f: impl FnOnce() -> R) -> R {
+    let _slots = crate::gc::lock_gc_root_registry(&SLOTS);
+    f()
 }
 
 #[cfg(test)]
@@ -103,7 +117,7 @@ mod tests {
     /// taking the lock.
     fn reset() -> std::sync::MutexGuard<'static, ()> {
         let g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        SLOTS.lock().unwrap().clear();
+        crate::gc::lock_gc_root_registry(&SLOTS).clear();
         STATE_DIRTY.store(false, Ordering::Release);
         g
     }

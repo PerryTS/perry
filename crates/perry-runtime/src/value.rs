@@ -1142,6 +1142,29 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     if idx_i32 < 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    // Registry-backed Buffer (`Buffer.from(...)`, `js_buffer_alloc`, the
+    // `'data'`-event chunk an http/net listener receives). These carry NO
+    // GcHeader (see `crates/perry-runtime/src/buffer.rs` — "Buffers carry
+    // no GcHeader") and store one byte per element after an 8-byte
+    // `BufferHeader { length, capacity }`. The generic fall-through below
+    // does `raw_ptr - GC_HEADER_SIZE` to read an `obj_type` that doesn't
+    // exist for a buffer (garbage that never matches GC_TYPE_ARRAY), then
+    // reads an 8-byte f64 at `raw_ptr + 8 + idx*8` straight out of the
+    // buffer's 1-byte-per-element data region — `chunk[0]` came back as a
+    // denormal/garbage f64 that printed `0`, while `.toString()` /
+    // `.length` / `Array.from(chunk)` (which all probe BUFFER_REGISTRY)
+    // were correct. Probe the registry first and read the byte the same
+    // way the working accessors do (`js_buffer_get` → `buffer_data()`).
+    // Node semantics: in-range → the byte (0..255); out-of-range → undefined.
+    if crate::buffer::is_registered_buffer(raw_ptr) {
+        let buf = raw_ptr as *const crate::buffer::BufferHeader;
+        let len = unsafe { (*buf).length };
+        if (idx_i32 as u32) >= len {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        let byte_val = crate::buffer::js_buffer_get(buf, idx_i32);
+        return byte_val as f64;
+    }
     if raw_ptr >= crate::gc::GC_HEADER_SIZE {
         let gc_hdr = unsafe {
             (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader

@@ -80,6 +80,7 @@ unsafe fn unpin_promise_after_native_resolution(promise_ptr: usize) {
 /// `js_stdlib_process_pending`.
 #[inline]
 pub unsafe fn js_promise_new_for_native_resolution() -> *mut perry_runtime::Promise {
+    ensure_gc_scanner_registered();
     let p = perry_runtime::js_promise_new();
     pin_promise_for_native_resolution(p as usize);
     p
@@ -127,6 +128,22 @@ static PENDING_RESOLUTIONS: Lazy<Mutex<Vec<PendingResolution>>> =
 static PENDING_DEFERRED: Lazy<Mutex<Vec<DeferredResolution>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
 
+thread_local! {
+    static GC_SCANNER_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn ensure_gc_scanner_registered() {
+    GC_SCANNER_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
+        perry_runtime::gc::gc_register_mutable_root_scanner(
+            scan_pending_native_async_resolution_roots_mut,
+        );
+        registered.set(true);
+    });
+}
+
 /// A pending promise resolution (for simple values that don't need conversion)
 struct PendingResolution {
     /// Pointer to the Promise object (as usize for Send)
@@ -147,6 +164,27 @@ struct DeferredResolution {
     /// Boxed converter function that creates the JSValue on the main thread
     /// Returns the JSValue bits
     converter: Box<dyn FnOnce() -> u64 + Send>,
+}
+
+/// Mutable GC scanner for native async completions waiting in stdlib's
+/// main-thread pump. Promise pointers are raw heap pointers; simple
+/// result bits may be NaN-boxed heap values.
+pub fn scan_pending_native_async_resolution_roots_mut(
+    visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>,
+) {
+    {
+        let mut pending = PENDING_RESOLUTIONS.lock().unwrap();
+        for resolution in pending.iter_mut() {
+            visitor.visit_usize_slot(&mut resolution.promise_ptr);
+            visitor.visit_nanbox_u64_slot(&mut resolution.result_bits);
+        }
+    }
+    {
+        let mut pending = PENDING_DEFERRED.lock().unwrap();
+        for resolution in pending.iter_mut() {
+            visitor.visit_usize_slot(&mut resolution.promise_ptr);
+        }
+    }
 }
 
 /// Get a reference to the global runtime
@@ -219,6 +257,7 @@ where
 /// that don't involve pointer allocations. For complex values like arrays,
 /// objects, or strings, use queue_deferred_resolution instead.
 pub fn queue_promise_resolution(promise_ptr: usize, is_success: bool, result_bits: u64) {
+    ensure_gc_scanner_registered();
     {
         let mut pending = PENDING_RESOLUTIONS.lock().unwrap();
         pending.push(PendingResolution {
@@ -242,6 +281,7 @@ pub fn queue_deferred_resolution<F>(promise_ptr: usize, is_success: bool, conver
 where
     F: FnOnce() -> u64 + Send + 'static,
 {
+    ensure_gc_scanner_registered();
     {
         let mut pending = PENDING_DEFERRED.lock().unwrap();
         pending.push(DeferredResolution {
@@ -273,6 +313,7 @@ pub fn ensure_pump_registered() {
             fn js_register_stdlib_has_active(f: extern "C" fn() -> i32);
             fn js_stdlib_init_dispatch();
         }
+        ensure_gc_scanner_registered();
         unsafe {
             js_register_stdlib_pump(js_stdlib_process_pending);
             js_register_stdlib_has_active(js_stdlib_has_active_handles);
@@ -297,55 +338,51 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     let mut count = 0i32;
 
     // Process simple resolutions first
-    {
+    let simple_resolutions: Vec<PendingResolution> = {
         let mut pending = PENDING_RESOLUTIONS.lock().unwrap();
         let n = pending.len();
         count += n as i32;
+        pending.drain(..).collect()
+    };
 
-        for resolution in pending.drain(..) {
-            let promise_ptr_usize = resolution.promise_ptr;
-            let promise_ptr = promise_ptr_usize as *mut perry_runtime::Promise;
-            // Issue #859: unpin BEFORE resolve so the just-settled promise
-            // can be reclaimed by the next GC. Resolve doesn't trigger GC
-            // mid-call, so ordering here is purely about leaving a clean
-            // GC state after the loop.
-            unsafe { unpin_promise_after_native_resolution(promise_ptr_usize) };
-            if resolution.is_success {
-                perry_runtime::js_promise_resolve(
-                    promise_ptr,
-                    f64::from_bits(resolution.result_bits),
-                );
-            } else {
-                perry_runtime::js_promise_reject(
-                    promise_ptr,
-                    f64::from_bits(resolution.result_bits),
-                );
-            }
+    for resolution in simple_resolutions {
+        let promise_ptr_usize = resolution.promise_ptr;
+        let promise_ptr = promise_ptr_usize as *mut perry_runtime::Promise;
+        // Issue #859: unpin BEFORE resolve so the just-settled promise
+        // can be reclaimed by the next GC. Resolve doesn't trigger GC
+        // mid-call, so ordering here is purely about leaving a clean
+        // GC state after the loop.
+        unsafe { unpin_promise_after_native_resolution(promise_ptr_usize) };
+        if resolution.is_success {
+            perry_runtime::js_promise_resolve(promise_ptr, f64::from_bits(resolution.result_bits));
+        } else {
+            perry_runtime::js_promise_reject(promise_ptr, f64::from_bits(resolution.result_bits));
         }
     }
 
     // Process deferred resolutions - these run converter functions on the main thread
-    {
+    let deferred_resolutions: Vec<DeferredResolution> = {
         let mut pending = PENDING_DEFERRED.lock().unwrap();
         let n = pending.len();
         count += n as i32;
+        pending.drain(..).collect()
+    };
 
-        for resolution in pending.drain(..) {
-            let promise_ptr_usize = resolution.promise_ptr;
-            let promise_ptr = promise_ptr_usize as *mut perry_runtime::Promise;
-            // Run the converter on the main thread to create JSValues safely
-            let result_bits = (resolution.converter)();
+    for resolution in deferred_resolutions {
+        let promise_ptr_usize = resolution.promise_ptr;
+        let promise_ptr = promise_ptr_usize as *mut perry_runtime::Promise;
+        // Run the converter on the main thread to create JSValues safely
+        let result_bits = (resolution.converter)();
 
-            // Issue #859: unpin BEFORE resolve. The converter ran first
-            // and may itself have allocated (creating the result string,
-            // etc.), but the promise stayed pinned across that work — so
-            // even if the converter triggered GC, the promise survived.
-            unsafe { unpin_promise_after_native_resolution(promise_ptr_usize) };
-            if resolution.is_success {
-                perry_runtime::js_promise_resolve(promise_ptr, f64::from_bits(result_bits));
-            } else {
-                perry_runtime::js_promise_reject(promise_ptr, f64::from_bits(result_bits));
-            }
+        // Issue #859: unpin BEFORE resolve. The converter ran first
+        // and may itself have allocated (creating the result string,
+        // etc.), but the promise stayed pinned across that work — so
+        // even if the converter triggered GC, the promise survived.
+        unsafe { unpin_promise_after_native_resolution(promise_ptr_usize) };
+        if resolution.is_success {
+            perry_runtime::js_promise_resolve(promise_ptr, f64::from_bits(result_bits));
+        } else {
+            perry_runtime::js_promise_reject(promise_ptr, f64::from_bits(result_bits));
         }
     }
 
@@ -633,6 +670,7 @@ where
     F: Future<Output = Result<u64, String>> + Send + 'static,
 {
     ensure_pump_registered();
+    ensure_gc_scanner_registered();
     // Convert to usize for Send.
     let ptr = promise_ptr as usize;
     // Issue #859: pin the promise BEFORE crossing the tokio boundary.
@@ -691,6 +729,7 @@ where
     C: FnOnce(T) -> u64 + Send + 'static,
 {
     ensure_pump_registered();
+    ensure_gc_scanner_registered();
     let ptr = promise_ptr as usize;
     // Issue #859: pin the promise BEFORE crossing the tokio boundary.
     pin_promise_for_native_resolution(ptr);
@@ -719,4 +758,44 @@ where
         EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
         perry_runtime::event_pump::js_notify_main_thread();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn clear_pending() {
+        PENDING_RESOLUTIONS.lock().unwrap().clear();
+        PENDING_DEFERRED.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn async_bridge_pending_resolution_scanner_emits_promise_and_result_roots() {
+        clear_pending();
+        let promise_ptr = 0x1234_5000usize;
+        let deferred_promise_ptr = 0x1234_6000usize;
+        let result_bits = 0x7FFD_0000_1234_7000u64;
+        PENDING_RESOLUTIONS.lock().unwrap().push(PendingResolution {
+            promise_ptr,
+            is_success: true,
+            result_bits,
+        });
+        PENDING_DEFERRED.lock().unwrap().push(DeferredResolution {
+            promise_ptr: deferred_promise_ptr,
+            is_success: true,
+            converter: Box::new(|| 0),
+        });
+
+        let mut emitted = Vec::new();
+        {
+            let mut mark = |value: f64| emitted.push(value.to_bits());
+            let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(&mut mark);
+            scan_pending_native_async_resolution_roots_mut(&mut visitor);
+        }
+
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | promise_ptr as u64)));
+        assert!(emitted.contains(&result_bits));
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | deferred_promise_ptr as u64)));
+        clear_pending();
+    }
 }

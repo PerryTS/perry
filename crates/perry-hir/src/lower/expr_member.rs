@@ -533,6 +533,19 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                             | ("IncomingMessage", "complete")
                             | ("IncomingMessage", "aborted")
                             | ("IncomingMessage", "destroyed")
+                            // Closes #769 followup — client-side `res.statusCode`
+                            // (and statusMessage / headers) returned the
+                            // 0.0 zero-sentinel from `lower_native_method_call`
+                            // because no NativeModSig matched and the receiver
+                            // had been pre-tagged ("http", "IncomingMessage"),
+                            // so the generic property dispatcher in the runtime
+                            // never saw the read. Rewrite to `__get_<prop>` so
+                            // the codegen routes through the perry-ext-http
+                            // accessor (which knows the client-IncomingMessage
+                            // registry).
+                            | ("IncomingMessage", "statusCode")
+                            | ("IncomingMessage", "statusMessage")
+                            | ("IncomingMessage", "headers")
                             | ("ServerResponse", "statusCode")
                             | ("ServerResponse", "headersSent")
                             | ("ServerResponse", "writableEnded")

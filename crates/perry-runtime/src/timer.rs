@@ -552,45 +552,145 @@ pub extern "C" fn js_interval_timer_next_deadline() -> f64 {
 
 /// GC root scanner: mark all values reachable from timer queues
 pub fn scan_timer_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_timer_roots_mut(&mut visitor);
+}
+
+pub fn scan_timer_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     // Scan promise-based timers
     {
-        let q = TIMER_QUEUE.lock().unwrap();
-        for timer in q.iter() {
-            if !timer.promise.is_null() {
-                let boxed = f64::from_bits(
-                    0x7FFD_0000_0000_0000 | (timer.promise as u64 & 0x0000_FFFF_FFFF_FFFF),
-                );
-                mark(boxed);
-            }
-            mark(timer.value);
+        let mut q = TIMER_QUEUE.lock().unwrap();
+        for timer in q.iter_mut() {
+            visitor.visit_raw_mut_ptr_slot(&mut timer.promise);
+            visitor.visit_nanbox_f64_slot(&mut timer.value);
         }
     }
 
     // Scan callback timers (closure pointers stored as i64)
     {
-        let q = CALLBACK_TIMERS.lock().unwrap();
-        for timer in q.iter() {
+        let mut q = CALLBACK_TIMERS.lock().unwrap();
+        for timer in q.iter_mut() {
             if !timer.cleared && timer.callback != 0 {
-                let boxed = f64::from_bits(
-                    0x7FFD_0000_0000_0000 | (timer.callback as u64 & 0x0000_FFFF_FFFF_FFFF),
-                );
-                mark(boxed);
+                visitor.visit_i64_slot(&mut timer.callback);
             }
-            crate::async_context::scan_snapshot_roots(&timer.context, mark);
+            for arg in &mut timer.args {
+                visitor.visit_nanbox_f64_slot(arg);
+            }
+            crate::async_context::scan_snapshot_roots_mut(&mut timer.context, visitor);
         }
     }
 
     // Scan interval timers
     {
-        let q = INTERVAL_TIMERS.lock().unwrap();
-        for timer in q.iter() {
+        let mut q = INTERVAL_TIMERS.lock().unwrap();
+        for timer in q.iter_mut() {
             if !timer.cleared && timer.callback != 0 {
-                let boxed = f64::from_bits(
-                    0x7FFD_0000_0000_0000 | (timer.callback as u64 & 0x0000_FFFF_FFFF_FFFF),
-                );
-                mark(boxed);
+                visitor.visit_i64_slot(&mut timer.callback);
             }
-            crate::async_context::scan_snapshot_roots(&timer.context, mark);
+            crate::async_context::scan_snapshot_roots_mut(&mut timer.context, visitor);
         }
     }
+}
+
+#[cfg(test)]
+const TEST_CALLBACK_TIMER_ID: i64 = i64::MIN + 101;
+#[cfg(test)]
+const TEST_INTERVAL_TIMER_ID: i64 = i64::MIN + 102;
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct TestTimerScannerSnapshot {
+    pub timeout_promise_ptr: usize,
+    pub timeout_value_bits: u64,
+    pub callback_ptr: usize,
+    pub callback_arg_bits: u64,
+    pub callback_context_store_bits: u64,
+    pub interval_callback_ptr: usize,
+    pub interval_context_store_bits: u64,
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_timer_scanner_roots(
+    promise: *mut Promise,
+    value: f64,
+    callback: i64,
+    arg: f64,
+    context_store: f64,
+) {
+    let context = crate::async_context::test_snapshot_with_store(context_store);
+    let deadline = Instant::now() + Duration::from_secs(86_400);
+    TIMER_QUEUE.lock().unwrap().push(Timer {
+        deadline,
+        promise,
+        value,
+    });
+    CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
+        id: TEST_CALLBACK_TIMER_ID,
+        deadline,
+        callback,
+        args: vec![arg],
+        context: context.clone(),
+        async_id: 0,
+        trigger_async_id: 0,
+        cleared: false,
+    });
+    INTERVAL_TIMERS.lock().unwrap().push(IntervalTimer {
+        id: TEST_INTERVAL_TIMER_ID,
+        callback,
+        interval_ms: 86_400_000,
+        next_deadline: deadline,
+        context,
+        cleared: false,
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_timer_scanner_snapshot() -> TestTimerScannerSnapshot {
+    let mut snapshot = TestTimerScannerSnapshot::default();
+    if let Some(timer) = TIMER_QUEUE.lock().unwrap().last() {
+        snapshot.timeout_promise_ptr = timer.promise as usize;
+        snapshot.timeout_value_bits = timer.value.to_bits();
+    }
+    if let Some(timer) = CALLBACK_TIMERS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|timer| timer.id == TEST_CALLBACK_TIMER_ID)
+    {
+        snapshot.callback_ptr = timer.callback as usize;
+        snapshot.callback_arg_bits = timer.args.first().copied().map(f64::to_bits).unwrap_or(0);
+        snapshot.callback_context_store_bits =
+            crate::async_context::test_snapshot_first_store(&timer.context)
+                .map(f64::to_bits)
+                .unwrap_or(0);
+    }
+    if let Some(timer) = INTERVAL_TIMERS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|timer| timer.id == TEST_INTERVAL_TIMER_ID)
+    {
+        snapshot.interval_callback_ptr = timer.callback as usize;
+        snapshot.interval_context_store_bits =
+            crate::async_context::test_snapshot_first_store(&timer.context)
+                .map(f64::to_bits)
+                .unwrap_or(0);
+    }
+    snapshot
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_timer_scanner_roots(promise_before: usize, promise_after: usize) {
+    TIMER_QUEUE.lock().unwrap().retain(|timer| {
+        let promise = timer.promise as usize;
+        promise != promise_before && promise != promise_after
+    });
+    CALLBACK_TIMERS
+        .lock()
+        .unwrap()
+        .retain(|timer| timer.id != TEST_CALLBACK_TIMER_ID);
+    INTERVAL_TIMERS
+        .lock()
+        .unwrap()
+        .retain(|timer| timer.id != TEST_INTERVAL_TIMER_ID);
 }

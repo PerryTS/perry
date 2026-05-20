@@ -125,8 +125,44 @@ pub fn scan_snapshot_roots(snapshot: &AsyncContextSnapshot, mark: &mut dyn FnMut
     }
 }
 
+pub fn scan_snapshot_roots_mut(
+    snapshot: &mut AsyncContextSnapshot,
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+) {
+    for entry in &mut snapshot.entries {
+        for store in &mut entry.stores {
+            visitor.visit_nanbox_f64_slot(store);
+        }
+    }
+}
+
 pub fn scan_active_context_roots(mark: &mut dyn FnMut(f64)) {
     ACTIVE_CONTEXT.with(|ctx| {
-        scan_snapshot_roots(&ctx.borrow(), mark);
+        let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+        scan_snapshot_roots_mut(&mut ctx.borrow_mut(), &mut visitor);
     });
+}
+
+pub fn scan_active_context_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    ACTIVE_CONTEXT.with(|ctx| {
+        scan_snapshot_roots_mut(&mut ctx.borrow_mut(), visitor);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_snapshot_with_store(store: f64) -> AsyncContextSnapshot {
+    AsyncContextSnapshot {
+        entries: vec![AsyncContextEntry {
+            handle: -1,
+            stores: vec![store],
+        }],
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_snapshot_first_store(snapshot: &AsyncContextSnapshot) -> Option<f64> {
+    snapshot
+        .entries
+        .first()
+        .and_then(|entry| entry.stores.first().copied())
 }

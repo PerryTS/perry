@@ -130,7 +130,7 @@ static CALLBACKS: Mutex<Vec<f64>> = Mutex::new(Vec::new());
 /// caller can register slots in any order.
 #[no_mangle]
 pub extern "C" fn perry_arkts_register_callback(idx: i64, closure_d: f64) {
-    let mut cbs = CALLBACKS.lock().unwrap();
+    let mut cbs = crate::gc::lock_gc_root_registry(&CALLBACKS);
     let i = idx as usize;
     while cbs.len() <= i {
         cbs.push(f64::from_bits(TAG_UNDEFINED));
@@ -152,7 +152,7 @@ pub extern "C" fn perry_arkts_invoke_callback(idx: i64) -> f64 {
     // Snapshot under lock then drop so the closure body can re-enter
     // (e.g. a button handler that itself registers another callback).
     let closure_d = {
-        let cbs = CALLBACKS.lock().unwrap();
+        let cbs = crate::gc::lock_gc_root_registry(&CALLBACKS);
         let i = idx as usize;
         if i >= cbs.len() {
             arkts_log(&format!("invoke OOB idx={} cbs.len={}", i, cbs.len()));
@@ -192,7 +192,7 @@ pub extern "C" fn perry_arkts_invoke_callback1(idx: i64, arg_d: f64) -> f64 {
         arg_d.to_bits()
     ));
     let closure_d = {
-        let cbs = CALLBACKS.lock().unwrap();
+        let cbs = crate::gc::lock_gc_root_registry(&CALLBACKS);
         let i = idx as usize;
         if i >= cbs.len() {
             arkts_log(&format!("invoke1 OOB idx={} cbs.len={}", i, cbs.len()));
@@ -219,11 +219,41 @@ pub extern "C" fn perry_arkts_invoke_callback1(idx: i64, arg_d: f64) -> f64 {
 /// GC root scanner. Marks each registered closure pointer as live so the
 /// generational mark-sweep doesn't reclaim closure bodies between taps.
 pub fn arkts_callbacks_root_scanner(mark: &mut dyn FnMut(f64)) {
-    if let Ok(cbs) = CALLBACKS.try_lock() {
-        for &c in cbs.iter() {
-            mark(c);
-        }
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    arkts_callbacks_root_scanner_mut(&mut visitor);
+}
+
+pub fn arkts_callbacks_root_scanner_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut cbs = crate::gc::lock_gc_root_registry(&CALLBACKS);
+    for c in cbs.iter_mut() {
+        visitor.visit_nanbox_f64_slot(c);
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_arkts_callback_root(idx: usize, closure_d: f64) {
+    let mut cbs = crate::gc::lock_gc_root_registry(&CALLBACKS);
+    while cbs.len() <= idx {
+        cbs.push(f64::from_bits(TAG_UNDEFINED));
+    }
+    cbs[idx] = closure_d;
+}
+
+#[cfg(test)]
+pub(crate) fn test_arkts_callback_root(idx: usize) -> u64 {
+    let cbs = crate::gc::lock_gc_root_registry(&CALLBACKS);
+    cbs.get(idx).copied().map(f64::to_bits).unwrap_or(0)
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_arkts_callback_roots() {
+    crate::gc::lock_gc_root_registry(&CALLBACKS).clear();
+}
+
+#[cfg(test)]
+pub(crate) fn test_with_arkts_callback_roots_locked<R>(f: impl FnOnce() -> R) -> R {
+    let _callbacks = crate::gc::lock_gc_root_registry(&CALLBACKS);
+    f()
 }
 
 // --- Phase 2 v3 Option 1: showToast drain queue ---

@@ -244,9 +244,22 @@ fn print_uncaught(value: f64) {
 
 /// GC root scanner: mark the current exception value
 pub fn scan_exception_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_exception_roots_mut(&mut visitor);
+}
+
+pub fn scan_exception_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     unsafe {
         if HAS_EXCEPTION {
-            mark(CURRENT_EXCEPTION);
+            visitor.visit_nanbox_f64_raw_slot(&raw mut CURRENT_EXCEPTION);
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_exception(value: f64) {
+    unsafe {
+        CURRENT_EXCEPTION = value;
+        HAS_EXCEPTION = true;
     }
 }

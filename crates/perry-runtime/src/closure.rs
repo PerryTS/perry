@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 thread_local! {
     /// Singleton cache keyed by `func_ptr` for non-capturing closures.
-    /// See `js_closure_alloc_singleton` and `snapshot_singleton_closures`.
+    /// See `js_closure_alloc_singleton` and `scan_singleton_closure_roots_mut`.
     /// Pointer-keyed; uses `PtrHasher` (Fibonacci-multiplicative) to
     /// skip SipHash's per-byte cost — the function-pointer keys never
     /// come from external input and are already ~uniformly distributed.
@@ -569,6 +569,7 @@ pub extern "C" fn js_closure_alloc(func_ptr: *const u8, capture_count: u32) -> *
         (*ptr).func_ptr = func_ptr;
         (*ptr).capture_count = capture_count; // Preserve flag in high bit
         (*ptr).type_tag = CLOSURE_MAGIC;
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
     ptr
@@ -595,9 +596,8 @@ pub static CLOSURE_CAP_SINGLETON_MISS: std::sync::atomic::AtomicU64 =
 ///
 /// Safety: the cached closure has zero captures, so it has no per-call
 /// state — sharing it across all call sites is observationally identical
-/// to allocating fresh. The closure is GC-rooted by the singleton table
-/// (the table is scanned in `gc::trace_singleton_closures`) so it stays
-/// live across collections without being copied/moved.
+/// to allocating fresh. The closure is GC-rooted by the singleton table's
+/// mutable scanner so it stays live across collections.
 #[no_mangle]
 pub extern "C" fn js_closure_alloc_singleton(func_ptr: *const u8) -> *mut ClosureHeader {
     // Fast path: already cached. Drop the borrow before any potential
@@ -613,22 +613,78 @@ pub extern "C" fn js_closure_alloc_singleton(func_ptr: *const u8) -> *mut Closur
     allocated
 }
 
-/// Snapshot the singleton-closure table for the GC. Returns the cached
-/// closure pointers so `gc::build_valid_pointer_set` (or equivalent) can
-/// mark them as roots — without this, the GC would reclaim a singleton
-/// closure as soon as no live JSValue references it, even though emitted
-/// code keeps reaching for it via `js_closure_alloc_singleton`.
-pub fn snapshot_singleton_closures() -> Vec<*mut ClosureHeader> {
-    let mut out: Vec<*mut ClosureHeader> =
-        SINGLETON_CLOSURES.with(|s| s.borrow().values().copied().collect());
+/// Mutable GC scanner for singleton closure caches.
+///
+/// No-capture cache values are raw closure pointers. Captured cache entries
+/// additionally keep a bit-exact capture tuple as the cache key; each key word
+/// can be a NaN-boxed JSValue or a raw heap pointer, matching closure capture
+/// storage. The mutable visitor lets copied-minor rewrite both the closure's
+/// heap capture slots and the cache key words after moving young captures.
+pub fn scan_singleton_closure_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    SINGLETON_CLOSURES.with(|s| {
+        let mut closures = s.borrow_mut();
+        for closure in closures.values_mut() {
+            visitor.visit_raw_mut_ptr_slot(closure);
+        }
+    });
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
-        for slots in s.borrow().values() {
-            for (_caps, c) in slots {
-                out.push(*c);
+        let mut captured = s.borrow_mut();
+        for slots in captured.values_mut() {
+            for (capture_key, closure) in slots.iter_mut() {
+                visitor.visit_raw_mut_ptr_slot(closure);
+                for word in capture_key.iter_mut() {
+                    visitor.visit_heap_word_u64_slot(word);
+                }
             }
         }
     });
-    out
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_singleton_closure_caches() {
+    SINGLETON_CLOSURES.with(|s| s.borrow_mut().clear());
+    SINGLETON_CAPTURED_CLOSURES.with(|s| s.borrow_mut().clear());
+    CAPTURED_MISS_STREAK.with(|s| s.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_singleton_closure_cache(func_ptr: *const u8, closure: *mut ClosureHeader) {
+    SINGLETON_CLOSURES.with(|s| {
+        s.borrow_mut().insert(func_ptr as usize, closure);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_captured_singleton_closure_cache(
+    func_ptr: *const u8,
+    capture_key: Vec<u64>,
+    closure: *mut ClosureHeader,
+) {
+    SINGLETON_CAPTURED_CLOSURES.with(|s| {
+        s.borrow_mut()
+            .entry(func_ptr as usize)
+            .or_insert_with(Vec::new)
+            .insert(0, (capture_key, closure));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_singleton_closure_cache_entry(
+    func_ptr: *const u8,
+) -> Option<*mut ClosureHeader> {
+    SINGLETON_CLOSURES.with(|s| s.borrow().get(&(func_ptr as usize)).copied())
+}
+
+#[cfg(test)]
+pub(crate) fn test_captured_singleton_closure_cache_entries(
+    func_ptr: *const u8,
+) -> Vec<(Vec<u64>, *mut ClosureHeader)> {
+    SINGLETON_CAPTURED_CLOSURES.with(|s| {
+        s.borrow()
+            .get(&(func_ptr as usize))
+            .cloned()
+            .unwrap_or_default()
+    })
 }
 
 /// Maximum number of (captures-tuple, ClosureHeader) entries cached
@@ -699,6 +755,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
                 let dest =
                     (allocated as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut u64;
                 std::ptr::copy_nonoverlapping(captures_ptr, dest, n);
+                crate::gc::layout_rebuild_from_slots(allocated as *mut u8, dest as *const u64, n);
             }
         }
         return allocated;
@@ -742,6 +799,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
         unsafe {
             let dest = (allocated as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut u64;
             std::ptr::copy_nonoverlapping(captures_ptr, dest, n);
+            crate::gc::layout_rebuild_from_slots(allocated as *mut u8, dest as *const u64, n);
         }
     }
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
@@ -796,6 +854,7 @@ pub extern "C" fn js_closure_set_capture_f64(closure: *mut ClosureHeader, index:
         let captures_ptr =
             (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
         *captures_ptr.add(index as usize) = value;
+        crate::gc::layout_note_slot(closure as usize, index as usize, value.to_bits());
     }
 }
 
@@ -822,6 +881,7 @@ pub extern "C" fn js_closure_set_capture_ptr(closure: *mut ClosureHeader, index:
         let captures_ptr =
             (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut i64;
         *captures_ptr.add(index as usize) = value;
+        crate::gc::layout_note_slot(closure as usize, index as usize, value as u64);
     }
 }
 
@@ -1885,6 +1945,11 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
         for i in 1..count {
             *dst_captures.add(i) = *src_captures.add(i);
         }
+        crate::gc::layout_rebuild_from_slots(
+            new_closure as *mut u8,
+            dst_captures as *const u64,
+            count,
+        );
         // NaN-box the new closure pointer
         let new_ptr = new_closure as u64;
         f64::from_bits(0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF))
@@ -1945,6 +2010,11 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         }
         let this_slot = count - 1;
         *dst_captures.add(this_slot) = recv_box;
+        crate::gc::layout_rebuild_from_slots(
+            new_closure as *mut u8,
+            dst_captures as *const u64,
+            count,
+        );
         let new_ptr = new_closure as u64;
         0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF)
     }

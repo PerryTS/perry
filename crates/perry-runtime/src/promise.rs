@@ -9,7 +9,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 
 use crate::async_context::{
-    capture_context, enter_context, restore_context, scan_snapshot_roots, AsyncContextSnapshot,
+    capture_context, enter_context, restore_context, scan_snapshot_roots_mut, AsyncContextSnapshot,
 };
 
 // Cached `PERRY_MT_PROFILE` flag, populated once at process start.
@@ -240,8 +240,14 @@ pub extern "C" fn js_iter_result_get_done() -> f64 {
 /// this with the GC so they survive a collection that lands between
 /// `js_iter_result_set` and the next `js_iter_result_get_value`.
 pub fn scan_iter_result_root(mark: &mut dyn FnMut(f64)) {
-    let v = ITER_RESULT_VALUE.with(|c| c.get());
-    mark(v);
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_iter_result_root_mut(&mut visitor);
+}
+
+pub fn scan_iter_result_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    ITER_RESULT_VALUE.with(|c| {
+        visitor.visit_cell_f64_slot(c);
+    });
 }
 
 /// Promise state
@@ -1901,15 +1907,20 @@ thread_local! {
 
 /// GC root scanner for the LAST_ASYNC_STEP_THUNKS cache.
 pub fn scan_async_step_thunk_cache(mark: &mut dyn FnMut(f64)) {
-    let (_, f, r) = LAST_ASYNC_STEP_THUNKS.with(|c| c.get());
-    if !f.is_null() {
-        let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (f as u64 & 0x0000_FFFF_FFFF_FFFF));
-        mark(boxed);
-    }
-    if !r.is_null() {
-        let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (r as u64 & 0x0000_FFFF_FFFF_FFFF));
-        mark(boxed);
-    }
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_async_step_thunk_cache_mut(&mut visitor);
+}
+
+pub fn scan_async_step_thunk_cache_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    LAST_ASYNC_STEP_THUNKS.with(|c| {
+        let (mut key, mut fulfill, mut reject) = c.get();
+        let mut changed = visitor.visit_metadata_usize_slot(&mut key);
+        changed |= visitor.visit_raw_mut_ptr_slot(&mut fulfill);
+        changed |= visitor.visit_raw_mut_ptr_slot(&mut reject);
+        if changed {
+            c.set((key, fulfill, reject));
+        }
+    });
 }
 
 /// Build (fulfill, reject) thunks for the async-step promise-chain
@@ -3054,76 +3065,188 @@ extern "C" fn promise_any_reject_handler(
 
 /// GC root scanner: mark all values reachable from promise task queues
 pub fn scan_promise_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_promise_roots_mut(&mut visitor);
+}
+
+pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     // Scan TASK_QUEUE entries
     TASK_QUEUE.with(|q| {
-        let q = q.borrow();
-        for entry in q.iter() {
+        let mut q = q.borrow_mut();
+        for entry in q.iter_mut() {
             match entry {
                 Task::Promise(promise_ptr, value, _, context) => {
-                    if !promise_ptr.is_null() {
-                        let boxed = f64::from_bits(
-                            0x7FFD_0000_0000_0000 | (*promise_ptr as u64 & 0x0000_FFFF_FFFF_FFFF),
-                        );
-                        mark(boxed);
-                    }
-                    mark(*value);
-                    scan_snapshot_roots(context, mark);
+                    visitor.visit_raw_mut_ptr_slot(promise_ptr);
+                    visitor.visit_nanbox_f64_slot(value);
+                    scan_snapshot_roots_mut(context, visitor);
                 }
                 Task::Inline(cb, value, next, _, context) => {
-                    if !cb.is_null() {
-                        let boxed = f64::from_bits(
-                            0x7FFD_0000_0000_0000 | (*cb as u64 & 0x0000_FFFF_FFFF_FFFF),
-                        );
-                        mark(boxed);
-                    }
-                    if !next.is_null() {
-                        let boxed = f64::from_bits(
-                            0x7FFD_0000_0000_0000 | (*next as u64 & 0x0000_FFFF_FFFF_FFFF),
-                        );
-                        mark(boxed);
-                    }
-                    mark(*value);
-                    scan_snapshot_roots(context, mark);
+                    visitor.visit_raw_const_ptr_slot(cb);
+                    visitor.visit_raw_mut_ptr_slot(next);
+                    visitor.visit_nanbox_f64_slot(value);
+                    scan_snapshot_roots_mut(context, visitor);
                 }
                 Task::AsyncStep(cb, value, next, _, context) => {
-                    if !cb.is_null() {
-                        let boxed = f64::from_bits(
-                            0x7FFD_0000_0000_0000 | (*cb as u64 & 0x0000_FFFF_FFFF_FFFF),
-                        );
-                        mark(boxed);
-                    }
-                    if !next.is_null() {
-                        let boxed = f64::from_bits(
-                            0x7FFD_0000_0000_0000 | (*next as u64 & 0x0000_FFFF_FFFF_FFFF),
-                        );
-                        mark(boxed);
-                    }
-                    mark(*value);
-                    scan_snapshot_roots(context, mark);
+                    visitor.visit_raw_const_ptr_slot(cb);
+                    visitor.visit_raw_mut_ptr_slot(next);
+                    visitor.visit_nanbox_f64_slot(value);
+                    scan_snapshot_roots_mut(context, visitor);
                 }
             }
         }
     });
 
     PROMISE_CONTEXTS.with(|contexts| {
-        for context in contexts.borrow().values() {
-            scan_snapshot_roots(context, mark);
+        let mut contexts = contexts.borrow_mut();
+        let mut moved = Vec::new();
+        for (&key, context) in contexts.iter_mut() {
+            let mut new_key = key;
+            if visitor.visit_metadata_usize_slot(&mut new_key) {
+                moved.push((key, new_key));
+            }
+            scan_snapshot_roots_mut(context, visitor);
+        }
+        for (old_key, new_key) in moved {
+            if let Some(context) = contexts.remove(&old_key) {
+                contexts.insert(new_key, context);
+            }
         }
     });
 
     // Scan SCHEDULED_RESOLVES entries
     SCHEDULED_RESOLVES.with(|q| {
-        let q = q.borrow();
-        for &(promise_ptr, value) in q.iter() {
-            if !promise_ptr.is_null() {
-                let boxed = f64::from_bits(
-                    0x7FFD_0000_0000_0000 | (promise_ptr as u64 & 0x0000_FFFF_FFFF_FFFF),
-                );
-                mark(boxed);
-            }
-            mark(value);
+        let mut q = q.borrow_mut();
+        for (promise_ptr, value) in q.iter_mut() {
+            visitor.visit_raw_mut_ptr_slot(promise_ptr);
+            visitor.visit_nanbox_f64_slot(value);
         }
     });
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct TestPromiseScannerSnapshot {
+    pub task_promise_ptr: usize,
+    pub task_value_bits: u64,
+    pub task_context_store_bits: u64,
+    pub inline_callback_ptr: usize,
+    pub inline_next_ptr: usize,
+    pub inline_value_bits: u64,
+    pub async_step_callback_ptr: usize,
+    pub async_step_next_ptr: usize,
+    pub async_step_value_bits: u64,
+    pub promise_context_key: usize,
+    pub promise_context_store_bits: u64,
+    pub scheduled_promise_ptr: usize,
+    pub scheduled_value_bits: u64,
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_promise_scanner_roots(
+    promise_ptr: *mut Promise,
+    value: f64,
+    context_store: f64,
+    callback_ptr: *const crate::closure::ClosureHeader,
+    next_ptr: *mut Promise,
+) {
+    let context = crate::async_context::test_snapshot_with_store(context_store);
+    TASK_QUEUE.with(|q| {
+        let mut q = q.borrow_mut();
+        q.clear();
+        q.push_back(Task::Promise(promise_ptr, value, true, context.clone()));
+        q.push_back(Task::Inline(
+            callback_ptr,
+            value,
+            next_ptr,
+            true,
+            context.clone(),
+        ));
+        q.push_back(Task::AsyncStep(
+            callback_ptr,
+            value,
+            next_ptr,
+            false,
+            context.clone(),
+        ));
+    });
+    PROMISE_CONTEXTS.with(|contexts| {
+        let mut contexts = contexts.borrow_mut();
+        contexts.clear();
+        contexts.insert(promise_ptr as usize, context.clone());
+    });
+    SCHEDULED_RESOLVES.with(|q| {
+        let mut q = q.borrow_mut();
+        q.clear();
+        q.push((promise_ptr, value));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_promise_scanner_snapshot() -> TestPromiseScannerSnapshot {
+    let mut snapshot = TestPromiseScannerSnapshot::default();
+    TASK_QUEUE.with(|q| {
+        let q = q.borrow();
+        if let Some(Task::Promise(promise_ptr, value, _, context)) = q.get(0) {
+            snapshot.task_promise_ptr = *promise_ptr as usize;
+            snapshot.task_value_bits = value.to_bits();
+            snapshot.task_context_store_bits =
+                crate::async_context::test_snapshot_first_store(context)
+                    .map(f64::to_bits)
+                    .unwrap_or(0);
+        }
+        if let Some(Task::Inline(callback_ptr, value, next_ptr, _, _)) = q.get(1) {
+            snapshot.inline_callback_ptr = *callback_ptr as usize;
+            snapshot.inline_next_ptr = *next_ptr as usize;
+            snapshot.inline_value_bits = value.to_bits();
+        }
+        if let Some(Task::AsyncStep(callback_ptr, value, next_ptr, _, _)) = q.get(2) {
+            snapshot.async_step_callback_ptr = *callback_ptr as usize;
+            snapshot.async_step_next_ptr = *next_ptr as usize;
+            snapshot.async_step_value_bits = value.to_bits();
+        }
+    });
+    PROMISE_CONTEXTS.with(|contexts| {
+        let contexts = contexts.borrow();
+        if let Some((&key, context)) = contexts.iter().next() {
+            snapshot.promise_context_key = key;
+            snapshot.promise_context_store_bits =
+                crate::async_context::test_snapshot_first_store(context)
+                    .map(f64::to_bits)
+                    .unwrap_or(0);
+        }
+    });
+    SCHEDULED_RESOLVES.with(|q| {
+        let q = q.borrow();
+        if let Some((promise_ptr, value)) = q.first() {
+            snapshot.scheduled_promise_ptr = *promise_ptr as usize;
+            snapshot.scheduled_value_bits = value.to_bits();
+        }
+    });
+    snapshot
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_promise_scanner_roots() {
+    TASK_QUEUE.with(|q| q.borrow_mut().clear());
+    PROMISE_CONTEXTS.with(|contexts| contexts.borrow_mut().clear());
+    SCHEDULED_RESOLVES.with(|q| q.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_async_step_thunk_cache(
+    key: usize,
+    fulfill: *mut crate::closure::ClosureHeader,
+    reject: *mut crate::closure::ClosureHeader,
+) {
+    LAST_ASYNC_STEP_THUNKS.with(|c| c.set((key, fulfill, reject)));
+}
+
+#[cfg(test)]
+pub(crate) fn test_async_step_thunk_cache() -> (usize, usize, usize) {
+    LAST_ASYNC_STEP_THUNKS.with(|c| {
+        let (key, fulfill, reject) = c.get();
+        (key, fulfill as usize, reject as usize)
+    })
 }
 
 /// Promise.withResolvers<T>() — returns an object with { promise, resolve, reject }.

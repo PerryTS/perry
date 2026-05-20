@@ -58,20 +58,47 @@ pub extern "C" fn js_template_raw(cooked: *const ArrayHeader) -> i64 {
 /// next read miss; for now the map grows unbounded but it's tiny in
 /// practice (one entry per distinct tagged-template call site).
 pub fn scan_template_raw_roots(mark: &mut dyn FnMut(f64)) {
-    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_template_raw_roots_mut(&mut visitor);
+}
+
+pub fn scan_template_raw_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     TEMPLATE_RAW_MAP.with(|m| {
-        for (cooked_addr, raw_ptr) in m.borrow().iter() {
-            mark(f64::from_bits(
-                POINTER_TAG | (*cooked_addr as u64 & POINTER_MASK),
-            ));
-            if !raw_ptr.is_null() {
-                mark(f64::from_bits(
-                    POINTER_TAG | (*raw_ptr as u64 & POINTER_MASK),
-                ));
+        let mut map = m.borrow_mut();
+        let mut moved = Vec::new();
+        for (&cooked_addr, raw_ptr) in map.iter_mut() {
+            let mut new_cooked_addr = cooked_addr;
+            if visitor.visit_usize_slot(&mut new_cooked_addr) {
+                moved.push((cooked_addr, new_cooked_addr));
+            }
+            visitor.visit_raw_mut_ptr_slot(raw_ptr);
+        }
+        for (old_addr, new_addr) in moved {
+            if let Some(raw_ptr) = map.remove(&old_addr) {
+                map.insert(new_addr, raw_ptr);
             }
         }
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_template_raw_roots(cooked: *mut ArrayHeader, raw: *mut ArrayHeader) {
+    TEMPLATE_RAW_MAP.with(|m| {
+        let mut m = m.borrow_mut();
+        m.clear();
+        m.insert(cooked as usize, raw);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_template_raw_roots() -> (usize, usize) {
+    TEMPLATE_RAW_MAP.with(|m| {
+        let m = m.borrow();
+        let Some((&cooked, raw)) = m.iter().next() else {
+            return (0, 0);
+        };
+        (cooked, *raw as usize)
+    })
 }
 
 /// Strip NaN-boxing tags from an array pointer and guard against invalid values.
@@ -225,6 +252,35 @@ fn array_byte_size(capacity: usize) -> usize {
     std::mem::size_of::<ArrayHeader>() + capacity * std::mem::size_of::<f64>()
 }
 
+#[inline]
+unsafe fn array_elements_ptr(arr: *mut ArrayHeader) -> *mut u64 {
+    (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64
+}
+
+#[inline]
+unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
+    crate::gc::layout_note_slot(arr as usize, index, value_bits);
+}
+
+#[inline]
+unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
+    if arr.is_null() {
+        return;
+    }
+    let length = (*arr).length as usize;
+    let capacity = (*arr).capacity as usize;
+    if length > capacity || length > 16_000_000 {
+        crate::gc::layout_mark_unknown(arr as *mut u8);
+        return;
+    }
+    crate::gc::layout_rebuild_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
+}
+
+#[inline]
+unsafe fn mark_array_layout_unknown(arr: *mut ArrayHeader) {
+    crate::gc::layout_mark_unknown(arr as *mut u8);
+}
+
 /// Minimum initial capacity for arrays to reduce reallocations
 const MIN_ARRAY_CAPACITY: u32 = 16;
 
@@ -243,6 +299,7 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
         // Initialize header
         (*ptr).length = 0;
         (*ptr).capacity = actual_capacity;
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
     ptr
@@ -286,6 +343,7 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
         for i in 0..capacity as usize {
             std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
         }
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
     ptr
@@ -311,6 +369,7 @@ pub extern "C" fn js_array_alloc_with_length_longlived(capacity: u32) -> *mut Ar
     unsafe {
         (*ptr).length = capacity;
         (*ptr).capacity = capacity;
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
     ptr
@@ -324,6 +383,7 @@ pub extern "C" fn js_array_from_f64(elements: *const f64, count: u32) -> *mut Ar
         (*arr).length = count;
         let arr_elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         ptr::copy_nonoverlapping(elements, arr_elements, count as usize);
+        rebuild_array_layout(arr);
     }
     arr
 }
@@ -362,6 +422,7 @@ unsafe fn js_array_from_arraylike(obj: *const crate::object::ObjectHeader) -> *m
         let key = crate::string::js_string_from_bytes(key_str.as_ptr(), key_str.len() as u32);
         let v = crate::object::js_object_get_field_by_name_f64(obj, key);
         *elements.add(i as usize) = v;
+        note_array_slot(arr, i as usize, v.to_bits());
     }
     arr
 }
@@ -396,7 +457,9 @@ unsafe fn js_array_from_string_codepoints(
         let mut buf = [0u8; 4];
         let s_ref = ch.encode_utf8(&mut buf);
         let s_ptr = crate::string::js_string_from_bytes(s_ref.as_ptr(), s_ref.len() as u32);
-        *elements.add(i) = crate::value::js_nanbox_string(s_ptr as i64);
+        let value = crate::value::js_nanbox_string(s_ptr as i64);
+        *elements.add(i) = value;
+        note_array_slot(arr, i, value.to_bits());
     }
     arr
 }
@@ -425,6 +488,7 @@ pub extern "C" fn js_array_alloc_literal(capacity: u32) -> *mut ArrayHeader {
     unsafe {
         (*ptr).length = capacity;
         (*ptr).capacity = capacity;
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
     ptr
 }
@@ -676,6 +740,7 @@ pub extern "C" fn js_array_set_f64_unchecked(arr: *mut ArrayHeader, index: u32, 
         }
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         ptr::write(elements_ptr.add(index as usize), value);
+        note_array_slot(arr, index as usize, value.to_bits());
     }
 }
 
@@ -712,6 +777,7 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
         }
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         ptr::write(elements_ptr.add(index as usize), value);
+        note_array_slot(arr, index as usize, value.to_bits());
     }
 }
 
@@ -753,6 +819,7 @@ pub extern "C" fn js_array_set_f64_extend(
         if index < length {
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             ptr::write(elements_ptr.add(index as usize), value);
+            note_array_slot(arr, index as usize, value.to_bits());
             return arr;
         }
 
@@ -775,10 +842,12 @@ pub extern "C" fn js_array_set_f64_extend(
         let hole = f64::from_bits(crate::value::TAG_HOLE);
         for i in length..index {
             ptr::write(elements_ptr.add(i as usize), hole);
+            note_array_slot(arr, i as usize, crate::value::TAG_HOLE);
         }
 
         // Set the value
         ptr::write(elements_ptr.add(index as usize), value);
+        note_array_slot(arr, index as usize, value.to_bits());
         (*arr).length = new_length;
 
         arr
@@ -944,13 +1013,22 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         ptr::copy_nonoverlapping(arr as *const u8, new_ptr as *mut u8, old_size);
 
         (*new_ptr).capacity = new_capacity;
+        let old_header =
+            (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        let new_header =
+            (new_ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        (*new_header)._reserved = (*old_header)._reserved;
+        crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
 
         // Issue #233: install a forwarding pointer at the OLD location
         // so any stale reference (e.g. an async function's caller still
         // holding the pre-grow pointer in its parameter slot) resolves
         // to the new head via clean_arr_ptr's GC_FLAG_FORWARDED follow.
-        // Reuses the GC's existing evac-forwarding mechanism — first 8
-        // bytes of payload (length+capacity) become the new user ptr.
+        // Uses the same forwarding-slot representation as GC evacuation:
+        // first 8 bytes of payload (length+capacity) become the new user
+        // ptr. Unlike GC-evacuation originals, array-growth stubs stay
+        // retained because stale array references rely on clean_arr_ptr
+        // following this chain.
         // Only valid for arena-allocated arrays (which have a GcHeader
         // 8 bytes before the user pointer); guard with a heap-bounds
         // check that mirrors clean_arr_ptr's HEAP_MIN to skip pointers
@@ -961,8 +1039,6 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         #[cfg(not(any(target_os = "android", target_os = "linux", target_os = "windows")))]
         const HEAP_MIN: usize = 0x200_0000_0000;
         if (arr as usize) >= HEAP_MIN + crate::gc::GC_HEADER_SIZE {
-            let old_header =
-                (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
             // Only forward arrays that came from the GC arena. A
             // non-array obj_type would mean something has gone wrong
             // upstream; bail out without forwarding rather than corrupt
@@ -996,6 +1072,7 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
 
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         ptr::write(elements_ptr.add(length as usize), value);
+        note_array_slot(arr, length as usize, value.to_bits());
         (*arr).length = length + 1;
         arr
     }
@@ -1102,6 +1179,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             for i in n..cur {
                 std::ptr::write(elements_ptr.add(i as usize), TAG_UNDEFINED_F64);
+                note_array_slot(arr, i as usize, TAG_UNDEFINED_F64.to_bits());
             }
             (*arr).length = n;
         } else if n > cur {
@@ -1121,6 +1199,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                     (target as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
                 for i in cur..n {
                     std::ptr::write(elements_ptr.add(i as usize), TAG_UNDEFINED_F64);
+                    note_array_slot(target, i as usize, TAG_UNDEFINED_F64.to_bits());
                 }
                 (*target).length = n;
             }
@@ -1147,6 +1226,7 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
         const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         std::ptr::write(elements_ptr.add(index as usize), TAG_UNDEFINED_F64);
+        note_array_slot(arr, index as usize, TAG_UNDEFINED_F64.to_bits());
         1
     }
 }
@@ -1176,6 +1256,7 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
         // Shift all elements down
         ptr::copy(elements_ptr.add(1), elements_ptr, (length - 1) as usize);
         (*arr).length = length - 1;
+        rebuild_array_layout(arr);
         value
     }
 }
@@ -1205,6 +1286,7 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
         // Write new element at beginning
         ptr::write(elements_ptr, value);
         (*arr).length = length + 1;
+        rebuild_array_layout(arr);
         arr
     }
 }
@@ -1352,6 +1434,7 @@ pub extern "C" fn js_array_splice(
                 *elements_ptr.add(start_idx as usize + i),
             );
         }
+        rebuild_array_layout(deleted);
 
         // Calculate new length
         let new_len = (len as u32 - actual_delete + items_count) as u32;
@@ -1383,6 +1466,7 @@ pub extern "C" fn js_array_splice(
         }
 
         (*arr).length = new_len;
+        rebuild_array_layout(arr);
 
         // Return modified array via out param
         *out_arr = arr;
@@ -1440,6 +1524,7 @@ pub extern "C" fn js_array_slice(
                 ptr::read(src_elements.add(start_idx as usize + i)),
             );
         }
+        rebuild_array_layout(result);
 
         result
     }
@@ -1487,6 +1572,7 @@ pub extern "C" fn js_array_from_jsvalue(elements: *const u64, count: u32) -> *mu
             let bits = *elements.add(i);
             ptr::write(arr_elements.add(i), f64::from_bits(bits));
         }
+        rebuild_array_layout(arr);
     }
     arr
 }
@@ -1599,6 +1685,7 @@ pub extern "C" fn js_array_concat(
                 src_len as usize,
             );
             (*result).length = new_len;
+            rebuild_array_layout(result);
             return result;
         }
 
@@ -1668,6 +1755,7 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
             i += 1;
             j -= 1;
         }
+        rebuild_array_layout(arr);
         arr
     }
 }
@@ -1689,6 +1777,7 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
         for i in 0..len {
             *elements.add(i) = value;
         }
+        rebuild_array_layout(arr);
         arr
     }
 }
@@ -1747,6 +1836,7 @@ pub extern "C" fn js_array_fill_range(
         for i in s..e {
             *elements.add(i as usize) = value;
         }
+        rebuild_array_layout(arr);
         arr
     }
 }
@@ -1806,6 +1896,7 @@ pub extern "C" fn js_array_sort_default(arr: *mut ArrayHeader) -> *mut ArrayHead
         for (i, (_, val)) in pairs.into_iter().enumerate() {
             *elements_ptr.add(i) = val;
         }
+        rebuild_array_layout(arr);
 
         arr
     }
@@ -2079,6 +2170,7 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                 (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
             (*result).length = len;
+            rebuild_array_layout(result);
         }
         result
     }
@@ -2108,8 +2200,12 @@ pub extern "C" fn js_array_entries(arr: *const ArrayHeader) -> *mut ArrayHeader 
             let pair_elems = (pair as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             *pair_elems.add(0) = i as f64;
             *pair_elems.add(1) = *src_elements.add(i);
+            note_array_slot(pair, 0, (i as f64).to_bits());
+            note_array_slot(pair, 1, (*src_elements.add(i)).to_bits());
             // NaN-box the inner array pointer so the outer storage slot keeps tag info.
-            *dst_elements.add(i) = crate::value::js_nanbox_pointer(pair as i64);
+            let pair_value = crate::value::js_nanbox_pointer(pair as i64);
+            *dst_elements.add(i) = pair_value;
+            note_array_slot(result, i, pair_value.to_bits());
         }
         result
     }
@@ -2153,6 +2249,7 @@ pub extern "C" fn js_array_values(arr: *const ArrayHeader) -> *mut ArrayHeader {
                 (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
             (*result).length = len;
+            rebuild_array_layout(result);
         }
         result
     }
@@ -2213,6 +2310,8 @@ pub extern "C" fn js_array_map(
             // which caused SIGSEGV on x86_64 when callbacks used the index (e.g., (_, i) => obj[i]).
             let mapped = js_closure_call2(callback, element, i as f64);
             ptr::write(result_elements.add(i), mapped);
+            note_array_slot(result, i, mapped.to_bits());
+            (*result).length = (i + 1) as u32;
         }
         (*result).length = length;
 
@@ -2248,6 +2347,7 @@ pub extern "C" fn js_array_sort_with_comparator(
             return arr;
         }
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        mark_array_layout_unknown(arr);
 
         // Hoist the closure-dispatch resolution out of the hot loops.
         // For a 1.25M-element sort we'd otherwise hit ~50M HashMap lookups
@@ -2376,6 +2476,7 @@ pub extern "C" fn js_array_sort_with_comparator(
                 ptr::copy_nonoverlapping(src, elements_ptr, length);
             }
         }
+        rebuild_array_layout(arr);
 
         arr
     }
@@ -2978,6 +3079,7 @@ pub extern "C" fn js_array_to_reversed(arr: *const ArrayHeader) -> *mut ArrayHea
         for i in 0..len {
             *dst.add(i) = *src.add(len - 1 - i);
         }
+        rebuild_array_layout(new_arr);
         new_arr
     }
 }
@@ -3002,6 +3104,7 @@ pub extern "C" fn js_array_to_sorted_default(arr: *const ArrayHeader) -> *mut Ar
         let src = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let dst = (new_arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         std::ptr::copy_nonoverlapping(src, dst, len);
+        rebuild_array_layout(new_arr);
         // Sort the copy in-place using default sort
         js_array_sort_default(new_arr);
         new_arr
@@ -3032,6 +3135,7 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
         let src = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let dst = (new_arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         std::ptr::copy_nonoverlapping(src, dst, len);
+        rebuild_array_layout(new_arr);
         // Sort the copy in-place
         js_array_sort_with_comparator(new_arr, comparator);
         new_arr
@@ -3095,6 +3199,7 @@ pub extern "C" fn js_array_to_spliced(
             *dst.add(s as usize + items_count as usize + i - after_start) = *src.add(i);
         }
 
+        rebuild_array_layout(new_arr);
         new_arr
     }
 }
@@ -3130,6 +3235,7 @@ pub extern "C" fn js_array_with(
             let src = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
             let dst = (new_arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             std::ptr::copy_nonoverlapping(src, dst, len as usize);
+            rebuild_array_layout(new_arr);
             return new_arr;
         }
         let src = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -3138,6 +3244,7 @@ pub extern "C" fn js_array_with(
         let dst = (new_arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         std::ptr::copy_nonoverlapping(src, dst, len as usize);
         *dst.add(idx as usize) = value;
+        rebuild_array_layout(new_arr);
         new_arr
     }
 }
@@ -3200,6 +3307,7 @@ pub extern "C" fn js_array_copy_within(
             elements.add(t as usize),
             count as usize,
         );
+        rebuild_array_layout(arr);
         arr
     }
 }

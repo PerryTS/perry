@@ -1184,7 +1184,7 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
         }
         // Allocate and cache
         let s = format!("{}", value as u64);
-        let ptr = js_string_from_bytes(s.as_bytes().as_ptr(), s.len() as u32);
+        let ptr = js_string_from_bytes_longlived(s.as_bytes().as_ptr(), s.len() as u32);
         unsafe {
             // Mark as shared so it's never mutated in-place
             (*ptr).refcount = 0;
@@ -2827,16 +2827,42 @@ unsafe fn concat_content_matches(
 /// is thread-local-by-discipline (perry user code is single-threaded),
 /// so the unsafe deref is sound.
 pub fn scan_intern_table_roots(mark: &mut dyn FnMut(f64)) {
-    let base: *const InternEntry = (&raw const INTERN_TABLE).cast();
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_intern_table_roots_mut(&mut visitor);
+}
+
+pub fn scan_intern_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let base: *mut InternEntry = (&raw mut INTERN_TABLE).cast();
     unsafe {
         for i in 0..INTERN_TABLE_SIZE {
-            let entry = &*base.add(i);
-            if entry.string_ptr != 0 {
-                let nanboxed =
-                    0x7FFF_0000_0000_0000u64 | (entry.string_ptr as u64 & 0x0000_FFFF_FFFF_FFFFu64);
-                mark(f64::from_bits(nanboxed));
-            }
+            let entry = &mut *base.add(i);
+            visitor.visit_tagged_usize_slot(&mut entry.string_ptr, crate::value::STRING_TAG);
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_intern_table_root(string_ptr: usize) {
+    unsafe {
+        INTERN_TABLE[0] = InternEntry {
+            hash: 0xC0DEC0DE,
+            string_ptr,
+        };
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_intern_table_root() -> usize {
+    unsafe { INTERN_TABLE[0].string_ptr }
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_intern_table_root() {
+    unsafe {
+        INTERN_TABLE[0] = InternEntry {
+            hash: 0,
+            string_ptr: 0,
+        };
     }
 }
 

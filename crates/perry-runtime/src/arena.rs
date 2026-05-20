@@ -6,6 +6,8 @@
 
 use std::alloc::{alloc, Layout};
 use std::cell::{Cell, RefCell, UnsafeCell};
+use std::collections::{hash_map::Entry, HashMap};
+use std::hash::{BuildHasherDefault, Hasher};
 
 /// Size of each arena block (1 MB — issue #179 tier 1 #1).
 ///
@@ -48,6 +50,12 @@ use std::cell::{Cell, RefCell, UnsafeCell};
 ///   shrinks appropriately on the first productive collection.
 const BLOCK_SIZE: usize = 1024 * 1024;
 const GENERATION_PAGE_SHIFT: usize = 12;
+// Generation classification wants exact range answers, but it does
+// not need a separate hash entry for every 4 KiB remembered-set card.
+// A 1 MiB bucket matches the arena block scale, keeps lookup bounded,
+// and avoids thousands of metadata entries for low-pressure nursery
+// churn before the first GC.
+const GENERATION_CLASS_SHIFT: usize = 20;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HeapGeneration {
@@ -58,10 +66,31 @@ pub(crate) enum HeapGeneration {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HeapSpace {
+    Unknown,
+    NurseryEden,
+    Survivor0,
+    Survivor1,
+    Longlived,
+    Old,
+}
+
+impl HeapSpace {
+    #[inline]
+    pub(crate) fn is_nursery(self) -> bool {
+        matches!(
+            self,
+            HeapSpace::NurseryEden | HeapSpace::Survivor0 | HeapSpace::Survivor1
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PageGenerationRange {
     base: usize,
     end: usize,
     generation: HeapGeneration,
+    space: HeapSpace,
 }
 
 impl PageGenerationRange {
@@ -71,9 +100,43 @@ impl PageGenerationRange {
     }
 }
 
+#[derive(Clone, Debug)]
+enum PageGenerationSlot {
+    Single(PageGenerationRange),
+    Multiple(Vec<PageGenerationRange>),
+}
+
+impl PageGenerationSlot {
+    #[inline]
+    fn find(&self, addr: usize) -> Option<PageGenerationRange> {
+        match self {
+            PageGenerationSlot::Single(range) => range.contains(addr).then_some(*range),
+            PageGenerationSlot::Multiple(ranges) => {
+                ranges.iter().copied().find(|range| range.contains(addr))
+            }
+        }
+    }
+
+    fn insert(&mut self, range: PageGenerationRange) {
+        match self {
+            PageGenerationSlot::Single(existing) => {
+                if *existing == range {
+                    return;
+                }
+                *self = PageGenerationSlot::Multiple(vec![*existing, range]);
+            }
+            PageGenerationSlot::Multiple(ranges) => {
+                if !ranges.contains(&range) {
+                    ranges.push(range);
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct PageGenerationCache {
-    page: usize,
+    key: usize,
     range: PageGenerationRange,
     valid: bool,
 }
@@ -81,22 +144,48 @@ struct PageGenerationCache {
 impl PageGenerationCache {
     const fn empty() -> Self {
         Self {
-            page: 0,
+            key: 0,
             range: PageGenerationRange {
                 base: 0,
                 end: 0,
                 generation: HeapGeneration::Unknown,
+                space: HeapSpace::Unknown,
             },
             valid: false,
         }
     }
 }
 
+#[derive(Default)]
+struct IdentityHasher(u64);
+
+impl Hasher for IdentityHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut hash = 0u64;
+        for (idx, byte) in bytes.iter().take(8).enumerate() {
+            hash |= (*byte as u64) << (idx * 8);
+        }
+        self.0 = hash;
+    }
+
+    #[inline]
+    fn write_usize(&mut self, value: usize) {
+        self.0 = value as u64;
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+type PageGenerationMap = HashMap<usize, PageGenerationSlot, BuildHasherDefault<IdentityHasher>>;
 type OldGenPageObjectMap = crate::fast_hash::PtrHashMap<usize, Vec<usize>>;
 
 thread_local! {
-    static GENERATION_RANGES: RefCell<Vec<PageGenerationRange>> =
-        const { RefCell::new(Vec::new()) };
+    static PAGE_GENERATIONS: RefCell<PageGenerationMap> =
+        RefCell::new(HashMap::with_hasher(BuildHasherDefault::<IdentityHasher>::default()));
 
     static PAGE_GENERATION_CACHE: Cell<PageGenerationCache> =
         const { Cell::new(PageGenerationCache::empty()) };
@@ -111,24 +200,16 @@ pub(crate) fn generation_page_for_addr(addr: usize) -> usize {
 }
 
 #[inline]
+fn generation_class_key_for_addr(addr: usize) -> usize {
+    addr >> GENERATION_CLASS_SHIFT
+}
+
+#[inline]
 fn invalidate_generation_cache() {
     PAGE_GENERATION_CACHE.with(|cache| cache.set(PageGenerationCache::empty()));
 }
 
-#[inline]
-fn find_generation_range(
-    ranges: &[PageGenerationRange],
-    addr: usize,
-) -> Option<PageGenerationRange> {
-    let idx = ranges.partition_point(|range| range.base <= addr);
-    if idx == 0 {
-        return None;
-    }
-    let range = ranges[idx - 1];
-    range.contains(addr).then_some(range)
-}
-
-fn register_block_generation(base: usize, size: usize, generation: HeapGeneration) {
+fn register_block_space(base: usize, size: usize, generation: HeapGeneration, space: HeapSpace) {
     if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
         return;
     }
@@ -137,18 +218,20 @@ fn register_block_generation(base: usize, size: usize, generation: HeapGeneratio
         base,
         end,
         generation,
+        space,
     };
-    GENERATION_RANGES.with(|ranges| {
-        let mut ranges = ranges.borrow_mut();
-        if let Some(existing) = ranges
-            .iter_mut()
-            .find(|existing| existing.base == base && existing.end == end)
-        {
-            *existing = range;
-            return;
+    let first_key = generation_class_key_for_addr(base);
+    let last_key = generation_class_key_for_addr(end - 1);
+    PAGE_GENERATIONS.with(|pages| {
+        let mut pages = pages.borrow_mut();
+        for key in first_key..=last_key {
+            match pages.entry(key) {
+                Entry::Occupied(mut entry) => entry.get_mut().insert(range),
+                Entry::Vacant(entry) => {
+                    entry.insert(PageGenerationSlot::Single(range));
+                }
+            }
         }
-        let idx = ranges.partition_point(|existing| existing.base < base);
-        ranges.insert(idx, range);
     });
     invalidate_generation_cache();
 }
@@ -158,10 +241,34 @@ fn unregister_block_generation(base: usize, size: usize) {
         return;
     }
     let end = base + size;
-    GENERATION_RANGES.with(|ranges| {
-        ranges
-            .borrow_mut()
-            .retain(|range| !(range.base == base && range.end == end));
+    let first_key = generation_class_key_for_addr(base);
+    let last_key = generation_class_key_for_addr(end - 1);
+    PAGE_GENERATIONS.with(|pages| {
+        let mut pages = pages.borrow_mut();
+        for key in first_key..=last_key {
+            let mut remove_page = false;
+            let mut replacement = None;
+            if let Some(slot) = pages.get_mut(&key) {
+                match slot {
+                    PageGenerationSlot::Single(range) => {
+                        remove_page = range.base == base && range.end == end;
+                    }
+                    PageGenerationSlot::Multiple(ranges) => {
+                        ranges.retain(|range| !(range.base == base && range.end == end));
+                        if ranges.is_empty() {
+                            remove_page = true;
+                        } else if ranges.len() == 1 {
+                            replacement = Some(PageGenerationSlot::Single(ranges[0]));
+                        }
+                    }
+                }
+            }
+            if remove_page {
+                pages.remove(&key);
+            } else if let Some(slot) = replacement {
+                pages.insert(key, slot);
+            }
+        }
     });
     invalidate_generation_cache();
 }
@@ -171,23 +278,23 @@ pub(crate) fn classify_heap_generation(addr: usize) -> HeapGeneration {
     if addr == 0 {
         return HeapGeneration::Unknown;
     }
-    let page = generation_page_for_addr(addr);
+    let key = generation_class_key_for_addr(addr);
     if let Some(generation) = PAGE_GENERATION_CACHE.with(|cache| {
         let cached = cache.get();
-        (cached.valid && cached.page == page && cached.range.contains(addr))
+        (cached.valid && cached.key == key && cached.range.contains(addr))
             .then_some(cached.range.generation)
     }) {
         return generation;
     }
 
-    let found = GENERATION_RANGES.with(|ranges| {
-        let ranges = ranges.borrow();
-        find_generation_range(&ranges, addr)
+    let found = PAGE_GENERATIONS.with(|pages| {
+        let pages = pages.borrow();
+        pages.get(&key).and_then(|slot| slot.find(addr))
     });
     if let Some(range) = found {
         PAGE_GENERATION_CACHE.with(|cache| {
             cache.set(PageGenerationCache {
-                page,
+                key,
                 range,
                 valid: true,
             });
@@ -195,6 +302,38 @@ pub(crate) fn classify_heap_generation(addr: usize) -> HeapGeneration {
         range.generation
     } else {
         HeapGeneration::Unknown
+    }
+}
+
+#[inline]
+pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
+    if addr == 0 {
+        return HeapSpace::Unknown;
+    }
+    let key = generation_class_key_for_addr(addr);
+    if let Some(space) = PAGE_GENERATION_CACHE.with(|cache| {
+        let cached = cache.get();
+        (cached.valid && cached.key == key && cached.range.contains(addr))
+            .then_some(cached.range.space)
+    }) {
+        return space;
+    }
+
+    let found = PAGE_GENERATIONS.with(|pages| {
+        let pages = pages.borrow();
+        pages.get(&key).and_then(|slot| slot.find(addr))
+    });
+    if let Some(range) = found {
+        PAGE_GENERATION_CACHE.with(|cache| {
+            cache.set(PageGenerationCache {
+                key,
+                range,
+                valid: true,
+            });
+        });
+        range.space
+    } else {
+        HeapSpace::Unknown
     }
 }
 
@@ -331,6 +470,7 @@ struct Arena {
     blocks: Vec<ArenaBlock>,
     current: usize,
     generation: HeapGeneration,
+    space: HeapSpace,
 }
 
 impl Drop for Arena {
@@ -353,14 +493,15 @@ impl Drop for Arena {
 }
 
 impl Arena {
-    fn new(generation: HeapGeneration) -> Self {
+    fn new(generation: HeapGeneration, space: HeapSpace) -> Self {
         let initial = ArenaBlock::new();
-        register_block_generation(initial.data as usize, initial.size, generation);
+        register_block_space(initial.data as usize, initial.size, generation, space);
         ARENA_TOTAL_BYTES.with(|t| t.set(t.get() + initial.size));
         Arena {
             blocks: vec![initial],
             current: 0,
             generation,
+            space,
         }
     }
 
@@ -417,7 +558,7 @@ impl Arena {
         let fresh = alloc_block(size);
         let fresh_size = fresh.size;
         let fresh_base = fresh.data as usize;
-        register_block_generation(fresh_base, fresh_size, self.generation);
+        register_block_space(fresh_base, fresh_size, self.generation, self.space);
         let mut tomb_idx: Option<usize> = None;
         for i in 0..self.blocks.len() {
             if self.blocks[i].data.is_null() {
@@ -457,7 +598,8 @@ thread_local! {
     /// `arena_reset_empty_blocks`).
     static ARENA_TOTAL_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 
-    static ARENA: UnsafeCell<Arena> = UnsafeCell::new(Arena::new(HeapGeneration::Nursery));
+    static ARENA: UnsafeCell<Arena> =
+        UnsafeCell::new(Arena::new(HeapGeneration::Nursery, HeapSpace::NurseryEden));
 
     /// Segregated long-lived arena (issue #179). Holds objects that are
     /// intentionally pinned for the lifetime of the program by explicit
@@ -477,7 +619,16 @@ thread_local! {
     /// scanners (`scan_parse_roots`, `scan_shape_cache_roots`,
     /// `scan_transition_cache_roots`) keep them marked.
     static LONGLIVED_ARENA: UnsafeCell<Arena> =
-        UnsafeCell::new(Arena::new(HeapGeneration::Longlived));
+        UnsafeCell::new(Arena::new(HeapGeneration::Longlived, HeapSpace::Longlived));
+
+    /// Copying nursery survivor semispaces. At most one is the active
+    /// from-space at the start of a copying minor GC; the other is reset
+    /// and used as to-space for fresh Eden survivors.
+    static SURVIVOR_ARENA_0: UnsafeCell<Arena> =
+        UnsafeCell::new(Arena::new(HeapGeneration::Nursery, HeapSpace::Survivor0));
+    static SURVIVOR_ARENA_1: UnsafeCell<Arena> =
+        UnsafeCell::new(Arena::new(HeapGeneration::Nursery, HeapSpace::Survivor1));
+    static ACTIVE_SURVIVOR: Cell<usize> = const { Cell::new(0) };
 
     /// Generational-GC old-generation arena (gen-GC Phase B per
     /// `docs/generational-gc-plan.md`). Holds objects PROMOTED from
@@ -494,7 +645,8 @@ thread_local! {
     /// the inline bump allocator. Major GC will eventually mark-
     /// sweep them in Phase C+; today they accumulate forever
     /// because nothing allocates into them.
-    static OLD_ARENA: UnsafeCell<Arena> = UnsafeCell::new(Arena::new(HeapGeneration::Old));
+    static OLD_ARENA: UnsafeCell<Arena> =
+        UnsafeCell::new(Arena::new(HeapGeneration::Old, HeapSpace::Old));
 
     /// Inline allocator state — a cache of the current arena block's
     /// `(data, offset, size)` triple, exposed via a stable pointer so
@@ -729,6 +881,47 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
 
+fn inactive_survivor_index() -> usize {
+    ACTIVE_SURVIVOR.with(|active| 1 - active.get())
+}
+
+fn with_survivor_arena_mut<R>(idx: usize, f: impl FnOnce(&mut Arena) -> R) -> R {
+    match idx {
+        0 => SURVIVOR_ARENA_0.with(|a| unsafe { f(&mut *a.get()) }),
+        1 => SURVIVOR_ARENA_1.with(|a| unsafe { f(&mut *a.get()) }),
+        _ => unreachable!("invalid survivor arena index"),
+    }
+}
+
+fn with_survivor_arena<R>(idx: usize, f: impl FnOnce(&Arena) -> R) -> R {
+    match idx {
+        0 => SURVIVOR_ARENA_0.with(|a| unsafe { f(&*a.get()) }),
+        1 => SURVIVOR_ARENA_1.with(|a| unsafe { f(&*a.get()) }),
+        _ => unreachable!("invalid survivor arena index"),
+    }
+}
+
+/// Allocate into the inactive survivor semispace. The copying minor GC
+/// resets this space before use and flips it active after from-space reset.
+pub(crate) fn arena_alloc_gc_survivor(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
+
+    let pad = align.max(8);
+    let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
+    let idx = inactive_survivor_index();
+    let raw = with_survivor_arena_mut(idx, |arena| arena.alloc(total, align));
+
+    unsafe {
+        let header = raw as *mut GcHeader;
+        (*header).obj_type = obj_type;
+        (*header).gc_flags = GC_FLAG_ARENA;
+        (*header)._reserved = 0;
+        (*header).size = total as u32;
+    }
+
+    unsafe { raw.add(GC_HEADER_SIZE) }
+}
+
 /// Allocate from arena with a GcHeader prepended.
 /// Returns pointer to usable memory AFTER the GcHeader.
 /// The object is NOT added to any tracking list — arena objects are discovered
@@ -862,6 +1055,18 @@ pub fn arena_in_use_bytes() -> usize {
             used += block.offset;
         }
     });
+    SURVIVOR_ARENA_0.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        for block in &arena.blocks {
+            used += block.offset;
+        }
+    });
+    SURVIVOR_ARENA_1.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        for block in &arena.blocks {
+            used += block.offset;
+        }
+    });
     // Phase B: include old-gen in-use bytes.
     OLD_ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
@@ -882,6 +1087,8 @@ pub(crate) struct ArenaRegionTelemetry {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ArenaTelemetrySnapshot {
     pub(crate) arena: ArenaRegionTelemetry,
+    pub(crate) survivor0: ArenaRegionTelemetry,
+    pub(crate) survivor1: ArenaRegionTelemetry,
     pub(crate) longlived: ArenaRegionTelemetry,
     pub(crate) old: ArenaRegionTelemetry,
     pub(crate) total_in_use_bytes: usize,
@@ -914,17 +1121,39 @@ pub(crate) fn arena_telemetry_snapshot() -> ArenaTelemetrySnapshot {
         let arena = unsafe { &*arena.get() };
         arena_region_telemetry(arena)
     });
+    let survivor0 = SURVIVOR_ARENA_0.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        arena_region_telemetry(arena)
+    });
+    let survivor1 = SURVIVOR_ARENA_1.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        arena_region_telemetry(arena)
+    });
     let old = OLD_ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
         arena_region_telemetry(arena)
     });
     ArenaTelemetrySnapshot {
         arena,
+        survivor0,
+        survivor1,
         longlived,
         old,
-        total_in_use_bytes: arena.in_use_bytes + longlived.in_use_bytes + old.in_use_bytes,
-        total_reserved_bytes: arena.reserved_bytes + longlived.reserved_bytes + old.reserved_bytes,
-        total_block_count: arena.block_count + longlived.block_count + old.block_count,
+        total_in_use_bytes: arena.in_use_bytes
+            + survivor0.in_use_bytes
+            + survivor1.in_use_bytes
+            + longlived.in_use_bytes
+            + old.in_use_bytes,
+        total_reserved_bytes: arena.reserved_bytes
+            + survivor0.reserved_bytes
+            + survivor1.reserved_bytes
+            + longlived.reserved_bytes
+            + old.reserved_bytes,
+        total_block_count: arena.block_count
+            + survivor0.block_count
+            + survivor1.block_count
+            + longlived.block_count
+            + old.block_count,
     }
 }
 
@@ -959,6 +1188,8 @@ pub fn arena_walk_objects_addr_sorted(mut callback: impl FnMut(*mut u8)) {
         }
     };
     ARENA.with(|a| unsafe { collect(&*a.get(), &mut blocks) });
+    SURVIVOR_ARENA_0.with(|a| unsafe { collect(&*a.get(), &mut blocks) });
+    SURVIVOR_ARENA_1.with(|a| unsafe { collect(&*a.get(), &mut blocks) });
     LONGLIVED_ARENA.with(|a| unsafe { collect(&*a.get(), &mut blocks) });
     OLD_ARENA.with(|a| unsafe { collect(&*a.get(), &mut blocks) });
     blocks.sort_unstable_by_key(|&(d, _, _)| d);
@@ -1036,6 +1267,14 @@ pub fn arena_walk_objects(mut callback: impl FnMut(*mut u8)) {
         let arena = unsafe { &*arena.get() };
         walk_region(&arena.blocks);
     });
+    SURVIVOR_ARENA_0.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        walk_region(&arena.blocks);
+    });
+    SURVIVOR_ARENA_1.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        walk_region(&arena.blocks);
+    });
     LONGLIVED_ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
         walk_region(&arena.blocks);
@@ -1100,6 +1339,8 @@ pub fn arena_walk_objects_with_block_index(mut callback: impl FnMut(*mut u8, usi
     sync_inline_arena_state();
 
     let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
+    let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });
+    let survivor1_n = SURVIVOR_ARENA_1.with(|a| unsafe { (*a.get()).blocks.len() });
     let mut walk_region = |blocks: &[ArenaBlock], base: usize| {
         for (i, block) in blocks.iter().enumerate() {
             let block_idx = base + i;
@@ -1130,16 +1371,27 @@ pub fn arena_walk_objects_with_block_index(mut callback: impl FnMut(*mut u8, usi
         let arena = unsafe { &*arena.get() };
         walk_region(&arena.blocks, 0);
     });
-    let longlived_n = LONGLIVED_ARENA.with(|arena| {
+    SURVIVOR_ARENA_0.with(|arena| {
         let arena = unsafe { &*arena.get() };
         walk_region(&arena.blocks, general_n);
+    });
+    SURVIVOR_ARENA_1.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        walk_region(&arena.blocks, general_n + survivor0_n);
+    });
+    let longlived_n = LONGLIVED_ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        walk_region(&arena.blocks, general_n + survivor0_n + survivor1_n);
         arena.blocks.len()
     });
     // Phase B: old-gen blocks. Indices begin at
     // `general_n + longlived_n` per the global block-index plan.
     OLD_ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
-        walk_region(&arena.blocks, general_n + longlived_n);
+        walk_region(
+            &arena.blocks,
+            general_n + survivor0_n + survivor1_n + longlived_n,
+        );
     });
 }
 
@@ -1160,6 +1412,8 @@ pub fn arena_walk_objects_filtered(
     sync_inline_arena_state();
 
     let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
+    let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });
+    let survivor1_n = SURVIVOR_ARENA_1.with(|a| unsafe { (*a.get()).blocks.len() });
     let walk_region = |blocks: &[ArenaBlock],
                        base: usize,
                        block_filter: &mut dyn FnMut(usize) -> bool,
@@ -1196,9 +1450,27 @@ pub fn arena_walk_objects_filtered(
         let arena = unsafe { &*arena.get() };
         walk_region(&arena.blocks, 0, &mut block_filter, &mut callback);
     });
-    let longlived_n = LONGLIVED_ARENA.with(|arena| {
+    SURVIVOR_ARENA_0.with(|arena| {
         let arena = unsafe { &*arena.get() };
         walk_region(&arena.blocks, general_n, &mut block_filter, &mut callback);
+    });
+    SURVIVOR_ARENA_1.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        walk_region(
+            &arena.blocks,
+            general_n + survivor0_n,
+            &mut block_filter,
+            &mut callback,
+        );
+    });
+    let longlived_n = LONGLIVED_ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        walk_region(
+            &arena.blocks,
+            general_n + survivor0_n + survivor1_n,
+            &mut block_filter,
+            &mut callback,
+        );
         arena.blocks.len()
     });
     // Phase B: include old-gen blocks at indices
@@ -1207,7 +1479,7 @@ pub fn arena_walk_objects_filtered(
         let arena = unsafe { &*arena.get() };
         walk_region(
             &arena.blocks,
-            general_n + longlived_n,
+            general_n + survivor0_n + survivor1_n + longlived_n,
             &mut block_filter,
             &mut callback,
         );
@@ -1222,9 +1494,11 @@ pub fn arena_walk_objects_filtered(
 /// (gen-GC Phase B).
 pub fn arena_block_count() -> usize {
     let g = ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() });
+    let s0 = SURVIVOR_ARENA_0.with(|arena| unsafe { (*arena.get()).blocks.len() });
+    let s1 = SURVIVOR_ARENA_1.with(|arena| unsafe { (*arena.get()).blocks.len() });
     let l = LONGLIVED_ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() });
     let o = OLD_ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() });
-    g + l + o
+    g + s0 + s1 + l + o
 }
 
 /// Block-index range boundary: block indices `0..general_block_count()`
@@ -1243,8 +1517,10 @@ pub fn general_block_count() -> usize {
 #[inline]
 pub fn longlived_end() -> usize {
     let g = ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() });
+    let s0 = SURVIVOR_ARENA_0.with(|arena| unsafe { (*arena.get()).blocks.len() });
+    let s1 = SURVIVOR_ARENA_1.with(|arena| unsafe { (*arena.get()).blocks.len() });
     let l = LONGLIVED_ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() });
-    g + l
+    g + s0 + s1 + l
 }
 
 /// Fast path for the common case where the entire arena is empty
@@ -1280,6 +1556,74 @@ pub fn arena_reset_all_blocks_to_zero() {
             }
         });
     });
+}
+
+fn reset_region_to_zero(arena: &mut Arena) -> usize {
+    let mut reset_blocks = 0usize;
+    for block in arena.blocks.iter_mut() {
+        if block.data.is_null() {
+            continue;
+        }
+        if block.offset != 0 {
+            reset_blocks += 1;
+        }
+        block.offset = 0;
+        block.dead_cycles = 0;
+    }
+    arena.current = 0;
+    reset_blocks
+}
+
+/// Reset the inactive survivor semispace before a copying minor starts.
+pub(crate) fn copying_prepare_to_space() -> usize {
+    let idx = inactive_survivor_index();
+    with_survivor_arena_mut(idx, reset_region_to_zero)
+}
+
+/// Bytes currently allocated in Eden plus the active survivor from-space.
+pub(crate) fn copying_from_space_in_use_bytes() -> usize {
+    sync_inline_arena_state();
+    let eden = ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        arena.blocks.iter().map(|b| b.offset).sum::<usize>()
+    });
+    let active = ACTIVE_SURVIVOR.with(|active| active.get());
+    let survivor = with_survivor_arena(active, |arena| {
+        arena.blocks.iter().map(|b| b.offset).sum::<usize>()
+    });
+    eden + survivor
+}
+
+/// Reset Eden and the active survivor from-space, then flip the survivor
+/// roles so the to-space populated by the copying collector becomes active.
+pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
+    sync_inline_arena_state();
+    let mut reset_blocks = 0usize;
+    ARENA.with(|arena| unsafe {
+        let arena = &mut *arena.get();
+        reset_blocks += reset_region_to_zero(arena);
+        crate::gc::ARENA_FREE_LIST.with(|fl| fl.borrow_mut().clear());
+        crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
+        INLINE_STATE.with(|s| {
+            let inline = &mut *s.get();
+            if !inline.data.is_null() {
+                let block = &arena.blocks[arena.current];
+                inline.data = block.data;
+                inline.offset = block.offset;
+                inline.size = block.size;
+            }
+        });
+    });
+
+    let active = ACTIVE_SURVIVOR.with(|active| active.get());
+    reset_blocks += with_survivor_arena_mut(active, reset_region_to_zero);
+    ACTIVE_SURVIVOR.with(|active_cell| active_cell.set(1 - active));
+
+    ArenaResetStats {
+        reset_blocks,
+        deallocated_blocks: 0,
+        deallocated_bytes: 0,
+    }
 }
 
 /// Reset arena blocks that have zero live objects after a GC sweep.
@@ -1555,6 +1899,20 @@ pub extern "C" fn js_arena_stats(out_used: *mut u64, out_total: *mut u64) {
             total += block.size as u64;
         }
     });
+    SURVIVOR_ARENA_0.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        for block in &arena.blocks {
+            used += block.offset as u64;
+            total += block.size as u64;
+        }
+    });
+    SURVIVOR_ARENA_1.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        for block in &arena.blocks {
+            used += block.offset as u64;
+            total += block.size as u64;
+        }
+    });
     unsafe {
         *out_used = used;
         *out_total = total;
@@ -1582,18 +1940,37 @@ pub fn old_gen_in_use_bytes() -> usize {
     })
 }
 
+#[inline]
+pub(crate) fn active_survivor_space() -> HeapSpace {
+    ACTIVE_SURVIVOR.with(|active| match active.get() {
+        0 => HeapSpace::Survivor0,
+        1 => HeapSpace::Survivor1,
+        _ => HeapSpace::Unknown,
+    })
+}
+
+#[inline]
+pub(crate) fn inactive_survivor_space() -> HeapSpace {
+    match active_survivor_space() {
+        HeapSpace::Survivor0 => HeapSpace::Survivor1,
+        HeapSpace::Survivor1 => HeapSpace::Survivor0,
+        _ => HeapSpace::Unknown,
+    }
+}
+
 /// Gen-GC Phase C: is `addr` inside any nursery (= general
 /// `ARENA`) block? Hot-path predicate for the write barrier —
 /// "is the child of this store a young-gen pointer?". Backed by
-/// page side metadata so the runtime barrier does not scan every
-/// arena block on each heap store.
+/// range side metadata so the runtime barrier does not scan every
+/// arena block on each heap store, while avoiding per-card metadata
+/// growth on low-pressure nursery churn.
 #[inline]
 pub fn pointer_in_nursery(addr: usize) -> bool {
-    matches!(classify_heap_generation(addr), HeapGeneration::Nursery)
+    classify_heap_space(addr).is_nursery()
 }
 
 /// Gen-GC Phase C: is `addr` inside any old-gen arena block?
-/// Mirror of `pointer_in_nursery`, also backed by page side
+/// Mirror of `pointer_in_nursery`, also backed by range side
 /// metadata.
 #[inline]
 pub fn pointer_in_old_gen(addr: usize) -> bool {
@@ -1685,6 +2062,55 @@ mod tests {
             assert!(!pointer_in_nursery(longlived));
             assert!(!pointer_in_old_gen(longlived));
             assert!(pointer_in_old_gen(old));
+        });
+    }
+
+    #[test]
+    fn generation_metadata_bucket_keeps_exact_range_boundaries() {
+        run_with_fresh_arenas(|| {
+            let bucket_base = 0x0055_0000_0000usize & !((1usize << GENERATION_CLASS_SHIFT) - 1);
+            let nursery_base = bucket_base + 0x1000;
+            let old_base = bucket_base + 0x4000;
+            let range_size = 0x1000;
+
+            register_block_space(
+                nursery_base,
+                range_size,
+                HeapGeneration::Nursery,
+                HeapSpace::NurseryEden,
+            );
+            register_block_space(old_base, range_size, HeapGeneration::Old, HeapSpace::Old);
+
+            assert_eq!(
+                classify_heap_generation(nursery_base + 0x80),
+                HeapGeneration::Nursery
+            );
+            assert_eq!(
+                classify_heap_generation(old_base + 0x80),
+                HeapGeneration::Old
+            );
+            assert_eq!(
+                classify_heap_generation(bucket_base + 0x3000),
+                HeapGeneration::Unknown,
+                "same metadata bucket must not classify holes between exact ranges"
+            );
+
+            unregister_block_generation(nursery_base, range_size);
+            assert_eq!(
+                classify_heap_generation(nursery_base + 0x80),
+                HeapGeneration::Unknown
+            );
+            assert_eq!(
+                classify_heap_generation(old_base + 0x80),
+                HeapGeneration::Old,
+                "removing one range must not remove another range in the same bucket"
+            );
+
+            unregister_block_generation(old_base, range_size);
+            assert_eq!(
+                classify_heap_generation(old_base + 0x80),
+                HeapGeneration::Unknown
+            );
         });
     }
 

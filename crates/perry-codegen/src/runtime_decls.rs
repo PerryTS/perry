@@ -1563,6 +1563,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_shadow_frame_push", I64, &[I32]);
     module.declare_function("js_shadow_frame_pop", VOID, &[I64]);
     module.declare_function("js_shadow_slot_set", VOID, &[I32, I64]);
+    module.declare_function("js_gc_write_barriers_emitted", VOID, &[I32]);
 
     // Write barrier for the generational GC (Phase C per the
     // gen-GC plan). Called by codegen-emitted heap-store sites
@@ -1571,8 +1572,10 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // GC can scan precise roots + RS instead of the full old-gen.
     //   js_write_barrier(parent_bits: u64, child_bits: u64)
     //   js_write_barrier_slot(parent_bits: u64, slot_addr: u64, child_bits: u64)
+    //   js_gc_note_slot_layout(parent_bits: u64, slot_index: u32, value_bits: u64)
     module.declare_function("js_write_barrier", VOID, &[I64, I64]);
     module.declare_function("js_write_barrier_slot", VOID, &[I64, I64, I64]);
+    module.declare_function("js_gc_note_slot_layout", VOID, &[I64, I32, I64]);
 
     // Array methods (Phase B.12).
     // - js_array_pop_f64(arr) -> f64    (last element, NaN if empty)
@@ -2206,6 +2209,16 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_ws_on_client_i64", I64, &[I64, I64, I64]);
     module.declare_function("js_ws_server_close", VOID, &[I64]);
     module.declare_function("js_ws_server_new", I64, &[DOUBLE]);
+    // #1113 — `wss.handleUpgrade(req, socket, head, cb)`. Receiver
+    // (the noServer WsServerHandle) is passed as I64 (post-unbox_to_i64
+    // from NATIVE_MODULE_TABLE dispatch, same receiver convention as
+    // `js_ws_on`). req/socket/head are NaN-boxed JSValues (DOUBLE);
+    // cb is the unboxed closure pointer (I64).
+    module.declare_function(
+        "js_ws_handle_upgrade",
+        I64,
+        &[I64, DOUBLE, DOUBLE, DOUBLE, I64],
+    );
     module.declare_function("js_ws_wait_for_message", I64, &[I64, DOUBLE]);
 
     // ========== SQLite ==========
@@ -2519,6 +2532,21 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_string_decoder_new", I64, &[I64]);
     module.declare_function("js_string_decoder_write", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_string_decoder_end", DOUBLE, &[I64, DOUBLE]);
+
+    // ========== node:querystring ==========
+    // Module-level functions (no receiver). `escape` / `unescape` take
+    // a single NaN-boxed string and return one. `parse` returns a raw
+    // ObjectHeader pointer (NaN-boxed at the call site via the
+    // dispatcher's NR_PTR shape). `stringify` returns a NaN-boxed
+    // STRING_TAG value directly.
+    module.declare_function("js_querystring_escape", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_querystring_unescape", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_querystring_parse", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_querystring_stringify",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
 
     // ========== Fastify ==========
     module.declare_function("js_fastify_add_hook", I32, &[I64, I64, I64]);

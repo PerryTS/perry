@@ -539,24 +539,23 @@ pub extern "C" fn js_async_resource_static_bind(callback: i64, type_value: f64) 
 }
 
 pub fn scan_async_hooks_roots(mark: &mut dyn FnMut(f64)) {
-    let hooks = HOOKS.lock().unwrap();
-    for hook in hooks.iter() {
-        for cb in [
-            hook.callbacks.init,
-            hook.callbacks.before,
-            hook.callbacks.after,
-            hook.callbacks.destroy,
-            hook.callbacks.promise_resolve,
-        ] {
-            if !cb.is_null() {
-                mark(box_ptr(cb as *const u8));
-            }
-        }
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_async_hooks_roots_mut(&mut visitor);
+}
+
+pub fn scan_async_hooks_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut hooks = HOOKS.lock().unwrap();
+    for hook in hooks.iter_mut() {
+        visitor.visit_raw_const_ptr_slot(&mut hook.callbacks.init);
+        visitor.visit_raw_const_ptr_slot(&mut hook.callbacks.before);
+        visitor.visit_raw_const_ptr_slot(&mut hook.callbacks.after);
+        visitor.visit_raw_const_ptr_slot(&mut hook.callbacks.destroy);
+        visitor.visit_raw_const_ptr_slot(&mut hook.callbacks.promise_resolve);
     }
     drop(hooks);
-    let resources = RESOURCES.lock().unwrap();
-    for meta in resources.values() {
-        mark(meta.resource);
+    let mut resources = RESOURCES.lock().unwrap();
+    for meta in resources.values_mut() {
+        visitor.visit_nanbox_f64_slot(&mut meta.resource);
     }
 }
 
@@ -570,6 +569,48 @@ pub fn reset_for_tests() {
     CURRENT_EXECUTION_ID.with(|c| c.set(0));
     CURRENT_TRIGGER_ID.with(|c| c.set(0));
     EXECUTION_STACK.with(|s| s.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_async_hooks_scanner_roots(callback: *const ClosureHeader, resource: f64) {
+    reset_for_tests();
+    HOOKS.lock().unwrap().push(HookRecord {
+        callbacks: HookCallbacks {
+            init: callback,
+            before: callback,
+            after: callback,
+            destroy: callback,
+            promise_resolve: callback,
+        },
+        enabled: true,
+    });
+    HOOKS_ACTIVE.store(1, Ordering::Relaxed);
+    RESOURCES.lock().unwrap().insert(
+        1,
+        ResourceMeta {
+            type_name: "test".to_string(),
+            trigger_async_id: 0,
+            resource,
+            destroyed: false,
+        },
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn test_async_hooks_scanner_snapshot() -> (usize, u64) {
+    let callback = HOOKS
+        .lock()
+        .unwrap()
+        .first()
+        .map(|hook| hook.callbacks.init as usize)
+        .unwrap_or(0);
+    let resource_bits = RESOURCES
+        .lock()
+        .unwrap()
+        .get(&1)
+        .map(|meta| meta.resource.to_bits())
+        .unwrap_or(0);
+    (callback, resource_bits)
 }
 
 #[cfg(test)]

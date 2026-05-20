@@ -78,6 +78,10 @@ pub mod slugify;
 // `end` methods + `lastNeed` / `lastTotal` / `lastChar` getters wired
 // through HANDLE_METHOD_DISPATCH / HANDLE_PROPERTY_DISPATCH.
 pub mod string_decoder;
+// querystring — node:querystring legacy URL-encoded form parser.
+// Greenfield implementation (Node ships it deprecated since v11 but
+// many npm packages still import it).
+pub mod querystring;
 pub mod worker_threads;
 
 // Re-export core
@@ -100,6 +104,7 @@ pub use lodash::*;
 pub use lru_cache::*;
 #[cfg(feature = "bundled-moment")]
 pub use moment::*;
+pub use querystring::*;
 pub use readline::*;
 #[cfg(feature = "bundled-slugify")]
 pub use slugify::*;

@@ -84,6 +84,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "async_hooks",
     "readline",
     "string_decoder",
+    "querystring",
     "tty",
     "process",
     "perry/tui",
@@ -472,6 +473,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("ws", "on", true, None),
     method("ws", "send", true, None),
     method("ws", "close", true, None),
+    // #1113 — `wss.handleUpgrade(req, socket, head, cb)` for a
+    // `new WebSocketServer({ noServer: true })`.
+    method("ws", "handleUpgrade", true, None),
     // Issue #577 Phase 4 — Client-class methods for the upgrade-path wsId.
     method("ws", "on", true, Some("Client")),
     method("ws", "addListener", true, Some("Client")),
@@ -1845,6 +1849,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("string_decoder", "lastNeed"),
     property("string_decoder", "lastTotal"),
     property("string_decoder", "lastChar"),
+    // node:querystring — legacy URL-encoded form parser. Greenfield
+    // (deprecated since Node 11 but still imported by many npm pkgs).
+    method("querystring", "escape", false, None),
+    method("querystring", "unescape", false, None),
+    method("querystring", "parse", false, None),
+    method("querystring", "stringify", false, None),
+    // `decode` / `encode` are aliases the test_parity_querystring fixture
+    // verifies are *identity-equal* to parse/stringify. Native dispatch
+    // routes both names to the same runtime symbol so the closures live
+    // at the same address.
+    method("querystring", "decode", false, None),
+    method("querystring", "encode", false, None),
     // ===========================================================
     // #513 Phase A: backfill receiver-less surface for modules that
     // previously had zero entries. Without these, `module_has_any_entries`
@@ -2349,6 +2365,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "method", true, Some("IncomingMessage")),
     method("http", "url", true, Some("IncomingMessage")),
     method("http", "httpVersion", true, Some("IncomingMessage")),
+    method("http", "statusCode", true, Some("IncomingMessage")),
+    method("http", "statusMessage", true, Some("IncomingMessage")),
+    method("http", "headers", true, Some("IncomingMessage")),
     method("http", "setStatus", true, Some("ServerResponse")),
     method("http", "getStatus", true, Some("ServerResponse")),
     method("http", "__get_method", true, Some("IncomingMessage")),
@@ -2357,6 +2376,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "__get_complete", true, Some("IncomingMessage")),
     method("http", "__get_aborted", true, Some("IncomingMessage")),
     method("http", "__get_destroyed", true, Some("IncomingMessage")),
+    method("http", "__get_statusCode", true, Some("IncomingMessage")),
+    method("http", "__get_statusMessage", true, Some("IncomingMessage")),
+    method("http", "__get_headers", true, Some("IncomingMessage")),
     method("http", "__get_statusCode", true, Some("ServerResponse")),
     method("http", "__set_statusCode", true, Some("ServerResponse")),
     method("http", "__set_statusMessage", true, Some("ServerResponse")),

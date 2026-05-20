@@ -91,33 +91,73 @@ const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 /// always 0 today; when cleanup-on-dep-change wiring lands the
 /// scanner will need to emit it too.
 pub fn scan_hook_slot_roots(mark: &mut dyn FnMut(f64)) {
-    let s = match SLOTS.try_lock() {
-        Ok(g) => g,
-        // The render loop holds the lock while building widgets; if GC
-        // fires from inside that path we just skip this scan rather
-        // than deadlocking. Any pointer transitively reachable from a
-        // local will still be picked up by the conservative stack scan.
-        Err(_) => return,
-    };
-    for slot in s.iter() {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_hook_slot_roots_mut(&mut visitor);
+}
+
+pub fn scan_hook_slot_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
+    for slot in s.iter_mut() {
         match slot {
-            HookSlot::State { value_bits } => mark(f64::from_bits(*value_bits)),
+            HookSlot::State { value_bits } => {
+                visitor.visit_nanbox_u64_slot(value_bits);
+            }
             HookSlot::Memo {
                 value_bits,
                 computed,
                 ..
             } => {
                 if *computed {
-                    mark(f64::from_bits(*value_bits));
+                    visitor.visit_nanbox_u64_slot(value_bits);
                 }
             }
-            HookSlot::Ref { value_bits } => mark(f64::from_bits(*value_bits)),
+            HookSlot::Ref { value_bits } => {
+                visitor.visit_nanbox_u64_slot(value_bits);
+            }
             // TODO: when useEffect cleanup-on-dep-change wiring lands,
             // emit `cleanup` here too — it'll hold a NaN-boxed POINTER
             // to a Perry closure that the GC otherwise can't see.
             HookSlot::Effect { .. } | HookSlot::Focus { .. } => {}
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_hook_slot_roots(value_bits: u64) {
+    let mut slots = crate::gc::lock_gc_root_registry(&SLOTS);
+    slots.clear();
+    slots.push(HookSlot::State { value_bits });
+    slots.push(HookSlot::Memo {
+        last_deps_hash: 0,
+        value_bits,
+        computed: true,
+    });
+    slots.push(HookSlot::Ref { value_bits });
+    NEXT_HOOK_IDX.store(0, Ordering::Release);
+}
+
+#[cfg(test)]
+pub(crate) fn test_hook_slot_roots() -> (u64, u64, u64) {
+    let slots = crate::gc::lock_gc_root_registry(&SLOTS);
+    let state = match slots.first() {
+        Some(HookSlot::State { value_bits }) => *value_bits,
+        _ => 0,
+    };
+    let memo = match slots.get(1) {
+        Some(HookSlot::Memo { value_bits, .. }) => *value_bits,
+        _ => 0,
+    };
+    let reference = match slots.get(2) {
+        Some(HookSlot::Ref { value_bits }) => *value_bits,
+        _ => 0,
+    };
+    (state, memo, reference)
+}
+
+#[cfg(test)]
+pub(crate) fn test_with_hook_slots_locked<R>(f: impl FnOnce() -> R) -> R {
+    let _slots = crate::gc::lock_gc_root_registry(&SLOTS);
+    f()
 }
 
 /// Reset the hook index at the top of each render. Called by run.rs.
@@ -144,7 +184,7 @@ fn next_idx() -> usize {
 #[no_mangle]
 pub extern "C" fn js_perry_tui_use_state(initial: f64) -> f64 {
     let idx = next_idx();
-    let mut s = SLOTS.lock().unwrap();
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     while s.len() <= idx {
         s.push(HookSlot::State {
             value_bits: TAG_UNDEFINED,
@@ -173,7 +213,7 @@ pub extern "C" fn js_perry_tui_use_state(initial: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_perry_tui_use_state_set(slot_idx: f64, value: f64) -> f64 {
     let idx = slot_idx as usize;
-    let mut s = SLOTS.lock().unwrap();
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     if let Some(HookSlot::State { value_bits }) = s.get_mut(idx) {
         let new_bits = value.to_bits();
         if *value_bits != new_bits {
@@ -215,7 +255,7 @@ pub extern "C" fn perry_tui_state_setter_trampoline(
             (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
         *captures
     } as usize;
-    let mut s = SLOTS.lock().unwrap();
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     if let Some(HookSlot::State { value_bits }) = s.get_mut(slot) {
         let new_bits = value.to_bits();
         if *value_bits != new_bits {
@@ -237,7 +277,7 @@ pub extern "C" fn perry_tui_state_setter_trampoline(
 #[no_mangle]
 pub extern "C" fn js_perry_tui_use_state_tuple(initial: f64) -> i64 {
     let idx = next_idx();
-    let mut s = SLOTS.lock().unwrap();
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     while s.len() <= idx {
         s.push(HookSlot::State {
             value_bits: initial.to_bits(),
@@ -276,7 +316,7 @@ pub extern "C" fn js_perry_tui_use_state_tuple(initial: f64) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_perry_tui_use_state_slot(initial: f64) -> f64 {
     let idx = next_idx();
-    let mut s = SLOTS.lock().unwrap();
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     while s.len() <= idx {
         s.push(HookSlot::State {
             value_bits: initial.to_bits(),
@@ -312,7 +352,7 @@ pub extern "C" fn js_perry_tui_use_state_slot(initial: f64) -> f64 {
 pub extern "C" fn js_perry_tui_use_effect(fn_closure: i64, deps_array: i64) -> f64 {
     let deps_hash = hash_deps_array(deps_array);
     let idx = next_idx();
-    let mut s = SLOTS.lock().unwrap();
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     while s.len() <= idx {
         s.push(HookSlot::Effect {
             last_deps_hash: 0,
@@ -396,7 +436,7 @@ fn hash_deps_array(deps_array: i64) -> u64 {
 pub extern "C" fn js_perry_tui_use_memo(fn_closure: i64, deps_array: i64) -> f64 {
     let deps_hash = hash_deps_array(deps_array);
     let idx = next_idx();
-    let mut s = SLOTS.lock().unwrap();
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     while s.len() <= idx {
         s.push(HookSlot::Memo {
             last_deps_hash: 0,
@@ -419,7 +459,7 @@ pub extern "C" fn js_perry_tui_use_memo(fn_closure: i64, deps_array: i64) -> f64
         } else {
             f64::from_bits(TAG_UNDEFINED)
         };
-        let mut s2 = SLOTS.lock().unwrap();
+        let mut s2 = crate::gc::lock_gc_root_registry(&SLOTS);
         // Slot index hasn't shifted because we only allocate, never remove.
         s2[idx] = HookSlot::Memo {
             last_deps_hash: deps_hash,
@@ -452,7 +492,7 @@ pub extern "C" fn js_perry_tui_use_memo(fn_closure: i64, deps_array: i64) -> f64
 #[no_mangle]
 pub extern "C" fn js_perry_tui_use_ref(initial: f64) -> i64 {
     let idx = next_idx();
-    let mut s = SLOTS.lock().unwrap();
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     while s.len() <= idx {
         s.push(HookSlot::Ref {
             value_bits: initial.to_bits(),
@@ -474,7 +514,7 @@ pub extern "C" fn js_perry_tui_ref_get(handle: i64) -> f64 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     let idx = (handle - 1) as usize;
-    let s = SLOTS.lock().unwrap();
+    let s = crate::gc::lock_gc_root_registry(&SLOTS);
     match s.get(idx) {
         Some(HookSlot::Ref { value_bits }) => f64::from_bits(*value_bits),
         _ => f64::from_bits(TAG_UNDEFINED),
@@ -488,7 +528,7 @@ pub extern "C" fn js_perry_tui_ref_set(handle: i64, value: f64) -> f64 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     let idx = (handle - 1) as usize;
-    let mut s = SLOTS.lock().unwrap();
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     if let Some(HookSlot::Ref { value_bits }) = s.get_mut(idx) {
         *value_bits = value.to_bits();
     }
@@ -627,7 +667,7 @@ pub extern "C" fn js_perry_tui_use_focus(auto_focus: f64, is_active: f64) -> f64
     let idx = next_idx();
     let auto = auto_focus != 0.0;
     let active = is_active != 0.0;
-    let mut s = SLOTS.lock().unwrap();
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     while s.len() <= idx {
         let new_id = FOCUS_ID_COUNTER.fetch_add(1, Ordering::AcqRel) + 1;
         let take_focus = auto && FOCUS_CURRENT.load(Ordering::Acquire) == 0;
@@ -683,7 +723,7 @@ pub extern "C" fn js_perry_tui_focus(id: f64) -> f64 {
 }
 
 fn focus_step(forward: bool) {
-    let s = SLOTS.lock().unwrap();
+    let s = crate::gc::lock_gc_root_registry(&SLOTS);
     let active_ids: Vec<u32> = s
         .iter()
         .filter_map(|slot| {
@@ -780,7 +820,7 @@ mod tests {
     /// guard — drop at end of test.
     fn reset() -> std::sync::MutexGuard<'static, ()> {
         let g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        SLOTS.lock().unwrap().clear();
+        crate::gc::lock_gc_root_registry(&SLOTS).clear();
         NEXT_HOOK_IDX.store(0, Ordering::Release);
         STATE_DIRTY.store(false, Ordering::Release);
         FOCUS_ID_COUNTER.store(0, Ordering::Release);

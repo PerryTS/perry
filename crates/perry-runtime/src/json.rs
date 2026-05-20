@@ -199,21 +199,50 @@ fn make_pointer_bits(ptr: *const u8) -> u64 {
 
 /// Root scanner called by GC — marks every value in PARSE_ROOTS as live.
 pub fn scan_parse_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_parse_roots_mut(&mut visitor);
+}
+
+pub fn scan_parse_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     PARSE_ROOTS.with(|r| {
-        for &v in r.borrow().iter() {
-            mark(v);
+        for v in r.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(v);
         }
     });
     // Also mark interned key strings so GC doesn't sweep them mid-parse.
     PARSE_KEY_CACHE.with(|c| {
-        for &ptr in c.borrow().values() {
-            if !ptr.is_null() {
-                mark(f64::from_bits(
-                    crate::value::STRING_TAG | (ptr as u64 & 0x0000_FFFF_FFFF_FFFF),
-                ));
-            }
+        for ptr in c.borrow_mut().values_mut() {
+            visitor.visit_tagged_raw_const_ptr_slot(ptr, crate::value::STRING_TAG);
         }
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_parse_roots(value: f64, key_ptr: *const StringHeader) {
+    PARSE_ROOTS.with(|r| {
+        let mut r = r.borrow_mut();
+        r.clear();
+        r.push(value);
+    });
+    PARSE_KEY_CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        c.clear();
+        c.insert(b"test".to_vec(), key_ptr);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_parse_roots_snapshot() -> (u64, usize) {
+    let value_bits =
+        PARSE_ROOTS.with(|r| r.borrow().first().copied().map(f64::to_bits).unwrap_or(0));
+    let key_ptr = PARSE_KEY_CACHE.with(|c| {
+        c.borrow()
+            .get(b"test".as_slice())
+            .copied()
+            .map(|ptr| ptr as usize)
+            .unwrap_or(0)
+    });
+    (value_bits, key_ptr)
 }
 
 // ─── Zero-copy string access ──────────────────────────────────────────────────
