@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 968 entries across 75 modules.
+Total: 982 entries across 76 modules.
 
 ## Modules
 
@@ -76,6 +76,7 @@ Total: 968 entries across 75 modules.
 - [`tursodb`](#tursodb)
 - [`url`](#url)
 - [`util`](#util)
+- [`util/types`](#util-types)
 - [`uuid`](#uuid)
 - [`validator`](#validator)
 - [`worker_threads`](#worker-threads)
@@ -1451,10 +1452,29 @@ Total: 968 entries across 75 modules.
 - `inspect` — module
 - `isDeepStrictEqual` — module
 - `promisify` — module
+- `stripVTControlCharacters` — module
 
 ### Properties
 
 - `types`
+
+## `util/types`
+
+### Methods
+
+- `isAnyArrayBuffer` — module
+- `isArrayBuffer` — module
+- `isArrayBufferView` — module
+- `isDate` — module
+- `isFloat64Array` — module
+- `isInt32Array` — module
+- `isMap` — module
+- `isPromise` — module
+- `isRegExp` — module
+- `isSet` — module
+- `isTypedArray` — module
+- `isUint16Array` — module
+- `isUint8Array` — module
 
 ## `uuid`
 

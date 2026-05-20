@@ -1115,13 +1115,21 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     }
                 }
                 b'j' => {
-                    let inspected = format_jsvalue_for_json(val, 0);
-                    let compact = inspected
-                        .replace("{ ", "{\"")
-                        .replace(": ", "\":")
-                        .replace(", ", ",\"")
-                        .replace(" }", "}");
-                    out.push_str(&compact);
+                    // Real JSON.stringify — string-replace post-processing
+                    // of inspect output mangles strings that contain
+                    // ", ", ": ", "{ ", or " }".
+                    unsafe {
+                        let s_ptr = crate::json::js_json_stringify(val, 0);
+                        if s_ptr.is_null() {
+                            out.push_str("undefined");
+                        } else {
+                            let len = (*s_ptr).byte_len as usize;
+                            let data = (s_ptr as *const u8)
+                                .add(std::mem::size_of::<crate::string::StringHeader>());
+                            let bytes = std::slice::from_raw_parts(data, len);
+                            out.push_str(std::str::from_utf8(bytes).unwrap_or(""));
+                        }
+                    }
                 }
                 b'o' | b'O' => {
                     out.push_str(&format_jsvalue(val, 0));
@@ -1238,8 +1246,24 @@ pub extern "C" fn js_util_strip_vt_control_characters(value: f64) -> f64 {
                 }
                 out.push_str(&input[start..i]);
             } else {
-                out.push(bytes[i] as char);
-                i += 1;
+                // Preserve multi-byte UTF-8 sequences: advance by the
+                // full code-point width instead of casting one byte to
+                // char (which mangles non-ASCII, e.g. "café" → "cafÃ©").
+                let lead = bytes[i];
+                let width = if lead < 0x80 {
+                    1
+                } else if lead < 0xc0 {
+                    1 // stray continuation byte; copy verbatim
+                } else if lead < 0xe0 {
+                    2
+                } else if lead < 0xf0 {
+                    3
+                } else {
+                    4
+                };
+                let end = (i + width).min(bytes.len());
+                out.push_str(std::str::from_utf8(&bytes[i..end]).unwrap_or(""));
+                i = end;
             }
         }
         let ptr = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
