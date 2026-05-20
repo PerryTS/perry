@@ -903,6 +903,11 @@ pub extern "C" fn js_object_get_field_by_name(
                     let b = obj as *const crate::buffer::BufferHeader;
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
+                if key_bytes == b"buffer" {
+                    return JSValue::from_bits(
+                        crate::value::js_nanbox_pointer(obj as i64).to_bits(),
+                    );
+                }
                 // Issue #639 followup: method-as-value reads on a Buffer
                 // (e.g. duck-type tests like `typeof v.readUInt8 === "function"`
                 // in @perryts/mysql's `isBufferLike`) need to return a

@@ -847,14 +847,15 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     }
 
     // Issue #848: StringDecoder reads — state getters `lastNeed` /
-    // `lastTotal` / `lastChar` and the method-as-value reads `write` /
+    // `lastTotal` / `lastChar`, the canonical `encoding` property,
+    // and the method-as-value reads `write` /
     // `end` (the latter return a bound-method closure so
     // `typeof dec.write === "function"` and `const w = dec.write; w(buf)`
     // both work; see `dispatch_string_decoder_property`). Same disjoint-
     // property gate as the method-dispatch arm above.
     if matches!(
         property_name,
-        "lastNeed" | "lastTotal" | "lastChar" | "write" | "end"
+        "lastNeed" | "lastTotal" | "lastChar" | "encoding" | "write" | "end"
     ) && crate::string_decoder::is_string_decoder_handle(handle)
     {
         return crate::string_decoder::dispatch_string_decoder_property(handle, property_name);

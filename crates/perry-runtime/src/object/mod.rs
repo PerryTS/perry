@@ -5132,6 +5132,7 @@ fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
             | ("events", "EventEmitter")
+            | ("string_decoder", "StringDecoder")
             // node:cluster — namespace property reads of these callables
             // need to satisfy `typeof cluster.fork === "function"` etc.
             // The fixtures only probe types, but compiled npm code that

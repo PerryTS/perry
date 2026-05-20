@@ -90,6 +90,21 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_array_buffer_new", &[(I32, &size_i32)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        // Minimal DataView support for BufferSource consumers such as
+        // StringDecoder: Perry models ArrayBuffer/Uint8Array storage as a
+        // BufferHeader, so `new DataView(buffer)` can alias the same backing
+        // pointer for byte-extraction call sites.
+        "DataView" => {
+            let view_box = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            Ok(Some(view_box))
+        }
         "RegExp" => {
             let pattern_box = if !args.is_empty() {
                 lower_expr(ctx, &args[0])?

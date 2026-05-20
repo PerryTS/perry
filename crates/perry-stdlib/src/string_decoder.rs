@@ -24,7 +24,7 @@
 //! so a chunk that isn't a multiple of 3 carries the leftover into
 //! the next write. `hex` / `latin1` / `ascii` are stateless.
 
-use crate::common::handle::{get_handle_mut, register_handle, with_handle, Handle};
+use crate::common::handle::{get_handle_mut, register_handle, with_handle};
 use perry_runtime::buffer::{is_registered_buffer, BufferHeader};
 use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 
@@ -35,6 +35,7 @@ pub enum DecodingMode {
     Utf8,
     Utf16Le,
     Base64,
+    Base64Url,
     Hex,
     Latin1,
     Ascii,
@@ -62,6 +63,11 @@ pub struct StringDecoderHandle {
     /// Base64: 0..=2 buffered bytes that didn't fit into the last 3-byte
     /// chunk. Re-prefixed onto the next `write` before encoding.
     base64_partial: Vec<u8>,
+    /// UTF-16LE: a high surrogate buffered across writes. JavaScript strings
+    /// can contain lone surrogate code units; Rust `String` cannot, but
+    /// buffering a high surrogate here lets split valid surrogate pairs
+    /// decode to the same scalar value as Node.
+    utf16_high_surrogate: Option<u16>,
 }
 
 impl Default for StringDecoderHandle {
@@ -84,6 +90,7 @@ impl StringDecoderHandle {
             last_char_len: 0,
             utf16_partial: None,
             base64_partial: Vec::new(),
+            utf16_high_surrogate: None,
         }
     }
 }
@@ -93,16 +100,29 @@ impl StringDecoderHandle {
 /// default — that mirrors Node's `normalizeEncoding` returning undefined
 /// (then `new StringDecoder` throws), but Perry's existing callers expect
 /// utf-8 as a forgiving default; keep that for now.
-fn parse_encoding(name: &str) -> DecodingMode {
+fn parse_encoding(name: &str) -> Option<DecodingMode> {
     let lower = name.to_ascii_lowercase();
-    match lower.as_str() {
+    Some(match lower.as_str() {
         "utf8" | "utf-8" => DecodingMode::Utf8,
         "utf16le" | "utf-16le" | "ucs2" | "ucs-2" => DecodingMode::Utf16Le,
-        "base64" | "base64url" => DecodingMode::Base64,
+        "base64" => DecodingMode::Base64,
+        "base64url" => DecodingMode::Base64Url,
         "hex" => DecodingMode::Hex,
         "latin1" | "binary" => DecodingMode::Latin1,
         "ascii" => DecodingMode::Ascii,
-        _ => DecodingMode::Utf8,
+        _ => return None,
+    })
+}
+
+fn canonical_encoding_name(mode: DecodingMode) -> &'static str {
+    match mode {
+        DecodingMode::Utf8 => "utf8",
+        DecodingMode::Utf16Le => "utf16le",
+        DecodingMode::Base64 => "base64",
+        DecodingMode::Base64Url => "base64url",
+        DecodingMode::Hex => "hex",
+        DecodingMode::Latin1 => "latin1",
+        DecodingMode::Ascii => "ascii",
     }
 }
 
@@ -141,6 +161,33 @@ unsafe fn encoding_name_from_bits(bits: i64) -> Option<String> {
     let data = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data, len);
     Some(String::from_utf8_lossy(bytes).into_owned())
+}
+
+fn throw_type_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = perry_runtime::error::js_typeerror_new(msg);
+    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+}
+
+unsafe fn string_from_nanboxed_for_error(bits: i64) -> String {
+    let u = bits as u64;
+    if u == JSValue::undefined().bits() {
+        return "undefined".to_string();
+    }
+    if u == JSValue::null().bits() {
+        return "null".to_string();
+    }
+    if let Some(s) = encoding_name_from_bits(bits) {
+        return s;
+    }
+    let f = f64::from_bits(u);
+    if f.is_finite() && f.fract() == 0.0 {
+        return format!("{}", f as i64);
+    }
+    if f.is_finite() {
+        return format!("{}", f);
+    }
+    "unknown".to_string()
 }
 
 /// Detect a multi-byte UTF-8 lead in the final 0–3 bytes of `buf`.
@@ -306,10 +353,9 @@ fn write_utf16le(state: &mut StringDecoderHandle, bytes: &[u8]) -> String {
     let head = &combined[..take];
     let mut out = String::with_capacity(take / 2);
     let mut iter = head.chunks_exact(2);
-    let mut high_surrogate: Option<u16> = None;
     for pair in iter.by_ref() {
         let unit = u16::from_le_bytes([pair[0], pair[1]]);
-        if let Some(h) = high_surrogate.take() {
+        if let Some(h) = state.utf16_high_surrogate.take() {
             // Expecting a low surrogate to pair with the buffered high.
             if (0xDC00..=0xDFFF).contains(&unit) {
                 let cp = 0x10000 + (((h - 0xD800) as u32) << 10) + ((unit - 0xDC00) as u32);
@@ -321,18 +367,11 @@ fn write_utf16le(state: &mut StringDecoderHandle, bytes: &[u8]) -> String {
             } else {
                 // Lone high → replacement, then reprocess this unit.
                 out.push('\u{FFFD}');
-                process_utf16_unit(&mut out, &mut high_surrogate, unit);
+                process_utf16_unit(&mut out, &mut state.utf16_high_surrogate, unit);
             }
         } else {
-            process_utf16_unit(&mut out, &mut high_surrogate, unit);
+            process_utf16_unit(&mut out, &mut state.utf16_high_surrogate, unit);
         }
-    }
-    // A still-pending high surrogate is rare (would need an odd number of
-    // surrogate pairs straddling writes) — Node lets it ride to the next
-    // write/end too. We don't track it across writes; flush as replacement
-    // here.
-    if high_surrogate.is_some() {
-        out.push('\u{FFFD}');
     }
     out
 }
@@ -346,13 +385,19 @@ fn process_utf16_unit(out: &mut String, high: &mut Option<u16>, unit: u16) {
 }
 
 fn end_utf16le(state: &mut StringDecoderHandle, bytes: Option<&[u8]>) -> String {
-    let out = match bytes {
+    let mut out = match bytes {
         Some(b) => write_utf16le(state, b),
         None => String::new(),
     };
     // Any leftover lone byte at end is dropped (matches Node — the trailing
     // odd byte produces no character).
     state.utf16_partial = None;
+    // Node can return a JS string containing a lone high surrogate here.
+    // Perry's runtime string is UTF-8, so use U+FFFD for the unpaired scalar
+    // until runtime strings can preserve raw UTF-16 code units.
+    if state.utf16_high_surrogate.take().is_some() {
+        out.push('\u{FFFD}');
+    }
     out
 }
 
@@ -371,15 +416,17 @@ fn encode_base64_chunk(triplet: &[u8], out: &mut String) {
     out.push(B64_ALPHABET[(b2 & 0x3F) as usize] as char);
 }
 
-fn encode_base64_tail(tail: &[u8], out: &mut String) {
+fn encode_base64_tail(tail: &[u8], out: &mut String, padded: bool) {
     // Final 1 or 2 bytes — produces 2 or 3 base64 chars + `=` padding to 4.
     match tail.len() {
         1 => {
             let b0 = tail[0];
             out.push(B64_ALPHABET[(b0 >> 2) as usize] as char);
             out.push(B64_ALPHABET[((b0 & 0x3) << 4) as usize] as char);
-            out.push('=');
-            out.push('=');
+            if padded {
+                out.push('=');
+                out.push('=');
+            }
         }
         2 => {
             let b0 = tail[0];
@@ -387,7 +434,9 @@ fn encode_base64_tail(tail: &[u8], out: &mut String) {
             out.push(B64_ALPHABET[(b0 >> 2) as usize] as char);
             out.push(B64_ALPHABET[(((b0 & 0x3) << 4) | (b1 >> 4)) as usize] as char);
             out.push(B64_ALPHABET[((b1 & 0xF) << 2) as usize] as char);
-            out.push('=');
+            if padded {
+                out.push('=');
+            }
         }
         _ => {}
     }
@@ -414,13 +463,13 @@ fn write_base64(state: &mut StringDecoderHandle, bytes: &[u8]) -> String {
     out
 }
 
-fn end_base64(state: &mut StringDecoderHandle, bytes: Option<&[u8]>) -> String {
+fn end_base64(state: &mut StringDecoderHandle, bytes: Option<&[u8]>, padded: bool) -> String {
     let mut out = match bytes {
         Some(b) => write_base64(state, b),
         None => String::new(),
     };
     if !state.base64_partial.is_empty() {
-        encode_base64_tail(&state.base64_partial, &mut out);
+        encode_base64_tail(&state.base64_partial, &mut out, padded);
         state.base64_partial.clear();
     }
     out
@@ -483,6 +532,16 @@ unsafe fn bytes_from_nanboxed(value: f64) -> Vec<u8> {
     std::slice::from_raw_parts(data, len).to_vec()
 }
 
+unsafe fn bytes_from_write_arg(value: f64) -> Vec<u8> {
+    let bits = value.to_bits();
+    if bits == JSValue::undefined().bits() || bits == JSValue::null().bits() {
+        throw_type_error(
+            "The \"buf\" argument must be an instance of Buffer, TypedArray, or DataView.",
+        );
+    }
+    bytes_from_nanboxed(value)
+}
+
 /// `new StringDecoder(encoding)` — allocate a real StringDecoderHandle.
 ///
 /// `encoding_bits` arrives as `i64` carrying the raw bits of the NaN-boxed
@@ -494,9 +553,18 @@ unsafe fn bytes_from_nanboxed(value: f64) -> Vec<u8> {
 /// is wanted).
 #[no_mangle]
 pub unsafe extern "C" fn js_string_decoder_new(encoding_bits: i64) -> i64 {
-    let mode = match encoding_name_from_bits(encoding_bits) {
-        Some(name) => parse_encoding(&name),
-        None => DecodingMode::Utf8,
+    let mode = if encoding_bits == 0
+        || encoding_bits == 1
+        || (encoding_bits as u64) == JSValue::undefined().bits()
+        || (encoding_bits as u64) == JSValue::null().bits()
+    {
+        DecodingMode::Utf8
+    } else {
+        let name = string_from_nanboxed_for_error(encoding_bits);
+        match parse_encoding(&name) {
+            Some(mode) => mode,
+            None => throw_type_error(&format!("Unknown encoding: {}", name)),
+        }
     };
     register_handle(StringDecoderHandle::with_mode(mode))
 }
@@ -555,14 +623,16 @@ pub unsafe fn dispatch_string_decoder(handle: i64, method: &str, args: &[f64]) -
     match method {
         "write" => {
             let bytes = if args.is_empty() {
-                Vec::new()
+                throw_type_error(
+                    "The \"buf\" argument must be an instance of Buffer, TypedArray, or DataView.",
+                )
             } else {
-                bytes_from_nanboxed(args[0])
+                bytes_from_write_arg(args[0])
             };
             let s = match h.mode {
                 DecodingMode::Utf8 => write_utf8(h, &bytes),
                 DecodingMode::Utf16Le => write_utf16le(h, &bytes),
-                DecodingMode::Base64 => write_base64(h, &bytes),
+                DecodingMode::Base64 | DecodingMode::Base64Url => write_base64(h, &bytes),
                 DecodingMode::Hex => write_hex(h, &bytes),
                 DecodingMode::Latin1 => write_latin1(h, &bytes),
                 DecodingMode::Ascii => write_ascii(h, &bytes),
@@ -579,14 +649,15 @@ pub unsafe fn dispatch_string_decoder(handle: i64, method: &str, args: &[f64]) -
                 if bits == JSValue::undefined().bits() || bits == JSValue::null().bits() {
                     None
                 } else {
-                    Some(bytes_from_nanboxed(args[0]))
+                    Some(bytes_from_write_arg(args[0]))
                 }
             };
             let bytes_ref = bytes_opt.as_deref();
             let s = match h.mode {
                 DecodingMode::Utf8 => end_utf8(h, bytes_ref),
                 DecodingMode::Utf16Le => end_utf16le(h, bytes_ref),
-                DecodingMode::Base64 => end_base64(h, bytes_ref),
+                DecodingMode::Base64 => end_base64(h, bytes_ref, true),
+                DecodingMode::Base64Url => end_base64(h, bytes_ref, false),
                 // Hex / Latin1 / Ascii have no carry-over state — `end`
                 // is just a `write` with no trailing flush.
                 DecodingMode::Hex => match bytes_ref {
@@ -644,6 +715,11 @@ pub unsafe fn dispatch_string_decoder_property(handle: i64, property: &str) -> f
             let dst = perry_runtime::buffer::buffer_data_mut(buf);
             std::ptr::copy_nonoverlapping(h.last_char.as_ptr(), dst, 4);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
+        }
+        "encoding" => {
+            let s = canonical_encoding_name(h.mode);
+            let sh = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            f64::from_bits(0x7FFF_0000_0000_0000u64 | ((sh as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
         "write" | "end" => {
             // Build a bound-method closure whose `this` is the

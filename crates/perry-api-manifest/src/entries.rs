@@ -1846,6 +1846,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("string_decoder", "lastNeed"),
     property("string_decoder", "lastTotal"),
     property("string_decoder", "lastChar"),
+    property("string_decoder", "encoding"),
     // node:querystring — legacy URL-encoded form parser. Greenfield
     // (deprecated since Node 11 but still imported by many npm pkgs).
     method("querystring", "escape", false, None),
