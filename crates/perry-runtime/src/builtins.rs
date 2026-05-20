@@ -31,6 +31,69 @@ fn is_negative_zero(n: f64) -> bool {
     n.to_bits() == 0x8000_0000_0000_0000u64
 }
 
+// Circular-reference tracking for `format_jsvalue` / `format_jsvalue_for_json`.
+// Node's `util.inspect` detects cycles and prints `<ref *N>` at the head of
+// the cycle plus `[Circular *N]` at the back-edge. We track:
+//   - `stack`: pointer addresses currently mid-format (the ancestor chain)
+//   - `ids`: pointer address → assigned ref ID (only populated for cyclic refs)
+//   - `next_id`: monotonic ID counter, allocated lazily on first back-edge
+// Reset at every top-level `format_jsvalue(_, 0)` call so each print starts
+// fresh. See #1204.
+#[derive(Default)]
+struct CircularState {
+    stack: Vec<usize>,
+    ids: std::collections::HashMap<usize, usize>,
+    next_id: usize,
+}
+
+impl CircularState {
+    fn reset(&mut self) {
+        self.stack.clear();
+        self.ids.clear();
+        self.next_id = 0;
+    }
+}
+
+thread_local! {
+    static INSPECT_CIRCULAR: std::cell::RefCell<CircularState> =
+        std::cell::RefCell::new(CircularState::default());
+}
+
+/// Enter an object/array for formatting. Returns:
+/// - `Err(id)` if `ptr_addr` is already on the ancestor stack — caller should
+///   return `[Circular *id]` immediately (no push, no body).
+/// - `Ok(())` after pushing `ptr_addr` — caller must call
+///   `inspect_finish_circular(ptr_addr, body)` to pop + maybe prepend `<ref *N>`.
+fn inspect_enter_circular(ptr_addr: usize) -> Result<(), usize> {
+    INSPECT_CIRCULAR.with(|c| {
+        let mut st = c.borrow_mut();
+        if st.stack.contains(&ptr_addr) {
+            if let Some(&id) = st.ids.get(&ptr_addr) {
+                return Err(id);
+            }
+            st.next_id += 1;
+            let id = st.next_id;
+            st.ids.insert(ptr_addr, id);
+            return Err(id);
+        }
+        st.stack.push(ptr_addr);
+        Ok(())
+    })
+}
+
+/// Pop `ptr_addr` from the ancestor stack and prepend `<ref *N> ` if a
+/// back-edge to it was discovered during body formatting.
+fn inspect_finish_circular(ptr_addr: usize, body: String) -> String {
+    INSPECT_CIRCULAR.with(|c| {
+        let mut st = c.borrow_mut();
+        st.stack.pop();
+        match st.ids.get(&ptr_addr).copied() {
+            Some(id) => format!("<ref *{}> {}", id, body),
+            None => body,
+        }
+    })
+}
+
 /// Format a finite, non-zero, non-integer-like f64 per ECMAScript
 /// NumberToString. Caller has already filtered NaN / ±Infinity / ±0 /
 /// integer-shaped values; this only decides decimal vs scientific
@@ -508,6 +571,11 @@ pub unsafe extern "C" fn js_register_function_name(
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
 pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
+    // Top-level entry: clear circular-tracking state so each print starts
+    // fresh and ref IDs restart at 1. See #1204.
+    if depth == 0 {
+        INSPECT_CIRCULAR.with(|c| c.borrow_mut().reset());
+    }
     // Prevent stack overflow with deeply nested structures
     if depth > 10 {
         return "[...]".to_string();
@@ -619,17 +687,24 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     }
                 } else if gc_type == crate::gc::GC_TYPE_ARRAY {
                     // Array — format as [ elem1, elem2, ... ] matching Node.js util.inspect.
-                    // Node's default depth cap is 2: anything more than 2
-                    // levels of nesting collapses to `[Array]`. `%o` (`%O`'s
-                    // unbounded-depth sibling) and `console.dir(v, { depth })`
-                    // both override the cap via INSPECT_DEPTH_LIMIT.
+                    // Cycle check FIRST so back-edges win over depth truncation
+                    // (#1204): `a=[]; a.push(a); console.log(a)` should print
+                    // `<ref *1> [ [Circular *1] ]` even when depth would have
+                    // collapsed nested arrays. Then the Node default depth cap
+                    // (overridable via INSPECT_DEPTH_LIMIT for `%o` /
+                    // `console.dir(v, { depth })`): past that, nested arrays
+                    // collapse to `[Array]`.
+                    if let Err(id) = inspect_enter_circular(ptr as usize) {
+                        return format!("[Circular *{}]", id);
+                    }
                     if depth > inspect_depth_limit() {
-                        return "[Array]".to_string();
+                        // We just pushed; finish to keep the stack balanced.
+                        return inspect_finish_circular(ptr as usize, "[Array]".to_string());
                     }
                     let maybe_arr = ptr;
                     let length = (*maybe_arr).length as usize;
                     if length == 0 {
-                        return "[]".to_string();
+                        return inspect_finish_circular(ptr as usize, "[]".to_string());
                     }
                     let data_ptr = (maybe_arr as *const u8)
                         .add(std::mem::size_of::<crate::array::ArrayHeader>())
@@ -654,7 +729,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     let inner = parts.join(", ");
                     // Node uses multi-line when length > 6 or single-line exceeds breakLength (76)
                     let use_multiline = length > 6 || inner.len() + 4 > 76;
-                    if !use_multiline {
+                    let body_str = if !use_multiline {
                         format!("[ {} ]", inner)
                     } else if all_numeric {
                         // Node.js groupArrayElements for numeric arrays:
@@ -704,19 +779,23 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                             line.push(',');
                         }
                         format!("[\n{}\n]", row_strs.join("\n"))
-                    }
+                    };
+                    inspect_finish_circular(ptr as usize, body_str)
                 } else if gc_type == crate::gc::GC_TYPE_OBJECT {
-                    // Object — check for keys_array. Node's default depth
-                    // cap is 2: anything past that collapses to `[Object]`.
-                    // `%o` and `console.dir(v, { depth })` override via
-                    // INSPECT_DEPTH_LIMIT.
+                    // Object — check for keys_array. Cycle check FIRST so the
+                    // self-referencing case wins over the depth-2 collapse to
+                    // `[Object]` (#1204). The depth cap is overridable via
+                    // INSPECT_DEPTH_LIMIT for `%o` / `console.dir(v, { depth })`.
+                    if let Err(id) = inspect_enter_circular(ptr as usize) {
+                        return format!("[Circular *{}]", id);
+                    }
                     if depth > inspect_depth_limit() {
-                        return "[Object]".to_string();
+                        return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                     }
                     let obj_ptr = ptr as *const crate::object::ObjectHeader;
                     let keys_array = (*obj_ptr).keys_array;
 
-                    if !keys_array.is_null()
+                    let body_str = if !keys_array.is_null()
                         && (keys_array as usize) > 0x10000
                         && ((keys_array as u64) >> 48) == 0
                     {
@@ -731,7 +810,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                         // `js_jsvalue_to_string` (a separate path), so
                         // returning `{}` here doesn't break that contract.
                         "{}".to_string()
-                    }
+                    };
+                    inspect_finish_circular(ptr as usize, body_str)
                 } else if gc_type == crate::gc::GC_TYPE_MAP {
                     "Map {}".to_string()
                 } else if gc_type == crate::gc::GC_TYPE_CLOSURE {
@@ -894,6 +974,12 @@ unsafe fn format_object_as_json(
 /// The hard guard at depth > 10 remains as a crash safety net for pathological
 /// cyclic structures.
 fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
+    // Top-level callers (`deep_equal`, JSON stringify) reach this directly,
+    // not through `format_jsvalue`. Reset circular state at depth=0 so we
+    // don't accumulate stale ref IDs across unrelated print/compare calls.
+    if depth == 0 {
+        INSPECT_CIRCULAR.with(|c| c.borrow_mut().reset());
+    }
     if depth > 10 {
         return "\"...\"".to_string();
     }
@@ -974,17 +1060,20 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     let gc_type = (*gc_header).obj_type;
 
                     if gc_type == crate::gc::GC_TYPE_ARRAY {
-                        // Node's default depth cap: beyond 2 levels of
-                        // nesting, arrays collapse to `[Array]`. `%o` and
-                        // `console.dir(v, { depth })` override via
-                        // INSPECT_DEPTH_LIMIT.
+                        // Cycle check FIRST so back-edges always print as
+                        // `[Circular *N]` regardless of depth (#1204). The
+                        // depth cap is overridable via INSPECT_DEPTH_LIMIT
+                        // for `%o` / `console.dir(v, { depth })`.
+                        if let Err(id) = inspect_enter_circular(ptr as usize) {
+                            return format!("[Circular *{}]", id);
+                        }
                         if depth > inspect_depth_limit() {
-                            return "[Array]".to_string();
+                            return inspect_finish_circular(ptr as usize, "[Array]".to_string());
                         }
                         let maybe_arr = ptr;
                         let length = (*maybe_arr).length as usize;
                         if length > 1_000_000 {
-                            return "[Array]".to_string();
+                            return inspect_finish_circular(ptr as usize, "[Array]".to_string());
                         }
                         let data_ptr = (maybe_arr as *const u8)
                             .add(std::mem::size_of::<crate::array::ArrayHeader>())
@@ -997,29 +1086,34 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // Node formats empty arrays as `[]` and non-empty
                         // arrays with a space inside the brackets:
                         // `[ 1, 2, 3 ]`. Match byte-for-byte.
-                        if length == 0 {
+                        let body_str = if length == 0 {
                             "[]".to_string()
                         } else {
                             format!("[ {} ]", parts.join(", "))
-                        }
+                        };
+                        inspect_finish_circular(ptr as usize, body_str)
                     } else if gc_type == crate::gc::GC_TYPE_OBJECT {
-                        // Past Node's default depth cap, nested objects
-                        // collapse to the literal token `[Object]`. `%o` and
-                        // `console.dir(v, { depth })` override via
-                        // INSPECT_DEPTH_LIMIT.
+                        // Cycle check FIRST so back-edges win over the
+                        // depth-limit collapse to `[Object]` (#1204). The
+                        // depth cap is overridable via INSPECT_DEPTH_LIMIT
+                        // for `%o` / `console.dir(v, { depth })`.
+                        if let Err(id) = inspect_enter_circular(ptr as usize) {
+                            return format!("[Circular *{}]", id);
+                        }
                         if depth > inspect_depth_limit() {
-                            return "[Object]".to_string();
+                            return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                         }
                         let obj_ptr = ptr as *const crate::object::ObjectHeader;
                         let keys_array = (*obj_ptr).keys_array;
-                        if !keys_array.is_null()
+                        let body_str = if !keys_array.is_null()
                             && (keys_array as usize) > 0x10000
                             && ((keys_array as u64) >> 48) == 0
                         {
                             format_object_as_json(obj_ptr, depth)
                         } else {
                             "[object Object]".to_string()
-                        }
+                        };
+                        inspect_finish_circular(ptr as usize, body_str)
                     } else if gc_type == crate::gc::GC_TYPE_CLOSURE {
                         // Function-valued object fields used to fall through
                         // to the `[object Object]` catch-all below, hiding
@@ -1028,10 +1122,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // collapsed `myFn` to `[object Object]`). Route
                         // through the same display path `format_jsvalue`'s
                         // own GC_TYPE_CLOSURE branch uses so the registered
-                        // function name flows out. Refs #1201 (the eventual
-                        // util.inspect.custom Symbol-key support builds on
-                        // this — without it the custom inspector value
-                        // would still print as `[object Object]`).
+                        // function name flows out.
                         let closure = ptr as *const crate::closure::ClosureHeader;
                         format_function_for_console((*closure).func_ptr)
                     } else {
