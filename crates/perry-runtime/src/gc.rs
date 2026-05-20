@@ -52,6 +52,76 @@ pub const GC_TYPE_MAP: u8 = 8;
 /// subsequent accesses hit the tree).
 pub const GC_TYPE_LAZY_ARRAY: u8 = 9;
 
+const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
+const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_LAZY_ARRAY as usize + 1;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct MallocKindTelemetry {
+    allocated_count: u64,
+    allocated_bytes: u64,
+    realloc_count: u64,
+    realloc_old_bytes: u64,
+    realloc_new_bytes: u64,
+    freed_count: u64,
+    freed_bytes: u64,
+    survivor_count: u64,
+    survivor_bytes: u64,
+    copied_minor_validation_lookups: u64,
+}
+
+impl MallocKindTelemetry {
+    const fn zero() -> Self {
+        Self {
+            allocated_count: 0,
+            allocated_bytes: 0,
+            realloc_count: 0,
+            realloc_old_bytes: 0,
+            realloc_new_bytes: 0,
+            freed_count: 0,
+            freed_bytes: 0,
+            survivor_count: 0,
+            survivor_bytes: 0,
+            copied_minor_validation_lookups: 0,
+        }
+    }
+
+    fn reset_cycle_deltas(&mut self) {
+        self.allocated_count = 0;
+        self.allocated_bytes = 0;
+        self.realloc_count = 0;
+        self.realloc_old_bytes = 0;
+        self.realloc_new_bytes = 0;
+        self.freed_count = 0;
+        self.freed_bytes = 0;
+        self.copied_minor_validation_lookups = 0;
+    }
+}
+
+#[inline]
+fn malloc_kind_index(obj_type: u8) -> usize {
+    if (1..=GC_TYPE_LAZY_ARRAY).contains(&obj_type) {
+        obj_type as usize
+    } else {
+        MALLOC_KIND_UNKNOWN_INDEX
+    }
+}
+
+#[inline]
+fn gc_type_name(obj_type: u8) -> &'static str {
+    match obj_type {
+        GC_TYPE_ARRAY => "array",
+        GC_TYPE_OBJECT => "object",
+        GC_TYPE_STRING => "string",
+        GC_TYPE_CLOSURE => "closure",
+        GC_TYPE_PROMISE => "promise",
+        GC_TYPE_BIGINT => "bigint",
+        GC_TYPE_ERROR => "error",
+        GC_TYPE_MAP => "map",
+        GC_TYPE_LAZY_ARRAY => "lazy_array",
+        _ => "unknown",
+    }
+}
+
 // Flag constants
 pub const GC_FLAG_MARKED: u8 = 0x01;
 pub const GC_FLAG_ARENA: u8 = 0x02;
@@ -309,6 +379,7 @@ pub(crate) struct MallocState {
     /// already-active exact registry, but must never rebuild it on the fast
     /// path because that would scale with total malloc churn.
     registry_state: MallocRegistryState,
+    kind_telemetry: [MallocKindTelemetry; MALLOC_KIND_BUCKET_COUNT],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -347,6 +418,7 @@ thread_local! {
             crate::fast_hash::PtrHasher,
         ),
         registry_state: MallocRegistryState::Inactive,
+        kind_telemetry: [MallocKindTelemetry::zero(); MALLOC_KIND_BUCKET_COUNT],
     });
 
     /// Free list of arena slots available for reuse: (user_ptr, payload_size)
@@ -1111,11 +1183,12 @@ impl GcCycleTrace {
         *self.phase_us.entry(name).or_insert(0) += elapsed.as_micros() as u64;
     }
 
-    fn emit(self, steps_after: GcStepSnapshot) {
+    fn into_json(self, steps_after: GcStepSnapshot) -> serde_json::Value {
         let arena_after = crate::arena::arena_telemetry_snapshot();
         let malloc_after = malloc_object_count();
         let remembered_set_after = remembered_set_size();
-        let event = serde_json::json!({
+        let malloc_kinds = take_malloc_kind_telemetry_json();
+        serde_json::json!({
             "event": "gc_cycle",
             "collection_kind": self.collection_kind.as_str(),
             "pause_us": self.pause_us,
@@ -1128,6 +1201,7 @@ impl GcCycleTrace {
                 "before": self.malloc_before,
                 "after": malloc_after,
             },
+            "malloc_kinds": malloc_kinds,
             "remembered_set": {
                 "before": self.remembered_set_before,
                 "after": remembered_set_after,
@@ -1228,7 +1302,11 @@ impl GcCycleTrace {
                 "kind": self.trigger_kind.as_str(),
             },
             "steps": steps_json(self.steps_before, steps_after),
-        });
+        })
+    }
+
+    fn emit(self, steps_after: GcStepSnapshot) {
+        let event = self.into_json(steps_after);
         if let Ok(line) = serde_json::to_string(&event) {
             eprintln!("{line}");
         }
@@ -1539,6 +1617,45 @@ fn trace_phase_record(
 #[inline]
 fn malloc_object_count() -> usize {
     MALLOC_STATE.with(|s| s.borrow().objects.len())
+}
+
+fn malloc_kind_telemetry_row(obj_type: u8, counters: MallocKindTelemetry) -> serde_json::Value {
+    serde_json::json!({
+        "obj_type": obj_type,
+        "kind": gc_type_name(obj_type),
+        "allocated_count": counters.allocated_count,
+        "allocated_bytes": counters.allocated_bytes,
+        "realloc_count": counters.realloc_count,
+        "realloc_old_bytes": counters.realloc_old_bytes,
+        "realloc_new_bytes": counters.realloc_new_bytes,
+        "freed_count": counters.freed_count,
+        "freed_bytes": counters.freed_bytes,
+        "survivor_count": counters.survivor_count,
+        "survivor_bytes": counters.survivor_bytes,
+        "copied_minor_validation_lookups": counters.copied_minor_validation_lookups,
+    })
+}
+
+fn malloc_kind_telemetry_json_from_snapshot(
+    snapshot: [MallocKindTelemetry; MALLOC_KIND_BUCKET_COUNT],
+) -> serde_json::Value {
+    let mut rows = Vec::with_capacity(MALLOC_KIND_BUCKET_COUNT);
+    for obj_type in 1..=GC_TYPE_LAZY_ARRAY {
+        rows.push(malloc_kind_telemetry_row(
+            obj_type,
+            snapshot[obj_type as usize],
+        ));
+    }
+    rows.push(malloc_kind_telemetry_row(
+        0,
+        snapshot[MALLOC_KIND_UNKNOWN_INDEX],
+    ));
+    serde_json::Value::Array(rows)
+}
+
+fn take_malloc_kind_telemetry_json() -> serde_json::Value {
+    let snapshot = MALLOC_STATE.with(|s| s.borrow_mut().take_kind_telemetry());
+    malloc_kind_telemetry_json_from_snapshot(snapshot)
 }
 
 fn arena_region_json(region: crate::arena::ArenaRegionTelemetry) -> serde_json::Value {
@@ -1873,6 +1990,7 @@ pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
         MALLOC_STATE.with(|s| {
             let mut s = s.borrow_mut();
             s.objects.push(header);
+            s.record_malloc_alloc(obj_type, 1, total as u64);
             if s.malloc_registry_available() {
                 s.set.insert(header as usize);
             }
@@ -1894,6 +2012,7 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
     let n = sizes.len();
     let mut results = Vec::with_capacity(n);
     let mut headers = Vec::with_capacity(n);
+    let mut allocated_bytes: u64 = 0;
 
     unsafe {
         GC_FLAGS.with(|f| f.set(f.get() | GC_FLAG_IN_ALLOC));
@@ -1911,6 +2030,7 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
             (*header)._reserved = 0;
             (*header).size = total as u32;
 
+            allocated_bytes = allocated_bytes.saturating_add(total as u64);
             headers.push(header);
             results.push(raw.add(GC_HEADER_SIZE));
         }
@@ -1918,6 +2038,7 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
         MALLOC_STATE.with(|s| {
             let mut s = s.borrow_mut();
             s.objects.extend_from_slice(&headers);
+            s.record_malloc_alloc(obj_type, headers.len() as u64, allocated_bytes);
             if s.malloc_registry_available() {
                 s.set.extend(headers.iter().map(|&h| h as usize));
             }
@@ -1933,6 +2054,59 @@ impl MallocState {
     #[inline]
     fn malloc_registry_available(&self) -> bool {
         self.registry_state == MallocRegistryState::ActiveConsistent
+    }
+
+    #[inline]
+    fn record_malloc_alloc(&mut self, obj_type: u8, count: u64, bytes: u64) {
+        let counters = &mut self.kind_telemetry[malloc_kind_index(obj_type)];
+        counters.allocated_count = counters.allocated_count.saturating_add(count);
+        counters.allocated_bytes = counters.allocated_bytes.saturating_add(bytes);
+        counters.survivor_count = counters.survivor_count.saturating_add(count);
+        counters.survivor_bytes = counters.survivor_bytes.saturating_add(bytes);
+    }
+
+    #[inline]
+    fn record_malloc_realloc(&mut self, obj_type: u8, old_bytes: u64, new_bytes: u64) {
+        let counters = &mut self.kind_telemetry[malloc_kind_index(obj_type)];
+        counters.realloc_count = counters.realloc_count.saturating_add(1);
+        counters.realloc_old_bytes = counters.realloc_old_bytes.saturating_add(old_bytes);
+        counters.realloc_new_bytes = counters.realloc_new_bytes.saturating_add(new_bytes);
+        if new_bytes >= old_bytes {
+            counters.survivor_bytes = counters
+                .survivor_bytes
+                .saturating_add(new_bytes.saturating_sub(old_bytes));
+        } else {
+            counters.survivor_bytes = counters
+                .survivor_bytes
+                .saturating_sub(old_bytes.saturating_sub(new_bytes));
+        }
+    }
+
+    #[inline]
+    fn record_malloc_free(&mut self, obj_type: u8, bytes: u64) {
+        let counters = &mut self.kind_telemetry[malloc_kind_index(obj_type)];
+        counters.freed_count = counters.freed_count.saturating_add(1);
+        counters.freed_bytes = counters.freed_bytes.saturating_add(bytes);
+        counters.survivor_count = counters.survivor_count.saturating_sub(1);
+        counters.survivor_bytes = counters.survivor_bytes.saturating_sub(bytes);
+    }
+
+    #[inline]
+    fn record_copied_minor_validation_lookup(&mut self, obj_type: Option<u8>) {
+        let index = obj_type
+            .map(malloc_kind_index)
+            .unwrap_or(MALLOC_KIND_UNKNOWN_INDEX);
+        let counters = &mut self.kind_telemetry[index];
+        counters.copied_minor_validation_lookups =
+            counters.copied_minor_validation_lookups.saturating_add(1);
+    }
+
+    fn take_kind_telemetry(&mut self) -> [MallocKindTelemetry; MALLOC_KIND_BUCKET_COUNT] {
+        let snapshot = self.kind_telemetry;
+        for counters in &mut self.kind_telemetry {
+            counters.reset_cycle_deltas();
+        }
+        snapshot
     }
 }
 
@@ -2011,6 +2185,7 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
     }
 
     let old_total = unsafe { (*old_header).size as usize };
+    let obj_type = unsafe { (*old_header).obj_type };
     let new_total = GC_HEADER_SIZE + new_payload_size;
 
     let old_layout = Layout::from_size_align(old_total, 8).unwrap();
@@ -2024,11 +2199,16 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
         let new_header = new_raw as *mut GcHeader;
         (*new_header).size = new_total as u32;
 
-        // Update pointer in MALLOC_STATE (objects + set) if it changed.
-        if new_header != old_header {
-            GC_FLAGS.with(|f| f.set(f.get() | GC_FLAG_IN_ALLOC));
-            MALLOC_STATE.with(|s| {
-                let mut s = s.borrow_mut();
+        let prev_in_alloc = GC_FLAGS.with(|f| {
+            let prev = f.get();
+            f.set(prev | GC_FLAG_IN_ALLOC);
+            prev & GC_FLAG_IN_ALLOC
+        });
+        MALLOC_STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            s.record_malloc_realloc(obj_type, old_total as u64, new_total as u64);
+            // Update pointer in MALLOC_STATE (objects + set) if it changed.
+            if new_header != old_header {
                 for ptr in s.objects.iter_mut() {
                     if *ptr == old_header {
                         *ptr = new_header;
@@ -2040,9 +2220,16 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
                 // consistent with `objects` — patch in place.
                 s.set.remove(&(old_header as usize));
                 s.set.insert(new_header as usize);
-            });
-            GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_IN_ALLOC));
-        }
+            }
+        });
+        GC_FLAGS.with(|f| {
+            let cur = f.get();
+            if prev_in_alloc != 0 {
+                f.set(cur | GC_FLAG_IN_ALLOC);
+            } else {
+                f.set(cur & !GC_FLAG_IN_ALLOC);
+            }
+        });
 
         new_raw.add(GC_HEADER_SIZE)
     }
@@ -5325,13 +5512,19 @@ impl CopyingPointerSet {
         let header = unsafe { header_from_user_ptr(addr as *const u8) };
         self.malloc_validation_lookups
             .set(self.malloc_validation_lookups.get().saturating_add(1));
-        let tracked = MALLOC_STATE.with(|s| s.borrow().set.contains(&(header as usize)));
-        if !tracked {
-            return None;
-        }
-        unsafe { plausible_gc_header(header, false) }.then_some(CopyingPointer {
-            header,
-            kind: CopyingPointerKind::Malloc,
+        MALLOC_STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            if !s.set.contains(&(header as usize)) {
+                s.record_copied_minor_validation_lookup(None);
+                return None;
+            }
+            let obj_type =
+                unsafe { plausible_gc_header(header, false).then_some((*header).obj_type) };
+            s.record_copied_minor_validation_lookup(obj_type);
+            obj_type.map(|_| CopyingPointer {
+                header,
+                kind: CopyingPointerKind::Malloc,
+            })
         })
     }
 
@@ -7011,6 +7204,7 @@ fn sweep_malloc_objects() -> u64 {
                 if (*header).gc_flags & GC_FLAG_MARKED == 0 {
                     // Unmarked: free it
                     let total_size = (*header).size as usize;
+                    let obj_type = (*header).obj_type;
                     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                     freed_bytes += total_size as u64;
                     layout_clear_for_ptr(user_ptr as usize);
@@ -7039,6 +7233,7 @@ fn sweep_malloc_objects() -> u64 {
 
                     let layout = Layout::from_size_align(total_size, 8).unwrap();
                     dealloc(header as *mut u8, layout);
+                    s.record_malloc_free(obj_type, total_size as u64);
                     s.objects.swap_remove(i);
                     if registry_available {
                         s.set.remove(&(header as usize));
@@ -9814,6 +10009,42 @@ mod tests {
         MALLOC_STATE.with(|s| s.borrow().malloc_registry_available())
     }
 
+    fn reset_malloc_kind_telemetry_for_tests() {
+        MALLOC_STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            let mut telemetry = [MallocKindTelemetry::zero(); MALLOC_KIND_BUCKET_COUNT];
+            for &header in s.objects.iter() {
+                unsafe {
+                    let counters = &mut telemetry[malloc_kind_index((*header).obj_type)];
+                    counters.survivor_count = counters.survivor_count.saturating_add(1);
+                    counters.survivor_bytes = counters
+                        .survivor_bytes
+                        .saturating_add((*header).size as u64);
+                }
+            }
+            s.kind_telemetry = telemetry;
+        });
+    }
+
+    fn malloc_kind_telemetry_for_tests(obj_type: u8) -> MallocKindTelemetry {
+        MALLOC_STATE.with(|s| s.borrow().kind_telemetry[malloc_kind_index(obj_type)])
+    }
+
+    fn mark_existing_malloc_and_arena_objects_except(excluded: &[usize]) {
+        MALLOC_STATE.with(|s| {
+            for &tracked in s.borrow().objects.iter() {
+                if !excluded.contains(&(tracked as usize)) {
+                    unsafe {
+                        (*tracked).gc_flags |= GC_FLAG_MARKED;
+                    }
+                }
+            }
+        });
+        crate::arena::arena_walk_objects(|arena_header| unsafe {
+            (*(arena_header as *mut GcHeader)).gc_flags |= GC_FLAG_MARKED;
+        });
+    }
+
     fn gc_collection_count() -> u64 {
         GC_STATS.with(|s| s.borrow().collection_count)
     }
@@ -10668,6 +10899,321 @@ mod tests {
                 .filter(|&&addr| state.objects.iter().any(|&header| header as usize == addr))
                 .count()
         })
+    }
+
+    fn malloc_kind_test_payload_size(obj_type: u8) -> usize {
+        match obj_type {
+            GC_TYPE_STRING => std::mem::size_of::<crate::string::StringHeader>() + 8,
+            GC_TYPE_CLOSURE => std::mem::size_of::<crate::closure::ClosureHeader>(),
+            GC_TYPE_PROMISE => std::mem::size_of::<crate::promise::Promise>(),
+            GC_TYPE_BIGINT => std::mem::size_of::<crate::bigint::BigIntHeader>(),
+            GC_TYPE_ERROR => std::mem::size_of::<crate::error::ErrorHeader>(),
+            _ => 16,
+        }
+    }
+
+    fn alloc_malloc_kind_test_object(obj_type: u8) -> *mut u8 {
+        let ptr = gc_malloc(malloc_kind_test_payload_size(obj_type), obj_type);
+        unsafe {
+            match obj_type {
+                GC_TYPE_STRING => {
+                    std::ptr::write(
+                        ptr as *mut crate::string::StringHeader,
+                        crate::string::StringHeader {
+                            utf16_len: 0,
+                            byte_len: 0,
+                            capacity: 8,
+                            refcount: 0,
+                            flags: 0,
+                        },
+                    );
+                }
+                GC_TYPE_CLOSURE => init_test_closure(ptr),
+                GC_TYPE_PROMISE => {
+                    std::ptr::write(
+                        ptr as *mut crate::promise::Promise,
+                        crate::promise::Promise {
+                            state: crate::promise::PromiseState::Pending,
+                            value: 0.0,
+                            reason: 0.0,
+                            on_fulfilled: std::ptr::null(),
+                            on_rejected: std::ptr::null(),
+                            next: std::ptr::null_mut(),
+                            async_id: 0,
+                            trigger_async_id: 0,
+                        },
+                    );
+                }
+                GC_TYPE_BIGINT => {
+                    std::ptr::write(
+                        ptr as *mut crate::bigint::BigIntHeader,
+                        crate::bigint::BigIntHeader {
+                            limbs: [0; crate::bigint::BIGINT_LIMBS],
+                        },
+                    );
+                }
+                GC_TYPE_ERROR => {
+                    std::ptr::write(
+                        ptr as *mut crate::error::ErrorHeader,
+                        crate::error::ErrorHeader {
+                            object_type: crate::error::OBJECT_TYPE_ERROR,
+                            error_kind: crate::error::ERROR_KIND_ERROR,
+                            message: std::ptr::null_mut(),
+                            name: std::ptr::null_mut(),
+                            stack: std::ptr::null_mut(),
+                            cause: 0.0,
+                            errors: std::ptr::null_mut(),
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
+        ptr
+    }
+
+    #[test]
+    fn test_malloc_kind_telemetry_sweep_by_kind() {
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        reset_malloc_kind_telemetry_for_tests();
+        let kinds = [
+            GC_TYPE_STRING,
+            GC_TYPE_CLOSURE,
+            GC_TYPE_PROMISE,
+            GC_TYPE_BIGINT,
+            GC_TYPE_ERROR,
+        ];
+        let baselines: Vec<(u64, u64)> = kinds
+            .iter()
+            .map(|&kind| {
+                let stats = malloc_kind_telemetry_for_tests(kind);
+                (stats.survivor_count, stats.survivor_bytes)
+            })
+            .collect();
+
+        let mut dead = Vec::new();
+        let mut live = Vec::new();
+        for &kind in &kinds {
+            let dead_ptr = alloc_malloc_kind_test_object(kind);
+            let live_ptr = alloc_malloc_kind_test_object(kind);
+            unsafe {
+                dead.push((kind, header_from_user_ptr(dead_ptr) as usize));
+                live.push((kind, header_from_user_ptr(live_ptr) as usize));
+            }
+        }
+
+        let dead_headers: Vec<usize> = dead.iter().map(|&(_, header)| header).collect();
+        mark_existing_malloc_and_arena_objects_except(&dead_headers);
+        let dead_bytes: Vec<u64> = dead
+            .iter()
+            .map(|&(_, header)| unsafe { (*(header as *mut GcHeader)).size as u64 })
+            .collect();
+        let live_bytes: Vec<u64> = live
+            .iter()
+            .map(|&(_, header)| unsafe { (*(header as *mut GcHeader)).size as u64 })
+            .collect();
+
+        let freed = sweep_malloc_objects();
+        assert_eq!(
+            freed,
+            dead_bytes.iter().sum::<u64>(),
+            "target sweep should reclaim only the intentionally-dead malloc objects"
+        );
+
+        for &(_, header) in &dead {
+            assert!(
+                !MALLOC_STATE.with(|s| s
+                    .borrow()
+                    .objects
+                    .iter()
+                    .any(|&tracked| tracked as usize == header)),
+                "dead malloc header should be removed from tracking"
+            );
+        }
+        for &(_, header) in &live {
+            assert!(
+                MALLOC_STATE.with(|s| s
+                    .borrow()
+                    .objects
+                    .iter()
+                    .any(|&tracked| tracked as usize == header)),
+                "live malloc header should remain tracked"
+            );
+        }
+
+        for (idx, &kind) in kinds.iter().enumerate() {
+            let stats = malloc_kind_telemetry_for_tests(kind);
+            assert_eq!(stats.allocated_count, 2, "{}", gc_type_name(kind));
+            assert_eq!(
+                stats.allocated_bytes,
+                dead_bytes[idx] + live_bytes[idx],
+                "{}",
+                gc_type_name(kind)
+            );
+            assert_eq!(stats.freed_count, 1, "{}", gc_type_name(kind));
+            assert_eq!(stats.freed_bytes, dead_bytes[idx], "{}", gc_type_name(kind));
+            assert_eq!(
+                stats.survivor_count,
+                baselines[idx].0 + 1,
+                "{}",
+                gc_type_name(kind)
+            );
+            assert_eq!(
+                stats.survivor_bytes,
+                baselines[idx].1 + live_bytes[idx],
+                "{}",
+                gc_type_name(kind)
+            );
+        }
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_malloc_kind_telemetry_batch_and_realloc() {
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        reset_malloc_kind_telemetry_for_tests();
+        let baseline = malloc_kind_telemetry_for_tests(GC_TYPE_STRING);
+        let sizes = [8usize, 16, 24];
+        let ptrs = gc_malloc_batch(&sizes, GC_TYPE_STRING);
+        let old_total = unsafe { (*header_from_user_ptr(ptrs[1])).size as u64 };
+        let new_ptr = gc_realloc(ptrs[1], 64);
+        let new_total = unsafe { (*header_from_user_ptr(new_ptr)).size as u64 };
+        let allocated_bytes = sizes
+            .iter()
+            .map(|size| (GC_HEADER_SIZE + size) as u64)
+            .sum::<u64>();
+
+        let stats = malloc_kind_telemetry_for_tests(GC_TYPE_STRING);
+        assert_eq!(stats.allocated_count, sizes.len() as u64);
+        assert_eq!(stats.allocated_bytes, allocated_bytes);
+        assert_eq!(stats.realloc_count, 1);
+        assert_eq!(stats.realloc_old_bytes, old_total);
+        assert_eq!(stats.realloc_new_bytes, new_total);
+        assert_eq!(
+            stats.survivor_count,
+            baseline.survivor_count + sizes.len() as u64
+        );
+        assert_eq!(
+            stats.survivor_bytes,
+            baseline
+                .survivor_bytes
+                .saturating_add(allocated_bytes)
+                .saturating_sub(old_total)
+                .saturating_add(new_total)
+        );
+        assert!(malloc_user_ptr_tracked(new_ptr));
+    }
+
+    #[test]
+    fn test_malloc_kind_telemetry_copied_minor_validation_by_kind() {
+        let _guard = CopyingNurseryTestGuard::new(2);
+        let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let live_child = young_leaf();
+        let live_malloc = gc_malloc(
+            std::mem::size_of::<crate::closure::ClosureHeader>() + std::mem::size_of::<u64>(),
+            GC_TYPE_CLOSURE,
+        );
+        let capture_slot =
+            unsafe { init_test_closure_with_one_capture(live_malloc, ptr_bits(live_child)) };
+        js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+        let rejected_malloc_probe = (live_malloc as usize).saturating_add(16);
+        js_shadow_slot_set(1, ptr_bits(rejected_malloc_probe));
+        activate_malloc_registry_for_tests();
+
+        let churn_headers = allocate_dead_malloc_churn_headers(128);
+        reset_malloc_kind_telemetry_for_tests();
+        trigger_guard.make_malloc_sweep_due();
+        let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
+            kind: GcTriggerKind::ArenaBytes,
+            steps_before: Some(GcStepSnapshot::current()),
+        });
+        let trace = outcome.trace.expect("test requested GC trace capture");
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, true);
+        assert!(
+            trace.copying_nursery.malloc_validation_lookups > 0,
+            "copied-minor should preserve the existing total malloc validation counter"
+        );
+        let closure_stats = malloc_kind_telemetry_for_tests(GC_TYPE_CLOSURE);
+        assert!(
+            closure_stats.copied_minor_validation_lookups > 0,
+            "live malloc closure validation should be attributed to closure"
+        );
+        assert!(
+            closure_stats.copied_minor_validation_lookups < churn_headers.len() as u64,
+            "per-kind validation must scale with reachable malloc candidates, not dead churn"
+        );
+        let unknown_stats = malloc_kind_telemetry_for_tests(0);
+        assert!(
+            unknown_stats.copied_minor_validation_lookups > 0,
+            "rejected copied-minor malloc validation probes should land in unknown"
+        );
+        assert_eq!(tracked_malloc_headers_matching(&churn_headers), 0);
+        assert!(malloc_user_ptr_tracked(live_malloc));
+        let capture_after = unsafe { (*capture_slot & POINTER_MASK) as usize };
+        assert_ne!(capture_after, live_child);
+        assert!(crate::arena::pointer_in_nursery(capture_after));
+    }
+
+    #[test]
+    fn test_malloc_kind_telemetry_trace_json() {
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        reset_malloc_kind_telemetry_for_tests();
+        let _ptr = gc_malloc(24, GC_TYPE_STRING);
+        let trace = GcCycleTrace::new(
+            GcCollectionKind::Minor,
+            GcTriggerSnapshot {
+                kind: GcTriggerKind::Direct,
+                steps_before: Some(GcStepSnapshot::current()),
+            },
+        )
+        .expect("test requested GC trace capture");
+
+        let event = trace.into_json(GcStepSnapshot::current());
+        let rows = event["malloc_kinds"]
+            .as_array()
+            .expect("malloc_kinds should be an array");
+        assert_eq!(rows.len(), MALLOC_KIND_BUCKET_COUNT);
+        for kind in 1..=GC_TYPE_LAZY_ARRAY {
+            let row = rows
+                .iter()
+                .find(|row| row["obj_type"].as_u64() == Some(kind as u64))
+                .unwrap_or_else(|| panic!("missing malloc_kinds row for {}", gc_type_name(kind)));
+            assert_eq!(row["kind"].as_str(), Some(gc_type_name(kind)));
+            for field in [
+                "allocated_count",
+                "allocated_bytes",
+                "realloc_count",
+                "realloc_old_bytes",
+                "realloc_new_bytes",
+                "freed_count",
+                "freed_bytes",
+                "survivor_count",
+                "survivor_bytes",
+                "copied_minor_validation_lookups",
+            ] {
+                assert!(
+                    row.get(field).and_then(|value| value.as_u64()).is_some(),
+                    "missing numeric field {field} for {}",
+                    gc_type_name(kind)
+                );
+            }
+        }
+        let string_row = rows
+            .iter()
+            .find(|row| row["obj_type"].as_u64() == Some(GC_TYPE_STRING as u64))
+            .expect("string row should be present");
+        assert_eq!(string_row["allocated_count"].as_u64(), Some(1));
+        assert_eq!(
+            string_row["allocated_bytes"].as_u64(),
+            Some((GC_HEADER_SIZE + 24) as u64)
+        );
+        let unknown_row = rows
+            .iter()
+            .find(|row| row["obj_type"].as_u64() == Some(0))
+            .expect("unknown row should be present");
+        assert_eq!(unknown_row["kind"].as_str(), Some("unknown"));
     }
 
     unsafe fn alloc_old_test_object(
