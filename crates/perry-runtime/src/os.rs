@@ -71,6 +71,64 @@ pub extern "C" fn js_os_arch() -> *mut StringHeader {
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
 
+/// Get the recommended amount of parallelism for the current process.
+#[no_mangle]
+pub extern "C" fn js_os_available_parallelism() -> f64 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as f64)
+        .unwrap_or(1.0)
+}
+
+/// Get the CPU endianness Node was compiled for.
+#[no_mangle]
+pub extern "C" fn js_os_endianness() -> *mut StringHeader {
+    let value = if cfg!(target_endian = "little") {
+        "LE"
+    } else {
+        "BE"
+    };
+    let bytes = value.as_bytes();
+    js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+/// Get the platform-specific null device path.
+#[no_mangle]
+pub extern "C" fn js_os_dev_null() -> *mut StringHeader {
+    let value = if cfg!(windows) {
+        "\\\\.\\nul"
+    } else {
+        "/dev/null"
+    };
+    let bytes = value.as_bytes();
+    js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+/// Get the machine hardware name.
+#[no_mangle]
+pub extern "C" fn js_os_machine() -> *mut StringHeader {
+    #[cfg(target_arch = "x86_64")]
+    let machine = "x86_64";
+    #[cfg(target_arch = "aarch64")]
+    let machine = "arm64";
+    #[cfg(target_arch = "x86")]
+    let machine = "i386";
+    #[cfg(target_arch = "arm")]
+    let machine = "arm";
+    #[cfg(target_arch = "riscv64")]
+    let machine = "riscv64";
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "x86",
+        target_arch = "arm",
+        target_arch = "riscv64"
+    )))]
+    let machine = "unknown";
+
+    let bytes = machine.as_bytes();
+    js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
 /// Get the hostname of the operating system
 #[no_mangle]
 pub extern "C" fn js_os_hostname() -> *mut StringHeader {
@@ -321,6 +379,42 @@ pub extern "C" fn js_os_uptime() -> f64 {
     {
         0.0
     }
+}
+
+/// Get 1, 5, and 15 minute system load averages.
+#[no_mangle]
+pub extern "C" fn js_os_loadavg() -> *mut ArrayHeader {
+    use crate::array::{js_array_alloc, js_array_push_f64};
+
+    let arr = js_array_alloc(3);
+    #[cfg(unix)]
+    {
+        let mut loads = [0.0_f64; 3];
+        unsafe {
+            if libc::getloadavg(loads.as_mut_ptr(), 3) != 3 {
+                loads = [0.0, 0.0, 0.0];
+            }
+        }
+        let mut result = arr;
+        for load in loads {
+            result = js_array_push_f64(result, load);
+        }
+        result
+    }
+    #[cfg(not(unix))]
+    {
+        let mut result = arr;
+        for _ in 0..3 {
+            result = js_array_push_f64(result, 0.0);
+        }
+        result
+    }
+}
+
+/// Get the operating system version string.
+#[no_mangle]
+pub extern "C" fn js_os_version() -> *mut StringHeader {
+    js_os_release()
 }
 
 /// Get the process uptime in seconds (time since process started)
@@ -741,8 +835,54 @@ pub extern "C" fn js_os_network_interfaces() -> *mut ObjectHeader {
 /// TODO: Implement properly when dynamic object properties are supported
 #[no_mangle]
 pub extern "C" fn js_os_user_info() -> *mut ObjectHeader {
-    // Return empty object for now - dynamic object properties need different API
-    crate::object::js_object_alloc(0, 0)
+    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
+    use crate::value::JSValue;
+
+    let packed = b"uid\0gid\0username\0homedir\0shell\0";
+    let obj = js_object_alloc_with_shape(0x7FFF_FF24, 5, packed.as_ptr(), packed.len() as u32);
+
+    #[cfg(unix)]
+    let uid = unsafe { libc::geteuid() as f64 };
+    #[cfg(not(unix))]
+    let uid = -1.0;
+    #[cfg(unix)]
+    let gid = unsafe { libc::getegid() as f64 };
+    #[cfg(not(unix))]
+    let gid = -1.0;
+
+    let username = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_default();
+    let homedir = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| {
+            let ptr = js_os_homedir();
+            unsafe {
+                let len = (*ptr).byte_len as usize;
+                let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+            }
+        });
+    #[cfg(unix)]
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    #[cfg(not(unix))]
+    let shell = String::new();
+
+    let string_value = |s: &str| -> JSValue {
+        let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        JSValue::string_ptr(ptr)
+    };
+
+    js_object_set_field(obj, 0, JSValue::number(uid));
+    js_object_set_field(obj, 1, JSValue::number(gid));
+    js_object_set_field(obj, 2, string_value(&username));
+    js_object_set_field(obj, 3, string_value(&homedir));
+    #[cfg(unix)]
+    js_object_set_field(obj, 4, string_value(&shell));
+    #[cfg(not(unix))]
+    js_object_set_field(obj, 4, JSValue::null());
+
+    obj
 }
 
 #[cfg(test)]

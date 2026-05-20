@@ -692,7 +692,13 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::OsCpus
         | Expr::OsNetworkInterfaces
         | Expr::OsUserInfo
-        | Expr::OsEOL => {}
+        | Expr::OsEOL
+        | Expr::OsDevNull
+        | Expr::OsAvailableParallelism
+        | Expr::OsEndianness
+        | Expr::OsLoadavg
+        | Expr::OsMachine
+        | Expr::OsVersion => {}
         // Buffer operations
         Expr::BufferFrom { data, encoding } => {
             collect_assigned_locals_expr(data, assigned);

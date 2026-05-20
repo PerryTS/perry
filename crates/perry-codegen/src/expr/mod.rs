@@ -9487,6 +9487,62 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let h = blk.call(I64, "js_os_hostname", &[]);
             Ok(nanbox_string_inline(blk, &h))
         }
+        Expr::OsHomedir => {
+            let blk = ctx.block();
+            let h = blk.call(I64, "js_os_homedir", &[]);
+            Ok(nanbox_string_inline(blk, &h))
+        }
+        Expr::OsTmpdir => {
+            let blk = ctx.block();
+            let h = blk.call(I64, "js_os_tmpdir", &[]);
+            Ok(nanbox_string_inline(blk, &h))
+        }
+        Expr::OsTotalmem => Ok(ctx.block().call(DOUBLE, "js_os_totalmem", &[])),
+        Expr::OsFreemem => Ok(ctx.block().call(DOUBLE, "js_os_freemem", &[])),
+        Expr::OsUptime => Ok(ctx.block().call(DOUBLE, "js_os_uptime", &[])),
+        Expr::OsCpus => {
+            let blk = ctx.block();
+            let h = blk.call(I64, "js_os_cpus", &[]);
+            Ok(nanbox_pointer_inline(blk, &h))
+        }
+        Expr::OsNetworkInterfaces => {
+            let blk = ctx.block();
+            let h = blk.call(I64, "js_os_network_interfaces", &[]);
+            Ok(nanbox_pointer_inline(blk, &h))
+        }
+        Expr::OsUserInfo => {
+            let blk = ctx.block();
+            let h = blk.call(I64, "js_os_user_info", &[]);
+            Ok(nanbox_pointer_inline(blk, &h))
+        }
+        Expr::OsDevNull => {
+            let blk = ctx.block();
+            let h = blk.call(I64, "js_os_dev_null", &[]);
+            Ok(nanbox_string_inline(blk, &h))
+        }
+        Expr::OsAvailableParallelism => {
+            Ok(ctx.block().call(DOUBLE, "js_os_available_parallelism", &[]))
+        }
+        Expr::OsEndianness => {
+            let blk = ctx.block();
+            let h = blk.call(I64, "js_os_endianness", &[]);
+            Ok(nanbox_string_inline(blk, &h))
+        }
+        Expr::OsLoadavg => {
+            let blk = ctx.block();
+            let h = blk.call(I64, "js_os_loadavg", &[]);
+            Ok(nanbox_pointer_inline(blk, &h))
+        }
+        Expr::OsMachine => {
+            let blk = ctx.block();
+            let h = blk.call(I64, "js_os_machine", &[]);
+            Ok(nanbox_string_inline(blk, &h))
+        }
+        Expr::OsVersion => {
+            let blk = ctx.block();
+            let h = blk.call(I64, "js_os_version", &[]);
+            Ok(nanbox_string_inline(blk, &h))
+        }
         Expr::ProcessMemoryUsage => {
             // Runtime returns an already NaN-boxed pointer (f64).
             Ok(ctx.block().call(DOUBLE, "js_process_memory_usage", &[]))

@@ -1720,6 +1720,16 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
         Expr::OsTotalmem => Expr::OsTotalmem,
         Expr::OsFreemem => Expr::OsFreemem,
         Expr::OsCpus => Expr::OsCpus,
+        Expr::OsNetworkInterfaces => Expr::OsNetworkInterfaces,
+        Expr::OsUserInfo => Expr::OsUserInfo,
+        Expr::OsUptime => Expr::OsUptime,
+        Expr::OsEOL => Expr::OsEOL,
+        Expr::OsDevNull => Expr::OsDevNull,
+        Expr::OsAvailableParallelism => Expr::OsAvailableParallelism,
+        Expr::OsEndianness => Expr::OsEndianness,
+        Expr::OsLoadavg => Expr::OsLoadavg,
+        Expr::OsMachine => Expr::OsMachine,
+        Expr::OsVersion => Expr::OsVersion,
         // Catch-all for any other expressions that don't need type substitution
         _ => expr.clone(),
     }

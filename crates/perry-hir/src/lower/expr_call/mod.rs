@@ -1206,16 +1206,21 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                         if let ast::MemberProp::Ident(method_ident) = &member.prop {
                             let method_name = method_ident.sym.as_ref();
                             match method_name {
+                                "availableParallelism" => return Ok(Expr::OsAvailableParallelism),
                                 "platform" => return Ok(Expr::OsPlatform),
                                 "arch" => return Ok(Expr::OsArch),
+                                "endianness" => return Ok(Expr::OsEndianness),
                                 "hostname" => return Ok(Expr::OsHostname),
                                 "homedir" => return Ok(Expr::OsHomedir),
                                 "tmpdir" => return Ok(Expr::OsTmpdir),
+                                "loadavg" => return Ok(Expr::OsLoadavg),
+                                "machine" => return Ok(Expr::OsMachine),
                                 "totalmem" => return Ok(Expr::OsTotalmem),
                                 "freemem" => return Ok(Expr::OsFreemem),
                                 "uptime" => return Ok(Expr::OsUptime),
                                 "type" => return Ok(Expr::OsType),
                                 "release" => return Ok(Expr::OsRelease),
+                                "version" => return Ok(Expr::OsVersion),
                                 "cpus" => return Ok(Expr::OsCpus),
                                 "networkInterfaces" => return Ok(Expr::OsNetworkInterfaces),
                                 "userInfo" => return Ok(Expr::OsUserInfo),
@@ -3118,11 +3123,17 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                         if let ast::MemberProp::Ident(method_ident) = &member.prop {
                             let method_name = method_ident.sym.as_ref();
                             match method_name {
+                                "availableParallelism" => {
+                                    return Ok(Expr::OsAvailableParallelism);
+                                }
                                 "platform" => {
                                     return Ok(Expr::OsPlatform);
                                 }
                                 "arch" => {
                                     return Ok(Expr::OsArch);
+                                }
+                                "endianness" => {
+                                    return Ok(Expr::OsEndianness);
                                 }
                                 "hostname" => {
                                     return Ok(Expr::OsHostname);
@@ -3132,6 +3143,12 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                 }
                                 "tmpdir" => {
                                     return Ok(Expr::OsTmpdir);
+                                }
+                                "loadavg" => {
+                                    return Ok(Expr::OsLoadavg);
+                                }
+                                "machine" => {
+                                    return Ok(Expr::OsMachine);
                                 }
                                 "totalmem" => {
                                     return Ok(Expr::OsTotalmem);
@@ -3147,6 +3164,9 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                 }
                                 "release" => {
                                     return Ok(Expr::OsRelease);
+                                }
+                                "version" => {
+                                    return Ok(Expr::OsVersion);
                                 }
                                 "cpus" => {
                                     return Ok(Expr::OsCpus);
@@ -6520,6 +6540,29 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                 // e.g., uuid() where import { v4 as uuid } from 'uuid'
                 if let Some((module_name, Some(method_name))) = ctx.lookup_native_module(func_name)
                 {
+                    if module_name == "os" || module_name == "node:os" {
+                        match method_name {
+                            "availableParallelism" => return Ok(Expr::OsAvailableParallelism),
+                            "platform" => return Ok(Expr::OsPlatform),
+                            "arch" => return Ok(Expr::OsArch),
+                            "endianness" => return Ok(Expr::OsEndianness),
+                            "hostname" => return Ok(Expr::OsHostname),
+                            "homedir" => return Ok(Expr::OsHomedir),
+                            "tmpdir" => return Ok(Expr::OsTmpdir),
+                            "loadavg" => return Ok(Expr::OsLoadavg),
+                            "machine" => return Ok(Expr::OsMachine),
+                            "totalmem" => return Ok(Expr::OsTotalmem),
+                            "freemem" => return Ok(Expr::OsFreemem),
+                            "uptime" => return Ok(Expr::OsUptime),
+                            "type" => return Ok(Expr::OsType),
+                            "release" => return Ok(Expr::OsRelease),
+                            "version" => return Ok(Expr::OsVersion),
+                            "cpus" => return Ok(Expr::OsCpus),
+                            "networkInterfaces" => return Ok(Expr::OsNetworkInterfaces),
+                            "userInfo" => return Ok(Expr::OsUserInfo),
+                            _ => {}
+                        }
+                    }
                     return Ok(Expr::NativeMethodCall {
                         module: module_name.to_string(),
                         class_name: None,

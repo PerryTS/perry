@@ -1776,9 +1776,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("crypto", "subtle"),
     // os — methods mapped to Expr::Os* in expr_call.rs.
     method("os", "platform", false, None),
+    method("os", "availableParallelism", false, None),
     method("os", "arch", false, None),
+    method("os", "endianness", false, None),
     method("os", "hostname", false, None),
     method("os", "homedir", false, None),
+    method("os", "loadavg", false, None),
+    method("os", "machine", false, None),
     method("os", "tmpdir", false, None),
     method("os", "totalmem", false, None),
     method("os", "freemem", false, None),
@@ -1788,7 +1792,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("os", "cpus", false, None),
     method("os", "networkInterfaces", false, None),
     method("os", "userInfo", false, None),
+    method("os", "version", false, None),
     property("os", "EOL"),
+    property("os", "devNull"),
     // Issue #649: os/crypto.constants tables — see
     // get_native_module_constant in perry-runtime/src/object.rs.
     property("os", "constants"),

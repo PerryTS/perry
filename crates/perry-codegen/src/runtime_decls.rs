@@ -525,6 +525,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_os_release", I64, &[]);
     module.declare_function("js_os_hostname", I64, &[]);
     module.declare_function("js_os_eol", I64, &[]);
+    module.declare_function("js_os_available_parallelism", DOUBLE, &[]);
+    module.declare_function("js_os_endianness", I64, &[]);
+    module.declare_function("js_os_dev_null", I64, &[]);
+    module.declare_function("js_os_machine", I64, &[]);
+    module.declare_function("js_os_loadavg", I64, &[]);
+    module.declare_function("js_os_version", I64, &[]);
     // Heap-allocated mutable capture boxes.
     // See crates/perry-runtime/src/box.rs. These let multiple
     // closures share mutable state (e.g. a counter captured by
