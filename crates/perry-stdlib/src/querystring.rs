@@ -407,6 +407,17 @@ fn querystring_scalar_to_string(value_bits: u64) -> String {
     if value.is_int32() {
         return value.as_int32().to_string();
     }
+    if value.is_bigint() {
+        let ptr = value.as_bigint_ptr();
+        if ptr.is_null() {
+            return String::new();
+        }
+        let hdr = unsafe { perry_runtime::bigint::js_bigint_to_string(ptr) };
+        if hdr.is_null() {
+            return String::new();
+        }
+        return unsafe { nanboxed_to_string(nanbox_string(hdr)) }.unwrap_or_default();
+    }
     if value.is_number() {
         let n = value.as_number();
         if !n.is_finite() {
