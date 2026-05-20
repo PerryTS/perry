@@ -1216,6 +1216,12 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
 
+#[inline(always)]
+fn gc_padded_total_size(size: usize, align: usize) -> usize {
+    let pad = align.max(8);
+    (crate::gc::GC_HEADER_SIZE + size + pad - 1) & !(pad - 1)
+}
+
 fn inactive_survivor_index() -> usize {
     ACTIVE_SURVIVOR.with(|active| 1 - active.get())
 }
@@ -1241,8 +1247,7 @@ fn with_survivor_arena<R>(idx: usize, f: impl FnOnce(&Arena) -> R) -> R {
 pub(crate) fn arena_alloc_gc_survivor(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
-    let pad = align.max(8);
-    let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
+    let total = gc_padded_total_size(size, align);
     let idx = inactive_survivor_index();
     let raw = with_survivor_arena_mut(idx, |arena| arena.alloc(total, align));
 
@@ -1269,7 +1274,20 @@ pub(crate) fn arena_alloc_gc_survivor(size: usize, align: usize, obj_type: u8) -
 /// behind a cold branch.
 #[inline(always)]
 pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
-    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
+    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_FLAG_TENURED, GC_HEADER_SIZE};
+
+    // Large arena-backed GC objects are born directly in non-moving old
+    // generation. The threshold applies to the actual bytes a copying nursery
+    // would otherwise move: GcHeader + payload + alignment padding.
+    let total = gc_padded_total_size(size, align);
+    if crate::gc::is_large_object_total_size(total) {
+        let user_ptr = arena_alloc_gc_old(size, align, obj_type);
+        unsafe {
+            let header = user_ptr.sub(GC_HEADER_SIZE) as *mut GcHeader;
+            (*header).gc_flags |= GC_FLAG_TENURED;
+        }
+        return user_ptr;
+    }
 
     // Hot path: bump-allocate from the current arena block, skipping the
     // free-list walk entirely. The free-list-nonempty `Cell` is a single
@@ -1339,8 +1357,6 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // first componentData key drifted to a denormal (~1.086e-311),
     // throwing "Component type 1 is not in this archetype" on the
     // next query.
-    let pad = align.max(8);
-    let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
     let raw = arena_alloc(total, align);
 
     unsafe {
@@ -2315,7 +2331,9 @@ pub fn pointer_in_old_gen(addr: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gc::{GcHeader, GC_FLAG_MARKED, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_STRING};
+    use crate::gc::{
+        GcHeader, GC_FLAG_MARKED, GC_FLAG_TENURED, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_STRING,
+    };
 
     fn general_block_index_for(addr: usize) -> Option<usize> {
         sync_inline_arena_state();
@@ -2344,10 +2362,9 @@ mod tests {
     }
 
     fn reset_old_nursery_block(dead_cycles_before: u32) -> (usize, usize, usize, ArenaResetStats) {
-        let full_block_payload = BLOCK_SIZE - GC_HEADER_SIZE;
         let mut blocks = Vec::new();
         for _ in 0..7 {
-            let ptr = arena_alloc_gc(full_block_payload, 8, GC_TYPE_STRING) as usize;
+            let ptr = arena_alloc(BLOCK_SIZE, 8) as usize;
             let idx = general_block_index_for(ptr).expect("allocation should be in nursery");
             blocks.push(idx);
         }
@@ -2630,6 +2647,35 @@ mod tests {
     }
 
     #[test]
+    fn large_object_arena_alloc_gc_is_old_tenured_and_indexed() {
+        run_with_fresh_arenas(|| {
+            let payload = crate::gc::LARGE_OBJECT_THRESHOLD_BYTES;
+            let ptr = arena_alloc_gc(payload, 8, GC_TYPE_STRING) as usize;
+            let header_addr = ptr - GC_HEADER_SIZE;
+            let total = unsafe { (*(header_addr as *const GcHeader)).size as usize };
+
+            assert!(
+                crate::gc::is_large_object_total_size(total),
+                "test allocation should exceed the large-object threshold"
+            );
+            assert_eq!(classify_heap_generation(ptr), HeapGeneration::Old);
+            assert!(pointer_in_old_gen(ptr));
+            assert!(!pointer_in_nursery(ptr));
+            unsafe {
+                let header = header_addr as *const GcHeader;
+                assert_ne!((*header).gc_flags & GC_FLAG_TENURED, 0);
+            }
+
+            let overlaps = old_object_page_overlaps(header_addr, total);
+            assert!(!overlaps.is_empty());
+            for &(page, _) in &overlaps {
+                let meta = old_page_meta(page);
+                assert_eq!(meta.object_count, 1);
+            }
+        });
+    }
+
+    #[test]
     fn generation_metadata_survives_nursery_block_reset() {
         run_with_fresh_arenas(|| {
             let (idx, base, size, stats) = reset_old_nursery_block(0);
@@ -2677,7 +2723,7 @@ mod tests {
                 "test setup should create a nursery tombstone"
             );
 
-            let oversized = arena_alloc_gc(BLOCK_SIZE + 64, 8, GC_TYPE_STRING) as usize;
+            let oversized = arena_alloc(BLOCK_SIZE + 64, 8) as usize;
             ARENA.with(|a| unsafe {
                 let arena = &*a.get();
                 assert!(!arena.blocks[idx].data.is_null());
@@ -2732,11 +2778,10 @@ mod tests {
 
     #[test]
     fn test_arena_reset_reuses_dead_general_block_without_touching_live_block() {
-        let full_block_payload = BLOCK_SIZE - GC_HEADER_SIZE;
         let mut dead_blocks = Vec::new();
 
         for _ in 0..6 {
-            let ptr = arena_alloc_gc(full_block_payload, 8, GC_TYPE_STRING) as usize;
+            let ptr = arena_alloc(BLOCK_SIZE, 8) as usize;
             let block_idx =
                 general_block_index_for(ptr).expect("dead allocation should land in general arena");
             dead_blocks.push(block_idx);
@@ -2749,7 +2794,7 @@ mod tests {
             "test setup should force six distinct full general blocks"
         );
 
-        let live_ptr = arena_alloc_gc(full_block_payload, 8, GC_TYPE_STRING);
+        let live_ptr = arena_alloc_gc(24, 8, GC_TYPE_STRING);
         let live_addr = live_ptr as usize;
         let live_header_addr = live_addr - GC_HEADER_SIZE;
         let live_block =

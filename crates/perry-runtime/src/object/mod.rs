@@ -2633,8 +2633,14 @@ pub(crate) unsafe fn gc_field_slot_range(
 
 #[inline]
 pub(super) unsafe fn rebuild_object_field_layout(obj: *mut ObjectHeader, slot_count: usize) {
-    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     crate::gc::layout_rebuild_from_slots(obj as *mut u8, fields, slot_count);
+    if crate::arena::pointer_in_old_gen(obj as usize) {
+        for i in 0..slot_count {
+            let slot = fields.add(i);
+            crate::gc::runtime_write_barrier_slot(obj as usize, slot as usize, *slot);
+        }
+    }
 }
 
 #[inline]
@@ -2643,8 +2649,14 @@ pub(super) unsafe fn rebuild_array_layout_from_slots(arr: *mut ArrayHeader) {
         return;
     }
     let len = (*arr).length as usize;
-    let slots = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+    let slots = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
     crate::gc::layout_rebuild_from_slots(arr as *mut u8, slots, len);
+    if crate::arena::pointer_in_old_gen(arr as usize) {
+        for i in 0..len {
+            let slot = slots.add(i);
+            crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
+        }
+    }
 }
 /// Call a method on an object with dynamic dispatch
 /// This is used for runtime method calls when the method cannot be resolved statically.

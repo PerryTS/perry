@@ -277,6 +277,8 @@ pub(crate) unsafe fn gc_element_slot_range(
 #[inline]
 unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
     crate::gc::layout_note_slot(arr as usize, index, value_bits);
+    let slot = array_elements_ptr(arr).add(index) as usize;
+    crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
 }
 
 #[inline]
@@ -291,6 +293,13 @@ unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
         return;
     }
     crate::gc::layout_rebuild_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
+    if crate::arena::pointer_in_old_gen(arr as usize) {
+        let slots = array_elements_ptr(arr);
+        for i in 0..length {
+            let slot = slots.add(i);
+            crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
+        }
+    }
 }
 
 #[inline]
@@ -1043,6 +1052,7 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             (new_ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*new_header)._reserved = (*old_header)._reserved;
         crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
+        rebuild_array_layout(new_ptr);
 
         // Issue #233: install a forwarding pointer at the OLD location
         // so any stale reference (e.g. an async function's caller still

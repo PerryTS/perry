@@ -4,7 +4,10 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use super::{emit_layout_note_slot_on_block, lower_expr, nanbox_pointer_inline, FnCtx};
+use super::{
+    emit_layout_note_slot_on_block, emit_write_barrier_slot_on_block, lower_expr,
+    nanbox_pointer_inline, FnCtx,
+};
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
 /// Lower an array literal `[a, b, c, …]`.
@@ -180,8 +183,10 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
         let elem_ptr = ctx.block().gep_inbounds(I8, &arr_ptr, &[(I64, &offset)]);
         ctx.block().store(DOUBLE, v, &elem_ptr);
         let value_bits = ctx.block().bitcast_double_to_i64(v);
+        let elem_addr = ctx.block().ptrtoint(&elem_ptr, I64);
         let slot_index = i.to_string();
         emit_layout_note_slot_on_block(ctx.block(), &arr, &slot_index, &value_bits);
+        emit_write_barrier_slot_on_block(ctx.block(), &arr, &elem_addr, &value_bits);
     }
 
     Ok(nanbox_pointer_inline(ctx.block(), &arr))

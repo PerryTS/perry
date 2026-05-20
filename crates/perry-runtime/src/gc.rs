@@ -52,9 +52,19 @@ pub const GC_TYPE_MAP: u8 = 8;
 /// force-materializes (mutates the header's `materialized` field so
 /// subsequent accesses hit the tree).
 pub const GC_TYPE_LAZY_ARRAY: u8 = 9;
+pub const GC_TYPE_BUFFER: u8 = 10;
+pub const GC_TYPE_TYPED_ARRAY: u8 = 11;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_TYPED_ARRAY;
 
 const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
-const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_LAZY_ARRAY as usize + 1;
+const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
+
+pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
+
+#[inline]
+pub fn is_large_object_total_size(total_size: usize) -> bool {
+    total_size > LARGE_OBJECT_THRESHOLD_BYTES
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct MallocKindTelemetry {
@@ -100,7 +110,7 @@ impl MallocKindTelemetry {
 
 #[inline]
 fn malloc_kind_index(obj_type: u8) -> usize {
-    if (1..=GC_TYPE_LAZY_ARRAY).contains(&obj_type) {
+    if (1..=GC_TYPE_MAX).contains(&obj_type) {
         obj_type as usize
     } else {
         MALLOC_KIND_UNKNOWN_INDEX
@@ -119,6 +129,8 @@ fn gc_type_name(obj_type: u8) -> &'static str {
         GC_TYPE_ERROR => "error",
         GC_TYPE_MAP => "map",
         GC_TYPE_LAZY_ARRAY => "lazy_array",
+        GC_TYPE_BUFFER => "buffer",
+        GC_TYPE_TYPED_ARRAY => "typed_array",
         _ => "unknown",
     }
 }
@@ -1003,6 +1015,8 @@ struct CopyingNurseryTraceStats {
     copied_bytes: usize,
     promoted_objects: usize,
     promoted_bytes: usize,
+    large_excluded_objects: usize,
+    large_excluded_bytes: usize,
     reset_blocks: usize,
     malloc_validation_lookups: usize,
     malloc_registry_rebuilds: u64,
@@ -1340,6 +1354,8 @@ impl GcCycleTrace {
                 "copied_bytes": self.copying_nursery.copied_bytes,
                 "promoted_objects": self.copying_nursery.promoted_objects,
                 "promoted_bytes": self.copying_nursery.promoted_bytes,
+                "large_excluded_objects": self.copying_nursery.large_excluded_objects,
+                "large_excluded_bytes": self.copying_nursery.large_excluded_bytes,
                 "reset_blocks": self.copying_nursery.reset_blocks,
                 "malloc_validation_lookups": self.copying_nursery.malloc_validation_lookups,
                 "malloc_registry_rebuilds": self.copying_nursery.malloc_registry_rebuilds,
@@ -1734,7 +1750,7 @@ fn malloc_kind_telemetry_json_from_snapshot(
     snapshot: [MallocKindTelemetry; MALLOC_KIND_BUCKET_COUNT],
 ) -> serde_json::Value {
     let mut rows = Vec::with_capacity(MALLOC_KIND_BUCKET_COUNT);
-    for obj_type in 1..=GC_TYPE_LAZY_ARRAY {
+    for obj_type in 1..=GC_TYPE_MAX {
         rows.push(malloc_kind_telemetry_row(
             obj_type,
             snapshot[obj_type as usize],
@@ -5741,7 +5757,7 @@ unsafe fn scan_dirty_object_slots(
         GC_TYPE_ERROR => scan_dirty_error_slots(user_ptr, dirty_pages, stats, visit_slot),
         GC_TYPE_MAP => scan_dirty_map_slots(user_ptr, dirty_pages, stats, visit_slot),
         GC_TYPE_LAZY_ARRAY => scan_dirty_lazy_array_slots(user_ptr, dirty_pages, stats, visit_slot),
-        GC_TYPE_STRING | GC_TYPE_BIGINT => {}
+        GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
         _ => {}
     }
 }
@@ -6112,7 +6128,7 @@ unsafe fn plausible_gc_header(header: *mut GcHeader, arena: bool) -> bool {
         return false;
     }
     let obj_type = (*header).obj_type;
-    if !(1..=GC_TYPE_LAZY_ARRAY).contains(&obj_type) {
+    if !(1..=GC_TYPE_MAX).contains(&obj_type) {
         return false;
     }
     let size = (*header).size as usize;
@@ -6227,7 +6243,7 @@ impl CopyingNurseryPreflight {
             GC_TYPE_ERROR => self.scan_error_fields(user_ptr),
             GC_TYPE_MAP => self.scan_map_fields(user_ptr),
             GC_TYPE_LAZY_ARRAY => self.scan_lazy_array_fields(user_ptr),
-            GC_TYPE_STRING | GC_TYPE_BIGINT => {}
+            GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
             _ => {}
         }
     }
@@ -6350,6 +6366,7 @@ struct CopyingNurseryCollector {
     worklist: Vec<*mut GcHeader>,
     marked_headers: Vec<*mut GcHeader>,
     moved_headers: Vec<*mut GcHeader>,
+    large_excluded_headers: crate::fast_hash::PtrHashSet<usize>,
     sticky: StickyRememberedSet,
     stats: CopyingNurseryTraceStats,
     live_from_bytes: usize,
@@ -6362,6 +6379,7 @@ impl CopyingNurseryCollector {
             worklist: Vec::new(),
             marked_headers: Vec::new(),
             moved_headers: Vec::new(),
+            large_excluded_headers: crate::fast_hash::new_ptr_hash_set(),
             sticky: StickyRememberedSet::default(),
             stats: CopyingNurseryTraceStats {
                 eligible: true,
@@ -6369,6 +6387,20 @@ impl CopyingNurseryCollector {
                 ..CopyingNurseryTraceStats::default()
             },
             live_from_bytes: 0,
+        }
+    }
+
+    unsafe fn record_large_excluded(&mut self, header: *mut GcHeader) {
+        if header.is_null() {
+            return;
+        }
+        let total = (*header).size as usize;
+        if !is_large_object_total_size(total) {
+            return;
+        }
+        if self.large_excluded_headers.insert(header as usize) {
+            self.stats.large_excluded_objects = self.stats.large_excluded_objects.saturating_add(1);
+            self.stats.large_excluded_bytes = self.stats.large_excluded_bytes.saturating_add(total);
         }
     }
 
@@ -6428,7 +6460,12 @@ impl CopyingNurseryCollector {
                 }
                 Some(addr)
             }
-            CopyingPointerKind::Old => Some(addr),
+            CopyingPointerKind::Old => {
+                unsafe {
+                    self.record_large_excluded(ptr.header);
+                }
+                Some(addr)
+            }
         }
     }
 
@@ -6528,7 +6565,7 @@ impl CopyingNurseryCollector {
             GC_TYPE_ERROR => self.scan_error_fields(header, user_ptr),
             GC_TYPE_MAP => self.scan_map_fields(header, user_ptr),
             GC_TYPE_LAZY_ARRAY => self.scan_lazy_array_fields(header, user_ptr),
-            GC_TYPE_STRING | GC_TYPE_BIGINT => {}
+            GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
             _ => {}
         }
     }
@@ -7157,7 +7194,7 @@ fn drain_trace_worklist_inner(
                 GC_TYPE_ERROR => trace_error(user_ptr, valid_ptrs, worklist),
                 GC_TYPE_MAP => trace_map(user_ptr, valid_ptrs, worklist),
                 GC_TYPE_LAZY_ARRAY => trace_lazy_array(user_ptr, valid_ptrs, worklist),
-                GC_TYPE_STRING | GC_TYPE_BIGINT => {}
+                GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
                 _ => {}
             }
         }
@@ -8633,7 +8670,7 @@ unsafe fn rewrite_heap_object_fields(header: *mut GcHeader, valid_ptrs: &ValidPo
         GC_TYPE_ERROR => rewrite_error_fields(user_ptr, valid_ptrs),
         GC_TYPE_MAP => rewrite_map_fields(user_ptr, valid_ptrs),
         GC_TYPE_LAZY_ARRAY => rewrite_lazy_array_fields(user_ptr, valid_ptrs),
-        GC_TYPE_STRING | GC_TYPE_BIGINT => {}
+        GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
         _ => {}
     }
 }
@@ -8832,7 +8869,7 @@ unsafe fn remember_evacuated_old_copy_young_slots(
         GC_TYPE_ERROR => remember_evacuated_error_young_slots(sticky, header, user_ptr),
         GC_TYPE_MAP => remember_evacuated_map_young_slots(sticky, header, user_ptr),
         GC_TYPE_LAZY_ARRAY => remember_evacuated_lazy_array_young_slots(sticky, header, user_ptr),
-        GC_TYPE_STRING | GC_TYPE_BIGINT => {}
+        GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
         _ => {}
     }
 }
@@ -9017,7 +9054,7 @@ unsafe fn verify_heap_object_fields(
         GC_TYPE_ERROR => verify_error_fields(user_ptr, valid_ptrs, surface),
         GC_TYPE_MAP => verify_map_fields(user_ptr, valid_ptrs, surface),
         GC_TYPE_LAZY_ARRAY => verify_lazy_array_fields(user_ptr, valid_ptrs, surface),
-        GC_TYPE_STRING | GC_TYPE_BIGINT => {}
+        GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
         _ => {}
     }
 }
@@ -11331,7 +11368,7 @@ mod tests {
 
     fn force_next_general_arena_alloc_slow() {
         const TEST_BLOCK_SIZE: usize = 1024 * 1024;
-        let _ = crate::arena::arena_alloc_gc(TEST_BLOCK_SIZE - GC_HEADER_SIZE, 8, GC_TYPE_STRING);
+        let _ = crate::arena::arena_alloc(TEST_BLOCK_SIZE, 8);
     }
 
     fn old_page_dirty_for(page: usize) -> bool {
@@ -11711,7 +11748,7 @@ mod tests {
             .as_array()
             .expect("malloc_kinds should be an array");
         assert_eq!(rows.len(), MALLOC_KIND_BUCKET_COUNT);
-        for kind in 1..=GC_TYPE_LAZY_ARRAY {
+        for kind in 1..=GC_TYPE_MAX {
             let row = rows
                 .iter()
                 .find(|row| row["obj_type"].as_u64() == Some(kind as u64))
@@ -12207,6 +12244,214 @@ mod tests {
         assert_eq!(trace.shadow_roots.nonzero_slots, 1);
         assert_eq!(trace.shadow_roots.pointer_roots, 1);
         assert_eq!(trace.shadow_roots.rewritten_slots, 1);
+    }
+
+    #[test]
+    fn large_object_copying_minor_excludes_rooted_old_object_from_copy_counts() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let large =
+            crate::arena::arena_alloc_gc(LARGE_OBJECT_THRESHOLD_BYTES, 8, GC_TYPE_STRING) as usize;
+        let header = unsafe { header_from_user_ptr(large as *const u8) };
+        let total = unsafe { (*header).size as usize };
+
+        assert!(is_large_object_total_size(total));
+        assert!(crate::arena::pointer_in_old_gen(large));
+        js_shadow_slot_set(0, ptr_bits(large));
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_eq!(after, large);
+        assert_eq!(trace.copying_nursery.copied_objects, 0);
+        assert_eq!(trace.copying_nursery.copied_bytes, 0);
+        assert_eq!(trace.copying_nursery.promoted_objects, 0);
+        assert_eq!(trace.copying_nursery.promoted_bytes, 0);
+        assert_eq!(trace.copying_nursery.large_excluded_objects, 1);
+        assert_eq!(trace.copying_nursery.large_excluded_bytes, total);
+
+        let event = trace.into_json(GcStepSnapshot::current());
+        assert_eq!(
+            event["copying_nursery"]["large_excluded_objects"].as_u64(),
+            Some(1)
+        );
+        assert_eq!(
+            event["copying_nursery"]["large_excluded_bytes"].as_u64(),
+            Some(total as u64)
+        );
+    }
+
+    #[test]
+    fn large_object_old_born_array_slot_write_keeps_young_child_alive() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let child = young_leaf();
+        let arr = crate::array::js_array_alloc(4096);
+
+        assert!(crate::arena::pointer_in_old_gen(arr as usize));
+        crate::array::js_array_set_f64_extend(arr, 0, f64::from_bits(ptr_bits(child)));
+        assert!(
+            remembered_set_size() > 0,
+            "large old-born array write should dirty old-page metadata"
+        );
+
+        let elements = unsafe {
+            (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
+        };
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let rewritten = unsafe { (*elements & POINTER_MASK) as usize };
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_ne!(rewritten, child);
+        assert!(crate::arena::pointer_in_nursery(rewritten));
+        assert_eq!(trace.copying_nursery.copied_objects, 1);
+        assert!(
+            remembered_set_size() > 0,
+            "old-to-survivor edge must remain remembered after copied minor"
+        );
+    }
+
+    #[test]
+    fn large_object_array_literal_direct_store_keeps_young_child_alive_and_excludes_parent() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let child = young_leaf();
+        let child_total = unsafe { (*header_from_user_ptr(child as *const u8)).size as usize };
+        let arr = crate::array::js_array_alloc_literal(4096);
+        let parent_total = unsafe { (*header_from_user_ptr(arr as *const u8)).size as usize };
+
+        assert!(crate::arena::pointer_in_old_gen(arr as usize));
+        assert!(is_large_object_total_size(parent_total));
+        let elements = unsafe {
+            (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
+        };
+        unsafe {
+            *elements = ptr_bits(child);
+        }
+        layout_note_slot(arr as usize, 0, unsafe { *elements });
+        runtime_write_barrier_slot(arr as usize, elements as usize, unsafe { *elements });
+        assert!(
+            remembered_set_size() > 0,
+            "direct large literal store should dirty old-page metadata"
+        );
+        js_shadow_slot_set(0, ptr_bits(arr as usize));
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        let rewritten = unsafe { (*elements & POINTER_MASK) as usize };
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_eq!(arr_after, arr as usize);
+        assert_ne!(rewritten, child);
+        assert!(crate::arena::pointer_in_nursery(rewritten));
+        assert_eq!(trace.copying_nursery.copied_objects, 1);
+        assert_eq!(trace.copying_nursery.copied_bytes, child_total);
+        assert_eq!(trace.copying_nursery.promoted_objects, 0);
+        assert_eq!(trace.copying_nursery.promoted_bytes, 0);
+        assert_eq!(trace.copying_nursery.large_excluded_objects, 1);
+        assert_eq!(trace.copying_nursery.large_excluded_bytes, parent_total);
+    }
+
+    #[test]
+    fn large_object_inline_push_store_keeps_young_child_alive_and_excludes_parent() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let child = young_leaf();
+        let child_total = unsafe { (*header_from_user_ptr(child as *const u8)).size as usize };
+        let arr = crate::array::js_array_alloc(4096);
+        let parent_total = unsafe { (*header_from_user_ptr(arr as *const u8)).size as usize };
+
+        assert!(crate::arena::pointer_in_old_gen(arr as usize));
+        assert!(is_large_object_total_size(parent_total));
+
+        let elements = unsafe {
+            (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
+        };
+        let slot = unsafe {
+            let length = (*arr).length as usize;
+            assert!(length < (*arr).capacity as usize);
+            let slot = elements.add(length);
+            *slot = ptr_bits(child);
+            (*arr).length = length as u32 + 1;
+            layout_note_slot(arr as usize, length, *slot);
+            runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
+            slot
+        };
+        assert!(
+            remembered_set_size() > 0,
+            "optimized direct push store should dirty old-page metadata"
+        );
+        js_shadow_slot_set(0, ptr_bits(arr as usize));
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        let rewritten = unsafe { (*slot & POINTER_MASK) as usize };
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_eq!(arr_after, arr as usize);
+        assert_ne!(rewritten, child);
+        assert!(crate::arena::pointer_in_nursery(rewritten));
+        assert_eq!(trace.copying_nursery.copied_objects, 1);
+        assert_eq!(trace.copying_nursery.copied_bytes, child_total);
+        assert_eq!(trace.copying_nursery.promoted_objects, 0);
+        assert_eq!(trace.copying_nursery.promoted_bytes, 0);
+        assert_eq!(trace.copying_nursery.large_excluded_objects, 1);
+        assert_eq!(trace.copying_nursery.large_excluded_bytes, parent_total);
+        assert!(
+            remembered_set_size() > 0,
+            "old-to-survivor edge must remain remembered after copied minor"
+        );
+    }
+
+    #[test]
+    fn large_object_clone_direct_copy_keeps_young_child_alive_and_excludes_parent() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let child = young_leaf();
+        let child_total = unsafe { (*header_from_user_ptr(child as *const u8)).size as usize };
+        let src = crate::object::js_object_alloc(0, 1);
+        crate::object::js_object_set_field(
+            src,
+            0,
+            crate::value::JSValue::from_bits(ptr_bits(child)),
+        );
+
+        let clone = unsafe {
+            crate::object::js_object_clone_with_extra(
+                f64::from_bits(ptr_bits(src as usize)),
+                4096,
+                std::ptr::null(),
+                0,
+            )
+        };
+        let parent_total = unsafe { (*header_from_user_ptr(clone as *const u8)).size as usize };
+        let fields = unsafe {
+            (clone as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64
+        };
+
+        assert!(crate::arena::pointer_in_old_gen(clone as usize));
+        assert!(is_large_object_total_size(parent_total));
+        assert!(
+            remembered_set_size() > 0,
+            "old-born clone field copy should dirty old-page metadata"
+        );
+        js_shadow_slot_set(0, ptr_bits(clone as usize));
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let clone_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        let rewritten = unsafe { (*fields & POINTER_MASK) as usize };
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_eq!(clone_after, clone as usize);
+        assert_ne!(rewritten, child);
+        assert!(crate::arena::pointer_in_nursery(rewritten));
+        assert_eq!(trace.copying_nursery.copied_objects, 1);
+        assert_eq!(trace.copying_nursery.copied_bytes, child_total);
+        assert_eq!(trace.copying_nursery.promoted_objects, 0);
+        assert_eq!(trace.copying_nursery.promoted_bytes, 0);
+        assert!(trace.copying_nursery.large_excluded_objects >= 1);
+        assert!(trace.copying_nursery.large_excluded_bytes >= parent_total);
     }
 
     #[test]

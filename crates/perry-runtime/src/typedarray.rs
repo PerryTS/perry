@@ -154,10 +154,42 @@ fn ta_layout(capacity: u32, elem_size: usize) -> Layout {
     Layout::from_size_align(total, 8).unwrap()
 }
 
+#[inline]
+fn typed_array_payload_size(capacity: u32, elem_size: usize) -> usize {
+    let total = std::mem::size_of::<TypedArrayHeader>() + (capacity as usize) * elem_size;
+    total.max(std::mem::size_of::<TypedArrayHeader>() + elem_size)
+}
+
+#[inline]
+fn typed_array_gc_total_size(capacity: u32, elem_size: usize) -> usize {
+    let payload = typed_array_payload_size(capacity, elem_size);
+    (crate::gc::GC_HEADER_SIZE + payload + 7) & !7
+}
+
 /// Allocate a zero-filled typed array of `length` elements.
 pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
     let elem_size = elem_size_for_kind(kind);
     let capacity = length.max(1);
+    if crate::gc::is_large_object_total_size(typed_array_gc_total_size(capacity, elem_size)) {
+        let p = crate::arena::arena_alloc_gc_old(
+            typed_array_payload_size(capacity, elem_size),
+            8,
+            crate::gc::GC_TYPE_TYPED_ARRAY,
+        ) as *mut TypedArrayHeader;
+        unsafe {
+            let header = (p as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
+            (*p).length = length;
+            (*p).capacity = capacity;
+            (*p).kind = kind;
+            (*p).elem_size = elem_size as u8;
+            (*p)._pad = [0; 6];
+            let data = data_ptr_mut(p);
+            ptr::write_bytes(data, 0, (capacity as usize) * elem_size);
+        }
+        register_typed_array(p, kind);
+        return p;
+    }
     let layout = ta_layout(capacity, elem_size);
     unsafe {
         let raw = alloc(layout);
@@ -798,5 +830,32 @@ fn format_typed_value(kind: u8, v: f64) -> String {
             // Integer types
             format!("{}", v as i64)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn large_object_typed_array_alloc_uses_old_gc_header_and_stays_usable() {
+        let ta = typed_array_alloc(KIND_UINT8, crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32);
+        assert!(!ta.is_null());
+        assert_eq!(lookup_typed_array_kind(ta as usize), Some(KIND_UINT8));
+        assert!(crate::arena::pointer_in_old_gen(ta as usize));
+        unsafe {
+            let header =
+                (ta as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            assert_eq!((*header).obj_type, crate::gc::GC_TYPE_TYPED_ARRAY);
+            assert_ne!((*header).gc_flags & crate::gc::GC_FLAG_TENURED, 0);
+        }
+
+        js_typed_array_set(ta, 0, 17.0);
+        js_typed_array_set(ta, crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as i32 - 1, 99.0);
+        assert_eq!(js_typed_array_get(ta, 0), 17.0);
+        assert_eq!(
+            js_typed_array_get(ta, crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as i32 - 1),
+            99.0
+        );
     }
 }
