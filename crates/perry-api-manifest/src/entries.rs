@@ -2058,8 +2058,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- url (additional helpers) ---
     method("url", "fileURLToPath", false, None),
     method("url", "pathToFileURL", false, None),
+    method("url", "domainToASCII", false, None),
+    method("url", "domainToUnicode", false, None),
+    method("url", "urlToHttpOptions", false, None),
     method("url", "format", false, None),
     method("url", "parse", false, None),
+    method("url", "resolve", false, None),
     // --- http (perry-ext-http surface + classes the framework spec
     //     exposes). Both http and https route through the same crate. ---
     method("http", "createServer", false, None),
