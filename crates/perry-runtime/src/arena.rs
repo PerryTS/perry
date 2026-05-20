@@ -236,7 +236,10 @@ impl OldPageMeta {
 
     #[inline]
     fn refresh_policy_bits(&mut self) {
-        self.evacuation_eligible = self.live_bytes > 0 && self.pinned_bytes == 0;
+        self.evacuation_eligible = self.allocated_bytes > 0
+            && self.live_bytes > 0
+            && self.dead_bytes > 0
+            && self.pinned_bytes == 0;
     }
 }
 
@@ -323,6 +326,23 @@ fn unregister_old_block_pages(pages: &[usize]) {
             index.remove(&page);
         }
     });
+}
+
+#[inline]
+fn address_span_overlaps_pages(
+    start: usize,
+    size: usize,
+    pages: &crate::fast_hash::PtrHashSet<usize>,
+) -> bool {
+    if start == 0 || size == 0 || pages.is_empty() {
+        return false;
+    }
+    let Some(end) = start.checked_add(size) else {
+        return true;
+    };
+    let first_page = generation_page_for_addr(start);
+    let last_page = generation_page_for_addr(end - 1);
+    (first_page..=last_page).any(|page| pages.contains(&page))
 }
 
 fn register_block_space(base: usize, size: usize, generation: HeapGeneration, space: HeapSpace) {
@@ -668,6 +688,14 @@ pub(crate) fn old_page_summary() -> OldPageSummary {
     })
 }
 
+pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut snapshot = meta.borrow().values().copied().collect::<Vec<_>>();
+        snapshot.sort_unstable_by_key(|page_meta| page_meta.page_base);
+        snapshot
+    })
+}
+
 pub(crate) fn old_arena_walk_objects_on_pages(
     pages: &crate::fast_hash::PtrHashSet<usize>,
     mut callback: impl FnMut(*mut u8),
@@ -696,6 +724,29 @@ pub(crate) fn old_arena_walk_objects_on_pages(
         callback(header_addr as *mut u8);
     }
     count
+}
+
+pub(crate) fn old_arena_page_index_remove_object(header_addr: usize, total_size: usize) {
+    if header_addr == 0 || total_size == 0 {
+        return;
+    }
+    let overlaps = old_object_page_overlaps(header_addr, total_size);
+    if overlaps.is_empty() {
+        return;
+    }
+    OLD_GEN_PAGE_OBJECTS.with(|index| {
+        let mut index = index.borrow_mut();
+        for (page, _) in overlaps {
+            let mut remove_page = false;
+            if let Some(headers) = index.get_mut(&page) {
+                headers.retain(|&addr| addr != header_addr);
+                remove_page = headers.is_empty();
+            }
+            if remove_page {
+                index.remove(&page);
+            }
+        }
+    });
 }
 
 pub(crate) fn old_page_mark_dirty(page: usize) {
@@ -795,6 +846,34 @@ impl ArenaBlock {
         self.offset = (bumped + pad - 1) & !(pad - 1);
         Some(ptr)
     }
+
+    #[inline]
+    fn allocation_start(&self, size: usize, align: usize) -> Option<usize> {
+        if self.data.is_null() {
+            return None;
+        }
+        let pad = align.max(8);
+        let aligned_offset = (self.offset + pad - 1) & !(pad - 1);
+        let bumped = aligned_offset.checked_add(size)?;
+        if bumped > self.size {
+            return None;
+        }
+        (self.data as usize).checked_add(aligned_offset)
+    }
+
+    #[inline]
+    fn alloc_excluding_pages(
+        &mut self,
+        size: usize,
+        align: usize,
+        excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
+    ) -> Option<*mut u8> {
+        let start = self.allocation_start(size, align)?;
+        if address_span_overlaps_pages(start, size, excluded_pages) {
+            return None;
+        }
+        self.alloc(size, align)
+    }
 }
 
 /// Thread-local arena allocator
@@ -841,6 +920,68 @@ impl Arena {
     }
 
     #[inline]
+    fn resync_inline_to_current(&self) {
+        INLINE_STATE.with(|s| unsafe {
+            let inline = &mut *s.get();
+            if !inline.data.is_null() {
+                let block = &self.blocks[self.current];
+                inline.data = block.data;
+                inline.offset = block.offset;
+                inline.size = block.size;
+            }
+        });
+    }
+
+    fn install_fresh_block(&mut self, size: usize) {
+        let fresh = alloc_block(size);
+        let fresh_size = fresh.size;
+        let fresh_base = fresh.data as usize;
+        register_block_space(fresh_base, fresh_size, self.generation, self.space);
+        let mut tomb_idx: Option<usize> = None;
+        for i in 0..self.blocks.len() {
+            if self.blocks[i].data.is_null() {
+                tomb_idx = Some(i);
+                break;
+            }
+        }
+        let new_idx = match tomb_idx {
+            Some(i) => {
+                self.blocks[i] = fresh;
+                i
+            }
+            None => {
+                self.blocks.push(fresh);
+                self.blocks.len() - 1
+            }
+        };
+        self.current = new_idx;
+        ARENA_TOTAL_BYTES.with(|t| t.set(t.get() + fresh_size));
+    }
+
+    fn alloc_fresh_block(&mut self, size: usize, align: usize) -> *mut u8 {
+        self.install_fresh_block(size);
+        self.blocks[self.current]
+            .alloc(size, align)
+            .expect("Fresh block should have space")
+    }
+
+    fn alloc_fresh_block_excluding_pages(
+        &mut self,
+        size: usize,
+        align: usize,
+        excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
+    ) -> *mut u8 {
+        loop {
+            self.install_fresh_block(size);
+            if let Some(ptr) =
+                self.blocks[self.current].alloc_excluding_pages(size, align, excluded_pages)
+            {
+                return ptr;
+            }
+        }
+    }
+
+    #[inline]
     fn alloc(&mut self, size: usize, align: usize) -> *mut u8 {
         // Try current block first
         if let Some(ptr) = self.blocks[self.current].alloc(size, align) {
@@ -871,15 +1012,7 @@ impl Arena {
             if let Some(ptr) = self.blocks[i].alloc(size, align) {
                 self.current = i;
                 // Resync inline state to the new current block.
-                INLINE_STATE.with(|s| unsafe {
-                    let inline = &mut *s.get();
-                    if !inline.data.is_null() {
-                        let block = &self.blocks[self.current];
-                        inline.data = block.data;
-                        inline.offset = block.offset;
-                        inline.size = block.size;
-                    }
-                });
+                self.resync_inline_to_current();
                 return ptr;
             }
         }
@@ -890,33 +1023,34 @@ impl Arena {
         // dealloc threshold) over growing the Vec, so block_idx
         // semantics stay bounded even on workloads that churn
         // through nursery blocks.
-        let fresh = alloc_block(size);
-        let fresh_size = fresh.size;
-        let fresh_base = fresh.data as usize;
-        register_block_space(fresh_base, fresh_size, self.generation, self.space);
-        let mut tomb_idx: Option<usize> = None;
+        self.alloc_fresh_block(size, align)
+    }
+
+    fn alloc_excluding_pages(
+        &mut self,
+        size: usize,
+        align: usize,
+        excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
+    ) -> *mut u8 {
+        if excluded_pages.is_empty() {
+            return self.alloc(size, align);
+        }
+        if let Some(ptr) =
+            self.blocks[self.current].alloc_excluding_pages(size, align, excluded_pages)
+        {
+            return ptr;
+        }
         for i in 0..self.blocks.len() {
-            if self.blocks[i].data.is_null() {
-                tomb_idx = Some(i);
-                break;
+            if i == self.current {
+                continue;
+            }
+            if let Some(ptr) = self.blocks[i].alloc_excluding_pages(size, align, excluded_pages) {
+                self.current = i;
+                self.resync_inline_to_current();
+                return ptr;
             }
         }
-        let new_idx = match tomb_idx {
-            Some(i) => {
-                self.blocks[i] = fresh;
-                i
-            }
-            None => {
-                self.blocks.push(fresh);
-                self.blocks.len() - 1
-            }
-        };
-        self.current = new_idx;
-        ARENA_TOTAL_BYTES.with(|t| t.set(t.get() + fresh_size));
-
-        self.blocks[self.current]
-            .alloc(size, align)
-            .expect("Fresh block should have space")
+        self.alloc_fresh_block_excluding_pages(size, align, excluded_pages)
     }
 }
 
@@ -1193,6 +1327,17 @@ pub fn arena_alloc_old(size: usize, align: usize) -> *mut u8 {
     })
 }
 
+pub(crate) fn arena_alloc_old_excluding_pages(
+    size: usize,
+    align: usize,
+    excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
+) -> *mut u8 {
+    OLD_ARENA.with(|a| unsafe {
+        let arena = &mut *a.get();
+        arena.alloc_excluding_pages(size, align, excluded_pages)
+    })
+}
+
 /// GcHeader-prefixed counterpart of `arena_alloc_old`. See
 /// `arena_alloc_gc_longlived` for the same shape on the longlived
 /// arena — only the backing region differs.
@@ -1203,6 +1348,30 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     let pad = align.max(8);
     let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
     let raw = arena_alloc_old(total, align);
+
+    unsafe {
+        let header = raw as *mut GcHeader;
+        (*header).obj_type = obj_type;
+        (*header).gc_flags = GC_FLAG_ARENA;
+        (*header)._reserved = 0;
+        (*header).size = total as u32;
+    }
+    register_old_object_pages(raw as usize, total);
+
+    unsafe { raw.add(GC_HEADER_SIZE) }
+}
+
+pub(crate) fn arena_alloc_gc_old_excluding_pages(
+    size: usize,
+    align: usize,
+    obj_type: u8,
+    excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
+) -> *mut u8 {
+    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
+
+    let pad = align.max(8);
+    let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
+    let raw = arena_alloc_old_excluding_pages(total, align, excluded_pages);
 
     unsafe {
         let header = raw as *mut GcHeader;
@@ -2467,6 +2636,23 @@ mod tests {
                 assert!(!meta.evacuation_eligible);
             }
             assert_eq!(total_overlap, total_size);
+        });
+    }
+
+    #[test]
+    fn old_page_metadata_snapshot_is_sorted_by_page() {
+        run_with_fresh_arenas(|| {
+            let _first = arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+            let _second = arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+
+            let snapshot = old_page_meta_snapshot();
+            assert!(!snapshot.is_empty());
+            assert!(
+                snapshot
+                    .windows(2)
+                    .all(|pair| pair[0].page_base <= pair[1].page_base),
+                "old page metadata snapshot should be deterministic"
+            );
         });
     }
 

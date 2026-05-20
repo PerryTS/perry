@@ -966,6 +966,8 @@ struct EvacuationTraceStats {
     bytes: usize,
     moved_objects: usize,
     moved_bytes: usize,
+    old_page_moved_objects: usize,
+    old_page_moved_bytes: usize,
     released_original_objects: usize,
     released_original_bytes: usize,
     retained_forwarded_stub_objects: usize,
@@ -1087,6 +1089,11 @@ struct EvacuationPolicySnapshot {
     candidate_objects: usize,
     reclaimable_candidate_bytes: usize,
     reclaimable_candidate_objects: usize,
+    old_page_candidate_pages: usize,
+    old_page_selected_pages: usize,
+    old_page_selected_live_bytes: usize,
+    old_page_reclaimable_bytes: usize,
+    old_page_skipped_pinned_pages: usize,
     retained_forwarded_stub_bytes: usize,
     retained_forwarded_stub_objects: usize,
     conservative_pinned_bytes: usize,
@@ -1112,6 +1119,41 @@ impl EvacuationPolicySnapshot {
         ((self.reclaimable_candidate_bytes as u128 * 100)
             / self.tenured_still_in_nursery_bytes as u128) as u64
     }
+
+    #[inline]
+    fn effective_candidate_bytes(self) -> usize {
+        self.candidate_bytes
+            .saturating_add(self.old_page_selected_live_bytes)
+    }
+
+    #[inline]
+    fn effective_reclaimable_candidate_bytes(self) -> usize {
+        self.reclaimable_candidate_bytes
+            .saturating_add(self.old_page_reclaimable_bytes)
+    }
+
+    #[inline]
+    fn effective_reclaimable_candidate_ratio_pct(self) -> u64 {
+        let denominator = self
+            .tenured_still_in_nursery_bytes
+            .saturating_add(self.old_page_selected_live_bytes)
+            .saturating_add(self.old_page_reclaimable_bytes);
+        if denominator == 0 {
+            return 0;
+        }
+        ((self.effective_reclaimable_candidate_bytes() as u128 * 100) / denominator as u128) as u64
+    }
+}
+
+#[derive(Default)]
+struct OldPageDefragSelection {
+    pages: crate::fast_hash::PtrHashSet<usize>,
+    page_order: Vec<usize>,
+    candidate_pages: usize,
+    selected_pages: usize,
+    selected_live_bytes: usize,
+    selected_reclaimable_bytes: usize,
+    skipped_pinned_pages: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -1343,6 +1385,8 @@ impl GcCycleTrace {
                 "bytes": self.evacuation.bytes,
                 "moved_objects": self.evacuation.moved_objects,
                 "moved_bytes": self.evacuation.moved_bytes,
+                "old_page_moved_objects": self.evacuation.old_page_moved_objects,
+                "old_page_moved_bytes": self.evacuation.old_page_moved_bytes,
                 "released_original_objects": self.evacuation.released_original_objects,
                 "released_original_bytes": self.evacuation.released_original_bytes,
                 "retained_forwarded_stub_objects": self.evacuation.retained_forwarded_stub_objects,
@@ -1375,6 +1419,11 @@ impl GcCycleTrace {
                 "reclaimable_candidate_bytes": self.evacuation_policy.snapshot.reclaimable_candidate_bytes,
                 "reclaimable_candidate_objects": self.evacuation_policy.snapshot.reclaimable_candidate_objects,
                 "reclaimable_candidate_ratio_pct": self.evacuation_policy.snapshot.reclaimable_candidate_ratio_pct(),
+                "old_page_candidate_pages": self.evacuation_policy.snapshot.old_page_candidate_pages,
+                "old_page_selected_pages": self.evacuation_policy.snapshot.old_page_selected_pages,
+                "old_page_selected_live_bytes": self.evacuation_policy.snapshot.old_page_selected_live_bytes,
+                "old_page_reclaimable_bytes": self.evacuation_policy.snapshot.old_page_reclaimable_bytes,
+                "old_page_skipped_pinned_pages": self.evacuation_policy.snapshot.old_page_skipped_pinned_pages,
                 "retained_forwarded_stub_bytes": self.evacuation_policy.snapshot.retained_forwarded_stub_bytes,
                 "retained_forwarded_stub_objects": self.evacuation_policy.snapshot.retained_forwarded_stub_objects,
                 "conservative_pinned_bytes": self.evacuation_policy.snapshot.conservative_pinned_bytes,
@@ -1438,6 +1487,67 @@ fn gc_last_pause_us() -> u64 {
     GC_STATS.with(|stats| stats.borrow().last_pause_us)
 }
 
+#[inline]
+fn old_page_defrag_eligible(meta: crate::arena::OldPageMeta) -> bool {
+    meta.allocated_bytes > 0 && meta.live_bytes > 0 && meta.dead_bytes > 0 && meta.pinned_bytes == 0
+}
+
+#[inline]
+fn old_page_defrag_skipped_for_pin(meta: crate::arena::OldPageMeta) -> bool {
+    meta.allocated_bytes > 0 && meta.live_bytes > 0 && meta.dead_bytes > 0 && meta.pinned_bytes > 0
+}
+
+fn select_old_page_defrag_pages_from_snapshot(
+    snapshot: &[crate::arena::OldPageMeta],
+    force: bool,
+) -> OldPageDefragSelection {
+    let mut selection = OldPageDefragSelection::default();
+    let mut candidates = Vec::new();
+    for &meta in snapshot {
+        if old_page_defrag_skipped_for_pin(meta) {
+            selection.skipped_pinned_pages = selection.skipped_pinned_pages.saturating_add(1);
+            continue;
+        }
+        if !old_page_defrag_eligible(meta) {
+            continue;
+        }
+        selection.candidate_pages = selection.candidate_pages.saturating_add(1);
+        if force || meta.dead_bytes >= meta.live_bytes {
+            candidates.push(meta);
+        }
+    }
+
+    candidates.sort_unstable_by(|a, b| {
+        let b_ratio = (b.dead_bytes as u128).saturating_mul(a.allocated_bytes as u128);
+        let a_ratio = (a.dead_bytes as u128).saturating_mul(b.allocated_bytes as u128);
+        b_ratio
+            .cmp(&a_ratio)
+            .then_with(|| a.live_bytes.cmp(&b.live_bytes))
+            .then_with(|| a.page_base.cmp(&b.page_base))
+    });
+
+    for meta in candidates {
+        let page = crate::arena::generation_page_for_addr(meta.page_base);
+        if selection.pages.insert(page) {
+            selection.page_order.push(page);
+            selection.selected_pages = selection.selected_pages.saturating_add(1);
+            selection.selected_live_bytes = selection
+                .selected_live_bytes
+                .saturating_add(meta.live_bytes);
+            selection.selected_reclaimable_bytes = selection
+                .selected_reclaimable_bytes
+                .saturating_add(meta.dead_bytes);
+        }
+    }
+
+    selection
+}
+
+fn select_old_page_defrag_pages(force: bool) -> OldPageDefragSelection {
+    let snapshot = crate::arena::old_page_meta_snapshot();
+    select_old_page_defrag_pages_from_snapshot(&snapshot, force)
+}
+
 fn evacuation_policy_initial_decision(
     tenured_still_in_nursery_bytes: usize,
     rss_bytes: u64,
@@ -1446,6 +1556,7 @@ fn evacuation_policy_initial_decision(
     allowed: bool,
     force: bool,
     old_to_young_tracking_complete: bool,
+    old_page_selected_pages: usize,
 ) -> EvacuationPolicyDecision {
     let snapshot = EvacuationPolicySnapshot {
         tenured_still_in_nursery_bytes,
@@ -1502,6 +1613,16 @@ fn evacuation_policy_initial_decision(
             ..EvacuationPolicyDecision::default()
         };
     }
+    if old_page_selected_pages > 0 {
+        return EvacuationPolicyDecision {
+            allowed,
+            considered: true,
+            force,
+            reason: "old_page_fragmentation",
+            snapshot,
+            ..EvacuationPolicyDecision::default()
+        };
+    }
     EvacuationPolicyDecision {
         allowed,
         force,
@@ -1515,6 +1636,7 @@ fn evacuation_policy_snapshot_after_mark(
     mut snapshot: EvacuationPolicySnapshot,
     force: bool,
     pre_evac_pause_us: u64,
+    old_page_selection: &OldPageDefragSelection,
 ) -> EvacuationPolicySnapshot {
     #[derive(Clone, Copy, Default)]
     struct BlockCandidateState {
@@ -1532,6 +1654,11 @@ fn evacuation_policy_snapshot_after_mark(
     snapshot.retained_forwarded_stub_objects = 0;
     snapshot.conservative_pinned_bytes = 0;
     snapshot.pre_evac_pause_us = pre_evac_pause_us;
+    snapshot.old_page_candidate_pages = old_page_selection.candidate_pages;
+    snapshot.old_page_selected_pages = old_page_selection.selected_pages;
+    snapshot.old_page_selected_live_bytes = old_page_selection.selected_live_bytes;
+    snapshot.old_page_reclaimable_bytes = old_page_selection.selected_reclaimable_bytes;
+    snapshot.old_page_skipped_pinned_pages = old_page_selection.skipped_pinned_pages;
 
     let n_blocks = crate::arena::arena_block_count();
     let general_n = crate::arena::general_block_count();
@@ -1619,7 +1746,7 @@ fn evacuation_policy_final_decision(
         decision.reason = "low_pressure";
         return decision;
     }
-    if snapshot.candidate_bytes == 0 {
+    if snapshot.effective_candidate_bytes() == 0 {
         decision.reason = "zero_candidates";
         return decision;
     }
@@ -1628,15 +1755,15 @@ fn evacuation_policy_final_decision(
         decision.reason = "force";
         return decision;
     }
-    if snapshot.reclaimable_candidate_bytes == 0 {
+    if snapshot.effective_reclaimable_candidate_bytes() == 0 {
         decision.reason = "zero_reclaimable_candidates";
         return decision;
     }
-    if snapshot.reclaimable_candidate_bytes < MIN_CANDIDATE_BYTES {
+    if snapshot.effective_reclaimable_candidate_bytes() < MIN_CANDIDATE_BYTES {
         decision.reason = "reclaimable_candidate_bytes_below_threshold";
         return decision;
     }
-    if snapshot.reclaimable_candidate_ratio_pct() < MIN_CANDIDATE_RATIO_PCT {
+    if snapshot.effective_reclaimable_candidate_ratio_pct() < MIN_CANDIDATE_RATIO_PCT {
         decision.reason = "reclaimable_candidate_ratio_below_threshold";
         return decision;
     }
@@ -1652,6 +1779,10 @@ fn evacuation_policy_final_decision(
         "rss_hard_pressure"
     } else if snapshot.rss_bytes >= RSS_PRESSURE_BYTES {
         "rss_pressure"
+    } else if snapshot.old_page_selected_pages > 0
+        && snapshot.tenured_still_in_nursery_bytes < MIN_TENURED_NURSERY_BYTES
+    {
+        "old_page_fragmentation"
     } else {
         "nursery_pressure"
     };
@@ -1670,7 +1801,7 @@ fn maybe_print_evacuation_policy_diag(
     }
     let snapshot = decision.snapshot;
     eprintln!(
-        "[gc-evac-policy] enabled={} reason={} tenured={} candidate_bytes={} candidate_objects={} candidate_ratio_pct={} reclaimable_candidate_bytes={} reclaimable_candidate_objects={} reclaimable_candidate_ratio_pct={} policy_retained_forwarded_stub_bytes={} policy_retained_forwarded_stub_objects={} cons_pinned={} rss={} prev_pause_us={} pre_evac_pause_us={} moved_bytes={} moved_objects={} released_original_bytes={} released_original_objects={} sweep_retained_forwarded_stub_bytes={} sweep_retained_forwarded_stub_objects={}",
+        "[gc-evac-policy] enabled={} reason={} tenured={} candidate_bytes={} candidate_objects={} candidate_ratio_pct={} reclaimable_candidate_bytes={} reclaimable_candidate_objects={} reclaimable_candidate_ratio_pct={} old_page_candidate_pages={} old_page_selected_pages={} old_page_selected_live_bytes={} old_page_reclaimable_bytes={} old_page_skipped_pinned_pages={} policy_retained_forwarded_stub_bytes={} policy_retained_forwarded_stub_objects={} cons_pinned={} rss={} prev_pause_us={} pre_evac_pause_us={} moved_bytes={} moved_objects={} old_page_moved_bytes={} old_page_moved_objects={} released_original_bytes={} released_original_objects={} sweep_retained_forwarded_stub_bytes={} sweep_retained_forwarded_stub_objects={}",
         decision.enabled,
         decision.reason,
         snapshot.tenured_still_in_nursery_bytes,
@@ -1680,6 +1811,11 @@ fn maybe_print_evacuation_policy_diag(
         snapshot.reclaimable_candidate_bytes,
         snapshot.reclaimable_candidate_objects,
         snapshot.reclaimable_candidate_ratio_pct(),
+        snapshot.old_page_candidate_pages,
+        snapshot.old_page_selected_pages,
+        snapshot.old_page_selected_live_bytes,
+        snapshot.old_page_reclaimable_bytes,
+        snapshot.old_page_skipped_pinned_pages,
         snapshot.retained_forwarded_stub_bytes,
         snapshot.retained_forwarded_stub_objects,
         snapshot.conservative_pinned_bytes,
@@ -1688,6 +1824,8 @@ fn maybe_print_evacuation_policy_diag(
         snapshot.pre_evac_pause_us,
         evacuation.moved_bytes,
         evacuation.moved_objects,
+        evacuation.old_page_moved_bytes,
+        evacuation.old_page_moved_objects,
         evacuation.released_original_bytes,
         evacuation.released_original_objects,
         evacuation.retained_forwarded_stub_bytes,
@@ -2838,6 +2976,11 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     let current_rss_bytes = crate::process::get_rss_bytes();
     let evacuation_policy_allowed = gen_gc_evacuate_enabled();
     let force_evacuation = gc_force_evacuate_enabled();
+    let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
+        select_old_page_defrag_pages(force_evacuation)
+    } else {
+        OldPageDefragSelection::default()
+    };
     // MARK_SEEDS persists across GC cycles. Clear before any try_mark
     // call so trace sees only this cycle's freshly-marked headers.
     clear_mark_seeds();
@@ -2879,6 +3022,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         evacuation_policy_allowed,
         force_evacuation,
         old_to_young_tracking_complete(),
+        old_page_selection.selected_pages,
     );
     if let Some(trace) = trace.as_mut() {
         trace.evacuation_policy = evacuation_policy;
@@ -2993,6 +3137,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
             evacuation_policy.snapshot,
             evacuation_policy.force,
             start.elapsed().as_micros() as u64,
+            &old_page_selection,
         );
         evacuation_policy = evacuation_policy_final_decision(evacuation_policy, snapshot);
     } else {
@@ -3012,6 +3157,23 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
             &mut evacuated_new_headers,
             &mut evacuated_original_headers,
         );
+        let old_page_evacuation = evacuate_selected_old_pages_collecting(
+            &old_page_selection.pages,
+            &mut evacuated_new_headers,
+            &mut evacuated_original_headers,
+        );
+        evacuation.objects = evacuation
+            .objects
+            .saturating_add(old_page_evacuation.objects);
+        evacuation.bytes = evacuation.bytes.saturating_add(old_page_evacuation.bytes);
+        evacuation.moved_objects = evacuation
+            .moved_objects
+            .saturating_add(old_page_evacuation.moved_objects);
+        evacuation.moved_bytes = evacuation
+            .moved_bytes
+            .saturating_add(old_page_evacuation.moved_bytes);
+        evacuation.old_page_moved_objects = old_page_evacuation.old_page_moved_objects;
+        evacuation.old_page_moved_bytes = old_page_evacuation.old_page_moved_bytes;
         trace_phase_record(&mut trace, "evacuation", phase_start);
         if evacuation.objects > 0 {
             let phase_start = trace_phase_start(&trace);
@@ -5612,6 +5774,9 @@ unsafe fn scan_dirty_header_once(
 ) {
     let total_size = (*header).size as usize;
     if total_size == 0 {
+        return;
+    }
+    if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
         return;
     }
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
@@ -8415,6 +8580,100 @@ fn evacuate_tenured_nursery_objects_collecting(
     evacuated
 }
 
+fn old_object_pages_all_selected(
+    header: *mut GcHeader,
+    total_size: usize,
+    selected_pages: &crate::fast_hash::PtrHashSet<usize>,
+) -> bool {
+    let overlaps = crate::arena::old_object_page_overlaps(header as usize, total_size);
+    !overlaps.is_empty()
+        && overlaps
+            .iter()
+            .all(|(page, _)| selected_pages.contains(page))
+}
+
+fn old_object_pages_disjoint_from_selected(
+    header: *mut GcHeader,
+    total_size: usize,
+    selected_pages: &crate::fast_hash::PtrHashSet<usize>,
+) -> bool {
+    crate::arena::old_object_page_overlaps(header as usize, total_size)
+        .iter()
+        .all(|(page, _)| !selected_pages.contains(page))
+}
+
+fn evacuate_selected_old_pages_collecting(
+    selected_pages: &crate::fast_hash::PtrHashSet<usize>,
+    evacuated_new_headers: &mut Vec<*mut GcHeader>,
+    evacuated_original_headers: &mut Vec<*mut GcHeader>,
+) -> EvacuationTraceStats {
+    let mut evacuated = EvacuationTraceStats::default();
+    if selected_pages.is_empty() {
+        return evacuated;
+    }
+
+    crate::arena::old_arena_walk_objects_on_pages(selected_pages, |header_ptr| {
+        let header = header_ptr as *mut GcHeader;
+        unsafe {
+            let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+            if !crate::arena::pointer_in_old_gen(user_ptr as usize) {
+                return;
+            }
+            let flags = (*header).gc_flags;
+            if flags & GC_FLAG_FORWARDED != 0 {
+                return;
+            }
+            if flags & GC_FLAG_MARKED == 0 {
+                return;
+            }
+            if flags & GC_FLAG_PINNED != 0 {
+                return;
+            }
+            if is_conservatively_pinned(header) {
+                return;
+            }
+
+            let total = (*header).size as usize;
+            if !old_object_pages_all_selected(header, total, selected_pages) {
+                return;
+            }
+
+            let payload = total - GC_HEADER_SIZE;
+            let new_user = crate::arena::arena_alloc_gc_old_excluding_pages(
+                payload,
+                8,
+                (*header).obj_type,
+                selected_pages,
+            );
+            std::ptr::copy_nonoverlapping(user_ptr, new_user, payload);
+            set_forwarding_address(header, new_user);
+            (*header).gc_flags &= !GC_FLAG_MARKED;
+
+            let new_header = (new_user as *mut u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
+            debug_assert!(
+                old_object_pages_disjoint_from_selected(new_header, total, selected_pages),
+                "old-page evacuation copy landed in a selected source page"
+            );
+            (*new_header)._reserved = (*header)._reserved;
+            layout_transfer(user_ptr, new_user);
+            (*new_header).gc_flags |= GC_FLAG_MARKED
+                | GC_FLAG_TENURED
+                | (flags & (GC_FLAG_SHAPE_SHARED | GC_FLAG_INTERNED));
+
+            evacuated_original_headers.push(header);
+            evacuated_new_headers.push(new_header);
+            evacuated.objects = evacuated.objects.saturating_add(1);
+            evacuated.bytes = evacuated.bytes.saturating_add(total);
+            evacuated.moved_objects = evacuated.moved_objects.saturating_add(1);
+            evacuated.moved_bytes = evacuated.moved_bytes.saturating_add(total);
+            evacuated.old_page_moved_objects = evacuated.old_page_moved_objects.saturating_add(1);
+            evacuated.old_page_moved_bytes = evacuated.old_page_moved_bytes.saturating_add(total);
+        }
+    });
+
+    evacuated
+}
+
 fn release_evacuated_original_forwarding_stubs(
     evacuated_original_headers: &[*mut GcHeader],
 ) -> EvacuationTraceStats {
@@ -8425,14 +8684,18 @@ fn release_evacuated_original_forwarding_stubs(
         }
         unsafe {
             let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-            if !crate::arena::pointer_in_nursery(user_ptr as usize) {
-                continue;
-            }
+            let original_in_old = crate::arena::pointer_in_old_gen(user_ptr as usize);
             let flags = (*header).gc_flags;
             if flags & GC_FLAG_FORWARDED == 0 {
                 continue;
             }
             (*header).gc_flags = flags & !GC_FLAG_FORWARDED;
+            if original_in_old {
+                crate::arena::old_arena_page_index_remove_object(
+                    header as usize,
+                    (*header).size as usize,
+                );
+            }
             released.released_original_objects += 1;
             released.released_original_bytes += (*header).size as usize;
         }
@@ -11934,7 +12197,7 @@ mod tests {
         assert_eq!(summary.live_bytes, total);
         assert_eq!(summary.dead_bytes, 0);
         assert_eq!(summary.live_object_count, overlaps.len());
-        assert_eq!(summary.evacuation_eligible_pages, overlaps.len());
+        assert_eq!(summary.evacuation_eligible_pages, 0);
         for (page, bytes) in overlaps {
             let meta = crate::arena::old_page_meta_for_tests(page)
                 .expect("spanned old page should have metadata");
@@ -12020,6 +12283,354 @@ mod tests {
         unsafe {
             (*pinned_header).gc_flags &= !GC_FLAG_PINNED;
         }
+    }
+
+    #[test]
+    fn test_old_page_defrag_policy_selection_prefers_fragmented_unpinned_pages() {
+        fn meta(
+            page_base: usize,
+            allocated_bytes: usize,
+            live_bytes: usize,
+            dead_bytes: usize,
+            pinned_bytes: usize,
+        ) -> crate::arena::OldPageMeta {
+            crate::arena::OldPageMeta {
+                page_base,
+                page_end: page_base + 4096,
+                allocated_bytes,
+                live_bytes,
+                dead_bytes,
+                object_count: 1,
+                live_object_count: usize::from(live_bytes > 0),
+                dead_object_count: usize::from(dead_bytes > 0),
+                pinned_bytes,
+                pinned_object_count: usize::from(pinned_bytes > 0),
+                dirty_slots: 0,
+                dirty: false,
+                evacuation_eligible: false,
+            }
+        }
+
+        let low_dead = meta(0x1000_0000, 100, 80, 20, 0);
+        let high_dead = meta(0x1000_1000, 100, 10, 90, 0);
+        let high_dead_more_live = meta(0x1000_2000, 100, 20, 80, 0);
+        let pinned = meta(0x1000_3000, 100, 10, 90, 8);
+        let empty = meta(0x1000_4000, 0, 0, 0, 0);
+        let snapshot = [low_dead, high_dead_more_live, pinned, empty, high_dead];
+
+        let selection = select_old_page_defrag_pages_from_snapshot(&snapshot, false);
+        let high_dead_page = crate::arena::generation_page_for_addr(high_dead.page_base);
+        let high_dead_more_live_page =
+            crate::arena::generation_page_for_addr(high_dead_more_live.page_base);
+        let low_dead_page = crate::arena::generation_page_for_addr(low_dead.page_base);
+
+        assert_eq!(selection.candidate_pages, 3);
+        assert_eq!(selection.selected_pages, 2);
+        assert_eq!(selection.selected_live_bytes, 30);
+        assert_eq!(selection.selected_reclaimable_bytes, 170);
+        assert_eq!(selection.skipped_pinned_pages, 1);
+        assert!(selection.pages.contains(&high_dead_page));
+        assert!(selection.pages.contains(&high_dead_more_live_page));
+        assert!(!selection.pages.contains(&low_dead_page));
+        assert_eq!(
+            selection.page_order,
+            vec![high_dead_page, high_dead_more_live_page],
+            "selected pages should be ordered by highest dead ratio, then lowest live bytes"
+        );
+
+        let forced = select_old_page_defrag_pages_from_snapshot(&snapshot, true);
+        assert_eq!(forced.selected_pages, 3);
+        assert!(forced.pages.contains(&low_dead_page));
+        assert_eq!(forced.skipped_pinned_pages, 1);
+    }
+
+    #[test]
+    fn test_old_page_defrag_forced_moves_only_marked_old_objects_on_selected_pages() {
+        let _isolation = copying_nursery_isolation_lock();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+
+        let movable = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+        let unmarked = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+        let (movable_header, movable_total) = old_test_header_and_size(movable);
+        let (unmarked_header, _) = old_test_header_and_size(unmarked);
+        let mut selected_pages = crate::fast_hash::new_ptr_hash_set();
+        for (page, _) in
+            crate::arena::old_object_page_overlaps(movable_header as usize, movable_total)
+        {
+            selected_pages.insert(page);
+        }
+        unsafe {
+            (*movable_header).gc_flags |= GC_FLAG_MARKED;
+        }
+
+        let mut new_headers = Vec::new();
+        let mut original_headers = Vec::new();
+        let moved = evacuate_selected_old_pages_collecting(
+            &selected_pages,
+            &mut new_headers,
+            &mut original_headers,
+        );
+
+        assert_eq!(moved.old_page_moved_objects, 1);
+        assert_eq!(moved.old_page_moved_bytes, movable_total);
+        assert_eq!(new_headers.len(), 1);
+        assert_eq!(original_headers, vec![movable_header]);
+        assert!(
+            old_object_pages_disjoint_from_selected(new_headers[0], movable_total, &selected_pages),
+            "old-page copy must not land in any selected source page"
+        );
+        unsafe {
+            assert_ne!((*movable_header).gc_flags & GC_FLAG_FORWARDED, 0);
+            assert_eq!(
+                (*unmarked_header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "unmarked old object on the selected page must not move"
+            );
+            assert!(crate::arena::pointer_in_old_gen(
+                forwarding_address(movable_header) as usize
+            ));
+        }
+
+        let released = release_evacuated_original_forwarding_stubs(&original_headers);
+        assert_eq!(released.released_original_objects, 1);
+        clear_marks();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+    }
+
+    #[test]
+    fn test_old_page_defrag_copy_avoids_selected_pages_and_rebuilds_remembered_set() {
+        let _isolation = copying_nursery_isolation_lock();
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+
+        let (parent, fields) = unsafe { alloc_old_test_object(1) };
+        let parent_user = parent as usize;
+        let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };
+        let parent_total = unsafe { (*parent_header).size as usize };
+        let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+        let child_header = unsafe { header_from_user_ptr(child as *const u8) };
+        let mut selected_pages = crate::fast_hash::new_ptr_hash_set();
+        for (page, _) in
+            crate::arena::old_object_page_overlaps(parent_header as usize, parent_total)
+        {
+            selected_pages.insert(page);
+        }
+        unsafe {
+            *fields = ptr_bits(child);
+            (*parent_header).gc_flags |= GC_FLAG_MARKED;
+        }
+        js_write_barrier_slot(ptr_bits(parent_user), fields as u64, ptr_bits(child));
+
+        let mut new_headers = Vec::new();
+        let mut original_headers = Vec::new();
+        let moved = evacuate_selected_old_pages_collecting(
+            &selected_pages,
+            &mut new_headers,
+            &mut original_headers,
+        );
+
+        assert_eq!(moved.old_page_moved_objects, 1);
+        assert_eq!(new_headers.len(), 1);
+        assert!(
+            old_object_pages_disjoint_from_selected(new_headers[0], parent_total, &selected_pages),
+            "forwarded old-page copy must land outside all selected source pages"
+        );
+        unsafe {
+            let forwarded_page =
+                crate::arena::generation_page_for_addr(forwarding_address(parent_header) as usize);
+            assert!(
+                !selected_pages.contains(&forwarded_page),
+                "forwarded address page must not be a selected source page"
+            );
+        }
+
+        let sticky = rebuild_evacuated_old_to_young_remembered_set(&new_headers);
+        remembered_set_clear();
+        sticky.restore();
+        let released = release_evacuated_original_forwarding_stubs(&original_headers);
+        assert_eq!(released.released_original_objects, 1);
+        assert!(
+            remembered_set_size() > 0,
+            "rebuilt remembered set should keep the evacuated old-to-young edge dirty"
+        );
+
+        clear_marks();
+        let valid_ptrs = build_valid_pointer_set();
+        let stats = mark_remembered_set_roots(&valid_ptrs);
+        assert!(
+            stats.newly_marked > 0,
+            "rebuilt remembered set should mark the young child"
+        );
+        unsafe {
+            assert_ne!(
+                (*child_header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "young child should remain reachable through the moved old parent"
+            );
+        }
+
+        clear_marks();
+        remembered_set_clear();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+    }
+
+    #[test]
+    fn test_old_page_defrag_skips_pinned_old_objects() {
+        let _isolation = copying_nursery_isolation_lock();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+
+        let pinned = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+        let (pinned_header, pinned_total) = old_test_header_and_size(pinned);
+        let mut selected_pages = crate::fast_hash::new_ptr_hash_set();
+        for (page, _) in
+            crate::arena::old_object_page_overlaps(pinned_header as usize, pinned_total)
+        {
+            selected_pages.insert(page);
+        }
+        unsafe {
+            (*pinned_header).gc_flags |= GC_FLAG_MARKED | GC_FLAG_PINNED;
+        }
+
+        let mut new_headers = Vec::new();
+        let mut original_headers = Vec::new();
+        let moved = evacuate_selected_old_pages_collecting(
+            &selected_pages,
+            &mut new_headers,
+            &mut original_headers,
+        );
+
+        assert_eq!(moved.old_page_moved_objects, 0);
+        assert!(new_headers.is_empty());
+        assert!(original_headers.is_empty());
+        unsafe {
+            assert_eq!(
+                (*pinned_header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "pinned old object address must remain stable"
+            );
+            (*pinned_header).gc_flags &= !(GC_FLAG_MARKED | GC_FLAG_PINNED);
+        }
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+    }
+
+    #[test]
+    fn test_old_page_defrag_re_remembers_young_child_after_collection_clear() {
+        struct ResetGcTestState;
+
+        impl Drop for ResetGcTestState {
+            fn drop(&mut self) {
+                reset_shadow_stack();
+                reset_global_roots();
+                reset_remembered_set();
+                clear_marks();
+                clear_mark_seeds();
+                CONS_PINNED.with(|s| s.borrow_mut().clear());
+            }
+        }
+
+        let _reset = ResetGcTestState;
+        let _isolation = copying_nursery_isolation_lock();
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _force = EnvVarGuard::set("PERRY_GC_FORCE_EVACUATE", "1");
+        let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
+        reset_shadow_stack();
+        reset_global_roots();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+
+        let (parent, fields) = unsafe { alloc_old_test_object(1) };
+        let parent_user = parent as usize;
+        let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };
+        let _dead = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        unsafe {
+            (*parent_header).gc_flags |= GC_FLAG_MARKED;
+        }
+        let _ = sweep_with_age_bump(false);
+
+        let frame = js_shadow_frame_push(1);
+        let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+        let child_header = unsafe { header_from_user_ptr(child as *const u8) };
+        let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[ptr_bits(child)]);
+        unsafe {
+            *fields = ptr_bits(child);
+        }
+        js_write_barrier_slot(ptr_bits(parent_user), fields as u64, ptr_bits(child));
+        js_shadow_slot_set(0, ptr_bits(parent_user));
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+        assert!(
+            trace.evacuation.old_page_moved_objects >= 1,
+            "forced old-page defrag should move the rooted old parent"
+        );
+        let parent_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert_ne!(parent_after, parent_user);
+        assert!(crate::arena::pointer_in_old_gen(parent_after));
+        assert!(
+            remembered_set_size() > 0,
+            "moved old parent retaining a young child must be re-remembered after clear"
+        );
+
+        clear_marks();
+        let valid_ptrs = build_valid_pointer_set();
+        let stats = mark_remembered_set_roots(&valid_ptrs);
+        assert!(stats.newly_marked > 0);
+        unsafe {
+            assert_ne!(
+                (*child_header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "rebuilt remembered set should mark the young child"
+            );
+        }
+
+        js_shadow_frame_pop(frame);
+    }
+
+    #[test]
+    fn test_old_page_defrag_trace_json_distinguishes_moved_from_reclaimable() {
+        let mut trace = GcCycleTrace::new(
+            GcCollectionKind::Minor,
+            GcTriggerSnapshot {
+                kind: GcTriggerKind::Direct,
+                steps_before: Some(GcStepSnapshot::current()),
+            },
+        )
+        .expect("test requested GC trace capture");
+        trace.evacuation_policy.snapshot.old_page_candidate_pages = 2;
+        trace.evacuation_policy.snapshot.old_page_selected_pages = 1;
+        trace
+            .evacuation_policy
+            .snapshot
+            .old_page_selected_live_bytes = 64;
+        trace.evacuation_policy.snapshot.old_page_reclaimable_bytes = 192;
+        trace.evacuation.old_page_moved_objects = 1;
+        trace.evacuation.old_page_moved_bytes = 64;
+
+        let event = trace.into_json(GcStepSnapshot::current());
+
+        assert_eq!(
+            event["evacuation_policy"]["old_page_reclaimable_bytes"].as_u64(),
+            Some(192)
+        );
+        assert_eq!(
+            event["evacuation_policy"]["old_page_selected_live_bytes"].as_u64(),
+            Some(64)
+        );
+        assert_eq!(
+            event["evacuation"]["old_page_moved_bytes"].as_u64(),
+            Some(64)
+        );
     }
 
     #[test]
@@ -15016,12 +15627,11 @@ mod tests {
                 candidate_objects,
                 reclaimable_candidate_bytes: candidate,
                 reclaimable_candidate_objects: candidate_objects,
-                retained_forwarded_stub_bytes: 0,
-                retained_forwarded_stub_objects: 0,
                 conservative_pinned_bytes: pinned,
                 rss_bytes: rss,
                 previous_pause_us,
                 pre_evac_pause_us,
+                ..EvacuationPolicySnapshot::default()
             }
         }
 
@@ -15115,6 +15725,7 @@ mod tests {
                 rss_bytes: 0,
                 previous_pause_us: 0,
                 pre_evac_pause_us: 0,
+                ..EvacuationPolicySnapshot::default()
             },
             true,
             false,
@@ -15164,8 +15775,16 @@ mod tests {
         assert!(force.enabled);
         assert_eq!(force.reason, "force");
 
-        let low_pressure =
-            evacuation_policy_initial_decision(0, RSS_PRESSURE_BYTES - 1, 0, 0, true, false, true);
+        let low_pressure = evacuation_policy_initial_decision(
+            0,
+            RSS_PRESSURE_BYTES - 1,
+            0,
+            0,
+            true,
+            false,
+            true,
+            0,
+        );
         assert!(!low_pressure.considered);
         assert!(!low_pressure.enabled);
         assert_eq!(low_pressure.reason, "low_pressure");
@@ -15178,13 +15797,14 @@ mod tests {
             true,
             false,
             false,
+            0,
         );
         assert!(!pressure_barriers_inactive.considered);
         assert!(!pressure_barriers_inactive.enabled);
         assert_eq!(pressure_barriers_inactive.reason, "barriers_inactive");
 
         let force_barriers_inactive =
-            evacuation_policy_initial_decision(0, 0, 0, 0, true, true, false);
+            evacuation_policy_initial_decision(0, 0, 0, 0, true, true, false, 1);
         assert!(force_barriers_inactive.force);
         assert!(!force_barriers_inactive.considered);
         assert!(!force_barriers_inactive.enabled);
@@ -15198,6 +15818,7 @@ mod tests {
             false,
             true,
             false,
+            0,
         );
         assert!(!disabled.considered);
         assert!(!disabled.enabled);
@@ -15233,8 +15854,13 @@ mod tests {
             set_forwarding_address(stub_header, stub_target);
         }
 
-        let snapshot =
-            evacuation_policy_snapshot_after_mark(EvacuationPolicySnapshot::default(), false, 0);
+        let old_page_selection = OldPageDefragSelection::default();
+        let snapshot = evacuation_policy_snapshot_after_mark(
+            EvacuationPolicySnapshot::default(),
+            false,
+            0,
+            &old_page_selection,
+        );
         let candidate_size = unsafe { (*candidate_header).size as usize };
         let stub_size = unsafe { (*stub_header).size as usize };
         assert!(
