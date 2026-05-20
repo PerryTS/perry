@@ -430,6 +430,7 @@ impl LayoutSlotMask {
 #[derive(Clone)]
 struct TypedLayoutDescriptor {
     slot_count: usize,
+    raw_f64_mask: LayoutSlotMask,
     pointer_mask: LayoutSlotMask,
 }
 
@@ -3819,6 +3820,12 @@ fn layout_pointer_bearing_bits(bits: u64) -> bool {
 }
 
 #[inline]
+fn layout_raw_f64_bits(bits: u64) -> bool {
+    let upper = bits >> 48;
+    !(0x7FFC..=0x7FFF).contains(&upper)
+}
+
+#[inline]
 unsafe fn layout_header_for_user(user_ptr: usize) -> Option<*mut GcHeader> {
     if user_ptr < GC_HEADER_SIZE + 0x1000 {
         return None;
@@ -3921,6 +3928,10 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 layout_set_typed_unknown(header, parent_user);
                 return;
             }
+            if typed.raw_f64_mask.contains_slot(slot_index) && !layout_raw_f64_bits(value_bits) {
+                layout_set_typed_unknown(header, parent_user);
+                return;
+            }
             if pointer && !typed.pointer_mask.contains_slot(slot_index) {
                 layout_set_typed_unknown(header, parent_user);
                 return;
@@ -4010,6 +4021,75 @@ pub extern "C" fn js_gc_init_typed_shape_layout(
 
         let descriptor = TypedLayoutDescriptor {
             slot_count,
+            raw_f64_mask: LayoutSlotMask::Inline(0),
+            pointer_mask: pointer_mask.clone(),
+        };
+        TYPED_LAYOUTS.with(|m| {
+            m.borrow_mut().insert(user_ptr, descriptor);
+        });
+        if pointer_mask.is_empty() {
+            set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+            LAYOUT_SLOT_MASKS.with(|m| {
+                m.borrow_mut().remove(&user_ptr);
+            });
+        } else {
+            set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+            LAYOUT_SLOT_MASKS.with(|m| {
+                m.borrow_mut().insert(user_ptr, pointer_mask);
+            });
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_gc_init_unboxed_object_layout(
+    obj: u64,
+    slot_count: u32,
+    raw_f64_mask: u64,
+    pointer_mask: u64,
+) {
+    let user_ptr = strip_nanbox_user_ptr(obj);
+    let slot_count = slot_count as usize;
+    if user_ptr == 0 || slot_count > 64 {
+        return;
+    }
+    unsafe {
+        let Some(header) = layout_header_for_user(user_ptr) else {
+            return;
+        };
+        if (*header).obj_type != GC_TYPE_OBJECT {
+            return;
+        }
+        let obj_header = user_ptr as *const crate::object::ObjectHeader;
+        let object_slot_count = (*obj_header).field_count as usize;
+        if object_slot_count != slot_count {
+            layout_set_typed_unknown(header, user_ptr);
+            return;
+        }
+
+        let raw_f64_mask = LayoutSlotMask::Inline(raw_f64_mask);
+        let pointer_mask = LayoutSlotMask::Inline(pointer_mask);
+
+        if slot_count != 0 {
+            let fields = (obj_header as *const u8)
+                .add(std::mem::size_of::<crate::object::ObjectHeader>())
+                as *const u64;
+            for i in 0..slot_count {
+                let bits = *fields.add(i);
+                if raw_f64_mask.contains_slot(i) && !layout_raw_f64_bits(bits) {
+                    layout_set_typed_unknown(header, user_ptr);
+                    return;
+                }
+                if layout_pointer_bearing_bits(bits) && !pointer_mask.contains_slot(i) {
+                    layout_set_typed_unknown(header, user_ptr);
+                    return;
+                }
+            }
+        }
+
+        let descriptor = TypedLayoutDescriptor {
+            slot_count,
+            raw_f64_mask,
             pointer_mask: pointer_mask.clone(),
         };
         TYPED_LAYOUTS.with(|m| {
@@ -10559,6 +10639,96 @@ mod tests {
 
         let child = crate::string::js_string_from_bytes(b"moved-child".as_ptr(), 11);
         crate::object::js_object_set_field(dst, 0, crate::value::JSValue::string_ptr(child));
+        assert_eq!(test_layout_pointer_slot_count(dst as usize, 2), None);
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_unboxed_object_layout_scans_zero_raw_numeric_fields() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let obj = crate::object::js_object_alloc(0, 2);
+        crate::object::js_object_set_unboxed_f64_field(obj, 0, 1.25);
+        crate::object::js_object_set_unboxed_f64_field(obj, 1, -2.5);
+        js_gc_init_unboxed_object_layout(obj as u64, 2, 0b11, 0);
+
+        assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), Some(0));
+        assert_eq!(test_heap_child_slot_count(obj as *mut u8), 0);
+
+        let valid_ptrs = build_valid_pointer_set();
+        assert!(try_mark_value(
+            POINTER_TAG | (obj as u64 & POINTER_MASK),
+            &valid_ptrs
+        ));
+        test_reset_trace_slot_reads();
+        trace_marked_objects(&valid_ptrs);
+        assert_eq!(test_trace_slot_reads(), 0);
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_unboxed_object_pointer_write_to_raw_slot_falls_back_and_traces() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let obj = crate::object::js_object_alloc(0, 2);
+        crate::object::js_object_set_unboxed_f64_field(obj, 0, 1.0);
+        crate::object::js_object_set_unboxed_f64_field(obj, 1, 2.0);
+        js_gc_init_unboxed_object_layout(obj as u64, 2, 0b11, 0);
+        assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), Some(0));
+
+        let child = crate::string::js_string_from_bytes(b"unboxed-child".as_ptr(), 13);
+        let child_header = unsafe { header_from_user_ptr(child as *mut u8) };
+        crate::object::js_object_set_field(obj, 0, crate::value::JSValue::string_ptr(child));
+
+        assert_eq!(
+            test_layout_pointer_slot_count(obj as usize, 2),
+            None,
+            "non-number writes to raw f64 slots must deopt to full scanning"
+        );
+
+        let valid_ptrs = build_valid_pointer_set();
+        assert!(try_mark_value(
+            POINTER_TAG | (obj as u64 & POINTER_MASK),
+            &valid_ptrs
+        ));
+        test_reset_trace_slot_reads();
+        trace_marked_objects(&valid_ptrs);
+        assert_eq!(test_trace_slot_reads(), 2);
+        unsafe {
+            assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+        }
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_unboxed_object_descriptor_transfers_on_object_move() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let src = crate::object::js_object_alloc(0, 2);
+        let dst = crate::object::js_object_alloc(0, 2);
+        crate::object::js_object_set_unboxed_f64_field(src, 0, 3.0);
+        crate::object::js_object_set_unboxed_f64_field(src, 1, 4.0);
+        js_gc_init_unboxed_object_layout(src as u64, 2, 0b11, 0);
+
+        unsafe {
+            layout_transfer(src as *mut u8, dst as *mut u8);
+        }
+
+        assert_eq!(test_layout_pointer_slot_count(dst as usize, 2), Some(0));
+        crate::object::js_object_set_unboxed_f64_field(dst, 1, 5.0);
+        assert_eq!(test_layout_pointer_slot_count(dst as usize, 2), Some(0));
+
+        let child = crate::string::js_string_from_bytes(b"moved-child".as_ptr(), 11);
+        crate::object::js_object_set_field(dst, 1, crate::value::JSValue::string_ptr(child));
         assert_eq!(test_layout_pointer_slot_count(dst as usize, 2), None);
 
         clear_marks();

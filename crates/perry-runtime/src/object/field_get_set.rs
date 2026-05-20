@@ -298,6 +298,67 @@ pub extern "C" fn js_object_set_field_f64(obj: *mut ObjectHeader, field_index: u
     js_object_set_field(obj, field_index, JSValue::from_bits(value.to_bits()));
 }
 
+/// Store a raw f64 into an object field slot for the unboxed numeric-field prototype.
+///
+/// This is only intended for construction sites whose static type has already
+/// proven a raw-number slot. Dynamic writes still go through the normal setters,
+/// which deopt the typed descriptor before tracing non-number values.
+#[no_mangle]
+pub extern "C" fn js_object_set_unboxed_f64_field(
+    obj: *mut ObjectHeader,
+    field_index: u32,
+    value: f64,
+) {
+    let obj = {
+        let b = obj as u64;
+        let t = b >> 48;
+        if t >= 0x7FF8 {
+            if t == 0x7FFC
+                || (b & 0x0000_FFFF_FFFF_FFFF) == 0
+                || (b & 0x0000_FFFF_FFFF_FFFF) < 0x10000
+            {
+                return;
+            }
+            (b & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader
+        } else {
+            obj
+        }
+    };
+    if obj.is_null() || (obj as usize) < 0x1000000 {
+        return;
+    }
+    unsafe {
+        let gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
+            return;
+        }
+        let stored_field_count = (*obj).field_count;
+        let alloc_limit = std::cmp::max(stored_field_count, 8);
+        if field_index >= alloc_limit {
+            eprintln!(
+                "[PERRY WARN] js_object_set_unboxed_f64_field: OOB write field_index={} alloc_limit={} (field_count={}) obj={:p} class_id={}",
+                field_index, alloc_limit, stored_field_count, obj, (*obj).class_id
+            );
+            return;
+        }
+        let bits = value.to_bits();
+        let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+        let slot = fields_ptr.add(field_index as usize);
+        ptr::write(slot, bits);
+        super::note_object_field_slot(obj, field_index as usize, bits);
+        crate::gc::runtime_write_barrier_slot(obj as usize, slot as usize, bits);
+    }
+}
+
+/// Read a raw f64 object field slot used by the unboxed numeric-field prototype.
+#[no_mangle]
+pub extern "C" fn js_object_get_unboxed_f64_field(
+    obj: *const ObjectHeader,
+    field_index: u32,
+) -> f64 {
+    f64::from_bits(js_object_get_field(obj, field_index).bits())
+}
+
 /// Set a field by index with a raw f64 value (for dynamic object creation)
 /// This is a convenience wrapper that takes field_index as u32 and value as f64.
 /// Honors `Object.freeze` and per-key `writable: false` descriptors so codegen

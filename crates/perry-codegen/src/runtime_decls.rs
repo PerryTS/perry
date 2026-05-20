@@ -1620,10 +1620,16 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     //   js_write_barrier_slot(parent_bits: u64, slot_addr: u64, child_bits: u64)
     //   js_gc_note_slot_layout(parent_bits: u64, slot_index: u32, value_bits: u64)
     //   js_gc_init_typed_shape_layout(obj: u64, slot_count: u32, mask_words: *const u64, mask_word_count: u32)
+    //   js_gc_init_unboxed_object_layout(obj: u64, slot_count: u32, raw_f64_mask: u64, pointer_mask: u64)
     module.declare_function("js_write_barrier", VOID, &[I64, I64]);
     module.declare_function("js_write_barrier_slot", VOID, &[I64, I64, I64]);
     module.declare_function("js_gc_note_slot_layout", VOID, &[I64, I32, I64]);
     module.declare_function("js_gc_init_typed_shape_layout", VOID, &[I64, I32, PTR, I32]);
+    module.declare_function(
+        "js_gc_init_unboxed_object_layout",
+        VOID,
+        &[I64, I32, I64, I64],
+    );
 
     // Array methods (Phase B.12).
     // - js_array_pop_f64(arr) -> f64    (last element, NaN if empty)
@@ -1685,6 +1691,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // loop hung forever. Declaring the slot as I64 routes through the
     // same register class the runtime actually reads.
     module.declare_function("js_object_set_field", VOID, &[I64, I32, I64]);
+    module.declare_function("js_object_set_unboxed_f64_field", VOID, &[I64, I32, DOUBLE]);
+    module.declare_function("js_object_get_unboxed_f64_field", DOUBLE, &[I64, I32]);
     module.declare_function("js_object_set_field_by_name", VOID, &[I64, I64, DOUBLE]);
     // Closes #471: polymorphic numeric-key set/get used by the IndexSet/Get
     // fallback when the receiver type isn't statically narrowed to an array.
