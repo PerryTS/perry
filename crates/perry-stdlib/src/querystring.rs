@@ -116,7 +116,7 @@ fn percent_encode(input: &str) -> String {
     out
 }
 
-fn percent_decode(input: &str) -> String {
+fn percent_decode(input: &str, plus_as_space: bool) -> String {
     let bytes = input.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -141,9 +141,7 @@ fn percent_decode(input: &str) -> String {
                 }
             }
         }
-        // Node's `unescape` also turns `+` into space, matching the
-        // historical `application/x-www-form-urlencoded` rule.
-        if b == b'+' {
+        if plus_as_space && b == b'+' {
             out.push(b' ');
         } else {
             out.push(b);
@@ -179,54 +177,85 @@ pub unsafe extern "C" fn js_querystring_unescape(str_arg: f64) -> f64 {
         Some(s) => s,
         None => return f64::from_bits(JSValue::undefined().bits()),
     };
-    nanbox_string(intern_string(&percent_decode(&s)))
+    nanbox_string(intern_string(&percent_decode(&s, false)))
 }
 
-/// Default separators if the caller didn't pass one. Node uses `&` and
-/// `=`; passing `undefined` for either falls back to the default.
-fn resolve_separator(value: f64, default_byte: u8) -> u8 {
-    let bits = value.to_bits();
-    if bits == JSValue::undefined().bits() || bits == JSValue::null().bits() {
-        return default_byte;
-    }
-    match unsafe { nanboxed_to_string(value) } {
-        Some(s) if !s.is_empty() => s.as_bytes()[0],
-        _ => default_byte,
-    }
-}
-
-/// `querystring.parse(str, sep?, eq?)` → object. Repeated keys produce
+/// `querystring.parse(str, sep?, eq?, options?)` → object. Repeated keys produce
 /// array values. Empty input returns an empty object.
 #[no_mangle]
 pub unsafe extern "C" fn js_querystring_parse(
     str_arg: f64,
     sep_arg: f64,
     eq_arg: f64,
+    options_arg: f64,
 ) -> *mut ObjectHeader {
     let input = nanboxed_to_string(str_arg).unwrap_or_default();
-    let sep = resolve_separator(sep_arg, b'&');
-    let eq = resolve_separator(eq_arg, b'=');
+    let sep = resolve_separator_str(sep_arg, "&");
+    let eq = resolve_separator_str(eq_arg, "=");
+    let max_keys = resolve_max_keys(options_arg);
 
     let obj = js_object_alloc(0, 0);
     if input.is_empty() {
         return obj;
     }
 
-    for pair in input.as_bytes().split(|&c| c == sep) {
+    let pairs: Box<dyn Iterator<Item = &str>> = if sep.is_empty() {
+        Box::new(std::iter::once(input.as_str()))
+    } else {
+        Box::new(input.split(sep.as_str()))
+    };
+    let mut parsed = 0usize;
+    for pair in pairs {
+        if let Some(limit) = max_keys {
+            if parsed >= limit {
+                break;
+            }
+        }
         if pair.is_empty() {
             continue;
         }
-        let (key_bytes, val_bytes) = match pair.iter().position(|&c| c == eq) {
-            Some(p) => (&pair[..p], &pair[p + 1..]),
-            None => (pair, &b""[..]),
+        let (key_raw, val_raw) = if eq.is_empty() {
+            (pair, "")
+        } else {
+            match pair.find(eq.as_str()) {
+                Some(p) => (&pair[..p], &pair[p + eq.len()..]),
+                None => (pair, ""),
+            }
         };
-        let key_raw = std::str::from_utf8(key_bytes).unwrap_or("");
-        let val_raw = std::str::from_utf8(val_bytes).unwrap_or("");
-        let key = percent_decode(key_raw);
-        let value = percent_decode(val_raw);
+        let key = percent_decode(key_raw, true);
+        let value = percent_decode(val_raw, true);
         push_parsed_pair(obj, &key, &value);
+        parsed += 1;
     }
     obj
+}
+
+fn resolve_max_keys(options: f64) -> Option<usize> {
+    let value = JSValue::from_bits(options.to_bits());
+    if !value.is_pointer() {
+        return Some(1000);
+    }
+    let obj = value.as_pointer::<ObjectHeader>();
+    if obj.is_null() {
+        return Some(1000);
+    }
+    let key = intern_string("maxKeys");
+    let max_keys = unsafe { js_object_get_field_by_name(obj, key) };
+    if max_keys.is_undefined() || max_keys.is_null() {
+        return Some(1000);
+    }
+    let n = if max_keys.is_int32() {
+        max_keys.as_int32() as f64
+    } else if max_keys.is_number() {
+        max_keys.as_number()
+    } else {
+        return Some(1000);
+    };
+    if n <= 0.0 || !n.is_finite() {
+        None
+    } else {
+        Some(n.floor() as usize)
+    }
 }
 
 /// Insert `(key, value)` into the parse result, promoting to an array
@@ -317,9 +346,7 @@ fn resolve_separator_str(value: f64, default: &'static str) -> String {
     }
 }
 
-/// Append `key=value` (or `key=v1&key=v2` for arrays) to `out`. Skips
-/// non-stringifiable values to match Node's filter (functions, symbols
-/// get dropped silently).
+/// Append `key=value` (or `key=v1&key=v2` for arrays) to `out`.
 unsafe fn append_stringify_value(
     out: &mut String,
     key: &str,
@@ -344,10 +371,7 @@ unsafe fn append_stringify_value(
                 let n = js_array_length(arr);
                 for i in 0..n {
                     let elem = perry_runtime::array::js_array_get_f64(arr, i);
-                    let elem_str = match nanboxed_to_string(elem) {
-                        Some(s) => s,
-                        None => continue,
-                    };
+                    let elem_str = querystring_scalar_to_string(elem.to_bits());
                     if !out.is_empty() {
                         out.push_str(sep);
                     }
@@ -360,14 +384,41 @@ unsafe fn append_stringify_value(
         }
     }
 
-    let value_str = match nanboxed_to_string(value_f64) {
-        Some(s) => s,
-        None => return,
-    };
+    let value_str = querystring_scalar_to_string(value_f64.to_bits());
     if !out.is_empty() {
         out.push_str(sep);
     }
     out.push_str(&percent_encode(key));
     out.push_str(eq);
     out.push_str(&percent_encode(&value_str));
+}
+
+fn querystring_scalar_to_string(value_bits: u64) -> String {
+    let value = JSValue::from_bits(value_bits);
+    if value.is_undefined() || value.is_null() {
+        return String::new();
+    }
+    if perry_runtime::date::is_registered_date_bits(value_bits) {
+        return String::new();
+    }
+    if value.is_bool() {
+        return value.as_bool().to_string();
+    }
+    if value.is_int32() {
+        return value.as_int32().to_string();
+    }
+    if value.is_number() {
+        let n = value.as_number();
+        if !n.is_finite() {
+            return String::new();
+        }
+        if n.fract() == 0.0 {
+            return (n as i64).to_string();
+        }
+        return n.to_string();
+    }
+    if value.is_any_string() {
+        return unsafe { nanboxed_to_string(f64::from_bits(value_bits)) }.unwrap_or_default();
+    }
+    String::new()
 }
