@@ -2561,11 +2561,10 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                         // `new URL`) and via the HIR variants (`UrlNew`,
                                         // `UrlInstanceToJSON`, …) that earlier passes may
                                         // already have produced.
-                                        let original_arg = call.args.first().map(|a| a.expr.as_ref());
+                                        let original_arg =
+                                            call.args.first().map(|a| a.expr.as_ref());
                                         let arg_is_url = original_arg
-                                            .map(|e| {
-                                                static_receiver_class(ctx, e) == Some("URL")
-                                            })
+                                            .map(|e| static_receiver_class(ctx, e) == Some("URL"))
                                             .unwrap_or(false)
                                             || matches!(
                                                 &value,

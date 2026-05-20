@@ -1602,7 +1602,11 @@ pub extern "C" fn js_url_search_params_has2(
         let value = string_header_to_string(value_str);
         entries.iter().any(|(k, v)| k == &name && v == &value)
     };
-    if found { 1.0 } else { 0.0 }
+    if found {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /// Node 19+: `URLSearchParams.delete(name, value)` — drops only entries

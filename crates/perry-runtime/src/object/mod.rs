@@ -5199,7 +5199,6 @@ unsafe fn dispatch_native_module_method(
         ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1)),
         ("url", "resolve") => crate::url::js_url_legacy_resolve(arg(0), arg(1)),
 
-
         _ => {
             // Method not found on native module — return undefined
             f64::from_bits(JSValue::undefined().bits())
