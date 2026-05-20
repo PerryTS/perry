@@ -4,6 +4,7 @@
 //! These live in perry-runtime (not perry-stdlib) so that programs that
 //! only use JSON don't need to link the full stdlib.
 
+use crate::string::js_string_from_ascii_bytes;
 use crate::{
     js_array_alloc, js_array_push, js_object_alloc, js_object_set_keys, js_string_from_bytes,
     JSValue, StringHeader,
@@ -114,6 +115,15 @@ fn take_stringify_buf() -> String {
 fn restore_stringify_buf(mut buf: String) {
     buf.clear();
     STRINGIFY_BUF.with(|b| b.set(Some(buf)));
+}
+
+#[inline]
+fn json_string_from_output_bytes(bytes: &[u8]) -> *mut StringHeader {
+    if bytes.is_ascii() {
+        js_string_from_ascii_bytes(bytes.as_ptr(), bytes.len() as u32)
+    } else {
+        js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    }
 }
 
 /// Save & clear the shape cache for the duration of a top-level stringify
@@ -2734,22 +2744,7 @@ unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringHeader> {
         return None;
     }
     let slice = &blob_bytes[start..end];
-    let len = slice.len() as u32;
-    let total = std::mem::size_of::<StringHeader>() + slice.len();
-    let raw = crate::arena::arena_alloc_gc(total, 8, crate::gc::GC_TYPE_STRING);
-    let ptr = raw as *mut StringHeader;
-    (*ptr).utf16_len = len;
-    (*ptr).byte_len = len;
-    (*ptr).capacity = len;
-    (*ptr).refcount = 0;
-    if !slice.is_empty() {
-        std::ptr::copy_nonoverlapping(
-            slice.as_ptr(),
-            raw.add(std::mem::size_of::<StringHeader>()),
-            slice.len(),
-        );
-    }
-    Some(ptr)
+    Some(json_string_from_output_bytes(slice))
 }
 
 #[no_mangle]
@@ -2785,26 +2780,7 @@ pub unsafe extern "C" fn js_json_stringify(value: f64, type_hint: u32) -> *mut S
     // single-call output that exceeds that, so skip the estimate call
     // (issue #67: it was ~10ns of wasted work per call for small values).
     stringify_value(value, type_hint, &mut buf);
-    // JSON output is always ASCII (non-ASCII is \uXXXX escaped), so
-    // utf16_len == byte_len. Arena-allocate (issue #67): saves ~60ns vs
-    // gc_malloc on the per-call result (bump pointer + GcHeader init vs
-    // mimalloc + MALLOC_STATE push + set insert). Arena walker already
-    // tracks GC_TYPE_STRING (v0.5.68), so collection works unchanged.
-    let len = buf.len() as u32;
-    let total = std::mem::size_of::<StringHeader>() + len as usize;
-    let raw = crate::arena::arena_alloc_gc(total, 8, crate::gc::GC_TYPE_STRING);
-    let ptr = raw as *mut StringHeader;
-    (*ptr).utf16_len = len;
-    (*ptr).byte_len = len;
-    (*ptr).capacity = len;
-    (*ptr).refcount = 0;
-    if len > 0 {
-        std::ptr::copy_nonoverlapping(
-            buf.as_ptr(),
-            raw.add(std::mem::size_of::<StringHeader>()),
-            len as usize,
-        );
-    }
+    let ptr = json_string_from_output_bytes(buf.as_bytes());
     restore_stringify_buf(buf);
     match saved_cache {
         Some(s) => restore_shape_cache(s),
@@ -3975,26 +3951,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
         }
     });
 
-    // JSON output is always ASCII (high bytes are \uXXXX-escaped), so
-    // utf16_len == byte_len. Allocate the StringHeader directly via
-    // gc_malloc/arena and skip the compute_utf16_len byte scan that
-    // js_string_from_bytes performs (issue #64). For 1MB stringify output
-    // that's a 1MB pass per call.
-    let len = buf.len() as u32;
-    let total = std::mem::size_of::<StringHeader>() + len as usize;
-    let raw = crate::arena::arena_alloc_gc(total, 8, crate::gc::GC_TYPE_STRING);
-    let result_ptr = raw as *mut StringHeader;
-    (*result_ptr).utf16_len = len;
-    (*result_ptr).byte_len = len;
-    (*result_ptr).capacity = len;
-    (*result_ptr).refcount = 0;
-    if len > 0 {
-        std::ptr::copy_nonoverlapping(
-            buf.as_ptr(),
-            raw.add(std::mem::size_of::<StringHeader>()),
-            len as usize,
-        );
-    }
+    let result_ptr = json_string_from_output_bytes(buf.as_bytes());
     restore_stringify_buf(buf);
     match saved_cache {
         Some(s) => restore_shape_cache(s),
@@ -4085,4 +4042,21 @@ pub unsafe extern "C" fn js_json_parse_with_reviver(
     let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
     let empty_key_f64 = nanbox_string_f64(empty_str);
     apply_reviver(parsed, empty_key_f64, reviver)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stringify_non_ascii_output_keeps_utf16_len_distinct_from_bytes() {
+        let input = crate::string::js_string_from_bytes("é".as_ptr(), "é".len() as u32);
+        let value = f64::from_bits(crate::value::JSValue::string_ptr(input).bits());
+        let output = unsafe { js_json_stringify(value, TYPE_UNKNOWN) };
+
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, "\"é\"");
+        assert_eq!(unsafe { (*output).byte_len }, 4);
+        assert_eq!(unsafe { (*output).utf16_len }, 3);
+        assert_eq!(unsafe { (*output).flags }, 0);
+    }
 }

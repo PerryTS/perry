@@ -3,7 +3,7 @@
 //! Design:
 //! - 8-byte GcHeader prepended to every heap allocation (invisible to callers)
 //! - Arena objects (arrays/objects): discovered by walking arena blocks linearly (zero per-alloc tracking cost)
-//! - Malloc objects (strings/closures/promises/bigints/errors): tracked in MALLOC_STATE
+//! - Explicit malloc objects (closures/promises/maps/errors and compatibility residents): tracked in MALLOC_STATE
 //! - Mark phase: precise thread-local roots + optional conservative stack scan + type-specific tracing
 //! - Sweep phase: free malloc objects; arena objects added to free list for reuse
 //! - Trigger: only checked on new arena block allocation or explicit gc() call
@@ -437,7 +437,7 @@ pub struct GcStats {
 /// 4 TLS + 2 borrow_mut to 3 TLS + 1 borrow_mut, with the adjacent `objects`
 /// and `set` fields sharing a single cacheline for better locality.
 pub(crate) struct MallocState {
-    /// Malloc-allocated objects tracked for GC (strings/closures/bigints/…)
+    /// Malloc-allocated objects tracked for GC (closures/promises/maps/errors/compatibility residents/…)
     pub(crate) objects: Vec<*mut GcHeader>,
     /// O(1) exact header registry for validating malloc pointers. It starts
     /// inactive so malloc-heavy workloads that never need pointer validation
