@@ -37,6 +37,14 @@ pub fn declare_phase1(module: &mut LlModule) {
     // Handle-method dispatcher wiring (issue #86). Stdlib provides the
     // real impl; when only runtime is linked, it's a no-op stub.
     module.declare_function("js_stdlib_init_dispatch", VOID, &[]);
+    // #1178 — App Group suite-name registration. The CLI bakes
+    // `[ios] app_group` from perry.toml into the entry module's `main`
+    // prelude as a single call to `perry_app_group_init(ptr, len)` so
+    // the iOS/macOS UserDefaults(suiteName:) FFI can resolve it
+    // without re-reading the manifest. Declared unconditionally because
+    // the runtime always provides the symbol; main only emits the call
+    // when `app_metadata.app_group` is `Some`.
+    module.declare_function("perry_app_group_init", VOID, &[PTR, I32]);
     // Function-name registry — populated by `main()` once per top-level
     // named function so `console.log(named)` prints `[Function: named]`
     // instead of `[Function (anonymous)]`. See #1202.

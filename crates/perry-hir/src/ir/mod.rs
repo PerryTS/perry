@@ -37,8 +37,9 @@ pub use module::Module;
 // ---- widget.rs ----
 pub use widget::{
     GaugeStyle, WidgetConditionOp, WidgetConfigParam, WidgetConfigParamType, WidgetDecl,
-    WidgetFieldType, WidgetFont, WidgetModifier, WidgetNode, WidgetPlaceholderValue,
-    WidgetStackKind, WidgetTemplatePart, WidgetTextContent,
+    WidgetFieldType, WidgetFont, WidgetFormatArg, WidgetFormatCall, WidgetFormatExpr,
+    WidgetModifier, WidgetNode, WidgetPlaceholderValue, WidgetStackKind, WidgetTemplatePart,
+    WidgetTextContent,
 };
 
 // ---- decl.rs ----

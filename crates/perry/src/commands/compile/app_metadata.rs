@@ -87,6 +87,21 @@ pub(super) fn read_app_metadata(
         if let Some(build_number) = toml_build_number(doc) {
             metadata.build_number = build_number;
         }
+        // #1178 — App Group suite name. Resolution order: target-specific
+        // section (`[ios]` / `[macos]`) → generic `[app] app_group` →
+        // top-level `app_group`. The section preference for Apple targets
+        // mirrors how `bundle_id` is resolved above; non-Apple targets
+        // still see the value so `[android] app_group` can flow through
+        // once the SharedPreferences backend lands.
+        let target_section = target_bundle_section(target);
+        metadata.app_group = target_section
+            .and_then(|section| toml_string(doc, section, "app_group"))
+            .or_else(|| toml_string(doc, "app", "app_group"))
+            .or_else(|| {
+                doc.get("app_group")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            });
     }
 
     metadata.bundle_id = cli_bundle_id
@@ -203,6 +218,53 @@ bundle_id = "com.example.project"
         assert_eq!(metadata.version, "1.0.0");
         assert_eq!(metadata.build_number, 7);
         assert_eq!(metadata.bundle_id, "com.example.cli");
+    }
+
+    #[test]
+    fn reads_ios_app_group_from_target_section() {
+        // #1178 — `[ios] app_group` is the canonical place to declare the
+        // App Group suite name; it should win over the generic `[app]`
+        // fallback for an iOS target.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = parse(
+            r#"
+[ios]
+app_group = "group.com.example.shared"
+
+[app]
+app_group = "group.com.example.fallback"
+"#,
+        );
+        let input = dir.path().join("main.ts");
+        std::fs::write(&input, "console.log('x')").unwrap();
+
+        let ios = read_app_metadata(Some(&doc), &input, Some("ios"), None);
+        assert_eq!(ios.app_group.as_deref(), Some("group.com.example.shared"));
+
+        // No-target build (host = macOS in CI) should still pick the
+        // `[macos]` or fall back to `[app]` when the target section is
+        // absent — here only `[app]` provides a value for the implicit
+        // host target.
+        let host = read_app_metadata(Some(&doc), &input, None, None);
+        // macOS host: `[macos]` is absent, so `[app]` wins.
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                host.app_group.as_deref(),
+                Some("group.com.example.fallback")
+            );
+        }
+    }
+
+    #[test]
+    fn missing_app_group_is_none() {
+        // No perry.toml at all → app_group stays None, which the codegen
+        // prelude reads as "skip the perry_app_group_init() call" and the
+        // runtime treats as "stub-warn on first appGroupSet".
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("main.ts");
+        std::fs::write(&input, "console.log('x')").unwrap();
+        let metadata = read_app_metadata(None, &input, Some("ios"), None);
+        assert!(metadata.app_group.is_none());
     }
 
     #[test]

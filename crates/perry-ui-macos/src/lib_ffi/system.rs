@@ -104,18 +104,40 @@ unsafe fn present_sharing_picker(items: *mut objc2::runtime::AnyObject) {
     ];
 }
 
-// #675 — App Group / cross-process shared storage on macOS.
+// #675 + #1178 — App Group / cross-process shared storage on macOS.
 //
-// Backed by `NSUserDefaults(suiteName:)`. The suite name is read
-// from the `PERRY_APP_GROUP` environment variable so an app's
-// signing identity can override the default without a recompile;
-// when unset, falls back to `"group.perryapp"` which is fine for
-// the dev flow (no entitlement → the suite simply lives under
-// `~/Library/Preferences/group.perryapp.plist` instead of inside
-// the shared App Group container).
+// Backed by `NSUserDefaults(suiteName:)`. Resolution order:
+//   1. `[ios] app_group` / `[macos] app_group` baked in from
+//      `perry.toml` (the #1178 path — codegen calls
+//      `perry_app_group_init` in `main`'s prelude).
+//   2. `PERRY_APP_GROUP` environment override (predates #1178; kept
+//      for dev/CI flows that flip the suite per-run without
+//      regenerating the binary).
+//   3. `"group.perryapp"` fallback so the dev flow still works
+//      without any config — no entitlement → the suite simply lives
+//      under `~/Library/Preferences/group.perryapp.plist` instead of
+//      inside the shared App Group container.
 
 fn app_group_suite() -> objc2::rc::Retained<objc2_foundation::NSString> {
-    let suite = std::env::var("PERRY_APP_GROUP").unwrap_or_else(|_| "group.perryapp".to_string());
+    // perry-ui-macos intentionally avoids a Cargo dep on perry-runtime
+    // (see `string_header.rs`'s comment). Reach for the suite name via
+    // the C-ABI shim instead.
+    extern "C" {
+        fn perry_app_group_suite_name(out_len: *mut i32) -> *const u8;
+    }
+    let baked = unsafe {
+        let mut len: i32 = 0;
+        let ptr = perry_app_group_suite_name(&mut len as *mut i32);
+        if ptr.is_null() || len <= 0 {
+            None
+        } else {
+            let slice = std::slice::from_raw_parts(ptr, len as usize);
+            std::str::from_utf8(slice).ok().map(str::to_string)
+        }
+    };
+    let suite = baked
+        .or_else(|| std::env::var("PERRY_APP_GROUP").ok())
+        .unwrap_or_else(|| "group.perryapp".to_string());
     objc2_foundation::NSString::from_str(&suite)
 }
 

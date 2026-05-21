@@ -21,6 +21,7 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+pub mod app_group;
 pub mod arena;
 pub mod array;
 pub mod async_context;

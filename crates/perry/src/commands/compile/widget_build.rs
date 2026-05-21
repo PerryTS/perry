@@ -39,6 +39,14 @@ pub struct WidgetEntry {
     pub watchos_source: Option<String>,
     /// Optional Android Glance variant. Not wired up in v1.
     pub glance_source: Option<String>,
+    /// Issue #1179: TS entry point (relative to the perry.toml project
+    /// root, or absolute) that declares one or more `Widget({...})` calls.
+    /// When set, `perry compile --target ios` / `--target android`
+    /// invokes the existing `--target ios-widget` / `--target android-widget`
+    /// codegen internally and uses the produced sources in place of
+    /// `swift_source` / `glance_source`. Lets apps keep a single source
+    /// of truth (`widgets/index.ts`) without checking in generated code.
+    pub ts_source: Option<String>,
     /// Display name shown in the widget gallery. Defaults to `name`.
     pub display_name: Option<String>,
     /// One-line description. Defaults to "{display_name} widget".
@@ -148,11 +156,17 @@ pub(super) fn build_declared_widgets_ios(
 
     let mut built = 0usize;
     for entry in &entries {
+        let has_ts = entry.ts_source.is_some();
+
         // watchOS / Android variants: emit a warning and skip. We don't
         // hard-fail because a single `[[widget]]` entry can legitimately
         // declare multiple platform sources — the iOS half should still
         // build even if the Android half hasn't been wired yet.
-        if entry.swift_source.is_none() && entry.watchos_source.is_some() {
+        //
+        // When `ts_source` is set we always produce SwiftUI from it for
+        // the iOS path, so the "watchOS-only" / "Android-only" skips
+        // don't apply.
+        if entry.swift_source.is_none() && !has_ts && entry.watchos_source.is_some() {
             warn_skip(
                 format,
                 &entry.name,
@@ -161,7 +175,7 @@ pub(super) fn build_declared_widgets_ios(
             );
             continue;
         }
-        if entry.glance_source.is_some() && entry.swift_source.is_none() {
+        if entry.glance_source.is_some() && entry.swift_source.is_none() && !has_ts {
             // Pure-Android widget: skipped here, picked up by
             // `build_declared_widgets_android` when the target is android.
             continue;
@@ -179,39 +193,45 @@ pub(super) fn build_declared_widgets_ios(
         // the Android slice is handled by build_declared_widgets_android
         // on android targets, the iOS .appex is built here.
 
-        let Some(swift_source) = entry.swift_source.as_deref() else {
-            // No iOS source and no skip-warned non-iOS source above means a
-            // bogus entry — surface it but don't kill the build.
+        // Issue #1179: resolve the SwiftUI source directory. Precedence
+        // is explicit `swift_source` (hand-edited override) > `ts_source`
+        // (cross-compiled from TS). When neither is present we surface
+        // the bogus entry as a warning and skip.
+        let (abs_swift_source, swift_source_display) = if let Some(swift_source) =
+            entry.swift_source.as_deref()
+        {
+            let abs = resolve_against_project_root(project_root.as_deref(), swift_source);
+            if !abs.exists() {
+                return Err(anyhow!(
+                    "[[widget]] `{}`: swift_source `{}` does not exist (looked at `{}`)",
+                    entry.name,
+                    swift_source,
+                    abs.display()
+                ));
+            }
+            (abs, swift_source.to_string())
+        } else if let Some(ts_source) = entry.ts_source.as_deref() {
+            let abs_ts = resolve_against_project_root(project_root.as_deref(), ts_source);
+            if !abs_ts.exists() {
+                return Err(anyhow!(
+                    "[[widget]] `{}`: ts_source `{}` does not exist (looked at `{}`)",
+                    entry.name,
+                    ts_source,
+                    abs_ts.display()
+                ));
+            }
+            let dir = compile_ts_widget_to_swift(&abs_ts, &entry.name, app_bundle_id, format)?;
+            (dir, ts_source.to_string())
+        } else {
             match format {
                 OutputFormat::Text => eprintln!(
-                    "Warning: [[widget]] `{}` has neither swift_source nor a recognized non-iOS source — skipping.",
+                    "Warning: [[widget]] `{}` has neither swift_source, ts_source, nor a recognized non-iOS source — skipping.",
                     entry.name
                 ),
                 OutputFormat::Json => {}
             }
             continue;
         };
-
-        let abs_swift_source = match project_root.as_deref() {
-            Some(root) => {
-                let candidate = root.join(swift_source);
-                if candidate.exists() {
-                    candidate
-                } else {
-                    PathBuf::from(swift_source)
-                }
-            }
-            None => PathBuf::from(swift_source),
-        };
-
-        if !abs_swift_source.exists() {
-            return Err(anyhow!(
-                "[[widget]] `{}`: swift_source `{}` does not exist (looked at `{}`)",
-                entry.name,
-                swift_source,
-                abs_swift_source.display()
-            ));
-        }
 
         let display_name = entry
             .display_name
@@ -222,9 +242,9 @@ pub(super) fn build_declared_widgets_ios(
         let swift_files = collect_swift_files(&abs_swift_source)?;
         if swift_files.is_empty() {
             return Err(anyhow!(
-                "[[widget]] `{}`: swift_source `{}` contained no `.swift` files",
+                "[[widget]] `{}`: source `{}` contained no `.swift` files",
                 entry.name,
-                abs_swift_source.display()
+                swift_source_display
             ));
         }
 
@@ -322,6 +342,166 @@ fn warn_skip(format: OutputFormat, widget: &str, platform: &str, message: &str) 
     if let OutputFormat::Text = format {
         eprintln!("Warning: widget `{}` ({}): {}", widget, platform, message);
     }
+}
+
+/// Resolve a `[[widget]]`-relative path against the project root that owns
+/// `perry.toml`. Falls back to the raw path if no project root is known
+/// or the joined candidate doesn't exist on disk.
+fn resolve_against_project_root(project_root: Option<&Path>, source: &str) -> PathBuf {
+    match project_root {
+        Some(root) => {
+            let candidate = root.join(source);
+            if candidate.exists() {
+                candidate
+            } else {
+                PathBuf::from(source)
+            }
+        }
+        None => PathBuf::from(source),
+    }
+}
+
+/// Issue #1179: cross-compile a `[[widget]] ts_source` to SwiftUI by
+/// re-invoking the running `perry` binary with `--target ios-widget
+/// --skip-swift-build`. Returns the directory of emitted `.swift` files,
+/// which the iOS build path then feeds into `swiftc` as if it were the
+/// user's `swift_source`. Side-effect-free at the filesystem level apart
+/// from writing into a fresh temp directory under `std::env::temp_dir()`.
+fn compile_ts_widget_to_swift(
+    ts_source: &Path,
+    widget_name: &str,
+    app_bundle_id: &str,
+    format: OutputFormat,
+) -> Result<PathBuf> {
+    let perry = std::env::current_exe()
+        .map_err(|e| anyhow!("Failed to locate the running perry binary: {}", e))?;
+
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "perry-ts-widget-ios-{}-{}-{}",
+        widget_name,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    fs::create_dir_all(&tmp_dir)
+        .with_context(|| format!("Failed to create temp dir `{}`", tmp_dir.display()))?;
+
+    if let OutputFormat::Text = format {
+        println!(
+            "  Cross-compiling TS widget `{}` ({}) → {}",
+            widget_name,
+            ts_source.display(),
+            tmp_dir.display()
+        );
+    }
+
+    let mut cmd = Command::new(&perry);
+    // Pass `--format` as a global flag so it propagates to the nested
+    // `compile` subcommand. Inherit the parent's format so json-mode
+    // builds don't get text chatter mixed into stdout.
+    match format {
+        OutputFormat::Text => {}
+        OutputFormat::Json => {
+            cmd.args(["--format", "json"]);
+        }
+    }
+    cmd.arg("compile")
+        .arg(ts_source)
+        .args(["--target", "ios-widget"])
+        .args(["--app-bundle-id", app_bundle_id])
+        .arg("--skip-swift-build")
+        .arg("-o")
+        .arg(&tmp_dir);
+
+    let status = cmd.status().map_err(|e| {
+        anyhow!(
+            "Failed to invoke nested `perry compile --target ios-widget` for widget `{}`: {}",
+            widget_name,
+            e
+        )
+    })?;
+    if !status.success() {
+        return Err(anyhow!(
+            "Nested `perry compile --target ios-widget` failed for widget `{}` \
+             (input `{}`, exit {}).",
+            widget_name,
+            ts_source.display(),
+            status.code().unwrap_or(-1),
+        ));
+    }
+
+    Ok(tmp_dir)
+}
+
+/// Issue #1179: cross-compile a `[[widget]] ts_source` to Kotlin Glance
+/// sources by re-invoking the running `perry` binary with
+/// `--target android-widget`. Returns the directory of emitted `.kt`
+/// files, which the Android build path then copies into the Gradle
+/// project as if it were the user's `glance_source`.
+fn compile_ts_widget_to_glance(
+    ts_source: &Path,
+    widget_name: &str,
+    app_package: &str,
+    format: OutputFormat,
+) -> Result<PathBuf> {
+    let perry = std::env::current_exe()
+        .map_err(|e| anyhow!("Failed to locate the running perry binary: {}", e))?;
+
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "perry-ts-widget-android-{}-{}-{}",
+        widget_name,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    fs::create_dir_all(&tmp_dir)
+        .with_context(|| format!("Failed to create temp dir `{}`", tmp_dir.display()))?;
+
+    if let OutputFormat::Text = format {
+        println!(
+            "  Cross-compiling TS widget `{}` ({}) → {}",
+            widget_name,
+            ts_source.display(),
+            tmp_dir.display()
+        );
+    }
+
+    let mut cmd = Command::new(&perry);
+    match format {
+        OutputFormat::Text => {}
+        OutputFormat::Json => {
+            cmd.args(["--format", "json"]);
+        }
+    }
+    cmd.arg("compile")
+        .arg(ts_source)
+        .args(["--target", "android-widget"])
+        .args(["--app-bundle-id", app_package])
+        .arg("-o")
+        .arg(&tmp_dir);
+
+    let status = cmd.status().map_err(|e| {
+        anyhow!(
+            "Failed to invoke nested `perry compile --target android-widget` for widget `{}`: {}",
+            widget_name,
+            e
+        )
+    })?;
+    if !status.success() {
+        return Err(anyhow!(
+            "Nested `perry compile --target android-widget` failed for widget `{}` \
+             (input `{}`, exit {}).",
+            widget_name,
+            ts_source.display(),
+            status.code().unwrap_or(-1),
+        ));
+    }
+
+    Ok(tmp_dir)
 }
 
 fn resolve_sdk_path(sdk: &str) -> Result<String> {
@@ -451,29 +631,37 @@ pub(crate) fn build_declared_widgets_android(
     let mut receiver_blocks: Vec<String> = Vec::new();
 
     for entry in &entries {
-        let Some(glance_source) = entry.glance_source.as_deref() else {
-            continue;
-        };
-
-        let abs_source = match project_root.as_deref() {
-            Some(root) => {
-                let candidate = root.join(glance_source);
-                if candidate.exists() {
-                    candidate
-                } else {
-                    PathBuf::from(glance_source)
+        // Issue #1179: resolve the Kotlin/Glance source directory.
+        // Precedence is explicit `glance_source` (hand-edited override)
+        // > `ts_source` (cross-compiled from TS). Entries with neither
+        // skip silently on the Android path — they may be iOS-only.
+        let (abs_source, source_display) =
+            if let Some(glance_source) = entry.glance_source.as_deref() {
+                let abs = resolve_against_project_root(project_root.as_deref(), glance_source);
+                if !abs.exists() {
+                    return Err(anyhow!(
+                        "[[widget]] `{}`: glance_source `{}` does not exist (looked at `{}`)",
+                        entry.name,
+                        glance_source,
+                        abs.display()
+                    ));
                 }
-            }
-            None => PathBuf::from(glance_source),
-        };
-        if !abs_source.exists() {
-            return Err(anyhow!(
-                "[[widget]] `{}`: glance_source `{}` does not exist (looked at `{}`)",
-                entry.name,
-                glance_source,
-                abs_source.display()
-            ));
-        }
+                (abs, glance_source.to_string())
+            } else if let Some(ts_source) = entry.ts_source.as_deref() {
+                let abs_ts = resolve_against_project_root(project_root.as_deref(), ts_source);
+                if !abs_ts.exists() {
+                    return Err(anyhow!(
+                        "[[widget]] `{}`: ts_source `{}` does not exist (looked at `{}`)",
+                        entry.name,
+                        ts_source,
+                        abs_ts.display()
+                    ));
+                }
+                let dir = compile_ts_widget_to_glance(&abs_ts, &entry.name, app_package, format)?;
+                (dir, ts_source.to_string())
+            } else {
+                continue;
+            };
 
         // Lay each widget under `<app_package>.widgets.<name>` so apps
         // shipping several widgets don't collide in one flat package.
@@ -489,8 +677,9 @@ pub(crate) fn build_declared_widgets_android(
         let kt_files = collect_kotlin_files(&abs_source)?;
         if kt_files.is_empty() {
             return Err(anyhow!(
-                "[[widget]] `{}`: glance_source `{}` contained no `.kt` files",
+                "[[widget]] `{}`: source `{}` contained no `.kt` files (resolved to `{}`)",
                 entry.name,
+                source_display,
                 abs_source.display()
             ));
         }
@@ -700,6 +889,49 @@ intents = ["DailyIntent", "RefreshIntent"]
         assert_eq!(w.display_name.as_deref(), Some("Daily change"));
         assert_eq!(w.intents, vec!["DailyIntent", "RefreshIntent"]);
         assert!(w.glance_source.is_some());
+    }
+
+    #[test]
+    fn manifest_parses_ts_source_widget_entry() {
+        let toml_text = r#"
+[[widget]]
+name = "Widgets"
+ts_source = "widgets/index.ts"
+"#;
+        let m: WidgetManifest = toml::from_str(toml_text).unwrap();
+        assert_eq!(m.widget.len(), 1);
+        let w = &m.widget[0];
+        assert_eq!(w.name, "Widgets");
+        assert_eq!(w.ts_source.as_deref(), Some("widgets/index.ts"));
+        assert!(w.swift_source.is_none());
+        assert!(w.glance_source.is_none());
+    }
+
+    #[test]
+    fn resolve_against_project_root_joins_when_candidate_exists() {
+        let tmp = std::env::temp_dir().join(format!(
+            "perry-resolve-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let sub = tmp.join("widgets");
+        fs::create_dir_all(&sub).unwrap();
+        let resolved = resolve_against_project_root(Some(&tmp), "widgets");
+        assert_eq!(resolved, sub);
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn resolve_against_project_root_falls_back_to_raw() {
+        // Non-existent candidate under root → fall back to raw path.
+        let resolved = resolve_against_project_root(
+            Some(Path::new("/nonexistent/perry/root")),
+            "/absolute/widgets/dir",
+        );
+        assert_eq!(resolved, PathBuf::from("/absolute/widgets/dir"));
     }
 
     #[test]

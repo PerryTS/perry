@@ -157,12 +157,61 @@ pub enum WidgetTextContent {
     Field(String),
     /// Template literal with parts: `Score: ${entry.score}`
     Template(Vec<WidgetTemplatePart>),
+    /// Issue #1179 follow-up: a whitelisted formatting/coercion call
+    /// (`String(x)`, `Number(x)`, `x.toFixed(n)`, `x.toString()`,
+    /// `Math.round/floor/ceil(x)`) applied to a single argument.
+    /// Anything outside this whitelist still degrades to
+    /// `Literal(String::new())` so older codepaths don't observe a new
+    /// variant they can't interpret; new code MUST handle this variant.
+    Formatted(WidgetFormatExpr),
 }
 
 #[derive(Debug, Clone)]
 pub enum WidgetTemplatePart {
     Literal(String),
     Field(String),
+    /// Issue #1179 follow-up: a whitelisted formatting call inside a
+    /// template literal hole (e.g., `${Math.round(entry.x)}`).
+    Formatted(WidgetFormatExpr),
+}
+
+/// Issue #1179 follow-up: whitelisted formatter or coercion that we
+/// know how to transpile into each platform's render-text expression
+/// (SwiftUI / Kotlin Glance / Wear Tiles). The whitelist is deliberately
+/// small — anything richer is the user's job to compute in the provider
+/// and pass through as a pre-formatted string field.
+#[derive(Debug, Clone)]
+pub enum WidgetFormatCall {
+    /// `String(x)` — coerce to a display string
+    StringCast,
+    /// `Number(x)` — coerce to a numeric value
+    NumberCast,
+    /// `Math.round(x)` — round to the nearest integer
+    Round,
+    /// `Math.floor(x)`
+    Floor,
+    /// `Math.ceil(x)`
+    Ceil,
+    /// `x.toFixed(n)` — fixed-point string with `n` digits after the dot
+    ToFixed { digits: u32 },
+    /// `x.toString()` — explicit string coercion
+    ToString,
+}
+
+#[derive(Debug, Clone)]
+pub enum WidgetFormatArg {
+    /// `entry.<field>` — references a named entry field
+    Field(String),
+    /// Numeric literal argument (e.g., `Math.round(3.14)`)
+    Number(f64),
+    /// String literal argument
+    String(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct WidgetFormatExpr {
+    pub call: WidgetFormatCall,
+    pub arg: WidgetFormatArg,
 }
 
 #[derive(Debug, Clone)]

@@ -9,8 +9,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 thread_local! {
-    /// Map from observer object address to (closure_f64, textfield_view_ptr)
-    static TEXTFIELD_CALLBACKS: RefCell<HashMap<usize, (f64, *const AnyObject)>> = RefCell::new(HashMap::new());
+    /// Map from observer object address to (closure_f64, textfield_view_ptr, textfield_handle)
+    static TEXTFIELD_CALLBACKS: RefCell<HashMap<usize, (f64, *const AnyObject, i64)>> = RefCell::new(HashMap::new());
     /// Map from observer address to (submit_closure_f64, textfield_view_ptr)
     static TEXTFIELD_SUBMIT_CALLBACKS: RefCell<HashMap<usize, (f64, *const AnyObject)>> = RefCell::new(HashMap::new());
     /// Map from observer address to (focus_closure_f64, textfield_view_ptr)
@@ -41,7 +41,7 @@ define_class!(
             let key = self.ivars().callback_key.get();
             crate::catch_callback_panic("textfield callback", std::panic::AssertUnwindSafe(|| {
                 TEXTFIELD_CALLBACKS.with(|cbs| {
-                    if let Some(&(closure_f64, tf_ptr)) = cbs.borrow().get(&key) {
+                    if let Some(&(closure_f64, tf_ptr, tf_handle)) = cbs.borrow().get(&key) {
                         if tf_ptr.is_null() {
                             return;
                         }
@@ -65,8 +65,22 @@ define_class!(
                         let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
 
                         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
+
+                        // If this textfield is bound to a state cell via
+                        // `stateBindTextfield`, set the binding's suppress flag
+                        // around the user closure so any `state.set` inside it
+                        // doesn't echo back to setStringValue and reset the
+                        // user's cursor / selection. See #1198.
+                        let binding = crate::state::TEXTFIELD_TO_BINDING
+                            .with(|m| m.borrow().get(&tf_handle).cloned());
+                        if let Some(ref b) = binding {
+                            b.suppress.set(true);
+                        }
                         unsafe {
                             js_closure_call1(closure_ptr as *const u8, nanboxed);
+                        }
+                        if let Some(b) = binding {
+                            b.suppress.set(false);
                         }
                     }
                 });
@@ -187,7 +201,8 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
         observer.ivars().callback_key.set(observer_addr);
 
         TEXTFIELD_CALLBACKS.with(|cbs| {
-            cbs.borrow_mut().insert(observer_addr, (on_change, tf_raw));
+            cbs.borrow_mut()
+                .insert(observer_addr, (on_change, tf_raw, handle));
         });
 
         #[cfg(feature = "geisterhand")]

@@ -194,6 +194,66 @@ pub(super) fn inject_google_auth_info_plist(
     ))
 }
 
+/// #1178 — write (or augment) `app.entitlements` with the
+/// `com.apple.security.application-groups` array when
+/// `[ios] app_group` is configured in perry.toml.
+///
+/// Idempotent with `inject_ios_deeplinks`: if the deeplinks pass
+/// already wrote an entitlements file (e.g. associated-domains for
+/// `applinks:`), we splice our `<key>...</key><array>...</array>`
+/// before the closing `</dict>` instead of clobbering it. Otherwise
+/// we emit the full plist wrapper. Either way the user's signing
+/// pipeline picks up a single `app.entitlements` file at codesign
+/// time.
+pub(super) fn inject_ios_app_group_entitlement(
+    app_dir: &std::path::Path,
+    app_group: Option<&str>,
+    format: OutputFormat,
+) -> Option<()> {
+    let app_group = app_group.filter(|s| !s.is_empty())?;
+    let entitlements_path = app_dir.join("app.entitlements");
+
+    let key_block = format!(
+        "    <key>com.apple.security.application-groups</key>\n    <array>\n        <string>{}</string>\n    </array>\n",
+        app_group
+    );
+
+    let new_contents = match fs::read_to_string(&entitlements_path) {
+        Ok(existing) => {
+            // Already declared? leave the user's hand-written or
+            // deeplinks-injected entry alone.
+            if existing.contains("com.apple.security.application-groups") {
+                return Some(());
+            }
+            existing.replace(
+                "</dict>\n</plist>",
+                &format!("{}</dict>\n</plist>", key_block),
+            )
+        }
+        Err(_) => {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n{}</dict>\n</plist>\n",
+                key_block
+            )
+        }
+    };
+
+    fs::write(&entitlements_path, new_contents).ok()?;
+
+    if let OutputFormat::Text = format {
+        println!(
+            "  App Group: {} → {} (#1178)",
+            app_group,
+            entitlements_path.display()
+        );
+        println!(
+            "  Sign with: codesign --entitlements {} ...",
+            entitlements_path.display()
+        );
+    }
+    Some(())
+}
+
 /// Cheap CFBundleIdentifier extraction from an in-memory Info.plist string.
 /// We need it for the CFBundleURLName field (Apple's convention is
 /// `<bundle-id>.<scheme>`). Falls back to `perry.deeplink` when the

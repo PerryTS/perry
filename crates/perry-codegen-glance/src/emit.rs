@@ -525,11 +525,51 @@ fn emit_text_content(content: &WidgetTextContent, entry_param: &str) -> String {
                     WidgetTemplatePart::Field(field) => {
                         write!(s, "${{{}.{}}}", entry_param, field).unwrap()
                     }
+                    WidgetTemplatePart::Formatted(expr) => {
+                        write!(s, "${{{}}}", emit_format_kotlin(expr, entry_param)).unwrap()
+                    }
                 }
             }
             s.push('"');
             s
         }
+        WidgetTextContent::Formatted(expr) => {
+            // Wrap the produced Kotlin expression in a string template
+            // so Text(...) consumes a String — same as the Field arm.
+            format!("\"${{{}}}\"", emit_format_kotlin(expr, entry_param))
+        }
+    }
+}
+
+/// Issue #1179 follow-up: emit a Kotlin expression for one of the
+/// whitelisted formatter calls. Result is a String-typed expression.
+fn emit_format_kotlin(expr: &WidgetFormatExpr, entry_param: &str) -> String {
+    let value = emit_format_arg_kotlin(&expr.arg, entry_param);
+    match expr.call {
+        WidgetFormatCall::StringCast | WidgetFormatCall::ToString => {
+            format!("{}.toString()", value)
+        }
+        WidgetFormatCall::NumberCast => format!("{}.toDouble()", value),
+        WidgetFormatCall::Round => format!("kotlin.math.round({}).toInt()", value),
+        WidgetFormatCall::Floor => format!("kotlin.math.floor({}).toInt()", value),
+        WidgetFormatCall::Ceil => format!("kotlin.math.ceil({}).toInt()", value),
+        WidgetFormatCall::ToFixed { digits } => {
+            format!("\"%.{}f\".format({})", digits, value)
+        }
+    }
+}
+
+fn emit_format_arg_kotlin(arg: &WidgetFormatArg, entry_param: &str) -> String {
+    match arg {
+        WidgetFormatArg::Field(field) => format!("{}.{}", entry_param, field),
+        WidgetFormatArg::Number(n) => {
+            if n.is_finite() && *n == n.floor() {
+                format!("{:.0}", n)
+            } else {
+                format!("{}", n)
+            }
+        }
+        WidgetFormatArg::String(s) => format!("\"{}\"", escape_kotlin_string(s)),
     }
 }
 
@@ -599,6 +639,8 @@ fn emit_kotlin_value(value: &WidgetTextContent) -> String {
         }
         WidgetTextContent::Field(f) => f.clone(),
         WidgetTextContent::Template(_) => "\"\"".to_string(),
+        // Conditions don't compare against formatted expressions today.
+        WidgetTextContent::Formatted(_) => "\"\"".to_string(),
     }
 }
 

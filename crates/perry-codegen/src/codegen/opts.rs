@@ -12,6 +12,14 @@ pub struct AppMetadata {
     pub version: String,
     pub build_number: i64,
     pub bundle_id: String,
+    /// iOS / macOS App Group suite name from `[ios] app_group` (or
+    /// `[macos] app_group`) in perry.toml. Baked into the entry module's
+    /// `main` prelude as a `perry_app_group_init(suite, len)` call so
+    /// `appGroupSet/Get/Delete` can resolve `UserDefaults(suiteName:)` at
+    /// runtime without re-reading the manifest. `None` means
+    /// `app_group_*` calls fall through to the runtime's "not configured"
+    /// stub-warn diagnostic. Refs #1178.
+    pub app_group: Option<String>,
 }
 
 impl Default for AppMetadata {
@@ -20,6 +28,7 @@ impl Default for AppMetadata {
             version: "1.0.0".to_string(),
             build_number: 1,
             bundle_id: "com.perry.app".to_string(),
+            app_group: None,
         }
     }
 }

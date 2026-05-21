@@ -905,11 +905,51 @@ fn emit_text_content(content: &WidgetTextContent, entry_param: &str) -> String {
                     WidgetTemplatePart::Field(field) => {
                         write!(s, "\\({}.{})", entry_param, field).unwrap();
                     }
+                    WidgetTemplatePart::Formatted(expr) => {
+                        write!(s, "\\({})", emit_format_swift(expr, entry_param)).unwrap();
+                    }
                 }
             }
             s.push('"');
             s
         }
+        WidgetTextContent::Formatted(expr) => {
+            // Wrap the produced Swift expression in a Swift string so
+            // Text(...) consumes a String literal — same convention as
+            // the Field arm above.
+            format!("\"\\({})\"", emit_format_swift(expr, entry_param))
+        }
+    }
+}
+
+/// Emit a Swift expression for one of the whitelisted formatter calls.
+/// The result is a `String`-typed expression suitable for dropping into
+/// `Text(...)` directly or interpolating with `\(...)`.
+fn emit_format_swift(expr: &WidgetFormatExpr, entry_param: &str) -> String {
+    let value = emit_format_arg_swift(&expr.arg, entry_param);
+    match expr.call {
+        WidgetFormatCall::StringCast | WidgetFormatCall::ToString => {
+            format!("String({})", value)
+        }
+        WidgetFormatCall::NumberCast => {
+            // `Number(x)` is rarely useful in a render position; coerce
+            // through Double so callers can interpolate it.
+            format!("Double({}) ?? 0", value)
+        }
+        WidgetFormatCall::Round => format!("Int({}.rounded())", value),
+        WidgetFormatCall::Floor => format!("Int({}.rounded(.down))", value),
+        WidgetFormatCall::Ceil => format!("Int({}.rounded(.up))", value),
+        WidgetFormatCall::ToFixed { digits } => {
+            format!("String(format: \"%.{}f\", {})", digits, value)
+        }
+    }
+}
+
+fn emit_format_arg_swift(arg: &WidgetFormatArg, entry_param: &str) -> String {
+    match arg {
+        WidgetFormatArg::Field(field) => format!("{}.{}", entry_param, field),
+        WidgetFormatArg::Number(n) => format_f64(*n),
+        WidgetFormatArg::String(s) => format!("\"{}\"", escape_swift_string(s)),
     }
 }
 
@@ -950,6 +990,10 @@ fn emit_condition_value(value: &WidgetTextContent) -> String {
         }
         WidgetTextContent::Field(f) => f.clone(),
         WidgetTextContent::Template(_) => "\"\"".to_string(),
+        // Conditions compare against constants today, not formatted
+        // expressions — fall through to an empty literal so we don't
+        // emit a syntactically dubious comparison.
+        WidgetTextContent::Formatted(_) => "\"\"".to_string(),
     }
 }
 
@@ -1370,5 +1414,105 @@ mod tests {
         assert!(view.contains(".frame(maxWidth: .infinity)"));
         assert!(view.contains(".widgetURL(URL(string: \"myapp://home\")!)"));
         assert!(view.contains(".containerBackground(Color.blue.gradient, for: .widget)"));
+    }
+
+    #[test]
+    fn format_to_fixed_emits_string_format() {
+        let s = emit_format_swift(
+            &WidgetFormatExpr {
+                call: WidgetFormatCall::ToFixed { digits: 2 },
+                arg: WidgetFormatArg::Field("totalClicks".to_string()),
+            },
+            "entry",
+        );
+        assert_eq!(s, "String(format: \"%.2f\", entry.totalClicks)");
+    }
+
+    #[test]
+    fn format_math_round_emits_rounded_int() {
+        let s = emit_format_swift(
+            &WidgetFormatExpr {
+                call: WidgetFormatCall::Round,
+                arg: WidgetFormatArg::Field("totalClicks".to_string()),
+            },
+            "entry",
+        );
+        assert_eq!(s, "Int(entry.totalClicks.rounded())");
+    }
+
+    #[test]
+    fn format_math_floor_and_ceil_emit_directed_rounding() {
+        let floor = emit_format_swift(
+            &WidgetFormatExpr {
+                call: WidgetFormatCall::Floor,
+                arg: WidgetFormatArg::Field("totalClicks".to_string()),
+            },
+            "entry",
+        );
+        assert_eq!(floor, "Int(entry.totalClicks.rounded(.down))");
+        let ceil = emit_format_swift(
+            &WidgetFormatExpr {
+                call: WidgetFormatCall::Ceil,
+                arg: WidgetFormatArg::Field("totalClicks".to_string()),
+            },
+            "entry",
+        );
+        assert_eq!(ceil, "Int(entry.totalClicks.rounded(.up))");
+    }
+
+    #[test]
+    fn format_string_cast_wraps_in_string_init() {
+        let s = emit_format_swift(
+            &WidgetFormatExpr {
+                call: WidgetFormatCall::StringCast,
+                arg: WidgetFormatArg::Field("totalClicks".to_string()),
+            },
+            "entry",
+        );
+        assert_eq!(s, "String(entry.totalClicks)");
+    }
+
+    #[test]
+    fn text_formatted_render_replaces_empty_string_bug() {
+        // Issue #1179 follow-up: rendering `Text(Math.round(entry.totalClicks))`
+        // used to emit `Text("")`. The new path produces a proper Swift
+        // string interpolation through the whitelisted format helper.
+        let widget = make_widget(
+            "com.test.Formatted",
+            vec![("totalClicks".to_string(), WidgetFieldType::Number)],
+            vec![WidgetNode::Text {
+                content: WidgetTextContent::Formatted(WidgetFormatExpr {
+                    call: WidgetFormatCall::Round,
+                    arg: WidgetFormatArg::Field("totalClicks".to_string()),
+                }),
+                modifiers: vec![],
+            }],
+        );
+        let view = emit_view(&widget, "Formatted");
+        assert!(view.contains("Text(\"\\(Int(entry.totalClicks.rounded()))\")"));
+        // And it must not collapse to the empty-string bug.
+        assert!(!view.contains("Text(\"\")"));
+    }
+
+    #[test]
+    fn template_with_formatted_hole_interpolates_through_helper() {
+        // ``Total: ${entry.totalClicks.toFixed(2)}`` should land as
+        // `Text("Total: \(String(format: "%.2f", entry.totalClicks))")`.
+        let widget = make_widget(
+            "com.test.Template",
+            vec![("totalClicks".to_string(), WidgetFieldType::Number)],
+            vec![WidgetNode::Text {
+                content: WidgetTextContent::Template(vec![
+                    WidgetTemplatePart::Literal("Total: ".to_string()),
+                    WidgetTemplatePart::Formatted(WidgetFormatExpr {
+                        call: WidgetFormatCall::ToFixed { digits: 2 },
+                        arg: WidgetFormatArg::Field("totalClicks".to_string()),
+                    }),
+                ]),
+                modifiers: vec![],
+            }],
+        );
+        let view = emit_view(&widget, "Template");
+        assert!(view.contains("Text(\"Total: \\(String(format: \"%.2f\", entry.totalClicks))\")"));
     }
 }
