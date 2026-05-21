@@ -36,6 +36,7 @@ mod native_call_method;
 mod native_module;
 mod native_module_dispatch;
 mod object_ops;
+mod polymorphic_index;
 mod util_types;
 pub use alloc::*;
 pub use assert::*;
@@ -51,6 +52,7 @@ pub use native_call_method::*;
 pub use native_module::*;
 pub(crate) use native_module_dispatch::*;
 pub use object_ops::*;
+pub use polymorphic_index::*;
 pub use util_types::*;
 
 // Overflow field storage for objects that exceed their pre-allocated inline slot count.

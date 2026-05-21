@@ -1,0 +1,219 @@
+//! Lowering of destructuring assignment expressions (`[a, b] = expr` as a value).
+
+use super::*;
+
+/// Lower a destructuring assignment expression.
+/// For [a, b] = expr or { a, b } = expr, we generate a Sequence expression:
+///   1. Assign each element/property to the corresponding target
+///   2. Return the RHS value (assignment expressions evaluate to RHS)
+///
+/// Note: We reference the RHS value directly multiple times rather than
+/// creating a temporary variable, since temps created in expression context
+/// aren't visible to codegen. This is safe when the RHS is a simple expression
+/// (which is the common case for destructuring).
+pub(crate) fn lower_destructuring_assignment(
+    ctx: &mut LoweringContext,
+    pat: &ast::AssignTargetPat,
+    value: Box<Expr>,
+) -> Result<Expr> {
+    match pat {
+        ast::AssignTargetPat::Array(arr_pat) => {
+            // Array destructuring assignment: [a, b] = expr
+            // Desugar to:
+            //   a = expr[0];
+            //   b = expr[1];
+            //   expr (result)
+            //
+            // We reference the RHS value directly. This works because:
+            // 1. The RHS is typically a local variable or simple expression
+            // 2. Creating a temp in expression context is problematic for codegen
+
+            let mut exprs = Vec::new();
+
+            // Now assign each element
+            for (idx, elem) in arr_pat.elems.iter().enumerate() {
+                if let Some(elem_pat) = elem {
+                    let index_expr = Expr::IndexGet {
+                        object: value.clone(),
+                        index: Box::new(Expr::Number(idx as f64)),
+                    };
+
+                    match elem_pat {
+                        ast::Pat::Ident(ident) => {
+                            let name = ident.id.sym.to_string();
+                            if let Some(id) = ctx.lookup_local(&name) {
+                                exprs.push(Expr::LocalSet(id, Box::new(index_expr)));
+                            } else {
+                                return Err(anyhow!(
+                                    "Assignment to undeclared variable in destructuring: {}",
+                                    name
+                                ));
+                            }
+                        }
+                        ast::Pat::Expr(inner_expr) => {
+                            // Expression pattern like [obj.prop] = arr
+                            match inner_expr.as_ref() {
+                                ast::Expr::Member(member) => {
+                                    let object = Box::new(lower_expr(ctx, &member.obj)?);
+                                    match &member.prop {
+                                        ast::MemberProp::Ident(prop_ident) => {
+                                            let property = prop_ident.sym.to_string();
+                                            exprs.push(Expr::PropertySet {
+                                                object,
+                                                property,
+                                                value: Box::new(index_expr),
+                                            });
+                                        }
+                                        ast::MemberProp::Computed(computed) => {
+                                            let index = Box::new(lower_expr(ctx, &computed.expr)?);
+                                            exprs.push(Expr::IndexSet {
+                                                object,
+                                                index,
+                                                value: Box::new(index_expr),
+                                            });
+                                        }
+                                        _ => {
+                                            return Err(anyhow!(
+                                                "Unsupported member expression in destructuring"
+                                            ));
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    return Err(anyhow!(
+                                        "Unsupported expression pattern in destructuring"
+                                    ));
+                                }
+                            }
+                        }
+                        ast::Pat::Rest(_) => {
+                            // Rest pattern in assignment: [...rest] = arr
+                            // For now, skip (would need slice operation)
+                        }
+                        ast::Pat::Array(nested_arr) => {
+                            // Nested array destructuring: [[a, b], c] = expr
+                            // Recursively lower with the indexed element as the value
+                            let nested_target = ast::AssignTargetPat::Array(nested_arr.clone());
+                            let nested_expr = lower_destructuring_assignment(
+                                ctx,
+                                &nested_target,
+                                Box::new(index_expr),
+                            )?;
+                            exprs.push(nested_expr);
+                        }
+                        ast::Pat::Object(nested_obj) => {
+                            // Nested object destructuring: [{ a, b }, c] = expr
+                            let nested_target = ast::AssignTargetPat::Object(nested_obj.clone());
+                            let nested_expr = lower_destructuring_assignment(
+                                ctx,
+                                &nested_target,
+                                Box::new(index_expr),
+                            )?;
+                            exprs.push(nested_expr);
+                        }
+                        _ => {
+                            // Other patterns (Assign with default, etc.) - skip for now
+                        }
+                    }
+                }
+                // If elem is None, it's a hole like [a, , c] - skip it
+            }
+
+            // The result of the assignment is the original RHS value
+            exprs.push(*value);
+
+            Ok(Expr::Sequence(exprs))
+        }
+        ast::AssignTargetPat::Object(obj_pat) => {
+            // Object destructuring assignment: { a, b } = expr
+            // Desugar to:
+            //   a = expr.a;
+            //   b = expr.b;
+            //   expr (result)
+
+            let mut exprs = Vec::new();
+
+            // Now assign each property
+            for prop in &obj_pat.props {
+                match prop {
+                    ast::ObjectPatProp::KeyValue(kv) => {
+                        // { key: target } - extract obj.key into target
+                        let key = match &kv.key {
+                            ast::PropName::Ident(ident) => ident.sym.to_string(),
+                            ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                            ast::PropName::Num(n) => n.value.to_string(),
+                            _ => continue, // Skip computed keys
+                        };
+
+                        let prop_expr = Expr::PropertyGet {
+                            object: value.clone(),
+                            property: key,
+                        };
+
+                        match &*kv.value {
+                            ast::Pat::Ident(ident) => {
+                                let name = ident.id.sym.to_string();
+                                if let Some(id) = ctx.lookup_local(&name) {
+                                    exprs.push(Expr::LocalSet(id, Box::new(prop_expr)));
+                                } else {
+                                    return Err(anyhow!(
+                                        "Assignment to undeclared variable in destructuring: {}",
+                                        name
+                                    ));
+                                }
+                            }
+                            ast::Pat::Array(nested_arr) => {
+                                let nested_target = ast::AssignTargetPat::Array(nested_arr.clone());
+                                let nested_expr = lower_destructuring_assignment(
+                                    ctx,
+                                    &nested_target,
+                                    Box::new(prop_expr),
+                                )?;
+                                exprs.push(nested_expr);
+                            }
+                            ast::Pat::Object(nested_obj) => {
+                                let nested_target =
+                                    ast::AssignTargetPat::Object(nested_obj.clone());
+                                let nested_expr = lower_destructuring_assignment(
+                                    ctx,
+                                    &nested_target,
+                                    Box::new(prop_expr),
+                                )?;
+                                exprs.push(nested_expr);
+                            }
+                            _ => {
+                                // Other patterns - skip for now
+                            }
+                        }
+                    }
+                    ast::ObjectPatProp::Assign(assign) => {
+                        // Shorthand: { a } means { a: a }
+                        let name = assign.key.sym.to_string();
+                        let prop_expr = Expr::PropertyGet {
+                            object: value.clone(),
+                            property: name.clone(),
+                        };
+
+                        if let Some(id) = ctx.lookup_local(&name) {
+                            exprs.push(Expr::LocalSet(id, Box::new(prop_expr)));
+                        } else {
+                            return Err(anyhow!(
+                                "Assignment to undeclared variable in destructuring: {}",
+                                name
+                            ));
+                        }
+                    }
+                    ast::ObjectPatProp::Rest(_) => {
+                        // Rest pattern: { ...rest } - skip for now
+                    }
+                }
+            }
+
+            // The result of the assignment is the original RHS value
+            exprs.push(*value);
+
+            Ok(Expr::Sequence(exprs))
+        }
+        ast::AssignTargetPat::Invalid(_) => Err(anyhow!("Invalid assignment target pattern")),
+    }
+}
