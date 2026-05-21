@@ -327,6 +327,11 @@ fn update_call_sites_in_expr(
         | Expr::PathToNamespacedPath(p) => {
             update_call_sites_in_expr(p, ctx, lookup);
         }
+        Expr::PathWin32 { args, .. } => {
+            for e in args {
+                update_call_sites_in_expr(e, ctx, lookup);
+            }
+        }
         Expr::ArrayPush { value, .. }
         | Expr::ArrayUnshift { value, .. }
         | Expr::ArrayPushSpread { source: value, .. } => {

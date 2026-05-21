@@ -311,6 +311,13 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             Box::new(substitute_expr(a, substitutions)),
             Box::new(substitute_expr(b, substitutions)),
         ),
+        Expr::PathWin32 { method, args } => Expr::PathWin32 {
+            method: *method,
+            args: args
+                .iter()
+                .map(|e| substitute_expr(e, substitutions))
+                .collect(),
+        },
         Expr::PathDirname(path) => {
             Expr::PathDirname(Box::new(substitute_expr(path, substitutions)))
         }

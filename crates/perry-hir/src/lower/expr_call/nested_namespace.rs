@@ -282,10 +282,9 @@ pub(super) fn try_util_types_namespace(
 ///   The runtime js_path_* functions use POSIX (`/`) semantics,
 ///   so this is a direct shape rewrite.
 /// - `path.win32.join` routes to a dedicated Expr::PathWin32Join
-///   so the result uses `\` separators. Other path.win32.*
-///   methods are intentionally unwired here — falling through
-///   to a POSIX impl would silently mis-handle drive letters
-///   and `\` segments. Track those in a follow-up.
+///   so the result uses `\` separators. Other path.win32.<method>
+///   calls route to the generic `Expr::PathWin32` carrier, which
+///   codegen dispatches to `js_path_win32_*` (issue #1162).
 pub(super) fn try_path_subnamespace(
     ctx: &LoweringContext,
     expr: &ast::Expr,
@@ -340,13 +339,61 @@ pub(super) fn try_path_subnamespace(
                                 }
                             }
 
+                            // path.win32.<method> — issue #1162. Route
+                            // every supported method to the generic
+                            // `Expr::PathWin32` carrier; codegen
+                            // dispatches to the matching
+                            // `js_path_win32_*` runtime function.
+                            if sub == "win32" {
+                                use crate::ir::PathWin32Method as M;
+                                let m = match method {
+                                    "dirname" if !args.is_empty() => Some(M::Dirname),
+                                    "basename" if args.len() >= 2 => Some(M::BasenameExt),
+                                    "basename" if !args.is_empty() => Some(M::Basename),
+                                    "extname" if !args.is_empty() => Some(M::Extname),
+                                    "isAbsolute" if !args.is_empty() => Some(M::IsAbsolute),
+                                    "normalize" if !args.is_empty() => Some(M::Normalize),
+                                    "parse" if !args.is_empty() => Some(M::Parse),
+                                    "format" if !args.is_empty() => Some(M::Format),
+                                    "relative" if args.len() >= 2 => Some(M::Relative),
+                                    "toNamespacedPath" if !args.is_empty() => {
+                                        Some(M::ToNamespacedPath)
+                                    }
+                                    "matchesGlob" if args.len() >= 2 => Some(M::MatchesGlob),
+                                    _ => None,
+                                };
+                                if let Some(m) = m {
+                                    return Ok(Expr::PathWin32 { method: m, args });
+                                }
+                                // resolve has multi-arg chaining like
+                                // POSIX — first arg seeds, remaining
+                                // fold via ResolveJoin, final via
+                                // Resolve.
+                                if method == "resolve" {
+                                    if args.is_empty() {
+                                        return Ok(Expr::PathWin32 {
+                                            method: M::Resolve,
+                                            args: vec![Expr::String(String::new())],
+                                        });
+                                    }
+                                    let mut it = args.into_iter();
+                                    let first = it.next().unwrap();
+                                    let mut joined = first;
+                                    for next_arg in it {
+                                        joined = Expr::PathWin32 {
+                                            method: M::ResolveJoin,
+                                            args: vec![joined, next_arg],
+                                        };
+                                    }
+                                    return Ok(Expr::PathWin32 {
+                                        method: M::Resolve,
+                                        args: vec![joined],
+                                    });
+                                }
+                            }
                             // The remaining methods route to the
                             // existing POSIX Expr::Path* variants
                             // only for the `posix` sub-namespace.
-                            // For `win32` we deliberately fall
-                            // through to the receiver-less path
-                            // (returns undefined) rather than
-                            // give a wrong POSIX answer.
                             if sub == "posix" {
                                 match method {
                                     "dirname" if !args.is_empty() => {

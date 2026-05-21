@@ -273,6 +273,32 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
         }
     }
 
+    // path.win32.sep / path.win32.delimiter (and path.posix.sep/.delimiter)
+    // — sub-namespace constants. Lower directly to string literals; no
+    // runtime call needed (issue #1162).
+    if let ast::Expr::Member(inner) = member.obj.as_ref() {
+        if let (ast::Expr::Ident(root_ident), ast::MemberProp::Ident(sub_prop)) =
+            (inner.obj.as_ref(), &inner.prop)
+        {
+            let root_name = root_ident.sym.to_string();
+            let is_path_root =
+                root_name == "path" || ctx.lookup_builtin_module_alias(&root_name) == Some("path");
+            if is_path_root {
+                let sub = sub_prop.sym.as_ref();
+                if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                    let prop = prop_ident.sym.as_ref();
+                    match (sub, prop) {
+                        ("win32", "sep") => return Ok(Expr::String("\\".to_string())),
+                        ("win32", "delimiter") => return Ok(Expr::String(";".to_string())),
+                        ("posix", "sep") => return Ok(Expr::String("/".to_string())),
+                        ("posix", "delimiter") => return Ok(Expr::String(":".to_string())),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
     // Check if this is a process.env.VARNAME or process.env[expr] access
     if let ast::Expr::Member(inner_member) = member.obj.as_ref() {
         if let ast::Expr::Ident(obj_ident) = inner_member.obj.as_ref() {

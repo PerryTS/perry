@@ -518,6 +518,14 @@ pub enum Expr {
     PathMatchesGlob(Box<Expr>, Box<Expr>), // path.matchesGlob(path, pattern) -> boolean
     PathResolveJoin(Box<Expr>, Box<Expr>), // internal: join with reset-on-absolute (multi-arg resolve)
     PathWin32Join(Box<Expr>, Box<Expr>),   // path.win32.join(a, b) -> string (issue #810)
+    /// All other `path.win32.<method>(args...)` calls. One variant for the
+    /// whole sub-namespace to avoid 15× boilerplate across walker/codegen
+    /// touch sites; the codegen dispatches on `method` to the right
+    /// `js_path_win32_*` runtime call. Issue #1162.
+    PathWin32 {
+        method: PathWin32Method,
+        args: Vec<Expr>,
+    },
 
     // WeakRef and FinalizationRegistry
     WeakRefNew(Box<Expr>),              // new WeakRef(obj) -> WeakRef
@@ -1954,4 +1962,23 @@ pub enum BoxedPrimitiveKind {
     Number,
     String,
     Boolean,
+}
+
+/// `path.win32.<method>` dispatch — one variant per supported method.
+/// See `Expr::PathWin32`. Used by issue #1162.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PathWin32Method {
+    Dirname,
+    Basename,
+    BasenameExt,
+    Extname,
+    IsAbsolute,
+    Normalize,
+    Parse,
+    Format,
+    Relative,
+    Resolve,
+    ResolveJoin,
+    ToNamespacedPath,
+    MatchesGlob,
 }

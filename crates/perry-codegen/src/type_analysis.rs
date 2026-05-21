@@ -796,6 +796,20 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::PathToNamespacedPath(_)
         | Expr::PathResolveJoin(..)
         | Expr::PathWin32Join(..)
+        | Expr::PathWin32 {
+            method:
+                perry_hir::PathWin32Method::Dirname
+                | perry_hir::PathWin32Method::Basename
+                | perry_hir::PathWin32Method::BasenameExt
+                | perry_hir::PathWin32Method::Extname
+                | perry_hir::PathWin32Method::Normalize
+                | perry_hir::PathWin32Method::Format
+                | perry_hir::PathWin32Method::Relative
+                | perry_hir::PathWin32Method::Resolve
+                | perry_hir::PathWin32Method::ResolveJoin
+                | perry_hir::PathWin32Method::ToNamespacedPath,
+            ..
+        }
         | Expr::ProcessVersion
         | Expr::ProcessCwd
         | Expr::OsArch
@@ -906,7 +920,21 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::PathNormalize(_)
         | Expr::PathToNamespacedPath(_)
         | Expr::PathResolveJoin(..)
-        | Expr::PathWin32Join(..) => true,
+        | Expr::PathWin32Join(..)
+        | Expr::PathWin32 {
+            method:
+                perry_hir::PathWin32Method::Dirname
+                | perry_hir::PathWin32Method::Basename
+                | perry_hir::PathWin32Method::BasenameExt
+                | perry_hir::PathWin32Method::Extname
+                | perry_hir::PathWin32Method::Normalize
+                | perry_hir::PathWin32Method::Format
+                | perry_hir::PathWin32Method::Relative
+                | perry_hir::PathWin32Method::Resolve
+                | perry_hir::PathWin32Method::ResolveJoin
+                | perry_hir::PathWin32Method::ToNamespacedPath,
+            ..
+        } => true,
         // String.fromCodePoint(...) / String.fromCharCode(...) / str.at(i)
         // / RegExp.source|flags — all produce string handles.
         Expr::StringFromCodePoint(_)

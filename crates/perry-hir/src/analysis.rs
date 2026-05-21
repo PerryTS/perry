@@ -458,6 +458,11 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::FileURLToPath(path) => {
             collect_assigned_locals_expr(path, assigned);
         }
+        Expr::PathWin32 { args, .. } => {
+            for e in args {
+                collect_assigned_locals_expr(e, assigned);
+            }
+        }
         // Array methods - push/unshift may reassign the array pointer
         Expr::ArrayPush { array_id, value }
         | Expr::ArrayUnshift { array_id, value }

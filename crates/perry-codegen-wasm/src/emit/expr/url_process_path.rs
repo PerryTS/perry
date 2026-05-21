@@ -149,6 +149,29 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 1, b);
                 self.emit_memcall(func, "path_win32_join", 2);
             }
+            Expr::PathWin32 { method, args } => {
+                use perry_hir::PathWin32Method;
+                let (name, expected_args): (&str, u32) = match method {
+                    PathWin32Method::Dirname => ("path_win32_dirname", 1),
+                    PathWin32Method::Basename => ("path_win32_basename", 1),
+                    PathWin32Method::BasenameExt => ("path_win32_basename_ext", 2),
+                    PathWin32Method::Extname => ("path_win32_extname", 1),
+                    PathWin32Method::IsAbsolute => ("path_win32_is_absolute", 1),
+                    PathWin32Method::Normalize => ("path_win32_normalize", 1),
+                    PathWin32Method::Parse => ("path_win32_parse", 1),
+                    PathWin32Method::Format => ("path_win32_format", 1),
+                    PathWin32Method::Relative => ("path_win32_relative", 2),
+                    PathWin32Method::Resolve => ("path_win32_resolve", 1),
+                    PathWin32Method::ResolveJoin => ("path_win32_resolve_join", 2),
+                    PathWin32Method::ToNamespacedPath => ("path_win32_to_namespaced_path", 1),
+                    PathWin32Method::MatchesGlob => ("path_win32_matches_glob", 2),
+                };
+                self.emit_frame_begin(func, expected_args);
+                for (i, a) in args.iter().enumerate().take(expected_args as usize) {
+                    self.emit_store_arg(func, i as u32, a);
+                }
+                self.emit_memcall(func, name, expected_args);
+            }
             Expr::PathDirname(p) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, p);

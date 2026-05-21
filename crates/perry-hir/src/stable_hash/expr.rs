@@ -108,6 +108,7 @@ impl SH for Expr {
             Expr::FsRmRecursive(e) => { tag(h, 89); e.as_ref().hash(h); }
             Expr::PathJoin(a, b) => { tag(h, 90); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::PathWin32Join(a, b) => { tag(h, 462); a.as_ref().hash(h); b.as_ref().hash(h); }
+            Expr::PathWin32 { method, args } => { tag(h, 11222); (*method as u32).hash(h); for a in args { a.hash(h); } }
             Expr::PathDirname(e) => { tag(h, 91); e.as_ref().hash(h); }
             Expr::PathBasename(e) => { tag(h, 92); e.as_ref().hash(h); }
             Expr::PathBasenameExt(a, b) => { tag(h, 93); a.as_ref().hash(h); b.as_ref().hash(h); }

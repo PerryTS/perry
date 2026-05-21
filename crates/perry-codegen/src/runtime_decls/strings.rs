@@ -764,6 +764,22 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_object_entries", I64, &[I64]);
     module.declare_function("js_path_join", I64, &[I64, I64]);
     module.declare_function("js_path_win32_join", I64, &[I64, I64]);
+    // path.win32 sub-namespace (issue #1162)
+    module.declare_function("js_path_win32_dirname", I64, &[I64]);
+    module.declare_function("js_path_win32_basename", I64, &[I64]);
+    module.declare_function("js_path_win32_basename_ext", I64, &[I64, I64]);
+    module.declare_function("js_path_win32_extname", I64, &[I64]);
+    module.declare_function("js_path_win32_is_absolute", I32, &[I64]);
+    module.declare_function("js_path_win32_normalize", I64, &[I64]);
+    module.declare_function("js_path_win32_parse", I64, &[I64]);
+    module.declare_function("js_path_win32_format", I64, &[DOUBLE]);
+    module.declare_function("js_path_win32_relative", I64, &[I64, I64]);
+    module.declare_function("js_path_win32_resolve", I64, &[I64]);
+    module.declare_function("js_path_win32_resolve_join", I64, &[I64, I64]);
+    module.declare_function("js_path_win32_to_namespaced_path", I64, &[I64]);
+    module.declare_function("js_path_win32_matches_glob", I32, &[I64, I64]);
+    module.declare_function("js_path_win32_sep_get", I64, &[]);
+    module.declare_function("js_path_win32_delimiter_get", I64, &[]);
     module.declare_function("js_path_dirname", I64, &[I64]);
     module.declare_function("js_path_resolve", I64, &[I64]);
     module.declare_function("js_path_relative", I64, &[I64, I64]);

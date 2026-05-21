@@ -583,6 +583,11 @@ where
                 f(e);
             }
         }
+        Expr::PathWin32 { args, .. } => {
+            for e in args {
+                f(e);
+            }
+        }
         Expr::WebAssemblyCallExport {
             instance,
             name,

@@ -573,6 +573,32 @@ impl JsEmitter {
                 self.emit_expr(b);
                 self.output.push(')');
             }
+            Expr::PathWin32 { method, args } => {
+                use perry_hir::PathWin32Method;
+                let name = match method {
+                    PathWin32Method::Dirname => "dirname",
+                    PathWin32Method::Basename | PathWin32Method::BasenameExt => "basename",
+                    PathWin32Method::Extname => "extname",
+                    PathWin32Method::IsAbsolute => "isAbsolute",
+                    PathWin32Method::Normalize => "normalize",
+                    PathWin32Method::Parse => "parse",
+                    PathWin32Method::Format => "format",
+                    PathWin32Method::Relative => "relative",
+                    PathWin32Method::Resolve | PathWin32Method::ResolveJoin => "resolve",
+                    PathWin32Method::ToNamespacedPath => "toNamespacedPath",
+                    PathWin32Method::MatchesGlob => "matchesGlob",
+                };
+                self.output.push_str("__perry.path.win32.");
+                self.output.push_str(name);
+                self.output.push('(');
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
+                    self.emit_expr(a);
+                }
+                self.output.push(')');
+            }
             Expr::PathDirname(p) => {
                 self.output.push_str("__perry.path.dirname(");
                 self.emit_expr(p);

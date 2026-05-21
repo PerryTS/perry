@@ -395,6 +395,11 @@ fn collect_instantiations_in_expr(
         | Expr::PathToNamespacedPath(p) => {
             collect_instantiations_in_expr(p, ctx, module, idx);
         }
+        Expr::PathWin32 { args, .. } => {
+            for e in args {
+                collect_instantiations_in_expr(e, ctx, module, idx);
+            }
+        }
         Expr::ArrayPush { value, .. }
         | Expr::ArrayUnshift { value, .. }
         | Expr::ArrayPushSpread { source: value, .. } => {

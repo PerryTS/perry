@@ -947,6 +947,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ObjectEntries(..)
         | Expr::PathJoin(..)
         | Expr::PathWin32Join(..)
+        | Expr::PathWin32 { .. }
         | Expr::QueueMicrotask(..)
         | Expr::ProcessNextTick(..)
         | Expr::RegExpTest { .. }

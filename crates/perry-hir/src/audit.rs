@@ -243,6 +243,23 @@ fn specialized_stdlib_call(expr: &Expr) -> Option<(&'static str, &'static str)> 
         Expr::PathDelimiter => ("path", "delimiter"),
         Expr::PathToNamespacedPath(_) => ("path", "toNamespacedPath"),
         Expr::PathMatchesGlob(_, _) => ("path", "matchesGlob"),
+        Expr::PathWin32 { method, .. } => match method {
+            crate::ir::PathWin32Method::Dirname => ("path", "win32.dirname"),
+            crate::ir::PathWin32Method::Basename | crate::ir::PathWin32Method::BasenameExt => {
+                ("path", "win32.basename")
+            }
+            crate::ir::PathWin32Method::Extname => ("path", "win32.extname"),
+            crate::ir::PathWin32Method::IsAbsolute => ("path", "win32.isAbsolute"),
+            crate::ir::PathWin32Method::Normalize => ("path", "win32.normalize"),
+            crate::ir::PathWin32Method::Parse => ("path", "win32.parse"),
+            crate::ir::PathWin32Method::Format => ("path", "win32.format"),
+            crate::ir::PathWin32Method::Relative => ("path", "win32.relative"),
+            crate::ir::PathWin32Method::Resolve | crate::ir::PathWin32Method::ResolveJoin => {
+                ("path", "win32.resolve")
+            }
+            crate::ir::PathWin32Method::ToNamespacedPath => ("path", "win32.toNamespacedPath"),
+            crate::ir::PathWin32Method::MatchesGlob => ("path", "win32.matchesGlob"),
+        },
         // process — `process.env` etc. are accessed via dedicated
         // HIR variants. The SBOM should reflect that the binary
         // touches them.

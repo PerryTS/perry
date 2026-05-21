@@ -336,6 +336,84 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &result))
         }
 
+        // -------- path.win32.<method>(...) (issue #1162) --------
+        // One arm covers every win32 sub-namespace method other than
+        // `.join` (above), `.sep`, and `.delimiter` (string literals
+        // folded at lowering time). Dispatch on `method` to the matching
+        // js_path_win32_* runtime function.
+        Expr::PathWin32 { method, args } => {
+            use perry_hir::PathWin32Method;
+            // Lower all args up front into NaN-boxed JSValue locals.
+            let lowered: Vec<_> = args
+                .iter()
+                .map(|a| lower_expr(ctx, a))
+                .collect::<Result<Vec<_>, _>>()?;
+            match method {
+                PathWin32Method::Dirname
+                | PathWin32Method::Basename
+                | PathWin32Method::Extname
+                | PathWin32Method::Normalize
+                | PathWin32Method::Resolve
+                | PathWin32Method::ToNamespacedPath => {
+                    let fn_name = match method {
+                        PathWin32Method::Dirname => "js_path_win32_dirname",
+                        PathWin32Method::Basename => "js_path_win32_basename",
+                        PathWin32Method::Extname => "js_path_win32_extname",
+                        PathWin32Method::Normalize => "js_path_win32_normalize",
+                        PathWin32Method::Resolve => "js_path_win32_resolve",
+                        PathWin32Method::ToNamespacedPath => "js_path_win32_to_namespaced_path",
+                        _ => unreachable!(),
+                    };
+                    let blk = ctx.block();
+                    let h = unbox_to_i64(blk, &lowered[0]);
+                    let result = blk.call(I64, fn_name, &[(I64, &h)]);
+                    Ok(nanbox_string_inline(blk, &result))
+                }
+                PathWin32Method::BasenameExt
+                | PathWin32Method::Relative
+                | PathWin32Method::ResolveJoin => {
+                    let fn_name = match method {
+                        PathWin32Method::BasenameExt => "js_path_win32_basename_ext",
+                        PathWin32Method::Relative => "js_path_win32_relative",
+                        PathWin32Method::ResolveJoin => "js_path_win32_resolve_join",
+                        _ => unreachable!(),
+                    };
+                    let blk = ctx.block();
+                    let a = unbox_to_i64(blk, &lowered[0]);
+                    let b = unbox_to_i64(blk, &lowered[1]);
+                    let result = blk.call(I64, fn_name, &[(I64, &a), (I64, &b)]);
+                    Ok(nanbox_string_inline(blk, &result))
+                }
+                PathWin32Method::IsAbsolute => {
+                    let blk = ctx.block();
+                    let h = unbox_to_i64(blk, &lowered[0]);
+                    let i32_v = blk.call(I32, "js_path_win32_is_absolute", &[(I64, &h)]);
+                    Ok(i32_bool_to_nanbox(blk, &i32_v))
+                }
+                PathWin32Method::MatchesGlob => {
+                    let blk = ctx.block();
+                    let p = unbox_to_i64(blk, &lowered[0]);
+                    let pat = unbox_to_i64(blk, &lowered[1]);
+                    let i32_v =
+                        blk.call(I32, "js_path_win32_matches_glob", &[(I64, &p), (I64, &pat)]);
+                    Ok(i32_bool_to_nanbox(blk, &i32_v))
+                }
+                PathWin32Method::Parse => {
+                    let blk = ctx.block();
+                    let h = unbox_to_i64(blk, &lowered[0]);
+                    let result = blk.call(I64, "js_path_win32_parse", &[(I64, &h)]);
+                    Ok(nanbox_pointer_inline(blk, &result))
+                }
+                PathWin32Method::Format => {
+                    // js_path_win32_format takes a NaN-boxed double (object handle).
+                    let obj_box = lowered.into_iter().next().unwrap();
+                    let blk = ctx.block();
+                    let result = blk.call(I64, "js_path_win32_format", &[(DOUBLE, &obj_box)]);
+                    Ok(nanbox_string_inline(blk, &result))
+                }
+            }
+        }
+
         // -------- queueMicrotask(fn) / process.nextTick(fn) stubs --------
         // Real microtask scheduling needs the runtime's queue. For
         // now we lower the callback for side effects (it might be a

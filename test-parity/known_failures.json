@@ -38,36 +38,6 @@
     "category": "bug-open",
     "reason": "node:console granular parity: inspecting a function whose own `toString` is overridden doesn't follow Node's function-formatting path (which renders `[Function: name]` without invoking user `toString`). Flips to PASS when #1203 lands."
   },
-  "node-suite/path/win32/basename-dirname": {
-    "issue": "1162",
-    "added": "2026-05-20",
-    "category": "module-inventory",
-    "reason": "#1162: the `path.win32` sub-namespace isn't implemented. `path.win32.basename` / `path.win32.dirname` resolve to undefined; all five `node-suite/path/win32/*` fixtures flip to PASS once the win32 mirror lands."
-  },
-  "node-suite/path/win32/join-normalize": {
-    "issue": "1162",
-    "added": "2026-05-20",
-    "category": "module-inventory",
-    "reason": "#1162: the `path.win32` sub-namespace isn't implemented. `path.win32.join` happens to produce a Node-shaped string for the covered cases but `path.win32.normalize` doesn't — both rely on the missing Windows separator/drive handling. Flips to PASS with the rest of the win32 family."
-  },
-  "node-suite/path/win32/parse-format": {
-    "issue": "1162",
-    "added": "2026-05-20",
-    "category": "module-inventory",
-    "reason": "#1162: `path.win32.parse` returns undefined so the downstream property reads (`.root`, `.dir`, …) throw. Flips to PASS when the win32 mirror is wired."
-  },
-  "node-suite/path/win32/relative-resolve": {
-    "issue": "1162",
-    "added": "2026-05-20",
-    "category": "module-inventory",
-    "reason": "#1162: `path.win32.relative` / `.resolve` / `.isAbsolute` resolve to undefined. Flips to PASS when the win32 mirror is wired."
-  },
-  "node-suite/path/win32/unc-and-drive": {
-    "issue": "1162",
-    "added": "2026-05-20",
-    "category": "module-inventory",
-    "reason": "#1162: UNC paths (`\\\\\\\\server\\\\share`) and drive-relative paths (`C:foo`) need win32-specific normalize/resolve rules that Perry doesn't model on POSIX hosts. Flips to PASS when the win32 mirror is wired."
-  },
   "issue_655_repro": {
     "issue": "655",
     "added": "2026-05-15",

@@ -476,6 +476,11 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(a, out);
             walk(b, out);
         }
+        Expr::PathWin32 { args, .. } => {
+            for v in args {
+                walk(v, out);
+            }
+        }
         Expr::JsonStringifyFull(value, replacer, indent) => {
             walk(value, out);
             walk(replacer, out);

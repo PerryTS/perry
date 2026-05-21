@@ -985,6 +985,11 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(v, candidates, classes, escaped);
             }
         }
+        Expr::PathWin32 { args, .. } => {
+            for v in args {
+                check_escapes_in_expr(v, candidates, classes, escaped);
+            }
+        }
         Expr::ErrorNew(opt) => {
             if let Some(o) = opt {
                 check_escapes_in_expr(o, candidates, classes, escaped);
