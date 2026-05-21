@@ -6,7 +6,7 @@
 //! alphabetically, entries within a module sort by kind then name —
 //! so regenerated docs produce stable diffs in CI.
 
-use crate::{ApiEntry, ApiKind, ApiSource, ParamSpec, TypeSpec, API_MANIFEST};
+use crate::{is_internal_module, ApiEntry, ApiKind, ApiSource, ParamSpec, TypeSpec, API_MANIFEST};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
@@ -36,7 +36,7 @@ pub fn emit_markdown(_perry_version: &str) -> String {
     let _ = writeln!(
         out,
         "Total: {} entries across {} modules.",
-        API_MANIFEST.len(),
+        by_module.values().map(|v| v.len()).sum::<usize>(),
         by_module.len()
     );
     let _ = writeln!(out);
@@ -144,7 +144,7 @@ pub fn emit_dts(_perry_version: &str) -> String {
     let _ = writeln!(
         out,
         "// Coverage: {} entries across {} modules",
-        API_MANIFEST.len(),
+        by_module.values().map(|v| v.len()).sum::<usize>(),
         by_module.len()
     );
     let _ = writeln!(out);
@@ -251,6 +251,9 @@ pub fn emit_dts(_perry_version: &str) -> String {
 fn group_by_module() -> BTreeMap<&'static str, Vec<&'static ApiEntry>> {
     let mut by_module: BTreeMap<&'static str, Vec<&'static ApiEntry>> = BTreeMap::new();
     for entry in API_MANIFEST {
+        if is_internal_module(entry.module) {
+            continue;
+        }
         by_module.entry(entry.module).or_default().push(entry);
     }
     for entries in by_module.values_mut() {
@@ -462,8 +465,11 @@ mod tests {
     #[test]
     fn markdown_contains_every_module() {
         let md = emit_markdown("test");
-        let modules: std::collections::HashSet<&'static str> =
-            API_MANIFEST.iter().map(|e| e.module).collect();
+        let modules: std::collections::HashSet<&'static str> = API_MANIFEST
+            .iter()
+            .map(|e| e.module)
+            .filter(|m| !is_internal_module(m))
+            .collect();
         for m in &modules {
             // Modules render as `## `<name>``.
             assert!(
@@ -477,8 +483,11 @@ mod tests {
     #[test]
     fn dts_declares_every_module() {
         let dts = emit_dts("test");
-        let modules: std::collections::HashSet<&'static str> =
-            API_MANIFEST.iter().map(|e| e.module).collect();
+        let modules: std::collections::HashSet<&'static str> = API_MANIFEST
+            .iter()
+            .map(|e| e.module)
+            .filter(|m| !is_internal_module(m))
+            .collect();
         for m in &modules {
             assert!(
                 dts.contains(&format!("declare module \"{}\"", m)),

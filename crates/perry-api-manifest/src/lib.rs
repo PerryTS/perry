@@ -21,7 +21,7 @@ mod emit;
 mod entries;
 
 pub use emit::{emit_dts, emit_markdown};
-pub use entries::{API_MANIFEST, NATIVE_MODULES, RUNTIME_ONLY_MODULES};
+pub use entries::{API_MANIFEST, INTERNAL_MODULES, NATIVE_MODULES, RUNTIME_ONLY_MODULES};
 
 /// One entry in the manifest. Identifies a single named symbol on a
 /// known module — a method, a property, or a class.
@@ -203,7 +203,14 @@ pub fn module_has_symbol(module: &str, name: &str) -> Option<&'static ApiEntry> 
 /// `perry-hir::ir`.
 pub fn is_known_module(path: &str) -> bool {
     let normalized = path.strip_prefix("node:").unwrap_or(path);
-    NATIVE_MODULES.contains(&normalized)
+    NATIVE_MODULES.contains(&normalized) || INTERNAL_MODULES.contains(&normalized)
+}
+
+/// True if `module` is an internal pseudo-module (not user-importable,
+/// hidden from generated docs / .d.ts). See `INTERNAL_MODULES`.
+pub fn is_internal_module(module: &str) -> bool {
+    let normalized = module.strip_prefix("node:").unwrap_or(module);
+    INTERNAL_MODULES.contains(&normalized)
 }
 
 /// True if `module` is handled entirely by `perry-runtime` (no

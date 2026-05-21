@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1054 entries across 79 modules.
+Total: 1061 entries across 79 modules.
 
 ## Modules
 
@@ -242,8 +242,10 @@ Total: 1054 entries across 79 modules.
 - `byteLength` — module
 - `concat` — module
 - `from` — module
+- `isAscii` — module
 - `isBuffer` — module
 - `isEncoding` — module
+- `isUtf8` — module
 - `of` — module
 
 ### Properties
@@ -503,6 +505,7 @@ Total: 1054 entries across 79 modules.
 - `listeners` — instance
 - `off` — instance
 - `on` — instance
+- `on` — module
 - `once` — instance
 - `once` — module
 - `prependListener` — instance
@@ -1573,13 +1576,17 @@ Total: 1054 entries across 79 modules.
 - `isAnyArrayBuffer` — module
 - `isArrayBuffer` — module
 - `isArrayBufferView` — module
+- `isBooleanObject` — module
+- `isBoxedPrimitive` — module
 - `isDate` — module
 - `isFloat64Array` — module
 - `isInt32Array` — module
 - `isMap` — module
+- `isNumberObject` — module
 - `isPromise` — module
 - `isRegExp` — module
 - `isSet` — module
+- `isStringObject` — module
 - `isTypedArray` — module
 - `isUint16Array` — module
 - `isUint8Array` — module

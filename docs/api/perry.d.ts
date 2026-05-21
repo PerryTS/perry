@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1054 entries across 79 modules
+// Coverage: 1061 entries across 79 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -172,9 +172,13 @@ declare module "buffer" {
   /** stdlib */
   export function from(...args: any[]): any;
   /** stdlib */
+  export function isAscii(...args: any[]): any;
+  /** stdlib */
   export function isBuffer(...args: any[]): any;
   /** stdlib */
   export function isEncoding(...args: any[]): any;
+  /** stdlib */
+  export function isUtf8(...args: any[]): any;
   /** stdlib */
   export function of(...args: any[]): any;
 }
@@ -406,6 +410,8 @@ declare module "events" {
   export function getMaxListeners(...args: any[]): any;
   /** stdlib */
   export function listenerCount(...args: any[]): any;
+  /** stdlib */
+  export function on(...args: any[]): any;
   /** stdlib */
   export function once(...args: any[]): any;
   /** stdlib */
@@ -1566,6 +1572,10 @@ declare module "util/types" {
   /** stdlib */
   export function isArrayBufferView(...args: any[]): any;
   /** stdlib */
+  export function isBooleanObject(...args: any[]): any;
+  /** stdlib */
+  export function isBoxedPrimitive(...args: any[]): any;
+  /** stdlib */
   export function isDate(...args: any[]): any;
   /** stdlib */
   export function isFloat64Array(...args: any[]): any;
@@ -1574,11 +1584,15 @@ declare module "util/types" {
   /** stdlib */
   export function isMap(...args: any[]): any;
   /** stdlib */
+  export function isNumberObject(...args: any[]): any;
+  /** stdlib */
   export function isPromise(...args: any[]): any;
   /** stdlib */
   export function isRegExp(...args: any[]): any;
   /** stdlib */
   export function isSet(...args: any[]): any;
+  /** stdlib */
+  export function isStringObject(...args: any[]): any;
   /** stdlib */
   export function isTypedArray(...args: any[]): any;
   /** stdlib */

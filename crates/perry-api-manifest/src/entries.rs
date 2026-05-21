@@ -147,6 +147,15 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "tty",
 ];
 
+/// Pseudo-modules that exist in the dispatch table + manifest but are
+/// NOT user-importable. Used to route internal codegen artifacts
+/// (e.g. `new Number(...)` boxing, the `util.types` namespace-access
+/// alias of `util/types`) through the same (module, name) dispatch
+/// machinery as real Node modules. Hidden from `--print-api-manifest`
+/// markdown / .d.ts output, but accepted by `is_known_module` so the
+/// manifest consistency tests pass.
+pub const INTERNAL_MODULES: &[&str] = &["__primitive_box", "util.types"];
+
 const fn method(
     module: &'static str,
     name: &'static str,
