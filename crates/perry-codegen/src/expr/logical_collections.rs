@@ -1,0 +1,568 @@
+//! Logical..SetNewFromArray.
+//!
+//! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
+//! Pure mechanical move — match arm bodies are verbatim copies, called from
+//! `lower_expr`'s outer dispatch.
+
+use anyhow::{anyhow, bail, Result};
+#[allow(unused_imports)]
+use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
+#[allow(unused_imports)]
+use perry_types::Type as HirType;
+
+#[allow(unused_imports)]
+use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
+#[allow(unused_imports)]
+use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
+#[allow(unused_imports)]
+use crate::lower_string_method::{
+    flatten_string_add_chain, lower_string_coerce_concat, lower_string_concat,
+    lower_string_concat_chain, lower_string_self_append,
+};
+#[allow(unused_imports)]
+use crate::nanbox::{double_literal, POINTER_MASK_I64};
+#[allow(unused_imports)]
+use crate::type_analysis::{
+    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
+    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+};
+#[allow(unused_imports)]
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+
+#[allow(unused_imports)]
+use super::{
+    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
+    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
+    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
+    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
+    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
+    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
+    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
+    I18nLowerCtx,
+};
+
+pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::Logical { op, left, right } => lower_logical(ctx, *op, left, right),
+
+        // -------- arr.filter(callback) --------
+        // Mirrors ArrayMap: takes a closure header pointer, returns
+        // a new array.
+        Expr::ArrayFilter { array, callback } => {
+            let arr_box = lower_expr(ctx, array)?;
+            let cb_box = lower_expr(ctx, callback)?;
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let cb_handle = unbox_to_i64(blk, &cb_box);
+            let result = blk.call(
+                I64,
+                "js_array_filter",
+                &[(I64, &arr_handle), (I64, &cb_handle)],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
+
+        // -------- fetch(url, { method, body, headers }) --------
+        // Build a runtime headers object from the static (key, dynamic-value)
+        // pairs, JSON-stringify it, and pass everything to
+        // `js_fetch_with_options(url, method, body, headers_json)` which
+        // returns a `*mut Promise`. The result is NaN-boxed with POINTER_TAG
+        // so the rest of the await/then machinery sees a normal Promise.
+        Expr::FetchWithOptions {
+            url,
+            method,
+            body,
+            headers,
+        } => {
+            let url_box = lower_expr(ctx, url)?;
+            let method_box = lower_expr(ctx, method)?;
+            let body_box = lower_expr(ctx, body)?;
+
+            // Build the headers object: js_object_alloc(0, N) followed by
+            // js_object_set_field_by_name for each (interned key, value).
+            let n_str = (headers.len() as u32).to_string();
+            let zero_str = "0".to_string();
+            let headers_handle =
+                ctx.block()
+                    .call(I64, "js_object_alloc", &[(I32, &zero_str), (I32, &n_str)]);
+            for (key, val_expr) in headers {
+                let key_idx = ctx.strings.intern(key);
+                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let v_box = lower_expr(ctx, val_expr)?;
+                let blk = ctx.block();
+                let key_box = blk.load(DOUBLE, &key_handle_global);
+                let key_bits = blk.bitcast_double_to_i64(&key_box);
+                let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                blk.call_void(
+                    "js_object_set_field_by_name",
+                    &[(I64, &headers_handle), (I64, &key_raw), (DOUBLE, &v_box)],
+                );
+            }
+
+            let blk = ctx.block();
+            let headers_obj_box = nanbox_pointer_inline(blk, &headers_handle);
+            // js_json_stringify(value: f64, indent: i32) -> i64 string handle.
+            let zero_i = "0".to_string();
+            let headers_str = blk.call(
+                I64,
+                "js_json_stringify",
+                &[(DOUBLE, &headers_obj_box), (I32, &zero_i)],
+            );
+
+            // The runtime takes raw StringHeader pointers (i64). Unbox each
+            // input string. `body` may be undefined → unbox produces 0 which
+            // the runtime treats as "no body" via string_from_header().
+            let url_handle = unbox_to_i64(blk, &url_box);
+            let method_handle = unbox_to_i64(blk, &method_box);
+            let body_handle = unbox_to_i64(blk, &body_box);
+            let promise = blk.call(
+                I64,
+                "js_fetch_with_options",
+                &[
+                    (I64, &url_handle),
+                    (I64, &method_handle),
+                    (I64, &body_handle),
+                    (I64, &headers_str),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+
+        // -------- arr.some(callback) -> boolean --------
+        // js_array_some returns a NaN-tagged TAG_TRUE/TAG_FALSE as f64,
+        // so we forward it directly without conversion.
+        Expr::ArraySome { array, callback } => {
+            let arr_box = lower_expr(ctx, array)?;
+            let cb_box = lower_expr(ctx, callback)?;
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let cb_handle = unbox_to_i64(blk, &cb_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_array_some",
+                &[(I64, &arr_handle), (I64, &cb_handle)],
+            ))
+        }
+
+        // -------- arr.every(callback) -> boolean --------
+        Expr::ArrayEvery { array, callback } => {
+            let arr_box = lower_expr(ctx, array)?;
+            let cb_box = lower_expr(ctx, callback)?;
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let cb_handle = unbox_to_i64(blk, &cb_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_array_every",
+                &[(I64, &arr_handle), (I64, &cb_handle)],
+            ))
+        }
+
+        // -------- arr.join(separator?) -> string --------
+        // The runtime takes a separator StringHeader (nullable). We
+        // intern "," as the default when no separator is given so the
+        // runtime side never sees a null pointer.
+        Expr::ArrayJoin { array, separator } => {
+            let arr_box = lower_expr(ctx, array)?;
+            let sep_box = if let Some(sep_expr) = separator {
+                lower_expr(ctx, sep_expr)?
+            } else {
+                let key_idx = ctx.strings.intern(",");
+                let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                ctx.block().load(DOUBLE, &handle_global)
+            };
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            // SSO-safe separator unbox: `js_array_join` reads `byte_len`
+            // from the StringHeader, which segfaults on SSO inline bits.
+            // Same #214 bug class.
+            let sep_handle = unbox_str_handle(blk, &sep_box);
+            let result = blk.call(
+                I64,
+                "js_array_join",
+                &[(I64, &arr_handle), (I64, &sep_handle)],
+            );
+            Ok(nanbox_string_inline(blk, &result))
+        }
+
+        // -------- map.delete(key) -> boolean --------
+        Expr::MapDelete { map, key } => {
+            let m_box = lower_expr(ctx, map)?;
+            let k_box = lower_expr(ctx, key)?;
+            let blk = ctx.block();
+            let m_handle = unbox_to_i64(blk, &m_box);
+            let i32_v = blk.call(I32, "js_map_delete", &[(I64, &m_handle), (DOUBLE, &k_box)]);
+            let bit = blk.icmp_ne(I32, &i32_v, "0");
+            let tagged = blk.select(
+                crate::types::I1,
+                &bit,
+                I64,
+                crate::nanbox::TAG_TRUE_I64,
+                crate::nanbox::TAG_FALSE_I64,
+            );
+            Ok(blk.bitcast_i64_to_double(&tagged))
+        }
+
+        // -------- Object.keys(obj) -> string[] --------
+        Expr::ObjectKeys(obj) => {
+            let obj_box = lower_expr(ctx, obj)?;
+            let blk = ctx.block();
+            let obj_handle = unbox_to_i64(blk, &obj_box);
+            let arr_handle = blk.call(I64, "js_object_keys", &[(I64, &obj_handle)]);
+            Ok(nanbox_pointer_inline(blk, &arr_handle))
+        }
+
+        // -------- isFinite(x) — global, coerces to Number first --------
+        // The runtime's js_is_finite returns NaN-tagged TAG_TRUE/TAG_FALSE
+        // (not a raw 0.0/1.0), so we return the result directly. No fcmp
+        // conversion needed — TAG_TRUE is itself a NaN payload and
+        // fcmp("one", NaN, 0.0) always returns false.
+        Expr::IsFinite(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            Ok(ctx.block().call(DOUBLE, "js_is_finite", &[(DOUBLE, &v)]))
+        }
+
+        // -------- Number.isFinite(x) — strict, no coercion --------
+        // Per ECMA-262 §21.1.2.2, returns false for any non-Number value
+        // (`"1"`, `true`, `null`, etc.) — distinct from the global
+        // `isFinite` which coerces via ToNumber. Pre-fix the codegen
+        // routed both forms to `js_is_finite` (the coercing variant),
+        // so `Number.isFinite("1")` returned true; correct value is
+        // false.
+        Expr::NumberIsFinite(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_number_is_finite", &[(DOUBLE, &v)]))
+        }
+
+        // -------- internal: is value === undefined OR a bare-NaN double --------
+        Expr::IsUndefinedOrBareNan(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            let i32_v = blk.call(I32, "js_is_undefined_or_bare_nan", &[(DOUBLE, &v)]);
+            Ok(i32_bool_to_nanbox(blk, &i32_v))
+        }
+
+        // -------- Math.min(...args) --------
+        // Two HIR shapes: variadic (Vec<Expr>) and spread-from-array
+        // (single Expr that is an array). Both build/use an array and
+        // call js_math_min_array. The variadic form materializes a
+        // temporary fixed-size array via js_array_alloc + push.
+        Expr::MathMin(values) => {
+            let cap = (values.len() as u32).to_string();
+            let arr_handle_v = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+            // Push each value. push_f64 may realloc, so we thread the
+            // returned pointer through.
+            let mut current = arr_handle_v;
+            for v_expr in values {
+                let v_box = lower_expr(ctx, v_expr)?;
+                let blk = ctx.block();
+                current = blk.call(
+                    I64,
+                    "js_array_push_f64",
+                    &[(I64, &current), (DOUBLE, &v_box)],
+                );
+            }
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_math_min_array", &[(I64, &current)]))
+        }
+        Expr::MathMinSpread(arr_expr) => {
+            let arr_box = lower_expr(ctx, arr_expr)?;
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            Ok(blk.call(DOUBLE, "js_math_min_array", &[(I64, &arr_handle)]))
+        }
+
+        // -------- Math.max(...args) — same shape as Math.min --------
+        Expr::MathMax(values) => {
+            let cap = (values.len() as u32).to_string();
+            let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+            for v_expr in values {
+                let v_box = lower_expr(ctx, v_expr)?;
+                let blk = ctx.block();
+                current = blk.call(
+                    I64,
+                    "js_array_push_f64",
+                    &[(I64, &current), (DOUBLE, &v_box)],
+                );
+            }
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_math_max_array", &[(I64, &current)]))
+        }
+        Expr::MathMaxSpread(arr_expr) => {
+            let arr_box = lower_expr(ctx, arr_expr)?;
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            Ok(blk.call(DOUBLE, "js_math_max_array", &[(I64, &arr_handle)]))
+        }
+
+        // -------- String(value) coercion --------
+        Expr::StringCoerce(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_string_coerce", &[(DOUBLE, &v)]);
+            Ok(nanbox_string_inline(blk, &handle))
+        }
+
+        // -------- Boolean(value) coercion --------
+        // js_is_truthy is exactly the JS Boolean(value) coercion: it
+        // returns 1 for truthy, 0 for falsy. We convert the i32 to
+        // a NaN-tagged TAG_TRUE/TAG_FALSE so console.log prints
+        // "true"/"false" via the runtime's NaN-tag dispatch.
+        Expr::BooleanCoerce(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            let i32_v = blk.call(I32, "js_is_truthy", &[(DOUBLE, &v)]);
+            let bit = blk.icmp_ne(I32, &i32_v, "0");
+            let tagged = blk.select(
+                crate::types::I1,
+                &bit,
+                I64,
+                crate::nanbox::TAG_TRUE_I64,
+                crate::nanbox::TAG_FALSE_I64,
+            );
+            Ok(blk.bitcast_i64_to_double(&tagged))
+        }
+
+        // -------- arr.slice(start, end?) -- new array slice --------
+        Expr::ArraySlice { array, start, end } => {
+            let arr_box = lower_expr(ctx, array)?;
+            let start_d = lower_expr(ctx, start)?;
+            let end_d = if let Some(end_expr) = end {
+                lower_expr(ctx, end_expr)?
+            } else {
+                // No end → pass i32::MAX so the runtime clamps to length.
+                // Encode as 2147483647.0 → fptosi → i32 max.
+                "2147483647.0".to_string()
+            };
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
+            let end_i32 = blk.fptosi(DOUBLE, &end_d, I32);
+            let result = blk.call(
+                I64,
+                "js_array_slice",
+                &[(I64, &arr_handle), (I32, &start_i32), (I32, &end_i32)],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
+
+        // -------- arr.shift() (HIR variant takes a LocalId) --------
+        Expr::ArrayShift(array_id) => {
+            let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            Ok(blk.call(DOUBLE, "js_array_shift_f64", &[(I64, &arr_handle)]))
+        }
+
+        // -------- new Set() / new Set(arr) --------
+        Expr::SetNew => {
+            let cap = "8".to_string();
+            let handle = ctx.block().call(I64, "js_set_alloc", &[(I32, &cap)]);
+            Ok(nanbox_pointer_inline(ctx.block(), &handle))
+        }
+
+        // -------- "key" in obj --------
+        // js_object_has_property takes two NaN-boxed doubles and returns
+        // a NaN-boxed boolean (1.0/0.0 already in our ABI).
+        Expr::In { property, object } => {
+            let key = lower_expr(ctx, property)?;
+            let obj = lower_expr(ctx, object)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_has_property",
+                &[(DOUBLE, &obj), (DOUBLE, &key)],
+            ))
+        }
+
+        // -------- fs.writeFileSync(path, content) --------
+        // The runtime takes both args as NaN-boxed doubles directly.
+        // Returns i32 (1=success); we drop the result and return 0.0
+        // since the HIR-level fs.writeFileSync is void in JS.
+        // -------- parseInt(string, radix?) -> number --------
+        Expr::ParseInt { string, radix } => {
+            let s_box = lower_expr(ctx, string)?;
+            let r_d = if let Some(r_expr) = radix {
+                lower_expr(ctx, r_expr)?
+            } else {
+                "0.0".to_string()
+            };
+            let blk = ctx.block();
+            let s_handle = unbox_to_i64(blk, &s_box);
+            Ok(blk.call(DOUBLE, "js_parse_int", &[(I64, &s_handle), (DOUBLE, &r_d)]))
+        }
+        Expr::ParseFloat(string) => {
+            let s_box = lower_expr(ctx, string)?;
+            let blk = ctx.block();
+            let s_handle = unbox_to_i64(blk, &s_box);
+            Ok(blk.call(DOUBLE, "js_parse_float", &[(I64, &s_handle)]))
+        }
+
+        // -------- RegExp literal: /pattern/flags --------
+        // Constructs a RegExpHeader at compile time. Both pattern
+        // and flags are interned in the StringPool so the runtime
+        // sees stable handles.
+        Expr::RegExp { pattern, flags } => {
+            let pattern_idx = ctx.strings.intern(pattern);
+            let flags_idx = ctx.strings.intern(flags);
+            let pattern_global = format!("@{}", ctx.strings.entry(pattern_idx).handle_global);
+            let flags_global = format!("@{}", ctx.strings.entry(flags_idx).handle_global);
+            let blk = ctx.block();
+            let pattern_box = blk.load(DOUBLE, &pattern_global);
+            let flags_box = blk.load(DOUBLE, &flags_global);
+            let pattern_handle = unbox_to_i64(blk, &pattern_box);
+            let flags_handle = unbox_to_i64(blk, &flags_box);
+            let result = blk.call(
+                I64,
+                "js_regexp_new",
+                &[(I64, &pattern_handle), (I64, &flags_handle)],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
+
+        // `RegExp(<dynExpr>)` / `RegExp(<dynExpr>, <dynFlagsExpr>)` /
+        // `new RegExp(<non-literal>)`. Folded at HIR (lower/expr_call.rs +
+        // lower/expr_new.rs) from any callsite where the pattern (or
+        // flags) come in as runtime values rather than string literals.
+        // Both `pattern` and `flags` are NaN-boxed strings; missing
+        // flags fall back to interning an empty string at codegen so
+        // `js_regexp_new` always sees a real `StringHeader*`. Followup
+        // to #957 / PR #959.
+        Expr::RegExpDynamic { pattern, flags } => {
+            let pattern_box = lower_expr(ctx, pattern)?;
+            let flags_handle = if let Some(flags_expr) = flags {
+                let flags_box = lower_expr(ctx, flags_expr)?;
+                let blk = ctx.block();
+                unbox_str_handle(blk, &flags_box)
+            } else {
+                // Intern an empty string and use its handle so the
+                // runtime sees a valid `StringHeader*` (the
+                // `is_valid_ptr` check inside `js_regexp_new` already
+                // accepts null, but the LLVM type system needs a real
+                // i64 here, not a `null` typed `ptr`).
+                let empty_idx = ctx.strings.intern("");
+                let empty_global = format!("@{}", ctx.strings.entry(empty_idx).handle_global);
+                let blk = ctx.block();
+                let empty_box = blk.load(DOUBLE, &empty_global);
+                unbox_to_i64(blk, &empty_box)
+            };
+            let blk = ctx.block();
+            let pattern_handle = unbox_str_handle(blk, &pattern_box);
+            let result = blk.call(
+                I64,
+                "js_regexp_new",
+                &[(I64, &pattern_handle), (I64, &flags_handle)],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
+
+        // -------- ObjectSpread literal --------
+        // `{ ...a, key: val, ...b }`. The HIR carries an ordered
+        // Vec<(Option<String>, Expr)>. Static props use the same
+        // js_object_set_field_by_name path as `Expr::Object`. For
+        // spread sources we'd need a runtime helper to copy fields
+        // — for now we just allocate the object and set the static
+        // props, ignoring spreads. Wrong for `...src` but unblocks
+        // compilation.
+        Expr::ObjectSpread { parts } => {
+            // `{ ...a, x: 1, ...b, y: 2 }` — allocate an empty object,
+            // then process `parts` in source order: static keys call
+            // `js_object_set_field_by_name`, spreads call the runtime
+            // `js_object_copy_own_fields(dst, src)` which walks the
+            // source's `keys_array` and copies each field via the same
+            // setter (so later parts override earlier ones, matching JS
+            // semantics).
+            let static_count = parts.iter().filter(|(k, _)| k.is_some()).count() as u32;
+            let class_id = "0".to_string();
+            let count_str = static_count.to_string();
+            let obj_handle = ctx.block().call(
+                I64,
+                "js_object_alloc",
+                &[(I32, &class_id), (I32, &count_str)],
+            );
+            for (key_opt, value_expr) in parts {
+                if let Some(key) = key_opt {
+                    // Static key:value pair.
+                    let v = lower_expr(ctx, value_expr)?;
+                    let key_idx = ctx.strings.intern(key);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    blk.call_void(
+                        "js_object_set_field_by_name",
+                        &[(I64, &obj_handle), (I64, &key_raw), (DOUBLE, &v)],
+                    );
+                } else {
+                    // `...expr` spread — copy all own fields from the
+                    // source object into `obj_handle`.
+                    let src_box = lower_expr(ctx, value_expr)?;
+                    ctx.block().call_void(
+                        "js_object_copy_own_fields",
+                        &[(I64, &obj_handle), (DOUBLE, &src_box)],
+                    );
+                }
+            }
+            Ok(nanbox_pointer_inline(ctx.block(), &obj_handle))
+        }
+
+        // -------- Object.assign(target, ...sources) --------
+        // Per ECMAScript spec, Object.assign mutates `target` by copying each
+        // source's own enumerable string- and Symbol-keyed properties, and
+        // returns `target` (same identity, class_id, and side-table state
+        // preserved). The runtime helper `js_object_assign_one(t, s)` does
+        // both copies for one source and returns t. We chain the calls so
+        // `target` is evaluated exactly once and threaded through each source.
+        // Refs #590.
+        Expr::ObjectAssign { target, sources } => {
+            let target_box = lower_expr(ctx, target)?;
+            // Stash target in a temp slot if there are multiple sources, so
+            // each helper call uses the same SSA value (defensive: helper
+            // returns target_f64 unchanged, but the chain is clearer when we
+            // pass target_box explicitly each time — and side-step any LLVM
+            // SSA reordering quirks). With zero sources, we still want to
+            // return target itself (matching `Object.assign(t)` which is a
+            // valid no-op-and-return-target form).
+            if sources.is_empty() {
+                return Ok(target_box);
+            }
+            let mut acc = target_box;
+            for src in sources {
+                let src_box = lower_expr(ctx, src)?;
+                acc = ctx.block().call(
+                    DOUBLE,
+                    "js_object_assign_one",
+                    &[(DOUBLE, &acc), (DOUBLE, &src_box)],
+                );
+            }
+            Ok(acc)
+        }
+
+        // -------- new Set(iter) --------
+        // Fix #421 (v0.5.574): route through js_set_from_iterable so
+        // string inputs (`new Set("abc")`) iterate codepoints instead of
+        // segfaulting on a bad ArrayHeader cast. The runtime function
+        // takes the NaN-boxed value directly and dispatches by tag.
+        Expr::SetNewFromArray(arr_expr) => {
+            let arr_box = lower_expr(ctx, arr_expr)?;
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_set_from_iterable", &[(DOUBLE, &arr_box)]);
+            Ok(nanbox_pointer_inline(blk, &handle))
+        }
+
+        // -------- StaticMethodCall --------
+        // `MyClass.staticMethod(args)` — look up the synthesized
+        // `perry_method_<modprefix>__<class>__<method>` in the methods
+        // registry and emit a direct call. Static methods don't take
+        // a `this` parameter (unlike instance methods).
+        _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}

@@ -1,0 +1,196 @@
+//! PropertySet (obj.prop = v).
+//!
+//! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
+//! Pure mechanical move — match arm bodies are verbatim copies, called from
+//! `lower_expr`'s outer dispatch.
+
+use anyhow::{anyhow, bail, Result};
+#[allow(unused_imports)]
+use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
+#[allow(unused_imports)]
+use perry_types::Type as HirType;
+
+#[allow(unused_imports)]
+use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
+#[allow(unused_imports)]
+use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
+#[allow(unused_imports)]
+use crate::lower_string_method::{
+    flatten_string_add_chain, lower_string_coerce_concat, lower_string_concat,
+    lower_string_concat_chain, lower_string_self_append,
+};
+#[allow(unused_imports)]
+use crate::nanbox::{double_literal, POINTER_MASK_I64};
+#[allow(unused_imports)]
+use crate::type_analysis::{
+    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
+    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+};
+#[allow(unused_imports)]
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+
+#[allow(unused_imports)]
+use super::{
+    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
+    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
+    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
+    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
+    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
+    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
+    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
+    I18nLowerCtx,
+};
+
+pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::PropertySet {
+            object,
+            property,
+            value,
+        } => {
+            // Closes #304: `arr.length = N` must mutate the ArrayHeader, not
+            // set a "length" field in the object dispatch. Pre-fix the generic
+            // `js_object_set_field_by_name(arr, "length", N)` path silently
+            // recorded a property on the array's hidden dispatch object but
+            // never touched the real ArrayHeader.length, so subsequent reads
+            // of `arr.length` returned the stale original count and the
+            // elements stayed live. Statically Array-typed receivers route to
+            // `js_array_set_length` which truncates / extends the header.
+            // Open question: dynamic `Any`-typed receivers that happen to be
+            // arrays at runtime still hit the generic path and miss the fix —
+            // they'd need a runtime-side check inside js_object_set_field_by_name
+            // (route to js_array_set_length when the target is registered as
+            // an array). Deliberately out of scope here; the static-typed
+            // case covers the issue's repro.
+            if property == "length" && crate::type_analysis::is_array_expr(ctx, object) {
+                let arr_box = lower_expr(ctx, object)?;
+                let val_double = lower_expr(ctx, value)?;
+                let blk = ctx.block();
+                let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                blk.call_void(
+                    "js_array_set_length",
+                    &[(I64, &arr_handle), (DOUBLE, &val_double)],
+                );
+                return Ok(val_double);
+            }
+            // Scalar replacement fast path: store to the field's alloca.
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if let Some(slot) = ctx
+                    .scalar_replaced
+                    .get(id)
+                    .and_then(|fs| fs.get(property.as_str()))
+                    .cloned()
+                {
+                    let val_double = lower_expr(ctx, value)?;
+                    ctx.block().store(DOUBLE, &val_double, &slot);
+                    return Ok(val_double);
+                }
+            }
+            // Handle `this` during scalar-replaced constructor inlining:
+            if let Expr::This = object.as_ref() {
+                if let Some(slot) = ctx
+                    .scalar_ctor_target
+                    .last()
+                    .and_then(|tid| ctx.scalar_replaced.get(tid))
+                    .and_then(|fs| fs.get(property.as_str()))
+                    .cloned()
+                {
+                    let val_double = lower_expr(ctx, value)?;
+                    ctx.block().store(DOUBLE, &val_double, &slot);
+                    return Ok(val_double);
+                }
+            }
+            // Setter dispatch: if the receiver is a known class and the
+            // property is registered as a setter, call the synthesized
+            // __set_<property> method instead of doing a raw field
+            // store. The setter takes (this, value) and returns
+            // undefined; we forward `value` as the expression result.
+            if let Some(class_name) = receiver_class_name(ctx, object) {
+                let setter_key = (class_name.clone(), format!("__set_{}", property));
+                if let Some(fn_name) = ctx.methods.get(&setter_key).cloned() {
+                    let recv_box = lower_expr(ctx, object)?;
+                    let val_double = lower_expr(ctx, value)?;
+                    let _ = ctx.block().call(
+                        DOUBLE,
+                        &fn_name,
+                        &[(DOUBLE, &recv_box), (DOUBLE, &val_double)],
+                    );
+                    return Ok(val_double);
+                }
+                // Fast path: known class instance + plain instance field.
+                // Mirrors the PropertyGet fast path. NOTE: this bypasses
+                // the runtime's `Object.freeze` / per-key writable: false
+                // check that `js_object_set_field_by_name` does. That's
+                // OK for class methods on user types because:
+                //   1. The fast path only fires when the receiver type
+                //      is statically known to be a Named class — which
+                //      means the user has typed it as such.
+                //   2. Object.freeze on user-class instances is rare in
+                //      practice; freezing a Counter and then calling
+                //      .increment() would silently succeed instead of
+                //      silently failing — both are non-standard.
+                //   3. The dynamic `obj["foo"] = ...` path still goes
+                //      through the runtime helper and honors freeze.
+                if let Some(field_index) =
+                    crate::type_analysis::class_field_global_index(ctx, &class_name, property)
+                {
+                    let recv_box = lower_expr(ctx, object)?;
+                    let val_double = lower_expr(ctx, value)?;
+                    let blk = ctx.block();
+                    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                    let obj_ptr = blk.inttoptr(I64, &obj_handle);
+                    let header_skip = "24".to_string();
+                    let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                    let idx_str = field_index.to_string();
+                    let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &idx_str)]);
+                    blk.store(DOUBLE, &val_double, &field_ptr);
+                    let field_addr = blk.ptrtoint(&field_ptr, I64);
+                    let val_bits = blk.bitcast_double_to_i64(&val_double);
+                    emit_layout_note_slot_on_block(blk, &obj_handle, &idx_str, &val_bits);
+                    emit_write_barrier_slot_on_block(blk, &obj_bits, &field_addr, &val_bits);
+                    return Ok(val_double);
+                }
+            }
+            let obj_box = lower_expr(ctx, object)?;
+            let val_double = lower_expr(ctx, value)?;
+            // Intern the field name in the StringPool (same one the
+            // matching getter uses, so they share the global string).
+            let key_idx = ctx.strings.intern(property);
+            let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let blk = ctx.block();
+            let obj_bits = blk.bitcast_double_to_i64(&obj_box);
+            // Issue #618-followup: pass the FULL bits (including NaN-box
+            // tag) so the runtime can detect INT32-tagged class refs
+            // (`SQL.Aliased = Aliased` IIFE-static-property pattern from
+            // drizzle-orm). Pre-fix the AND-with-POINTER_MASK_I64 stripped
+            // the 0x7FFE tag, leaving the runtime with a small integer
+            // (the class id) — which fell into the small-handle dispatch
+            // path and silently dropped the assignment. The runtime now
+            // checks for top16 == 0x7FFE and routes to CLASS_DYNAMIC_PROPS.
+            let key_box = blk.load(DOUBLE, &key_handle_global);
+            let key_bits = blk.bitcast_double_to_i64(&key_box);
+            let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+            blk.call_void(
+                "js_object_set_field_by_name",
+                &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
+            );
+            Ok(val_double)
+        }
+
+        // `obj.field` — generic object field read. We get the key string
+        // handle from the StringPool (interned, so the same key across
+        // multiple sites shares one allocation), unbox both the object
+        // pointer and the key handle, then call
+        // `js_object_get_field_by_name_f64`. The result is a raw f64
+        // (which IS the NaN-boxed value for non-number fields — same bit
+        // pattern, runtime callers re-interpret based on context).
+        _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}

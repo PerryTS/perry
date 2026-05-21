@@ -1,0 +1,720 @@
+use super::*;
+
+pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
+    // ========== MySQL2 ==========
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: false,
+        method: "createConnection",
+        class_filter: None,
+        runtime: "js_mysql2_create_connection",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: false,
+        method: "createPool",
+        class_filter: None,
+        runtime: "js_mysql2_create_pool",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: false,
+        method: "createConnection",
+        class_filter: None,
+        runtime: "js_mysql2_create_connection",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: false,
+        method: "createPool",
+        class_filter: None,
+        runtime: "js_mysql2_create_pool",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    // mysql2 Pool-specific methods (class_filter: Some("Pool"))
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "query",
+        class_filter: Some("Pool"),
+        runtime: "js_mysql2_pool_query",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "execute",
+        class_filter: Some("Pool"),
+        runtime: "js_mysql2_pool_execute",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "end",
+        class_filter: Some("Pool"),
+        runtime: "js_mysql2_pool_end",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "query",
+        class_filter: Some("Pool"),
+        runtime: "js_mysql2_pool_query",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "execute",
+        class_filter: Some("Pool"),
+        runtime: "js_mysql2_pool_execute",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "end",
+        class_filter: Some("Pool"),
+        runtime: "js_mysql2_pool_end",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // mysql2 PoolConnection-specific methods
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "query",
+        class_filter: Some("PoolConnection"),
+        runtime: "js_mysql2_pool_connection_query",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "execute",
+        class_filter: Some("PoolConnection"),
+        runtime: "js_mysql2_pool_connection_execute",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "query",
+        class_filter: Some("PoolConnection"),
+        runtime: "js_mysql2_pool_connection_query",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "execute",
+        class_filter: Some("PoolConnection"),
+        runtime: "js_mysql2_pool_connection_execute",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    // mysql2 generic instance methods (Connection fallback, class_filter: None)
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "query",
+        class_filter: None,
+        runtime: "js_mysql2_connection_query",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "execute",
+        class_filter: None,
+        runtime: "js_mysql2_connection_execute",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "end",
+        class_filter: None,
+        runtime: "js_mysql2_connection_end",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "getConnection",
+        class_filter: None,
+        runtime: "js_mysql2_pool_get_connection",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "release",
+        class_filter: None,
+        runtime: "js_mysql2_pool_connection_release",
+        args: &[],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "beginTransaction",
+        class_filter: None,
+        runtime: "js_mysql2_connection_begin_transaction",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "commit",
+        class_filter: None,
+        runtime: "js_mysql2_connection_commit",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2",
+        has_receiver: true,
+        method: "rollback",
+        class_filter: None,
+        runtime: "js_mysql2_connection_rollback",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "query",
+        class_filter: None,
+        runtime: "js_mysql2_connection_query",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "execute",
+        class_filter: None,
+        runtime: "js_mysql2_connection_execute",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "end",
+        class_filter: None,
+        runtime: "js_mysql2_connection_end",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "getConnection",
+        class_filter: None,
+        runtime: "js_mysql2_pool_get_connection",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "release",
+        class_filter: None,
+        runtime: "js_mysql2_pool_connection_release",
+        args: &[],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "beginTransaction",
+        class_filter: None,
+        runtime: "js_mysql2_connection_begin_transaction",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "commit",
+        class_filter: None,
+        runtime: "js_mysql2_connection_commit",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mysql2/promise",
+        has_receiver: true,
+        method: "rollback",
+        class_filter: None,
+        runtime: "js_mysql2_connection_rollback",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // ========== PostgreSQL (pg) ==========
+    // `new Client(config)` and `new Pool(config)` are dispatched by
+    // `lower_builtin_new` (sync constructors that produce real handles).
+    // The factory-style entries below stay wired for `pg.connect(config)` /
+    // `pg.Pool(config)` patterns that some npm code uses.
+    NativeModSig {
+        module: "pg",
+        has_receiver: false,
+        method: "connect",
+        class_filter: None,
+        runtime: "js_pg_connect",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "pg",
+        has_receiver: false,
+        method: "Pool",
+        class_filter: None,
+        runtime: "js_pg_create_pool",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    // `client.connect()` — async, opens the TCP connection on a handle that
+    // `new Client(config)` previously created in the pre-connect state.
+    // No-op if the handle was already connected (e.g. came from the
+    // older `pg.connect(config)` factory). Class-filtered to Client so
+    // `pool.connect()` (which has different semantics — checkout a pooled
+    // connection — not yet implemented) doesn't accidentally land here.
+    NativeModSig {
+        module: "pg",
+        has_receiver: true,
+        method: "connect",
+        class_filter: Some("Client"),
+        runtime: "js_pg_client_connect",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // Pool-specific query/end — different runtime fns from the Client paths.
+    // Pre-existing dispatch was unfiltered and routed both Pool and Client
+    // through the Client query/end fns (latent bug: pool.query() against a
+    // Pool handle would fail because js_pg_client_query expects a Connection
+    // handle). Class-filtered Pool rows take precedence over the unfiltered
+    // Client/default rows below thanks to native_module_lookup's two-pass
+    // search (exact class_filter match first, then None fallback).
+    NativeModSig {
+        module: "pg",
+        has_receiver: true,
+        method: "query",
+        class_filter: Some("Pool"),
+        runtime: "js_pg_pool_query",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "pg",
+        has_receiver: true,
+        method: "end",
+        class_filter: Some("Pool"),
+        runtime: "js_pg_pool_end",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "pg",
+        has_receiver: true,
+        method: "query",
+        class_filter: None,
+        runtime: "js_pg_client_query",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "pg",
+        has_receiver: true,
+        method: "end",
+        class_filter: None,
+        runtime: "js_pg_client_end",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // ========== ioredis ==========
+    // NB: every row was previously emitting `js_redis_*` symbols which don't
+    // exist in perry-stdlib (the actual fns are `js_ioredis_*`). The bug was
+    // dormant because pre-#187 no codepath could land on a real Redis handle
+    // — `new Redis()` fell into the empty-placeholder branch in lower_new and
+    // every method dispatched against junk. With the v0.5.262 ctor branch
+    // making the receiver real, these rows have to point at the actual
+    // runtime symbols. Fixed throughout below.
+    NativeModSig {
+        module: "ioredis",
+        has_receiver: false,
+        method: "createClient",
+        class_filter: None,
+        // npm `redis`'s createClient(opts) and ioredis's `new Redis(opts)` are
+        // shape-compatible (both produce a client; opts is host/port/etc.).
+        // js_ioredis_new ignores its arg and reads env vars — same behavior.
+        runtime: "js_ioredis_new",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "ioredis",
+        has_receiver: true,
+        method: "set",
+        class_filter: None,
+        runtime: "js_ioredis_set",
+        args: &[NA_STR, NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "ioredis",
+        has_receiver: true,
+        method: "get",
+        class_filter: None,
+        runtime: "js_ioredis_get",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "ioredis",
+        has_receiver: true,
+        method: "del",
+        class_filter: None,
+        runtime: "js_ioredis_del",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "ioredis",
+        has_receiver: true,
+        method: "exists",
+        class_filter: None,
+        runtime: "js_ioredis_exists",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "ioredis",
+        has_receiver: true,
+        method: "incr",
+        class_filter: None,
+        runtime: "js_ioredis_incr",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "ioredis",
+        has_receiver: true,
+        method: "decr",
+        class_filter: None,
+        runtime: "js_ioredis_decr",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "ioredis",
+        has_receiver: true,
+        method: "expire",
+        class_filter: None,
+        runtime: "js_ioredis_expire",
+        args: &[NA_STR, NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "ioredis",
+        has_receiver: true,
+        method: "quit",
+        class_filter: None,
+        runtime: "js_ioredis_quit",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // Issue #605 — npm `redis`'s `client.connect()` is async. ioredis
+    // auto-connects in `new Redis()` and exposes `connect()` as a no-op
+    // resolved-promise that the runtime returns. Without this row,
+    // `await client.connect()` from `import { createClient } from
+    // "redis"` dispatches against `undefined` and raises the user-
+    // facing TypeError ("Cannot read properties of undefined …").
+    NativeModSig {
+        module: "ioredis",
+        has_receiver: true,
+        method: "connect",
+        class_filter: None,
+        runtime: "js_ioredis_connect",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // npm `redis`'s `client.disconnect()` — alias for `.quit()`.
+    NativeModSig {
+        module: "ioredis",
+        has_receiver: true,
+        method: "disconnect",
+        class_filter: None,
+        runtime: "js_ioredis_quit",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // ========== MongoDB ==========
+    // `new MongoClient(uri)` is dispatched by `lower_builtin_new` (sync ctor
+    // that stores the URI). `client.connect()` opens the connection on the
+    // pre-connect handle. The receiver-less factory `mongodb.connect(uri)`
+    // (combines new+connect, returns Promise<Handle>) stays wired below.
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: false,
+        method: "connect",
+        class_filter: None,
+        runtime: "js_mongodb_connect",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "connect",
+        class_filter: None,
+        runtime: "js_mongodb_client_connect",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // Symbol-name fix: every row below previously emitted a stripped-name
+    // form (`js_mongodb_db`, `js_mongodb_insert_one`, etc.) but the actual
+    // stdlib functions carry a `_client_` / `_db_` / `_collection_` infix
+    // (`js_mongodb_client_db`, `js_mongodb_collection_insert_one`, ...).
+    // Pre-#187 nobody hit it because `new MongoClient()` produced a junk
+    // handle and method calls against it never linked the symbols. With the
+    // v0.5.270-era ctor making the receiver real, these dispatch rows now
+    // actually link — so they have to point at the real functions. Same
+    // family as the v0.5.270 ioredis row fix.
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "db",
+        class_filter: None,
+        runtime: "js_mongodb_client_db",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "collection",
+        class_filter: None,
+        runtime: "js_mongodb_db_collection",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    // `_value` wrapper variants — every collection method that accepts an
+    // object/filter arg goes through a wrapper that JSON-stringifies the
+    // NaN-boxed JSValue (NA_F64) before forwarding to the existing
+    // JSON-string-taking runtime fn. Without the wrapper, codegen passed
+    // the JSValue f64 bits directly into a fn signed to receive a
+    // *const StringHeader — every doc/filter looked like garbage and the
+    // user saw "Invalid document" / "Invalid JSON".
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "insertOne",
+        class_filter: None,
+        runtime: "js_mongodb_collection_insert_one_value",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "insertMany",
+        class_filter: None,
+        runtime: "js_mongodb_collection_insert_many_value",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "find",
+        class_filter: None,
+        runtime: "js_mongodb_collection_find_value",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "findOne",
+        class_filter: None,
+        runtime: "js_mongodb_collection_find_one_value",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "updateOne",
+        class_filter: None,
+        runtime: "js_mongodb_collection_update_one_value",
+        args: &[NA_F64, NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "updateMany",
+        class_filter: None,
+        runtime: "js_mongodb_collection_update_many_value",
+        args: &[NA_F64, NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "deleteOne",
+        class_filter: None,
+        runtime: "js_mongodb_collection_delete_one_value",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "deleteMany",
+        class_filter: None,
+        runtime: "js_mongodb_collection_delete_many_value",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "countDocuments",
+        class_filter: None,
+        runtime: "js_mongodb_collection_count_value",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    // aggregate / createIndex / toArray runtime functions don't exist in
+    // perry-stdlib yet — listed as commented-out so the dispatch table
+    // doesn't reference undefined symbols. User code calling these methods
+    // falls through to the unknown-method sentinel returning TAG_UNDEFINED;
+    // that's better than a hard link failure for code that happens to
+    // import mongodb but doesn't call the methods.
+    //   NativeModSig { module: "mongodb", method: "aggregate",   ... },
+    //   NativeModSig { module: "mongodb", method: "createIndex", ... },
+    //   NativeModSig { module: "mongodb", method: "toArray",     ... },
+    NativeModSig {
+        module: "mongodb",
+        has_receiver: true,
+        method: "close",
+        class_filter: None,
+        runtime: "js_mongodb_client_close",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // ========== better-sqlite3 ==========
+    NativeModSig {
+        module: "better-sqlite3",
+        has_receiver: false,
+        method: "default",
+        class_filter: None,
+        runtime: "js_sqlite_open",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "better-sqlite3",
+        has_receiver: true,
+        method: "prepare",
+        class_filter: None,
+        runtime: "js_sqlite_prepare",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    // stmt.run/get/all/iterate take JS-side variadic params. The runtime
+    // consumes them as a single `*const ArrayHeader`, so VarArgsAsArray
+    // packs every user-supplied arg into a real JS array before the call.
+    // Pre-#339 these used `NA_F64` and the runtime had to defensively
+    // bail when the high-16 bits looked like a NaN-box tag — fine for
+    // the no-arg case (TAG_UNDEFINED), but `.all('a')` passed a
+    // STRING-tagged f64 that also tripped the bail and the params were
+    // silently dropped.
+    NativeModSig {
+        module: "better-sqlite3",
+        has_receiver: true,
+        method: "run",
+        class_filter: None,
+        runtime: "js_sqlite_stmt_run",
+        args: &[NA_VARARGS],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "better-sqlite3",
+        has_receiver: true,
+        method: "get",
+        class_filter: None,
+        runtime: "js_sqlite_stmt_get",
+        args: &[NA_VARARGS],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "better-sqlite3",
+        has_receiver: true,
+        method: "all",
+        class_filter: None,
+        runtime: "js_sqlite_stmt_all",
+        args: &[NA_VARARGS],
+        ret: NR_PTR,
+    },
+    // `stmt.raw([toggle])` — flips the statement into raw mode and
+    // returns the same handle so `stmt.raw().all(...)` chains. drizzle's
+    // PreparedQuery.values() relies on this; without it `stmt.raw` is
+    // undefined and the call surfaces as `(number).all is not a
+    // function` deeper in the chain. Refs #643. The optional `toggle`
+    // arg isn't threaded through the dispatch yet (always enables);
+    // extend `args` if a real downstream needs `.raw(false)`.
+    NativeModSig {
+        module: "better-sqlite3",
+        has_receiver: true,
+        method: "raw",
+        class_filter: None,
+        runtime: "js_sqlite_stmt_raw",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "better-sqlite3",
+        has_receiver: true,
+        method: "exec",
+        class_filter: None,
+        runtime: "js_sqlite_exec",
+        args: &[NA_STR],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "better-sqlite3",
+        has_receiver: true,
+        method: "close",
+        class_filter: None,
+        runtime: "js_sqlite_close",
+        args: &[],
+        ret: NR_VOID,
+    },
+];

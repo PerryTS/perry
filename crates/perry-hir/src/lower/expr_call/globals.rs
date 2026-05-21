@@ -1,0 +1,816 @@
+//! Global built-in function calls (parseInt, parseFloat, Number, String, isNaN, isFinite, etc.).
+//!
+//! Extracted from `expr_call/mod.rs` as a mechanical move.
+
+use anyhow::{anyhow, Result};
+use perry_types::{LocalId, Type};
+use swc_ecma_ast as ast;
+
+use crate::ir::*;
+use crate::lower_types::extract_ts_type_with_ctx;
+
+use super::super::{
+    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
+    resolve_typed_parse_ty, LoweringContext,
+};
+
+pub(super) fn try_global_builtins(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    expr: &ast::Expr,
+    mut args: Vec<Expr>,
+) -> Result<Result<Expr, Vec<Expr>>> {
+    // Check for global built-in function calls (parseInt, parseFloat, Number, String, isNaN, isFinite)
+    if let ast::Expr::Ident(ident) = expr {
+        let func_name = ident.sym.as_ref();
+        match func_name {
+            "parseInt" => {
+                let string_arg = if !args.is_empty() {
+                    Box::new(args.remove(0))
+                } else {
+                    return Err(anyhow!("parseInt requires at least one argument"));
+                };
+                let radix_arg = if !args.is_empty() {
+                    Some(Box::new(args.remove(0)))
+                } else {
+                    None
+                };
+                return Ok(Ok(Expr::ParseInt {
+                    string: string_arg,
+                    radix: radix_arg,
+                }));
+            }
+            "parseFloat" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::ParseFloat(Box::new(args.remove(0)))));
+                } else {
+                    return Err(anyhow!("parseFloat requires one argument"));
+                }
+            }
+            "Number" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::NumberCoerce(Box::new(args.remove(0)))));
+                } else {
+                    // Number() with no args returns 0
+                    return Ok(Ok(Expr::Number(0.0)));
+                }
+            }
+            "BigInt" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::BigIntCoerce(Box::new(args.remove(0)))));
+                } else {
+                    // BigInt() with no args returns 0n
+                    return Ok(Ok(Expr::BigInt("0".to_string())));
+                }
+            }
+            "String" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::StringCoerce(Box::new(args.remove(0)))));
+                } else {
+                    // String() with no args returns ""
+                    return Ok(Ok(Expr::String(String::new())));
+                }
+            }
+            "Boolean" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::BooleanCoerce(Box::new(args.remove(0)))));
+                } else {
+                    // Boolean() with no args returns false
+                    return Ok(Ok(Expr::Bool(false)));
+                }
+            }
+            "Array"
+                if ctx.lookup_local("Array").is_none()
+                    && ctx.lookup_func("Array").is_none()
+                    && ctx.lookup_imported_func("Array").is_none() =>
+            {
+                // Issue #904: `Array(n)` (bare call, no `new`) must
+                // behave identically to `new Array(n)` per spec
+                // (ES2015 §22.1.1.1 / §22.1.1.2). Pre-fix the call
+                // fell through to the unknown-ident sentinel path,
+                // which lowers to `Call { callee: GlobalGet(0), ... }`
+                // and explodes at runtime via `js_closure_callN`'s
+                // `throw_not_callable` → `TypeError: value is not a
+                // function`. dayjs's `format()` hits this through
+                // `padStart`'s `Array(length + 1 - s.length).join(pad)`
+                // every time it formats a sub-10 number (e.g. month
+                // "07" in "YYYY-MM"). Route through `Expr::New` so the
+                // existing Array-constructor codegen in
+                // `crates/perry-codegen/src/lower_call/builtin.rs`
+                // handles it. Shadow-safe: only fires when no local
+                // / user fn / imported fn named `Array` is in scope.
+                return Ok(Ok(Expr::New {
+                    class_name: "Array".to_string(),
+                    args,
+                    type_args: Vec::new(),
+                }));
+            }
+            "isNaN" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::IsNaN(Box::new(args.remove(0)))));
+                } else {
+                    return Err(anyhow!("isNaN requires one argument"));
+                }
+            }
+            "isFinite" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::IsFinite(Box::new(args.remove(0)))));
+                } else {
+                    return Err(anyhow!("isFinite requires one argument"));
+                }
+            }
+            "atob" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::Atob(Box::new(args.remove(0)))));
+                } else {
+                    return Err(anyhow!("atob requires one argument"));
+                }
+            }
+            "btoa" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::Btoa(Box::new(args.remove(0)))));
+                } else {
+                    return Err(anyhow!("btoa requires one argument"));
+                }
+            }
+            "encodeURI" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::EncodeURI(Box::new(args.remove(0)))));
+                } else {
+                    return Err(anyhow!("encodeURI requires one argument"));
+                }
+            }
+            "decodeURI" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::DecodeURI(Box::new(args.remove(0)))));
+                } else {
+                    return Err(anyhow!("decodeURI requires one argument"));
+                }
+            }
+            "encodeURIComponent" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::EncodeURIComponent(Box::new(args.remove(0)))));
+                } else {
+                    return Err(anyhow!("encodeURIComponent requires one argument"));
+                }
+            }
+            "decodeURIComponent" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::DecodeURIComponent(Box::new(args.remove(0)))));
+                } else {
+                    return Err(anyhow!("decodeURIComponent requires one argument"));
+                }
+            }
+            "structuredClone" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::StructuredClone(Box::new(args.remove(0)))));
+                } else {
+                    return Err(anyhow!("structuredClone requires one argument"));
+                }
+            }
+            "queueMicrotask" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::QueueMicrotask(Box::new(args.remove(0)))));
+                } else {
+                    return Err(anyhow!("queueMicrotask requires one argument"));
+                }
+            }
+            "Symbol" => {
+                // Symbol() / Symbol(description)
+                if args.is_empty() {
+                    return Ok(Ok(Expr::SymbolNew(None)));
+                } else {
+                    return Ok(Ok(Expr::SymbolNew(Some(Box::new(args.remove(0))))));
+                }
+            }
+            "perryResolveStaticPlugin" => {
+                if !args.is_empty() {
+                    return Ok(Ok(Expr::StaticPluginResolve(Box::new(args.remove(0)))));
+                } else {
+                    return Err(anyhow!("perryResolveStaticPlugin requires one argument"));
+                }
+            }
+            "fetchWithAuth" => {
+                // fetchWithAuth(url, authHeader) -> Promise<Response>
+                // Calls js_fetch_get_with_auth(url, auth_header)
+                if args.len() >= 2 {
+                    let url = args.remove(0);
+                    let auth_header = args.remove(0);
+                    ctx.uses_fetch = true;
+                    return Ok(Ok(Expr::FetchGetWithAuth {
+                        url: Box::new(url),
+                        auth_header: Box::new(auth_header),
+                    }));
+                } else {
+                    return Err(anyhow!(
+                        "fetchWithAuth requires url and authHeader arguments"
+                    ));
+                }
+            }
+            "fetchPostWithAuth" => {
+                // fetchPostWithAuth(url, authHeader, body) -> Promise<Response>
+                // Calls js_fetch_post_with_auth(url, auth_header, body)
+                if args.len() >= 3 {
+                    let url = args.remove(0);
+                    let auth_header = args.remove(0);
+                    let body = args.remove(0);
+                    ctx.uses_fetch = true;
+                    return Ok(Ok(Expr::FetchPostWithAuth {
+                        url: Box::new(url),
+                        auth_header: Box::new(auth_header),
+                        body: Box::new(body),
+                    }));
+                } else {
+                    return Err(anyhow!(
+                        "fetchPostWithAuth requires url, authHeader, and body arguments"
+                    ));
+                }
+            }
+            "fetch" => {
+                // Handle fetch(url) and fetch(url, options)
+                // Extract URL (first argument)
+                let url = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    return Err(anyhow!("fetch requires at least a URL argument"));
+                };
+
+                // Check if there's an options object (second argument)
+                if !args.is_empty() {
+                    // Extract options from the object literal
+                    // We need to get the original AST to extract the object properties
+                    if let Some(options_arg) = call.args.get(1) {
+                        if let ast::Expr::Object(obj) = &*options_arg.expr {
+                            // Extract method, body, and headers from options
+                            let mut method = Expr::String("GET".to_string());
+                            let mut body = Expr::Undefined;
+                            let mut headers_obj: Vec<(String, Expr)> = Vec::new();
+
+                            for prop in &obj.props {
+                                if let ast::PropOrSpread::Prop(prop) = prop {
+                                    match prop.as_ref() {
+                                        ast::Prop::KeyValue(kv) => {
+                                            let key = match &kv.key {
+                                                ast::PropName::Ident(ident) => {
+                                                    ident.sym.to_string()
+                                                }
+                                                ast::PropName::Str(s) => {
+                                                    s.value.as_str().unwrap_or("").to_string()
+                                                }
+                                                _ => continue,
+                                            };
+                                            match key.as_str() {
+                                                "method" => {
+                                                    method = lower_expr(ctx, &kv.value)?;
+                                                }
+                                                "body" => {
+                                                    body = lower_expr(ctx, &kv.value)?;
+                                                }
+                                                "headers" => {
+                                                    // Extract headers object
+                                                    if let ast::Expr::Object(headers_ast) =
+                                                        &*kv.value
+                                                    {
+                                                        for hprop in &headers_ast.props {
+                                                            if let ast::PropOrSpread::Prop(hprop) =
+                                                                hprop
+                                                            {
+                                                                if let ast::Prop::KeyValue(hkv) =
+                                                                    hprop.as_ref()
+                                                                {
+                                                                    let hkey = match &hkv.key {
+                                                                        ast::PropName::Ident(
+                                                                            ident,
+                                                                        ) => ident.sym.to_string(),
+                                                                        ast::PropName::Str(s) => s
+                                                                            .value
+                                                                            .as_str()
+                                                                            .unwrap_or("")
+                                                                            .to_string(),
+                                                                        _ => continue,
+                                                                    };
+                                                                    let hval = lower_expr(
+                                                                        ctx, &hkv.value,
+                                                                    )?;
+                                                                    headers_obj.push((hkey, hval));
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        ast::Prop::Shorthand(ident) => {
+                                            // Handle shorthand properties like { body } which means { body: body }
+                                            let key = ident.sym.to_string();
+                                            let value =
+                                                if let Some(local_id) = ctx.lookup_local(&key) {
+                                                    Expr::LocalGet(local_id)
+                                                } else {
+                                                    continue;
+                                                };
+                                            match key.as_str() {
+                                                "method" => method = value,
+                                                "body" => body = value,
+                                                _ => {}
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+
+                            // Create a FetchWithOptions expression
+                            ctx.uses_fetch = true;
+                            return Ok(Ok(Expr::FetchWithOptions {
+                                url: Box::new(url),
+                                method: Box::new(method),
+                                body: Box::new(body),
+                                headers: headers_obj,
+                            }));
+                        }
+                    }
+                }
+
+                // Simple fetch(url) with no options - use GET
+                ctx.uses_fetch = true;
+                return Ok(Ok(Expr::FetchWithOptions {
+                    url: Box::new(url),
+                    method: Box::new(Expr::String("GET".to_string())),
+                    body: Box::new(Expr::Undefined),
+                    headers: Vec::new(),
+                }));
+            }
+            _ => {} // Fall through to generic handling
+        }
+
+        // Check if this is a named import from child_process (e.g., execSync, spawnSync)
+        if let Some((module_name, _method)) = ctx.lookup_native_module(func_name) {
+            if module_name == "child_process" {
+                match func_name {
+                    "execSync" => {
+                        if !args.is_empty() {
+                            let mut args_iter = args.into_iter();
+                            let command = args_iter.next().unwrap();
+                            let options = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessExecSync {
+                                command: Box::new(command),
+                                options,
+                            }));
+                        }
+                    }
+                    "spawnSync" => {
+                        if !args.is_empty() {
+                            let mut args_iter = args.into_iter();
+                            let command = args_iter.next().unwrap();
+                            let spawn_args = args_iter.next().map(Box::new);
+                            let options = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessSpawnSync {
+                                command: Box::new(command),
+                                args: spawn_args,
+                                options,
+                            }));
+                        }
+                    }
+                    "spawn" => {
+                        if !args.is_empty() {
+                            let mut args_iter = args.into_iter();
+                            let command = args_iter.next().unwrap();
+                            let spawn_args = args_iter.next().map(Box::new);
+                            let options = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessSpawn {
+                                command: Box::new(command),
+                                args: spawn_args,
+                                options,
+                            }));
+                        }
+                    }
+                    "exec" => {
+                        if !args.is_empty() {
+                            let mut args_iter = args.into_iter();
+                            let command = args_iter.next().unwrap();
+                            let options = args_iter.next().map(Box::new);
+                            let callback = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessExec {
+                                command: Box::new(command),
+                                options,
+                                callback,
+                            }));
+                        }
+                    }
+                    "spawnBackground" => {
+                        if args.len() >= 3 {
+                            let mut args_iter = args.into_iter();
+                            let command = args_iter.next().unwrap();
+                            let spawn_args = args_iter.next().map(Box::new);
+                            let log_file = args_iter.next().unwrap();
+                            let env_json = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessSpawnBackground {
+                                command: Box::new(command),
+                                args: spawn_args,
+                                log_file: Box::new(log_file),
+                                env_json,
+                            }));
+                        }
+                    }
+                    "getProcessStatus" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::ChildProcessGetProcessStatus(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "killProcess" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::ChildProcessKillProcess(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    _ => {} // Fall through
+                }
+            }
+
+            // Check if this is a named import from path (e.g., join, dirname, basename)
+            if module_name == "path" {
+                match func_name {
+                    "join" => {
+                        if args.is_empty() {
+                            return Ok(Ok(Expr::String(".".to_string())));
+                        }
+                        if args.len() == 1 {
+                            return Ok(Ok(Expr::PathNormalize(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                        let mut iter = args.into_iter();
+                        let mut result = iter.next().unwrap();
+                        for next_arg in iter {
+                            result = Expr::PathJoin(Box::new(result), Box::new(next_arg));
+                        }
+                        return Ok(Ok(result));
+                    }
+                    "dirname" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::PathDirname(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "basename" => {
+                        if args.len() >= 2 {
+                            let mut iter = args.into_iter();
+                            let path_arg = iter.next().unwrap();
+                            let ext_arg = iter.next().unwrap();
+                            return Ok(Ok(Expr::PathBasenameExt(
+                                Box::new(path_arg),
+                                Box::new(ext_arg),
+                            )));
+                        }
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::PathBasename(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "extname" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::PathExtname(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "resolve" => {
+                        if args.is_empty() {
+                            return Ok(Ok(Expr::PathResolve(Box::new(
+                                Expr::String(String::new()),
+                            ))));
+                        }
+                        if !args.is_empty() {
+                            let mut iter = args.into_iter();
+                            let first = iter.next().unwrap();
+                            let mut joined = first;
+                            for next_arg in iter {
+                                joined =
+                                    Expr::PathResolveJoin(Box::new(joined), Box::new(next_arg));
+                            }
+                            return Ok(Ok(Expr::PathResolve(Box::new(joined))));
+                        }
+                    }
+                    "isAbsolute" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::PathIsAbsolute(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "relative" => {
+                        if args.len() >= 2 {
+                            let mut iter = args.into_iter();
+                            let from = iter.next().unwrap();
+                            let to = iter.next().unwrap();
+                            return Ok(Ok(Expr::PathRelative(Box::new(from), Box::new(to))));
+                        }
+                    }
+                    "normalize" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::PathNormalize(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "parse" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::PathParse(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "format" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::PathFormat(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "toNamespacedPath" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::PathToNamespacedPath(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "matchesGlob" => {
+                        if args.len() >= 2 {
+                            let mut iter = args.into_iter();
+                            let path_arg = iter.next().unwrap();
+                            let pattern = iter.next().unwrap();
+                            return Ok(Ok(Expr::PathMatchesGlob(
+                                Box::new(path_arg),
+                                Box::new(pattern),
+                            )));
+                        }
+                    }
+                    _ => {} // Fall through
+                }
+            }
+
+            // Check if this is a named import from url (e.g., fileURLToPath)
+            if module_name == "url" {
+                match func_name {
+                    "fileURLToPath" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::FileURLToPath(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    _ => {} // Fall through
+                }
+            }
+
+            // Check if this is a named import from fs (e.g., existsSync, mkdirSync, etc.)
+            if module_name == "fs" {
+                match func_name {
+                    "readFileSync" => {
+                        if args.len() >= 2 {
+                            // readFileSync(path, encoding) — returns string
+                            return Ok(Ok(Expr::FsReadFileSync(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        } else if args.len() == 1 {
+                            // readFileSync(path) without encoding — returns Buffer (Node parity)
+                            return Ok(Ok(Expr::FsReadFileBinary(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "writeFileSync" => {
+                        if args.len() >= 2 {
+                            let mut iter = args.into_iter();
+                            let path = iter.next().unwrap();
+                            let content = iter.next().unwrap();
+                            return Ok(Ok(Expr::FsWriteFileSync(
+                                Box::new(path),
+                                Box::new(content),
+                            )));
+                        }
+                    }
+                    "existsSync" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::FsExistsSync(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "mkdirSync" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::FsMkdirSync(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "unlinkSync" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::FsUnlinkSync(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "appendFileSync" => {
+                        if args.len() >= 2 {
+                            let mut iter = args.into_iter();
+                            let path = iter.next().unwrap();
+                            let content = iter.next().unwrap();
+                            return Ok(Ok(Expr::FsAppendFileSync(
+                                Box::new(path),
+                                Box::new(content),
+                            )));
+                        }
+                    }
+                    "readFileBuffer" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::FsReadFileBinary(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "rmRecursive" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::FsRmRecursive(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    // Issue #648 fallout: see twin arm above.
+                    "rmSync" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::FsRmRecursive(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    _ => {} // Fall through
+                }
+            }
+
+            // Named imports from `node:crypto` (e.g.
+            // `import { randomFillSync, randomUUID, randomBytes }
+            //  from 'node:crypto'`). Without these arms the bare
+            // call `randomFillSync(buf)` falls into the generic
+            // `NativeMethodCall` path, which has no `crypto`
+            // dispatcher and returns `undefined` — so the buffer
+            // never gets filled (jose's signing flow silently
+            // produces all-zero IVs / nonces). Route each call
+            // straight to the dedicated `Expr::CryptoRandom*`
+            // variant that the `crypto.xxx(...)` (object-method)
+            // arm above (line ~3060) uses, so both call shapes
+            // share one codegen path.
+            if module_name == "crypto" {
+                match func_name {
+                    "randomFillSync" => {
+                        if !args.is_empty() {
+                            let mut iter = args.into_iter();
+                            let buffer = iter.next().unwrap();
+                            let offset = iter.next().unwrap_or(Expr::Undefined);
+                            let size = iter.next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::CryptoRandomFillSync {
+                                buffer: Box::new(buffer),
+                                offset: Box::new(offset),
+                                size: Box::new(size),
+                            }));
+                        }
+                    }
+                    "randomUUID" => {
+                        return Ok(Ok(Expr::CryptoRandomUUID));
+                    }
+                    "randomBytes" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::CryptoRandomBytes(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    // `createSecretKey(key, encoding?)` from a named
+                    // import. Without this arm the call lowered to a
+                    // generic NativeMethodCall with no dispatcher for
+                    // `crypto.createSecretKey`, so the call returned
+                    // undefined and `jose.sign(undefined)` threw
+                    // "Received undefined". Reuse the same PropertyGet
+                    // shape that the `crypto.createSecretKey(...)`
+                    // call-site form already exercises (handled in
+                    // `expr.rs` near the createHash/createHmac block)
+                    // so both shapes share one codegen path.
+                    "createSecretKey" => {
+                        if !args.is_empty() {
+                            let mut iter = args.into_iter();
+                            let key_arg = iter.next().unwrap();
+                            let mut new_args = vec![key_arg];
+                            if let Some(enc) = iter.next() {
+                                new_args.push(enc);
+                            }
+                            return Ok(Ok(Expr::Call {
+                                callee: Box::new(Expr::PropertyGet {
+                                    object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
+                                    property: "createSecretKey".to_string(),
+                                }),
+                                args: new_args,
+                                type_args: vec![],
+                            }));
+                        }
+                    }
+                    _ => {} // Fall through
+                }
+            }
+        }
+
+        // Issue #1123 — `import { createServer } from "node:net";
+        // createServer(handler)` (named-import form). Pre-fix this
+        // fell through to the generic `Expr::NativeMethodCall`
+        // arm right below, and the LLVM codegen's
+        // `lower_native_method_call` had no `("net", "createServer")`
+        // row in `NATIVE_MODULE_TABLE` (unlike the http sibling at
+        // `lower_call.rs:10620`), so the call dropped through every
+        // path and returned `TAG_UNDEFINED`. Synthesize the same
+        // `Expr::NetCreateServer` node the dotted form
+        // (`net.createServer(...)`) produces at sites 1899 / 3393,
+        // so both forms converge on the new codegen arm in
+        // `crates/perry-codegen/src/expr.rs` (the `Expr::FetchPostWithAuth`
+        // neighbor, added in the same fix). `createServer` accepts
+        // either `(listener)` or `(options, listener)`; mirror the
+        // dotted-form positional handling: 1 arg → listener-only,
+        // 2+ args → first is options, second is listener.
+        if let Some((module_name, Some(method_name))) = ctx.lookup_native_module(func_name) {
+            if module_name == "net" && method_name == "createServer" {
+                let (options, connection_listener) = if args.len() >= 2 {
+                    let mut args_iter = args.into_iter();
+                    let opts = args_iter.next().map(Box::new);
+                    let listener = args_iter.next().map(Box::new);
+                    (opts, listener)
+                } else {
+                    // 0 or 1 args — treat the single arg (if any) as
+                    // the connection listener. Matches Node's
+                    // `net.createServer(connectionListener)` shorthand.
+                    let listener = args.into_iter().next().map(Box::new);
+                    (None, listener)
+                };
+                return Ok(Ok(Expr::NetCreateServer {
+                    options,
+                    connection_listener,
+                }));
+            }
+        }
+
+        // Check if this is a direct call on an aliased named import
+        // e.g., uuid() where import { v4 as uuid } from 'uuid'
+        if let Some((module_name, Some(method_name))) = ctx.lookup_native_module(func_name) {
+            if module_name == "os" || module_name == "node:os" {
+                match method_name {
+                    "availableParallelism" => return Ok(Ok(Expr::OsAvailableParallelism)),
+                    "platform" => return Ok(Ok(Expr::OsPlatform)),
+                    "arch" => return Ok(Ok(Expr::OsArch)),
+                    "endianness" => return Ok(Ok(Expr::OsEndianness)),
+                    "hostname" => return Ok(Ok(Expr::OsHostname)),
+                    "homedir" => return Ok(Ok(Expr::OsHomedir)),
+                    "tmpdir" => return Ok(Ok(Expr::OsTmpdir)),
+                    "loadavg" => return Ok(Ok(Expr::OsLoadavg)),
+                    "machine" => return Ok(Ok(Expr::OsMachine)),
+                    "totalmem" => return Ok(Ok(Expr::OsTotalmem)),
+                    "freemem" => return Ok(Ok(Expr::OsFreemem)),
+                    "uptime" => return Ok(Ok(Expr::OsUptime)),
+                    "type" => return Ok(Ok(Expr::OsType)),
+                    "release" => return Ok(Ok(Expr::OsRelease)),
+                    "version" => return Ok(Ok(Expr::OsVersion)),
+                    "cpus" => return Ok(Ok(Expr::OsCpus)),
+                    "networkInterfaces" => return Ok(Ok(Expr::OsNetworkInterfaces)),
+                    "userInfo" => return Ok(Ok(Expr::OsUserInfo)),
+                    _ => {}
+                }
+            }
+            return Ok(Ok(Expr::NativeMethodCall {
+                module: module_name.to_string(),
+                class_name: None,
+                object: None,
+                method: method_name.to_string(),
+                args,
+            }));
+        }
+
+        // Check if this is a call on a default import from a native module
+        // e.g., Fastify() where import Fastify from 'fastify'
+        if let Some((module_name, None)) = ctx.lookup_native_module(func_name) {
+            return Ok(Ok(Expr::NativeMethodCall {
+                module: module_name.to_string(),
+                class_name: None,
+                object: None,
+                method: "default".to_string(), // Use "default" for default export calls
+                args,
+            }));
+        }
+    }
+
+    let callee_expr = lower_expr(ctx, expr)?;
+
+    Ok(Err(args))
+}

@@ -1,0 +1,753 @@
+//! Small standalone helpers used by `compile_module`, the per-function
+//! lowering helpers, and other modules in the crate.
+//!
+//! Split out of `codegen.rs` (now `codegen/mod.rs`). Names, behavior, and
+//! visibility are unchanged — every function is re-exported from
+//! `crate::codegen` as needed so external callers don't notice.
+
+use std::collections::HashMap;
+
+use anyhow::Result;
+use perry_hir::Module as HirModule;
+
+use crate::module::LlModule;
+use crate::types::{DOUBLE, I32, I64, PTR};
+
+use super::opts::{NamespaceEntry, NamespaceEntryKind};
+
+/// Compile a single user function into the module.
+/// Shadow-stack push/pop + slot-set emission for every user
+/// function. Default ON as of Phase D part 2 (v0.5.238); set
+/// `PERRY_SHADOW_STACK=0`/`off`/`false` to disable for bisection.
+/// Cached at first call so subsequent compile_* calls skip the
+/// env-var lookup.
+///
+/// Why on by default now: the shadow stack precisely covers every
+/// pointer-typed local in compiled JS frames, complementing the
+/// conservative C-stack scan. With Phase A complete and the GC
+/// tracer consuming the shadow stack as a parallel root source
+/// (v0.5.221), enabling it is a strict-improvement default —
+/// fewer over-promoted objects in generational mode, no change
+/// in observed correctness, modest per-function-entry overhead
+/// (one frame_push call + N slot stores at safepoints) that's
+/// invisible on every measured benchmark. Phase D part 2 then
+/// uses the shadow stack's authoritative JS-frame coverage to
+/// shrink the conservative scanner — which only makes sense once
+/// the shadow stack is guaranteed to be live.
+pub(super) fn shadow_stack_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_SHADOW_STACK").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+pub(super) fn enable_module_init_shadow_frame(
+    func: &mut crate::function::LlFunction,
+    stmts: &[perry_hir::Stmt],
+) -> (HashMap<u32, u32>, HashMap<usize, Vec<u32>>) {
+    if !shadow_stack_enabled() {
+        return (HashMap::new(), HashMap::new());
+    }
+
+    let shadow_slot_map = crate::collectors::collect_pointer_typed_locals(&[], stmts);
+    func.enable_post_init_shadow_frame(shadow_slot_map.len() as u32);
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(stmts, &shadow_slot_map);
+    (shadow_slot_map, shadow_slot_clears_after_stmt)
+}
+
+/// Gen-GC write-barrier emission gate. Default ON: emit a
+/// `js_write_barrier_slot(parent_bits, slot_addr, child_bits)` call, or
+/// the compatibility wrapper, after every heap-store site. Set
+/// `PERRY_WRITE_BARRIERS=0`/`off`/`false` to disable emission for
+/// benchmark/debug bisection. `=1`/`on`/`true` remain accepted and
+/// equivalent to the default.
+pub(crate) fn write_barriers_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_WRITE_BARRIERS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+pub(super) fn scoped_fn_name(module_prefix: &str, hir_name: &str) -> String {
+    format!("perry_fn_{}__{}", module_prefix, sanitize(hir_name))
+}
+
+/// Walk a function body looking for `Return(Some(expr))` shapes that
+/// identify the function as a factory returning a class. Sets
+/// `*produced` to the resolved class name when the first qualifying
+/// return is seen; sets `*disqualified` when a return points at
+/// something we can't classify as a class. Used by
+/// `func_returns_class_map` fixed-point in `compile_module` to recognise
+/// Effect's `Literal` / `makeLiteralClass` / `make` factories. Refs
+/// #915 (gap 3 / #321 follow-up).
+///
+/// Recognised return shapes:
+///   - `Return(Some(ClassRef(name)))` — direct class literal return.
+///   - `Return(Some(Call { callee: FuncRef(other_fid), .. }))` — call
+///     to another already-tagged factory (transitive).
+///   - `Return(Some(Conditional { then, else, .. }))` — both branches
+///     must independently resolve to the same class. Effect's
+///     `Literal(...)` has this shape — the body is
+///     `array_.isNonEmptyReadonlyArray(literals) ? makeLiteralClass(literals) : Never`.
+///   - `Return(Some(Sequence([..., ClassRef(name)])))` — the HIR's
+///     inliner sometimes collapses a factory call to
+///     `Sequence([RegisterClassParentDynamic, ClassRef(name)])`. Treat
+///     the trailing class as the produced value.
+///
+/// Anything else inside a `Return(Some(_))` disqualifies the function:
+/// we'd rather miss a factory than mis-classify a non-factory.
+/// Returns inside nested closures are SKIPPED — those belong to the
+/// inner function (the walker doesn't recurse into Expr).
+pub(super) fn collect_return_class(
+    stmts: &[perry_hir::Stmt],
+    produced: &mut Option<String>,
+    disqualified: &mut bool,
+    func_returns_class: &std::collections::HashMap<u32, String>,
+) {
+    use perry_hir::{Expr, Stmt};
+
+    fn resolve_class(
+        expr: &perry_hir::Expr,
+        func_returns_class: &std::collections::HashMap<u32, String>,
+    ) -> Option<String> {
+        match expr {
+            Expr::ClassRef(name) => Some(name.clone()),
+            Expr::Call { callee, .. } => match callee.as_ref() {
+                Expr::FuncRef(fid) => func_returns_class.get(fid).cloned(),
+                _ => None,
+            },
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                let lhs = resolve_class(then_expr, func_returns_class)?;
+                let rhs = resolve_class(else_expr, func_returns_class)?;
+                if lhs == rhs {
+                    Some(lhs)
+                } else {
+                    None
+                }
+            }
+            Expr::Sequence(exprs) => exprs
+                .last()
+                .and_then(|e| resolve_class(e, func_returns_class)),
+            _ => None,
+        }
+    }
+
+    for stmt in stmts {
+        if *disqualified {
+            return;
+        }
+        match stmt {
+            Stmt::Return(Some(expr)) => {
+                let resolved = resolve_class(expr, func_returns_class);
+                match resolved {
+                    Some(name) => match produced {
+                        None => *produced = Some(name),
+                        Some(existing) if *existing == name => {}
+                        Some(_) => {
+                            // Mixed return shapes — bail.
+                            *disqualified = true;
+                        }
+                    },
+                    None => {
+                        *disqualified = true;
+                    }
+                }
+            }
+            Stmt::Return(None) => {
+                // Returning undefined — disqualify (caller can't
+                // depend on the receiver being a class).
+                *disqualified = true;
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_return_class(then_branch, produced, disqualified, func_returns_class);
+                if let Some(eb) = else_branch {
+                    collect_return_class(eb, produced, disqualified, func_returns_class);
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_return_class(body, produced, disqualified, func_returns_class);
+                if let Some(cc) = catch {
+                    collect_return_class(&cc.body, produced, disqualified, func_returns_class);
+                }
+                if let Some(blk) = finally {
+                    collect_return_class(blk, produced, disqualified, func_returns_class);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_return_class(&case.body, produced, disqualified, func_returns_class);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                let slice = std::slice::from_ref(body.as_ref());
+                collect_return_class(slice, produced, disqualified, func_returns_class);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Mangle a class method name into an LLVM symbol, scoped by module
+/// prefix and class name.
+///
+/// `perry_method_<modprefix>__<class>__<method>`.
+pub(super) fn scoped_method_name(
+    module_prefix: &str,
+    class_name: &str,
+    method_name: &str,
+) -> String {
+    format!(
+        "perry_method_{}__{}__{}",
+        module_prefix,
+        sanitize(class_name),
+        sanitize(method_name)
+    )
+}
+
+/// Sanitize a name for use in an LLVM symbol — replace anything that isn't
+/// `[A-Za-z0-9_]` with an underscore. LLVM IR identifiers cannot start with
+/// a digit, so prefix with `_` if the first character would be one (this
+/// happens with module names like `05_fibonacci.ts`).
+pub(super) fn sanitize(name: &str) -> String {
+    let mut s: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if s.chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
+        s.insert(0, '_');
+    }
+    s
+}
+
+/// Host default triple.
+/// Host-default LLVM target triple. Used when `CompileOptions.target`
+/// is `None`. Also re-exposed via `pub(crate)` so `linker.rs` can pin
+/// clang's `-target` even on host builds — without that pin a clang
+/// whose own default triple is GNU/MinGW silently overrides the IR's
+/// stated msvc triple and emits a `__main` libgcc reference that
+/// lld-link/link.exe can't resolve. (The bug used to surface as
+/// `LNK2019: unresolved external symbol __main referenced in
+/// function main` even though the .ll says `target triple =
+/// "x86_64-pc-windows-msvc"`.)
+pub(crate) fn default_target_triple() -> String {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "arm64-apple-macosx15.0.0".to_string()
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "x86_64-apple-macosx15.0.0".to_string()
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "x86_64-unknown-linux-gnu".to_string()
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "aarch64-unknown-linux-gnu".to_string()
+    } else if cfg!(target_os = "windows") {
+        "x86_64-pc-windows-msvc".to_string()
+    } else {
+        "arm64-apple-macosx15.0.0".to_string()
+    }
+}
+
+/// Map a Perry `--target <name>` string to the LLVM triple used by
+/// `clang -target <triple>` / `llc -mtriple=<triple>`. The short
+/// names are the public `--target` surface exposed by the CLI;
+/// returning `None` leaves the triple to the host default.
+///
+/// Supported:
+///  * `ios`, `ios-simulator`           → aarch64-apple-ios
+///  * `visionos`, `visionos-simulator` → arm64-apple-xros1.0{,-simulator}
+///  * `watchos`                        → arm64_32-apple-watchos (ILP32)
+///  * `watchos-simulator`              → arm64-apple-watchos10.0-simulator
+///  * `tvos`, `tvos-simulator`         → aarch64-apple-tvos
+///  * `android`                        → aarch64-unknown-linux-android
+///  * `linux` (x86_64 alias)           → x86_64-unknown-linux-gnu
+///  * `linux-aarch64`                  → aarch64-unknown-linux-gnu
+///  * `macos` (aarch64 alias)          → arm64-apple-macosx15.0.0
+///  * `macos-x86_64`                   → x86_64-apple-macosx15.0.0
+///  * `windows`                        → x86_64-pc-windows-msvc
+///  * anything else                    → None (use host default)
+pub fn resolve_target_triple(name: &str) -> Option<String> {
+    match name {
+        "ios" => Some("aarch64-apple-ios".to_string()),
+        "ios-simulator" => Some("arm64-apple-ios17.0-simulator".to_string()),
+        "visionos" => Some("arm64-apple-xros1.0".to_string()),
+        "visionos-simulator" => Some("arm64-apple-xros1.0-simulator".to_string()),
+        "watchos" => Some("arm64_32-apple-watchos".to_string()),
+        "watchos-simulator" => Some("arm64-apple-watchos10.0-simulator".to_string()),
+        "tvos" => Some("aarch64-apple-tvos".to_string()),
+        "tvos-simulator" => Some("arm64-apple-tvos17.0-simulator".to_string()),
+        "harmonyos" => Some("aarch64-unknown-linux-ohos".to_string()),
+        "harmonyos-simulator" => Some("x86_64-unknown-linux-ohos".to_string()),
+        "android" => Some("aarch64-unknown-linux-android".to_string()),
+        "linux" => Some("x86_64-unknown-linux-gnu".to_string()),
+        "linux-aarch64" => Some("aarch64-unknown-linux-gnu".to_string()),
+        "macos" => Some("arm64-apple-macosx15.0.0".to_string()),
+        "macos-x86_64" => Some("x86_64-apple-macosx15.0.0".to_string()),
+        "windows" => Some("x86_64-pc-windows-msvc".to_string()),
+        _ => None,
+    }
+}
+
+pub(super) fn emit_buffer_alias_metadata(llmod: &mut LlModule, count: u32) {
+    if count == 0 {
+        return;
+    }
+    // Shared domain.
+    llmod.add_metadata_line("!100 = distinct !{!100}".to_string());
+    // Per-buffer scope nodes.
+    for i in 0..count {
+        let sid = 101 + i;
+        llmod.add_metadata_line(format!("!{} = distinct !{{!{}, !100}}", sid, sid));
+    }
+    // Single-element alias-scope lists (one per buffer).
+    for i in 0..count {
+        let list_id = 201 + i;
+        let scope_id = 101 + i;
+        llmod.add_metadata_line(format!("!{} = !{{!{}}}", list_id, scope_id));
+    }
+    // Noalias lists: for buffer i, every *other* buffer's scope.
+    for i in 0..count {
+        let list_id = 301 + i;
+        let others: Vec<String> = (0..count)
+            .filter(|j| *j != i)
+            .map(|j| format!("!{}", 101 + j))
+            .collect();
+        if others.is_empty() {
+            // Single buffer: empty noalias set — LLVM accepts `!{}` but
+            // it's a no-op. Still emit so `!noalias !{N}` references resolve.
+            llmod.add_metadata_line(format!("!{} = !{{}}", list_id));
+        } else {
+            llmod.add_metadata_line(format!("!{} = !{{{}}}", list_id, others.join(", ")));
+        }
+    }
+}
+
+pub(super) fn register_module_globals_as_gc_roots(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    module_globals: &HashMap<u32, String>,
+) {
+    // Sort by id for deterministic emit order (helps with diff-testing
+    // the generated IR and matches the existing `class_keys` pattern).
+    let mut entries: Vec<(&u32, &String)> = module_globals.iter().collect();
+    entries.sort_by_key(|(id, _)| **id);
+    for (_, global_name) in entries {
+        let addr = ctx.block().ptrtoint(&format!("@{}", global_name), I64);
+        ctx.block()
+            .call_void("js_gc_register_global_root", &[(I64, &addr)]);
+    }
+}
+
+/// Early static-field setup: registrations that don't read any
+/// module-level binding's value (Error-extending classes, well-known
+/// symbol method hooks). Safe to emit before `stmt::lower_stmts` —
+/// values referenced are either compile-time constants (class ids,
+/// function pointers) or computed entirely from `hir` metadata.
+///
+/// The split (early vs. late) was introduced for issue #894 (effect's
+/// `make()` factory's `static [TypeId] = variance` — both the key and
+/// the init reference module-level lets that haven't been initialized
+/// at the point the old combined `init_static_fields` ran).
+pub(super) fn init_static_fields_early(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    hir: &HirModule,
+) -> Result<()> {
+    // Phase C.3: register user classes that extend the built-in Error
+    // (or any of its subclasses) with the runtime, so `instanceof Error`
+    // walks the chain and returns true. Without this, `new HttpError(...)
+    // instanceof Error` returns false because the runtime's
+    // `EXTENDS_ERROR_REGISTRY` is empty for user classes.
+    for c in &hir.classes {
+        // Walk this class's extends_name chain; if any ancestor is a
+        // built-in error subclass, register this class's id.
+        let mut cur: Option<String> = c.extends_name.clone();
+        let mut extends_error = false;
+        let mut depth = 0usize;
+        while let Some(name) = cur {
+            if matches!(
+                name.as_str(),
+                "Error"
+                    | "TypeError"
+                    | "RangeError"
+                    | "ReferenceError"
+                    | "SyntaxError"
+                    | "URIError"
+                    | "EvalError"
+                    | "AggregateError"
+            ) {
+                extends_error = true;
+                break;
+            }
+            // Walk user-defined ancestor chain.
+            if let Some(parent) = ctx.classes.get(&name) {
+                cur = parent.extends_name.clone();
+                depth += 1;
+                if depth > 32 {
+                    break;
+                }
+            } else {
+                cur = None;
+            }
+        }
+        if extends_error {
+            if let Some(&cid) = ctx.class_ids.get(&c.name) {
+                let cid_str = cid.to_string();
+                ctx.block().call_void(
+                    "js_register_class_extends_error",
+                    &[(crate::types::I32, &cid_str)],
+                );
+            }
+        }
+    }
+    // Well-known symbol class hooks: HIR lifts `static [Symbol.hasInstance]`
+    // and `get [Symbol.toStringTag]` to top-level functions with the
+    // prefixes `__perry_wk_hasinstance_<class>` / `__perry_wk_tostringtag_<class>`.
+    // Scan `hir.functions`, compute the LLVM symbol via `scoped_fn_name`,
+    // and emit `js_register_class_<hook>(class_id, ptrtoint(@func, i64))`
+    // at module init so the runtime's `js_instanceof` / `js_object_to_string`
+    // can dispatch through them.
+    let module_prefix = ctx.strings.module_prefix().to_string();
+    for f in &hir.functions {
+        let (registrar, class_name): (&str, &str) =
+            if let Some(rest) = f.name.strip_prefix("__perry_wk_hasinstance_") {
+                ("js_register_class_has_instance", rest)
+            } else if let Some(rest) = f.name.strip_prefix("__perry_wk_tostringtag_") {
+                ("js_register_class_to_string_tag", rest)
+            } else {
+                continue;
+            };
+        let Some(&cid) = ctx.class_ids.get(class_name) else {
+            continue;
+        };
+        let cid_str = cid.to_string();
+        let llvm_sym = format!("perry_fn_{}__{}", module_prefix, sanitize(&f.name));
+        let func_ref = format!("@{}", llvm_sym);
+        let blk = ctx.block();
+        let func_ptr_i64 = blk.ptrtoint(&func_ref, I64);
+        blk.call_void(
+            registrar,
+            &[(crate::types::I32, &cid_str), (I64, &func_ptr_i64)],
+        );
+    }
+    Ok(())
+}
+
+/// Late static-field setup: per-class static-field initializer evaluation,
+/// computed-Symbol-key registration, and static-block invocation. Must
+/// run AFTER `stmt::lower_stmts` so module-level lets referenced by
+/// these initializers (e.g. `static [TypeId] = variance` where both
+/// `TypeId` and `variance` are top-level `const`s) read their populated
+/// global slots rather than the zero default.
+///
+/// Issue #894: effect's `function make(ast) { return class { static
+/// [TypeId] = variance } }` factory pattern hit this; the `TypeId`
+/// symbol and `variance` value were both top-level module lets, and
+/// the pre-#894 combined `init_static_fields` ran before user init,
+/// so `js_class_register_static_symbol(class_id, 0.0, 0.0)` registered
+/// nothing reachable. `isSchema(C)` then returned false on a class
+/// returned from `make`, dual()'s predicate failed, and the failing
+/// `.annotations({...})` chain eventually fed `undefined` to a `make`
+/// call that read `ast._tag` → `TypeError: Cannot read properties of
+/// undefined (reading '_tag')` during Schema.ts module init.
+pub(super) fn init_static_fields_late(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    hir: &HirModule,
+) -> Result<()> {
+    // Issue #685: nested classes (declared as expressions inside a
+    // factory function body, e.g. `return class X extends Y { static
+    // params = params.slice() }` in effect's `TemplateLiteralParser`)
+    // are hoisted into `module.classes` by HIR lowering, but their
+    // static-field initializers may reference parameters of the
+    // enclosing function — those LocalIds aren't in the module-init
+    // scope. The fallback at `expr.rs::LocalGet` returns `0.0`, so the
+    // hoisted init becomes `(0.0).slice()` and throws
+    // `TypeError: (number).slice is not a function` deep in
+    // `<module>__init`, before any user code runs.
+    //
+    // Skip such inits at module level — the static field's storage
+    // remains the zero default, which is wrong but harmless (the class
+    // is built fresh on each factory invocation and the static slot
+    // would need re-emitting per-invocation to be correct). The full
+    // fix is to emit the init at the class-expression site inside the
+    // factory body; tracking the eager-eval-of-inner-class-statics
+    // separately.
+    let mut module_local_scope: std::collections::HashSet<u32> =
+        ctx.module_globals.keys().copied().collect();
+    // Top-level `let` / `const` bindings may not appear in
+    // `module_globals` (the global table only includes vars referenced
+    // from inner functions or exported). For the purpose of "is this
+    // LocalId in the module's own scope," count every top-level
+    // `Stmt::Let` id too — otherwise a valid
+    // `static foo = topLevelConst` would be wrongly skipped.
+    for s in &hir.init {
+        if let perry_hir::Stmt::Let { id, .. } = s {
+            module_local_scope.insert(*id);
+        }
+    }
+    let init_references_out_of_scope_local = |init_expr: &perry_hir::Expr| -> bool {
+        let mut refs: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        crate::collectors::collect_ref_ids_in_expr(init_expr, &mut refs);
+        refs.iter().any(|id| !module_local_scope.contains(id))
+    };
+    for c in &hir.classes {
+        for sf in &c.static_fields {
+            // Computed-key static fields go through the class-static-symbol
+            // side table. Refs #420 — drizzle's `static [entityKind] =
+            // "Table"` is consulted by `Object.prototype.hasOwnProperty.call(
+            // type, entityKind)` in drizzle's `is(value, type)`.
+            if let (Some(key_expr), Some(init_expr)) = (sf.key_expr.as_ref(), sf.init.as_ref()) {
+                if init_references_out_of_scope_local(init_expr)
+                    || init_references_out_of_scope_local(key_expr)
+                {
+                    continue;
+                }
+                let Some(&class_id) = ctx.class_ids.get(&c.name) else {
+                    continue;
+                };
+                let key_v = crate::expr::lower_expr(ctx, key_expr)?;
+                let val_v = crate::expr::lower_expr(ctx, init_expr)?;
+                let cid_str = class_id.to_string();
+                ctx.block().call_void(
+                    "js_class_register_static_symbol",
+                    &[
+                        (crate::types::I32, &cid_str),
+                        (DOUBLE, &key_v),
+                        (DOUBLE, &val_v),
+                    ],
+                );
+                continue;
+            }
+            let key = (c.name.clone(), sf.name.clone());
+            let Some(global_name) = ctx.static_field_globals.get(&key).cloned() else {
+                continue;
+            };
+            if let Some(init_expr) = &sf.init {
+                if init_references_out_of_scope_local(init_expr) {
+                    continue;
+                }
+                let v = crate::expr::lower_expr(ctx, init_expr)?;
+                let g_ref = format!("@{}", global_name);
+                ctx.block().store(DOUBLE, &v, &g_ref);
+            }
+        }
+    }
+    // Static blocks — emitted as synthetic static methods with the
+    // name prefix `__perry_static_init_`. Call them in registration
+    // order for each class, after that class's static fields are
+    // initialized, so they can reference those fields.
+    for c in &hir.classes {
+        for sm in &c.static_methods {
+            if !sm.name.starts_with("__perry_static_init_") {
+                continue;
+            }
+            let key = (c.name.clone(), sm.name.clone());
+            if let Some(llvm_name) = ctx.methods.get(&key).cloned() {
+                ctx.block().call(DOUBLE, &llvm_name, &[]);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Issue #100: emit the IR that populates this module's
+/// `@__perry_ns_<module_prefix>` global from the resolved namespace
+/// entry list. Called at the end of `__perry_init_<prefix>` (or `main`
+/// for the entry module) AFTER the module's top-level statements have
+/// finished — at that point every local export's binding is set, and
+/// every dependency's `__init` has already run (topo-sort guarantees
+/// `ExportAll` / `ReExport` sources are initialised first), so
+/// cross-module getters are safe to call.
+///
+/// The IR sequence per call:
+///
+///   1. Alloca three parallel stack arrays sized `[N x ?]` — keys (ptr),
+///      key_lens (i32), values (double).
+///   2. For each entry i in `namespace_entries`:
+///      - Store `getelementptr inbounds [L x i8], ptr @.strK, i64 0, i64 0`
+///        into `keys[i]` and `L` into `key_lens[i]`.
+///      - Compute the value JSValue per `NamespaceEntryKind` and store
+///        into `values[i]`.
+///   3. Call `js_create_namespace(N, ptr keys, ptr key_lens, ptr values)`.
+///   4. Store the result into `@__perry_ns_<module_prefix>`.
+///
+/// Always emits the `js_create_namespace` call + store, even when
+/// `entries` is empty. This is required for Issue #842 (side-effect-only
+/// dynamic-import targets — no exports, but the consumer still needs a
+/// non-NaN `@__perry_ns_<prefix>` to load). The runtime tolerates
+/// `n == 0` and returns an empty NaN-boxed object. The caller is
+/// responsible for ensuring `key_globals.len() == entries.len()`.
+pub(super) fn emit_namespace_populator(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    entries: &[NamespaceEntry],
+    key_globals: &[(String, usize)],
+    module_prefix: &str,
+) {
+    debug_assert_eq!(entries.len(), key_globals.len());
+    // Issue #842: side-effect-only dynamic-import targets land here
+    // with `entries.is_empty()`. The runtime `js_create_namespace`
+    // tolerates `n == 0` and returns a fresh empty object — exactly
+    // what an export-less module's namespace should look like. We
+    // still alloca minimum-size buffers (`[1 x ?]`) and pass the
+    // pointers + n=0 so the runtime never dereferences them; the
+    // per-entry loop simply doesn't execute.
+    let n = entries.len();
+    let buf_len = n.max(1);
+    let blk = ctx.block();
+
+    // Alloca the three parallel buffers.
+    let keys_buf = blk.next_reg();
+    blk.emit_raw(format!("{} = alloca [{} x ptr]", keys_buf, buf_len));
+    let lens_buf = blk.next_reg();
+    blk.emit_raw(format!("{} = alloca [{} x i32]", lens_buf, buf_len));
+    let vals_buf = blk.next_reg();
+    blk.emit_raw(format!("{} = alloca [{} x double]", vals_buf, buf_len));
+
+    // Per-entry: store key ptr + len + value.
+    for (i, entry) in entries.iter().enumerate() {
+        let (key_global, key_len) = &key_globals[i];
+        let idx_str = format!("{}", i);
+        let blk = ctx.block();
+
+        // keys[i] = @<key_global> as ptr
+        let key_slot = blk.gep(PTR, &keys_buf, &[(I64, &idx_str)]);
+        blk.store(PTR, &format!("@{}", key_global), &key_slot);
+
+        // key_lens[i] = byte_len
+        let len_slot = blk.gep(I32, &lens_buf, &[(I64, &idx_str)]);
+        blk.store(I32, &format!("{}", key_len), &len_slot);
+
+        // Materialise the value per kind. We drop the `blk` borrow so
+        // each sub-emission can re-borrow ctx mutably for runtime calls
+        // / declares; then re-acquire for the store.
+        let val_str = match &entry.kind {
+            NamespaceEntryKind::LocalVar { global_name } => {
+                ctx.block().load(DOUBLE, &format!("@{}", global_name))
+            }
+            NamespaceEntryKind::LocalFunction { wrap_symbol } => {
+                let blk = ctx.block();
+                let handle = blk.call(
+                    I64,
+                    "js_closure_alloc_singleton",
+                    &[(PTR, &format!("@{}", wrap_symbol))],
+                );
+                crate::expr::nanbox_pointer_inline(blk, &handle)
+            }
+            NamespaceEntryKind::LocalClass { class_id } => {
+                // INT32-tagged class-id NaN-box: 0x7FFE_0000_0000_0000 |
+                // (class_id & 0xFFFFFFFF). Matches `Expr::ClassRef`.
+                let bits = crate::nanbox::INT32_TAG | (*class_id as u64 & 0xFFFF_FFFF);
+                crate::nanbox::double_literal(f64::from_bits(bits))
+            }
+            NamespaceEntryKind::ForeignVar {
+                source_prefix,
+                source_local,
+            } => {
+                let getter = format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
+                ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
+                ctx.block().call(DOUBLE, &getter, &[])
+            }
+            NamespaceEntryKind::ForeignFunction {
+                source_prefix,
+                source_local,
+                param_count,
+            } => {
+                // Mirror the consumer-side `__perry_wrap_extern_*` pattern
+                // that the top of compile_module emits when this module
+                // imports the function the regular way. We can re-emit
+                // it inline here (DCE removes duplicates if the same
+                // import is also referenced by `import { x } from`).
+                let target_name = format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
+                let param_types: Vec<crate::types::LlvmType> =
+                    std::iter::repeat_n(DOUBLE, *param_count).collect();
+                ctx.pending_declares
+                    .push((target_name.clone(), DOUBLE, param_types));
+                // Singleton-allocate against the closure global for this
+                // foreign function. The global is emitted by the
+                // `import_function_prefixes` block if this module also
+                // statically imports the function; otherwise we declare
+                // it as external and rely on the source module's
+                // export-side closure ptr (if any). For correctness in
+                // the dynamic-import-only case, fall back to the safer
+                // path: alloc a fresh per-callsite ClosureHeader via a
+                // dedicated wrapper. Simplest implementation: emit our
+                // own internal wrapper here under a unique name.
+                let wrapper_name = format!(
+                    "__perry_wrap_ns_extern_{}__{}__{}",
+                    module_prefix,
+                    source_prefix,
+                    sanitize(source_local)
+                );
+                // Lazy-add the wrapper to pending_declares so we don't
+                // try to define it twice if the namespace populates
+                // multiple times in the same module (it shouldn't, but
+                // defensive). The wrapper actually needs to be DEFINED
+                // not declared — but pending_declares only declares.
+                // To keep this PR focused, fall back to calling the
+                // getter even for functions: returns the f64 value
+                // (closure pointer if the source side emitted a
+                // wrapper-returning getter; undefined otherwise). For
+                // proper function-value re-export, the static-import
+                // path already covers it.
+                ctx.pending_declares.push((wrapper_name, DOUBLE, vec![]));
+                ctx.block().call(DOUBLE, &target_name, &[])
+            }
+            NamespaceEntryKind::NestedNamespace { source_prefix } => ctx
+                .block()
+                .load(DOUBLE, &format!("@__perry_ns_{}", source_prefix)),
+        };
+
+        let blk = ctx.block();
+        let val_slot = blk.gep(DOUBLE, &vals_buf, &[(I64, &idx_str)]);
+        blk.store(DOUBLE, &val_str, &val_slot);
+    }
+
+    // Call `js_create_namespace(n, keys, key_lens, values)` and store
+    // the result into the namespace global. The result is a NaN-boxed
+    // POINTER_TAG ObjectHeader; the global is already GC-rooted by
+    // `register_module_globals_as_gc_roots` is NOT — namespace globals
+    // aren't in `module_globals`. Register the address as a root here
+    // so the object survives subsequent GC cycles.
+    let n_str = format!("{}", n);
+    let blk = ctx.block();
+    let result = blk.call(
+        DOUBLE,
+        "js_create_namespace",
+        &[
+            (I32, &n_str),
+            (PTR, &keys_buf),
+            (PTR, &lens_buf),
+            (PTR, &vals_buf),
+        ],
+    );
+    let ns_name = format!("__perry_ns_{}", module_prefix);
+    blk.store(DOUBLE, &result, &format!("@{}", ns_name));
+    let addr_i64 = blk.ptrtoint(&format!("@{}", ns_name), I64);
+    blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
+}

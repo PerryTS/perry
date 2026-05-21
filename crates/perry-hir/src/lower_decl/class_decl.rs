@@ -1,0 +1,1098 @@
+use anyhow::{anyhow, bail, Result};
+use perry_types::{LocalId, Type};
+use swc_ecma_ast as ast;
+
+use crate::analysis::*;
+use crate::destructuring::*;
+use crate::ir::*;
+use crate::lower::{
+    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
+};
+use crate::lower_patterns::*;
+use crate::lower_types::*;
+
+use super::*;
+
+pub fn lower_class_decl(
+    ctx: &mut LoweringContext,
+    class_decl: &ast::ClassDecl,
+    is_exported: bool,
+) -> Result<Class> {
+    let name = class_decl.ident.sym.to_string();
+    validate_legacy_decorator_surface(&class_decl.class, &name)?;
+    let class_id = match ctx.lookup_class(&name) {
+        Some(id) => id,
+        None => {
+            let id = ctx.fresh_class();
+            ctx.register_class(name.clone(), id);
+            id
+        }
+    };
+
+    // Set current class for arrow function `this` capture tracking
+    let old_class = ctx.current_class.take();
+    ctx.current_class = Some(name.clone());
+
+    // Issue #562: track the parent class identifier so the `super({...})`
+    // pre-scan in expr_call.rs can register the controller param as a
+    // readable_stream instance for stream subclass constructors. Set
+    // here BEFORE constructor lowering so the body lowering picks it up.
+    let old_super_ident = ctx.current_class_super_ident.take();
+    ctx.current_class_super_ident = match class_decl.class.super_class.as_deref() {
+        Some(ast::Expr::Ident(ident)) => Some(ident.sym.to_string()),
+        _ => None,
+    };
+
+    // Extract type parameters from generic class declaration (e.g., class Box<T>)
+    let type_params = class_decl
+        .class
+        .type_params
+        .as_ref()
+        .map(|tp| extract_type_params(tp))
+        .unwrap_or_default();
+
+    // Enter type parameter scope for resolving T, U, etc. in member types
+    ctx.enter_type_param_scope(&type_params);
+
+    // Handle extends clause
+    let (extends, extends_name, native_extends, extends_expr) = if let Some(ref super_class) =
+        class_decl.class.super_class
+    {
+        if let ast::Expr::Ident(ident) = super_class.as_ref() {
+            let parent_name = ident.sym.to_string();
+            // First check if it's a native module class
+            let native_parent = match parent_name.as_str() {
+                "EventEmitter" => Some(("events".to_string(), "EventEmitter".to_string())),
+                "AsyncLocalStorage" => {
+                    Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
+                }
+                "AsyncResource" => Some(("async_hooks".to_string(), "AsyncResource".to_string())),
+                "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
+                // Issue #562: user classes extending the Web Streams
+                // base classes get a runtime-side subclass-init shim
+                // wired through `Expr::SuperCall` (codegen). The
+                // `extends_name` is also retained so the existing
+                // `native_extends.is_some()` branch below still
+                // populates it for the inheritance walks elsewhere
+                // (vtable, hasOwn, etc.) that key on the parent name.
+                "ReadableStream" => {
+                    Some(("readable_stream".to_string(), "ReadableStream".to_string()))
+                }
+                "WritableStream" => {
+                    Some(("writable_stream".to_string(), "WritableStream".to_string()))
+                }
+                "TransformStream" => Some((
+                    "transform_stream".to_string(),
+                    "TransformStream".to_string(),
+                )),
+                _ => None,
+            };
+            if native_parent.is_some() {
+                // Keep `extends_name` populated alongside `native_extends`
+                // so SuperCall codegen + downstream chain walks still
+                // see the parent name (mirrors how stream-class
+                // dispatch resolves through the existing extends_name
+                // path while the native_extends carries the (module,
+                // class) tag for the runtime shim).
+                (None, Some(parent_name), native_parent, None)
+            } else {
+                let parent_cid = ctx.lookup_class(&parent_name);
+                if parent_cid.is_none() {
+                    // Issue #711 part 2: the Ident doesn't resolve to
+                    // any known class. The common case is Effect's
+                    // `const Base = (function() { function Base(){}; Base.prototype = X; return Base })()` pattern —
+                    // `Base` is a function value with a prototype
+                    // object attached via `js_set_function_prototype`.
+                    // Capture the Ident as `extends_expr` so the
+                    // dynamic parent-registration helper can resolve
+                    // it through `function_class_id` at runtime.
+                    // `extends_name` stays populated for the rare
+                    // cases where downstream code paths key on the
+                    // textual parent name (super-call codegen, etc.)
+                    // but extends_expr takes precedence on the
+                    // method-dispatch path.
+                    match lower_expr(ctx, super_class) {
+                        Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
+                        Err(_) => (None, Some(parent_name), None, None),
+                    }
+                } else {
+                    // Always capture the parent name for imported classes that may not have a ClassId
+                    (parent_cid, Some(parent_name), None, None)
+                }
+            }
+        } else if let ast::Expr::Member(member) = super_class.as_ref() {
+            // Handle member expression like ethers.JsonRpcProvider or module.ClassName
+            let parent_name = extract_member_class_name(member);
+            // Refs #488 drizzle-sqlite: also try resolving the parent
+            // class by name across modules. Pre-fix the Member arm set
+            // `extends = None`, so `class SQLiteIntegerBuilder extends
+            // import_mid.SQLiteColumnBuilder { ... }` lost its parent
+            // link entirely — inherited methods (drizzle's
+            // ColumnBuilder.setName etc.) were unreachable on instances.
+            // Class names are unique enough in practice that `lookup_class`
+            // resolves; if it doesn't, we fall back to the prior
+            // name-only behavior (no regression for unknown parents).
+            (
+                ctx.lookup_class(&parent_name),
+                Some(parent_name),
+                None,
+                None,
+            )
+        } else {
+            // Issue #711: `class X extends fn(...)` / `class X extends
+            // new Foo(...)` etc. The super-class expression isn't
+            // statically resolvable to a known class. Lower the
+            // expression so codegen can evaluate it at the class
+            // declaration site and call
+            // `js_register_class_parent_dynamic` to wire the parent
+            // edge into CLASS_REGISTRY at runtime. Both `extends` and
+            // `extends_name` stay None — the parent class_id is only
+            // known once the expression evaluates. Lowering errors
+            // here are non-fatal: fall back to a parentless class so
+            // the rest of the program still compiles (the
+            // method-dispatch catch-all in object.rs surfaces the
+            // missing-method case clearly enough).
+            match lower_expr(ctx, super_class) {
+                Ok(expr) => (None, None, None, Some(Box::new(expr))),
+                Err(_) => (None, None, None, None),
+            }
+        }
+    } else {
+        (None, None, None, None)
+    };
+
+    // First pass: collect static field/method names for early registration
+    // This allows static method bodies to reference static fields
+    let mut static_field_names = Vec::new();
+    let mut static_method_names = Vec::new();
+    for member in &class_decl.class.body {
+        match member {
+            ast::ClassMember::Method(method) if method.is_static => {
+                if let ast::PropName::Ident(ident) = &method.key {
+                    static_method_names.push(ident.sym.to_string());
+                }
+            }
+            ast::ClassMember::PrivateMethod(method) if method.is_static => {
+                // Register as "#name" so WithPrivateStatic.#helper()
+                // call-site lookup via has_static_method() succeeds.
+                static_method_names.push(format!("#{}", method.key.name));
+            }
+            ast::ClassMember::ClassProp(prop) if prop.is_static => {
+                if let ast::PropName::Ident(ident) = &prop.key {
+                    static_field_names.push(ident.sym.to_string());
+                }
+            }
+            ast::ClassMember::PrivateProp(prop) if prop.is_static => {
+                static_field_names.push(format!("#{}", prop.key.name));
+            }
+            _ => {}
+        }
+    }
+
+    // Register static members early so method bodies can reference them
+    ctx.register_class_statics(name.clone(), static_field_names, static_method_names);
+
+    // Issue #302: also collect instance field TYPES early so method bodies'
+    // `for (... of this.someField)` lowering can detect Map/Set field types
+    // BEFORE method bodies are lowered. The full `fields` Vec gets populated
+    // during the next pass starting at line 672 (with init exprs etc.); for
+    // type-name lookup we only need (name, declared type) which is cheap to
+    // pluck from `prop.type_ann`. Registered again at end-of-class
+    // (line ~1058) once `fields` is complete in case any field types got
+    // refined during body lowering.
+    //
+    // Issue #305 (re-repro on v0.5.415): fields without an explicit
+    // annotation but WITH an initializer like `private map = new Map<K,V>()`
+    // also need their generic type registered, otherwise `for-of this.map`
+    // and `const m = this.map; for-of m` (whose type inference consults this
+    // registry via lower_types::infer_type_from_expr's `this.<field>` arm)
+    // both fall off the Map fast path and the loop body never executes.
+    // Falls back to `infer_type_from_expr` on the AST initializer when the
+    // annotation is absent — this is the same routine used elsewhere for
+    // `let m = new Map<K,V>()`, so the two shapes now agree.
+    let mut early_field_types: Vec<(String, Type)> = Vec::new();
+    for member in &class_decl.class.body {
+        if let ast::ClassMember::ClassProp(prop) = member {
+            if prop.is_static {
+                continue;
+            }
+            let field_name = match &prop.key {
+                ast::PropName::Ident(i) => i.sym.to_string(),
+                ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                _ => continue,
+            };
+            let ty = match prop.type_ann.as_ref() {
+                Some(ann) => extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)),
+                None => prop
+                    .value
+                    .as_ref()
+                    .map(|v| infer_type_from_expr(v, ctx))
+                    .unwrap_or(Type::Any),
+            };
+            early_field_types.push((field_name, ty));
+        }
+    }
+    ctx.register_class_field_types(name.clone(), early_field_types);
+
+    let mut fields = Vec::new();
+    let mut static_fields = Vec::new();
+    let mut constructor = None;
+    let mut methods = Vec::new();
+    let mut static_methods = Vec::new();
+    let mut getters = Vec::new();
+    let mut setters = Vec::new();
+
+    // Second pass: actually lower the class members
+    for member in &class_decl.class.body {
+        match member {
+            ast::ClassMember::Constructor(ctor) => {
+                constructor = Some(lower_constructor(ctx, &name, ctor)?);
+            }
+            ast::ClassMember::Method(method) => {
+                // Skip TypeScript overload declarations (no body)
+                if method.function.body.is_none() {
+                    continue;
+                }
+                // Get the property name for getters/setters. Computed
+                // keys are accepted for `[Symbol.iterator]` (registered
+                // under `@@iterator`), and for `[Symbol.hasInstance]` /
+                // `[Symbol.toStringTag]` (lifted to top-level functions
+                // with a `__perry_wk_<hook>_<class>` prefix so the LLVM
+                // backend's `init_static_fields` picks them up and
+                // registers them with the runtime).
+                let prop_name = match &method.key {
+                    ast::PropName::Ident(ident) => ident.sym.to_string(),
+                    ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                    ast::PropName::Computed(computed) => {
+                        if is_symbol_iterator_key(&computed.expr) {
+                            "@@iterator".to_string()
+                        } else if let Some(wk) = symbol_well_known_key(&computed.expr) {
+                            // hasInstance (static method): lift the method
+                            // body to a top-level function named
+                            // `__perry_wk_hasinstance_<class>`. Signature:
+                            // `(value: f64) -> f64` — no `this`.
+                            if wk == "hasInstance"
+                                && method.is_static
+                                && matches!(method.kind, ast::MethodKind::Method)
+                            {
+                                let mut func = lower_class_method(ctx, method)?;
+                                func.name = format!("__perry_wk_hasinstance_{}", name);
+                                ctx.pending_functions.push(func);
+                                continue;
+                            }
+                            // toStringTag (instance getter): lift the
+                            // getter body to a top-level function named
+                            // `__perry_wk_tostringtag_<class>`. Signature:
+                            // `(this: f64) -> f64` — getter takes `this`
+                            // as an explicit first parameter and returns
+                            // a string.
+                            if wk == "toStringTag"
+                                && !method.is_static
+                                && matches!(method.kind, ast::MethodKind::Getter)
+                            {
+                                let getter = lower_getter_method(ctx, method)?;
+                                // Inject a `this` parameter at position 0 and rewrite
+                                // any `Expr::This` in the body to `LocalGet(this_id)`.
+                                let this_id = ctx.fresh_local();
+                                let mut new_params = Vec::with_capacity(getter.params.len() + 1);
+                                new_params.push(Param {
+                                    id: this_id,
+                                    name: "this".to_string(),
+                                    ty: Type::Named(name.clone()),
+                                    default: None,
+                                    decorators: Vec::new(),
+                                    is_rest: false,
+                                });
+                                new_params.extend(getter.params.into_iter());
+                                let mut body = getter.body;
+                                crate::analysis::replace_this_in_stmts(&mut body, this_id);
+                                let top_fn = Function {
+                                    id: ctx.fresh_func(),
+                                    name: format!("__perry_wk_tostringtag_{}", name),
+                                    type_params: Vec::new(),
+                                    params: new_params,
+                                    return_type: Type::Any,
+                                    body,
+                                    is_async: false,
+                                    is_generator: false,
+                                    was_plain_async: false,
+                                    was_unrolled: false,
+                                    is_exported: false,
+                                    captures: Vec::new(),
+                                    decorators: Vec::new(),
+                                };
+                                ctx.pending_functions.push(top_fn);
+                                continue;
+                            }
+                            // `[Symbol.dispose]()` / `[Symbol.asyncDispose]()`:
+                            // ES2024 explicit-resource-management dispose hooks.
+                            // Rename the method to a stable string-keyed name so
+                            // the using-block desugarer can call it via plain
+                            // method dispatch (`obj.__perry_dispose__()` /
+                            // `obj.__perry_async_dispose__()`). Falls through to
+                            // the regular method-pushing path below with the
+                            // renamed key.
+                            if (wk == "dispose" || wk == "asyncDispose")
+                                && !method.is_static
+                                && matches!(method.kind, ast::MethodKind::Method)
+                            {
+                                if wk == "asyncDispose" {
+                                    "__perry_async_dispose__".to_string()
+                                } else {
+                                    "__perry_dispose__".to_string()
+                                }
+                            } else {
+                                // Other well-known (toPrimitive, asyncIterator)
+                                // on a class: not yet implemented, skip.
+                                continue;
+                            }
+                        } else {
+                            continue;
+                        }
+                    }
+                    _ => continue,
+                };
+
+                match method.kind {
+                    ast::MethodKind::Getter => {
+                        // Getter: no parameters, returns a value
+                        let func = lower_getter_method(ctx, method)?;
+                        getters.push((prop_name, func));
+                    }
+                    ast::MethodKind::Setter => {
+                        // Setter: takes one parameter
+                        let func = lower_setter_method(ctx, method)?;
+                        setters.push((prop_name, func));
+                    }
+                    ast::MethodKind::Method => {
+                        let mut func = lower_class_method(ctx, method)?;
+                        // Issue #212 fixed the broader class-method-captures-
+                        // outer-fn-local codegen gap, so the dispose family no
+                        // longer needs a silent-drop fallback — the same
+                        // hidden-field rewrite that lets `log() { captured.push(...) }`
+                        // work also lets `[Symbol.dispose]() { disposed.push(...) }`
+                        // work. The pre-fix gate at this site (`scope_depth > 0
+                        // && method_body_captures_outer(...)` → `continue`) was
+                        // removed in v0.5.319. See the v0.5.317 entry for the
+                        // history and `test_issue_154_using_dispose.ts` for the
+                        // regression test.
+                        // `*[Symbol.iterator]()` — lift to a top-level
+                        // generator function with `this` as an explicit
+                        // first parameter. The generator transform
+                        // (which only visits `module.functions`) then
+                        // rewrites it to return the `{next, return,
+                        // throw}` closure triple. For-of sites use
+                        // `iterator_func_for_class` to dispatch.
+                        if prop_name == "@@iterator" && func.is_generator && !method.is_static {
+                            let this_id = ctx.fresh_local();
+                            let mut new_params = Vec::with_capacity(func.params.len() + 1);
+                            new_params.push(Param {
+                                id: this_id,
+                                name: "this".to_string(),
+                                ty: Type::Named(name.clone()),
+                                default: None,
+                                decorators: Vec::new(),
+                                is_rest: false,
+                            });
+                            new_params.append(&mut func.params);
+
+                            let mut body = std::mem::take(&mut func.body);
+                            crate::analysis::replace_this_in_stmts(&mut body, this_id);
+
+                            let top_name = format!("__perry_iter_{}", name);
+                            let top_fn_id = ctx.fresh_func();
+                            let top_fn = Function {
+                                id: top_fn_id,
+                                name: top_name,
+                                type_params: Vec::new(),
+                                params: new_params,
+                                return_type: Type::Any,
+                                body,
+                                is_async: false,
+                                is_generator: true,
+                                was_plain_async: false,
+                                was_unrolled: false,
+                                is_exported: false,
+                                captures: Vec::new(),
+                                decorators: Vec::new(),
+                            };
+                            ctx.pending_functions.push(top_fn);
+                            ctx.iterator_func_for_class.insert(name.clone(), top_fn_id);
+                            continue;
+                        }
+                        if method.is_static {
+                            static_methods.push(func);
+                        } else {
+                            methods.push(func);
+                        }
+                    }
+                }
+            }
+            ast::ClassMember::ClassProp(prop) => {
+                // Computed-key fields (`[Symbol.for("k")] = init`) flow through
+                // here for both instance AND static positions.
+                // `lower_class_prop` captures the key expression in
+                // `ClassField.key_expr` for runtime evaluation. Refs #420 —
+                // drizzle's `static [entityKind] = "Table"` is the canonical
+                // static-computed-key pattern; codegen's `init_static_fields`
+                // detects `key_expr.is_some()` and emits a runtime
+                // registration into the class-static-symbol side table.
+                let field = lower_class_prop(ctx, prop)?;
+                if prop.is_static {
+                    static_fields.push(field);
+                } else {
+                    fields.push(field);
+                }
+            }
+            ast::ClassMember::PrivateProp(prop) => {
+                let field = lower_private_prop(ctx, prop)?;
+                if prop.is_static {
+                    static_fields.push(field);
+                } else {
+                    fields.push(field);
+                }
+            }
+            ast::ClassMember::PrivateMethod(method) => {
+                // Skip TypeScript overload declarations (no body)
+                if method.function.body.is_none() {
+                    continue;
+                }
+                match method.kind {
+                    ast::MethodKind::Method => {
+                        let func = lower_private_method(ctx, method)?;
+                        if method.is_static {
+                            static_methods.push(func);
+                        } else {
+                            methods.push(func);
+                        }
+                    }
+                    ast::MethodKind::Getter => {
+                        // Store under "#name" so PropertyGet on "#name"
+                        // can hit the getter registry (which keys on
+                        // the property name, not `get_#name`).
+                        let prop_name = format!("#{}", method.key.name);
+                        let func = lower_private_getter(ctx, method)?;
+                        getters.push((prop_name, func));
+                    }
+                    ast::MethodKind::Setter => {
+                        let prop_name = format!("#{}", method.key.name);
+                        let func = lower_private_setter(ctx, method)?;
+                        setters.push((prop_name, func));
+                    }
+                }
+            }
+            ast::ClassMember::StaticBlock(block) => {
+                // `static { ... }` — lower the body and attach it as
+                // a synthetic static method whose name is
+                // `__perry_static_init_N`. `codegen.rs :: init_static_fields`
+                // later recognizes the prefix and emits a call to each
+                // such method right after static field init, so they
+                // run once at module startup.
+                let scope_mark = ctx.enter_scope();
+                let body = lower_block_stmt(ctx, &block.body)?;
+                ctx.exit_scope(scope_mark);
+
+                let block_idx = static_methods
+                    .iter()
+                    .filter(|m| m.name.starts_with("__perry_static_init_"))
+                    .count();
+                let synthetic_name = format!("__perry_static_init_{}", block_idx);
+                static_methods.push(Function {
+                    id: ctx.fresh_func(),
+                    name: synthetic_name,
+                    type_params: Vec::new(),
+                    params: Vec::new(),
+                    return_type: Type::Void,
+                    body,
+                    is_async: false,
+                    is_generator: false,
+                    was_plain_async: false,
+                    was_unrolled: false,
+                    is_exported: false,
+                    captures: Vec::new(),
+                    decorators: Vec::new(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    // Detect fields from TypeScript parameter properties (e.g., constructor(public name: string)).
+    // SWC represents these as TsParamProp in the AST. They must be registered as class fields
+    // so that `this.name` access in methods can find them by field index.
+    {
+        let declared_field_names: std::collections::HashSet<String> =
+            fields.iter().map(|f| f.name.clone()).collect();
+        for member in &class_decl.class.body {
+            if let ast::ClassMember::Constructor(ctor) = member {
+                for param in &ctor.params {
+                    if let ast::ParamOrTsParamProp::TsParamProp(ts_prop) = param {
+                        let (param_name, param_type) = match &ts_prop.param {
+                            ast::TsParamPropParam::Ident(ident) => {
+                                let pname = ident.id.sym.to_string();
+                                let ty = ident
+                                    .type_ann
+                                    .as_ref()
+                                    .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
+                                    .unwrap_or(Type::Any);
+                                (pname, ty)
+                            }
+                            ast::TsParamPropParam::Assign(assign) => {
+                                let pname = get_pat_name(&assign.left).unwrap_or_default();
+                                let ty = extract_param_type_with_ctx(&assign.left, Some(ctx));
+                                (pname, ty)
+                            }
+                        };
+                        if !param_name.is_empty() && !declared_field_names.contains(&param_name) {
+                            fields.push(ClassField {
+                                name: param_name,
+                                key_expr: None,
+                                ty: param_type,
+                                init: None,
+                                is_private: false,
+                                is_readonly: ts_prop.readonly,
+                                decorators: lower_decorators(ctx, &ts_prop.decorators),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Detect fields from constructor body `this.xxx = ...` assignments.
+    // JavaScript classes (e.g., transpiled from TypeScript) often don't have ClassProp
+    // declarations; instead they assign to `this` in the constructor body.
+    //
+    // IMPORTANT: Also exclude fields inherited from parent classes. If the parent already
+    // declares `kind` and the subclass writes `this.kind = ...`, the subclass must NOT
+    // add `kind` as a new own field. Otherwise, codegen's resolve_class_fields later
+    // merges parent and own indices and the subclass's shadow `kind` gets a different
+    // offset from the parent's, leaving TWO `kind` slots that disagree at runtime.
+    {
+        // Collect inherited field names by walking the parent chain via the extends_name.
+        // Previous lower_class_decl calls have registered each class's full (own+inherited)
+        // field set, so a single lookup on the direct parent yields the complete chain.
+        let mut inherited_field_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        if let Some(ref parent_name) = extends_name {
+            if let Some(parent_fields) = ctx.lookup_class_field_names(parent_name) {
+                for f in parent_fields {
+                    inherited_field_names.insert(f.clone());
+                }
+            }
+        }
+
+        // Issue #665 (sixth pass): collect own + inherited accessor (getter+setter)
+        // property names. Real-world packages like rate-limiter-flexible
+        // declare a `set points(v)` accessor AND write `this.points = opts.points`
+        // from the constructor body. Pre-fix the bare-this scan below
+        // mis-categorised `points` as an own data field, allocating an
+        // inline slot that surfaced via `Object.keys` and shadowed the
+        // accessor when a subclass instance's `.points` was read across
+        // modules (the runtime's setter dispatch walks the class vtable
+        // chain correctly, but the spurious own-data slot wins lookup).
+        let mut accessor_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for member in &class_decl.class.body {
+            match member {
+                ast::ClassMember::Method(m)
+                    if matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
+                {
+                    let key = match &m.key {
+                        ast::PropName::Ident(i) => i.sym.to_string(),
+                        ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                        _ => continue,
+                    };
+                    accessor_names.insert(key);
+                }
+                ast::ClassMember::PrivateMethod(m)
+                    if matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
+                {
+                    accessor_names.insert(format!("#{}", m.key.name));
+                }
+                _ => {}
+            }
+        }
+        // Pull in accessor names from the parent chain. The parent's
+        // registration stored the own+inherited union, so a single lookup
+        // on the direct parent suffices.
+        if let Some(ref parent_name) = extends_name {
+            if let Some(parent_accessors) = ctx.lookup_class_accessor_names(parent_name) {
+                for a in parent_accessors {
+                    accessor_names.insert(a.clone());
+                }
+            }
+        }
+
+        let declared_field_names: std::collections::HashSet<String> =
+            fields.iter().map(|f| f.name.clone()).collect();
+        for member in &class_decl.class.body {
+            if let ast::ClassMember::Constructor(ctor) = member {
+                if let Some(ref body) = ctor.body {
+                    for stmt in &body.stmts {
+                        if let ast::Stmt::Expr(expr_stmt) = stmt {
+                            if let ast::Expr::Assign(assign) = &*expr_stmt.expr {
+                                if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(
+                                    mem,
+                                )) = &assign.left
+                                {
+                                    if let ast::Expr::This(_) = &*mem.obj {
+                                        if let ast::MemberProp::Ident(prop_ident) = &mem.prop {
+                                            let fname = prop_ident.sym.to_string();
+                                            if !declared_field_names.contains(&fname)
+                                                && !inherited_field_names.contains(&fname)
+                                                && !accessor_names.contains(&fname)
+                                            {
+                                                fields.push(ClassField {
+                                                    name: fname,
+                                                    key_expr: None,
+                                                    ty: Type::Any,
+                                                    init: None,
+                                                    is_private: false,
+                                                    is_readonly: false,
+                                                    decorators: Vec::new(),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Dedup fields: keep first occurrence of each name
+        let mut seen = std::collections::HashSet::new();
+        fields.retain(|f| seen.insert(f.name.clone()));
+
+        // Register this class's complete field set (own + inherited) so subclasses that
+        // extend it can see the full inheritance chain during their own lowering.
+        let mut complete_field_names: Vec<String> = inherited_field_names.into_iter().collect();
+        for f in &fields {
+            if !complete_field_names.contains(&f.name) {
+                complete_field_names.push(f.name.clone());
+            }
+        }
+        ctx.register_class_field_names(name.clone(), complete_field_names);
+
+        // Issue #665: register own+inherited accessor names so subclasses
+        // lowered after this one can also skip them when scanning ctor
+        // bodies. `accessor_names` already contains the union from the
+        // parent-chain lookup above.
+        let accessor_list: Vec<String> = accessor_names.into_iter().collect();
+        ctx.register_class_accessor_names(name.clone(), accessor_list);
+
+        // Issue #302: also register field TYPES so the for-of arm can
+        // detect `for (... of this.someMap)` patterns. Only own fields are
+        // registered here; inherited field types fall through to whichever
+        // ancestor class registered them (sub-class lookups walk via the
+        // class hierarchy elsewhere if needed).
+        let field_types: Vec<(String, Type)> = fields
+            .iter()
+            .map(|f| (f.name.clone(), f.ty.clone()))
+            .collect();
+        ctx.register_class_field_types(name.clone(), field_types);
+    }
+
+    // Exit type parameter scope
+    ctx.exit_type_param_scope();
+
+    // Issue #562: stash native_extends so the `let x = new <subclass>()`
+    // path in destructuring.rs can route the local through the parent
+    // stream module. Done here (not at the call site) so the registry
+    // lookup is always available regardless of declaration order.
+    if let Some((module, class)) = native_extends.as_ref() {
+        ctx.register_class_native_extends(name.clone(), module.clone(), class.clone());
+    }
+
+    // Restore previous current_class
+    ctx.current_class = old_class;
+    // Issue #562: restore the prior super-ident slot.
+    ctx.current_class_super_ident = old_super_ident;
+
+    // Issue #212: classes nested inside a function may have method bodies
+    // that reference enclosing-fn locals. See `synthesize_class_captures`
+    // for the full doc (extracted in #740 so anonymous class expressions
+    // can use the same machinery).
+    synthesize_class_captures(
+        ctx,
+        &name,
+        extends_name.as_deref(),
+        &mut fields,
+        &mut methods,
+        &mut getters,
+        &mut setters,
+        &mut constructor,
+    );
+
+    // Phase 4.1: register each method's and getter's return type so
+    // call-site inference (`infer_call_return_type`'s Member arm) can
+    // resolve `obj.method()` when obj's type is Type::Named(name).
+    // Feeds off Phase 4's body-based inference — any method without an
+    // explicit annotation whose body returned a known type lands here too.
+    for m in &methods {
+        if !matches!(m.return_type, Type::Any) {
+            ctx.register_class_method_return_type(
+                name.clone(),
+                m.name.clone(),
+                m.return_type.clone(),
+            );
+        }
+    }
+    for (prop_name, g) in &getters {
+        if !matches!(g.return_type, Type::Any) {
+            ctx.register_class_method_return_type(
+                name.clone(),
+                prop_name.clone(),
+                g.return_type.clone(),
+            );
+        }
+    }
+
+    Ok(Class {
+        id: class_id,
+        name,
+        type_params,
+        extends,
+        extends_name,
+        native_extends,
+        extends_expr,
+        fields,
+        constructor,
+        methods,
+        getters,
+        setters,
+        static_fields,
+        static_methods,
+        decorators: lower_decorators(ctx, &class_decl.class.decorators),
+        is_exported,
+        aliases: Vec::new(),
+    })
+}
+
+/// Lower a class expression (ast::Class) to HIR.
+/// Used for anonymous class expressions like `new (class extends Command { ... })()`.
+pub fn lower_class_from_ast(
+    ctx: &mut LoweringContext,
+    class: &ast::Class,
+    name: &str,
+    is_exported: bool,
+) -> Result<Class> {
+    validate_legacy_decorator_surface(class, name)?;
+    let class_id = match ctx.lookup_class(name) {
+        Some(id) => id,
+        None => {
+            let id = ctx.fresh_class();
+            ctx.register_class(name.to_string(), id);
+            id
+        }
+    };
+
+    let old_class = ctx.current_class.take();
+    ctx.current_class = Some(name.to_string());
+
+    // Issue #562: same as the parallel `lower_class_decl` arm — track the
+    // parent class identifier so super({...}) controller-param pre-scan
+    // fires for stream subclasses.
+    let old_super_ident = ctx.current_class_super_ident.take();
+    ctx.current_class_super_ident = match class.super_class.as_deref() {
+        Some(ast::Expr::Ident(ident)) => Some(ident.sym.to_string()),
+        _ => None,
+    };
+
+    let type_params = class
+        .type_params
+        .as_ref()
+        .map(|tp| extract_type_params(tp))
+        .unwrap_or_default();
+
+    ctx.enter_type_param_scope(&type_params);
+
+    let (extends, extends_name, native_extends, extends_expr) = if let Some(ref super_class) =
+        class.super_class
+    {
+        if let ast::Expr::Ident(ident) = super_class.as_ref() {
+            let parent_name = ident.sym.to_string();
+            let native_parent = match parent_name.as_str() {
+                "EventEmitter" => Some(("events".to_string(), "EventEmitter".to_string())),
+                "AsyncLocalStorage" => {
+                    Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
+                }
+                "AsyncResource" => Some(("async_hooks".to_string(), "AsyncResource".to_string())),
+                "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
+                // Issue #562: keep in lockstep with the parallel arm in
+                // `lower_class_decl` above.
+                "ReadableStream" => {
+                    Some(("readable_stream".to_string(), "ReadableStream".to_string()))
+                }
+                "WritableStream" => {
+                    Some(("writable_stream".to_string(), "WritableStream".to_string()))
+                }
+                "TransformStream" => Some((
+                    "transform_stream".to_string(),
+                    "TransformStream".to_string(),
+                )),
+                _ => None,
+            };
+            if native_parent.is_some() {
+                (None, Some(parent_name), native_parent, None)
+            } else {
+                let parent_cid = ctx.lookup_class(&parent_name);
+                if parent_cid.is_none() {
+                    // Issue #711 part 2: see the parallel arm in
+                    // `lower_class_decl` above. Unknown Ident super-class
+                    // falls through to extends_expr capture so a
+                    // function-with-prototype value can be resolved at
+                    // runtime via `function_class_id`.
+                    match lower_expr(ctx, super_class) {
+                        Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
+                        Err(_) => (None, Some(parent_name), None, None),
+                    }
+                } else {
+                    (parent_cid, Some(parent_name), None, None)
+                }
+            }
+        } else if let ast::Expr::Member(member) = super_class.as_ref() {
+            // Refs #488 drizzle-sqlite: try cross-module class lookup. See
+            // the matching arm in `lower_class_decl` (above) for the full
+            // rationale — without this, the parent link is lost and
+            // inherited methods don't reach instances.
+            let parent_name = extract_member_class_name(member);
+            (
+                ctx.lookup_class(&parent_name),
+                Some(parent_name),
+                None,
+                None,
+            )
+        } else {
+            // Issue #711: see the matching arm in `lower_class_decl` above
+            // for the full rationale. Capture the lowered extends
+            // expression so codegen can evaluate it at the class
+            // declaration site and call
+            // `js_register_class_parent_dynamic` at runtime.
+            match lower_expr(ctx, super_class) {
+                Ok(expr) => (None, None, None, Some(Box::new(expr))),
+                Err(_) => (None, None, None, None),
+            }
+        }
+    } else {
+        (None, None, None, None)
+    };
+
+    let mut static_field_names = Vec::new();
+    let mut static_method_names = Vec::new();
+    for member in &class.body {
+        match member {
+            ast::ClassMember::Method(method) if method.is_static => {
+                if let ast::PropName::Ident(ident) = &method.key {
+                    static_method_names.push(ident.sym.to_string());
+                }
+            }
+            ast::ClassMember::PrivateMethod(method) if method.is_static => {
+                static_method_names.push(format!("#{}", method.key.name));
+            }
+            ast::ClassMember::ClassProp(prop) if prop.is_static => {
+                if let ast::PropName::Ident(ident) = &prop.key {
+                    static_field_names.push(ident.sym.to_string());
+                }
+            }
+            ast::ClassMember::PrivateProp(prop) if prop.is_static => {
+                static_field_names.push(format!("#{}", prop.key.name));
+            }
+            _ => {}
+        }
+    }
+    ctx.register_class_statics(name.to_string(), static_field_names, static_method_names);
+
+    let mut fields = Vec::new();
+    let mut static_fields = Vec::new();
+    let mut constructor = None;
+    let mut methods = Vec::new();
+    let mut static_methods = Vec::new();
+    let mut getters = Vec::new();
+    let mut setters = Vec::new();
+
+    for member in &class.body {
+        match member {
+            ast::ClassMember::Constructor(ctor) => {
+                constructor = Some(lower_constructor(ctx, name, ctor)?);
+            }
+            ast::ClassMember::Method(method) => {
+                // Skip TypeScript overload declarations (no body)
+                if method.function.body.is_none() {
+                    continue;
+                }
+                let prop_name = match &method.key {
+                    ast::PropName::Ident(ident) => ident.sym.to_string(),
+                    ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                    _ => continue,
+                };
+                match method.kind {
+                    ast::MethodKind::Getter => {
+                        let func = lower_getter_method(ctx, method)?;
+                        getters.push((prop_name, func));
+                    }
+                    ast::MethodKind::Setter => {
+                        let func = lower_setter_method(ctx, method)?;
+                        setters.push((prop_name, func));
+                    }
+                    ast::MethodKind::Method => {
+                        let func = lower_class_method(ctx, method)?;
+                        if method.is_static {
+                            static_methods.push(func);
+                        } else {
+                            methods.push(func);
+                        }
+                    }
+                }
+            }
+            ast::ClassMember::ClassProp(prop) => {
+                // Computed-key fields (`[Symbol.for("k")] = init`) flow through
+                // here for both instance AND static positions.
+                // `lower_class_prop` captures the key expression in
+                // `ClassField.key_expr` for runtime evaluation. Refs #420 —
+                // drizzle's `static [entityKind] = "Table"` is the canonical
+                // static-computed-key pattern; codegen's `init_static_fields`
+                // detects `key_expr.is_some()` and emits a runtime
+                // registration into the class-static-symbol side table.
+                let field = lower_class_prop(ctx, prop)?;
+                if prop.is_static {
+                    static_fields.push(field);
+                } else {
+                    fields.push(field);
+                }
+            }
+            ast::ClassMember::PrivateProp(prop) => {
+                let field = lower_private_prop(ctx, prop)?;
+                if prop.is_static {
+                    static_fields.push(field);
+                } else {
+                    fields.push(field);
+                }
+            }
+            ast::ClassMember::PrivateMethod(method) => {
+                if method.function.body.is_none() {
+                    continue;
+                }
+                match method.kind {
+                    ast::MethodKind::Method => {
+                        let func = lower_private_method(ctx, method)?;
+                        if method.is_static {
+                            static_methods.push(func);
+                        } else {
+                            methods.push(func);
+                        }
+                    }
+                    ast::MethodKind::Getter => {
+                        let prop_name = format!("#{}", method.key.name);
+                        let func = lower_private_getter(ctx, method)?;
+                        getters.push((prop_name, func));
+                    }
+                    ast::MethodKind::Setter => {
+                        let prop_name = format!("#{}", method.key.name);
+                        let func = lower_private_setter(ctx, method)?;
+                        setters.push((prop_name, func));
+                    }
+                }
+            }
+            ast::ClassMember::StaticBlock(block) => {
+                let scope_mark = ctx.enter_scope();
+                let body = lower_block_stmt(ctx, &block.body)?;
+                ctx.exit_scope(scope_mark);
+
+                let block_idx = static_methods
+                    .iter()
+                    .filter(|m| m.name.starts_with("__perry_static_init_"))
+                    .count();
+                let synthetic_name = format!("__perry_static_init_{}", block_idx);
+                static_methods.push(Function {
+                    id: ctx.fresh_func(),
+                    name: synthetic_name,
+                    type_params: Vec::new(),
+                    params: Vec::new(),
+                    return_type: Type::Void,
+                    body,
+                    is_async: false,
+                    is_generator: false,
+                    was_plain_async: false,
+                    was_unrolled: false,
+                    is_exported: false,
+                    captures: Vec::new(),
+                    decorators: Vec::new(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    ctx.exit_type_param_scope();
+    // Issue #562: see the parallel site in `lower_class_decl` — register
+    // native_extends so subclass instances of the three Web Stream base
+    // classes route through the parent stream module's dispatch table.
+    if let Some((module, class)) = native_extends.as_ref() {
+        ctx.register_class_native_extends(name.to_string(), module.clone(), class.clone());
+    }
+    ctx.current_class = old_class;
+    // Issue #562: restore prior super-ident slot.
+    ctx.current_class_super_ident = old_super_ident;
+
+    // Phase 4.1: register method + getter return types — see the parallel
+    // site in lower_class_decl.
+    for m in &methods {
+        if !matches!(m.return_type, Type::Any) {
+            ctx.register_class_method_return_type(
+                name.to_string(),
+                m.name.clone(),
+                m.return_type.clone(),
+            );
+        }
+    }
+    for (prop_name, g) in &getters {
+        if !matches!(g.return_type, Type::Any) {
+            ctx.register_class_method_return_type(
+                name.to_string(),
+                prop_name.clone(),
+                g.return_type.clone(),
+            );
+        }
+    }
+
+    // Issue #740: synthesize __perry_cap_* capture machinery for class
+    // expressions that reference enclosing-fn locals (e.g. `const Inner =
+    // class { _tag = tag }` inside `function makeFactory(tag)`). Without
+    // this, anon class expressions silently dropped captures while named
+    // class declarations had the machinery via `lower_class_decl`. See
+    // the helper's doc comment for the full description.
+    synthesize_class_captures(
+        ctx,
+        name,
+        extends_name.as_deref(),
+        &mut fields,
+        &mut methods,
+        &mut getters,
+        &mut setters,
+        &mut constructor,
+    );
+
+    Ok(Class {
+        id: class_id,
+        name: name.to_string(),
+        type_params,
+        extends,
+        extends_name,
+        native_extends,
+        extends_expr,
+        fields,
+        constructor,
+        methods,
+        getters,
+        setters,
+        static_fields,
+        static_methods,
+        decorators: lower_decorators(ctx, &class.decorators),
+        is_exported,
+        aliases: Vec::new(),
+    })
+}

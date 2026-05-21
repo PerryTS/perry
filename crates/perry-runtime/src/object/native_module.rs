@@ -1,0 +1,1204 @@
+//! Native-module namespace machinery: allocator (`js_create_native_module_namespace`),
+//! property/method bindings (`js_native_module_property_by_name`,
+//! `js_native_module_bind_method`, `js_class_method_bind`), and the
+//! per-module constant/sub-namespace tables consumed from
+//! `dispatch_native_module_method` and `js_object_get_field_by_name`.
+//!
+//! Split out of `object/mod.rs` (issue #1103). Pure relocation — no
+//! logic changes.
+
+use super::*;
+
+/// Special class ID for native module namespace objects
+/// This is used to identify objects that represent native module namespaces
+pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFFFFFE;
+
+/// Create a native module namespace object
+/// This is used for `import * as X from 'module'` patterns
+/// The returned object identifies itself as an object (typeof returns "object")
+/// and stores the module name for debugging purposes
+///
+/// module_name_ptr: pointer to the module name string bytes
+/// module_name_len: length of the module name
+/// Returns the object as a NaN-boxed f64
+#[no_mangle]
+pub extern "C" fn js_create_native_module_namespace(
+    module_name_ptr: *const u8,
+    module_name_len: usize,
+) -> f64 {
+    // Create an object with one field to store the module name
+    let obj = js_object_alloc(NATIVE_MODULE_CLASS_ID, 1);
+
+    // Create a string from the module name
+    let module_name = crate::string::js_string_from_bytes(module_name_ptr, module_name_len as u32);
+
+    // Store the module name in the first field
+    js_object_set_field(obj, 0, JSValue::string_ptr(module_name));
+
+    // Create a keys array with one key: "__module__"
+    let keys_array = crate::array::js_array_alloc(1);
+    let key_bytes = b"__module__";
+    let key_str = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    crate::array::js_array_push(keys_array, JSValue::string_ptr(key_str));
+    js_object_set_keys(obj, keys_array);
+
+    // Return as NaN-boxed pointer
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+/// Issue #649: codegen entry for `PropertyGet { NativeModuleRef(name),
+/// property }`. `NativeModuleRef` lowers to a literal `0.0` at the codegen
+/// level, so the generic PropertyGet path can't find the namespace
+/// object. This helper short-circuits to the constants dispatcher; for
+/// the chained case (`fs.constants.F_OK`) the inner call returns a
+/// sub-namespace ObjectHeader and the outer PropertyGet goes through
+/// `js_object_get_field_by_name`'s NATIVE_MODULE_CLASS_ID arm.
+#[no_mangle]
+pub unsafe extern "C" fn js_native_module_property_by_name(
+    module_name_ptr: *const u8,
+    module_name_len: usize,
+    property_name_ptr: *const u8,
+    property_name_len: usize,
+) -> f64 {
+    let module_name =
+        std::str::from_utf8(std::slice::from_raw_parts(module_name_ptr, module_name_len))
+            .unwrap_or("");
+    let property_name = std::str::from_utf8(std::slice::from_raw_parts(
+        property_name_ptr,
+        property_name_len,
+    ))
+    .unwrap_or("");
+    if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
+        return val;
+    }
+    // For native modules whose surface includes known callable methods or
+    // class exports, return a bound-method closure so `typeof` and property
+    // capture (`const f = tty.isatty`) match Node's "function" shape. The
+    // closure routes back through js_native_call_method when invoked. Kept
+    // narrow to specific (module, property) pairs so a typo'd access still
+    // returns undefined.
+    if is_native_module_callable_export(module_name, property_name) {
+        let heap_name = {
+            let layout = std::alloc::Layout::from_size_align(property_name_len.max(1), 1).unwrap();
+            let ptr = std::alloc::alloc(layout);
+            std::ptr::copy_nonoverlapping(property_name_ptr, ptr, property_name_len);
+            ptr
+        };
+        let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
+        let ns = js_create_native_module_namespace(module_name_ptr, module_name_len);
+        crate::closure::js_closure_set_capture_f64(closure, 0, ns);
+        crate::closure::js_closure_set_capture_ptr(closure, 1, heap_name as i64);
+        crate::closure::js_closure_set_capture_ptr(closure, 2, property_name_len as i64);
+        set_bound_native_closure_name(closure, property_name);
+        return crate::value::js_nanbox_pointer(closure as i64);
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+pub(crate) fn set_bound_native_closure_name(
+    closure: *mut crate::closure::ClosureHeader,
+    name: &str,
+) {
+    let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let name_value = f64::from_bits(JSValue::string_ptr(ptr).bits());
+    crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
+}
+
+/// Whitelist of (module, property) pairs for which property-read should
+/// produce a callable handle (a bound-method closure) rather than undefined.
+/// Needed so `typeof tty.ReadStream === "function"` matches Node — the
+/// method-call form (`tty.isatty(0)`) is already handled by a dedicated
+/// codegen path, this just keeps the property-read form coherent.
+///
+/// Issue #894: also list `("events", "EventEmitter")` here so pino's
+/// `const { EventEmitter } = require('node:events'); /* ... */
+/// Object.setPrototypeOf(prototype, EventEmitter.prototype)` survives —
+/// pre-fix `EventEmitter` was `undefined`, and the subsequent
+/// `EventEmitter.prototype` read threw a spec TypeError at module init.
+/// Returning a callable closure makes `EventEmitter` truthy and gives
+/// `typeof EventEmitter === "function"` (matching Node); the chained
+/// `.prototype` read on a closure pointer returns `undefined` (no method
+/// dispatch table tracks `.prototype` on closures), which
+/// `Object.setPrototypeOf` then ignores (Perry's runtime helper is a
+/// no-op anyway). `new EventEmitter()` still routes through the dedicated
+/// builtin path at lower_call/builtin.rs that allocates a real
+/// `EventEmitterHandle`, so dispatch coherence is preserved.
+pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
+    matches!(
+        (module, prop),
+        ("tty", "isatty")
+            | ("tty", "ReadStream")
+            | ("tty", "WriteStream")
+            | ("events", "EventEmitter")
+            | ("string_decoder", "StringDecoder")
+            | ("assert", "ok")
+            | ("assert", "fail")
+            | ("assert", "equal")
+            | ("assert", "notEqual")
+            | ("assert", "strictEqual")
+            | ("assert", "notStrictEqual")
+            | ("assert", "deepEqual")
+            | ("assert", "notDeepEqual")
+            | ("assert", "deepStrictEqual")
+            | ("assert", "notDeepStrictEqual")
+            | ("assert", "match")
+            | ("assert", "doesNotMatch")
+            | ("assert", "ifError")
+            | ("assert", "CallTracker")
+            | ("assert/strict", "ok")
+            | ("assert/strict", "fail")
+            | ("assert/strict", "equal")
+            | ("assert/strict", "notEqual")
+            | ("assert/strict", "strictEqual")
+            | ("assert/strict", "notStrictEqual")
+            | ("assert/strict", "deepEqual")
+            | ("assert/strict", "notDeepEqual")
+            | ("assert/strict", "deepStrictEqual")
+            | ("assert/strict", "notDeepStrictEqual")
+            | ("assert/strict", "match")
+            | ("assert/strict", "doesNotMatch")
+            | ("assert/strict", "ifError")
+            | ("os", "platform")
+            | ("os", "arch")
+            | ("os", "hostname")
+            | ("os", "homedir")
+            | ("os", "tmpdir")
+            | ("os", "totalmem")
+            | ("os", "freemem")
+            | ("os", "uptime")
+            | ("os", "type")
+            | ("os", "release")
+            | ("os", "cpus")
+            | ("os", "networkInterfaces")
+            | ("os", "userInfo")
+            | ("os", "availableParallelism")
+            | ("os", "endianness")
+            | ("os", "loadavg")
+            | ("os", "machine")
+            | ("os", "version")
+            // node:cluster — namespace property reads of these callables
+            // need to satisfy `typeof cluster.fork === "function"` etc.
+            // The fixtures only probe types, but compiled npm code that
+            // calls `cluster.fork()` would also land on the bound-method
+            // dispatch (currently a stub — see runtime entries below).
+            | ("cluster", "fork")
+            | ("cluster", "disconnect")
+            | ("cluster", "setupPrimary")
+            | ("cluster", "setupMaster")
+            | ("cluster", "Worker")
+            | ("util", "format")
+            | ("util", "formatWithOptions")
+            | ("util", "inspect")
+            | ("util", "promisify")
+            | ("util", "callbackify")
+            | ("util", "deprecate")
+            | ("util", "inherits")
+            | ("util", "isDeepStrictEqual")
+            | ("util", "stripVTControlCharacters")
+            | ("util.types", "isPromise")
+            | ("util.types", "isArrayBuffer")
+            | ("util.types", "isAnyArrayBuffer")
+            | ("util.types", "isArrayBufferView")
+            | ("util.types", "isTypedArray")
+            | ("util.types", "isUint8Array")
+            | ("util.types", "isUint16Array")
+            | ("util.types", "isInt32Array")
+            | ("util.types", "isFloat64Array")
+            | ("util.types", "isMap")
+            | ("util.types", "isSet")
+            | ("util.types", "isDate")
+            | ("util.types", "isRegExp")
+            | ("util/types", "isPromise")
+            | ("timers", "setTimeout")
+            | ("timers", "clearTimeout")
+            | ("timers", "setInterval")
+            | ("timers", "clearInterval")
+            | ("timers", "setImmediate")
+            | ("timers", "clearImmediate")
+            | ("timers/promises", "setTimeout")
+            | ("timers/promises", "setImmediate")
+            | ("timers/promises", "setInterval")
+            | ("util/types", "isArrayBuffer")
+            | ("util/types", "isAnyArrayBuffer")
+            | ("util/types", "isArrayBufferView")
+            | ("util/types", "isTypedArray")
+            | ("util/types", "isUint8Array")
+            | ("util/types", "isUint16Array")
+            | ("util/types", "isInt32Array")
+            | ("util/types", "isFloat64Array")
+            | ("util/types", "isMap")
+            | ("util/types", "isSet")
+            | ("util/types", "isDate")
+            | ("util/types", "isRegExp")
+            | ("url", "URL")
+            | ("url", "URLSearchParams")
+            | ("url", "fileURLToPath")
+            | ("url", "pathToFileURL")
+            | ("url", "domainToASCII")
+            | ("url", "domainToUnicode")
+            | ("url", "urlToHttpOptions")
+            | ("url", "format")
+            | ("url", "parse")
+            | ("url", "resolve")
+            | ("console", "Console")
+            | ("console", "log")
+            | ("console", "info")
+            | ("console", "debug")
+            | ("console", "error")
+            | ("console", "warn")
+            | ("console", "assert")
+            | ("console", "dir")
+            | ("console", "dirxml")
+            | ("console", "trace")
+            | ("console", "table")
+            | ("console", "clear")
+            | ("console", "count")
+            | ("console", "countReset")
+            | ("console", "time")
+            | ("console", "timeEnd")
+            | ("console", "timeLog")
+            | ("console", "group")
+            | ("console", "groupCollapsed")
+            | ("console", "groupEnd")
+            | ("console", "profile")
+            | ("console", "profileEnd")
+            | ("console", "timeStamp")
+    )
+}
+
+/// Access a property on a native module namespace object.
+/// For method references (e.g., `fs.existsSync`), creates a bound method closure.
+/// For constant properties (e.g., `path.sep`, `fs.constants`), returns the value directly.
+#[no_mangle]
+pub extern "C" fn js_native_module_bind_method(
+    namespace_obj: f64,
+    property_name_ptr: *const u8,
+    property_name_len: usize,
+) -> f64 {
+    let property_name = unsafe {
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+            property_name_ptr,
+            property_name_len,
+        ))
+    };
+
+    // Extract module name from the namespace object's first field
+    let module_name = unsafe { get_module_name_from_namespace(namespace_obj) };
+
+    // Check for known constant properties first
+    if let Some(val) =
+        unsafe { get_native_module_constant(module_name, property_name, namespace_obj) }
+    {
+        return val;
+    }
+
+    // Try V8 JS runtime fallback for unknown properties (e.g., ethers.Contract)
+    let js_val = crate::value::native_module_try_js_property(module_name, property_name);
+    if js_val.to_bits() != crate::value::TAG_UNDEFINED {
+        return js_val;
+    }
+
+    // Not a constant — create a bound method closure
+    let heap_name = unsafe {
+        let layout = std::alloc::Layout::from_size_align(property_name_len, 1).unwrap();
+        let ptr = std::alloc::alloc(layout);
+        std::ptr::copy_nonoverlapping(property_name_ptr, ptr, property_name_len);
+        ptr
+    };
+
+    let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
+    crate::closure::js_closure_set_capture_f64(closure, 0, namespace_obj);
+    crate::closure::js_closure_set_capture_ptr(closure, 1, heap_name as i64);
+    crate::closure::js_closure_set_capture_ptr(closure, 2, property_name_len as i64);
+    set_bound_native_closure_name(closure, property_name);
+
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+/// Build a "bound method" closure for `obj.method` PropertyGet on a known class
+/// instance. The captures (instance, method_name_ptr, method_name_len) drive
+/// `dispatch_bound_method` (closure.rs), which calls `js_native_call_method`
+/// — that resolves the method through `CLASS_VTABLE_REGISTRY` for any class
+/// registered by `js_register_class_method` at module init.
+///
+/// Issue #446: previously a class method reference (`let f = obj.method`,
+/// `typeof obj.method`, `arr.map(obj.method)`) silently lowered to the
+/// generic property-bag lookup, which doesn't store prototype methods —
+/// every such read returned `undefined`, so `typeof obj.method === "undefined"`
+/// and a captured method ran no body when invoked.
+///
+/// Method-name pointer is expected to be stable for the closure's lifetime;
+/// codegen emits it from the per-module `.str.N.bytes` rodata global.
+#[no_mangle]
+pub extern "C" fn js_class_method_bind(
+    instance: f64,
+    method_name_ptr: *const u8,
+    method_name_len: usize,
+) -> f64 {
+    let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
+    crate::closure::js_closure_set_capture_f64(closure, 0, instance);
+    crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
+    crate::closure::js_closure_set_capture_ptr(closure, 2, method_name_len as i64);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+pub(crate) fn class_ref_id(value: f64) -> Option<u32> {
+    let bits = value.to_bits();
+    if (bits >> 48) == 0x7FFE {
+        let class_id = (bits & 0xFFFF_FFFF) as u32;
+        if class_id != 0 && is_class_id_registered(class_id) {
+            return Some(class_id);
+        }
+    }
+    None
+}
+
+pub(crate) unsafe fn metadata_key_to_string(value: f64) -> Option<String> {
+    let key_str = crate::builtins::js_string_coerce(value);
+    if key_str.is_null() {
+        return None;
+    }
+    let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let name_len = (*key_str).byte_len as usize;
+    std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+        .ok()
+        .map(|s| s.to_string())
+}
+
+pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
+    let registry = match CLASS_VTABLE_REGISTRY.read() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    registry
+        .as_ref()
+        .and_then(|reg| reg.get(&class_id))
+        .map(|vtable| vtable.methods.contains_key(method_name))
+        .unwrap_or(false)
+}
+
+pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -> f64 {
+    CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(bits) = cache.get(&(class_id, method_name.to_string())).copied() {
+            return f64::from_bits(bits);
+        }
+
+        // Bounded leak: `js_class_method_bind` keeps the byte pointer for the
+        // lifetime of the bound closure (it's stashed inside the closure's
+        // capture frame). We leak one allocation per unique
+        // `(class_id, method_name)` pair the program ever asks for, so the
+        // total leak is bounded by the static set of decorated method
+        // descriptors. The cache below short-circuits repeat queries.
+        let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
+        let class_bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF);
+        let class_ref = f64::from_bits(class_bits);
+        let value = js_class_method_bind(class_ref, leaked.as_ptr(), leaked.len());
+        cache.insert((class_id, method_name.to_string()), value.to_bits());
+        value
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn js_class_prototype_method_value(class_ref: f64, method_key: f64) -> f64 {
+    let Some(class_id) = class_ref_id(class_ref) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let method_name = unsafe { metadata_key_to_string(method_key) };
+    let Some(method_name) = method_name else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    class_prototype_method_value_for_name(class_id, &method_name)
+}
+
+/// Extract the module name string from a native module namespace object.
+pub(crate) unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> &'static str {
+    let jsval = JSValue::from_bits(namespace_obj.to_bits());
+    if !jsval.is_pointer() {
+        return "";
+    }
+    let obj = jsval.as_pointer::<ObjectHeader>();
+    if obj.is_null() || (obj as usize) < 0x100000 {
+        return "";
+    }
+    let module_field = js_object_get_field(obj as *mut _, 0);
+    if module_field.is_string() {
+        let str_ptr = module_field.as_string_ptr();
+        let len = (*str_ptr).byte_len as usize;
+        let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
+    } else {
+        ""
+    }
+}
+
+/// Return constant (non-method) property values for native modules.
+/// Returns None for method names, which should create bound closures instead.
+pub(crate) unsafe fn get_native_module_constant(
+    module_name: &str,
+    property: &str,
+    _namespace_obj: f64,
+) -> Option<f64> {
+    let str_val = |s: &str| -> f64 {
+        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    };
+
+    let o_nofollow: f64 = {
+        #[cfg(target_os = "macos")]
+        {
+            0x0100 as f64
+        }
+        #[cfg(target_os = "linux")]
+        {
+            0x20000 as f64
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            0x0100 as f64
+        }
+    };
+
+    // Helper for fs constants — shared between "fs" and "fs.constants" modules.
+    // Using a nested match (module first, then property) instead of OR patterns
+    // on tuples, because rustc's match optimizer can miscompile tuple OR patterns
+    // by absorbing one alternative's entries into the other branch's decision tree.
+    let fs_const = |prop: &str| -> Option<f64> {
+        match prop {
+            "F_OK" => Some(0.0),
+            "R_OK" => Some(4.0),
+            "W_OK" => Some(2.0),
+            "X_OK" => Some(1.0),
+            "O_RDONLY" => Some(0.0),
+            "O_WRONLY" => Some(1.0),
+            "O_RDWR" => Some(2.0),
+            "O_NOFOLLOW" => Some(o_nofollow),
+            "O_CREAT" => Some(0x200 as f64),
+            "O_TRUNC" => Some(0x400 as f64),
+            "O_APPEND" => Some(0x8 as f64),
+            "O_EXCL" => Some(0x800 as f64),
+            "COPYFILE_EXCL" => Some(1.0),
+            "COPYFILE_FICLONE" => Some(2.0),
+            "COPYFILE_FICLONE_FORCE" => Some(4.0),
+            "S_IRUSR" => Some(0o400 as f64),
+            "S_IWUSR" => Some(0o200 as f64),
+            "S_IXUSR" => Some(0o100 as f64),
+            "S_IRGRP" => Some(0o040 as f64),
+            "S_IWGRP" => Some(0o020 as f64),
+            "S_IXGRP" => Some(0o010 as f64),
+            "S_IROTH" => Some(0o004 as f64),
+            "S_IWOTH" => Some(0o002 as f64),
+            "S_IXOTH" => Some(0o001 as f64),
+            _ => None,
+        }
+    };
+
+    // Issue #649: `os.constants.signals.SIGINT`, `os.constants.errno.ENOENT`,
+    // `os.constants.priority.PRIORITY_NORMAL`, `os.constants.dlopen.RTLD_LAZY`
+    // are ubiquitous in Node ecosystem code. Pre-fix every read returned
+    // undefined. Use `libc::*` on Unix for byte-identical parity with Node.
+    let os_signal_const = |prop: &str| -> Option<f64> {
+        #[cfg(unix)]
+        {
+            let v: Option<i32> = match prop {
+                "SIGHUP" => Some(libc::SIGHUP),
+                "SIGINT" => Some(libc::SIGINT),
+                "SIGQUIT" => Some(libc::SIGQUIT),
+                "SIGILL" => Some(libc::SIGILL),
+                "SIGTRAP" => Some(libc::SIGTRAP),
+                "SIGABRT" => Some(libc::SIGABRT),
+                "SIGIOT" => Some(libc::SIGABRT),
+                "SIGBUS" => Some(libc::SIGBUS),
+                "SIGFPE" => Some(libc::SIGFPE),
+                "SIGKILL" => Some(libc::SIGKILL),
+                "SIGUSR1" => Some(libc::SIGUSR1),
+                "SIGSEGV" => Some(libc::SIGSEGV),
+                "SIGUSR2" => Some(libc::SIGUSR2),
+                "SIGPIPE" => Some(libc::SIGPIPE),
+                "SIGALRM" => Some(libc::SIGALRM),
+                "SIGTERM" => Some(libc::SIGTERM),
+                "SIGCHLD" => Some(libc::SIGCHLD),
+                "SIGCONT" => Some(libc::SIGCONT),
+                "SIGSTOP" => Some(libc::SIGSTOP),
+                "SIGTSTP" => Some(libc::SIGTSTP),
+                "SIGTTIN" => Some(libc::SIGTTIN),
+                "SIGTTOU" => Some(libc::SIGTTOU),
+                "SIGURG" => Some(libc::SIGURG),
+                "SIGXCPU" => Some(libc::SIGXCPU),
+                "SIGXFSZ" => Some(libc::SIGXFSZ),
+                "SIGVTALRM" => Some(libc::SIGVTALRM),
+                "SIGPROF" => Some(libc::SIGPROF),
+                "SIGWINCH" => Some(libc::SIGWINCH),
+                "SIGIO" => Some(libc::SIGIO),
+                "SIGSYS" => Some(libc::SIGSYS),
+                #[cfg(target_os = "macos")]
+                "SIGINFO" => Some(29i32),
+                _ => None,
+            };
+            v.map(|x| x as f64)
+        }
+        #[cfg(not(unix))]
+        {
+            match prop {
+                "SIGHUP" => Some(1.0),
+                "SIGINT" => Some(2.0),
+                "SIGILL" => Some(4.0),
+                "SIGABRT" => Some(22.0),
+                "SIGFPE" => Some(8.0),
+                "SIGKILL" => Some(9.0),
+                "SIGSEGV" => Some(11.0),
+                "SIGTERM" => Some(15.0),
+                "SIGBREAK" => Some(21.0),
+                _ => None,
+            }
+        }
+    };
+
+    let os_errno_const = |prop: &str| -> Option<f64> {
+        #[cfg(unix)]
+        {
+            let v: Option<i32> = match prop {
+                "E2BIG" => Some(libc::E2BIG),
+                "EACCES" => Some(libc::EACCES),
+                "EADDRINUSE" => Some(libc::EADDRINUSE),
+                "EADDRNOTAVAIL" => Some(libc::EADDRNOTAVAIL),
+                "EAFNOSUPPORT" => Some(libc::EAFNOSUPPORT),
+                "EAGAIN" => Some(libc::EAGAIN),
+                "EALREADY" => Some(libc::EALREADY),
+                "EBADF" => Some(libc::EBADF),
+                "EBADMSG" => Some(libc::EBADMSG),
+                "EBUSY" => Some(libc::EBUSY),
+                "ECANCELED" => Some(libc::ECANCELED),
+                "ECHILD" => Some(libc::ECHILD),
+                "ECONNABORTED" => Some(libc::ECONNABORTED),
+                "ECONNREFUSED" => Some(libc::ECONNREFUSED),
+                "ECONNRESET" => Some(libc::ECONNRESET),
+                "EDEADLK" => Some(libc::EDEADLK),
+                "EDESTADDRREQ" => Some(libc::EDESTADDRREQ),
+                "EDOM" => Some(libc::EDOM),
+                "EDQUOT" => Some(libc::EDQUOT),
+                "EEXIST" => Some(libc::EEXIST),
+                "EFAULT" => Some(libc::EFAULT),
+                "EFBIG" => Some(libc::EFBIG),
+                "EHOSTUNREACH" => Some(libc::EHOSTUNREACH),
+                "EIDRM" => Some(libc::EIDRM),
+                "EILSEQ" => Some(libc::EILSEQ),
+                "EINPROGRESS" => Some(libc::EINPROGRESS),
+                "EINTR" => Some(libc::EINTR),
+                "EINVAL" => Some(libc::EINVAL),
+                "EIO" => Some(libc::EIO),
+                "EISCONN" => Some(libc::EISCONN),
+                "EISDIR" => Some(libc::EISDIR),
+                "ELOOP" => Some(libc::ELOOP),
+                "EMFILE" => Some(libc::EMFILE),
+                "EMLINK" => Some(libc::EMLINK),
+                "EMSGSIZE" => Some(libc::EMSGSIZE),
+                "EMULTIHOP" => Some(libc::EMULTIHOP),
+                "ENAMETOOLONG" => Some(libc::ENAMETOOLONG),
+                "ENETDOWN" => Some(libc::ENETDOWN),
+                "ENETRESET" => Some(libc::ENETRESET),
+                "ENETUNREACH" => Some(libc::ENETUNREACH),
+                "ENFILE" => Some(libc::ENFILE),
+                "ENOBUFS" => Some(libc::ENOBUFS),
+                "ENODATA" => Some(libc::ENODATA),
+                "ENODEV" => Some(libc::ENODEV),
+                "ENOENT" => Some(libc::ENOENT),
+                "ENOEXEC" => Some(libc::ENOEXEC),
+                "ENOLCK" => Some(libc::ENOLCK),
+                "ENOLINK" => Some(libc::ENOLINK),
+                "ENOMEM" => Some(libc::ENOMEM),
+                "ENOMSG" => Some(libc::ENOMSG),
+                "ENOPROTOOPT" => Some(libc::ENOPROTOOPT),
+                "ENOSPC" => Some(libc::ENOSPC),
+                "ENOSR" => Some(libc::ENOSR),
+                "ENOSTR" => Some(libc::ENOSTR),
+                "ENOSYS" => Some(libc::ENOSYS),
+                "ENOTCONN" => Some(libc::ENOTCONN),
+                "ENOTDIR" => Some(libc::ENOTDIR),
+                "ENOTEMPTY" => Some(libc::ENOTEMPTY),
+                "ENOTSOCK" => Some(libc::ENOTSOCK),
+                "ENOTSUP" => Some(libc::ENOTSUP),
+                "ENOTTY" => Some(libc::ENOTTY),
+                "ENXIO" => Some(libc::ENXIO),
+                "EOPNOTSUPP" => Some(libc::EOPNOTSUPP),
+                "EOVERFLOW" => Some(libc::EOVERFLOW),
+                "EPERM" => Some(libc::EPERM),
+                "EPIPE" => Some(libc::EPIPE),
+                "EPROTO" => Some(libc::EPROTO),
+                "EPROTONOSUPPORT" => Some(libc::EPROTONOSUPPORT),
+                "EPROTOTYPE" => Some(libc::EPROTOTYPE),
+                "ERANGE" => Some(libc::ERANGE),
+                "EROFS" => Some(libc::EROFS),
+                "ESPIPE" => Some(libc::ESPIPE),
+                "ESRCH" => Some(libc::ESRCH),
+                "ESTALE" => Some(libc::ESTALE),
+                "ETIME" => Some(libc::ETIME),
+                "ETIMEDOUT" => Some(libc::ETIMEDOUT),
+                "ETXTBSY" => Some(libc::ETXTBSY),
+                "EWOULDBLOCK" => Some(libc::EWOULDBLOCK),
+                "EXDEV" => Some(libc::EXDEV),
+                _ => None,
+            };
+            v.map(|x| x as f64)
+        }
+        #[cfg(not(unix))]
+        {
+            match prop {
+                "EACCES" => Some(13.0),
+                "EAGAIN" => Some(11.0),
+                "EBADF" => Some(9.0),
+                "EBUSY" => Some(16.0),
+                "EEXIST" => Some(17.0),
+                "EFAULT" => Some(14.0),
+                "EINTR" => Some(4.0),
+                "EINVAL" => Some(22.0),
+                "EIO" => Some(5.0),
+                "EISDIR" => Some(21.0),
+                "EMFILE" => Some(24.0),
+                "ENFILE" => Some(23.0),
+                "ENODEV" => Some(19.0),
+                "ENOENT" => Some(2.0),
+                "ENOMEM" => Some(12.0),
+                "ENOSPC" => Some(28.0),
+                "ENOTDIR" => Some(20.0),
+                "ENOTEMPTY" => Some(41.0),
+                "EPERM" => Some(1.0),
+                "EPIPE" => Some(32.0),
+                "ERANGE" => Some(34.0),
+                "EROFS" => Some(30.0),
+                _ => None,
+            }
+        }
+    };
+
+    let os_priority_const = |prop: &str| -> Option<f64> {
+        match prop {
+            "PRIORITY_LOW" => Some(19.0),
+            "PRIORITY_BELOW_NORMAL" => Some(10.0),
+            "PRIORITY_NORMAL" => Some(0.0),
+            "PRIORITY_ABOVE_NORMAL" => Some(-7.0),
+            "PRIORITY_HIGH" => Some(-14.0),
+            "PRIORITY_HIGHEST" => Some(-20.0),
+            _ => None,
+        }
+    };
+
+    let os_dlopen_const = |prop: &str| -> Option<f64> {
+        #[cfg(unix)]
+        {
+            match prop {
+                "RTLD_LAZY" => Some(libc::RTLD_LAZY as f64),
+                "RTLD_NOW" => Some(libc::RTLD_NOW as f64),
+                "RTLD_GLOBAL" => Some(libc::RTLD_GLOBAL as f64),
+                "RTLD_LOCAL" => Some(libc::RTLD_LOCAL as f64),
+                #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                "RTLD_DEEPBIND" => Some(libc::RTLD_DEEPBIND as f64),
+                _ => None,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            match prop {
+                "RTLD_LAZY" => Some(1.0),
+                "RTLD_NOW" => Some(2.0),
+                "RTLD_GLOBAL" => Some(8.0),
+                "RTLD_LOCAL" => Some(4.0),
+                _ => None,
+            }
+        }
+    };
+
+    // Issue #649: `crypto.constants.RSA_PKCS1_PADDING` etc. OpenSSL-defined
+    // stable values; hardcoded to match Node 24.x's published table.
+    let crypto_const = |prop: &str| -> Option<f64> {
+        match prop {
+            "OPENSSL_VERSION_NUMBER" => Some(811597840.0),
+            "SSL_OP_ALL" => Some(2147485776.0),
+            "SSL_OP_ALLOW_NO_DHE_KEX" => Some(1024.0),
+            "SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION" => Some(262144.0),
+            "SSL_OP_CIPHER_SERVER_PREFERENCE" => Some(4194304.0),
+            "SSL_OP_CISCO_ANYCONNECT" => Some(32768.0),
+            "SSL_OP_COOKIE_EXCHANGE" => Some(8192.0),
+            "SSL_OP_CRYPTOPRO_TLSEXT_BUG" => Some(2147483648.0),
+            "SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS" => Some(2048.0),
+            "SSL_OP_LEGACY_SERVER_CONNECT" => Some(4.0),
+            "SSL_OP_NO_COMPRESSION" => Some(131072.0),
+            "SSL_OP_NO_ENCRYPT_THEN_MAC" => Some(524288.0),
+            "SSL_OP_NO_QUERY_MTU" => Some(4096.0),
+            "SSL_OP_NO_RENEGOTIATION" => Some(1073741824.0),
+            "SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION" => Some(65536.0),
+            "SSL_OP_NO_SSLv2" => Some(0.0),
+            "SSL_OP_NO_SSLv3" => Some(33554432.0),
+            "SSL_OP_NO_TICKET" => Some(16384.0),
+            "SSL_OP_NO_TLSv1" => Some(67108864.0),
+            "SSL_OP_NO_TLSv1_1" => Some(268435456.0),
+            "SSL_OP_NO_TLSv1_2" => Some(134217728.0),
+            "SSL_OP_NO_TLSv1_3" => Some(536870912.0),
+            "SSL_OP_PRIORITIZE_CHACHA" => Some(2097152.0),
+            "SSL_OP_TLS_ROLLBACK_BUG" => Some(8388608.0),
+            "ENGINE_METHOD_RSA" => Some(1.0),
+            "ENGINE_METHOD_DSA" => Some(2.0),
+            "ENGINE_METHOD_DH" => Some(4.0),
+            "ENGINE_METHOD_RAND" => Some(8.0),
+            "ENGINE_METHOD_EC" => Some(2048.0),
+            "ENGINE_METHOD_CIPHERS" => Some(64.0),
+            "ENGINE_METHOD_DIGESTS" => Some(128.0),
+            "ENGINE_METHOD_PKEY_METHS" => Some(512.0),
+            "ENGINE_METHOD_PKEY_ASN1_METHS" => Some(1024.0),
+            "ENGINE_METHOD_ALL" => Some(65535.0),
+            "ENGINE_METHOD_NONE" => Some(0.0),
+            "DH_CHECK_P_NOT_SAFE_PRIME" => Some(2.0),
+            "DH_CHECK_P_NOT_PRIME" => Some(1.0),
+            "DH_UNABLE_TO_CHECK_GENERATOR" => Some(4.0),
+            "DH_NOT_SUITABLE_GENERATOR" => Some(8.0),
+            "RSA_PKCS1_PADDING" => Some(1.0),
+            "RSA_NO_PADDING" => Some(3.0),
+            "RSA_PKCS1_OAEP_PADDING" => Some(4.0),
+            "RSA_X931_PADDING" => Some(5.0),
+            "RSA_PKCS1_PSS_PADDING" => Some(6.0),
+            "RSA_PSS_SALTLEN_DIGEST" => Some(-1.0),
+            "RSA_PSS_SALTLEN_MAX_SIGN" => Some(-2.0),
+            "RSA_PSS_SALTLEN_AUTO" => Some(-2.0),
+            "TLS1_VERSION" => Some(769.0),
+            "TLS1_1_VERSION" => Some(770.0),
+            "TLS1_2_VERSION" => Some(771.0),
+            "TLS1_3_VERSION" => Some(772.0),
+            "POINT_CONVERSION_COMPRESSED" => Some(2.0),
+            "POINT_CONVERSION_UNCOMPRESSED" => Some(4.0),
+            "POINT_CONVERSION_HYBRID" => Some(6.0),
+            _ => None,
+        }
+    };
+
+    // `zlib.constants` — the Z_*/DEFLATE/INFLATE/GZIP/BROTLI_*/ZSTD_*
+    // table Node exposes on `require('node:zlib').constants`. Values
+    // are taken straight from `node-internal/zlib/constants.h` (the
+    // upstream lib snapshots) so reads are byte-identical to Node.
+    // Required by axios for its stream wiring.
+    let zlib_const = |prop: &str| -> Option<f64> {
+        let v: i64 = match prop {
+            // Compression levels
+            "Z_NO_COMPRESSION" => 0,
+            "Z_BEST_SPEED" => 1,
+            "Z_BEST_COMPRESSION" => 9,
+            "Z_DEFAULT_COMPRESSION" => -1,
+            // Compression strategies
+            "Z_FILTERED" => 1,
+            "Z_HUFFMAN_ONLY" => 2,
+            "Z_RLE" => 3,
+            "Z_FIXED" => 4,
+            "Z_DEFAULT_STRATEGY" => 0,
+            // Flush values
+            "Z_NO_FLUSH" => 0,
+            "Z_PARTIAL_FLUSH" => 1,
+            "Z_SYNC_FLUSH" => 2,
+            "Z_FULL_FLUSH" => 3,
+            "Z_FINISH" => 4,
+            "Z_BLOCK" => 5,
+            "Z_TREES" => 6,
+            // Return codes
+            "Z_OK" => 0,
+            "Z_STREAM_END" => 1,
+            "Z_NEED_DICT" => 2,
+            "Z_ERRNO" => -1,
+            "Z_STREAM_ERROR" => -2,
+            "Z_DATA_ERROR" => -3,
+            "Z_MEM_ERROR" => -4,
+            "Z_BUF_ERROR" => -5,
+            "Z_VERSION_ERROR" => -6,
+            // Min/Max window bits and memlevel
+            "Z_MIN_WINDOWBITS" => 8,
+            "Z_MAX_WINDOWBITS" => 15,
+            "Z_DEFAULT_WINDOWBITS" => 15,
+            "Z_MIN_CHUNK" => 64,
+            "Z_MAX_CHUNK" => 0x7fff_ffff,
+            "Z_DEFAULT_CHUNK" => 16384,
+            "Z_MIN_MEMLEVEL" => 1,
+            "Z_MAX_MEMLEVEL" => 9,
+            "Z_DEFAULT_MEMLEVEL" => 8,
+            "Z_MIN_LEVEL" => -1,
+            "Z_MAX_LEVEL" => 9,
+            "Z_DEFAULT_LEVEL" => -1,
+            // Mode (zlib stream modes — used by zlib.createDeflate etc.)
+            "DEFLATE" => 1,
+            "INFLATE" => 2,
+            "GZIP" => 3,
+            "GUNZIP" => 4,
+            "DEFLATERAW" => 5,
+            "INFLATERAW" => 6,
+            "UNZIP" => 7,
+            "BROTLI_DECODE" => 8,
+            "BROTLI_ENCODE" => 9,
+            "ZSTD_COMPRESS" => 10,
+            "ZSTD_DECOMPRESS" => 11,
+            // Brotli operation/parameter constants — match Node's
+            // `zlib.constants` exactly (these are the BrotliEncoder/
+            // BrotliDecoder parameter ids the underlying brotli library
+            // exposes).
+            "BROTLI_OPERATION_PROCESS" => 0,
+            "BROTLI_OPERATION_FLUSH" => 1,
+            "BROTLI_OPERATION_FINISH" => 2,
+            "BROTLI_OPERATION_EMIT_METADATA" => 3,
+            "BROTLI_PARAM_MODE" => 0,
+            "BROTLI_MODE_GENERIC" => 0,
+            "BROTLI_MODE_TEXT" => 1,
+            "BROTLI_MODE_FONT" => 2,
+            "BROTLI_DEFAULT_MODE" => 0,
+            "BROTLI_PARAM_QUALITY" => 1,
+            "BROTLI_MIN_QUALITY" => 0,
+            "BROTLI_MAX_QUALITY" => 11,
+            "BROTLI_DEFAULT_QUALITY" => 11,
+            "BROTLI_PARAM_LGWIN" => 2,
+            "BROTLI_MIN_WINDOW_BITS" => 10,
+            "BROTLI_MAX_WINDOW_BITS" => 24,
+            "BROTLI_LARGE_MAX_WINDOW_BITS" => 30,
+            "BROTLI_DEFAULT_WINDOW" => 22,
+            "BROTLI_PARAM_LGBLOCK" => 3,
+            "BROTLI_MIN_INPUT_BLOCK_BITS" => 16,
+            "BROTLI_MAX_INPUT_BLOCK_BITS" => 24,
+            "BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING" => 4,
+            "BROTLI_PARAM_SIZE_HINT" => 5,
+            "BROTLI_PARAM_LARGE_WINDOW" => 6,
+            "BROTLI_PARAM_NPOSTFIX" => 7,
+            "BROTLI_PARAM_NDIRECT" => 8,
+            "BROTLI_DECODER_RESULT_ERROR" => 0,
+            "BROTLI_DECODER_RESULT_SUCCESS" => 1,
+            "BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT" => 2,
+            "BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT" => 3,
+            "BROTLI_DECODER_PARAM_DISABLE_RING_BUFFER_REALLOCATION" => 0,
+            "BROTLI_DECODER_PARAM_LARGE_WINDOW" => 1,
+            // Zstd parameter ids — match Node's `zlib.constants`.
+            "ZSTD_e_continue" => 0,
+            "ZSTD_e_flush" => 1,
+            "ZSTD_e_end" => 2,
+            "ZSTD_fast" => 1,
+            "ZSTD_dfast" => 2,
+            "ZSTD_greedy" => 3,
+            "ZSTD_lazy" => 4,
+            "ZSTD_lazy2" => 5,
+            "ZSTD_btlazy2" => 6,
+            "ZSTD_btopt" => 7,
+            "ZSTD_btultra" => 8,
+            "ZSTD_btultra2" => 9,
+            "ZSTD_c_compressionLevel" => 100,
+            "ZSTD_c_windowLog" => 101,
+            "ZSTD_c_hashLog" => 102,
+            "ZSTD_c_chainLog" => 103,
+            "ZSTD_c_searchLog" => 104,
+            "ZSTD_c_minMatch" => 105,
+            "ZSTD_c_targetLength" => 106,
+            "ZSTD_c_strategy" => 107,
+            "ZSTD_c_enableLongDistanceMatching" => 160,
+            "ZSTD_c_ldmHashLog" => 161,
+            "ZSTD_c_ldmMinMatch" => 162,
+            "ZSTD_c_ldmBucketSizeLog" => 163,
+            "ZSTD_c_ldmHashRateLog" => 164,
+            "ZSTD_c_contentSizeFlag" => 200,
+            "ZSTD_c_checksumFlag" => 201,
+            "ZSTD_c_dictIDFlag" => 202,
+            "ZSTD_c_nbWorkers" => 400,
+            "ZSTD_c_jobSize" => 401,
+            "ZSTD_c_overlapLog" => 402,
+            "ZSTD_d_windowLogMax" => 100,
+            "ZSTD_CLEVEL_DEFAULT" => 3,
+            "ZSTD_MINCLEVEL" => -131072,
+            "ZSTD_MAXCLEVEL" => 22,
+            _ => return None,
+        };
+        Some(v as f64)
+    };
+
+    match module_name {
+        "path" => match property {
+            "sep" => {
+                if cfg!(windows) {
+                    Some(str_val("\\"))
+                } else {
+                    Some(str_val("/"))
+                }
+            }
+            "delimiter" => {
+                if cfg!(windows) {
+                    Some(str_val(";"))
+                } else {
+                    Some(str_val(":"))
+                }
+            }
+            "posix" => Some(create_sub_namespace("path.posix")),
+            "win32" => Some(create_sub_namespace("path.win32")),
+            _ => None,
+        },
+        "path.posix" => match property {
+            "sep" => Some(str_val("/")),
+            "delimiter" => Some(str_val(":")),
+            _ => None,
+        },
+        "path.win32" => match property {
+            "sep" => Some(str_val("\\")),
+            "delimiter" => Some(str_val(";")),
+            _ => None,
+        },
+        "fs" => match property {
+            "constants" => Some(create_sub_namespace("fs.constants")),
+            _ => fs_const(property),
+        },
+        "fs.constants" => fs_const(property),
+        "buffer" => match property {
+            "constants" => Some(create_sub_namespace("buffer.constants")),
+            // Match Node's common 64-bit max Buffer length value. Perry won't
+            // actually allocate buffers this large, but shape/value parity lets
+            // packages feature-detect the Buffer surface without falling over.
+            "kMaxLength" => Some(4294967296.0),
+            "kStringMaxLength" => Some(536870888.0),
+            _ => None,
+        },
+        "buffer.constants" => match property {
+            "MAX_LENGTH" => Some(4294967296.0),
+            "MAX_STRING_LENGTH" => Some(536870888.0),
+            _ => None,
+        },
+        "os" => match property {
+            "EOL" => {
+                if cfg!(windows) {
+                    Some(str_val("\r\n"))
+                } else {
+                    Some(str_val("\n"))
+                }
+            }
+            "devNull" => {
+                if cfg!(windows) {
+                    Some(str_val("\\\\.\\nul"))
+                } else {
+                    Some(str_val("/dev/null"))
+                }
+            }
+            "constants" => Some(create_sub_namespace("os.constants")),
+            _ => None,
+        },
+        "os.constants" => match property {
+            "signals" => Some(create_sub_namespace("os.constants.signals")),
+            "errno" => Some(create_sub_namespace("os.constants.errno")),
+            "priority" => Some(create_sub_namespace("os.constants.priority")),
+            "dlopen" => Some(create_sub_namespace("os.constants.dlopen")),
+            // Top-level libuv constant — sits directly on `os.constants`, not
+            // inside one of the nested tables. Node's UDP socket impl uses it
+            // for `SO_REUSEADDR`. Value is the published libuv flag (4).
+            "UV_UDP_REUSEADDR" => Some(4.0),
+            _ => None,
+        },
+        "os.constants.signals" => os_signal_const(property),
+        "os.constants.errno" => os_errno_const(property),
+        "os.constants.priority" => os_priority_const(property),
+        "os.constants.dlopen" => os_dlopen_const(property),
+        "util" => match property {
+            "types" => Some(create_sub_namespace("util.types")),
+            _ => None,
+        },
+        "assert" => match property {
+            "strict" => Some(create_sub_namespace("assert/strict")),
+            _ => None,
+        },
+        "crypto" => match property {
+            "constants" => Some(create_sub_namespace("crypto.constants")),
+            _ => None,
+        },
+        "crypto.constants" => crypto_const(property),
+        "events" => match property {
+            "defaultMaxListeners" => Some(10.0),
+            "captureRejections" => Some(f64::from_bits(JSValue::bool(false).bits())),
+            "errorMonitor" => Some(crate::symbol::js_symbol_for(str_val("events.errorMonitor"))),
+            "captureRejectionSymbol" => {
+                Some(crate::symbol::js_symbol_for(str_val("nodejs.rejection")))
+            }
+            _ => None,
+        },
+        // `zlib.constants` and the top-level Z_*/DEFLATE/INFLATE shortcuts
+        // Node also exposes directly on `require('node:zlib')`.
+        "zlib" => match property {
+            "constants" => Some(create_sub_namespace("zlib.constants")),
+            _ => zlib_const(property),
+        },
+        "zlib.constants" => zlib_const(property),
+        // Issue #912 (#909 follow-up): express reads
+        // `const { METHODS } = require('node:http')` at module init and
+        // immediately calls `METHODS.map(...)` — pre-fix METHODS resolved
+        // to undefined and threw `TypeError: Cannot read properties of
+        // undefined (reading 'map')`. Node's `http.METHODS` is a sorted
+        // array of HTTP verb strings sourced from llhttp (only exposed
+        // on `node:http`, not on `https`/`http2`). We materialize the
+        // array once (`http_methods_array` caches the long-lived
+        // pointer) and hand it back for every read.
+        "http" => match property {
+            "METHODS" => Some(unsafe { http_methods_array() }),
+            _ => None,
+        },
+        // node:cluster — all property reads are static constants on the
+        // primary process. The test fixture only exercises shape, never
+        // forks a worker; the `fork` / `disconnect` / `setupPrimary` /
+        // `setupMaster` / `Worker` callables are produced separately by
+        // `is_native_module_callable_export` (bound-method closure path).
+        "cluster" => match property {
+            // Identity flags: we always identify as the primary
+            // process. A future `cluster.fork` impl would need to flip
+            // these in the spawned child.
+            "isPrimary" | "isMaster" => Some(f64::from_bits(JSValue::bool(true).bits())),
+            "isWorker" => Some(f64::from_bits(JSValue::bool(false).bits())),
+            // No active worker on the primary side.
+            "worker" => Some(f64::from_bits(JSValue::undefined().bits())),
+            // Empty registries — each read allocates a fresh empty
+            // object (the test only reads them once, so the allocation
+            // churn is irrelevant).
+            "workers" | "settings" => {
+                let obj = unsafe { js_object_alloc(0, 0) };
+                Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
+            }
+            // SCHED_RR is the cross-platform default (port-based on
+            // Linux/macOS, manual scheduling on Windows). `SCHED_NONE`
+            // is 1, `SCHED_RR` is 2; `schedulingPolicy` defaults to RR.
+            "schedulingPolicy" | "SCHED_RR" => Some(2.0),
+            "SCHED_NONE" => Some(1.0),
+            // EventEmitter methods on the cluster module aren't named
+            // exports — Node's namespace import reads them as
+            // `undefined`. We register them in the api-manifest so the
+            // #463 gate doesn't reject the typeof read at compile time;
+            // here we resolve them to undefined at runtime.
+            "on" | "addListener" => Some(f64::from_bits(JSValue::undefined().bits())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Create a NativeModuleRef sub-namespace (e.g. "fs.constants", "path.posix").
+/// The compiled code treats the result as another NativeModuleRef, so chained
+/// property accesses like `fs.constants.O_RDONLY` work through the dispatch table.
+fn create_sub_namespace(name: &str) -> f64 {
+    js_create_native_module_namespace(name.as_ptr(), name.len())
+}
+
+/// Issue #912 (#909 follow-up): cached `http.METHODS` array. Matches
+/// Node 22's exposed list (alphabetically sorted, derived from llhttp's
+/// HTTP method table). The array is allocated in the longlived arena so
+/// it survives every GC sweep — the cached pointer is shared across
+/// every `http.METHODS` / `https.METHODS` / `http2.METHODS` read.
+unsafe fn http_methods_array() -> f64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CACHED: AtomicU64 = AtomicU64::new(0);
+    let cached = CACHED.load(Ordering::Relaxed);
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
+    // Node 22 `require('node:http').METHODS` snapshot.
+    const METHODS: &[&str] = &[
+        "ACL",
+        "BIND",
+        "CHECKOUT",
+        "CONNECT",
+        "COPY",
+        "DELETE",
+        "GET",
+        "HEAD",
+        "LINK",
+        "LOCK",
+        "M-SEARCH",
+        "MERGE",
+        "MKACTIVITY",
+        "MKCALENDAR",
+        "MKCOL",
+        "MOVE",
+        "NOTIFY",
+        "OPTIONS",
+        "PATCH",
+        "POST",
+        "PROPFIND",
+        "PROPPATCH",
+        "PURGE",
+        "PUT",
+        "QUERY",
+        "REBIND",
+        "REPORT",
+        "SEARCH",
+        "SOURCE",
+        "SUBSCRIBE",
+        "TRACE",
+        "UNBIND",
+        "UNLINK",
+        "UNLOCK",
+        "UNSUBSCRIBE",
+    ];
+    let arr = crate::array::js_array_alloc_with_length_longlived(METHODS.len() as u32);
+    let elements_ptr = (arr as *mut u8).add(8) as *mut f64;
+    for (i, m) in METHODS.iter().enumerate() {
+        let bytes = m.as_bytes();
+        let str_ptr =
+            crate::string::js_string_from_bytes_longlived(bytes.as_ptr(), bytes.len() as u32);
+        let nanboxed = f64::from_bits(
+            crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
+        );
+        *elements_ptr.add(i) = nanboxed;
+        crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
+    }
+    let value = crate::value::js_nanbox_pointer(arr as i64);
+    CACHED.store(value.to_bits(), Ordering::Relaxed);
+    value
+}
+
+/// Create (and cache) the fs.constants object with POSIX file system constants.
+unsafe fn create_fs_constants_object() -> f64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CACHED: AtomicU64 = AtomicU64::new(0);
+    let cached = CACHED.load(Ordering::Relaxed);
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
+
+    // POSIX file-access constants
+    let field_names: &[&str] = &[
+        "F_OK",
+        "R_OK",
+        "W_OK",
+        "X_OK",
+        "O_RDONLY",
+        "O_WRONLY",
+        "O_RDWR",
+        "O_NOFOLLOW",
+        "COPYFILE_EXCL",
+    ];
+    let o_nofollow: f64 = {
+        #[cfg(target_os = "macos")]
+        {
+            0x0100 as f64
+        }
+        #[cfg(target_os = "linux")]
+        {
+            0x20000 as f64
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            0x0100 as f64
+        }
+    };
+    let field_values: &[f64] = &[
+        0.0, 4.0, 2.0, 1.0, // F_OK, R_OK, W_OK, X_OK
+        0.0, 1.0, 2.0,        // O_RDONLY, O_WRONLY, O_RDWR
+        o_nofollow, // O_NOFOLLOW
+        1.0,        // COPYFILE_EXCL
+    ];
+
+    // Build null-separated packed keys: "F_OK\0R_OK\0..."
+    let packed = field_names.join("\0");
+    let obj = js_object_alloc_with_shape(
+        0x7FFF_FF01, // unique shape_id for fs.constants
+        field_names.len() as u32,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+
+    for (i, &val) in field_values.iter().enumerate() {
+        js_object_set_field(obj, i as u32, JSValue::number(val));
+    }
+
+    let result = crate::value::js_nanbox_pointer(obj as i64);
+    CACHED.store(result.to_bits(), Ordering::Relaxed);
+    result
+}

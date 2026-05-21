@@ -1,0 +1,576 @@
+//! DynamicImport / ExternFuncRef / I18nString.
+//!
+//! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
+//! Pure mechanical move — match arm bodies are verbatim copies, called from
+//! `lower_expr`'s outer dispatch.
+
+use anyhow::{anyhow, bail, Result};
+#[allow(unused_imports)]
+use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
+#[allow(unused_imports)]
+use perry_types::Type as HirType;
+
+#[allow(unused_imports)]
+use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
+#[allow(unused_imports)]
+use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
+#[allow(unused_imports)]
+use crate::lower_string_method::{
+    flatten_string_add_chain, lower_string_coerce_concat, lower_string_concat,
+    lower_string_concat_chain, lower_string_self_append,
+};
+#[allow(unused_imports)]
+use crate::nanbox::{double_literal, POINTER_MASK_I64};
+#[allow(unused_imports)]
+use crate::type_analysis::{
+    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
+    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+};
+#[allow(unused_imports)]
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+
+#[allow(unused_imports)]
+use super::{
+    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
+    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
+    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
+    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
+    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
+    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
+    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
+    I18nLowerCtx,
+};
+
+pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::DynamicImport { paths, arg } => {
+            // Defensive: an empty `paths` list means the resolver pass
+            // failed to populate this node, which `collect_modules`
+            // should have raised as a compile error. Fall through to a
+            // rejected promise rather than crashing the IR.
+            if paths.is_empty() {
+                let _ = lower_expr(ctx, arg)?;
+                let blk = ctx.block();
+                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &undef)]);
+                return Ok(nanbox_pointer_inline(blk, &p));
+            }
+
+            // Single-target fast path. Skip the runtime string compare
+            // — the static resolver already proved this is the only
+            // possible target.
+            if paths.len() == 1 {
+                // Evaluate the arg for side effects (most are pure but
+                // a template literal with computed parts can have e.g.
+                // function calls); the result is discarded.
+                let _ = lower_expr(ctx, arg)?;
+                let path = &paths[0];
+                let target_prefix = ctx.dynamic_import_path_to_prefix.get(path).cloned();
+                let blk = ctx.block();
+                let ns_val = match target_prefix {
+                    Some(prefix) => {
+                        // Issue #753: trigger the target's init before
+                        // loading its namespace. For Eager targets the
+                        // guard short-circuits; for Deferred targets
+                        // this is the only invocation that populates
+                        // `@__perry_ns_<prefix>`.
+                        blk.call_void(&format!("{}__init", prefix), &[]);
+                        blk.load(DOUBLE, &format!("@__perry_ns_{}", prefix))
+                    }
+                    None => {
+                        // Driver didn't resolve this path to a target
+                        // module — surface a rejected promise.
+                        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &undef)]);
+                        return Ok(nanbox_pointer_inline(blk, &p));
+                    }
+                };
+                let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
+                return Ok(nanbox_pointer_inline(blk, &promise));
+            }
+
+            // Multi-target: evaluate the runtime path string, then
+            // emit a chain of `js_string_equals` compares. Each
+            // successful compare resolves to its corresponding
+            // namespace global. The final fallback emits a rejected
+            // promise.
+            let path_val = lower_expr(ctx, arg)?;
+            // Result phi slot: every successful match stores the
+            // promise (NaN-boxed POINTER_TAG f64) here, then jumps to
+            // a join block which loads and returns. Using an alloca
+            // keeps the IR straightforward without proper phi nodes.
+            let result_slot = ctx.block().alloca(DOUBLE);
+            let join_block_idx = ctx.new_block("dynamic_import_join");
+
+            // Unbox the path argument once into an i64 StringHeader*.
+            let path_handle =
+                ctx.block()
+                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &path_val)]);
+
+            // Pre-resolve target prefixes so we can skip paths that
+            // don't have a known target (driver dropped them).
+            let resolved: Vec<(String, String)> = paths
+                .iter()
+                .filter_map(|p| {
+                    ctx.dynamic_import_path_to_prefix
+                        .get(p)
+                        .cloned()
+                        .map(|tgt| (p.clone(), tgt))
+                })
+                .collect();
+
+            for (i, (path_str, target_prefix)) in resolved.iter().enumerate() {
+                // Intern the path string so the compare against the
+                // runtime arg works on real StringHeader pointers.
+                let key_idx = ctx.strings.intern(path_str);
+                let key_entry = ctx.strings.entry(key_idx);
+                let key_handle_global = format!("@{}", key_entry.handle_global);
+
+                let blk = ctx.block();
+                let key_box = blk.load(DOUBLE, &key_handle_global);
+                let key_handle =
+                    blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &key_box)]);
+                let eq_i32 = blk.call(
+                    I32,
+                    "js_string_equals",
+                    &[(I64, &path_handle), (I64, &key_handle)],
+                );
+                let cond = blk.icmp_ne(I32, &eq_i32, "0");
+
+                let match_block_idx = ctx.new_block(&format!("dyn_import_match_{}", i));
+                let next_label = if i + 1 < resolved.len() {
+                    ctx.new_block(&format!("dyn_import_next_{}", i))
+                } else {
+                    ctx.new_block(&format!("dyn_import_reject_{}", i))
+                };
+                let match_label = ctx.block_label(match_block_idx);
+                let next_label_str = ctx.block_label(next_label);
+                ctx.block().cond_br(&cond, &match_label, &next_label_str);
+
+                // Match arm — call target's __init (idempotent), load
+                // namespace, wrap in promise, store into result_slot,
+                // branch to join. Issue #753: the init call is the
+                // only thing that triggers a Deferred target's body
+                // and namespace populator; for Eager targets the
+                // guard short-circuits.
+                ctx.current_block = match_block_idx;
+                let join_label = ctx.block_label(join_block_idx);
+                let blk = ctx.block();
+                blk.call_void(&format!("{}__init", target_prefix), &[]);
+                let ns_val = blk.load(DOUBLE, &format!("@__perry_ns_{}", target_prefix));
+                let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
+                let boxed = nanbox_pointer_inline(blk, &promise);
+                blk.store(DOUBLE, &boxed, &result_slot);
+                blk.br(&join_label);
+
+                // Move to the next compare block (or fallthrough to
+                // rejection on the last iteration).
+                ctx.current_block = next_label;
+            }
+
+            // No-match fallthrough: rejected promise. Reuses the same
+            // pattern as the empty-paths defensive arm.
+            let join_label = ctx.block_label(join_block_idx);
+            let blk = ctx.block();
+            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &undef)]);
+            let boxed = nanbox_pointer_inline(blk, &p);
+            blk.store(DOUBLE, &boxed, &result_slot);
+            blk.br(&join_label);
+
+            // Join: load result and return.
+            ctx.current_block = join_block_idx;
+            Ok(ctx.block().load(DOUBLE, &result_slot))
+        }
+
+        // -------- ExternFuncRef as a value --------
+        // The Call path in `lower_call.rs` dispatches `Expr::Call { callee:
+        // ExternFuncRef, .. }` directly to the cross-module symbol. When
+        // an imported function appears as a STANDALONE value — `if
+        // (this.ffi.setCursors)` truthiness check, `someFn === otherFn`
+        // equality comparison, or being passed as a callback — we route
+        // to the static `__perry_extern_closure_<src>__<name>` global
+        // emitted by `compile_module` for every imported function (see the
+        // wrapper-emit block right after the user-function `__perry_wrap_*`
+        // loop). The global is a `ClosureHeader` with `func_ptr` pointing
+        // at a thin `__perry_wrap_extern_<src>__<name>` thunk and
+        // `type_tag = CLOSURE_MAGIC`, so the runtime's `js_closure_callN`
+        // sees a valid closure and dispatches correctly. We just take the
+        // address and NaN-box it as POINTER.
+        //
+        // For namespaces / built-ins that aren't in `import_function_prefixes`
+        // (e.g. setTimeout / clearTimeout / Math / Date), we still don't
+        // have a wrapper to point at. Fall back to TAG_TRUE so truthiness
+        // checks work; calling those values via stored references would
+        // need a separate runtime path that this commit doesn't add.
+        Expr::ExternFuncRef { name, .. } => {
+            // Imported class references (refs #420 / drizzle): when `name`
+            // resolves to a class registered in `ctx.class_ids` (populated
+            // from `opts.imported_classes` for imported classes too), emit
+            // the same INT32-tagged class-id NaN-box that local `Expr::ClassRef`
+            // produces. This is what `js_object_has_own`'s Symbol-key branch
+            // looks for to consult `CLASS_STATIC_SYMBOLS`. Without this,
+            // `Object.prototype.hasOwnProperty.call(ImportedClass, sym)`
+            // always returned false because the receiver was a closure-pointer
+            // NaN-box (POINTER_TAG) rather than a class-ref (INT32_TAG).
+            if let Some(&cid) = ctx.class_ids.get(name) {
+                let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
+                return Ok(double_literal(f64::from_bits(bits)));
+            }
+            if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
+                // Issue #678 followup: a V8-fallback import used as a value
+                // (rather than called directly) has no native singleton
+                // wrapper to point at — the `__perry_wrap_extern_*` for V8
+                // imports is the same no-op stub the imported-class branch
+                // emits (returns undefined). NaN-box `undefined` so any
+                // truthiness check fails closed; equality compares against
+                // `undefined`; a call through this value fast-paths through
+                // the closure-call's invalid-magic check.
+                if ctx.import_function_v8_specifiers.contains_key(name) {
+                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                }
+                // Issue #678: re-export renames mean the origin's symbol uses
+                // the *origin* name as the suffix, not the consumer-visible one.
+                let origin_suffix = import_origin_suffix(ctx.import_function_origin_names, name);
+                // Imported VARIABLES (exported consts/lets) need to be
+                // called through their getter to fetch the value, not
+                // wrapped as closures. Without this, `let v = HONE_VERSION`
+                // creates a closure wrapper instead of the actual string.
+                if ctx.imported_vars.contains(name) {
+                    let fname = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                    ctx.pending_declares.push((fname.clone(), DOUBLE, vec![]));
+                    return Ok(ctx.block().call(DOUBLE, &fname, &[]));
+                }
+                // Drizzle / cross-module IIFE-pattern static-property fix:
+                // route through the SOURCE module's wrapper symbol +
+                // `js_closure_alloc_singleton` (same path the source
+                // module uses for its own `Expr::FuncRef(id)` value
+                // reads) so the consumer gets the same ClosureHeader
+                // pointer the source sees. Pre-fix each consumer emitted
+                // its own `__perry_extern_closure_<src>__<name>` global
+                // with LLVM `internal` linkage, so the consumer-side
+                // pointer differed from the source-side singleton. The
+                // IIFE pattern `((fn2) => { fn2.X = Y; })(fn)` writes to
+                // CLOSURE_DYNAMIC_PROPS keyed by the source-local closure
+                // pointer; consumer reads keyed by their own pointer
+                // missed every entry. Drizzle hit this on every
+                // `sql.raw(...)` / `sql.identifier(...)` / `sql.fromList`
+                // call — the `((sql2) => { sql2.raw = ...; })(sql)`
+                // pattern in `drizzle-orm/sql/sql.js`. The fix unifies
+                // function-declaration imports with the same architecture
+                // const-bound closures already use: ONE module-level
+                // singleton observed via stable address from every
+                // module. `js_closure_alloc_singleton` keys its
+                // pool by func_ptr, so calling it with the source's
+                // wrapper symbol from any module returns the same
+                // ClosureHeader the source returned for its
+                // `Expr::FuncRef(id)` value-reads. The pre-fix
+                // `__perry_extern_closure_<src>__<name>` global is no
+                // longer referenced and link-time DCE strips it.
+                // Refs #645 deeper followup / #488 drizzle-sqlite.
+                let target_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                let wrap_name = format!("__perry_wrap_{}", target_name);
+                // Declare the source's wrapper so LLVM accepts the
+                // `@<wrap_name>` reference. Signature mirrors the
+                // emission in `compile_module`'s wrapper-loop (i64
+                // closure_ptr + N doubles, arity capped at 5). The
+                // signature is for LLVM-IR well-formedness only — the
+                // runtime closure-call machinery casts the func_ptr to
+                // its own ABI at dispatch time, so size of the param
+                // count here is informational. Defaults to arity 0 if
+                // the import metadata didn't carry a count; the runtime
+                // path still works because singleton lookup uses the
+                // address, not the signature.
+                let param_count = ctx
+                    .imported_func_param_counts
+                    .get(name)
+                    .copied()
+                    .unwrap_or(0)
+                    .min(5);
+                let mut wrap_param_types: Vec<crate::types::LlvmType> = vec![I64];
+                for _ in 0..param_count {
+                    wrap_param_types.push(DOUBLE);
+                }
+                ctx.pending_declares
+                    .push((wrap_name.clone(), DOUBLE, wrap_param_types));
+                let blk = ctx.block();
+                let wrap_ptr = format!("@{}", wrap_name);
+                let closure_handle =
+                    blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+                return Ok(nanbox_pointer_inline(blk, &closure_handle));
+            }
+            // Issue #841: named imports from the five Node submodules
+            // Perry recognizes but has no perry-stdlib backing for
+            // (`node:timers/promises`, `node:readline/promises`,
+            // `node:stream/promises`, `node:stream/consumers`,
+            // `node:sys`). Pre-fix the catch-all returned TAG_TRUE so
+            // `typeof setTimeout === "boolean"` and the value literally
+            // printed as `true`. Route to the runtime helper
+            // `js_node_submodule_export_as_function` which returns a
+            // NaN-boxed function singleton; the singleton's thunk is a
+            // thrower (a follow-up under #793 wires real impls).
+            if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name)
+            {
+                let submod_label = emit_string_literal_global(ctx, submod_key);
+                let name_label = emit_string_literal_global(ctx, exported_name);
+                let submod_len = submod_key.len();
+                let name_len = exported_name.len();
+                let blk = ctx.block();
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_node_submodule_export_as_function",
+                    &[
+                        (PTR, &submod_label),
+                        (I32, &submod_len.to_string()),
+                        (PTR, &name_label),
+                        (I32, &name_len.to_string()),
+                    ],
+                ));
+            }
+            // Issue #841 companion: namespace imports for the same five
+            // submodules. The `collect_modules.rs` rejection skips
+            // these so the namespace binding flows through HIR and
+            // lands here. Emit a call to `js_node_submodule_namespace`
+            // which returns a per-submodule stub object whose properties
+            // are the function singletons named imports produce.
+            if let Some(submod_key) = ctx.namespace_node_submodules.get(name) {
+                let submod_label = emit_string_literal_global(ctx, submod_key);
+                let submod_len = submod_key.len();
+                let blk = ctx.block();
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_node_submodule_namespace",
+                    &[(PTR, &submod_label), (I32, &submod_len.to_string())],
+                ));
+            }
+            // Issue #629: namespace imports for unresolved modules
+            // (`import * as fsp from "node:fs/promises"`) — when the
+            // module isn't backed by perry-stdlib bindings or compiled
+            // sources, the binding lands here. Pre-fix the catch-all
+            // returned TAG_TRUE so `typeof fsp === "boolean"` and every
+            // property access produced the confusing "(boolean).X is
+            // not a function" error. Route to the runtime stub which
+            // returns an empty-object pointer (typeof "object", every
+            // property reads undefined). Namespace bindings registered
+            // in `ctx.namespace_imports` already short-circuit via
+            // dedicated arms above; this catch-all only fires for
+            // names with no resolution at all.
+            if ctx.namespace_imports.contains(name) {
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_unresolved_namespace_stub", &[]));
+            }
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_TRUE)))
+        }
+
+        // -------- I18nString — compile-time resolution + runtime interpolation --------
+        // Two cases:
+        //
+        //  (a) `ctx.i18n` is `None` — the project doesn't configure i18n,
+        //      or this build doesn't have a snapshot threaded through.
+        //      Fall back to emitting the verbatim key string. Lower
+        //      params for side effects (closure collection, string
+        //      literal interning) so they don't get dropped.
+        //
+        //  (b) `ctx.i18n` is `Some(I18nLowerCtx { translations,
+        //      key_count, default_locale_idx })` — pull the right cell
+        //      from the flat 2D table at compile time using the entry's
+        //      `string_idx`, then:
+        //
+        //      - If the resolved string has no `{name}` placeholders,
+        //        intern it as a string literal and load the handle.
+        //      - Otherwise, parse the placeholders, lower each param's
+        //        value, `js_string_coerce` to a handle, and chain
+        //        `js_string_concat` calls to build the final string at
+        //        runtime. Fragments are interned via the StringPool so
+        //        identical templates share storage.
+        //
+        // Plurals: `plural_forms` and `plural_param` are deliberately
+        // ignored in this first cut. The lowering uses the canonical
+        // `string_idx` (which is what the singular/non-plural form
+        // points at). CLDR plural rule selection at runtime is a
+        // followup; in the meantime plural-tagged keys still produce a
+        // working translation, just not the count-aware variant.
+        Expr::I18nString {
+            key,
+            string_idx,
+            params,
+            ..
+        } => {
+            let resolved: Option<String> = ctx.i18n.as_ref().and_then(|t| {
+                let idx = t.default_locale_idx * t.key_count + (*string_idx as usize);
+                t.translations.get(idx).cloned()
+            });
+            // An empty translation cell means the locale file is missing
+            // this key — fall back to the source key so the user at
+            // least sees the English text instead of `""`.
+            let template: String = match resolved {
+                Some(s) if !s.is_empty() => s,
+                _ => key.clone(),
+            };
+            // Build a `(fragment, Option<param_name>)` plan from the
+            // template. Each `{name}` placeholder splits a fragment;
+            // text between/around placeholders is a literal piece. We
+            // tolerate `{{` / `}}` as literal braces (matches common
+            // i18n conventions and avoids quirks if a translation
+            // contains a literal `{`).
+            //
+            // The plan is a list of (literal_text, optional_param_name)
+            // pairs where the param name (if any) follows the literal.
+            // The trailing literal has no param.
+            #[derive(Debug)]
+            enum Part {
+                Lit(String),
+                Param(String),
+            }
+            let mut plan: Vec<Part> = Vec::new();
+            {
+                let bytes = template.as_bytes();
+                let mut i = 0usize;
+                let mut buf = String::new();
+                while i < bytes.len() {
+                    let b = bytes[i];
+                    if b == b'{' {
+                        if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                            buf.push('{');
+                            i += 2;
+                            continue;
+                        }
+                        // Find the matching `}`.
+                        let end = bytes[i + 1..]
+                            .iter()
+                            .position(|&c| c == b'}')
+                            .map(|p| i + 1 + p);
+                        match end {
+                            Some(close) => {
+                                if !buf.is_empty() {
+                                    plan.push(Part::Lit(std::mem::take(&mut buf)));
+                                }
+                                let name = std::str::from_utf8(&bytes[i + 1..close])
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string();
+                                plan.push(Part::Param(name));
+                                i = close + 1;
+                            }
+                            None => {
+                                // Unterminated `{` — treat as literal.
+                                buf.push(b as char);
+                                i += 1;
+                            }
+                        }
+                    } else if b == b'}' && i + 1 < bytes.len() && bytes[i + 1] == b'}' {
+                        buf.push('}');
+                        i += 2;
+                    } else {
+                        // Push the byte as-is. UTF-8 multi-byte chars
+                        // pass through cleanly because we never split
+                        // inside one (we only act on `{` and `}` which
+                        // are ASCII).
+                        buf.push(b as char);
+                        i += 1;
+                    }
+                }
+                if !buf.is_empty() {
+                    plan.push(Part::Lit(buf));
+                }
+            }
+
+            // Fast path: no `{name}` placeholders → just emit the
+            // literal. Still lower the params for side effects in case
+            // the template parser misses something exotic, but the
+            // result is a single static string handle.
+            let has_placeholders = plan.iter().any(|p| matches!(p, Part::Param(_)));
+            if !has_placeholders {
+                for (_, v) in params {
+                    let _ = lower_expr(ctx, v)?;
+                }
+                let key_idx = ctx.strings.intern(&template);
+                let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                return Ok(ctx.block().load(DOUBLE, &handle_global));
+            }
+
+            // Build a name → lowered value map for params we'll
+            // reference. We lower each param exactly once so closures
+            // and side effects in arg expressions fire in source order
+            // — even if a placeholder appears multiple times in the
+            // template (we'll reuse the cached value in that case).
+            //
+            // Params declared in the HIR but not referenced in the
+            // resolved template still get lowered for side effects.
+            let mut lowered_params: std::collections::HashMap<String, String> =
+                std::collections::HashMap::with_capacity(params.len());
+            for (name, v) in params {
+                let v_box = lower_expr(ctx, v)?;
+                lowered_params.insert(name.clone(), v_box);
+            }
+
+            // Walk the plan and emit a chain of string concats. We
+            // accumulate the result in `acc_handle` (i64 string
+            // handle, NOT a NaN-boxed double — saves the
+            // bitcast/mask cycle on every concat).
+            //
+            // For each Part:
+            //   - Lit(s): intern via StringPool, load the handle, mask.
+            //   - Param(name): look up the lowered value, coerce via
+            //     `js_string_coerce` (which already returns a handle).
+            // Then concat with `js_string_concat(left_handle, right_handle)`.
+            //
+            // For the very first part, just initialize acc_handle from
+            // it (no concat needed).
+            let mut acc_handle: Option<String> = None;
+            for part in &plan {
+                let part_handle: String = match part {
+                    Part::Lit(s) => {
+                        let key_idx = ctx.strings.intern(s);
+                        let handle_global =
+                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                        let blk = ctx.block();
+                        let lit_box = blk.load(DOUBLE, &handle_global);
+                        unbox_to_i64(blk, &lit_box)
+                    }
+                    Part::Param(name) => {
+                        // If the placeholder names a param we don't
+                        // know about, fall back to the literal `{name}`
+                        // text so the user can see the bug.
+                        let v_box = match lowered_params.get(name) {
+                            Some(v) => v.clone(),
+                            None => {
+                                let placeholder = format!("{{{}}}", name);
+                                let key_idx = ctx.strings.intern(&placeholder);
+                                let handle_global =
+                                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                                ctx.block().load(DOUBLE, &handle_global)
+                            }
+                        };
+                        let blk = ctx.block();
+                        blk.call(I64, "js_string_coerce", &[(DOUBLE, &v_box)])
+                    }
+                };
+                acc_handle = Some(match acc_handle {
+                    None => part_handle,
+                    Some(prev) => {
+                        let blk = ctx.block();
+                        blk.call(
+                            I64,
+                            "js_string_concat",
+                            &[(I64, &prev), (I64, &part_handle)],
+                        )
+                    }
+                });
+            }
+            // `plan` had at least one placeholder so it can't be empty;
+            // `acc_handle` is therefore Some. Box the final handle.
+            let final_handle = acc_handle.expect("template plan was non-empty");
+            Ok(nanbox_string_inline(ctx.block(), &final_handle))
+        }
+
+        // -------- Child Process --------
+        _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}

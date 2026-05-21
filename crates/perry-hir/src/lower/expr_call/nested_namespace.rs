@@ -1,0 +1,386 @@
+//! Nested-namespace member dispatch: `process.hrtime.bigint()`,
+//! `crypto.subtle.<method>(...)`, and `path.posix/win32.<method>(...)`.
+//!
+//! These need a 3-level Member AST shape and are resolved BEFORE the
+//! generic `mod.X.Y()` arm so the strict-API gate (#463) doesn't
+//! reject sub-namespaces (`subtle`, `posix`, `win32` are not classes).
+//!
+//! Each helper takes `args` by value and returns
+//! `Result<Result<Expr, Vec<Expr>>>` — `Ok(Ok(expr))` if it matched
+//! and the caller should return that expression, `Ok(Err(args))` if
+//! it didn't match and the caller should keep going. Extracted from
+//! `expr_call/mod.rs` as a mechanical move.
+
+use anyhow::Result;
+use swc_ecma_ast as ast;
+
+use crate::ir::*;
+
+use super::super::LoweringContext;
+
+/// `process.hrtime.bigint()` — nested 3-level member call.
+pub(super) fn try_process_hrtime_bigint(
+    expr: &ast::Expr,
+    args: Vec<Expr>,
+) -> Result<Expr, Vec<Expr>> {
+    if let ast::Expr::Member(outer_member) = expr {
+        if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
+            if let ast::Expr::Ident(inner_obj) = inner_member.obj.as_ref() {
+                if inner_obj.sym.as_ref() == "process" {
+                    if let ast::MemberProp::Ident(inner_prop) = &inner_member.prop {
+                        if inner_prop.sym.as_ref() == "hrtime" {
+                            if let ast::MemberProp::Ident(method_ident) = &outer_member.prop {
+                                if method_ident.sym.as_ref() == "bigint" {
+                                    return Ok(Expr::ProcessHrtimeBigint);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Err(args)
+}
+
+/// Web Crypto API — `crypto.subtle.<method>(args)` (issue #561).
+/// AST shape is the same nested-Member pattern as
+/// `process.hrtime.bigint()` above. We resolve here BEFORE the
+/// generic mod.X.Y() arm so the strict-API gate (#463) doesn't
+/// reject `subtle` (which is a sub-namespace, not a class).
+pub(super) fn try_web_crypto_subtle(
+    ctx: &LoweringContext,
+    expr: &ast::Expr,
+    args: Vec<Expr>,
+) -> Result<Result<Expr, Vec<Expr>>> {
+    if let ast::Expr::Member(outer_member) = expr {
+        if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
+            if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
+                let root_name = root_ident.sym.as_ref();
+                let is_crypto_root = root_name == "crypto"
+                    || ctx.lookup_builtin_module_alias(root_name) == Some("crypto")
+                    || ctx
+                        .lookup_native_module(root_name)
+                        .map(|(m, _)| m == "crypto")
+                        .unwrap_or(false);
+                if is_crypto_root {
+                    if let ast::MemberProp::Ident(inner_prop) = &inner_member.prop {
+                        if inner_prop.sym.as_ref() == "subtle" {
+                            if let ast::MemberProp::Ident(method_ident) = &outer_member.prop {
+                                let method = method_ident.sym.as_ref();
+                                match method {
+                                    "digest" if args.len() >= 2 => {
+                                        let mut iter = args.into_iter();
+                                        let algo = iter.next().unwrap();
+                                        let data = iter.next().unwrap();
+                                        return Ok(Ok(Expr::WebCryptoDigest {
+                                            algo: Box::new(algo),
+                                            data: Box::new(data),
+                                        }));
+                                    }
+                                    "importKey" if args.len() >= 5 => {
+                                        let mut iter = args.into_iter();
+                                        let format = iter.next().unwrap();
+                                        let key = iter.next().unwrap();
+                                        let algorithm = iter.next().unwrap();
+                                        let extractable = iter.next().unwrap();
+                                        let usages = iter.next().unwrap();
+                                        return Ok(Ok(Expr::WebCryptoImportKey {
+                                            format: Box::new(format),
+                                            key: Box::new(key),
+                                            algorithm: Box::new(algorithm),
+                                            extractable: Box::new(extractable),
+                                            usages: Box::new(usages),
+                                        }));
+                                    }
+                                    "sign" if args.len() >= 3 => {
+                                        let mut iter = args.into_iter();
+                                        let algorithm = iter.next().unwrap();
+                                        let key = iter.next().unwrap();
+                                        let data = iter.next().unwrap();
+                                        return Ok(Ok(Expr::WebCryptoSign {
+                                            algorithm: Box::new(algorithm),
+                                            key: Box::new(key),
+                                            data: Box::new(data),
+                                        }));
+                                    }
+                                    "verify" if args.len() >= 4 => {
+                                        let mut iter = args.into_iter();
+                                        let algorithm = iter.next().unwrap();
+                                        let key = iter.next().unwrap();
+                                        let signature = iter.next().unwrap();
+                                        let data = iter.next().unwrap();
+                                        return Ok(Ok(Expr::WebCryptoVerify {
+                                            algorithm: Box::new(algorithm),
+                                            key: Box::new(key),
+                                            signature: Box::new(signature),
+                                            data: Box::new(data),
+                                        }));
+                                    }
+                                    "encrypt" if args.len() >= 3 => {
+                                        let mut iter = args.into_iter();
+                                        let algorithm = iter.next().unwrap();
+                                        let key = iter.next().unwrap();
+                                        let data = iter.next().unwrap();
+                                        return Ok(Ok(Expr::WebCryptoEncrypt {
+                                            algorithm: Box::new(algorithm),
+                                            key: Box::new(key),
+                                            data: Box::new(data),
+                                        }));
+                                    }
+                                    "decrypt" if args.len() >= 3 => {
+                                        let mut iter = args.into_iter();
+                                        let algorithm = iter.next().unwrap();
+                                        let key = iter.next().unwrap();
+                                        let data = iter.next().unwrap();
+                                        return Ok(Ok(Expr::WebCryptoDecrypt {
+                                            algorithm: Box::new(algorithm),
+                                            key: Box::new(key),
+                                            data: Box::new(data),
+                                        }));
+                                    }
+                                    "generateKey" if args.len() >= 3 => {
+                                        let mut iter = args.into_iter();
+                                        let algorithm = iter.next().unwrap();
+                                        let extractable = iter.next().unwrap();
+                                        let usages = iter.next().unwrap();
+                                        return Ok(Ok(Expr::WebCryptoGenerateKey {
+                                            algorithm: Box::new(algorithm),
+                                            extractable: Box::new(extractable),
+                                            usages: Box::new(usages),
+                                        }));
+                                    }
+                                    "wrapKey" if args.len() >= 4 => {
+                                        let mut iter = args.into_iter();
+                                        let format = iter.next().unwrap();
+                                        let key = iter.next().unwrap();
+                                        let wrapping_key = iter.next().unwrap();
+                                        let wrap_algorithm = iter.next().unwrap();
+                                        return Ok(Ok(Expr::WebCryptoWrapKey {
+                                            format: Box::new(format),
+                                            key: Box::new(key),
+                                            wrapping_key: Box::new(wrapping_key),
+                                            wrap_algorithm: Box::new(wrap_algorithm),
+                                        }));
+                                    }
+                                    "unwrapKey" if args.len() >= 7 => {
+                                        let mut iter = args.into_iter();
+                                        let format = iter.next().unwrap();
+                                        let wrapped_key = iter.next().unwrap();
+                                        let unwrapping_key = iter.next().unwrap();
+                                        let unwrap_algorithm = iter.next().unwrap();
+                                        let unwrapped_key_algorithm = iter.next().unwrap();
+                                        let extractable = iter.next().unwrap();
+                                        let usages = iter.next().unwrap();
+                                        return Ok(Ok(Expr::WebCryptoUnwrapKey {
+                                            format: Box::new(format),
+                                            wrapped_key: Box::new(wrapped_key),
+                                            unwrapping_key: Box::new(unwrapping_key),
+                                            unwrap_algorithm: Box::new(unwrap_algorithm),
+                                            unwrapped_key_algorithm: Box::new(
+                                                unwrapped_key_algorithm,
+                                            ),
+                                            extractable: Box::new(extractable),
+                                            usages: Box::new(usages),
+                                        }));
+                                    }
+                                    _ => {
+                                        // Unsupported subtle method —
+                                        // fail loudly. The supported
+                                        // surface is documented in the
+                                        // d.ts and at #561; asymmetric
+                                        // (RSA-PSS / ECDSA / RSA-OAEP),
+                                        // deriveKey are still out of
+                                        // scope per the issue.
+                                        let allow_unimplemented =
+                                            std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
+                                        if !allow_unimplemented {
+                                            crate::lower_bail!(
+                                                outer_member.span,
+                                                "`crypto.subtle.{}` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify, encrypt, decrypt, generateKey, wrapKey, unwrapKey (HMAC + SHA-1/256/384/512; encrypt/decrypt/generateKey/wrapKey currently AES-GCM/AES-KW only). \
+                                                 See `perry --print-api-manifest` and #561, or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore.",
+                                                method,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Err(args))
+}
+
+/// `path.posix.<method>(args)` / `path.win32.<method>(args)` —
+/// sub-namespace dispatch (issue #810). Without this arm the
+/// generic mod.X.Y() block below skips the call (path.posix /
+/// path.win32 are in its sub-namespace exclusion list to keep
+/// them off the strict-API gate) and the call falls through
+/// to the receiver-less dispatch, returning undefined.
+///
+/// - `path.posix.X` routes to the existing Expr::PathX variant.
+///   The runtime js_path_* functions use POSIX (`/`) semantics,
+///   so this is a direct shape rewrite.
+/// - `path.win32.join` routes to a dedicated Expr::PathWin32Join
+///   so the result uses `\` separators. Other path.win32.*
+///   methods are intentionally unwired here — falling through
+///   to a POSIX impl would silently mis-handle drive letters
+///   and `\` segments. Track those in a follow-up.
+pub(super) fn try_path_subnamespace(
+    ctx: &LoweringContext,
+    expr: &ast::Expr,
+    args: Vec<Expr>,
+) -> Result<Expr, Vec<Expr>> {
+    if let ast::Expr::Member(outer_member) = expr {
+        if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
+            if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
+                let root_name = root_ident.sym.as_ref();
+                let is_path_root = root_name == "path"
+                    || ctx.lookup_builtin_module_alias(root_name) == Some("path")
+                    || ctx
+                        .lookup_native_module(root_name)
+                        .map(|(m, _)| m == "path")
+                        .unwrap_or(false);
+                if is_path_root {
+                    if let (ast::MemberProp::Ident(sub_prop), ast::MemberProp::Ident(method_prop)) =
+                        (&inner_member.prop, &outer_member.prop)
+                    {
+                        let sub = sub_prop.sym.as_ref();
+                        let method = method_prop.sym.as_ref();
+                        if sub == "posix" || sub == "win32" {
+                            // path.<sub>.join(...)
+                            if method == "join" {
+                                if args.is_empty() {
+                                    return Ok(Expr::String(".".to_string()));
+                                }
+                                if sub == "win32" {
+                                    let mut iter = args.into_iter();
+                                    let mut result = iter.next().unwrap();
+                                    for next_arg in iter {
+                                        result = Expr::PathWin32Join(
+                                            Box::new(result),
+                                            Box::new(next_arg),
+                                        );
+                                    }
+                                    return Ok(result);
+                                } else {
+                                    // posix.join → existing PathJoin
+                                    if args.len() == 1 {
+                                        return Ok(Expr::PathNormalize(Box::new(
+                                            args.into_iter().next().unwrap(),
+                                        )));
+                                    }
+                                    let mut iter = args.into_iter();
+                                    let mut result = iter.next().unwrap();
+                                    for next_arg in iter {
+                                        result =
+                                            Expr::PathJoin(Box::new(result), Box::new(next_arg));
+                                    }
+                                    return Ok(result);
+                                }
+                            }
+
+                            // The remaining methods route to the
+                            // existing POSIX Expr::Path* variants
+                            // only for the `posix` sub-namespace.
+                            // For `win32` we deliberately fall
+                            // through to the receiver-less path
+                            // (returns undefined) rather than
+                            // give a wrong POSIX answer.
+                            if sub == "posix" {
+                                match method {
+                                    "dirname" if !args.is_empty() => {
+                                        return Ok(Expr::PathDirname(Box::new(
+                                            args.into_iter().next().unwrap(),
+                                        )));
+                                    }
+                                    "basename" if args.len() >= 2 => {
+                                        let mut it = args.into_iter();
+                                        let p = it.next().unwrap();
+                                        let e = it.next().unwrap();
+                                        return Ok(Expr::PathBasenameExt(Box::new(p), Box::new(e)));
+                                    }
+                                    "basename" if !args.is_empty() => {
+                                        return Ok(Expr::PathBasename(Box::new(
+                                            args.into_iter().next().unwrap(),
+                                        )));
+                                    }
+                                    "extname" if !args.is_empty() => {
+                                        return Ok(Expr::PathExtname(Box::new(
+                                            args.into_iter().next().unwrap(),
+                                        )));
+                                    }
+                                    "isAbsolute" if !args.is_empty() => {
+                                        return Ok(Expr::PathIsAbsolute(Box::new(
+                                            args.into_iter().next().unwrap(),
+                                        )));
+                                    }
+                                    "normalize" if !args.is_empty() => {
+                                        return Ok(Expr::PathNormalize(Box::new(
+                                            args.into_iter().next().unwrap(),
+                                        )));
+                                    }
+                                    "parse" if !args.is_empty() => {
+                                        return Ok(Expr::PathParse(Box::new(
+                                            args.into_iter().next().unwrap(),
+                                        )));
+                                    }
+                                    "format" if !args.is_empty() => {
+                                        return Ok(Expr::PathFormat(Box::new(
+                                            args.into_iter().next().unwrap(),
+                                        )));
+                                    }
+                                    "toNamespacedPath" if !args.is_empty() => {
+                                        return Ok(Expr::PathToNamespacedPath(Box::new(
+                                            args.into_iter().next().unwrap(),
+                                        )));
+                                    }
+                                    "relative" if args.len() >= 2 => {
+                                        let mut it = args.into_iter();
+                                        let from = it.next().unwrap();
+                                        let to = it.next().unwrap();
+                                        return Ok(Expr::PathRelative(
+                                            Box::new(from),
+                                            Box::new(to),
+                                        ));
+                                    }
+                                    "resolve" if args.is_empty() => {
+                                        return Ok(Expr::PathResolve(Box::new(Expr::String(
+                                            String::new(),
+                                        ))));
+                                    }
+                                    "resolve" if !args.is_empty() => {
+                                        let mut it = args.into_iter();
+                                        let first = it.next().unwrap();
+                                        let mut joined = first;
+                                        for next_arg in it {
+                                            joined = Expr::PathResolveJoin(
+                                                Box::new(joined),
+                                                Box::new(next_arg),
+                                            );
+                                        }
+                                        return Ok(Expr::PathResolve(Box::new(joined)));
+                                    }
+                                    "matchesGlob" if args.len() >= 2 => {
+                                        let mut it = args.into_iter();
+                                        let p = it.next().unwrap();
+                                        let pat = it.next().unwrap();
+                                        return Ok(Expr::PathMatchesGlob(
+                                            Box::new(p),
+                                            Box::new(pat),
+                                        ));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Err(args)
+}

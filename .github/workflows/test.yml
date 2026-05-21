@@ -51,6 +51,14 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      # File-size gate (v0.5.1019): fails the PR if any tracked source
+      # file exceeds the LOC threshold (5000 initially; eventual target
+      # is 2000). Big single-file modules are hard to read, slow IDE +
+      # cargo-check incrementality, and hide regressions in code review.
+      # Allowlist + exclusions live in the script.
+      - name: File size limit
+        run: ./scripts/check_file_size.sh
+
   # ---------------------------------------------------------------------------
   # API docs drift gate (#465)
   #

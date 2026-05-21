@@ -1,0 +1,714 @@
+//! MathFround..SetClear.
+//!
+//! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
+//! Pure mechanical move — match arm bodies are verbatim copies, called from
+//! `lower_expr`'s outer dispatch.
+
+use anyhow::{anyhow, bail, Result};
+#[allow(unused_imports)]
+use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
+#[allow(unused_imports)]
+use perry_types::Type as HirType;
+
+#[allow(unused_imports)]
+use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
+#[allow(unused_imports)]
+use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
+#[allow(unused_imports)]
+use crate::lower_string_method::{
+    flatten_string_add_chain, lower_string_coerce_concat, lower_string_concat,
+    lower_string_concat_chain, lower_string_self_append,
+};
+#[allow(unused_imports)]
+use crate::nanbox::{double_literal, POINTER_MASK_I64};
+#[allow(unused_imports)]
+use crate::type_analysis::{
+    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
+    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+};
+#[allow(unused_imports)]
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+
+#[allow(unused_imports)]
+use super::{
+    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
+    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
+    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
+    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
+    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
+    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
+    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
+    I18nLowerCtx,
+};
+
+pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::MathFround(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            Ok(ctx.block().call(DOUBLE, "js_math_fround", &[(DOUBLE, &v)]))
+        }
+
+        // -------- new Map([[k,v], ...]) — alloc empty map, ignore source --------
+        Expr::MapNewFromArray(arr_expr) => {
+            let arr_box = lower_expr(ctx, arr_expr)?;
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let handle = blk.call(I64, "js_map_from_array", &[(I64, &arr_handle)]);
+            Ok(nanbox_pointer_inline(blk, &handle))
+        }
+
+        // -------- DateGetTime / DateGetTimezoneOffset --------
+        Expr::DateGetTime(d) => {
+            let v = lower_expr(ctx, d)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_time", &[(DOUBLE, &v)]))
+        }
+        Expr::DateGetTimezoneOffset(d) => {
+            let v = lower_expr(ctx, d)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_timezone_offset", &[(DOUBLE, &v)]))
+        }
+        // -------- Date.UTC(year, month, day?, hour?, minute?, second?, ms?) --------
+        Expr::DateUtc(args) => {
+            // Lower up to 7 args; pad missing ones with 0.
+            let mut vals: Vec<String> = Vec::with_capacity(7);
+            for a in args.iter().take(7) {
+                vals.push(lower_expr(ctx, a)?);
+            }
+            while vals.len() < 7 {
+                vals.push(double_literal(0.0));
+            }
+            let blk = ctx.block();
+            let call_args: Vec<(crate::types::LlvmType, &str)> =
+                vals.iter().map(|v| (DOUBLE, v.as_str())).collect();
+            Ok(blk.call(DOUBLE, "js_date_utc", &call_args))
+        }
+
+        // -------- Object.defineProperty --------
+        Expr::ObjectDefineProperty(obj, key, value) => {
+            let o = lower_expr(ctx, obj)?;
+            let k = lower_expr(ctx, key)?;
+            let v = lower_expr(ctx, value)?;
+            let blk = ctx.block();
+            blk.call(
+                DOUBLE,
+                "js_object_define_property",
+                &[(DOUBLE, &o), (DOUBLE, &k), (DOUBLE, &v)],
+            );
+            Ok(o)
+        }
+
+        // -------- path.isAbsolute(p) -> boolean --------
+        Expr::PathIsAbsolute(p) => {
+            let p_box = lower_expr(ctx, p)?;
+            let blk = ctx.block();
+            let p_handle = unbox_to_i64(blk, &p_box);
+            let i32_res = blk.call(I32, "js_path_is_absolute", &[(I64, &p_handle)]);
+            Ok(i32_bool_to_nanbox(blk, &i32_res))
+        }
+
+        // -------- process.hrtime.bigint() — returns already NaN-boxed BigInt --------
+        Expr::ProcessHrtimeBigint => Ok(ctx.block().call(DOUBLE, "js_process_hrtime_bigint", &[])),
+
+        // -------- RegExpExecIndex — reads thread-local from the last exec() call --------
+        Expr::RegExpExecIndex => Ok(ctx.block().call(DOUBLE, "js_regexp_exec_get_index", &[])),
+
+        // -------- Crypto.* wired to real runtime helpers --------
+        Expr::CryptoRandomUUID => {
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_crypto_random_uuid", &[]);
+            Ok(nanbox_string_inline(blk, &handle))
+        }
+        Expr::CryptoRandomBytes(operand) => {
+            // Returns a raw *mut BufferHeader i64. NaN-box with
+            // POINTER_TAG so downstream BUFFER_REGISTRY checks
+            // (format_jsvalue, .length, etc.) see a real buffer.
+            let size_box = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            let buf_handle = blk.call(I64, "js_crypto_random_bytes_buffer", &[(DOUBLE, &size_box)]);
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+        Expr::CryptoSha256(operand) => {
+            let data_box = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            let data_handle = unbox_to_i64(blk, &data_box);
+            let result = blk.call(I64, "js_crypto_sha256", &[(I64, &data_handle)]);
+            Ok(nanbox_string_inline(blk, &result))
+        }
+        Expr::CryptoMd5(operand) => {
+            let data_box = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            let data_handle = unbox_to_i64(blk, &data_box);
+            let result = blk.call(I64, "js_crypto_md5", &[(I64, &data_handle)]);
+            Ok(nanbox_string_inline(blk, &result))
+        }
+
+        // -------- Web Crypto API (issue #561) --------
+        // Each helper takes the JS values as f64 (NaN-boxed) and returns
+        // a *mut Promise that codegen NaN-boxes with POINTER_TAG. The
+        // runtime resolves synchronously inside the Promise body since
+        // SHA / HMAC are CPU-bound — the await is decorative.
+        Expr::WebCryptoDigest { algo, data } => {
+            let algo_box = lower_expr(ctx, algo)?;
+            let data_box = lower_expr(ctx, data)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_digest",
+                &[(DOUBLE, &algo_box), (DOUBLE, &data_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoImportKey {
+            format,
+            key,
+            algorithm,
+            extractable,
+            usages,
+        } => {
+            let format_box = lower_expr(ctx, format)?;
+            let key_box = lower_expr(ctx, key)?;
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let extractable_box = lower_expr(ctx, extractable)?;
+            let usages_box = lower_expr(ctx, usages)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_import_key",
+                &[
+                    (DOUBLE, &format_box),
+                    (DOUBLE, &key_box),
+                    (DOUBLE, &algo_box),
+                    (DOUBLE, &extractable_box),
+                    (DOUBLE, &usages_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoSign {
+            algorithm,
+            key,
+            data,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let key_box = lower_expr(ctx, key)?;
+            let data_box = lower_expr(ctx, data)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_sign",
+                &[(DOUBLE, &algo_box), (DOUBLE, &key_box), (DOUBLE, &data_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoVerify {
+            algorithm,
+            key,
+            signature,
+            data,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let key_box = lower_expr(ctx, key)?;
+            let sig_box = lower_expr(ctx, signature)?;
+            let data_box = lower_expr(ctx, data)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_verify",
+                &[
+                    (DOUBLE, &algo_box),
+                    (DOUBLE, &key_box),
+                    (DOUBLE, &sig_box),
+                    (DOUBLE, &data_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoEncrypt {
+            algorithm,
+            key,
+            data,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let key_box = lower_expr(ctx, key)?;
+            let data_box = lower_expr(ctx, data)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_encrypt",
+                &[(DOUBLE, &algo_box), (DOUBLE, &key_box), (DOUBLE, &data_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoDecrypt {
+            algorithm,
+            key,
+            data,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let key_box = lower_expr(ctx, key)?;
+            let data_box = lower_expr(ctx, data)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_decrypt",
+                &[(DOUBLE, &algo_box), (DOUBLE, &key_box), (DOUBLE, &data_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoGenerateKey {
+            algorithm,
+            extractable,
+            usages,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let extractable_box = lower_expr(ctx, extractable)?;
+            let usages_box = lower_expr(ctx, usages)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_generate_key",
+                &[
+                    (DOUBLE, &algo_box),
+                    (DOUBLE, &extractable_box),
+                    (DOUBLE, &usages_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoWrapKey {
+            format,
+            key,
+            wrapping_key,
+            wrap_algorithm,
+        } => {
+            let format_box = lower_expr(ctx, format)?;
+            let key_box = lower_expr(ctx, key)?;
+            let wrapping_key_box = lower_expr(ctx, wrapping_key)?;
+            let wrap_algo_box = lower_expr(ctx, wrap_algorithm)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_wrap_key",
+                &[
+                    (DOUBLE, &format_box),
+                    (DOUBLE, &key_box),
+                    (DOUBLE, &wrapping_key_box),
+                    (DOUBLE, &wrap_algo_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoUnwrapKey {
+            format,
+            wrapped_key,
+            unwrapping_key,
+            unwrap_algorithm,
+            unwrapped_key_algorithm,
+            extractable,
+            usages,
+        } => {
+            let format_box = lower_expr(ctx, format)?;
+            let wrapped_key_box = lower_expr(ctx, wrapped_key)?;
+            let unwrapping_key_box = lower_expr(ctx, unwrapping_key)?;
+            let unwrap_algo_box = lower_expr(ctx, unwrap_algorithm)?;
+            let unwrapped_algo_box = lower_expr(ctx, unwrapped_key_algorithm)?;
+            let extractable_box = lower_expr(ctx, extractable)?;
+            let usages_box = lower_expr(ctx, usages)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_unwrap_key",
+                &[
+                    (DOUBLE, &format_box),
+                    (DOUBLE, &wrapped_key_box),
+                    (DOUBLE, &unwrapping_key_box),
+                    (DOUBLE, &unwrap_algo_box),
+                    (DOUBLE, &unwrapped_algo_box),
+                    (DOUBLE, &extractable_box),
+                    (DOUBLE, &usages_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::CryptoRandomFillSync {
+            buffer,
+            offset,
+            size,
+        } => {
+            // Fill `buffer` (Buffer or TypedArray) with random bytes
+            // in-place; return the same NaN-boxed buffer value. `offset`
+            // and `size` are NaN-boxed JS values (Undefined → use
+            // defaults). The runtime accepts both layouts.
+            let buf_box = lower_expr(ctx, buffer)?;
+            let off_box = lower_expr(ctx, offset)?;
+            let sz_box = lower_expr(ctx, size)?;
+            let blk = ctx.block();
+            let result = blk.call(
+                DOUBLE,
+                "js_crypto_random_fill_sync",
+                &[(DOUBLE, &buf_box), (DOUBLE, &off_box), (DOUBLE, &sz_box)],
+            );
+            Ok(result)
+        }
+
+        // -------- arr.indexOf(value) -> number --------
+        // Issue #214: route through `_jsvalue` so string elements
+        // match by content (handles SSO + heap-string mixed arrays).
+        // Mirrors the `includes` arm + the `lower_array_method::indexOf`
+        // arm.
+        Expr::ArrayIndexOf { array, value } => {
+            let arr_box = lower_expr(ctx, array)?;
+            let v = lower_expr(ctx, value)?;
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let i32_v = blk.call(
+                I32,
+                "js_array_indexOf_jsvalue",
+                &[(I64, &arr_handle), (DOUBLE, &v)],
+            );
+            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+        }
+
+        // -------- arr.forEach(callback) — invoke callback for side effects --------
+        // We don't actually iterate; just lower the callback for side
+        // effects (so closures get auto-collected) and return undefined.
+        Expr::ArrayForEach { array, callback } => {
+            // Lower as: for (let i = 0; i < arr.length; i++)
+            //              callback(arr[i], i);
+            let arr_box = lower_expr(ctx, array)?;
+            let cb_box = lower_expr(ctx, callback)?;
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // Load length (null-guarded).
+            let len_i32 = blk.safe_load_i32_from_ptr(&arr_handle);
+            // Loop: for i = 0; i < len; i++
+            let cond_idx = ctx.new_block("foreach.cond");
+            let body_idx = ctx.new_block("foreach.body");
+            let exit_idx = ctx.new_block("foreach.exit");
+            let cond_lbl = ctx.block_label(cond_idx);
+            let body_lbl = ctx.block_label(body_idx);
+            let exit_lbl = ctx.block_label(exit_idx);
+            // i alloca — hoisted to the entry block so the loop body
+            // (which lives in its own basic blocks) is dominated by
+            // the slot definition even if this forEach is itself
+            // lowered from inside a nested if-arm.
+            let i_slot = ctx.func.alloca_entry(I32);
+            ctx.block().store(I32, "0", &i_slot);
+            ctx.block().br(&cond_lbl);
+            // cond: i < len
+            ctx.current_block = cond_idx;
+            let i_val = ctx.block().load(I32, &i_slot);
+            let cmp = ctx.block().icmp_slt(I32, &i_val, &len_i32);
+            ctx.block().cond_br(&cmp, &body_lbl, &exit_lbl);
+            // body: callback(arr[i], i)
+            ctx.current_block = body_idx;
+            let i_cur = ctx.block().load(I32, &i_slot);
+            let elem = ctx.block().call(
+                DOUBLE,
+                "js_array_get_f64",
+                &[(I64, &arr_handle), (I32, &i_cur)],
+            );
+            let i_f64 = ctx.block().sitofp(I32, &i_cur, DOUBLE);
+            ctx.block().call(
+                DOUBLE,
+                "js_closure_call3",
+                &[
+                    (I64, &cb_handle),
+                    (DOUBLE, &elem),
+                    (DOUBLE, &i_f64),
+                    (DOUBLE, &arr_box),
+                ],
+            );
+            // i++
+            let i_next = ctx.block().add(I32, &i_cur, "1");
+            ctx.block().store(I32, &i_next, &i_slot);
+            ctx.block().br(&cond_lbl);
+            // exit
+            ctx.current_block = exit_idx;
+            Ok(double_literal(0.0))
+        }
+
+        // -------- Object.getOwnPropertyDescriptor(obj, key) --------
+        Expr::ObjectGetOwnPropertyDescriptor(obj, key) => {
+            let o = lower_expr(ctx, obj)?;
+            let k = lower_expr(ctx, key)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_get_own_property_descriptor",
+                &[(DOUBLE, &o), (DOUBLE, &k)],
+            ))
+        }
+
+        // -------- Math.cbrt --------
+        Expr::MathCbrt(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            Ok(ctx.block().call(DOUBLE, "js_math_cbrt", &[(DOUBLE, &v)]))
+        }
+
+        // -------- Date.* getters: real runtime calls --------
+        Expr::DateGetFullYear(d) => {
+            let v = lower_expr(ctx, d)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_full_year", &[(DOUBLE, &v)]))
+        }
+        Expr::DateGetMonth(d) => {
+            let v = lower_expr(ctx, d)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_month", &[(DOUBLE, &v)]))
+        }
+        Expr::DateGetUtcDay(d) => {
+            let v = lower_expr(ctx, d)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_utc_day", &[(DOUBLE, &v)]))
+        }
+        Expr::DateValueOf(d) => {
+            let v = lower_expr(ctx, d)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_value_of", &[(DOUBLE, &v)]))
+        }
+
+        // -------- process.on(event, handler) — register a handler so its
+        // closure is rooted. We don't fire on real exit but the runtime
+        // records the handler pointer.
+        Expr::ProcessOn { event, handler } => {
+            let event_box = lower_expr(ctx, event)?;
+            let handler_box = lower_expr(ctx, handler)?;
+            let blk = ctx.block();
+            let event_handle = unbox_to_i64(blk, &event_box);
+            let handler_handle = unbox_to_i64(blk, &handler_box);
+            blk.call_void(
+                "js_process_on",
+                &[(I64, &event_handle), (I64, &handler_handle)],
+            );
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+        }
+
+        // -------- process.stdin.setRawMode(enabled) — toggle raw-mode
+        // termios on stdin and flip the readline reader's mode flag
+        // (#347 Phase 2).
+        Expr::ProcessStdinSetRawMode(arg) => {
+            let arg_box = lower_expr(ctx, arg)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_readline_set_raw_mode", &[(DOUBLE, &arg_box)]))
+        }
+
+        // -------- process.stdin.on(event, handler) — register a callback
+        // for raw-mode 'data' / 'keypress' events or 'end'/'close' EOF
+        // (#347 Phase 2). Event string goes through unbox_str_handle so
+        // SSO operands resolve to a real heap StringHeader; handler is
+        // unboxed to its closure pointer via the standard mask.
+        Expr::ProcessStdinOn { event, handler } => {
+            let event_box = lower_expr(ctx, event)?;
+            let handler_box = lower_expr(ctx, handler)?;
+            let blk = ctx.block();
+            let event_handle = unbox_str_handle(blk, &event_box);
+            let handler_handle = unbox_to_i64(blk, &handler_box);
+            blk.call_void(
+                "js_readline_stdin_on",
+                &[(I64, &event_handle), (I64, &handler_handle)],
+            );
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+        }
+
+        // -------- process.stdout.on(event, handler) — register a callback
+        // for the 'resize' event (#347 Phase 3). Other events fall
+        // through to the runtime's no-op (silently ignored).
+        Expr::ProcessStdoutOn { event, handler } => {
+            let event_box = lower_expr(ctx, event)?;
+            let handler_box = lower_expr(ctx, handler)?;
+            let blk = ctx.block();
+            let event_handle = unbox_str_handle(blk, &event_box);
+            let handler_handle = unbox_to_i64(blk, &handler_box);
+            blk.call_void(
+                "js_process_stdout_on",
+                &[(I64, &event_handle), (I64, &handler_handle)],
+            );
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+        }
+
+        // -------- tty.isatty(fd) (#347 Phase 3) --------
+        Expr::TtyIsAtty(fd) => {
+            let fd_box = lower_expr(ctx, fd)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_tty_isatty", &[(DOUBLE, &fd_box)]))
+        }
+
+        // -------- process.std{in,out,err}.isTTY (#347 Phase 3) --------
+        Expr::ProcessStdinIsTTY => Ok(ctx.block().call(DOUBLE, "js_process_stdin_isatty", &[])),
+        Expr::ProcessStdoutIsTTY => Ok(ctx.block().call(DOUBLE, "js_process_stdout_isatty", &[])),
+        Expr::ProcessStderrIsTTY => Ok(ctx.block().call(DOUBLE, "js_process_stderr_isatty", &[])),
+
+        // -------- process.stdout.columns / .rows (#347 Phase 3) --------
+        Expr::ProcessStdoutColumns => {
+            Ok(ctx.block().call(DOUBLE, "js_process_stdout_columns", &[]))
+        }
+        Expr::ProcessStdoutRows => Ok(ctx.block().call(DOUBLE, "js_process_stdout_rows", &[])),
+
+        // -------- performance.now() — sub-millisecond resolution --------
+        Expr::PerformanceNow => Ok(ctx.block().call(DOUBLE, "js_performance_now", &[])),
+
+        // -------- async-step iter-result scratch helpers --------
+        // Emitted only by the generator transform for `was_plain_async`
+        // functions. The state machine writes (value, done) via
+        // `IterResultSet`; the async-step driver reads them back via
+        // `IterResultGetValue` / `IterResultGetDone`. Eliminates the
+        // per-await `{value, done}` heap alloc on the hot path.
+        Expr::IterResultSet(value, done) => {
+            let v_box = lower_expr(ctx, value)?;
+            let done_str = if *done { "1" } else { "0" };
+            let blk = ctx.block();
+            Ok(blk.call(
+                DOUBLE,
+                "js_iter_result_set",
+                &[(DOUBLE, &v_box), (I32, done_str)],
+            ))
+        }
+        Expr::IterResultGetValue => Ok(ctx.block().call(DOUBLE, "js_iter_result_get_value", &[])),
+        Expr::IterResultGetDone => {
+            // Returns NaN-boxed bool (TAG_TRUE / TAG_FALSE) directly,
+            // so it can be used in any conditional / property context
+            // without a separate bool-to-JSValue conversion.
+            Ok(ctx.block().call(DOUBLE, "js_iter_result_get_done", &[]))
+        }
+
+        // -------- Optimized async-step chain (perf hot path) --------
+        // Equivalent to `Promise.resolve(value).then(v => step(v, false), e => step(e, true))`
+        // but skips the wrapper-arrow allocations + dispatches.
+        Expr::AsyncStepChain {
+            value,
+            step_closure,
+        } => {
+            let value_box = lower_expr(ctx, value)?;
+            let step_box = lower_expr(ctx, step_closure)?;
+            let blk = ctx.block();
+            let step_handle = unbox_to_i64(blk, &step_box);
+            let promise_handle = blk.call(
+                I64,
+                "js_async_step_chain",
+                &[(DOUBLE, &value_box), (I64, &step_handle)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise_handle))
+        }
+
+        // -------- Optimized async-step done (perf hot path) --------
+        // Equivalent to `Promise.resolve(value)` at the state-machine
+        // terminal position, but reuses the in-flight `next` Promise
+        // (stashed in INLINE_TRAP_NEXT by the microtask runner) when
+        // step is being dispatched. Saves one fresh Promise alloc per
+        // async function call. Gated by step_closure matching
+        // CURRENT_STEP_CLOSURE so nested async-fn calls can't accidentally
+        // resolve the outer activation's `next`.
+        Expr::AsyncStepDone {
+            value,
+            step_closure,
+        } => {
+            let value_box = lower_expr(ctx, value)?;
+            let step_box = lower_expr(ctx, step_closure)?;
+            let blk = ctx.block();
+            let step_handle = unbox_to_i64(blk, &step_box);
+            let promise_handle = blk.call(
+                I64,
+                "js_async_step_done",
+                &[(DOUBLE, &value_box), (I64, &step_handle)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise_handle))
+        }
+
+        // -------- #691 Phase 2: current step closure (self-ref) ----
+        // Reads the live step closure pointer from INLINE_TRAP.current_step
+        // TLS and NaN-boxes it. Only safe inside a step body or any
+        // code wrapped by js_async_first_call.
+        Expr::CurrentStepClosure => {
+            let blk = ctx.block();
+            let step_handle = blk.call(I64, "js_get_current_step_closure", &[]);
+            Ok(nanbox_pointer_inline(blk, &step_handle))
+        }
+
+        // -------- #691 Phase 2: first invocation with TLS setup -----
+        // Runtime helper takes the NaN-boxed closure pointer, saves
+        // the previous INLINE_TRAP, sets current_step, calls
+        // js_closure_call2(closure, undefined, false), then restores.
+        Expr::AsyncFirstCall { step_closure } => {
+            let step_box = lower_expr(ctx, step_closure)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_async_first_call", &[(DOUBLE, &step_box)]))
+        }
+
+        // -------- Object.getOwnPropertyNames(obj) --------
+        // Returns ALL own keys (including non-enumerable ones from
+        // defineProperty), unlike Object.keys which skips them.
+        Expr::ObjectGetOwnPropertyNames(obj) => {
+            let obj_box = lower_expr(ctx, obj)?;
+            let blk = ctx.block();
+            let arr_box = blk.call(
+                DOUBLE,
+                "js_object_get_own_property_names",
+                &[(DOUBLE, &obj_box)],
+            );
+            Ok(arr_box)
+        }
+
+        // -------- Math.hypot(...values) --------
+        // Routes through `js_math_hypot(a, b)` which uses Rust's
+        // `f64::hypot` (numerically stable for very large / very small
+        // operands vs. the naive sqrt(a² + b²)). For 3+ args we chain:
+        // hypot(a, b, c) ≡ hypot(hypot(a, b), c).
+        Expr::MathHypot(values) => {
+            if values.is_empty() {
+                return Ok(double_literal(0.0));
+            }
+            if values.len() == 1 {
+                let v = lower_expr(ctx, &values[0])?;
+                // Math.hypot(x) = |x|
+                return Ok(ctx.block().call(DOUBLE, "llvm.fabs.f64", &[(DOUBLE, &v)]));
+            }
+            let mut acc = lower_expr(ctx, &values[0])?;
+            for v in &values[1..] {
+                let rhs = lower_expr(ctx, v)?;
+                let blk = ctx.block();
+                acc = blk.call(DOUBLE, "js_math_hypot", &[(DOUBLE, &acc), (DOUBLE, &rhs)]);
+            }
+            Ok(acc)
+        }
+
+        // -------- RegExpExecGroups — reads thread-local from the last exec() call --------
+        // Returns an ObjectHeader* (as raw i64); NaN-box with POINTER_TAG so
+        // `lastExecResult.groups.year` reaches the generic object field path.
+        // When no named groups were matched the runtime returns 0, which we
+        // surface as TAG_UNDEFINED so `groups?.year` and `groups === undefined`
+        // probes behave correctly.
+        Expr::RegExpExecGroups => {
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_regexp_exec_get_groups", &[]);
+            let is_zero = blk.icmp_eq(I64, &handle, "0");
+            let ptr_boxed = nanbox_pointer_inline(ctx.block(), &handle);
+            let ptr_bits = ctx.block().bitcast_double_to_i64(&ptr_boxed);
+            let selected = ctx.block().select(
+                I1,
+                &is_zero,
+                I64,
+                crate::nanbox::TAG_UNDEFINED_I64,
+                &ptr_bits,
+            );
+            Ok(ctx.block().bitcast_i64_to_double(&selected))
+        }
+
+        // -------- set.clear() --------
+        _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}

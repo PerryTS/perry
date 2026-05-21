@@ -1,0 +1,543 @@
+//! Buffer / Uint8Array runtime method dispatch (issue #639 followup).
+//!
+//! Split out of `object/mod.rs` (issue #1103). Pure relocation — no
+//! logic changes.
+
+use super::*;
+
+/// Dispatch a Buffer / Uint8Array instance method call. Receiver address
+/// is the raw heap pointer (already stripped of NaN-box tags). Routes
+/// the Node-style numeric read/write/search/swap method family through
+/// `crate::buffer` helpers; unknown methods return undefined.
+/// Issue #639 followup: list of method names recognized by `dispatch_buffer_method`.
+/// Used by `js_object_get_field_by_name`'s Buffer arm to decide whether a
+/// non-length property read should synthesize a bound-method closure (so
+/// duck-type tests like `typeof v.readUInt8 === "function"` pass and a
+/// subsequent call dispatches through `js_native_call_method`).
+///
+/// Keep this list aligned with the `match method_name` arms below — every
+/// arm there should be reachable from a method-as-value read.
+pub fn is_buffer_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "toString"
+            | "slice"
+            | "subarray"
+            | "copy"
+            | "write"
+            | "fill"
+            | "equals"
+            | "compare"
+            | "indexOf"
+            | "lastIndexOf"
+            | "includes"
+            | "at"
+            | "swap16"
+            | "swap32"
+            | "swap64"
+            // Object.prototype methods exposed on Buffer instances so
+            // safer-buffer's `if (buffer.hasOwnProperty(...))` probe (and
+            // similar duck-type tests in express / body-parser dependents)
+            // resolve to a callable, not undefined. Without these,
+            // `typeof buf.hasOwnProperty` is `"undefined"` and the
+            // subsequent invocation throws "buffer.hasOwnProperty is not
+            // a function" at express startup.
+            | "hasOwnProperty"
+            | "propertyIsEnumerable"
+            | "valueOf"
+            | "isPrototypeOf"
+            | "toLocaleString"
+            | "readUInt8"
+            | "readUint8"
+            | "readInt8"
+            | "readUInt16BE"
+            | "readUint16BE"
+            | "readUInt16LE"
+            | "readUint16LE"
+            | "readInt16BE"
+            | "readInt16LE"
+            | "readUInt32BE"
+            | "readUint32BE"
+            | "readUInt32LE"
+            | "readUint32LE"
+            | "readInt32BE"
+            | "readInt32LE"
+            | "readFloatBE"
+            | "readFloatLE"
+            | "readDoubleBE"
+            | "readDoubleLE"
+            | "readBigInt64BE"
+            | "readBigInt64LE"
+            | "readBigUInt64BE"
+            | "readBigUint64BE"
+            | "readBigUInt64LE"
+            | "readBigUint64LE"
+            | "readUIntBE"
+            | "readUintBE"
+            | "readUIntLE"
+            | "readUintLE"
+            | "readIntBE"
+            | "readIntLE"
+            | "writeUInt8"
+            | "writeUint8"
+            | "writeInt8"
+            | "writeUInt16BE"
+            | "writeUint16BE"
+            | "writeUInt16LE"
+            | "writeUint16LE"
+            | "writeInt16BE"
+            | "writeInt16LE"
+            | "writeUInt32BE"
+            | "writeUint32BE"
+            | "writeUInt32LE"
+            | "writeUint32LE"
+            | "writeInt32BE"
+            | "writeInt32LE"
+            | "writeFloatBE"
+            | "writeFloatLE"
+            | "writeDoubleBE"
+            | "writeDoubleLE"
+            | "writeBigInt64BE"
+            | "writeBigInt64LE"
+            | "writeBigUInt64BE"
+            | "writeBigUint64BE"
+            | "writeBigUInt64LE"
+            | "writeBigUint64LE"
+            | "writeUIntBE"
+            | "writeUintBE"
+            | "writeUIntLE"
+            | "writeUintLE"
+            | "writeIntBE"
+            | "writeIntLE"
+    )
+}
+
+pub unsafe fn dispatch_buffer_method(
+    addr: usize,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let buf_f64 = f64::from_bits(JSValue::pointer(addr as *mut u8).bits());
+    let buf_ptr = addr as *mut crate::buffer::BufferHeader;
+    let args = if !args_ptr.is_null() && args_len > 0 {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    } else {
+        &[]
+    };
+    let arg_i32 = |i: usize| -> i32 {
+        if i < args.len() {
+            args[i] as i32
+        } else {
+            0
+        }
+    };
+    let arg_or_zero = |i: usize| -> f64 {
+        if i < args.len() {
+            args[i]
+        } else {
+            0.0
+        }
+    };
+    let i32_bool = |b: i32| f64::from_bits(JSValue::bool(b != 0).bits());
+    let i32_num = |n: i32| n as f64;
+
+    match method_name {
+        "length" => crate::buffer::js_buffer_length(buf_ptr) as f64,
+        "toString" => {
+            let enc = if !args.is_empty() {
+                crate::buffer::js_encoding_tag_from_value(args[0])
+            } else {
+                0
+            };
+            let str_ptr = if args.len() >= 2 {
+                let len = (*buf_ptr).length as i32;
+                let start = arg_i32(1);
+                let end = if args.len() >= 3 { arg_i32(2) } else { len };
+                crate::buffer::js_buffer_to_string_range(buf_ptr, enc, start, end)
+            } else {
+                crate::buffer::js_buffer_to_string(buf_ptr, enc)
+            };
+            f64::from_bits(JSValue::string_ptr(str_ptr).bits())
+        }
+        "slice" | "subarray" => {
+            let len = (*buf_ptr).length as i32;
+            let start = arg_i32(0);
+            let end = if args.len() >= 2 { arg_i32(1) } else { len };
+            let result = crate::buffer::js_buffer_slice(buf_ptr, start, end);
+            f64::from_bits(JSValue::pointer(result as *mut u8).bits())
+        }
+        // `src.copy(dst, targetStart?, sourceStart?, sourceEnd?)` — mirrors
+        // Node's Buffer.prototype.copy. Returns the number of bytes copied.
+        "copy" if !args.is_empty() => {
+            let dst_bits = args[0].to_bits();
+            let dst_addr = if (dst_bits >> 48) >= 0x7FF8 {
+                dst_bits & 0x0000_FFFF_FFFF_FFFF
+            } else {
+                dst_bits
+            };
+            let dst_ptr = dst_addr as *mut crate::buffer::BufferHeader;
+            let target_start = if args.len() >= 2 { arg_i32(1) } else { 0 };
+            let source_start = if args.len() >= 3 { arg_i32(2) } else { 0 };
+            let source_end = if args.len() >= 4 {
+                arg_i32(3)
+            } else {
+                (*buf_ptr).length as i32
+            };
+            crate::buffer::js_buffer_copy(buf_ptr, dst_ptr, target_start, source_start, source_end)
+                as f64
+        }
+        // `buf.write(string, offset?, length?, encoding?)` — writes the
+        // utf8/hex/base64 encoding of `string` into `buf` at `offset`.
+        // Returns the number of bytes written.
+        "write" if !args.is_empty() => {
+            let str_bits = args[0].to_bits();
+            let str_addr = if (str_bits >> 48) >= 0x7FF8 {
+                str_bits & 0x0000_FFFF_FFFF_FFFF
+            } else {
+                str_bits
+            };
+            let str_ptr = str_addr as *const crate::string::StringHeader;
+            let offset = if args.len() >= 2 { arg_i32(1) } else { 0 };
+            // Detect trailing encoding arg (string) vs length arg (number).
+            // Common forms: write(str), write(str, offset), write(str, offset, enc),
+            // write(str, offset, length, enc).
+            let enc = if args.len() >= 4 {
+                crate::buffer::js_encoding_tag_from_value(args[3])
+            } else if args.len() >= 3 {
+                crate::buffer::js_encoding_tag_from_value(args[2])
+            } else {
+                0
+            };
+            crate::buffer::js_buffer_write(buf_ptr, str_ptr, offset, enc) as f64
+        }
+        "fill" => {
+            let len = (*buf_ptr).length as i32;
+            let start = if args.len() >= 2 { arg_i32(1) } else { 0 };
+            let end = if args.len() >= 3 { arg_i32(2) } else { len };
+            let result = crate::buffer::js_buffer_fill_range(buf_ptr, arg_i32(0), start, end);
+            f64::from_bits(JSValue::pointer(result as *mut u8).bits())
+        }
+        "equals" => {
+            if args.is_empty() {
+                return i32_bool(0);
+            }
+            let other_bits = args[0].to_bits();
+            let other_addr = if (other_bits >> 48) >= 0x7FF8 {
+                other_bits & 0x0000_FFFF_FFFF_FFFF
+            } else {
+                other_bits
+            };
+            let other = other_addr as *const crate::buffer::BufferHeader;
+            i32_bool(crate::buffer::js_buffer_equals(buf_ptr, other))
+        }
+        "compare" => {
+            if args.is_empty() {
+                return 0.0;
+            }
+            let other_bits = args[0].to_bits();
+            let other_addr = if (other_bits >> 48) >= 0x7FF8 {
+                other_bits & 0x0000_FFFF_FFFF_FFFF
+            } else {
+                other_bits
+            };
+            let other = other_addr as *const crate::buffer::BufferHeader;
+            i32_num(crate::buffer::js_buffer_compare(buf_ptr, other))
+        }
+        "indexOf" => i32_num(crate::buffer::js_buffer_index_of(
+            buf_f64,
+            arg_or_zero(0),
+            arg_i32(1),
+        )),
+        "lastIndexOf" => {
+            let len = (*buf_ptr).length as i32;
+            let start = if args.len() >= 2 { arg_i32(1) } else { len - 1 };
+            i32_num(crate::buffer::js_buffer_last_index_of(
+                buf_f64,
+                arg_or_zero(0),
+                start,
+            ))
+        }
+        "includes" => i32_bool(crate::buffer::js_buffer_includes(
+            buf_f64,
+            arg_or_zero(0),
+            arg_i32(1),
+        )),
+        // `buf.at(i)` — supports negative indices like Array.prototype.at.
+        "at" => {
+            let len = (*buf_ptr).length as i32;
+            let mut idx = arg_i32(0);
+            if idx < 0 {
+                idx += len;
+            }
+            if idx < 0 || idx >= len {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            crate::buffer::js_buffer_get(buf_ptr, idx) as f64
+        }
+        "swap16" => {
+            crate::buffer::js_buffer_swap16(buf_f64);
+            buf_f64
+        }
+        "swap32" => {
+            crate::buffer::js_buffer_swap32(buf_f64);
+            buf_f64
+        }
+        "swap64" => {
+            crate::buffer::js_buffer_swap64(buf_f64);
+            buf_f64
+        }
+        // Synthetic method emitted by lower.rs for `crypto.getRandomValues(buf)`.
+        "$$cryptoFillRandom" => crate::buffer::js_buffer_fill_random(buf_f64),
+        "readUInt8" | "readUint8" => crate::buffer::js_buffer_read_uint8(buf_f64, arg_i32(0)),
+        "readInt8" => crate::buffer::js_buffer_read_int8(buf_f64, arg_i32(0)),
+        "readUInt16BE" | "readUint16BE" => {
+            crate::buffer::js_buffer_read_uint16_be(buf_f64, arg_i32(0))
+        }
+        "readUInt16LE" | "readUint16LE" => {
+            crate::buffer::js_buffer_read_uint16_le(buf_f64, arg_i32(0))
+        }
+        "readInt16BE" => crate::buffer::js_buffer_read_int16_be(buf_f64, arg_i32(0)),
+        "readInt16LE" => crate::buffer::js_buffer_read_int16_le(buf_f64, arg_i32(0)),
+        "readUInt32BE" | "readUint32BE" => {
+            crate::buffer::js_buffer_read_uint32_be(buf_f64, arg_i32(0))
+        }
+        "readUInt32LE" | "readUint32LE" => {
+            crate::buffer::js_buffer_read_uint32_le(buf_f64, arg_i32(0))
+        }
+        "readInt32BE" => crate::buffer::js_buffer_read_int32_be(buf_f64, arg_i32(0)),
+        "readInt32LE" => crate::buffer::js_buffer_read_int32_le(buf_f64, arg_i32(0)),
+        "readFloatBE" => crate::buffer::js_buffer_read_float_be(buf_f64, arg_i32(0)),
+        "readFloatLE" => crate::buffer::js_buffer_read_float_le(buf_f64, arg_i32(0)),
+        "readDoubleBE" => crate::buffer::js_buffer_read_double_be(buf_f64, arg_i32(0)),
+        "readDoubleLE" => crate::buffer::js_buffer_read_double_le(buf_f64, arg_i32(0)),
+        "readBigInt64BE" => crate::buffer::js_buffer_read_bigint64_be(buf_f64, arg_i32(0)),
+        "readBigInt64LE" => crate::buffer::js_buffer_read_bigint64_le(buf_f64, arg_i32(0)),
+        "readBigUInt64BE" | "readBigUint64BE" => {
+            crate::buffer::js_buffer_read_biguint64_be(buf_f64, arg_i32(0))
+        }
+        "readBigUInt64LE" | "readBigUint64LE" => {
+            crate::buffer::js_buffer_read_biguint64_le(buf_f64, arg_i32(0))
+        }
+        "writeUInt8" | "writeUint8" => {
+            crate::buffer::js_buffer_write_uint8(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 1) as f64
+        }
+        "writeInt8" => {
+            crate::buffer::js_buffer_write_int8(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 1) as f64
+        }
+        "writeUInt16BE" | "writeUint16BE" => {
+            crate::buffer::js_buffer_write_uint16_be(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 2) as f64
+        }
+        "writeUInt16LE" | "writeUint16LE" => {
+            crate::buffer::js_buffer_write_uint16_le(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 2) as f64
+        }
+        "writeInt16BE" => {
+            crate::buffer::js_buffer_write_int16_be(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 2) as f64
+        }
+        "writeInt16LE" => {
+            crate::buffer::js_buffer_write_int16_le(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 2) as f64
+        }
+        "writeUInt32BE" | "writeUint32BE" => {
+            crate::buffer::js_buffer_write_uint32_be(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 4) as f64
+        }
+        "writeUInt32LE" | "writeUint32LE" => {
+            crate::buffer::js_buffer_write_uint32_le(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 4) as f64
+        }
+        "writeInt32BE" => {
+            crate::buffer::js_buffer_write_int32_be(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 4) as f64
+        }
+        "writeInt32LE" => {
+            crate::buffer::js_buffer_write_int32_le(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 4) as f64
+        }
+        "writeFloatBE" => {
+            crate::buffer::js_buffer_write_float_be(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 4) as f64
+        }
+        "writeFloatLE" => {
+            crate::buffer::js_buffer_write_float_le(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 4) as f64
+        }
+        "writeDoubleBE" => {
+            crate::buffer::js_buffer_write_double_be(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 8) as f64
+        }
+        "writeDoubleLE" => {
+            crate::buffer::js_buffer_write_double_le(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 8) as f64
+        }
+        "writeBigInt64BE" => {
+            crate::buffer::js_buffer_write_bigint64_be(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 8) as f64
+        }
+        "writeBigInt64LE" => {
+            crate::buffer::js_buffer_write_bigint64_le(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 8) as f64
+        }
+        "writeBigUInt64BE" | "writeBigUint64BE" => {
+            crate::buffer::js_buffer_write_biguint64_be(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 8) as f64
+        }
+        "writeBigUInt64LE" | "writeBigUint64LE" => {
+            crate::buffer::js_buffer_write_biguint64_le(buf_f64, arg_or_zero(0), arg_i32(1));
+            (arg_i32(1) + 8) as f64
+        }
+        // Variable byteLength forms (Node-spec: byteLength 1..=6).
+        // ObjectId / BSON drivers rely on these for the 3-byte counter.
+        "readUIntBE" | "readUintBE" => {
+            crate::buffer::js_buffer_read_uint_be(buf_f64, arg_i32(0), arg_i32(1))
+        }
+        "readUIntLE" | "readUintLE" => {
+            crate::buffer::js_buffer_read_uint_le(buf_f64, arg_i32(0), arg_i32(1))
+        }
+        "readIntBE" => crate::buffer::js_buffer_read_int_be(buf_f64, arg_i32(0), arg_i32(1)),
+        "readIntLE" => crate::buffer::js_buffer_read_int_le(buf_f64, arg_i32(0), arg_i32(1)),
+        "writeUIntBE" | "writeUintBE" => {
+            crate::buffer::js_buffer_write_uint_be(buf_f64, arg_or_zero(0), arg_i32(1), arg_i32(2));
+            (arg_i32(1) + arg_i32(2)) as f64
+        }
+        "writeUIntLE" | "writeUintLE" => {
+            crate::buffer::js_buffer_write_uint_le(buf_f64, arg_or_zero(0), arg_i32(1), arg_i32(2));
+            (arg_i32(1) + arg_i32(2)) as f64
+        }
+        "writeIntBE" => {
+            crate::buffer::js_buffer_write_int_be(buf_f64, arg_or_zero(0), arg_i32(1), arg_i32(2));
+            (arg_i32(1) + arg_i32(2)) as f64
+        }
+        "writeIntLE" => {
+            crate::buffer::js_buffer_write_int_le(buf_f64, arg_or_zero(0), arg_i32(1), arg_i32(2));
+            (arg_i32(1) + arg_i32(2)) as f64
+        }
+        // ── Object.prototype fallbacks on Buffer instances ──
+        // safer-buffer (loaded by express) probes Buffer instances with
+        // `if (buffer.hasOwnProperty(...))`. Pre-fix every non-buffer-specific
+        // method read returned undefined, so the call threw
+        // "buffer.hasOwnProperty is not a function". Mirror the generic
+        // ObjectHeader behaviour wired up in PR #978: hasOwnProperty checks
+        // numeric indices against the buffer length (Node spec — indexed
+        // bytes are own properties, `length` is on the prototype), and
+        // the remaining Object.prototype methods get spec-shaped stubs.
+        "hasOwnProperty" => {
+            let key_is_own = if args.is_empty() {
+                false
+            } else {
+                let key_bits = args[0].to_bits();
+                if (key_bits >> 48) == 0x7FFF {
+                    // string key
+                    let sptr =
+                        (key_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::string::StringHeader;
+                    if sptr.is_null() {
+                        false
+                    } else {
+                        let slen = (*sptr).byte_len as usize;
+                        let sdata =
+                            (sptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let bytes = std::slice::from_raw_parts(sdata, slen);
+                        if let Ok(s) = std::str::from_utf8(bytes) {
+                            // Only numeric-string indices that are in bounds
+                            // count as own properties for Buffer/Uint8Array.
+                            if let Ok(idx) = s.parse::<u32>() {
+                                let buf_len = (*buf_ptr).length as u32;
+                                idx < buf_len
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                } else if (key_bits >> 48) == 0x7FFE {
+                    // int32 key
+                    let idx = (key_bits & 0xFFFF_FFFF) as i32;
+                    let buf_len = (*buf_ptr).length as i32;
+                    idx >= 0 && idx < buf_len
+                } else if !(0x7FF8..=0x7FFF).contains(&(key_bits >> 48)) {
+                    // raw f64 numeric key (NaN-boxing tags occupy 0x7FF8..=0x7FFF)
+                    let n = args[0];
+                    if n.is_finite() && n.fract() == 0.0 && n >= 0.0 {
+                        let idx = n as u32;
+                        let buf_len = (*buf_ptr).length as u32;
+                        idx < buf_len
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+            i32_bool(key_is_own as i32)
+        }
+        "propertyIsEnumerable" => {
+            // Same key→own check as hasOwnProperty; indexed bytes on a
+            // Buffer are enumerable own data properties.
+            let key_is_own = if args.is_empty() {
+                false
+            } else {
+                let key_bits = args[0].to_bits();
+                if (key_bits >> 48) == 0x7FFF {
+                    let sptr =
+                        (key_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::string::StringHeader;
+                    if sptr.is_null() {
+                        false
+                    } else {
+                        let slen = (*sptr).byte_len as usize;
+                        let sdata =
+                            (sptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let bytes = std::slice::from_raw_parts(sdata, slen);
+                        if let Ok(s) = std::str::from_utf8(bytes) {
+                            if let Ok(idx) = s.parse::<u32>() {
+                                let buf_len = (*buf_ptr).length as u32;
+                                idx < buf_len
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                } else if (key_bits >> 48) == 0x7FFE {
+                    let idx = (key_bits & 0xFFFF_FFFF) as i32;
+                    let buf_len = (*buf_ptr).length as i32;
+                    idx >= 0 && idx < buf_len
+                } else if !args[0].is_nan() {
+                    let n = args[0];
+                    if n.is_finite() && n.fract() == 0.0 && n >= 0.0 {
+                        let idx = n as u32;
+                        let buf_len = (*buf_ptr).length as u32;
+                        idx < buf_len
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+            i32_bool(key_is_own as i32)
+        }
+        // `buf.valueOf()` returns the Buffer itself in Node (Uint8Array
+        // inherits the no-op valueOf from Object.prototype, but for the
+        // duck-test usage in safer-buffer/express-graph the receiver
+        // round-trip is what matters).
+        "valueOf" => f64::from_bits(JSValue::pointer(addr as *mut u8).bits()),
+        // `buf.toLocaleString()` — Node delegates to toString() with no
+        // args, which yields the utf8 decode. Match that.
+        "toLocaleString" => {
+            let str_ptr = crate::buffer::js_buffer_to_string(buf_ptr, 0);
+            f64::from_bits(JSValue::string_ptr(str_ptr).bits())
+        }
+        // `buf.isPrototypeOf(other)` — buffers aren't prototype objects in
+        // user code, so this is always false (matches Node when `buf` is
+        // a Buffer instance rather than `Buffer.prototype`).
+        "isPrototypeOf" => i32_bool(0),
+        _ => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}

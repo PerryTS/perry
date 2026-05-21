@@ -1,0 +1,330 @@
+//! ArrayIsArray..ProcessEnv (arrays + buffers + paths).
+//!
+//! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
+//! Pure mechanical move — match arm bodies are verbatim copies, called from
+//! `lower_expr`'s outer dispatch.
+
+use anyhow::{anyhow, bail, Result};
+#[allow(unused_imports)]
+use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
+#[allow(unused_imports)]
+use perry_types::Type as HirType;
+
+#[allow(unused_imports)]
+use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
+#[allow(unused_imports)]
+use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
+#[allow(unused_imports)]
+use crate::lower_string_method::{
+    flatten_string_add_chain, lower_string_coerce_concat, lower_string_concat,
+    lower_string_concat_chain, lower_string_self_append,
+};
+#[allow(unused_imports)]
+use crate::nanbox::{double_literal, POINTER_MASK_I64};
+#[allow(unused_imports)]
+use crate::type_analysis::{
+    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
+    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+};
+#[allow(unused_imports)]
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+
+#[allow(unused_imports)]
+use super::{
+    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
+    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
+    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
+    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
+    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
+    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
+    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
+    I18nLowerCtx,
+};
+
+pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::ArrayIsArray(o) => {
+            // Fast path: static type is definitively array → emit
+            // TAG_TRUE at compile time. Slow path: indeterminate
+            // type (Any / Unknown / no annotation / Union including
+            // a non-array variant) → emit runtime call to
+            // `js_array_is_array`, which correctly handles
+            // JSON.parse results, closure-captured values, function
+            // returns typed `any`, and lazy arrays
+            // (GC_TYPE_LAZY_ARRAY). Emitting TAG_FALSE as a compile-
+            // time constant (the previous behavior) was wrong
+            // whenever the operand's static type was Any: the user's
+            // `Array.isArray(JSON.parse("[...]"))` would always
+            // return false despite being a real array at runtime.
+            //
+            // The fast-path TRUE check used to delegate to
+            // `is_array_expr`, but that helper deliberately treats a
+            // Union as array-typed when ANY variant is Array — which
+            // is correct for routing `.length` / `.push` dispatch on
+            // `T[] | null` after a truthy narrow, but wrong for
+            // `Array.isArray`: a parameter typed `number | number[]`
+            // would constant-fold to TAG_TRUE for every call site,
+            // making the if-guard always pick the array branch even
+            // when the runtime value is a number (issue #324). Use a
+            // strict match here instead — only pure `Array(_)` /
+            // `Tuple(_)` types short-circuit; anything Union-shaped
+            // falls through to the runtime.
+            let v = lower_expr(ctx, o)?;
+            if let Some(ty) = crate::type_analysis::static_type_of(ctx, o) {
+                if matches!(
+                    ty,
+                    perry_types::Type::Array(_) | perry_types::Type::Tuple(_)
+                ) {
+                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_TRUE)));
+                }
+                // Definitively not an array: emit TAG_FALSE. Leaves
+                // numeric / string / boolean literals and known
+                // object-class instances on the fast path.
+                let definitely_not_array = matches!(
+                    ty,
+                    perry_types::Type::Number
+                        | perry_types::Type::Int32
+                        | perry_types::Type::String
+                        | perry_types::Type::Boolean
+                        | perry_types::Type::Null
+                        | perry_types::Type::Void
+                        | perry_types::Type::BigInt
+                        | perry_types::Type::Symbol
+                );
+                if definitely_not_array {
+                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_FALSE)));
+                }
+            }
+            // Indeterminate — dispatch to runtime.
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_array_is_array", &[(DOUBLE, &v)]))
+        }
+
+        // -------- new AggregateError(errors, message) --------
+        // Calls real runtime `js_aggregateerror_new(errors_handle, msg_handle)`
+        // which stores both the errors array and message in ErrorHeader.
+        Expr::AggregateErrorNew { errors, message } => {
+            let errors_box = lower_expr(ctx, errors)?;
+            let m = lower_expr(ctx, message)?;
+            let blk = ctx.block();
+            let errors_handle = unbox_to_i64(blk, &errors_box);
+            let msg_handle = unbox_to_i64(blk, &m);
+            let err_handle = blk.call(
+                I64,
+                "js_aggregateerror_new",
+                &[(I64, &errors_handle), (I64, &msg_handle)],
+            );
+            Ok(nanbox_pointer_inline(blk, &err_handle))
+        }
+
+        // -------- RegExpLastIndex — regex.lastIndex getter --------
+        Expr::RegExpLastIndex(r) => {
+            let r_box = lower_expr(ctx, r)?;
+            let blk = ctx.block();
+            let r_handle = unbox_to_i64(blk, &r_box);
+            Ok(blk.call(DOUBLE, "js_regexp_get_last_index", &[(I64, &r_handle)]))
+        }
+
+        // -------- BufferConcat stub --------
+        // -------- BufferConcat --------
+        // `Buffer.concat([buf1, buf2, ...])`. Lower the array of buffer
+        // pointers and pass to `js_buffer_concat`. The runtime walks the
+        // array, summing lengths and copying bytes into a fresh buffer.
+        Expr::BufferConcat(operand) => {
+            let arr_box = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let buf_handle = blk.call(I64, "js_buffer_concat", &[(I64, &arr_handle)]);
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // #1177: `buf.slice(start?, end?)` on a statically buffer-producing
+        // receiver — emitted by the HIR fold at `expr_call/mod.rs:5396` when
+        // `.slice` is called on `BufferConcat` / `BufferFrom` / a chained
+        // `BufferSlice`. Pre-fix the chained `Buffer.concat(c).slice(0,8)`
+        // shape fell through to generic dynamic dispatch which routed
+        // `.slice` through String.slice semantics on the NaN-boxed Buffer
+        // pointer — producing a "string" with length=8 and all bytes empty.
+        // Folding to `Expr::BufferSlice` here calls `js_buffer_slice` (which
+        // ALWAYS copies bytes via `ptr::copy_nonoverlapping` into a freshly
+        // allocated Buffer registered in BUFFER_REGISTRY) so the result has
+        // its own backing storage independent of the parent's lifetime.
+        Expr::BufferSlice { buffer, start, end } => {
+            let buf_box = lower_expr(ctx, buffer)?;
+            let blk = ctx.block();
+            let buf_handle = unbox_to_i64(blk, &buf_box);
+            // Default start=0, end=buf.length. `js_buffer_slice` itself
+            // handles end-clamping via `.min(len)`, so we can pass i32::MAX
+            // when end is omitted to mean "to the end" — matches how the
+            // Node API treats `buf.slice(start)` (no end → to the end).
+            let start_box = match start {
+                Some(e) => lower_expr(ctx, e)?,
+                None => double_literal(0.0),
+            };
+            let end_box = match end {
+                Some(e) => lower_expr(ctx, e)?,
+                None => double_literal(i32::MAX as f64),
+            };
+            let blk = ctx.block();
+            let start_i32 = blk.fptosi(DOUBLE, &start_box, I32);
+            let end_i32 = blk.fptosi(DOUBLE, &end_box, I32);
+            let result = blk.call(
+                I64,
+                "js_buffer_slice",
+                &[(I64, &buf_handle), (I32, &start_i32), (I32, &end_i32)],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
+
+        // -------- BufferIsBuffer --------
+        // `Buffer.isBuffer(x)`. Runtime returns i32 (0/1); wrap as NaN-boxed
+        // boolean. `js_buffer_is_buffer` already strips NaN-box tags and
+        // checks the BUFFER_REGISTRY, so any value type is safe to pass.
+        Expr::BufferIsBuffer(operand) => {
+            let v_box = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            let v_handle = unbox_to_i64(blk, &v_box);
+            let i32_result = blk.call(I32, "js_buffer_is_buffer", &[(I64, &v_handle)]);
+            Ok(i32_bool_to_nanbox(blk, &i32_result))
+        }
+
+        // -------- BufferIsEncoding --------
+        Expr::BufferIsEncoding(operand) => {
+            let v_box = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            let i32_result = blk.call(I32, "js_buffer_is_encoding", &[(DOUBLE, &v_box)]);
+            Ok(i32_bool_to_nanbox(blk, &i32_result))
+        }
+
+        // -------- StaticPluginResolve stub --------
+        Expr::StaticPluginResolve(_) => Ok(double_literal(0.0)),
+
+        // -------- More cheap stubs --------
+        Expr::PathNormalize(p) => {
+            let p_box = lower_expr(ctx, p)?;
+            let blk = ctx.block();
+            let p_handle = unbox_to_i64(blk, &p_box);
+            let result = blk.call(I64, "js_path_normalize", &[(I64, &p_handle)]);
+            Ok(nanbox_string_inline(blk, &result))
+        }
+        Expr::PathResolve(p) => {
+            let p_box = lower_expr(ctx, p)?;
+            let blk = ctx.block();
+            let p_handle = unbox_to_i64(blk, &p_box);
+            let result = blk.call(I64, "js_path_resolve", &[(I64, &p_handle)]);
+            Ok(nanbox_string_inline(blk, &result))
+        }
+        Expr::ObjectCreate(p) => {
+            let v = lower_expr(ctx, p)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_object_create", &[(DOUBLE, &v)]))
+        }
+        Expr::MathClz32(o) => {
+            let v = lower_expr(ctx, o)?;
+            Ok(ctx.block().call(DOUBLE, "js_math_clz32", &[(DOUBLE, &v)]))
+        }
+        Expr::FsReadFileSync(p) => {
+            // Phase H fs: call js_fs_read_file_sync which returns a
+            // raw *mut StringHeader i64. NaN-box with STRING_TAG so
+            // downstream `.length` / `===` paths can use it as a string.
+            let path_box = lower_expr(ctx, p)?;
+            let blk = ctx.block();
+            let str_handle = blk.call(I64, "js_fs_read_file_sync", &[(DOUBLE, &path_box)]);
+            Ok(nanbox_string_inline(blk, &str_handle))
+        }
+        Expr::FinalizationRegistryNew(callback) => {
+            // `new FinalizationRegistry(cb)` — allocates a wrapper object
+            // that stores the cleanup callback and an `entries` list for
+            // later register/unregister lookups. Runtime returns a raw
+            // *mut ObjectHeader (i64); NaN-box with POINTER_TAG so the
+            // value can flow through subsequent dispatch sites.
+            let cb = lower_expr(ctx, callback)?;
+            let blk = ctx.block();
+            let obj = blk.call(I64, "js_finreg_new", &[(DOUBLE, &cb)]);
+            Ok(nanbox_pointer_inline(blk, &obj))
+        }
+        Expr::FinalizationRegistryRegister {
+            registry,
+            target,
+            held,
+            token,
+        } => {
+            // `reg.register(target, held, token?)` — always returns undefined.
+            let reg = lower_expr(ctx, registry)?;
+            let tgt = lower_expr(ctx, target)?;
+            let h = lower_expr(ctx, held)?;
+            let tok = if let Some(token_expr) = token {
+                lower_expr(ctx, token_expr)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_finreg_register",
+                &[(DOUBLE, &reg), (DOUBLE, &tgt), (DOUBLE, &h), (DOUBLE, &tok)],
+            ))
+        }
+        Expr::FinalizationRegistryUnregister { registry, token } => {
+            // `reg.unregister(token)` — returns NaN-boxed boolean.
+            let reg = lower_expr(ctx, registry)?;
+            let tok = lower_expr(ctx, token)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_finreg_unregister",
+                &[(DOUBLE, &reg), (DOUBLE, &tok)],
+            ))
+        }
+        Expr::ErrorNewWithCause { message, cause } => {
+            // new Error(msg, { cause }). Runtime stores the cause
+            // on the ErrorHeader so `e.cause` returns it.
+            let msg = lower_expr(ctx, message)?;
+            let c = lower_expr(ctx, cause)?;
+            let blk = ctx.block();
+            let msg_handle = unbox_to_i64(blk, &msg);
+            let err_handle = blk.call(
+                I64,
+                "js_error_new_with_cause",
+                &[(I64, &msg_handle), (DOUBLE, &c)],
+            );
+            Ok(nanbox_pointer_inline(blk, &err_handle))
+        }
+        Expr::EnvGet(name) => {
+            // process.env.HOME -> js_getenv("HOME") -> string handle
+            let key_idx = ctx.strings.intern(name);
+            let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let blk = ctx.block();
+            let key_box = blk.load(DOUBLE, &key_handle_global);
+            let key_handle = unbox_to_i64(blk, &key_box);
+            let result = blk.call(I64, "js_getenv", &[(I64, &key_handle)]);
+            // Returns null pointer if env var doesn't exist; nanbox as
+            // string (or null) and let downstream handle it.
+            Ok(nanbox_string_inline(blk, &result))
+        }
+        Expr::EnvGetDynamic(name_expr) => {
+            let key_box = lower_expr(ctx, name_expr)?;
+            let blk = ctx.block();
+            // SSO-safe key unbox — name comes from a runtime expr (e.g.
+            // `process.env[shortName]`); `js_getenv` dereferences it as
+            // `*StringHeader`. #214 SSO bug class.
+            let key_handle = unbox_str_handle(blk, &key_box);
+            let result = blk.call(I64, "js_getenv", &[(I64, &key_handle)]);
+            Ok(nanbox_string_inline(blk, &result))
+        }
+        Expr::ProcessEnv => {
+            // `process.env` (or `globalThis.process.env`) as a value.
+            // The runtime returns an already-NaN-boxed f64 POINTER_TAG
+            // to a cached object populated from the OS environment on
+            // first call. Subsequent PropertyGet dispatch on it works
+            // via the normal object field path.
+            Ok(ctx.block().call(DOUBLE, "js_process_env", &[]))
+        }
+        _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}

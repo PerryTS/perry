@@ -1,0 +1,278 @@
+//! StaticMethodCall.
+//!
+//! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
+//! Pure mechanical move — match arm bodies are verbatim copies, called from
+//! `lower_expr`'s outer dispatch.
+
+use anyhow::{anyhow, bail, Result};
+#[allow(unused_imports)]
+use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
+#[allow(unused_imports)]
+use perry_types::Type as HirType;
+
+#[allow(unused_imports)]
+use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
+#[allow(unused_imports)]
+use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
+#[allow(unused_imports)]
+use crate::lower_string_method::{
+    flatten_string_add_chain, lower_string_coerce_concat, lower_string_concat,
+    lower_string_concat_chain, lower_string_self_append,
+};
+#[allow(unused_imports)]
+use crate::nanbox::{double_literal, POINTER_MASK_I64};
+#[allow(unused_imports)]
+use crate::type_analysis::{
+    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
+    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+};
+#[allow(unused_imports)]
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+
+#[allow(unused_imports)]
+use super::{
+    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
+    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
+    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
+    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
+    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
+    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
+    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
+    I18nLowerCtx,
+};
+
+pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::StaticMethodCall {
+            class_name,
+            method_name,
+            args,
+        } => {
+            // Built-in static methods that the runtime provides directly.
+            if class_name == "AbortSignal" && method_name == "timeout" {
+                let ms = if !args.is_empty() {
+                    lower_expr(ctx, &args[0])?
+                } else {
+                    double_literal(0.0)
+                };
+                let blk = ctx.block();
+                let signal_handle = blk.call(I64, "js_abort_signal_timeout", &[(DOUBLE, &ms)]);
+                return Ok(nanbox_pointer_inline(blk, &signal_handle));
+            }
+            let key = (class_name.clone(), method_name.clone());
+            if let Some(fn_name) = ctx.methods.get(&key).cloned() {
+                let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                for a in args {
+                    lowered.push(lower_expr(ctx, a)?);
+                }
+                // Issue #894: static methods with synthetic `...arguments`
+                // rest params (or any user-declared rest param) need their
+                // trailing args bundled into an array. Without this,
+                // `Cls.pipe(a, b)` on a body that reads `arguments`
+                // emits a 2-scalar call against a 1-rest-array signature,
+                // leaving `arguments` bound to whichever scalar landed
+                // in the rest slot — `arguments.length` then reads garbage
+                // or hits the codegen-fallback undefined.
+                let has_rest = ctx.method_has_rest.get(&key).copied().unwrap_or(false);
+                if has_rest {
+                    let declared_count = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
+                    if declared_count > 0 {
+                        let fixed = declared_count.saturating_sub(1);
+                        if lowered.len() >= fixed {
+                            let trailing: Vec<String> = lowered.split_off(fixed);
+                            let arr_handle = ctx.block().call(
+                                I64,
+                                "js_array_alloc",
+                                &[(I32, &trailing.len().to_string())],
+                            );
+                            // js_array_push_f64 may realloc and return a
+                            // possibly-new handle; thread it.
+                            let mut handle_cur = arr_handle;
+                            for v in &trailing {
+                                handle_cur = ctx.block().call(
+                                    I64,
+                                    "js_array_push_f64",
+                                    &[(I64, &handle_cur), (DOUBLE, v)],
+                                );
+                            }
+                            let arr_box = nanbox_pointer_inline(ctx.block(), &handle_cur);
+                            lowered.push(arr_box);
+                        }
+                        // Pad fixed slots with undefined when caller under-supplied.
+                        while lowered.len() < declared_count {
+                            // Insert undefined at the rest-slot's predecessor.
+                            let undef = double_literal(f64::from_bits(0x7FFC_0000_0000_0001));
+                            let idx = lowered.len().saturating_sub(1);
+                            lowered.insert(idx, undef);
+                        }
+                    }
+                }
+                let arg_slices: Vec<(crate::types::LlvmType, &str)> =
+                    lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
+                return Ok(ctx.block().call(DOUBLE, &fn_name, &arg_slices));
+            }
+            // #310: when the receiver is a namespace alias from an
+            // `import { Foo } from "pkg"` where the source module did
+            // `export * as Foo from "./Foo"`, the HIR's "uppercase Ident
+            // looks like a class" rule lifts `Foo.method(...)` to
+            // StaticMethodCall — but `Foo` isn't actually a class, so
+            // the methods-table lookup above misses. The CLI driver's
+            // namespace-import walk has already registered every export
+            // of the namespace target file under its own name in
+            // `import_function_prefixes`, so the function call resolves
+            // to the same `perry_fn_<src>__<method>` symbol a
+            // `import * as Foo from "pkg/Foo"` would have used.
+            if ctx.namespace_imports.contains(class_name) {
+                // Issue #678 followup (namespace branch): `import * as ns
+                // from "<v8-module>"; ns.member(args)` with no companion
+                // Named import — the V8 module has no static export list
+                // so `import_function_prefixes` has no entry for
+                // `method_name`. Probe the namespace-level V8 specifier
+                // map first; on a hit, route the member call through the
+                // bridge using the namespace's specifier. Without this,
+                // ramda / date-fns / jose / effect wildcard-namespace
+                // members fell to the `double_literal(0.0)` stub below.
+                if let Some(specifier) = ctx.namespace_v8_specifiers.get(class_name).cloned() {
+                    let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                    for a in args {
+                        lowered.push(lower_expr(ctx, a)?);
+                    }
+                    return Ok(emit_v8_export_call(ctx, &specifier, method_name, &lowered));
+                }
+                if let Some(source_prefix) = ctx.import_function_prefixes.get(method_name).cloned()
+                {
+                    // Issue #678 followup: V8-fallback namespace member route —
+                    // the origin module emits no native symbol, so dispatch
+                    // through the runtime bridge.
+                    if let Some(specifier) =
+                        ctx.import_function_v8_specifiers.get(method_name).cloned()
+                    {
+                        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                        for a in args {
+                            lowered.push(lower_expr(ctx, a)?);
+                        }
+                        return Ok(emit_v8_export_call(ctx, &specifier, method_name, &lowered));
+                    }
+                    // Issue #678: namespace member resolved through a re-export
+                    // rename uses the origin name as the symbol suffix.
+                    let origin_suffix =
+                        import_origin_suffix(ctx.import_function_origin_names, method_name);
+                    let fn_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                    // Issue #321: var-shaped exports (e.g. `export const succeed
+                    // = (v) => new EffectInst(v)`) emit a ZERO-ARG getter
+                    // `perry_fn_<src>__<name>()` returning the closure. The
+                    // previous code emitted a 1-arg direct call against that
+                    // 0-arg symbol — the source returned the function pointer
+                    // unchanged and the consumer saw `typeof Effect.succeed(42)
+                    // === "function"` (the closure itself, not the EffectInst).
+                    // Mirror the `lower_call.rs` var-shaped branch: fetch the
+                    // closure via the zero-arg getter, then dispatch through
+                    // `js_closure_callN` with the user args. Without this every
+                    // `Effect.succeed`/`Effect.runSync` etc. on the native
+                    // `compilePackages: ["effect"]` path returned a closure,
+                    // which `runSync` then read `._tag` off and threw
+                    // `Cannot read properties of undefined`.
+                    //
+                    // SCOPE: only fire when the class_name was registered as a
+                    // namespace via the *named-import-of-namespace-reexport*
+                    // branch (`import { Effect } from "effect"` where effect's
+                    // index.ts has `export * as Effect from "./Effect.js"`).
+                    // Plain `import * as X from "./X.js"` (used in effect's
+                    // INTERNAL modules) deliberately preserves the pre-fix
+                    // direct-call (silently-wrong-but-doesn't-throw) path —
+                    // switching them all over surfaces init-order bugs that
+                    // were hiding behind the silent shape. Those need a
+                    // separate audit.
+                    if ctx.namespace_reexport_named_imports.contains(class_name)
+                        && ctx.imported_vars.contains(method_name)
+                    {
+                        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                        for a in args {
+                            lowered.push(lower_expr(ctx, a)?);
+                        }
+                        if lowered.len() > 16 {
+                            bail!(
+                                "perry-codegen: namespace static-method closure call with {} args (max 16)",
+                                lowered.len()
+                            );
+                        }
+                        ctx.pending_declares.push((fn_name.clone(), DOUBLE, vec![]));
+                        let closure_box = ctx.block().call(DOUBLE, &fn_name, &[]);
+                        let blk = ctx.block();
+                        let closure_handle = unbox_to_i64(blk, &closure_box);
+                        let runtime_fn = format!("js_closure_call{}", lowered.len());
+                        let mut call_args: Vec<(crate::types::LlvmType, &str)> =
+                            vec![(I64, &closure_handle)];
+                        for v in &lowered {
+                            call_args.push((DOUBLE, v.as_str()));
+                        }
+                        return Ok(blk.call(DOUBLE, &runtime_fn, &call_args));
+                    }
+                    let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                    for a in args {
+                        lowered.push(lower_expr(ctx, a)?);
+                    }
+                    let arg_kinds: Vec<crate::types::LlvmType> =
+                        std::iter::repeat(DOUBLE).take(args.len()).collect();
+                    ctx.pending_declares
+                        .push((fn_name.clone(), DOUBLE, arg_kinds));
+                    let arg_slices: Vec<(crate::types::LlvmType, &str)> =
+                        lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
+                    return Ok(ctx.block().call(DOUBLE, &fn_name, &arg_slices));
+                }
+            }
+            // Issue #818 (Effect.succeed pattern): the receiver is a NAMED
+            // import (`import { Effect } from 'effect'`), not a namespace
+            // alias. The HIR's "uppercase Ident looks like a class" rule
+            // lifts `Effect.succeed(args)` to StaticMethodCall, but `Effect`
+            // isn't a perry class and isn't in `namespace_imports`. When the
+            // class_name resolves to a V8-fallback specifier, route through
+            // the bridge: load the module, get the named member as an
+            // object, then call .method on it. Without this the call fell
+            // to the `double_literal(0.0)` stub below — Effect's
+            // `Effect.succeed(42)` returned the literal `0` instead of the
+            // tagged Effect instance.
+            if let Some(specifier) = ctx.import_function_v8_specifiers.get(class_name).cloned() {
+                let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                for a in args {
+                    lowered.push(lower_expr(ctx, a)?);
+                }
+                // The V8 module's top-level export uses the *imported* name
+                // (the name in the source module). If the local alias differs
+                // from the imported name, fall back to the local name — the
+                // specifier-registration code in compile.rs registers both
+                // when local != imported, so for a Named import the lookup
+                // key here is the consumer-visible alias which equals the
+                // remote name when no `as` rename is present.
+                let member = ctx
+                    .import_function_origin_names
+                    .get(class_name)
+                    .cloned()
+                    .unwrap_or_else(|| class_name.clone());
+                return Ok(emit_v8_member_method_call(
+                    ctx,
+                    &specifier,
+                    &member,
+                    method_name,
+                    &lowered,
+                ));
+            }
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            Ok(double_literal(0.0))
+        }
+
+        // -------- super.method(args) --------
+        // Walk the current class's parent chain for the named method
+        // (skipping the current class itself, even if it overrides
+        // the same name) and emit a direct call to the resolved
+        // perry_method_<modprefix>__<parent>__<name> with `this`.
+        _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}
