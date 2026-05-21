@@ -367,6 +367,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_buffer_set_from", VOID, &[I64, I64, I32]);
     module.declare_function("js_buffer_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_buffer_to_string", I64, &[I64, I32]);
+    // Issue #1210: `buffer.transcode(source, fromEnc, toEnc)`. Source is a
+    // NaN-boxed Buffer pointer (DOUBLE), encodings are NaN-boxed strings
+    // (DOUBLE). Returns a raw *mut BufferHeader (I64) — NR_PTR in the
+    // native dispatch table NaN-boxes the result with POINTER_TAG.
+    module.declare_function("js_buffer_transcode", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_buffer_write", I32, &[I64, I64, I32, I32]);
 
     // ========== child_process ==========

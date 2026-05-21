@@ -15,9 +15,11 @@ mod copy_write;
 mod encode;
 mod from;
 mod header;
+mod iter;
 mod mutate;
 mod numeric;
 mod query;
+mod transcode;
 
 // ---- Re-exports: types & constants ----
 pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
@@ -87,6 +89,15 @@ pub use numeric::{
 pub use coding::{
     base64_decode_into_buffer, base64_encode_into_string, base64url_encode_into_string,
     decode_base64, decode_hex, hex_decode_into_buffer, hex_encode_into_string,
+};
+
+// ---- Re-exports: transcode (FFI) ----
+pub use transcode::js_buffer_transcode;
+
+// ---- Re-exports: iterator surface (FFI + dispatch hook) ----
+pub use iter::{
+    dispatch_buffer_iterator_method, js_buffer_entries, js_buffer_keys, js_buffer_values,
+    BUFFER_ITERATOR_CLASS_ID,
 };
 
 #[cfg(test)]

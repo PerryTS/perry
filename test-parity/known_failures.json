@@ -8,6 +8,36 @@
       "reason": "Free-text explanation. Keep the most-actionable signal first \u2014 what changes the verdict (a fixture, a Perry fix, a Node spec change)."
     }
   },
+  "node-suite/buffer/blob-file/blob-basic": {
+    "issue": "1211",
+    "added": "2026-05-21",
+    "category": "module-inventory",
+    "reason": "#1211: `import { Blob } from 'node:buffer'` isn't a recognized named export. Perry has partial Blob support via the global constructor + perry-stdlib fetch registry, but the node:buffer surface (size/type/text()/arrayBuffer()) isn't wired up. Flips to PASS when the buffer-module Blob export lands."
+  },
+  "node-suite/buffer/blob-file/file-basic": {
+    "issue": "1211",
+    "added": "2026-05-21",
+    "category": "module-inventory",
+    "reason": "#1211: `File` extends Blob with name/lastModified. Same module-inventory gap as blob-basic — needs File class modeling on top of Blob exposure from node:buffer."
+  },
+  "node-suite/buffer/blob-file/object-url": {
+    "issue": "1211",
+    "added": "2026-05-21",
+    "category": "module-inventory",
+    "reason": "#1211: `resolveObjectURL` (paired with `URL.createObjectURL` / `URL.revokeObjectURL`) needs an object-URL registry. The Blob/File surface from #1211 lands first; this fixture cross-checks the registry round-trip."
+  },
+  "node-suite/buffer/copy-slice/slice-shared-mutation": {
+    "issue": "1205",
+    "added": "2026-05-21",
+    "category": "bug-open",
+    "reason": "#1205: Buffer.slice currently allocates a fresh BufferHeader with copied bytes rather than a view over the backing store. Codegen Uint8ArrayGet/Set emits direct gep+load/store against the buffer pointer (handle+8+idx), so a view-aware runtime helper can't intercept the byte access without a fast-path refactor. Flips to PASS when the codegen byte access learns about view headers."
+  },
+  "node-suite/buffer/copy-slice/subarray-shared-mutation": {
+    "issue": "1205",
+    "added": "2026-05-21",
+    "category": "bug-open",
+    "reason": "#1205: Buffer.subarray shares the slice/copy implementation — see slice-shared-mutation for the underlying gap."
+  },
   "node-suite/console/dir/depth-options": {
     "issue": "1199",
     "added": "2026-05-20",

@@ -2149,6 +2149,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Buffer module-level encoding probes added in PR #1257.
     method("buffer", "isAscii", false, None),
     method("buffer", "isUtf8", false, None),
+    // Issue #1210: re-encode bytes between supported encodings.
+    method("buffer", "transcode", false, None),
     property("buffer", "constants"),
     property("buffer", "kMaxLength"),
     property("buffer", "kStringMaxLength"),

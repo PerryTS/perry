@@ -1003,6 +1003,16 @@ pub unsafe extern "C" fn js_native_call_method(
                 // unconditionally. Removed.
                 return dispatch_native_module_method(obj, method_name, args_ptr, args_len);
             }
+            // Issue #1206: Buffer iterators returned from `buf.values()` etc.
+            // have a dedicated class id so `.next()` lands here and dispatches
+            // to the iterator-protocol helper without paying the generic
+            // closure-field scan below.
+            if (*obj).class_id == crate::buffer::BUFFER_ITERATOR_CLASS_ID {
+                return crate::buffer::dispatch_buffer_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
 
             // Scan object fields for a callable property (closure stored via IndexSet)
             let keys = (*obj).keys_array;
@@ -1303,6 +1313,15 @@ pub unsafe extern "C" fn js_native_call_method(
             if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
                 // #853: same dead-after-return as the first arm above.
                 return dispatch_native_module_method(obj, method_name, args_ptr, args_len);
+            }
+            // Issue #1206: same class-id check as the NaN-boxed path above
+            // so a raw-pointer iterator value (uncommon, but possible after
+            // a bitcast) still routes through the iterator dispatcher.
+            if (*obj).class_id == crate::buffer::BUFFER_ITERATOR_CLASS_ID {
+                return crate::buffer::dispatch_buffer_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
             }
 
             // Field name scan on this object

@@ -781,4 +781,18 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // Issue #1210: `buffer.transcode(source, fromEnc, toEnc)`.
+    // Receiver-less Node-buffer export; arguments are NaN-boxed (source
+    // is a Buffer pointer, encodings are strings). Returns a Buffer
+    // pointer that must be NaN-boxed with POINTER_TAG by the dispatch
+    // wrapper — `NR_PTR` handles that step.
+    NativeModSig {
+        module: "buffer",
+        has_receiver: false,
+        method: "transcode",
+        class_filter: None,
+        runtime: "js_buffer_transcode",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_PTR,
+    },
 ];

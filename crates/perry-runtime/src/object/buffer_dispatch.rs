@@ -36,6 +36,10 @@ pub fn is_buffer_method_name(name: &str) -> bool {
             | "swap16"
             | "swap32"
             | "swap64"
+            // Issue #1206: explicit iterator-protocol surface.
+            | "values"
+            | "keys"
+            | "entries"
             // Object.prototype methods exposed on Buffer instances so
             // safer-buffer's `if (buffer.hasOwnProperty(...))` probe (and
             // similar duck-type tests in express / body-parser dependents)
@@ -168,6 +172,12 @@ pub unsafe fn dispatch_buffer_method(
             let result = crate::buffer::js_buffer_slice(buf_ptr, start, end);
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
+        // Issue #1206: explicit iterator-protocol surface. Each helper
+        // returns a Buffer-iterator object whose `.next()` is dispatched
+        // through `dispatch_buffer_iterator_method` in `iter.rs`.
+        "values" => crate::buffer::js_buffer_values(buf_f64),
+        "keys" => crate::buffer::js_buffer_keys(buf_f64),
+        "entries" => crate::buffer::js_buffer_entries(buf_f64),
         // `src.copy(dst, targetStart?, sourceStart?, sourceEnd?)` — mirrors
         // Node's Buffer.prototype.copy. Returns the number of bytes copied.
         "copy" if !args.is_empty() => {
