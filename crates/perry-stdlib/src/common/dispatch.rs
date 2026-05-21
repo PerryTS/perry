@@ -265,6 +265,40 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return crate::string_decoder::dispatch_string_decoder(handle, method_name, args);
     }
 
+    // #1193 — cheerio (bundled): both `CheerioHandle` and
+    // `CheerioSelectionHandle` lose their static type at TS-side
+    // assignment boundaries (`const sel = $.select(".x")`). The static
+    // NATIVE_MODULE_TABLE path catches direct chains like
+    // `cheerio.load(html).select(".x").text()` only when the receiver
+    // type survives lowering; the moment user code lands the
+    // intermediate in a `let`, codegen sees `(number).method` and
+    // routes here. Method-gated to disjoint sets so a colliding handle
+    // id from another registry can't fall through to a cheerio shim.
+    #[cfg(feature = "bundled-cheerio")]
+    if matches!(
+        method_name,
+        "select"
+            | "text"
+            | "html"
+            | "attr"
+            | "length"
+            | "first"
+            | "last"
+            | "eq"
+            | "find"
+            | "children"
+            | "parent"
+            | "hasClass"
+            | "is"
+            | "toArray"
+            | "texts"
+            | "attrs"
+    ) {
+        if let Some(v) = crate::cheerio::dispatch_cheerio(handle, method_name, args) {
+            return v;
+        }
+    }
+
     // Unknown handle type - return undefined
     f64::from_bits(0x7FF8_0000_0000_0001)
 }

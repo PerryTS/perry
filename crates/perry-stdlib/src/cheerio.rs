@@ -32,7 +32,14 @@ pub struct CheerioSelectionHandle {
 
 /// cheerio.load(html) -> CheerioAPI
 ///
-/// Load HTML content for parsing.
+/// Load HTML content for parsing. Returns a raw CheerioHandle id; the
+/// callable-`$()` form (#1193) is reachable via the codegen's static
+/// dispatch table once it learns to map a value of type CheerioHandle to
+/// `js_cheerio_select` on a function-call shape. Until then user code
+/// can use the equivalent method form `load(html).select(...)` which
+/// works through both the static dispatch table and (for any-typed
+/// intermediates) the runtime fallback in
+/// `common/dispatch.rs::dispatch_cheerio`.
 #[no_mangle]
 pub unsafe extern "C" fn js_cheerio_load(html_ptr: *const StringHeader) -> Handle {
     let html = match string_from_header(html_ptr) {
@@ -441,4 +448,117 @@ pub unsafe extern "C" fn js_cheerio_selection_attrs(
     }
 
     result
+}
+
+// ============================================================================
+// #1193 — runtime fall-through dispatch for cheerio handles.
+//
+// The static NATIVE_MODULE_TABLE path resolves `cheerio.load(html).select(sel)`
+// when the receiver type survives lowering. As soon as user code lands an
+// intermediate in a `let` binding (`const sel = $.select(".x")`), the
+// codegen sees a generic `(number).method` call and routes through
+// `js_handle_method_dispatch` — which until this commit had no cheerio
+// arm, so `sel.text()` failed with `(number).text is not a function`.
+//
+// This helper accepts both `CheerioHandle` (the document) and
+// `CheerioSelectionHandle` (selection) shapes and dispatches the methods
+// the static table already exposes. Returns `None` when the handle id
+// doesn't belong to either registry so the caller falls through to the
+// next dispatcher.
+// ============================================================================
+pub(crate) unsafe fn dispatch_cheerio(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
+    use crate::common::with_handle;
+    const TAG_UNDEFINED_F64: u64 = 0x7FFC_0000_0000_0001;
+    const TAG_NULL_F64: u64 = 0x7FFC_0000_0000_0002;
+
+    let nanbox_pointer = |raw: i64| -> f64 {
+        f64::from_bits(0x7FFD_0000_0000_0000 | (raw as u64 & 0x0000_FFFF_FFFF_FFFF))
+    };
+    let nanbox_string = |ptr: *mut StringHeader| -> f64 {
+        if ptr.is_null() {
+            return f64::from_bits(TAG_NULL_F64);
+        }
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    };
+    let arg_str_ptr = |idx: usize| -> *const StringHeader {
+        if idx >= args.len() {
+            return std::ptr::null();
+        }
+        perry_runtime::js_get_string_pointer_unified(args[idx]) as *const StringHeader
+    };
+
+    let is_selection =
+        with_handle::<CheerioSelectionHandle, bool, _>(handle, |_| true).unwrap_or(false);
+    let is_document = with_handle::<CheerioHandle, bool, _>(handle, |_| true).unwrap_or(false);
+    if !is_selection && !is_document {
+        return None;
+    }
+
+    // Document-level methods. `select` is the only thing user code reaches
+    // for the document; the rest of the table is selection-only.
+    if is_document && method == "select" {
+        let raw = js_cheerio_select(handle, arg_str_ptr(0));
+        return Some(nanbox_pointer(raw));
+    }
+    if !is_selection {
+        return None;
+    }
+
+    match method {
+        "text" => Some(nanbox_string(js_cheerio_selection_text(handle))),
+        "html" => Some(nanbox_string(js_cheerio_selection_html(handle))),
+        "attr" => Some(nanbox_string(js_cheerio_selection_attr(
+            handle,
+            arg_str_ptr(0),
+        ))),
+        "length" => Some(js_cheerio_selection_length(handle)),
+        "first" => Some(nanbox_pointer(js_cheerio_selection_first(handle))),
+        "last" => Some(nanbox_pointer(js_cheerio_selection_last(handle))),
+        "eq" => {
+            let idx = if args.is_empty() { 0.0 } else { args[0] };
+            Some(nanbox_pointer(js_cheerio_selection_eq(handle, idx)))
+        }
+        "find" => Some(nanbox_pointer(js_cheerio_selection_find(
+            handle,
+            arg_str_ptr(0),
+        ))),
+        "children" => Some(nanbox_pointer(js_cheerio_selection_children(
+            handle,
+            arg_str_ptr(0),
+        ))),
+        "parent" => Some(nanbox_pointer(js_cheerio_selection_parent(handle))),
+        "hasClass" => {
+            let r = js_cheerio_selection_has_class(handle, arg_str_ptr(0));
+            Some(f64::from_bits(JSValue::bool(r).bits()))
+        }
+        "is" => {
+            let r = js_cheerio_selection_is(handle, arg_str_ptr(0));
+            Some(f64::from_bits(JSValue::bool(r).bits()))
+        }
+        "toArray" => {
+            let arr = js_cheerio_selection_to_array(handle);
+            if arr.is_null() {
+                Some(f64::from_bits(TAG_UNDEFINED_F64))
+            } else {
+                Some(nanbox_pointer(arr as i64))
+            }
+        }
+        "texts" => {
+            let arr = js_cheerio_selection_texts(handle);
+            if arr.is_null() {
+                Some(f64::from_bits(TAG_UNDEFINED_F64))
+            } else {
+                Some(nanbox_pointer(arr as i64))
+            }
+        }
+        "attrs" => {
+            let arr = js_cheerio_selection_attrs(handle, arg_str_ptr(0));
+            if arr.is_null() {
+                Some(f64::from_bits(TAG_UNDEFINED_F64))
+            } else {
+                Some(nanbox_pointer(arr as i64))
+            }
+        }
+        _ => None,
+    }
 }
