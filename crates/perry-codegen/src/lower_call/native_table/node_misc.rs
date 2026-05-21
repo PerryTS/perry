@@ -47,7 +47,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         method: "stringify",
         class_filter: None,
         runtime: "js_querystring_stringify",
-        args: &[NA_F64, NA_F64, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -56,7 +56,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         method: "encode",
         class_filter: None,
         runtime: "js_querystring_stringify",
-        args: &[NA_F64, NA_F64, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64, NA_F64],
         ret: NR_F64,
     },
     // ========== LRU Cache ==========

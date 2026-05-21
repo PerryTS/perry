@@ -26,9 +26,12 @@
 //! symbol.
 
 use crate::common::handle::Handle;
+use std::borrow::Cow;
+
 use perry_runtime::array::{js_array_alloc, js_array_length, js_array_push_f64};
+use perry_runtime::closure::{is_closure_ptr, js_closure_call1, ClosureHeader};
 use perry_runtime::{
-    js_object_alloc, js_object_get_field_by_name, js_object_get_own_field_or_undef,
+    js_object_alloc_null_proto, js_object_get_field_by_name, js_object_get_own_field_or_undef,
     js_object_set_field_by_name, js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader,
     StringHeader,
 };
@@ -194,8 +197,14 @@ pub unsafe extern "C" fn js_querystring_parse(
     let sep = resolve_separator_str(sep_arg, "&");
     let eq = resolve_separator_str(eq_arg, "=");
     let max_keys = resolve_max_keys(options_arg);
+    let decode = resolve_codec_option(options_arg, "decodeURIComponent");
 
-    let obj = js_object_alloc(0, 0);
+    // #1175: Node's `querystring.parse` returns an `Object.create(null)`
+    // result so `__proto__` / `constructor` etc. are stored as own data
+    // properties rather than punching through the prototype chain. Mirror
+    // that here — `js_object_alloc_null_proto` stamps a flag the
+    // `Object.getPrototypeOf` path consults so `proto: null` matches Node.
+    let obj = js_object_alloc_null_proto(0, 0);
     if input.is_empty() {
         return obj;
     }
@@ -223,12 +232,69 @@ pub unsafe extern "C" fn js_querystring_parse(
                 None => (pair, ""),
             }
         };
-        let key = percent_decode(key_raw, true);
-        let value = percent_decode(val_raw, true);
+        let key = match decode {
+            Some(cb) => {
+                let normalized = normalize_decode_component_input(key_raw);
+                apply_codec(cb, normalized.as_ref())
+            }
+            None => percent_decode(key_raw, true),
+        };
+        let value = match decode {
+            Some(cb) => {
+                let normalized = normalize_decode_component_input(val_raw);
+                apply_codec(cb, normalized.as_ref())
+            }
+            None => percent_decode(val_raw, true),
+        };
         push_parsed_pair(obj, &key, &value);
         parsed += 1;
     }
     obj
+}
+
+/// Look up a callable option (`decodeURIComponent` / `encodeURIComponent`).
+/// Returns `Some(closure)` only when the slot holds a real ClosureHeader —
+/// non-callable values (or absent options) fall back to the built-in codec.
+unsafe fn resolve_codec_option(options: f64, name: &str) -> Option<*const ClosureHeader> {
+    let value = JSValue::from_bits(options.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let obj = value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    if obj.is_null() {
+        return None;
+    }
+    let key = intern_string(name);
+    let slot = js_object_get_field_by_name(obj, key);
+    if slot.is_undefined() || slot.is_null() || !slot.is_pointer() {
+        return None;
+    }
+    let ptr = slot.as_pointer::<u8>() as usize;
+    if !is_closure_ptr(ptr) {
+        return None;
+    }
+    Some(ptr as *const ClosureHeader)
+}
+
+/// Node's querystring parser rewrites `+` to `%20` before invoking a custom
+/// decoder. The decoder is expected to receive percent-encoded input; passing
+/// raw `+` would make identity/custom decoders diverge from Node.
+fn normalize_decode_component_input(input: &str) -> Cow<'_, str> {
+    if input.as_bytes().contains(&b'+') {
+        Cow::Owned(input.replace('+', "%20"))
+    } else {
+        Cow::Borrowed(input)
+    }
+}
+
+/// Call a user-supplied codec closure with `raw` and decode the return.
+/// Returns the empty string if the callback yielded a non-string — Node
+/// would coerce via `String(ret)`, but the only realistic failure mode here
+/// is a buggy callback, and an empty string is observably distinct.
+unsafe fn apply_codec(callback: *const ClosureHeader, raw: &str) -> String {
+    let arg = nanbox_string(intern_string(raw));
+    let ret = js_closure_call1(callback, arg);
+    nanboxed_to_string(ret).unwrap_or_default()
 }
 
 fn resolve_max_keys(options: f64) -> Option<usize> {
@@ -330,13 +396,19 @@ unsafe fn push_parsed_pair(obj: *mut ObjectHeader, key: &str, value: &str) {
     js_object_set_field_by_name(obj, key_hdr, f64::from_bits(arr_boxed.bits()));
 }
 
-/// `querystring.stringify(obj, sep?, eq?)` → string.
+/// `querystring.stringify(obj, sep?, eq?, options?)` → string.
 #[no_mangle]
-pub unsafe extern "C" fn js_querystring_stringify(obj_arg: f64, sep_arg: f64, eq_arg: f64) -> f64 {
+pub unsafe extern "C" fn js_querystring_stringify(
+    obj_arg: f64,
+    sep_arg: f64,
+    eq_arg: f64,
+    options_arg: f64,
+) -> f64 {
     // Default separators are the bytes Node uses; we read into UTF-8
     // strings instead of bytes since the chars are always ASCII.
     let sep = resolve_separator_str(sep_arg, "&");
     let eq = resolve_separator_str(eq_arg, "=");
+    let encode = resolve_codec_option(options_arg, "encodeURIComponent");
 
     let bits = obj_arg.to_bits();
     let top16 = bits >> 48;
@@ -366,7 +438,7 @@ pub unsafe extern "C" fn js_querystring_stringify(obj_arg: f64, sep_arg: f64, eq
         };
         let key_hdr = intern_string(&key);
         let value_bits = js_object_get_field_by_name(obj, key_hdr).bits();
-        append_stringify_value(&mut out, &key, value_bits, &sep, &eq);
+        append_stringify_value(&mut out, &key, value_bits, &sep, &eq, encode);
     }
     nanbox_string(intern_string(&out))
 }
@@ -389,7 +461,14 @@ unsafe fn append_stringify_value(
     value_bits: u64,
     sep: &str,
     eq: &str,
+    encode: Option<*const ClosureHeader>,
 ) {
+    let encode_with = |s: &str| -> String {
+        match encode {
+            Some(cb) => apply_codec(cb, s),
+            None => percent_encode(s),
+        }
+    };
     let top16 = value_bits >> 48;
     let value_f64 = f64::from_bits(value_bits);
 
@@ -411,9 +490,9 @@ unsafe fn append_stringify_value(
                     if !out.is_empty() {
                         out.push_str(sep);
                     }
-                    out.push_str(&percent_encode(key));
+                    out.push_str(&encode_with(key));
                     out.push_str(eq);
-                    out.push_str(&percent_encode(&elem_str));
+                    out.push_str(&encode_with(&elem_str));
                 }
                 return;
             }
@@ -424,9 +503,9 @@ unsafe fn append_stringify_value(
     if !out.is_empty() {
         out.push_str(sep);
     }
-    out.push_str(&percent_encode(key));
+    out.push_str(&encode_with(key));
     out.push_str(eq);
-    out.push_str(&percent_encode(&value_str));
+    out.push_str(&encode_with(&value_str));
 }
 
 fn querystring_scalar_to_string(value_bits: u64) -> String {

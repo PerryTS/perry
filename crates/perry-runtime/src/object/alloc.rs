@@ -14,6 +14,22 @@ pub extern "C" fn js_object_alloc(class_id: u32, field_count: u32) -> *mut Objec
     js_object_alloc_with_parent(class_id, 0, field_count)
 }
 
+/// #1175: allocate an object whose `[[Prototype]]` is null. Same layout as
+/// `js_object_alloc`, but the `OBJ_FLAG_NULL_PROTO` bit is set on the GC
+/// header so `Object.getPrototypeOf` returns null instead of the heap
+/// pointer / synthesized proto. Used by `querystring.parse` to mirror Node's
+/// `Object.create(null)`-backed result and dodge prototype-pollution
+/// surprises.
+#[no_mangle]
+pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) -> *mut ObjectHeader {
+    let ptr = js_object_alloc_with_parent(class_id, 0, field_count);
+    unsafe {
+        let gc = (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
+    }
+    ptr
+}
+
 /// Allocate a new object with class ID, parent class ID, and field count
 /// The parent_class_id is used for instanceof inheritance checks
 /// Returns a pointer to the object header
