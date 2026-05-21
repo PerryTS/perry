@@ -88,7 +88,10 @@ pub struct CompileArgs {
     #[arg(long)]
     pub app_bundle_id: Option<String>,
 
-    /// Output type: executable (default) or dylib (shared library plugin)
+    /// Output type: executable (default), dylib (shared library plugin), or
+    /// staticlib (`.a` / `.lib` archive for embedding into a Rust/C/C++ host
+    /// — see #1088). dylib and staticlib both skip embedded-`main` emission
+    /// and expose `perry_module_init`.
     #[arg(long, default_value = "executable")]
     pub output_type: String,
 

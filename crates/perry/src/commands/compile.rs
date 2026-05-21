@@ -3995,6 +3995,15 @@ pub fn run_with_parse_cache(
     let stem_owned = super::sanitize::sanitize_for_linker_argv(raw_stem);
     let stem = stem_owned.as_str();
     let is_dylib = args.output_type == "dylib";
+    // #1088 — staticlib output: a Rust/C/C++ host links our `.a` / `.lib`
+    // alongside `libperry_runtime.a` (and friends) and drives the event
+    // loop itself via the FFI surface in `perry-runtime/src/event_pump.rs`
+    // (`perry_poll`, `perry_has_work`, `perry_next_wake_ms`,
+    // `perry_set_wake_callback`). Behaves like `dylib` at the codegen
+    // layer (no `main` emission, `perry_module_init` entrypoint), but the
+    // link step uses `ar` instead of `cc -shared`.
+    let is_staticlib = args.output_type == "staticlib";
+    let is_library_output = is_dylib || is_staticlib;
     // Capture the args fields that helpers downstream of the
     // `args.output.unwrap_or_else(...)` partial-move still need.
     // Per the saved feedback note on this file: any helper extracted
@@ -4011,6 +4020,17 @@ pub fn run_with_parse_cache(
             #[cfg(not(target_os = "macos"))]
             {
                 PathBuf::from(format!("{}.so", stem))
+            }
+        } else if is_staticlib {
+            // #1088 — Windows hosts expect `.lib`; everywhere else uses
+            // the Unix `lib<stem>.a` convention so the archive is reachable
+            // from `-l<stem>` at the host's link step.
+            if matches!(target.as_deref(), Some("windows"))
+                || (target.is_none() && cfg!(target_os = "windows"))
+            {
+                PathBuf::from(format!("{}.lib", stem))
+            } else {
+                PathBuf::from(format!("lib{}.a", stem))
             }
         } else if matches!(
             target.as_deref(),
@@ -4212,6 +4232,74 @@ pub fn run_with_parse_cache(
     // is_watchos / is_tvos are defined below (near jsruntime_lib).
     // The is_cross_* bindings used to live here, but they're now derived
     // inside `link::build_and_run_link` which is the only consumer.
+
+    // #1088 — staticlib output: bundle the object files into a `.a` / `.lib`
+    // archive. Skip runtime / stdlib linking entirely; the Rust/C/C++ host
+    // is expected to link `libperry_runtime.a` (and any extension archives
+    // it uses) alongside our archive at its own link step. Codegen already
+    // emits `perry_module_init` instead of `main` (see is_dylib branch in
+    // codegen/entry.rs, which now also covers `staticlib`).
+    if is_staticlib {
+        let is_windows_target = matches!(target.as_deref(), Some("windows"))
+            || (target.is_none() && cfg!(target_os = "windows"));
+        // Best-effort: drop a stale archive first so `ar` doesn't append to a
+        // previous build's contents.
+        let _ = fs::remove_file(&exe_path);
+        let mut cmd = if is_windows_target {
+            // MSVC `lib.exe` is the standard host on Windows; mingw users
+            // can override with `AR=...` since `cc::ar_name()` parity isn't
+            // available here.
+            let mut c = Command::new("lib.exe");
+            c.arg(format!("/OUT:{}", exe_path.display()));
+            c
+        } else {
+            let mut c = Command::new("ar");
+            // `c` create, `r` insert/replace, `s` write index. Matches what
+            // rustc invokes via cc-rs for `crate-type = staticlib`.
+            c.arg("crs").arg(&exe_path);
+            c
+        };
+        for obj_path in &obj_paths {
+            cmd.arg(obj_path);
+        }
+        let status = cmd.status()?;
+        if !status.success() {
+            return Err(anyhow!("Archiving staticlib failed"));
+        }
+
+        match format {
+            OutputFormat::Text => println!("Wrote static archive: {}", exe_path.display()),
+            OutputFormat::Json => {
+                println!("{{\"output\": \"{}\"}}", exe_path.display());
+            }
+        }
+
+        if !args.keep_intermediates {
+            for obj_path in &obj_paths {
+                let _ = fs::remove_file(obj_path);
+            }
+        }
+
+        let codegen_cache_stats = if object_cache.is_enabled() {
+            Some((
+                object_cache.hits(),
+                object_cache.misses(),
+                object_cache.stores(),
+                object_cache.store_errors(),
+            ))
+        } else {
+            None
+        };
+        return Ok(CompileResult {
+            output_path: exe_path,
+            target: target.clone().unwrap_or_else(|| "native".to_string()),
+            bundle_id: None,
+            // Reuse the dylib flag downstream — both library outputs share the
+            // "no embedded event loop, host drives `perry_module_init`" shape.
+            is_dylib: true,
+            codegen_cache_stats,
+        });
+    }
 
     // For dylib output, skip runtime/stdlib linking — symbols resolve from host at dlopen time
     if is_dylib {

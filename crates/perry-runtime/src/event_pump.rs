@@ -22,13 +22,73 @@
 //! `wait_timeout` survive — if we used a bare `Condvar::wait_timeout`
 //! without a flag we would lose any notify that races the lock acquire.
 
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::os::raw::c_void;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicPtr, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::timer::{
     js_callback_timer_next_deadline, js_interval_timer_next_deadline, js_timer_next_deadline,
 };
+
+// ============================================================================
+// #1088 — Host-embedding wake callback.
+//
+// Hosts that drive the event loop themselves (Rust + winit, Qt, GTK4, …)
+// sleep on OS primitives that don't observe Perry's internal `Condvar`. They
+// register `(cb, ctx)` once via `perry_set_wake_callback`; `js_notify_main_thread`
+// then invokes it on top of the existing condvar path so the host wakes
+// instantly instead of polling. The callback runs on whatever thread called
+// `js_notify_main_thread` (any tokio worker, any std::thread::spawn), so the
+// host's implementation must be thread-safe — typical use is
+// `EventLoopProxy::send_event(())` which is.
+// ============================================================================
+
+/// Host wake callback. Stored as raw pointers so the C FFI surface stays
+/// trivially `unsafe extern "C"`. Either-or-both can be null; the
+/// `cb` slot being null disables the wake.
+static WAKE_CALLBACK: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+static WAKE_CONTEXT: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Register a host wake callback. Passing `cb = NULL` clears the previous
+/// registration. The `ctx` pointer is opaque to Perry — the host owns its
+/// lifetime; we just hand it back on each invocation.
+///
+/// Thread-safety: the registration store is atomic; the callback itself is
+/// invoked from `js_notify_main_thread`, which any producer thread may
+/// call. Hosts must therefore use a thread-safe wake primitive (winit's
+/// `EventLoopProxy`, a self-pipe, an eventfd, etc.).
+///
+/// # Safety
+/// `cb` must remain callable for as long as it is registered. `ctx` must
+/// remain valid for the same window. Pass `cb = NULL` before dropping
+/// the target context to avoid use-after-free from a concurrent notify.
+#[no_mangle]
+pub unsafe extern "C" fn perry_set_wake_callback(
+    cb: Option<unsafe extern "C" fn(*mut c_void)>,
+    ctx: *mut c_void,
+) {
+    // Order matters: store the context first so any racing notifier that
+    // observes the new cb pointer also sees a fresh ctx.
+    WAKE_CONTEXT.store(ctx, Ordering::Release);
+    let cb_ptr = cb.map(|f| f as *mut ()).unwrap_or(std::ptr::null_mut());
+    WAKE_CALLBACK.store(cb_ptr, Ordering::Release);
+}
+
+#[inline]
+fn invoke_host_wake_callback() {
+    let cb_ptr = WAKE_CALLBACK.load(Ordering::Acquire);
+    if cb_ptr.is_null() {
+        return;
+    }
+    let ctx = WAKE_CONTEXT.load(Ordering::Acquire);
+    // SAFETY: `cb` was registered by a host that guaranteed it remains
+    // callable until cleared. We re-check non-null right above the call.
+    unsafe {
+        let cb: unsafe extern "C" fn(*mut c_void) = std::mem::transmute(cb_ptr);
+        cb(ctx);
+    }
+}
 
 struct Pump {
     /// `true` iff a producer notified since the last consumer reset.
@@ -144,6 +204,15 @@ pub extern "C" fn js_notify_main_thread() {
     // path it took (Release so subsequent producer side-effects are
     // visible).
     NOTIFIED.store(true, Ordering::Release);
+    // #1088 — fan the wake out to the host-registered callback (if any)
+    // BEFORE the WAITER_COUNT fast-path return. The host may be sleeping
+    // on an OS primitive (winit's `EventLoopProxy`, an eventfd, …) that
+    // Perry's condvar doesn't observe; without this hook a hot tokio
+    // worker pushing fetch results would only wake the host on the next
+    // OS-event tick. Registration is opt-in — `invoke_host_wake_callback`
+    // is a single atomic-load when no host is listening, so callers that
+    // never register pay essentially nothing.
+    invoke_host_wake_callback();
     // Hot path: no consumer is currently in `cvar.wait_timeout`, so
     // we don't need to take the mutex or signal the cvar — the next
     // call to `js_wait_for_event` will see `NOTIFIED == true` on the
@@ -163,6 +232,115 @@ pub extern "C" fn js_notify_main_thread() {
     *flag = true;
     drop(flag);
     PUMP.cvar.notify_one();
+}
+
+// ============================================================================
+// #1088 — Unified Event Loop FFI facade for host embedding.
+//
+// The internal pump surface (`js_promise_run_microtasks`, `js_run_stdlib_pump`,
+// `js_microtasks_pending`, `js_*_timer_next_deadline`, the various
+// `js_*_has_active_handles` shims) is correct but easy to mis-wire from a
+// host: forgetting `js_run_stdlib_pump` silently hangs `fetch`; relying only
+// on `js_microtasks_pending` to gate sleep ignores timers and stdlib I/O.
+//
+// The three functions below collapse the foot-guns into one obvious surface:
+//
+//   * `perry_poll()`           — drains microtasks + stdlib + jsruntime
+//   * `perry_has_work()`       — true while anything is pending (microtasks,
+//                                timers across all 3 queues, stdlib handles,
+//                                jsruntime handles)
+//   * `perry_next_wake_ms()`   — minimum across the 3 timer queues, or -1
+//
+// Pair with `perry_set_wake_callback` for polling-free integration.
+// ============================================================================
+
+extern "C" {
+    fn js_promise_run_microtasks() -> i32;
+    fn js_run_stdlib_pump();
+    fn js_run_jsruntime_pump();
+    fn js_microtasks_pending() -> i32;
+    fn js_stdlib_has_active_handles() -> i32;
+    fn js_jsruntime_has_active_handles() -> i32;
+}
+
+/// Drain everything Perry is currently holding ready: microtask queue, the
+/// stdlib pump (fetch / fs / ws / fastify / timers), the perry-jsruntime
+/// pump (V8 fallback module evaluations). Returns the number of microtasks
+/// executed by `js_promise_run_microtasks`. Stdlib/jsruntime pumps don't
+/// report task counts, so the return value is a lower-bound proxy for
+/// "did anything observable happen this tick".
+///
+/// Safe to call from the host's event-loop tick. Idempotent at zero cost
+/// when there's no work — the stdlib/jsruntime pump trampolines bail
+/// immediately when nothing is registered.
+#[no_mangle]
+pub extern "C" fn perry_poll() -> i32 {
+    // SAFETY: every call site below is a Perry C FFI surface declared with
+    // `extern "C"` linkage and stable across host builds; no thread-safety
+    // invariants beyond what each individual function already documents.
+    unsafe {
+        let microtasks = js_promise_run_microtasks();
+        js_run_stdlib_pump();
+        js_run_jsruntime_pump();
+        microtasks
+    }
+}
+
+/// Returns 1 if the host should keep the event loop alive — anything
+/// pending across all of Perry's internal queues. Use as the gate for
+/// `ControlFlow::Wait` vs `ControlFlow::Poll` in winit, or the equivalent
+/// in other event-loop frameworks.
+///
+/// Checks (any positive answer ⇒ has work):
+///   * `js_microtasks_pending()`           — promise microtasks
+///   * any of the 3 timer queues has a deadline ≥ 0
+///   * `js_stdlib_has_active_handles()`    — fetch / ws / fastify / timers
+///   * `js_jsruntime_has_active_handles()` — V8 fallback adapters
+#[no_mangle]
+pub extern "C" fn perry_has_work() -> i32 {
+    // SAFETY: same trampoline surface as `perry_poll`.
+    let pending_microtasks = unsafe { js_microtasks_pending() };
+    if pending_microtasks > 0 {
+        return 1;
+    }
+    let has_timer = js_timer_next_deadline() >= 0.0
+        || js_callback_timer_next_deadline() >= 0.0
+        || js_interval_timer_next_deadline() >= 0.0;
+    if has_timer {
+        return 1;
+    }
+    if unsafe { js_stdlib_has_active_handles() } != 0 {
+        return 1;
+    }
+    if unsafe { js_jsruntime_has_active_handles() } != 0 {
+        return 1;
+    }
+    0
+}
+
+/// Returns the closest pending wake-up across all 3 timer queues, in
+/// milliseconds from now. Returns -1.0 when no timers are scheduled —
+/// the host can then sleep indefinitely (or until an OS event / a wake
+/// callback fires).
+///
+/// NaN is *not* returned — keeps the return shape printable and avoids
+/// surprising hosts that compare with `<`.
+#[no_mangle]
+pub extern "C" fn perry_next_wake_ms() -> f64 {
+    let mut best: f64 = -1.0;
+    for d in [
+        js_timer_next_deadline(),
+        js_callback_timer_next_deadline(),
+        js_interval_timer_next_deadline(),
+    ] {
+        if d < 0.0 {
+            continue;
+        }
+        if best < 0.0 || d < best {
+            best = d;
+        }
+    }
+    best
 }
 
 /// Block until the next scheduled timer fires, a notify arrives, or the

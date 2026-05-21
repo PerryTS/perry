@@ -64,7 +64,13 @@ pub(super) fn compile_module_entry(
 ) -> Result<()> {
     let strings_init_name = format!("__perry_init_strings_{}", module_prefix);
 
-    let is_dylib = output_type == "dylib";
+    // #1088 — staticlib output is functionally identical to dylib at the
+    // codegen layer: both expose `perry_module_init` instead of `main`, both
+    // skip the embedded event loop (host drives it), both skip the
+    // app-group/geisterhand init that only makes sense for a stand-alone
+    // executable. The variable name stays for diff hygiene with the
+    // historical dylib-only branches downstream.
+    let is_dylib = output_type == "dylib" || output_type == "staticlib";
 
     if is_entry {
         // Pre-declare each non-entry module's init function as an
