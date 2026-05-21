@@ -259,9 +259,9 @@ pub fn try_lower_extern_func_call(
         let call_name = format!("js_closure_call{}", lowered_args.len().min(16));
         let mut decl_types = vec![I64];
         decl_types.extend(std::iter::repeat(DOUBLE).take(lowered_args.len().min(16)));
-        ctx.pending_declares.push((call_name.clone(), DOUBLE, decl_types));
-        let mut call_args: Vec<(crate::types::LlvmType, String)> =
-            vec![(I64, closure_handle)];
+        ctx.pending_declares
+            .push((call_name.clone(), DOUBLE, decl_types));
+        let mut call_args: Vec<(crate::types::LlvmType, String)> = vec![(I64, closure_handle)];
         for arg in lowered_args.into_iter().take(16) {
             call_args.push((DOUBLE, arg));
         }

@@ -1152,9 +1152,13 @@ pub extern "C" fn js_object_get_field_by_name(
                             let msg_len = (*msg).byte_len as usize;
                             let msg_bytes = std::slice::from_raw_parts(msg_ptr, msg_len);
                             if msg_bytes == b"The argument is invalid" {
-                                let code =
-                                    crate::string::js_string_from_bytes(b"ERR_INVALID_ARG_TYPE".as_ptr(), 20);
-                                return JSValue::from_bits(crate::js_nanbox_string(code as i64).to_bits());
+                                let code = crate::string::js_string_from_bytes(
+                                    b"ERR_INVALID_ARG_TYPE".as_ptr(),
+                                    20,
+                                );
+                                return JSValue::from_bits(
+                                    crate::js_nanbox_string(code as i64).to_bits(),
+                                );
                             }
                         }
                         return JSValue::undefined();

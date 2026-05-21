@@ -33,7 +33,9 @@ use crate::closure::{
     js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_register_closure_arity,
     ClosureHeader,
 };
-use crate::object::{js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader};
+use crate::object::{
+    js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
+};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
 
@@ -453,12 +455,36 @@ fn ensure_channel(name: f64) -> i64 {
     let obj = js_object_alloc(0, 9);
     set_field_value(obj, "name", name);
     set_field_value(obj, "hasSubscribers", bool_value(false));
-    set_field_value(obj, "subscribe", method_closure(cast1(diag_channel_subscribe), 1, id));
-    set_field_value(obj, "unsubscribe", method_closure(cast1(diag_channel_unsubscribe), 1, id));
-    set_field_value(obj, "publish", method_closure(cast1(diag_channel_publish), 1, id));
-    set_field_value(obj, "bindStore", method_closure(cast2(diag_channel_bind_store), 2, id));
-    set_field_value(obj, "unbindStore", method_closure(cast1(diag_channel_unbind_store), 1, id));
-    set_field_value(obj, "runStores", method_closure(cast5(diag_channel_run_stores), 5, id));
+    set_field_value(
+        obj,
+        "subscribe",
+        method_closure(cast1(diag_channel_subscribe), 1, id),
+    );
+    set_field_value(
+        obj,
+        "unsubscribe",
+        method_closure(cast1(diag_channel_unsubscribe), 1, id),
+    );
+    set_field_value(
+        obj,
+        "publish",
+        method_closure(cast1(diag_channel_publish), 1, id),
+    );
+    set_field_value(
+        obj,
+        "bindStore",
+        method_closure(cast2(diag_channel_bind_store), 2, id),
+    );
+    set_field_value(
+        obj,
+        "unbindStore",
+        method_closure(cast1(diag_channel_unbind_store), 1, id),
+    );
+    set_field_value(
+        obj,
+        "runStores",
+        method_closure(cast5(diag_channel_run_stores), 5, id),
+    );
     DIAG_CHANNEL_BY_KEY.with(|m| {
         m.borrow_mut().insert(key, id);
     });
@@ -540,7 +566,8 @@ fn publish_channel(id: i64, data: f64) {
 pub fn diagnostics_channel_publish_console(method: &str, arr: *const crate::array::ArrayHeader) {
     let name = format!("console.{method}");
     let s = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let name_value = f64::from_bits(crate::value::STRING_TAG | (s as u64 & crate::value::POINTER_MASK));
+    let name_value =
+        f64::from_bits(crate::value::STRING_TAG | (s as u64 & crate::value::POINTER_MASK));
     let id = ensure_channel(name_value);
     let arr_value = if arr.is_null() {
         undefined()
@@ -608,7 +635,11 @@ extern "C" fn diag_channel_unbind_store(closure: *const ClosureHeader, store: f6
     let id = method_id(closure);
     let removed = DIAG_CHANNELS.with(|m| {
         if let Some(c) = m.borrow_mut().get_mut(&id) {
-            if let Some(pos) = c.stores.iter().position(|(s, _)| s.to_bits() == store.to_bits()) {
+            if let Some(pos) = c
+                .stores
+                .iter()
+                .position(|(s, _)| s.to_bits() == store.to_bits())
+            {
                 c.stores.remove(pos);
                 return true;
             }
@@ -720,13 +751,21 @@ extern "C" fn thunk_diag_channel(closure: *const ClosureHeader, name: f64) -> f6
     channel_obj(ensure_channel(name))
 }
 
-extern "C" fn thunk_diag_subscribe(_closure: *const ClosureHeader, name: f64, subscriber: f64) -> f64 {
+extern "C" fn thunk_diag_subscribe(
+    _closure: *const ClosureHeader,
+    name: f64,
+    subscriber: f64,
+) -> f64 {
     let id = ensure_channel(name);
     add_subscriber(id, subscriber);
     undefined()
 }
 
-extern "C" fn thunk_diag_unsubscribe(_closure: *const ClosureHeader, name: f64, subscriber: f64) -> f64 {
+extern "C" fn thunk_diag_unsubscribe(
+    _closure: *const ClosureHeader,
+    name: f64,
+    subscriber: f64,
+) -> f64 {
     let id = ensure_channel(name);
     bool_value(remove_subscriber(id, subscriber))
 }
@@ -787,8 +826,14 @@ fn channel_from_object_property(obj_value: f64, prop: &str) -> i64 {
 extern "C" fn diag_trace_subscribe(closure: *const ClosureHeader, handlers: f64) -> f64 {
     let id = method_id(closure);
     let events = DIAG_TRACES.with(|m| m.borrow().get(&id).map(|t| t.events).unwrap_or([0; 5]));
-    for (idx, name) in ["start", "end", "asyncStart", "asyncEnd", "error"].iter().enumerate() {
-        let h = get_field_value(crate::value::js_nanbox_get_pointer(handlers) as *mut ObjectHeader, name);
+    for (idx, name) in ["start", "end", "asyncStart", "asyncEnd", "error"]
+        .iter()
+        .enumerate()
+    {
+        let h = get_field_value(
+            crate::value::js_nanbox_get_pointer(handlers) as *mut ObjectHeader,
+            name,
+        );
         if valid_closure_value(h) {
             add_subscriber(events[idx], h);
         }
@@ -800,8 +845,14 @@ extern "C" fn diag_trace_unsubscribe(closure: *const ClosureHeader, handlers: f6
     let id = method_id(closure);
     let events = DIAG_TRACES.with(|m| m.borrow().get(&id).map(|t| t.events).unwrap_or([0; 5]));
     let mut ok = true;
-    for (idx, name) in ["start", "end", "asyncStart", "asyncEnd", "error"].iter().enumerate() {
-        let h = get_field_value(crate::value::js_nanbox_get_pointer(handlers) as *mut ObjectHeader, name);
+    for (idx, name) in ["start", "end", "asyncStart", "asyncEnd", "error"]
+        .iter()
+        .enumerate()
+    {
+        let h = get_field_value(
+            crate::value::js_nanbox_get_pointer(handlers) as *mut ObjectHeader,
+            name,
+        );
         if valid_closure_value(h) && !remove_subscriber(events[idx], h) {
             ok = false;
         }
@@ -845,12 +896,20 @@ extern "C" fn diag_trace_sync(
     publish_channel(events[0], context);
     match catch_js(|| call_fn_value(fn_value, this_arg, &[arg])) {
         Ok(result) => {
-            set_field_value(crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader, "result", result);
+            set_field_value(
+                crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
+                "result",
+                result,
+            );
             publish_channel(events[1], context);
             result
         }
         Err(err) => {
-            set_field_value(crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader, "error", err);
+            set_field_value(
+                crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
+                "error",
+                err,
+            );
             publish_channel(events[4], context);
             publish_channel(events[1], context);
             crate::exception::js_throw(err)
@@ -873,34 +932,52 @@ extern "C" fn diag_trace_promise(
     publish_channel(events[0], context);
     let result = call_fn_value(fn_value, this_arg, &[]);
     let result_ptr = crate::value::js_nanbox_get_pointer(result) as *mut crate::promise::Promise;
-    if !result_ptr.is_null() && (result.to_bits() & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+    if !result_ptr.is_null()
+        && (result.to_bits() & crate::value::TAG_MASK) == crate::value::POINTER_TAG
+    {
         let _ = crate::promise::js_promise_run_microtasks();
         let state = crate::promise::js_promise_state(result_ptr);
         if state == 1 {
             publish_channel(events[1], context);
             let value = crate::promise::js_promise_value(result_ptr);
-            set_field_value(crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader, "result", value);
+            set_field_value(
+                crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
+                "result",
+                value,
+            );
             publish_channel(events[2], context);
             publish_channel(events[3], context);
             return result;
         } else if state == 2 {
             publish_channel(events[1], context);
             let reason = crate::promise::js_promise_reason(result_ptr);
-            set_field_value(crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader, "error", reason);
+            set_field_value(
+                crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
+                "error",
+                reason,
+            );
             publish_channel(events[4], context);
             publish_channel(events[2], context);
             publish_channel(events[3], context);
             return result;
         } else {
             publish_channel(events[1], context);
-            set_field_value(crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader, "result", result);
+            set_field_value(
+                crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
+                "result",
+                result,
+            );
             publish_channel(events[2], context);
             publish_channel(events[3], context);
             return result;
         }
     } else {
         publish_channel(events[1], context);
-        set_field_value(crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader, "result", result);
+        set_field_value(
+            crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
+            "result",
+            result,
+        );
         publish_channel(events[2], context);
         publish_channel(events[3], context);
         return result;
@@ -928,14 +1005,21 @@ extern "C" fn diag_trace_callback(
     });
     publish_channel(events[0], context);
     let ret = call_fn_value(fn_value, this_arg, &[callback, err, res]);
-    set_field_value(crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader, "result", res);
+    set_field_value(
+        crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
+        "result",
+        res,
+    );
     publish_channel(events[2], context);
     publish_channel(events[3], context);
     publish_channel(events[1], context);
     ret
 }
 
-extern "C" fn thunk_diag_tracing_channel(_closure: *const ClosureHeader, name_or_channels: f64) -> f64 {
+extern "C" fn thunk_diag_tracing_channel(
+    _closure: *const ClosureHeader,
+    name_or_channels: f64,
+) -> f64 {
     let id = next_diag_id();
     let events = if channel_key(name_or_channels).is_some() {
         [
@@ -945,7 +1029,8 @@ extern "C" fn thunk_diag_tracing_channel(_closure: *const ClosureHeader, name_or
             ensure_channel(tracing_event_name(name_or_channels, "asyncEnd")),
             ensure_channel(tracing_event_name(name_or_channels, "error")),
         ]
-    } else if (name_or_channels.to_bits() & crate::value::POINTER_TAG) == crate::value::POINTER_TAG {
+    } else if (name_or_channels.to_bits() & crate::value::POINTER_TAG) == crate::value::POINTER_TAG
+    {
         [
             channel_from_object_property(name_or_channels, "start"),
             channel_from_object_property(name_or_channels, "end"),
@@ -963,11 +1048,31 @@ extern "C" fn thunk_diag_tracing_channel(_closure: *const ClosureHeader, name_or
     set_field_value(obj, "asyncEnd", channel_obj(events[3]));
     set_field_value(obj, "error", channel_obj(events[4]));
     set_field_value(obj, "hasSubscribers", bool_value(false));
-    set_field_value(obj, "subscribe", method_closure(cast1(diag_trace_subscribe), 1, id));
-    set_field_value(obj, "unsubscribe", method_closure(cast1(diag_trace_unsubscribe), 1, id));
-    set_field_value(obj, "traceSync", method_closure(cast4(diag_trace_sync), 4, id));
-    set_field_value(obj, "tracePromise", method_closure(cast3(diag_trace_promise), 3, id));
-    set_field_value(obj, "traceCallback", method_closure(cast7(diag_trace_callback), 7, id));
+    set_field_value(
+        obj,
+        "subscribe",
+        method_closure(cast1(diag_trace_subscribe), 1, id),
+    );
+    set_field_value(
+        obj,
+        "unsubscribe",
+        method_closure(cast1(diag_trace_unsubscribe), 1, id),
+    );
+    set_field_value(
+        obj,
+        "traceSync",
+        method_closure(cast4(diag_trace_sync), 4, id),
+    );
+    set_field_value(
+        obj,
+        "tracePromise",
+        method_closure(cast3(diag_trace_promise), 3, id),
+    );
+    set_field_value(
+        obj,
+        "traceCallback",
+        method_closure(cast7(diag_trace_callback), 7, id),
+    );
     DIAG_TRACES.with(|m| {
         m.borrow_mut().insert(id, DiagTracingState { obj, events });
     });
