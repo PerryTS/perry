@@ -186,7 +186,10 @@ pub fn build_class_field_natives(
 /// which the inliner has already copied (substituting `this` with the
 /// receiver local). Recurses through control-flow constructs so
 /// guarded `let` bindings still register.
-pub fn scan_stmt_for_user_class_instances(stmt: &Stmt, user_classes: &mut HashMap<LocalId, String>) {
+pub fn scan_stmt_for_user_class_instances(
+    stmt: &Stmt,
+    user_classes: &mut HashMap<LocalId, String>,
+) {
     match stmt {
         Stmt::Let { id, init, .. } => {
             if let Some(init_expr) = init {

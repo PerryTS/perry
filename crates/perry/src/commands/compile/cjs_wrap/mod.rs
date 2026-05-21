@@ -64,7 +64,9 @@ mod tests {
         extract_exports_from_source, extract_named_exports_from_require,
         extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
     };
-    use super::extract_requires::{extract_require_aliases_with_ranges, extract_require_specifiers};
+    use super::extract_requires::{
+        extract_require_aliases_with_ranges, extract_require_specifiers,
+    };
     use super::wrap::wrap_commonjs;
     use std::path::PathBuf;
 

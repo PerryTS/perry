@@ -128,7 +128,11 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
 
 /// Unify a parameter type with an argument type, collecting type variable bindings.
 /// Returns true if unification succeeded.
-pub(crate) fn unify_types(param_ty: &Type, arg_ty: &Type, bindings: &mut HashMap<String, Type>) -> bool {
+pub(crate) fn unify_types(
+    param_ty: &Type,
+    arg_ty: &Type,
+    bindings: &mut HashMap<String, Type>,
+) -> bool {
     match (param_ty, arg_ty) {
         // Type variable - bind it to the argument type
         (Type::TypeVar(name), ty) => {
@@ -330,4 +334,3 @@ pub(crate) fn infer_type_args_for_class(
 
     Some(inferred_args)
 }
-

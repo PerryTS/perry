@@ -1,7 +1,9 @@
 //! GC root scanners for promise-related thread-locals and the
 //! `Promise.withResolvers` constructor.
 
+use super::async_step::LAST_ASYNC_STEP_THUNKS;
 use super::*;
+
 pub fn scan_promise_roots(mark: &mut dyn FnMut(f64)) {
     let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
     scan_promise_roots_mut(&mut visitor);

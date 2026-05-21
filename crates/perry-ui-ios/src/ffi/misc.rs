@@ -193,4 +193,3 @@ pub extern "C" fn hone_get_documents_dir() -> f64 {
 pub extern "C" fn __wrapper_hone_get_documents_dir() -> f64 {
     hone_get_documents_dir()
 }
-

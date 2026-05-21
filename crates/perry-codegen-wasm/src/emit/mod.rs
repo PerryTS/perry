@@ -56,7 +56,7 @@ use closures::{collect_closures_from_expr, collect_closures_from_stmts};
 #[allow(unused_imports)]
 use constants::f64_const_bits;
 use constants::{
-    EnumResolvedValue, STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED, f64_const,
+    f64_const, EnumResolvedValue, STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 use func_emit_ctx::FuncEmitCtx;
 use locals::{collect_locals, collect_module_let_ids, resolve_source_module_idx};

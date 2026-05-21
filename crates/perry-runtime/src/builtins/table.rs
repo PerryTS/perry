@@ -5,9 +5,9 @@
 //! across arrays of objects/arrays/primitives, Maps, Sets, typed arrays, and
 //! single-object inputs.
 
-use super::*;
 #[cfg(feature = "ohos-napi")]
 use super::println;
+use super::*;
 
 // === console.table ===
 //

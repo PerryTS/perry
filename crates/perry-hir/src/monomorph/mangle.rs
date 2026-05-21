@@ -22,7 +22,7 @@ pub(crate) fn generate_specialized_name(base_name: &str, type_args: &[Type]) -> 
 }
 
 /// Mangle a type into a string suitable for use in identifiers
-fn mangle_type(ty: &Type) -> String {
+pub(crate) fn mangle_type(ty: &Type) -> String {
     match ty {
         Type::Void => "void".to_string(),
         Type::Null => "null".to_string(),

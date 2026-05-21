@@ -11,9 +11,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{
-    lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx,
-};
+use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::type_analysis::{is_global_constructor_expr, receiver_class_name};
 use crate::types::{DOUBLE, I32, I64, PTR};
@@ -119,15 +117,21 @@ pub fn try_lower_console_call(
                 match property.as_str() {
                     "groupEnd" => {
                         ctx.block().call_void("js_console_group_end", &[]);
-                        return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                        return Ok(Some(double_literal(f64::from_bits(
+                            crate::nanbox::TAG_UNDEFINED,
+                        ))));
                     }
                     "clear" => {
                         ctx.block().call_void("js_console_clear", &[]);
-                        return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                        return Ok(Some(double_literal(f64::from_bits(
+                            crate::nanbox::TAG_UNDEFINED,
+                        ))));
                     }
                     "group" | "groupCollapsed" => {
                         ctx.block().call_void("js_console_group_begin", &[]);
-                        return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                        return Ok(Some(double_literal(f64::from_bits(
+                            crate::nanbox::TAG_UNDEFINED,
+                        ))));
                     }
                     "count" | "countReset" | "time" | "timeEnd" | "timeLog" => {
                         // Fall through to the dedicated handler below
@@ -141,27 +145,37 @@ pub fn try_lower_console_call(
                         // their arg is null, so pass i64 0 directly.
                         ctx.block()
                             .call_void("js_console_log_spread", &[(I64, "0")]);
-                        return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                        return Ok(Some(double_literal(f64::from_bits(
+                            crate::nanbox::TAG_UNDEFINED,
+                        ))));
                     }
                     "warn" => {
                         ctx.block()
                             .call_void("js_console_warn_spread", &[(I64, "0")]);
-                        return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                        return Ok(Some(double_literal(f64::from_bits(
+                            crate::nanbox::TAG_UNDEFINED,
+                        ))));
                     }
                     "error" => {
                         ctx.block()
                             .call_void("js_console_error_spread", &[(I64, "0")]);
-                        return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                        return Ok(Some(double_literal(f64::from_bits(
+                            crate::nanbox::TAG_UNDEFINED,
+                        ))));
                     }
                     "trace" => {
                         let val = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                         ctx.block().call_void("js_console_trace", &[(DOUBLE, &val)]);
-                        return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                        return Ok(Some(double_literal(f64::from_bits(
+                            crate::nanbox::TAG_UNDEFINED,
+                        ))));
                     }
                     _ => {
                         // Other zero-arg console.* methods (dir, assert,
                         // etc.) — print nothing.
-                        return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                        return Ok(Some(double_literal(f64::from_bits(
+                            crate::nanbox::TAG_UNDEFINED,
+                        ))));
                     }
                 }
             }
@@ -174,7 +188,9 @@ pub fn try_lower_console_call(
                         .call_void("js_console_log_dynamic", &[(DOUBLE, &v)]);
                 }
                 ctx.block().call_void("js_console_group_begin", &[]);
-                return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
             }
             // console.trace([msg]) — `js_console_trace` formats the
             // optional message and emits a native backtrace to stderr
@@ -198,7 +214,9 @@ pub fn try_lower_console_call(
                     ctx.block()
                         .call_void("js_console_trace_spread", &[(I64, &current_arr)]);
                 }
-                return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
             }
             // console.table(data[, properties]) — dedicated table renderer.
             if property == "table" && (args.len() == 1 || args.len() == 2) {
@@ -212,7 +230,9 @@ pub fn try_lower_console_call(
                 } else {
                     ctx.block().call_void("js_console_table", &[(DOUBLE, &v)]);
                 }
-                return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
             }
             // console.time(label) / timeEnd(label) / timeLog(label) —
             // dedicated timer functions that track per-label Instants
@@ -241,7 +261,9 @@ pub fn try_lower_console_call(
                         "js_console_time_log_spread",
                         &[(DOUBLE, &v), (I64, &current_arr)],
                     );
-                    return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                    return Ok(Some(double_literal(f64::from_bits(
+                        crate::nanbox::TAG_UNDEFINED,
+                    ))));
                 }
                 let runtime_fn = match property.as_str() {
                     "time" => "js_console_time_value",
@@ -252,7 +274,9 @@ pub fn try_lower_console_call(
                     _ => unreachable!(),
                 };
                 ctx.block().call_void(runtime_fn, &[(DOUBLE, &v)]);
-                return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
             }
             // Zero-arg time* / count* use the default label "default".
             if matches!(
@@ -274,7 +298,9 @@ pub fn try_lower_console_call(
                     _ => unreachable!(),
                 };
                 blk.call_void(runtime_fn, &[(I64, &handle)]);
-                return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
             }
             // console.assert(cond[, ...messages]) — runtime helper
             // checks the condition and only prints "Assertion failed: msg"
@@ -316,7 +342,9 @@ pub fn try_lower_console_call(
                         &[(DOUBLE, &cond_v), (I64, &current_arr)],
                     );
                 }
-                return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
             }
             // console.dir(obj[, options]) — Node prints just the formatted
             // object. Without an options arg we hit the fast path and route
@@ -340,7 +368,9 @@ pub fn try_lower_console_call(
                     ctx.block()
                         .call_void("js_console_log_dynamic", &[(DOUBLE, &v)]);
                 }
-                return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
             }
             // Single-arg fast path: just print directly. Pre-fix #345 this
             // ignored the `property` and always called `js_console_log_*`,
@@ -366,7 +396,9 @@ pub fn try_lower_console_call(
                     _ => "js_console_log_spread",
                 };
                 ctx.block().call_void(runtime_fn, &[(I64, &current_arr)]);
-                return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
             }
             // Multi-arg: bundle all args into a heap array and call
             // js_console_log_spread, which uses the runtime's
@@ -395,7 +427,9 @@ pub fn try_lower_console_call(
                 _ => "js_console_log_spread",
             };
             ctx.block().call_void(runtime_fn, &[(I64, &current_arr)]);
-            return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+            return Ok(Some(double_literal(f64::from_bits(
+                crate::nanbox::TAG_UNDEFINED,
+            ))));
         }
     }
     Ok(None)
@@ -464,11 +498,17 @@ pub fn try_lower_promise_static_call(
         // `Array.fromAsync(input)` — Node 22+ static method.
         if is_global_constructor_expr(object, "Array") && property == "fromAsync" {
             if args.is_empty() {
-                return Ok(Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))));
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
             }
             let input = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
-            return Ok(Some(blk.call(DOUBLE, "js_array_from_async", &[(DOUBLE, &input)])));
+            return Ok(Some(blk.call(
+                DOUBLE,
+                "js_array_from_async",
+                &[(DOUBLE, &input)],
+            )));
         }
     }
     Ok(None)

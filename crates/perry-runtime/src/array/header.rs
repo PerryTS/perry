@@ -5,7 +5,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-
 thread_local! {
     /// Tagged-template `.raw` side-table — maps a cooked-strings array
     /// pointer to its corresponding raw-strings array pointer. Populated
@@ -351,4 +350,3 @@ pub(crate) unsafe fn mark_array_layout_unknown(arr: *mut ArrayHeader) {
 
 /// Minimum initial capacity for arrays to reduce reallocations
 pub(crate) const MIN_ARRAY_CAPACITY: u32 = 16;
-

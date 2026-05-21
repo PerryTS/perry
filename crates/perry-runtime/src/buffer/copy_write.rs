@@ -79,4 +79,3 @@ pub extern "C" fn js_buffer_write(
         write_len as i32
     }
 }
-

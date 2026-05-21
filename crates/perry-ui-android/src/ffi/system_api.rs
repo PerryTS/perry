@@ -5,8 +5,8 @@
 //! 1410-1714.
 
 use crate::{
-    background, deeplinks, geolocation, image_picker, jni_bridge, keychain, location,
-    network, system,
+    background, deeplinks, geolocation, image_picker, jni_bridge, keychain, location, network,
+    system,
 };
 
 // =============================================================================

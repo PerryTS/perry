@@ -769,4 +769,3 @@ pub extern "C" fn perry_ui_textfield_set_text_color(handle: i64, r: f64, g: f64,
 pub extern "C" fn perry_ui_widget_add_child_at(parent_handle: i64, child_handle: i64, index: f64) {
     widgets::add_child_at(parent_handle, child_handle, index as i64);
 }
-

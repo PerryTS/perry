@@ -346,4 +346,3 @@ pub type InterfaceId = u32;
 
 /// Unique identifier for a type alias
 pub type TypeAliasId = u32;
-

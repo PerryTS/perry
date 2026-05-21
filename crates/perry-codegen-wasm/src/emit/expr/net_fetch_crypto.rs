@@ -6,7 +6,11 @@
 use super::*;
 
 impl<'a> FuncEmitCtx<'a> {
-    pub(super) fn try_emit_expr_net_fetch_crypto(&mut self, func: &mut Function, expr: &Expr) -> bool {
+    pub(super) fn try_emit_expr_net_fetch_crypto(
+        &mut self,
+        func: &mut Function,
+        expr: &Expr,
+    ) -> bool {
         match expr {
             Expr::ChildProcessExecSync { .. }
             | Expr::ChildProcessSpawnSync { .. }

@@ -392,7 +392,12 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
 /// For non-pointer values this is identical to stringify_value; for
 /// objects/arrays it threads the depth counter through.
 #[inline]
-pub(crate) unsafe fn stringify_value_depth(value: f64, type_hint: u32, buf: &mut String, depth: u32) {
+pub(crate) unsafe fn stringify_value_depth(
+    value: f64,
+    type_hint: u32,
+    buf: &mut String,
+    depth: u32,
+) {
     let bits: u64 = value.to_bits();
 
     // Fast path: non-pointer values don't recurse

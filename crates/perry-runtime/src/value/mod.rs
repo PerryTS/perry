@@ -74,13 +74,13 @@ pub(crate) use tags::{
 pub use jsvalue::JSValue;
 
 // ----- JS handle FFI registration + helpers -----
+pub(crate) use handle::js_handle_is_function;
 pub use handle::{
     is_js_handle, js_handle_array_get, js_handle_array_length, js_set_handle_array_get,
     js_set_handle_array_length, js_set_handle_call_method, js_set_handle_object_get_property,
     js_set_handle_to_string, js_set_handle_typeof, js_set_native_module_js_loader,
     js_set_new_from_handle_v8, native_module_try_js_property,
 };
-pub(crate) use handle::js_handle_is_function;
 
 // ----- Basic NaN-box pack / unpack FFI -----
 pub use nanbox::{

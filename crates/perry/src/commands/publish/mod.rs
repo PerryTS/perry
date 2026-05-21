@@ -31,9 +31,9 @@ mod tests;
 // Re-exports — explicit names only (no globs).
 pub use args::PublishArgs;
 pub(crate) use saved_config::{
-    check_beta_consent, config_path, is_interactive, load_config, prompt_input,
-    report_beta_error, save_config, AndroidSavedConfig, AppleSavedConfig, BetaConfig,
-    HarmonyosSavedConfig, IosSavedConfig, PerryConfig,
+    check_beta_consent, config_path, is_interactive, load_config, prompt_input, report_beta_error,
+    save_config, AndroidSavedConfig, AppleSavedConfig, BetaConfig, HarmonyosSavedConfig,
+    IosSavedConfig, PerryConfig,
 };
 pub(crate) use tarball::create_project_tarball_with_excludes;
 
@@ -44,7 +44,9 @@ use credentials::{
     validate_credentials_for_distribute,
 };
 use preflight::{ios_preflight_validation, macos_preflight_validation, run_security_audit_step};
-use server_api::{BuildManifest, BuildResponse, CredentialsPayload, RegisterResponse, ServerMessage};
+use server_api::{
+    BuildManifest, BuildResponse, CredentialsPayload, RegisterResponse, ServerMessage,
+};
 
 pub fn run(args: PublishArgs, format: OutputFormat, use_color: bool, _verbose: u8) -> Result<()> {
     if !check_beta_consent("publish") {

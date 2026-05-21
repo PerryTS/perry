@@ -272,8 +272,7 @@ fn old_page_metadata_reregisters_after_block_metadata_removal() {
 #[test]
 fn old_page_metadata_distributes_multi_page_object_bytes_and_indexes_pages() {
     run_with_fresh_arenas(|| {
-        let old_ptr =
-            arena_alloc_gc_old(GENERATION_PAGE_SIZE * 2 + 77, 8, GC_TYPE_STRING) as usize;
+        let old_ptr = arena_alloc_gc_old(GENERATION_PAGE_SIZE * 2 + 77, 8, GC_TYPE_STRING) as usize;
         let (header_addr, total_size) = old_header_and_size(old_ptr);
         let overlaps = old_object_page_overlaps(header_addr, total_size);
         assert!(
@@ -546,8 +545,7 @@ fn generation_metadata_survives_nursery_block_reset() {
 #[test]
 fn generation_metadata_arena_reset_stats_reports_reusable_bytes_for_retained_reset_blocks() {
     run_with_fresh_arenas(|| {
-        let (idx, _base, _size, before_offset, stats) =
-            reset_single_reclaimable_nursery_block(0);
+        let (idx, _base, _size, before_offset, stats) = reset_single_reclaimable_nursery_block(0);
         assert_eq!(stats.reset_blocks, 1);
         assert_eq!(stats.reusable_bytes, before_offset);
         assert_eq!(stats.deallocated_blocks, 0);
@@ -581,8 +579,7 @@ fn generation_metadata_removed_on_nursery_block_deallocation() {
 #[test]
 fn generation_metadata_arena_reset_stats_reports_deallocated_blocks_as_returned_not_reusable() {
     run_with_fresh_arenas(|| {
-        let (idx, base, size, _before_offset, stats) =
-            reset_single_reclaimable_nursery_block(1);
+        let (idx, base, size, _before_offset, stats) = reset_single_reclaimable_nursery_block(1);
         assert_eq!(stats.reset_blocks, 1);
         assert_eq!(stats.reusable_bytes, 0);
         assert_eq!(stats.deallocated_blocks, 1);

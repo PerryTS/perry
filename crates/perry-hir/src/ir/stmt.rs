@@ -82,4 +82,3 @@ pub struct CatchClause {
     pub param: Option<(LocalId, String)>,
     pub body: Vec<Stmt>,
 }
-

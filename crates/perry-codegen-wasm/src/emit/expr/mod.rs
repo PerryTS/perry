@@ -11,20 +11,20 @@
 //! behavioral changes; per-variant semantics are identical to the pre-split
 //! file.
 
-mod literals_vars;
-mod calls;
-mod native_method;
-mod math;
-mod objects;
 mod arrays;
-mod classes;
-mod strings_json;
-mod map_set;
-mod date_error;
-mod regex_globals;
-mod url_process_path;
 mod buffers;
+mod calls;
+mod classes;
+mod date_error;
+mod literals_vars;
+mod map_set;
+mod math;
+mod native_method;
 mod net_fetch_crypto;
+mod objects;
+mod regex_globals;
+mod strings_json;
+mod url_process_path;
 
 use super::*;
 

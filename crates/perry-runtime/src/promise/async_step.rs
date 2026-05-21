@@ -384,7 +384,7 @@ pub extern "C" fn js_async_first_call(step_closure_nanbox: f64) -> f64 {
 // GC-rooted via `ASYNC_STEP_THUNK_CACHE_SCANNER` so they survive
 // collection until evicted by a different step closure.
 thread_local! {
-    static LAST_ASYNC_STEP_THUNKS: std::cell::Cell<(usize, *mut crate::closure::ClosureHeader, *mut crate::closure::ClosureHeader)> =
+    pub(super) static LAST_ASYNC_STEP_THUNKS: std::cell::Cell<(usize, *mut crate::closure::ClosureHeader, *mut crate::closure::ClosureHeader)> =
         const { std::cell::Cell::new((0, std::ptr::null_mut(), std::ptr::null_mut())) };
 }
 

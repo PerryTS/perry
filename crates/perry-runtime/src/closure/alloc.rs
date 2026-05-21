@@ -74,7 +74,11 @@ pub unsafe fn closure_capture_slots_mut(closure: *mut ClosureHeader) -> *mut u64
 }
 
 #[inline]
-pub unsafe fn note_closure_capture_slot(closure: *mut ClosureHeader, index: usize, value_bits: u64) {
+pub unsafe fn note_closure_capture_slot(
+    closure: *mut ClosureHeader,
+    index: usize,
+    value_bits: u64,
+) {
     crate::gc::layout_note_slot(closure as usize, index, value_bits);
     let slot = closure_capture_slots_mut(closure).add(index);
     crate::gc::runtime_write_barrier_slot(closure as usize, slot as usize, value_bits);

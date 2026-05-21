@@ -3,7 +3,6 @@ use super::*;
 use crate::value::JSValue;
 use std::ptr;
 
-
 /// Set an element using JSValue
 #[no_mangle]
 pub extern "C" fn js_array_set(arr: *mut ArrayHeader, index: u32, value: JSValue) {

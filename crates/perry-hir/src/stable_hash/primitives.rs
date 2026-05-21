@@ -113,4 +113,3 @@ impl<A: SH, B: SH, C: SH> SH for (A, B, C) {
         self.2.hash(h);
     }
 }
-

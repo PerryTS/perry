@@ -98,9 +98,8 @@ pub(super) fn ios_preflight_validation(
 
         // 1. Validate provisioning profile bundle ID matches project bundle_id
         if let Some(profile_path) = provisioning_profile_path {
-            let profile_data = fs::read(profile_path).with_context(|| {
-                format!("Failed to read provisioning profile: {profile_path}")
-            })?;
+            let profile_data = fs::read(profile_path)
+                .with_context(|| format!("Failed to read provisioning profile: {profile_path}"))?;
             let data_str = String::from_utf8_lossy(&profile_data);
             if let (Some(xml_start), Some(xml_end)) =
                 (data_str.find("<?xml"), data_str.find("</plist>"))
@@ -115,12 +114,12 @@ pub(super) fn ios_preflight_validation(
                         if let Some(s_end) = after_key.find("</string>") {
                             let app_identifier = &after_key[s_start + "<string>".len()..s_end];
                             // application-identifier is "TEAMID.bundle.id" — strip team prefix
-                            let profile_bundle_id =
-                                if let Some(dot_pos) = app_identifier.find('.') {
-                                    &app_identifier[dot_pos + 1..]
-                                } else {
-                                    app_identifier
-                                };
+                            let profile_bundle_id = if let Some(dot_pos) = app_identifier.find('.')
+                            {
+                                &app_identifier[dot_pos + 1..]
+                            } else {
+                                app_identifier
+                            };
 
                             if profile_bundle_id != bundle_id && profile_bundle_id != "*" {
                                 errors.push(format!(
@@ -176,12 +175,10 @@ pub(super) fn ios_preflight_validation(
                 // Extract and validate team ID matches
                 if let Some(expected_team) = apple_team_id {
                     if let Some(team_pos) = plist_xml.find("<key>TeamIdentifier</key>") {
-                        let after_key =
-                            &plist_xml[team_pos + "<key>TeamIdentifier</key>".len()..];
+                        let after_key = &plist_xml[team_pos + "<key>TeamIdentifier</key>".len()..];
                         if let Some(s_start) = after_key.find("<string>") {
                             if let Some(s_end) = after_key.find("</string>") {
-                                let profile_team =
-                                    &after_key[s_start + "<string>".len()..s_end];
+                                let profile_team = &after_key[s_start + "<string>".len()..s_end];
                                 if profile_team != expected_team {
                                     errors.push(format!(
                                         "Provisioning profile team ID mismatch:\n\
@@ -196,8 +193,7 @@ pub(super) fn ios_preflight_validation(
                     }
                 }
             } else {
-                warnings
-                    .push("Could not parse provisioning profile to validate bundle ID.".into());
+                warnings.push("Could not parse provisioning profile to validate bundle ID.".into());
             }
         } else {
             errors.push(
@@ -251,7 +247,7 @@ pub(super) fn ios_preflight_validation(
                 "No distribution certificate (.p12) provided. Required for App Store signing.\n\
                  \x20\x20  Add certificate to [ios] in perry.toml or pass --certificate\n\
                  \x20\x20  Run `perry setup ios` to configure automatically"
-                .into()
+                    .into(),
             );
         }
 
@@ -350,7 +346,7 @@ pub(super) fn macos_preflight_validation(
                 "No distribution certificate (.p12) provided. Required for App Store signing.\n\
                  \x20\x20  Add certificate to [macos] in perry.toml or pass --certificate\n\
                  \x20\x20  Run `perry setup macos` to configure automatically"
-                .into()
+                    .into(),
             );
         }
 

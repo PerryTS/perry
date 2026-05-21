@@ -5,9 +5,9 @@
 //! guards, function-name registry, `format_jsvalue` / `format_jsvalue_for_json`
 //! recursion, plus `util.format` / `util.inspect` entry points.
 
-use super::*;
 #[cfg(feature = "ohos-napi")]
 use super::println;
+use super::*;
 
 /// Returns true if the f64 value is negative zero (-0.0).
 /// Uses bit pattern comparison so +0.0 and -0.0 are distinguished

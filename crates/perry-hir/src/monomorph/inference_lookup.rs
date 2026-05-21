@@ -59,4 +59,3 @@ impl InferenceLookup {
         Self { funcs, classes }
     }
 }
-

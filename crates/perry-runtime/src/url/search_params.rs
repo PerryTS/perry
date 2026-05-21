@@ -334,7 +334,9 @@ pub(crate) fn read_iterable_pair_entries(arr: *const ArrayHeader) -> Vec<(String
 /// only if the shape matches: a single field whose value is a top-level array
 /// of 2-element [string, string] pair arrays. Returns None for any other shape
 /// (the caller falls back to record enumeration).
-pub(crate) fn try_read_as_search_params(params: *mut ObjectHeader) -> Option<Vec<(String, String)>> {
+pub(crate) fn try_read_as_search_params(
+    params: *mut ObjectHeader,
+) -> Option<Vec<(String, String)>> {
     if params.is_null() {
         return None;
     }

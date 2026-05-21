@@ -279,4 +279,3 @@ pub struct Param {
     /// True if this is a rest parameter (...args)
     pub is_rest: bool,
 }
-

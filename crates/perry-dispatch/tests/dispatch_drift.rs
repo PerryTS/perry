@@ -117,15 +117,35 @@ fn runtime_symbols_appear_in_js_and_wasm_emit() {
         .parent()
         .expect("perry-dispatch lives under crates/");
 
-    let js_emit_path = crates_root.join("perry-codegen-js/src/emit.rs");
-    // #1102: `emit.rs` was split into a directory module — the canonical
-    // dispatch-wiring lookup now lives in `emit/mod.rs`.
-    let wasm_emit_path = crates_root.join("perry-codegen-wasm/src/emit/mod.rs");
+    // v0.5.1020 file-size split: `emit.rs` became a directory module
+    // in both perry-codegen-js and perry-codegen-wasm. Concatenate every
+    // sibling under `emit/` so the dispatch-wiring lookups below still
+    // find the runtime-symbol mentions regardless of which sibling
+    // emits which method-call branch.
+    fn read_emit_dir(dir: &std::path::Path) -> String {
+        let mut combined = String::new();
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("emit dir {:?} must be readable: {}", dir, e));
+        for ent in entries {
+            let ent = ent.expect("emit dir entry must be readable");
+            let path = ent.path();
+            if path.is_dir() {
+                combined.push_str(&read_emit_dir(&path));
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let chunk = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("emit sibling {:?} must be readable: {}", path, e));
+                combined.push_str(&chunk);
+                combined.push('\n');
+            }
+        }
+        combined
+    }
 
-    let js_src = std::fs::read_to_string(&js_emit_path)
-        .expect("JS emit source must be readable from the workspace");
-    let wasm_src = std::fs::read_to_string(&wasm_emit_path)
-        .expect("WASM emit source must be readable from the workspace");
+    let js_emit_dir = crates_root.join("perry-codegen-js/src/emit");
+    let wasm_emit_dir = crates_root.join("perry-codegen-wasm/src/emit");
+
+    let js_src = read_emit_dir(&js_emit_dir);
+    let wasm_src = read_emit_dir(&wasm_emit_dir);
 
     // Both backends now route unknown methods through
     // perry_dispatch::ui_method_to_runtime, so an LLVM row missing from

@@ -47,4 +47,3 @@ pub extern "C" fn js_array_is_array(value: f64) -> f64 {
         }
     }
 }
-

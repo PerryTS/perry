@@ -216,7 +216,10 @@ pub(crate) fn tape_mode_from_env() -> TapeMode {
 /// parser (pending parse-boundary collection → gc_check_trigger →
 /// suppress → parse → unsuppress → bump malloc trigger + cache trim) so
 /// it's a drop-in replacement behind the feature flag.
-pub(crate) unsafe fn try_parse_via_tape(text_ptr: *const StringHeader, bytes: &[u8]) -> Option<JSValue> {
+pub(crate) unsafe fn try_parse_via_tape(
+    text_ptr: *const StringHeader,
+    bytes: &[u8],
+) -> Option<JSValue> {
     crate::json_tape::with_built_tape(bytes, |tape_entries| {
         crate::gc::gc_collect_pending_suppressed_parse();
         crate::gc::gc_check_trigger();
@@ -423,4 +426,3 @@ pub(crate) fn shape_hash(bytes: &[u8]) -> u64 {
     // Nonzero class_id (0 is reserved for plain objects).
     h | 0x8000_0000_0000_0000
 }
-

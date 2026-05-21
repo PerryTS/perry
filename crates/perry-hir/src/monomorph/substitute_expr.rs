@@ -901,4 +901,3 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
         Stmt::PreallocateBoxes(ids) => Stmt::PreallocateBoxes(ids.clone()),
     }
 }
-

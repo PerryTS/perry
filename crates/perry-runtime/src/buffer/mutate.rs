@@ -1,6 +1,5 @@
 use super::*;
 
-
 /// `crypto.getRandomValues(buf)` — fill an existing buffer with random
 /// bytes in-place. Returns the same buffer pointer.
 #[no_mangle]

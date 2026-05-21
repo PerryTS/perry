@@ -185,7 +185,6 @@ pub static EXPORT_STAR_RE: Lazy<Regex> = Lazy::new(|| {
 pub static BLOCK_COMMENT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)/\*.*?\*/").unwrap());
 pub static LINE_COMMENT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)//.*$").unwrap());
 
-
 // Topical sub-modules (extracted from the original modules.rs).
 mod builtin_stubs;
 mod cjs;

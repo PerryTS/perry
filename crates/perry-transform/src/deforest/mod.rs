@@ -81,9 +81,7 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
-pub use call_sites::{
-    rewrite_call_sites_in_stmts, rewrite_call_sites_in_stmts_with_local_pass,
-};
+pub use call_sites::{rewrite_call_sites_in_stmts, rewrite_call_sites_in_stmts_with_local_pass};
 pub use detect::{analyze_producer, body_has_closure, detect_producers, stmt_contains_return};
 pub use out_usage::OutUsageAnalyzer;
 pub use producer_rewrite::{rewrite_producer_body, SubstituteLocal};

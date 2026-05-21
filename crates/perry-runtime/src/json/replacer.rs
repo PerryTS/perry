@@ -547,7 +547,12 @@ pub(crate) unsafe fn stringify_value_pretty(
     write_number(buf, value);
 }
 
-pub(crate) unsafe fn stringify_object_pretty(ptr: *const u8, buf: &mut String, indent: &str, depth: usize) {
+pub(crate) unsafe fn stringify_object_pretty(
+    ptr: *const u8,
+    buf: &mut String,
+    indent: &str,
+    depth: usize,
+) {
     // Circular reference check
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
@@ -632,7 +637,12 @@ pub(crate) unsafe fn stringify_object_pretty(ptr: *const u8, buf: &mut String, i
     STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
 }
 
-pub(crate) unsafe fn stringify_array_pretty(ptr: *const u8, buf: &mut String, indent: &str, depth: usize) {
+pub(crate) unsafe fn stringify_array_pretty(
+    ptr: *const u8,
+    buf: &mut String,
+    indent: &str,
+    depth: usize,
+) {
     let arr = ptr as *const crate::ArrayHeader;
     let len = (*arr).length;
     let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
@@ -1029,4 +1039,3 @@ pub unsafe extern "C" fn js_json_stringify_full(
     // Return as NaN-boxed string
     (STRING_TAG | (result_ptr as u64 & POINTER_MASK)) as i64
 }
-

@@ -267,4 +267,3 @@ pub extern "C" fn perry_ui_toolbar_add_item(
 
 #[no_mangle]
 pub extern "C" fn perry_ui_toolbar_attach(_toolbar: i64) {}
-

@@ -111,7 +111,9 @@ pub extern "C" fn js_array_from_f64(elements: *const f64, count: u32) -> *mut Ar
 /// and emit `obj[0]..obj[N-1]` in order (missing slots fill with `undefined`
 /// per spec). Receivers without a numeric `length` property produce an
 /// empty array (ToLength coerces non-numbers to 0).
-pub(crate) unsafe fn js_array_from_arraylike(obj: *const crate::object::ObjectHeader) -> *mut ArrayHeader {
+pub(crate) unsafe fn js_array_from_arraylike(
+    obj: *const crate::object::ObjectHeader,
+) -> *mut ArrayHeader {
     if obj.is_null() {
         return js_array_alloc(0);
     }
@@ -237,4 +239,3 @@ pub(crate) unsafe fn maybe_force_lazy(arr: *const ArrayHeader) -> *const ArrayHe
     }
     crate::json_tape::force_materialize_lazy(lazy) as *const ArrayHeader
 }
-

@@ -307,4 +307,3 @@ pub extern "C" fn perry_system_audio_start_recording() {
 pub extern "C" fn perry_system_audio_stop_recording() {
     audio::stop_recording();
 }
-

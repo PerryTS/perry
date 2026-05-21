@@ -40,4 +40,3 @@ pub extern "C" fn js_array_reduce_right(
         accumulator
     }
 }
-

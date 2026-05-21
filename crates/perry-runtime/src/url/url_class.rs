@@ -7,7 +7,9 @@ use super::parse::{
     throw_invalid_url, URL_HASH, URL_HOST, URL_HOSTNAME, URL_HREF, URL_ORIGIN, URL_PASSWORD,
     URL_PATHNAME, URL_PORT, URL_PROTOCOL, URL_SEARCH, URL_SEARCH_PARAMS, URL_USERNAME,
 };
-use super::search_params::{create_url_search_params_object, parse_query_string, URL_SEARCH_PARAMS_OWNER};
+use super::search_params::{
+    create_url_search_params_object, parse_query_string, URL_SEARCH_PARAMS_OWNER,
+};
 
 /// Create a new URL from a string
 /// js_url_new(url: *mut StringHeader) -> *mut ObjectHeader (URL object)

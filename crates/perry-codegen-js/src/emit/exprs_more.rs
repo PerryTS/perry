@@ -5,18 +5,25 @@ impl JsEmitter {
     pub fn emit_expr_continued(&mut self, expr: &Expr) {
         match expr {
             // --- Child process (throw stubs) ---
-            Expr::ChildProcessExecSync { .. } |
-            Expr::ChildProcessSpawnSync { .. } |
-            Expr::ChildProcessSpawn { .. } |
-            Expr::ChildProcessExec { .. } |
-            Expr::ChildProcessSpawnBackground { .. } |
-            Expr::ChildProcessGetProcessStatus(_) |
-            Expr::ChildProcessKillProcess(_) => {
-                self.output.push_str("((() => { throw new Error('child_process not available in browser'); })())");
+            Expr::ChildProcessExecSync { .. }
+            | Expr::ChildProcessSpawnSync { .. }
+            | Expr::ChildProcessSpawn { .. }
+            | Expr::ChildProcessExec { .. }
+            | Expr::ChildProcessSpawnBackground { .. }
+            | Expr::ChildProcessGetProcessStatus(_)
+            | Expr::ChildProcessKillProcess(_) => {
+                self.output.push_str(
+                    "((() => { throw new Error('child_process not available in browser'); })())",
+                );
             }
 
             // --- Fetch ---
-            Expr::FetchWithOptions { url, method, body, headers } => {
+            Expr::FetchWithOptions {
+                url,
+                method,
+                body,
+                headers,
+            } => {
                 self.output.push_str("fetch(");
                 self.emit_expr(url);
                 self.output.push_str(", {method: ");
@@ -25,7 +32,9 @@ impl JsEmitter {
                 self.emit_expr(body);
                 self.output.push_str(", headers: {");
                 for (i, (key, val)) in headers.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.output.push_str(&self.quote_string(key));
                     self.output.push_str(": ");
                     self.emit_expr(val);
@@ -39,21 +48,29 @@ impl JsEmitter {
                 self.emit_expr(auth_header);
                 self.output.push_str("}})");
             }
-            Expr::FetchPostWithAuth { url, auth_header, body } => {
+            Expr::FetchPostWithAuth {
+                url,
+                auth_header,
+                body,
+            } => {
                 self.output.push_str("fetch(");
                 self.emit_expr(url);
-                self.output.push_str(", {method: \"POST\", headers: {\"Authorization\": ");
+                self.output
+                    .push_str(", {method: \"POST\", headers: {\"Authorization\": ");
                 self.emit_expr(auth_header);
-                self.output.push_str(", \"Content-Type\": \"application/json\"}, body: ");
+                self.output
+                    .push_str(", \"Content-Type\": \"application/json\"}, body: ");
                 self.emit_expr(body);
                 self.output.push_str("})");
             }
 
             // --- Net (throw stubs) ---
-            Expr::NetCreateServer { .. } |
-            Expr::NetCreateConnection { .. } |
-            Expr::NetConnect { .. } => {
-                self.output.push_str("((() => { throw new Error('net module not available in browser'); })())");
+            Expr::NetCreateServer { .. }
+            | Expr::NetCreateConnection { .. }
+            | Expr::NetConnect { .. } => {
+                self.output.push_str(
+                    "((() => { throw new Error('net module not available in browser'); })())",
+                );
             }
 
             // --- Array methods ---
@@ -105,7 +122,12 @@ impl JsEmitter {
                 }
                 self.output.push(')');
             }
-            Expr::ArraySplice { array_id, start, delete_count, items } => {
+            Expr::ArraySplice {
+                array_id,
+                start,
+                delete_count,
+                items,
+            } => {
                 let name = self.get_local_name(*array_id);
                 let _ = write!(self.output, "{}.splice(", name);
                 self.emit_expr(start);
@@ -193,7 +215,11 @@ impl JsEmitter {
                 self.emit_expr(comparator);
                 self.output.push(')');
             }
-            Expr::ArrayReduce { array, callback, initial } => {
+            Expr::ArrayReduce {
+                array,
+                callback,
+                initial,
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".reduce(");
                 self.emit_expr(callback);
@@ -215,7 +241,11 @@ impl JsEmitter {
                 self.emit_expr(array);
                 self.output.push_str(".flat()");
             }
-            Expr::ArrayReduceRight { array, callback, initial } => {
+            Expr::ArrayReduceRight {
+                array,
+                callback,
+                initial,
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".reduceRight(");
                 self.emit_expr(callback);
@@ -237,7 +267,12 @@ impl JsEmitter {
                 }
                 self.output.push(')');
             }
-            Expr::ArrayToSpliced { array, start, delete_count, items } => {
+            Expr::ArrayToSpliced {
+                array,
+                start,
+                delete_count,
+                items,
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".toSpliced(");
                 self.emit_expr(start);
@@ -249,7 +284,11 @@ impl JsEmitter {
                 }
                 self.output.push(')');
             }
-            Expr::ArrayWith { array, index, value } => {
+            Expr::ArrayWith {
+                array,
+                index,
+                value,
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".with(");
                 self.emit_expr(index);
@@ -257,7 +296,12 @@ impl JsEmitter {
                 self.emit_expr(value);
                 self.output.push(')');
             }
-            Expr::ArrayCopyWithin { array_id, target, start, end } => {
+            Expr::ArrayCopyWithin {
+                array_id,
+                target,
+                start,
+                end,
+            } => {
                 let name = self.get_local_name(*array_id);
                 let _ = write!(self.output, "{}.copyWithin(", name);
                 self.emit_expr(target);
@@ -415,7 +459,9 @@ impl JsEmitter {
             Expr::Sequence(exprs) => {
                 self.output.push('(');
                 for (i, e) in exprs.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(e);
                 }
                 self.output.push(')');
@@ -437,56 +483,215 @@ impl JsEmitter {
                     self.output.push(')');
                 }
             }
-            Expr::DateGetTime(d) => { self.emit_expr(d); self.output.push_str(".getTime()"); }
-            Expr::DateToISOString(d) => { self.emit_expr(d); self.output.push_str(".toISOString()"); }
-            Expr::DateGetFullYear(d) => { self.emit_expr(d); self.output.push_str(".getFullYear()"); }
-            Expr::DateGetMonth(d) => { self.emit_expr(d); self.output.push_str(".getMonth()"); }
-            Expr::DateGetDate(d) => { self.emit_expr(d); self.output.push_str(".getDate()"); }
-            Expr::DateGetDay(d) => { self.emit_expr(d); self.output.push_str(".getDay()"); }
-            Expr::DateGetHours(d) => { self.emit_expr(d); self.output.push_str(".getHours()"); }
-            Expr::DateGetMinutes(d) => { self.emit_expr(d); self.output.push_str(".getMinutes()"); }
-            Expr::DateGetSeconds(d) => { self.emit_expr(d); self.output.push_str(".getSeconds()"); }
-            Expr::DateGetMilliseconds(d) => { self.emit_expr(d); self.output.push_str(".getMilliseconds()"); }
-            Expr::DateParse(s) => { self.output.push_str("Date.parse("); self.emit_expr(s); self.output.push(')'); }
+            Expr::DateGetTime(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getTime()");
+            }
+            Expr::DateToISOString(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".toISOString()");
+            }
+            Expr::DateGetFullYear(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getFullYear()");
+            }
+            Expr::DateGetMonth(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getMonth()");
+            }
+            Expr::DateGetDate(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getDate()");
+            }
+            Expr::DateGetDay(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getDay()");
+            }
+            Expr::DateGetHours(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getHours()");
+            }
+            Expr::DateGetMinutes(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getMinutes()");
+            }
+            Expr::DateGetSeconds(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getSeconds()");
+            }
+            Expr::DateGetMilliseconds(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getMilliseconds()");
+            }
+            Expr::DateParse(s) => {
+                self.output.push_str("Date.parse(");
+                self.emit_expr(s);
+                self.output.push(')');
+            }
             Expr::DateUtc(args) => {
                 self.output.push_str("Date.UTC(");
                 for (i, a) in args.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(a);
                 }
                 self.output.push(')');
             }
-            Expr::DateGetUtcDay(d) => { self.emit_expr(d); self.output.push_str(".getUTCDay()"); }
-            Expr::DateGetUtcFullYear(d) => { self.emit_expr(d); self.output.push_str(".getUTCFullYear()"); }
-            Expr::DateGetUtcMonth(d) => { self.emit_expr(d); self.output.push_str(".getUTCMonth()"); }
-            Expr::DateGetUtcDate(d) => { self.emit_expr(d); self.output.push_str(".getUTCDate()"); }
-            Expr::DateGetUtcHours(d) => { self.emit_expr(d); self.output.push_str(".getUTCHours()"); }
-            Expr::DateGetUtcMinutes(d) => { self.emit_expr(d); self.output.push_str(".getUTCMinutes()"); }
-            Expr::DateGetUtcSeconds(d) => { self.emit_expr(d); self.output.push_str(".getUTCSeconds()"); }
-            Expr::DateGetUtcMilliseconds(d) => { self.emit_expr(d); self.output.push_str(".getUTCMilliseconds()"); }
-            Expr::DateSetUtcFullYear { date, value } => { self.emit_expr(date); self.output.push_str(".setUTCFullYear("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetUtcMonth { date, value } => { self.emit_expr(date); self.output.push_str(".setUTCMonth("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetUtcDate { date, value } => { self.emit_expr(date); self.output.push_str(".setUTCDate("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetUtcHours { date, value } => { self.emit_expr(date); self.output.push_str(".setUTCHours("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetUtcMinutes { date, value } => { self.emit_expr(date); self.output.push_str(".setUTCMinutes("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetUtcSeconds { date, value } => { self.emit_expr(date); self.output.push_str(".setUTCSeconds("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetUtcMilliseconds { date, value } => { self.emit_expr(date); self.output.push_str(".setUTCMilliseconds("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetFullYear { date, value } => { self.emit_expr(date); self.output.push_str(".setFullYear("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetMonth { date, value } => { self.emit_expr(date); self.output.push_str(".setMonth("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetDate { date, value } => { self.emit_expr(date); self.output.push_str(".setDate("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetHours { date, value } => { self.emit_expr(date); self.output.push_str(".setHours("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetMinutes { date, value } => { self.emit_expr(date); self.output.push_str(".setMinutes("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetSeconds { date, value } => { self.emit_expr(date); self.output.push_str(".setSeconds("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetMilliseconds { date, value } => { self.emit_expr(date); self.output.push_str(".setMilliseconds("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateSetTime { date, value } => { self.emit_expr(date); self.output.push_str(".setTime("); self.emit_expr(value); self.output.push(')'); }
-            Expr::DateValueOf(d) => { self.emit_expr(d); self.output.push_str(".valueOf()"); }
-            Expr::DateToDateString(d) => { self.emit_expr(d); self.output.push_str(".toDateString()"); }
-            Expr::DateToTimeString(d) => { self.emit_expr(d); self.output.push_str(".toTimeString()"); }
-            Expr::DateToLocaleDateString(d) => { self.emit_expr(d); self.output.push_str(".toLocaleDateString()"); }
-            Expr::DateToLocaleTimeString(d) => { self.emit_expr(d); self.output.push_str(".toLocaleTimeString()"); }
-            Expr::DateToLocaleString(d) => { self.emit_expr(d); self.output.push_str(".toLocaleString()"); }
-            Expr::DateGetTimezoneOffset(d) => { self.emit_expr(d); self.output.push_str(".getTimezoneOffset()"); }
-            Expr::DateToJSON(d) => { self.emit_expr(d); self.output.push_str(".toJSON()"); }
+            Expr::DateGetUtcDay(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getUTCDay()");
+            }
+            Expr::DateGetUtcFullYear(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getUTCFullYear()");
+            }
+            Expr::DateGetUtcMonth(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getUTCMonth()");
+            }
+            Expr::DateGetUtcDate(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getUTCDate()");
+            }
+            Expr::DateGetUtcHours(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getUTCHours()");
+            }
+            Expr::DateGetUtcMinutes(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getUTCMinutes()");
+            }
+            Expr::DateGetUtcSeconds(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getUTCSeconds()");
+            }
+            Expr::DateGetUtcMilliseconds(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getUTCMilliseconds()");
+            }
+            Expr::DateSetUtcFullYear { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setUTCFullYear(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetUtcMonth { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setUTCMonth(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetUtcDate { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setUTCDate(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetUtcHours { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setUTCHours(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetUtcMinutes { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setUTCMinutes(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetUtcSeconds { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setUTCSeconds(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetUtcMilliseconds { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setUTCMilliseconds(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetFullYear { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setFullYear(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetMonth { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setMonth(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetDate { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setDate(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetHours { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setHours(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetMinutes { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setMinutes(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetSeconds { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setSeconds(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetMilliseconds { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setMilliseconds(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateSetTime { date, value } => {
+                self.emit_expr(date);
+                self.output.push_str(".setTime(");
+                self.emit_expr(value);
+                self.output.push(')');
+            }
+            Expr::DateValueOf(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".valueOf()");
+            }
+            Expr::DateToDateString(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".toDateString()");
+            }
+            Expr::DateToTimeString(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".toTimeString()");
+            }
+            Expr::DateToLocaleDateString(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".toLocaleDateString()");
+            }
+            Expr::DateToLocaleTimeString(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".toLocaleTimeString()");
+            }
+            Expr::DateToLocaleString(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".toLocaleString()");
+            }
+            Expr::DateGetTimezoneOffset(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".getTimezoneOffset()");
+            }
+            Expr::DateToJSON(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".toJSON()");
+            }
 
             // --- Error ---
             Expr::ErrorNew(msg) => {
@@ -547,16 +752,46 @@ impl JsEmitter {
                 }
                 self.output.push(')');
             }
-            Expr::UrlGetHref(u) => { self.emit_expr(u); self.output.push_str(".href"); }
-            Expr::UrlGetPathname(u) => { self.emit_expr(u); self.output.push_str(".pathname"); }
-            Expr::UrlGetProtocol(u) => { self.emit_expr(u); self.output.push_str(".protocol"); }
-            Expr::UrlGetHost(u) => { self.emit_expr(u); self.output.push_str(".host"); }
-            Expr::UrlGetHostname(u) => { self.emit_expr(u); self.output.push_str(".hostname"); }
-            Expr::UrlGetPort(u) => { self.emit_expr(u); self.output.push_str(".port"); }
-            Expr::UrlGetSearch(u) => { self.emit_expr(u); self.output.push_str(".search"); }
-            Expr::UrlGetHash(u) => { self.emit_expr(u); self.output.push_str(".hash"); }
-            Expr::UrlGetOrigin(u) => { self.emit_expr(u); self.output.push_str(".origin"); }
-            Expr::UrlGetSearchParams(u) => { self.emit_expr(u); self.output.push_str(".searchParams"); }
+            Expr::UrlGetHref(u) => {
+                self.emit_expr(u);
+                self.output.push_str(".href");
+            }
+            Expr::UrlGetPathname(u) => {
+                self.emit_expr(u);
+                self.output.push_str(".pathname");
+            }
+            Expr::UrlGetProtocol(u) => {
+                self.emit_expr(u);
+                self.output.push_str(".protocol");
+            }
+            Expr::UrlGetHost(u) => {
+                self.emit_expr(u);
+                self.output.push_str(".host");
+            }
+            Expr::UrlGetHostname(u) => {
+                self.emit_expr(u);
+                self.output.push_str(".hostname");
+            }
+            Expr::UrlGetPort(u) => {
+                self.emit_expr(u);
+                self.output.push_str(".port");
+            }
+            Expr::UrlGetSearch(u) => {
+                self.emit_expr(u);
+                self.output.push_str(".search");
+            }
+            Expr::UrlGetHash(u) => {
+                self.emit_expr(u);
+                self.output.push_str(".hash");
+            }
+            Expr::UrlGetOrigin(u) => {
+                self.emit_expr(u);
+                self.output.push_str(".origin");
+            }
+            Expr::UrlGetSearchParams(u) => {
+                self.emit_expr(u);
+                self.output.push_str(".searchParams");
+            }
 
             // --- URLSearchParams ---
             Expr::UrlSearchParamsNew(init) => {
@@ -588,7 +823,11 @@ impl JsEmitter {
                 }
                 self.output.push(')');
             }
-            Expr::UrlSearchParamsSet { params, name, value } => {
+            Expr::UrlSearchParamsSet {
+                params,
+                name,
+                value,
+            } => {
                 self.emit_expr(params);
                 self.output.push_str(".set(");
                 self.emit_expr(name);
@@ -596,7 +835,11 @@ impl JsEmitter {
                 self.emit_expr(value);
                 self.output.push(')');
             }
-            Expr::UrlSearchParamsAppend { params, name, value } => {
+            Expr::UrlSearchParamsAppend {
+                params,
+                name,
+                value,
+            } => {
                 self.emit_expr(params);
                 self.output.push_str(".append(");
                 self.emit_expr(name);
@@ -641,7 +884,12 @@ impl JsEmitter {
             }
 
             // --- Closure ---
-            Expr::Closure { params, body, is_async, .. } => {
+            Expr::Closure {
+                params,
+                body,
+                is_async,
+                ..
+            } => {
                 if *is_async {
                     self.output.push_str("async ");
                 }
@@ -679,7 +927,11 @@ impl JsEmitter {
                 self.emit_expr(regex);
                 self.output.push(')');
             }
-            Expr::StringReplace { string, pattern, replacement } => {
+            Expr::StringReplace {
+                string,
+                pattern,
+                replacement,
+            } => {
                 self.emit_expr(string);
                 self.output.push_str(".replace(");
                 self.emit_expr(pattern);
@@ -723,18 +975,25 @@ impl JsEmitter {
                 self.emit_expr(key);
                 self.output.push(')');
             }
-            Expr::ObjectRest { object, exclude_keys } => {
+            Expr::ObjectRest {
+                object,
+                exclude_keys,
+            } => {
                 self.output.push_str("(({");
                 for (i, key) in exclude_keys.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.output.push_str(key);
                 }
-                self.output.push_str("}, ..._rest) => _rest[0])(");  // Actually use Object.keys approach
-                // Better approach: use destructuring
+                self.output.push_str("}, ..._rest) => _rest[0])("); // Actually use Object.keys approach
+                                                                    // Better approach: use destructuring
                 self.output.clear(); // Redo this
                 self.output.push_str("((() => { const {");
                 for (i, key) in exclude_keys.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.output.push_str(key);
                     self.output.push_str(": _");
                 }
@@ -848,8 +1107,12 @@ impl JsEmitter {
             Expr::PerformanceNow => {
                 self.output.push_str("performance.now()");
             }
-            Expr::TextEncoderNew => { self.output.push_str("new TextEncoder()"); }
-            Expr::TextDecoderNew => { self.output.push_str("new TextDecoder()"); }
+            Expr::TextEncoderNew => {
+                self.output.push_str("new TextEncoder()");
+            }
+            Expr::TextDecoderNew => {
+                self.output.push_str("new TextDecoder()");
+            }
             Expr::TextEncoderEncode(inner) => {
                 self.output.push_str("new TextEncoder().encode(");
                 self.emit_expr(inner);
@@ -905,45 +1168,73 @@ impl JsEmitter {
             Expr::JsLoadModule { path } => {
                 let _ = write!(self.output, "((() => {{ throw new Error('JsLoadModule not supported in browser: {}'); }})())", path);
             }
-            Expr::JsGetExport { module_handle, export_name } => {
+            Expr::JsGetExport {
+                module_handle,
+                export_name,
+            } => {
                 self.emit_expr(module_handle);
                 let _ = write!(self.output, ".{}", export_name);
             }
-            Expr::JsCallFunction { module_handle, func_name, args } => {
+            Expr::JsCallFunction {
+                module_handle,
+                func_name,
+                args,
+            } => {
                 self.emit_expr(module_handle);
                 let _ = write!(self.output, ".{}(", func_name);
                 for (i, arg) in args.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(arg);
                 }
                 self.output.push(')');
             }
-            Expr::JsCallMethod { object, method_name, args } => {
+            Expr::JsCallMethod {
+                object,
+                method_name,
+                args,
+            } => {
                 self.emit_expr(object);
                 let _ = write!(self.output, ".{}(", method_name);
                 for (i, arg) in args.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(arg);
                 }
                 self.output.push(')');
             }
-            Expr::JsGetProperty { object, property_name } => {
+            Expr::JsGetProperty {
+                object,
+                property_name,
+            } => {
                 self.emit_expr(object);
                 let _ = write!(self.output, ".{}", property_name);
             }
-            Expr::JsSetProperty { object, property_name, value } => {
+            Expr::JsSetProperty {
+                object,
+                property_name,
+                value,
+            } => {
                 self.output.push('(');
                 self.emit_expr(object);
                 let _ = write!(self.output, ".{} = ", property_name);
                 self.emit_expr(value);
                 self.output.push(')');
             }
-            Expr::JsNew { module_handle, class_name, args } => {
+            Expr::JsNew {
+                module_handle,
+                class_name,
+                args,
+            } => {
                 self.output.push_str("new ");
                 self.emit_expr(module_handle);
                 let _ = write!(self.output, ".{}(", class_name);
                 for (i, arg) in args.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(arg);
                 }
                 self.output.push(')');
@@ -953,7 +1244,9 @@ impl JsEmitter {
                 self.emit_expr(constructor);
                 self.output.push_str(")(");
                 for (i, arg) in args.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(arg);
                 }
                 self.output.push(')');
@@ -980,45 +1273,153 @@ impl JsEmitter {
             // 2027–2050). The duplicate arms here were dead — removed.
             // Object property descriptor stubs
             Expr::ObjectDefineProperty(obj, key, desc) => {
-                self.output.push_str("Object.defineProperty("); self.emit_expr(obj);
-                self.output.push_str(", "); self.emit_expr(key);
-                self.output.push_str(", "); self.emit_expr(desc); self.output.push(')');
+                self.output.push_str("Object.defineProperty(");
+                self.emit_expr(obj);
+                self.output.push_str(", ");
+                self.emit_expr(key);
+                self.output.push_str(", ");
+                self.emit_expr(desc);
+                self.output.push(')');
             }
             Expr::ObjectGetOwnPropertyDescriptor(obj, key) => {
-                self.output.push_str("Object.getOwnPropertyDescriptor("); self.emit_expr(obj);
-                self.output.push_str(", "); self.emit_expr(key); self.output.push(')');
+                self.output.push_str("Object.getOwnPropertyDescriptor(");
+                self.emit_expr(obj);
+                self.output.push_str(", ");
+                self.emit_expr(key);
+                self.output.push(')');
             }
-            Expr::ObjectGetOwnPropertyNames(obj) => { self.output.push_str("Object.getOwnPropertyNames("); self.emit_expr(obj); self.output.push(')'); }
-            Expr::ObjectCreate(proto) => { self.output.push_str("Object.create("); self.emit_expr(proto); self.output.push(')'); }
-            Expr::ObjectFreeze(obj) => { self.output.push_str("Object.freeze("); self.emit_expr(obj); self.output.push(')'); }
-            Expr::ObjectSeal(obj) => { self.output.push_str("Object.seal("); self.emit_expr(obj); self.output.push(')'); }
-            Expr::ObjectPreventExtensions(obj) => { self.output.push_str("Object.preventExtensions("); self.emit_expr(obj); self.output.push(')'); }
-            Expr::ObjectIsFrozen(obj) => { self.output.push_str("Object.isFrozen("); self.emit_expr(obj); self.output.push(')'); }
-            Expr::ObjectIsSealed(obj) => { self.output.push_str("Object.isSealed("); self.emit_expr(obj); self.output.push(')'); }
-            Expr::ObjectIsExtensible(obj) => { self.output.push_str("Object.isExtensible("); self.emit_expr(obj); self.output.push(')'); }
-            Expr::ObjectGetPrototypeOf(obj) => { self.output.push_str("Object.getPrototypeOf("); self.emit_expr(obj); self.output.push(')'); }
-            Expr::ObjectSetPrototypeOf(obj, proto) => { self.output.push_str("Object.setPrototypeOf("); self.emit_expr(obj); self.output.push(','); self.emit_expr(proto); self.output.push(')'); }
-            Expr::ObjectDefineProperties(target, descs) => { self.output.push_str("Object.defineProperties("); self.emit_expr(target); self.output.push(','); self.emit_expr(descs); self.output.push(')'); }
-            Expr::ObjectGetOwnPropertySymbols(obj) => { self.output.push_str("Object.getOwnPropertySymbols("); self.emit_expr(obj); self.output.push(')'); }
+            Expr::ObjectGetOwnPropertyNames(obj) => {
+                self.output.push_str("Object.getOwnPropertyNames(");
+                self.emit_expr(obj);
+                self.output.push(')');
+            }
+            Expr::ObjectCreate(proto) => {
+                self.output.push_str("Object.create(");
+                self.emit_expr(proto);
+                self.output.push(')');
+            }
+            Expr::ObjectFreeze(obj) => {
+                self.output.push_str("Object.freeze(");
+                self.emit_expr(obj);
+                self.output.push(')');
+            }
+            Expr::ObjectSeal(obj) => {
+                self.output.push_str("Object.seal(");
+                self.emit_expr(obj);
+                self.output.push(')');
+            }
+            Expr::ObjectPreventExtensions(obj) => {
+                self.output.push_str("Object.preventExtensions(");
+                self.emit_expr(obj);
+                self.output.push(')');
+            }
+            Expr::ObjectIsFrozen(obj) => {
+                self.output.push_str("Object.isFrozen(");
+                self.emit_expr(obj);
+                self.output.push(')');
+            }
+            Expr::ObjectIsSealed(obj) => {
+                self.output.push_str("Object.isSealed(");
+                self.emit_expr(obj);
+                self.output.push(')');
+            }
+            Expr::ObjectIsExtensible(obj) => {
+                self.output.push_str("Object.isExtensible(");
+                self.emit_expr(obj);
+                self.output.push(')');
+            }
+            Expr::ObjectGetPrototypeOf(obj) => {
+                self.output.push_str("Object.getPrototypeOf(");
+                self.emit_expr(obj);
+                self.output.push(')');
+            }
+            Expr::ObjectSetPrototypeOf(obj, proto) => {
+                self.output.push_str("Object.setPrototypeOf(");
+                self.emit_expr(obj);
+                self.output.push(',');
+                self.emit_expr(proto);
+                self.output.push(')');
+            }
+            Expr::ObjectDefineProperties(target, descs) => {
+                self.output.push_str("Object.defineProperties(");
+                self.emit_expr(target);
+                self.output.push(',');
+                self.emit_expr(descs);
+                self.output.push(')');
+            }
+            Expr::ObjectGetOwnPropertySymbols(obj) => {
+                self.output.push_str("Object.getOwnPropertySymbols(");
+                self.emit_expr(obj);
+                self.output.push(')');
+            }
             // Symbol stubs
             Expr::SymbolNew(desc) => {
                 self.output.push_str("Symbol(");
-                if let Some(d) = desc { self.emit_expr(d); }
+                if let Some(d) = desc {
+                    self.emit_expr(d);
+                }
                 self.output.push(')');
             }
-            Expr::SymbolFor(key) => { self.output.push_str("Symbol.for("); self.emit_expr(key); self.output.push(')'); }
-            Expr::SymbolKeyFor(sym) => { self.output.push_str("Symbol.keyFor("); self.emit_expr(sym); self.output.push(')'); }
-            Expr::SymbolDescription(sym) => { self.emit_expr(sym); self.output.push_str(".description"); }
-            Expr::SymbolToString(sym) => { self.emit_expr(sym); self.output.push_str(".toString()"); }
+            Expr::SymbolFor(key) => {
+                self.output.push_str("Symbol.for(");
+                self.emit_expr(key);
+                self.output.push(')');
+            }
+            Expr::SymbolKeyFor(sym) => {
+                self.output.push_str("Symbol.keyFor(");
+                self.emit_expr(sym);
+                self.output.push(')');
+            }
+            Expr::SymbolDescription(sym) => {
+                self.emit_expr(sym);
+                self.output.push_str(".description");
+            }
+            Expr::SymbolToString(sym) => {
+                self.emit_expr(sym);
+                self.output.push_str(".toString()");
+            }
             // RegExp stubs
-            Expr::RegExpExec { regex, string } => { self.emit_expr(regex); self.output.push_str(".exec("); self.emit_expr(string); self.output.push(')'); }
-            Expr::RegExpSource(re) => { self.emit_expr(re); self.output.push_str(".source"); }
-            Expr::RegExpFlags(re) => { self.emit_expr(re); self.output.push_str(".flags"); }
-            Expr::RegExpLastIndex(re) => { self.emit_expr(re); self.output.push_str(".lastIndex"); }
-            Expr::RegExpSetLastIndex { regex, value } => { self.emit_expr(regex); self.output.push_str(".lastIndex = "); self.emit_expr(value); }
-            Expr::RegExpReplaceFn { string, regex, callback } => { self.emit_expr(string); self.output.push_str(".replace("); self.emit_expr(regex); self.output.push_str(", "); self.emit_expr(callback); self.output.push(')'); }
-            Expr::RegExpExecIndex => { self.output.push_str("__perry_exec_index"); }
-            Expr::RegExpExecGroups => { self.output.push_str("__perry_exec_groups"); }
+            Expr::RegExpExec { regex, string } => {
+                self.emit_expr(regex);
+                self.output.push_str(".exec(");
+                self.emit_expr(string);
+                self.output.push(')');
+            }
+            Expr::RegExpSource(re) => {
+                self.emit_expr(re);
+                self.output.push_str(".source");
+            }
+            Expr::RegExpFlags(re) => {
+                self.emit_expr(re);
+                self.output.push_str(".flags");
+            }
+            Expr::RegExpLastIndex(re) => {
+                self.emit_expr(re);
+                self.output.push_str(".lastIndex");
+            }
+            Expr::RegExpSetLastIndex { regex, value } => {
+                self.emit_expr(regex);
+                self.output.push_str(".lastIndex = ");
+                self.emit_expr(value);
+            }
+            Expr::RegExpReplaceFn {
+                string,
+                regex,
+                callback,
+            } => {
+                self.emit_expr(string);
+                self.output.push_str(".replace(");
+                self.emit_expr(regex);
+                self.output.push_str(", ");
+                self.emit_expr(callback);
+                self.output.push(')');
+            }
+            Expr::RegExpExecIndex => {
+                self.output.push_str("__perry_exec_index");
+            }
+            Expr::RegExpExecGroups => {
+                self.output.push_str("__perry_exec_groups");
+            }
             // Proxy / Reflect — JS backend emits direct JS forms.
             Expr::ProxyNew { target, handler } => {
                 self.output.push_str("new Proxy(");
@@ -1060,7 +1461,9 @@ impl JsEmitter {
                 self.emit_expr(proxy);
                 self.output.push('(');
                 for (i, a) in args.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(a);
                 }
                 self.output.push(')');
@@ -1070,7 +1473,9 @@ impl JsEmitter {
                 self.emit_expr(proxy);
                 self.output.push('(');
                 for (i, a) in args.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(a);
                 }
                 self.output.push(')');
@@ -1120,7 +1525,11 @@ impl JsEmitter {
                 self.emit_expr(target);
                 self.output.push(')');
             }
-            Expr::ReflectApply { func, this_arg, args } => {
+            Expr::ReflectApply {
+                func,
+                this_arg,
+                args,
+            } => {
                 self.output.push_str("Reflect.apply(");
                 self.emit_expr(func);
                 self.output.push_str(", ");
@@ -1136,7 +1545,11 @@ impl JsEmitter {
                 self.emit_expr(args);
                 self.output.push(')');
             }
-            Expr::ReflectDefineProperty { target, key, descriptor } => {
+            Expr::ReflectDefineProperty {
+                target,
+                key,
+                descriptor,
+            } => {
                 self.output.push_str("Reflect.defineProperty(");
                 self.emit_expr(target);
                 self.output.push_str(", ");

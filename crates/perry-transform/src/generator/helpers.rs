@@ -17,7 +17,10 @@ pub fn rewrite_hoisted_lets_in_stmts(
     }
 }
 
-pub fn rewrite_hoisted_lets_in_stmt(stmt: &mut Stmt, hoisted_ids: &std::collections::HashSet<LocalId>) {
+pub fn rewrite_hoisted_lets_in_stmt(
+    stmt: &mut Stmt,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+) {
     if let Stmt::Let {
         id,
         init: Some(init_expr),

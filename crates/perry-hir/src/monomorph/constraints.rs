@@ -311,4 +311,3 @@ pub(crate) fn check_class_constraints(
         Err(errors)
     }
 }
-

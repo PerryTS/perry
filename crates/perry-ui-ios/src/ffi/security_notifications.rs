@@ -229,4 +229,3 @@ pub extern "C" fn perry_system_get_locale() -> i64 {
         js_string_from_bytes(utf8, code_len as i64) as i64
     }
 }
-

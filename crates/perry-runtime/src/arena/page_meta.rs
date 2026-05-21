@@ -301,7 +301,12 @@ pub(crate) fn address_span_overlaps_pages(
     (first_page..=last_page).any(|page| pages.contains(&page))
 }
 
-pub(crate) fn register_block_space(base: usize, size: usize, generation: HeapGeneration, space: HeapSpace) {
+pub(crate) fn register_block_space(
+    base: usize,
+    size: usize,
+    generation: HeapGeneration,
+    space: HeapSpace,
+) {
     if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
         return;
     }

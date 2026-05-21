@@ -185,8 +185,7 @@ fn test_resolve_credential_saved_fallback() {
 
 #[test]
 fn test_resolve_credential_none_when_missing() {
-    let result =
-        resolve_credential(None, "NONEXISTENT_ENV_VAR_XYZ", None, "test", false, false);
+    let result = resolve_credential(None, "NONEXISTENT_ENV_VAR_XYZ", None, "test", false, false);
     assert!(result.is_none());
 }
 

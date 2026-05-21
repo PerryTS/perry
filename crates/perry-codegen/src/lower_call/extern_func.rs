@@ -222,8 +222,7 @@ pub fn try_lower_extern_func_call(
     // through the closure-call machinery — the singleton's thunk
     // throws an "is not yet implemented" Error. Real impls are
     // tracked separately under #793.
-    if let Some((submod_key, exported_name)) =
-        ctx.import_function_node_submodule.get(name).cloned()
+    if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name).cloned()
     {
         // Lower args for side effects (closure capture collection,
         // string-literal interning), then discard — the thunk
@@ -259,10 +258,11 @@ pub fn try_lower_extern_func_call(
         // f64 arg (passed as undefined).
         ctx.pending_declares
             .push(("js_closure_call0".to_string(), DOUBLE, vec![DOUBLE]));
-        return Ok(Some(
-            ctx.block()
-                .call(DOUBLE, "js_closure_call0", &[(DOUBLE, &closure_value)]),
-        ));
+        return Ok(Some(ctx.block().call(
+            DOUBLE,
+            "js_closure_call0",
+            &[(DOUBLE, &closure_value)],
+        )));
     }
     // perry/system dispatch: map JS names (isDarkMode, getDeviceIdiom,
     // keychainSave, etc.) to their perry_system_* / perry_* C symbols.
@@ -324,9 +324,11 @@ pub fn try_lower_extern_func_call(
         for a in args {
             let _ = lower_expr(ctx, a)?;
         }
-        return Ok(Some(
-            ctx.block().call(DOUBLE, "js_unresolved_default_call", &[]),
-        ));
+        return Ok(Some(ctx.block().call(
+            DOUBLE,
+            "js_unresolved_default_call",
+            &[],
+        )));
     }
     // Native library functions (bloom_draw_rect, bloom_init_window,
     // etc.) that aren't in the import map — emit a direct call so
@@ -508,8 +510,7 @@ pub fn try_lower_extern_func_call(
     // the *origin* name (`default`), not the consumer-visible name
     // (`render`). Look up the actual origin suffix before forming the
     // extern.
-    let origin_suffix =
-        crate::expr::import_origin_suffix(ctx.import_function_origin_names, name);
+    let origin_suffix = crate::expr::import_origin_suffix(ctx.import_function_origin_names, name);
     let fname = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
     // Issue #493 followup: when the imported binding is a VARIABLE
     // holding a closure value (e.g. `var mergePath = (b, s, ...r) => …`

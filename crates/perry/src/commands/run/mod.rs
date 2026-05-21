@@ -18,16 +18,19 @@ mod remote;
 mod resign;
 
 pub use android::{
-    build_and_run_android, debug_sign_apk, find_apksigner, find_latest_build_tool,
-    get_android_pid, inject_android_deeplinks, inject_google_auth_android_resources,
-    inject_gradle_dependencies, install_and_launch_android, wire_native_lib_kotlin_sources,
+    build_and_run_android, debug_sign_apk, find_apksigner, find_latest_build_tool, get_android_pid,
+    inject_android_deeplinks, inject_google_auth_android_resources, inject_gradle_dependencies,
+    install_and_launch_android, wire_native_lib_kotlin_sources,
 };
 pub use devices::{
     detect_android_devices, detect_booted_simulators, detect_booted_tv_simulators,
     detect_booted_visionos_simulators, detect_booted_watch_simulators, detect_ios_devices,
     pick_device, pick_from_list, DeviceInfo,
 };
-pub use entry::{can_compile_locally, read_perry_toml_entry, resolve_entry_file, resolve_target, rust_target_triple};
+pub use entry::{
+    can_compile_locally, read_perry_toml_entry, resolve_entry_file, resolve_target,
+    rust_target_triple,
+};
 pub use launch::{launch, launch_ios_device, launch_ios_simulator, launch_native, launch_web};
 pub use metadata::{
     auto_export_p12, build_device_credentials, detect_signing_identity,
@@ -39,8 +42,8 @@ pub use remote::{
     find_icon_source, remote_build_and_launch,
 };
 pub use resign::{
-    create_dev_profile_via_api, find_identity_for_team, find_system_dev_profile,
-    generate_asc_jwt, read_bundle_id_from_app, resign_for_development,
+    create_dev_profile_via_api, find_identity_for_team, find_system_dev_profile, generate_asc_jwt,
+    read_bundle_id_from_app, resign_for_development,
 };
 
 #[derive(Args, Debug)]

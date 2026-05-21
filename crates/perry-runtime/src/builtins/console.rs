@@ -6,10 +6,9 @@
 //! along with the lazy `console.log`-as-closure singleton and the shared
 //! `console.group` indent prefix helper.
 
-use super::*;
 #[cfg(feature = "ohos-napi")]
 use super::println;
-
+use super::*;
 
 /// Print a value to stdout (console.log implementation)
 #[no_mangle]
@@ -317,7 +316,6 @@ pub extern "C" fn js_console_log_i32(value: i32) {
 pub extern "C" fn js_console_log_i64(value: i64) {
     println!("{}", value);
 }
-
 
 #[no_mangle]
 pub extern "C" fn js_console_log_spread(arr_ptr: *const crate::array::ArrayHeader) {

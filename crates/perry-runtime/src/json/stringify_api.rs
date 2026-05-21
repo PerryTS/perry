@@ -5,7 +5,6 @@
 use super::*;
 use crate::{js_string_from_bytes, JSValue, StringHeader};
 
-
 /// Generic JSON.stringify that handles any JSValue
 /// Takes a f64 (NaN-boxed JSValue) and a type_hint (0=unknown, 1=object, 2=array)
 /// Returns a string pointer

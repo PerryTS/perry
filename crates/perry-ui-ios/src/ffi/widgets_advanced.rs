@@ -548,4 +548,3 @@ pub extern "C" fn perry_ui_widget_animate_position(
 pub extern "C" fn perry_ui_state_on_change(state_handle: i64, callback: f64) {
     state::state_on_change(state_handle, callback);
 }
-

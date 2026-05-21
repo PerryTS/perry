@@ -195,8 +195,7 @@ pub(crate) fn lower_let(
     // See `collect_non_escaping_object_literals` in collectors.rs.
     if let Some(perry_hir::Expr::Object(props)) = init {
         if let Some(field_order) = ctx.non_escaping_object_literals.get(&id).cloned() {
-            let undef =
-                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut field_slots: std::collections::HashMap<String, String> =
                 std::collections::HashMap::with_capacity(field_order.len());
             for fname in &field_order {
@@ -256,9 +255,8 @@ pub(crate) fn lower_let(
                     std::collections::HashMap::new();
                 for fname in &all_fields {
                     let slot = ctx.func.alloca_entry(DOUBLE);
-                    let undef = crate::nanbox::double_literal(f64::from_bits(
-                        crate::nanbox::TAG_UNDEFINED,
-                    ));
+                    let undef =
+                        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                     ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
                     field_slots.insert(fname.clone(), slot);
                 }
@@ -303,28 +301,27 @@ pub(crate) fn lower_let(
                 // between the inherited-ctor and the leaf get
                 // their fields after the body returns (their
                 // initializers may depend on parent body state).
-                let inherited_ctor_class: Option<String> =
-                    if ctor.is_none() && class_has_extends {
-                        let mut walker = ctx
-                            .classes
-                            .get(class_name)
-                            .and_then(|c| c.extends_name.clone());
-                        let mut found: Option<String> = None;
-                        while let Some(pname) = walker {
-                            if let Some(parent_class) = ctx.classes.get(&pname).copied() {
-                                if parent_class.constructor.is_some() {
-                                    found = Some(pname);
-                                    break;
-                                }
-                                walker = parent_class.extends_name.clone();
-                            } else {
+                let inherited_ctor_class: Option<String> = if ctor.is_none() && class_has_extends {
+                    let mut walker = ctx
+                        .classes
+                        .get(class_name)
+                        .and_then(|c| c.extends_name.clone());
+                    let mut found: Option<String> = None;
+                    while let Some(pname) = walker {
+                        if let Some(parent_class) = ctx.classes.get(&pname).copied() {
+                            if parent_class.constructor.is_some() {
+                                found = Some(pname);
                                 break;
                             }
+                            walker = parent_class.extends_name.clone();
+                        } else {
+                            break;
                         }
-                        found
-                    } else {
-                        None
-                    };
+                    }
+                    found
+                } else {
+                    None
+                };
                 let init_mode = if let Some(stop_at) = inherited_ctor_class.clone() {
                     crate::lower_call::FieldInitMode::UpToInclusive(stop_at)
                 } else if class_has_extends {
@@ -332,9 +329,7 @@ pub(crate) fn lower_let(
                 } else {
                     crate::lower_call::FieldInitMode::All
                 };
-                crate::lower_call::apply_field_initializers_recursive(
-                    ctx, class_name, init_mode,
-                )?;
+                crate::lower_call::apply_field_initializers_recursive(ctx, class_name, init_mode)?;
 
                 // Inline constructor body if present (own-ctor case).
                 if let Some(ctor) = &ctor {
@@ -368,9 +363,9 @@ pub(crate) fn lower_let(
                                     if i < lowered_args.len() {
                                         ctx.block().store(DOUBLE, &lowered_args[i], &slot);
                                     } else {
-                                        let undef = crate::nanbox::double_literal(
-                                            f64::from_bits(crate::nanbox::TAG_UNDEFINED),
-                                        );
+                                        let undef = crate::nanbox::double_literal(f64::from_bits(
+                                            crate::nanbox::TAG_UNDEFINED,
+                                        ));
                                         ctx.block().store(DOUBLE, &undef, &slot);
                                     }
                                     ctx.locals.insert(param.id, slot);
@@ -470,8 +465,7 @@ pub(crate) fn lower_let(
         if ctx.prealloc_boxes.contains(&id) {
             ctx.local_types.insert(id, refined_ty.clone());
             if let Some(init_expr) = init {
-                let init_val =
-                    lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
+                let init_val = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
                 let slot_clone = ctx.locals[&id].clone();
                 let blk = ctx.block();
                 let box_dbl = blk.load(DOUBLE, &slot_clone);
@@ -484,8 +478,7 @@ pub(crate) fn lower_let(
             return Ok(());
         }
         // Step 1: allocate box with undefined sentinel.
-        let undef =
-            crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         let blk = ctx.block();
         let box_ptr = blk.call(crate::types::I64, "js_box_alloc", &[(DOUBLE, &undef)]);
         // Slot must live in the entry block — closures from sibling
@@ -499,8 +492,7 @@ pub(crate) fn lower_let(
         ctx.local_types.insert(id, refined_ty.clone());
         // Step 3: lower init and store into the box.
         if let Some(init_expr) = init {
-            let init_val =
-                lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
+            let init_val = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
             // Read the box pointer back from the slot and
             // js_box_set the real init value.
             let slot_clone = ctx.locals[&id].clone();
@@ -525,8 +517,7 @@ pub(crate) fn lower_let(
     // (which runtime functions handle safely) rather than 0.0
     // (which looks like a null pointer when NaN-unboxed).
     {
-        let undef =
-            crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
     }
     ctx.locals.insert(id, slot.clone());
@@ -613,8 +604,7 @@ pub(crate) fn lower_let(
     // garbage; DCE removes the dummy store when no such reader
     // exists.
     if init.is_some() && ctx.array_row_aliases.contains_key(&id) {
-        let undef =
-            crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         ctx.block().store(DOUBLE, &undef, &slot);
     } else if let Some(init_expr) = init {
         // Issue #49 follow-up: i32-native init path. If this local
@@ -722,10 +712,7 @@ pub(crate) fn lower_let(
         // Only relevant on the f64-init path (BufferAlloc isn't
         // i32-able, so used_i32_init is always false here, but
         // gate explicitly to keep the invariant readable).
-        if !used_i32_init
-            && !mutable
-            && matches!(init_expr, perry_hir::Expr::BufferAlloc { .. })
-        {
+        if !used_i32_init && !mutable && matches!(init_expr, perry_hir::Expr::BufferAlloc { .. }) {
             let blk = ctx.block();
             let handle = crate::expr::unbox_to_i64(blk, &v);
             let handle_ptr = blk.inttoptr(I64, &handle);

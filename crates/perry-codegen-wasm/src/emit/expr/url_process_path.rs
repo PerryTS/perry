@@ -6,7 +6,11 @@
 use super::*;
 
 impl<'a> FuncEmitCtx<'a> {
-    pub(super) fn try_emit_expr_url_process_path(&mut self, func: &mut Function, expr: &Expr) -> bool {
+    pub(super) fn try_emit_expr_url_process_path(
+        &mut self,
+        func: &mut Function,
+        expr: &Expr,
+    ) -> bool {
         match expr {
             Expr::UrlNew { url, base } => {
                 self.emit_expr(func, url);

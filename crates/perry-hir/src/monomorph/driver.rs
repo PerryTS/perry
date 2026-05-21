@@ -530,4 +530,3 @@ fn collect_instantiations_in_expr(
         _ => {}
     }
 }
-

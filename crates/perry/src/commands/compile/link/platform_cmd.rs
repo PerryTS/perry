@@ -36,7 +36,7 @@ pub fn select_linker_command(
     is_cross_tvos: bool,
 ) -> Result<Command> {
     let _ = ctx; // reserved for future per-platform context-driven flags
-    // For cross-compilation targets, use the appropriate toolchain
+                 // For cross-compilation targets, use the appropriate toolchain
     let cmd = if is_watchos {
         let is_watchos_game_loop = compiled_features.iter().any(|f| f == "watchos-game-loop");
         let is_watchos_swift_app = compiled_features.iter().any(|f| f == "watchos-swift-app");
