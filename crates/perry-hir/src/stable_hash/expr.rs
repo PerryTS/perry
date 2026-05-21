@@ -348,6 +348,11 @@ impl SH for Expr {
             Expr::Sequence(es) => { tag(h, 309); es.hash(h); }
             Expr::DateNow => tag(h, 310),
             Expr::DateNew(es) => { tag(h, 311); es.hash(h); }
+            Expr::BoxedPrimitiveNew { kind, arg } => {
+                tag(h, 11221);
+                (*kind as u8).hash(h);
+                arg.as_ref().hash(h);
+            }
             Expr::DateGetTime(e) => { tag(h, 312); e.as_ref().hash(h); }
             Expr::DateToISOString(e) => { tag(h, 313); e.as_ref().hash(h); }
             Expr::DateGetFullYear(e) => { tag(h, 314); e.as_ref().hash(h); }

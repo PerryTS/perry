@@ -714,6 +714,7 @@ where
                 f(a);
             }
         }
+        Expr::BoxedPrimitiveNew { arg, .. } => f(arg),
         Expr::DateSetUtcFullYear { date, value }
         | Expr::DateSetUtcMonth { date, value }
         | Expr::DateSetUtcDate { date, value }

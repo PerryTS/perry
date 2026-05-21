@@ -1,35 +1,11 @@
 use super::*;
 
 pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
-    // ========== Internal primitive object wrappers ==========
-    NativeModSig {
-        module: "__primitive_box",
-        has_receiver: false,
-        method: "Number",
-        class_filter: None,
-        runtime: "js_boxed_number_new",
-        args: &[NA_F64],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "__primitive_box",
-        has_receiver: false,
-        method: "String",
-        class_filter: None,
-        runtime: "js_boxed_string_new",
-        args: &[NA_F64],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "__primitive_box",
-        has_receiver: false,
-        method: "Boolean",
-        class_filter: None,
-        runtime: "js_boxed_boolean_new",
-        args: &[NA_F64],
-        ret: NR_F64,
-    },
     // ========== Node URL ==========
+    // `new Number/String/Boolean(...)` now lowers to
+    // `Expr::BoxedPrimitiveNew` (see crates/perry-hir/src/lower/expr_new.rs)
+    // and is emitted by codegen as a direct runtime call — no dispatch
+    // table row needed.
     NativeModSig {
         module: "url",
         has_receiver: false,

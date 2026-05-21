@@ -48,6 +48,15 @@ use super::{
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
+        Expr::BoxedPrimitiveNew { kind, arg } => {
+            let v = lower_expr(ctx, arg)?;
+            let runtime = match kind {
+                perry_hir::BoxedPrimitiveKind::Number => "js_boxed_number_new",
+                perry_hir::BoxedPrimitiveKind::String => "js_boxed_string_new",
+                perry_hir::BoxedPrimitiveKind::Boolean => "js_boxed_boolean_new",
+            };
+            Ok(ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &v)]))
+        }
         Expr::DateNew(args) => match args.len() {
             0 => Ok(ctx.block().call(DOUBLE, "js_date_new", &[])),
             1 => {

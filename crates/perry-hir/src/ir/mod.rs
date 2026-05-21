@@ -52,7 +52,7 @@ pub use decl::{
 pub use stmt::{CatchClause, Stmt, SwitchCase};
 
 // ---- expr.rs ----
-pub use expr::Expr;
+pub use expr::{BoxedPrimitiveKind, Expr};
 
 // ---- ops.rs ----
 pub use ops::{ArrayElement, BinaryOp, CallArg, CompareOp, LogicalOp, UnaryOp, UpdateOp};

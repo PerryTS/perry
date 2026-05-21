@@ -1267,6 +1267,15 @@ pub enum Expr {
     // Sequence expression (comma operator)
     Sequence(Vec<Expr>),
 
+    // `new Number(x)` / `new String(x)` / `new Boolean(x)` — wrap a
+    // primitive in its boxed-object form. Mirrors the dedicated-variant
+    // pattern used by `DateNew` / `MapNew` / `SetNew`. Codegen routes
+    // each kind to its `js_boxed_*_new` runtime helper.
+    BoxedPrimitiveNew {
+        kind: BoxedPrimitiveKind,
+        arg: Box<Expr>,
+    },
+
     // Date operations
     DateNow,                        // Date.now() -> number (timestamp in ms)
     DateNew(Vec<Expr>), // new Date() / new Date(ts) / new Date(year, month, day, h?, m?, s?, ms?) -> Date object
@@ -1936,4 +1945,13 @@ pub enum Expr {
         paths: Vec<String>,
         arg: Box<Expr>,
     },
+}
+
+/// Which primitive the `new X(...)` form is wrapping. Used by
+/// `Expr::BoxedPrimitiveNew`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BoxedPrimitiveKind {
+    Number,
+    String,
+    Boolean,
 }

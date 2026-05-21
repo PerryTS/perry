@@ -970,6 +970,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::JsonParseReviver { .. }
         | Expr::JsonParseWithReviver(..) => instance_misc1::lower(ctx, expr),
         Expr::DateNew(..)
+        | Expr::BoxedPrimitiveNew { .. }
         | Expr::ArrayFind { .. }
         | Expr::ArrayFindIndex { .. }
         | Expr::ArrayFindLast { .. }

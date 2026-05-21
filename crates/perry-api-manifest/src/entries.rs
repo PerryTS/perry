@@ -148,13 +148,14 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
 ];
 
 /// Pseudo-modules that exist in the dispatch table + manifest but are
-/// NOT user-importable. Used to route internal codegen artifacts
-/// (e.g. `new Number(...)` boxing, the `util.types` namespace-access
-/// alias of `util/types`) through the same (module, name) dispatch
-/// machinery as real Node modules. Hidden from `--print-api-manifest`
-/// markdown / .d.ts output, but accepted by `is_known_module` so the
-/// manifest consistency tests pass.
-pub const INTERNAL_MODULES: &[&str] = &["__primitive_box", "util.types"];
+/// NOT user-importable. Used to route internal codegen artifacts —
+/// currently just the `util.types` namespace-access alias of
+/// `util/types`, which the dispatch table keys on `module = "util.types"`
+/// so a single set of dispatch rows covers both the `import "util/types"`
+/// form and the `util.types.X(...)` form. Hidden from
+/// `--print-api-manifest` markdown / .d.ts output, but accepted by
+/// `is_known_module` so the manifest consistency tests pass.
+pub const INTERNAL_MODULES: &[&str] = &["util.types"];
 
 const fn method(
     module: &'static str,
@@ -2037,11 +2038,6 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util.types", "isStringObject", false, None),
     method("util.types", "isBooleanObject", false, None),
     method("util.types", "isBoxedPrimitive", false, None),
-    // Internal pseudo-module used by `new Number/String/Boolean(...)`
-    // lowering — see crates/perry-codegen/src/lower_call/native_table/node_core.rs.
-    method("__primitive_box", "Number", false, None),
-    method("__primitive_box", "String", false, None),
-    method("__primitive_box", "Boolean", false, None),
     // node:assert — assertion helpers used by tests and many npm packages.
     method("assert", "ok", false, None),
     method("assert", "fail", false, None),
