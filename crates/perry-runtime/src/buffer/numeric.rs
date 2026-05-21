@@ -37,7 +37,7 @@ fn buffer_slice_at_mut<'a>(buf: *mut BufferHeader, offset: i32, n: usize) -> Opt
     }
 }
 
-fn throw_out_of_range() -> ! {
+pub(super) fn throw_out_of_range() -> ! {
     static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
     REGISTER_RANGE_ERROR.call_once(|| {
         crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);

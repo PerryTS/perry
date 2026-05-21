@@ -105,10 +105,23 @@ pub extern "C" fn js_buffer_compare_range(
     unsafe {
         let la = (*pa).length as i32;
         let lb = (*pb).length as i32;
-        let ss = source_start.max(0).min(la);
-        let se = source_end.max(ss).min(la);
-        let ts = target_start.max(0).min(lb);
-        let te = target_end.max(ts).min(lb);
+        // Node throws ERR_OUT_OF_RANGE when any range arg is outside
+        // [0, length] or when start > end. The previous silent-clamp
+        // matched Perry's pre-error-shape convention; align with Node
+        // now that the error helper exists.
+        if target_start < 0
+            || target_end < target_start
+            || target_end > lb
+            || source_start < 0
+            || source_end < source_start
+            || source_end > la
+        {
+            super::numeric::throw_out_of_range();
+        }
+        let ss = source_start;
+        let se = source_end;
+        let ts = target_start;
+        let te = target_end;
         let da = std::slice::from_raw_parts(buffer_data(pa).add(ss as usize), (se - ss) as usize);
         let db = std::slice::from_raw_parts(buffer_data(pb).add(ts as usize), (te - ts) as usize);
         match da.cmp(db) {

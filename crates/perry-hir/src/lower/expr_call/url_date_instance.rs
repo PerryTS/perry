@@ -118,6 +118,12 @@ pub(super) fn try_url_date_weakref_instance(
         // Check for Date instance method calls (date.getTime(), etc.)
         if let ast::MemberProp::Ident(method_ident) = &member.prop {
             let method_name = method_ident.sym.as_ref();
+            // toJSON has two competing receiver shapes: Buffer-like values
+            // need their own `.toJSON()` (exact Node toJSON output), every
+            // other shape falls into the Date arms below. We must lower the
+            // receiver to discriminate. Cache the lowered expr so we don't
+            // re-lower in the Date `toJSON` arm at line ~263.
+            let mut cached_recv: Option<Expr> = None;
             if method_name == "toJSON" {
                 let recv_expr = lower_expr(ctx, &member.obj)?;
                 if matches!(
@@ -137,6 +143,7 @@ pub(super) fn try_url_date_weakref_instance(
                         type_args: vec![],
                     }));
                 }
+                cached_recv = Some(recv_expr);
             }
             let ambiguous = matches!(
                 method_name,
@@ -258,7 +265,10 @@ pub(super) fn try_url_date_weakref_instance(
                         return Ok(Ok(Expr::DateGetTimezoneOffset(Box::new(date_expr))));
                     }
                     "toJSON" => {
-                        let date_expr = lower_expr(ctx, &member.obj)?;
+                        let date_expr = match cached_recv.take() {
+                            Some(e) => e,
+                            None => lower_expr(ctx, &member.obj)?,
+                        };
                         return Ok(Ok(Expr::DateToJSON(Box::new(date_expr))));
                     }
                     // UTC setters — mutate the local variable in place.

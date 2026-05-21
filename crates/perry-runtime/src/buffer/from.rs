@@ -356,8 +356,27 @@ pub extern "C" fn js_buffer_alloc_fill_value(
 
         let bits = fill_value.to_bits();
         let jsval = crate::JSValue::from_bits(bits);
-        if !jsval.is_string() && (bits >> 48) < 0x7FF8 {
-            ptr::write_bytes(data, fill_value as u8, size as usize);
+        // Numeric fills — Node coerces the fill arg through ToUint32 and
+        // writes the low byte. Raw f64, INT32-tagged, bool, undefined and
+        // null all flow through this path (undefined/null → 0, true/false
+        // → 1/0). Pre-fix only raw f64 was recognised, so a `Buffer.alloc(N, 65)`
+        // whose argument propagated as INT32_TAG was misread as a pointer
+        // and produced a zero-filled buffer.
+        if jsval.is_number() {
+            ptr::write_bytes(data, fill_value as i64 as u8, size as usize);
+            return buf;
+        }
+        if jsval.is_int32() {
+            ptr::write_bytes(data, jsval.as_int32() as u8, size as usize);
+            return buf;
+        }
+        if jsval.is_bool() {
+            let b = if jsval.as_bool() { 1u8 } else { 0u8 };
+            ptr::write_bytes(data, b, size as usize);
+            return buf;
+        }
+        if jsval.is_undefined() || jsval.is_null() {
+            ptr::write_bytes(data, 0, size as usize);
             return buf;
         }
 
