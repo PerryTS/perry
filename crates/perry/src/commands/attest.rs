@@ -77,7 +77,7 @@ pub fn sha256_hex(path: &Path) -> Result<(String, u64)> {
         hasher.update(&buf[..n]);
         total += n as u64;
     }
-    Ok((format!("{:x}", hasher.finalize()), total))
+    Ok((hex::encode(hasher.finalize()), total))
 }
 
 /// Read `commit_sha` from the project's git tree. Best-effort:

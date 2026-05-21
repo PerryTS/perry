@@ -359,7 +359,7 @@ pub unsafe extern "C" fn js_crypto_hmac_sha256(
     key_ptr: *const StringHeader,
     data_ptr: *const StringHeader,
 ) -> *mut StringHeader {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
 
     type HmacSha256 = Hmac<Sha256>;
@@ -393,7 +393,7 @@ pub unsafe extern "C" fn js_crypto_hmac_sha256_bytes(
     key_ptr: i64,
     data_ptr: i64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     type HmacSha256 = Hmac<Sha256>;
 
     let key = bytes_from_ptr(key_ptr);
@@ -820,7 +820,7 @@ pub struct HmacHandle {
 /// algorithms return undefined.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_create_hmac(alg_ptr: i64, key_ptr: i64) -> f64 {
-    use hmac::Mac;
+    use hmac::KeyInit;
     let alg_bytes = bytes_from_ptr(alg_ptr);
     let alg = std::str::from_utf8(&alg_bytes)
         .unwrap_or("")

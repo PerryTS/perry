@@ -33,7 +33,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use once_cell::sync::Lazy;
 use sha1::Sha1;
 use sha2::{Digest as Sha2Digest, Sha256, Sha384, Sha512};

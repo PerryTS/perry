@@ -577,7 +577,7 @@ fn op_perry_hash(#[string] alg: &str, #[buffer] data: &[u8]) -> Vec<u8> {
 #[op2]
 #[buffer]
 fn op_perry_hmac(#[string] alg: &str, #[buffer] key: &[u8], #[buffer] data: &[u8]) -> Vec<u8> {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::{Sha256, Sha384, Sha512};
 
     match alg {
