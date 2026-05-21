@@ -266,6 +266,16 @@ pub fn lower_class_decl(
                     ast::PropName::Computed(computed) => {
                         if is_symbol_iterator_key(&computed.expr) {
                             "@@iterator".to_string()
+                        } else if is_inspect_custom_key(ctx, &computed.expr)
+                            && !method.is_static
+                            && matches!(method.kind, ast::MethodKind::Method)
+                        {
+                            // `[util.inspect.custom]() {}` on a class — rename
+                            // to a stable string key so `js_register_class_method`
+                            // picks it up. `format_object_as_json` looks up
+                            // this name on the object's vtable when there is no
+                            // per-instance entry. Refs #1248.
+                            "__perry_inspect_custom__".to_string()
                         } else if let Some(wk) = symbol_well_known_key(&computed.expr) {
                             // hasInstance (static method): lift the method
                             // body to a top-level function named
@@ -927,6 +937,14 @@ pub fn lower_class_from_ast(
                 let prop_name = match &method.key {
                     ast::PropName::Ident(ident) => ident.sym.to_string(),
                     ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                    ast::PropName::Computed(computed)
+                        if is_inspect_custom_key(ctx, &computed.expr)
+                            && !method.is_static
+                            && matches!(method.kind, ast::MethodKind::Method) =>
+                    {
+                        // Refs #1248: see class_decl.rs Method handling above.
+                        "__perry_inspect_custom__".to_string()
+                    }
                     _ => continue,
                 };
                 match method.kind {

@@ -42,8 +42,8 @@ pub(crate) use enum_decl::lower_enum_decl;
 pub(crate) use fn_decl::lower_fn_decl;
 pub(crate) use helpers::{
     append_synthetic_arguments_param, body_uses_arguments, build_default_param_stmts,
-    collect_let_decls_in_stmt, init_is_webassembly_instantiate, is_symbol_iterator_key,
-    symbol_well_known_key,
+    collect_let_decls_in_stmt, init_is_webassembly_instantiate, is_inspect_custom_key,
+    is_symbol_iterator_key, symbol_well_known_key,
 };
 pub(crate) use interface_decl::lower_interface_decl;
 pub(crate) use private_members::{

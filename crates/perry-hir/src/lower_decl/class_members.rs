@@ -372,6 +372,15 @@ pub fn lower_class_method(
         ast::PropName::Computed(computed) if is_symbol_iterator_key(&computed.expr) => {
             "@@iterator".to_string()
         }
+        ast::PropName::Computed(computed)
+            if is_inspect_custom_key(ctx, &computed.expr)
+                && !method.is_static
+                && matches!(method.kind, ast::MethodKind::Method) =>
+        {
+            // Refs #1248: `[util.inspect.custom]() {}` on a class — rename to
+            // a stable string key so the runtime's vtable picks it up.
+            "__perry_inspect_custom__".to_string()
+        }
         ast::PropName::Computed(computed) => {
             // Well-known symbols (hasInstance, toStringTag, toPrimitive,
             // asyncIterator) get a synthetic `@@<short>` name. The caller

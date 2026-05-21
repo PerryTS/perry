@@ -166,6 +166,50 @@ pub fn is_symbol_iterator_key(expr: &ast::Expr) -> bool {
     false
 }
 
+/// Detect the computed key `[util.inspect.custom]` / `[inspect.custom]` in a
+/// class method / object literal. Mirrors the AST pattern recognised by
+/// `lower_member_expression` in `expr_member.rs` so the same `inspect.custom`
+/// pattern that becomes `Symbol.for("nodejs.util.inspect.custom")` as a value
+/// is detected as a method key too. Refs #1248.
+pub fn is_inspect_custom_key(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let member = match expr {
+        ast::Expr::Member(m) => m,
+        _ => return false,
+    };
+    let prop_ident = match &member.prop {
+        ast::MemberProp::Ident(p) => p,
+        _ => return false,
+    };
+    if prop_ident.sym.as_ref() != "custom" {
+        return false;
+    }
+    // Case A: `inspect.custom` where `inspect` is a named import from
+    // `node:util`.
+    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+        if let Some((module_name, Some(method_name))) =
+            ctx.lookup_native_module(obj_ident.sym.as_ref())
+        {
+            if (module_name == "util" || module_name == "node:util") && method_name == "inspect" {
+                return true;
+            }
+        }
+    }
+    // Case B: `util.inspect.custom` where `util` is a whole-module alias.
+    if let ast::Expr::Member(inner) = member.obj.as_ref() {
+        if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(inner_prop)) =
+            (inner.obj.as_ref(), &inner.prop)
+        {
+            let obj_name = obj_ident.sym.to_string();
+            let is_util_module =
+                obj_name == "util" || ctx.lookup_builtin_module_alias(&obj_name) == Some("util");
+            if is_util_module && inner_prop.sym.as_ref() == "inspect" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Detect the computed key `[Symbol.<well-known>]` in a class method (static
 /// method, getter, regular method). Returns the short well-known name
 /// ("toPrimitive", "hasInstance", "toStringTag", "iterator", "asyncIterator",

@@ -784,6 +784,37 @@ unsafe fn format_object_as_json(
                 return format_jsvalue(ret, depth);
             }
         }
+
+        // #1248: class-method `[util.inspect.custom]() {}` is not stored in
+        // the per-instance symbol side table — HIR renames it to
+        // `__perry_inspect_custom__` and registers it on the class vtable
+        // (see crates/perry-hir/src/lower_decl/class_decl.rs). Walk the
+        // object's class chain when the instance lookup misses.
+        let class_id = (*obj_ptr).class_id;
+        if class_id != 0 {
+            if let Some((func_ptr, param_count)) =
+                crate::object::lookup_class_method_in_chain(class_id, "__perry_inspect_custom__")
+            {
+                let _guard = InspectCustomInspectGuard::new(false);
+                let remaining = inspect_depth_limit().saturating_sub(depth) as f64;
+                let options_obj = crate::object::js_object_alloc(0, 0);
+                let options_arg = crate::value::js_nanbox_pointer(options_obj as i64);
+                let undef_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let args = [remaining, options_arg, undef_arg];
+                let ret = crate::object::call_vtable_method(
+                    func_ptr,
+                    obj_ptr as i64,
+                    args.as_ptr(),
+                    args.len(),
+                    param_count,
+                );
+                let ret_jv = crate::value::JSValue::from_bits(ret.to_bits());
+                if ret_jv.is_any_string() {
+                    return jsvalue_string_content(ret).unwrap_or_default();
+                }
+                return format_jsvalue(ret, depth);
+            }
+        }
     }
 
     let keys_array = (*obj_ptr).keys_array;
@@ -885,13 +916,20 @@ unsafe fn format_object_as_json(
     // outer callers (arrays, nested objects) may prepend indentation that
     // pushes the final width past 80. Empty / short bodies stay on one line
     // so `console.dir({ foo: 1 })` keeps printing `{ foo: 1 }`. Refs #1201.
-    if single_line.len() <= 72 {
+    //
+    // #1249: if any rendered child already contains a newline (its own
+    // nested formatter chose multi-line), the outer MUST also break — keeping
+    // it single-line would re-emit the child's continuation lines without our
+    // indent prefix, producing a left-aligned inner body inside an indented
+    // outer body.
+    let any_child_multiline = parts.iter().any(|p| p.contains('\n'));
+    if !any_child_multiline && single_line.len() <= 72 {
         return single_line;
     }
     let indent = "  ";
     let body = parts
         .iter()
-        .map(|p| format!("{}{}", indent, p))
+        .map(|p| format!("{}{}", indent, p.replace('\n', "\n  ")))
         .collect::<Vec<_>>()
         .join(",\n");
     format!("{{\n{}\n}}", body)
