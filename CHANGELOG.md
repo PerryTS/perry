@@ -2,6 +2,31 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1021 — fix(perry-ui-gtk4): #1246 follow-up, restore image.rs resolve_asset_path access
+
+PR #1246 ("Drop all files to <2k LOC + tighten size gate") split
+`crates/perry-ui-gtk4/src/lib.rs` and moved `resolve_asset_path` into
+`ffi::layout`, leaving the function private. `widgets/image.rs:33` still
+called `crate::resolve_asset_path(path)` (root path), so the gtk4 build
+on the `linux-aarch64-gnu` release target broke with:
+
+    error[E0425]: cannot find function `resolve_asset_path` in the crate root
+      --> crates/perry-ui-gtk4/src/widgets/image.rs:33:27
+
+Local macOS workspace builds didn't hit it because perry-ui-gtk4 is
+excluded from the macOS cargo-test set (per CLAUDE.md). v0.5.1020's
+release-packages run (#26249481496) surfaced it on the
+`linux-aarch64-gnu` matrix entry, which then fail-fast-cancelled four
+other matrix builds and skipped every publish job (winget / homebrew /
+npm / apt / apt-repo).
+
+Two-line fix:
+
+- `ffi::layout::resolve_asset_path`: `fn` → `pub(crate) fn` so sibling
+  widget modules can reach it through `crate::ffi::layout::…`.
+- `widgets::image::create_file`: `crate::resolve_asset_path(path)` →
+  `crate::ffi::layout::resolve_asset_path(path)`.
+
 ## v0.5.1020 — release sweep: close v0.5.1019 parity blockers + CI infra
 
 Rolls up the post-v0.5.1019 fixes that landed across 17 PRs on `main`. The
