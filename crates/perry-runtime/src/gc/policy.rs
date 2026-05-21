@@ -726,6 +726,11 @@ pub fn gc_check_trigger() {
             // (i.e. invisible to the bench's wall-time counter).
             // `bench_json_roundtrip` lands at 50-80 % freed and is
             // unchanged — it still halves and stabilizes at the floor.
+            //
+            // With INITIAL == ABSOLUTE_CEILING (128 MB), the post-GC
+            // `next_trigger` cap below supersedes doubling above the
+            // ceiling; the doubling branch is kept for the bisection
+            // escape hatch.
             if !(10..=84).contains(&pct_freed) {
                 step = (step * 2).min(GC_THRESHOLD_MAX_BYTES);
             } else if pct_freed >= 25 {
