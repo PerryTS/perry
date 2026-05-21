@@ -119,11 +119,10 @@ fn scan_fastify_roots(visitor: &mut GcRootVisitor<'_>) {
             visitor.visit_i64_slot(&mut plugin.handler);
         }
         // #1113: upgrade handlers registered via
-        // `app.server.on("upgrade", cb)`. Pin them so a GC cycle
-        // between registration and an Upgrade request doesn't sweep
-        // the closure.
-        for cb in app.upgrade_handlers.iter() {
-            mark_cb(*cb, mark);
+        // `app.server.on("upgrade", cb)`. Visit slots mutably so
+        // copied-minor GC can rewrite closures if they move.
+        for cb in app.upgrade_handlers.iter_mut() {
+            visitor.visit_i64_slot(cb);
         }
     });
 }
