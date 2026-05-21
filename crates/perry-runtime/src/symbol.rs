@@ -379,6 +379,22 @@ pub unsafe extern "C" fn js_symbol_to_string(sym_f64: f64) -> i64 {
 /// callers can iterate without holding the SYMBOL_PROPERTIES lock — important
 /// when each iteration may itself need to take the same lock (e.g.
 /// `Object.assign(target, source)` re-entering `js_object_set_symbol_property`).
+/// Look up the cached pointer for the registered `util.inspect.custom` symbol
+/// (description `"nodejs.util.inspect.custom"`). Returns 0 if the symbol has
+/// not been allocated yet — which means no user code has touched
+/// `util.inspect.custom` so no object can possibly hold it as a key.
+/// Used by the inspect formatter to detect the hook without iterating every
+/// symbol entry. Refs #1201.
+pub(crate) fn inspect_custom_symbol_ptr() -> usize {
+    let guard = SYMBOL_REGISTRY.lock().unwrap();
+    if let Some(map) = guard.as_ref() {
+        if let Some(&ptr) = map.get("nodejs.util.inspect.custom") {
+            return ptr;
+        }
+    }
+    0
+}
+
 pub(crate) fn clone_symbol_entries_for_obj_ptr(src_obj_ptr: usize) -> Vec<(usize, u64)> {
     if src_obj_ptr == 0 {
         return Vec::new();
@@ -449,6 +465,29 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
         }
     }
     entries.push((sym_key, val_bits));
+    drop(guard);
+
+    // Node-style name inference: `{ [sym]: fn }` makes `fn.name === "[<desc>]"`,
+    // which surfaces in `console.log(fn)` as `[Function: [<desc>]]`. We only
+    // tag anonymous closures here — closures created from `function f(){}` /
+    // method shorthand already have a name registered. Refs #1201.
+    let val_tag = val_bits & 0xFFFF_0000_0000_0000;
+    if val_tag == POINTER_TAG {
+        let val_ptr = (val_bits & POINTER_MASK) as *const u8;
+        if !val_ptr.is_null() && (val_ptr as usize) > 0x10000 {
+            let gc_header = val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_CLOSURE {
+                let closure_ptr = val_ptr as *const crate::closure::ClosureHeader;
+                let func_ptr = (*closure_ptr).func_ptr;
+                if !func_ptr.is_null() {
+                    let sym_ptr = sym_key as *const SymbolHeader;
+                    let desc = str_from_header((*sym_ptr).description).unwrap_or_default();
+                    let inferred = format!("[{}]", desc);
+                    crate::builtins::register_function_name_if_absent(func_ptr as usize, &inferred);
+                }
+            }
+        }
+    }
     value_f64
 }
 

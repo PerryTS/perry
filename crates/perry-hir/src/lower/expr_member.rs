@@ -215,6 +215,47 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
         }
     }
 
+    // `util.inspect.custom` / `inspect.custom` (named import from node:util)
+    // — Node exposes this as the registered symbol `Symbol.for("nodejs.util.inspect.custom")`,
+    // and object-literal keys / inspect output expect that exact description.
+    // See #1201.
+    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+        if prop_ident.sym.as_ref() == "custom" {
+            // Case A: `inspect.custom` where `inspect` is a named import from
+            // node:util.
+            if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                if let Some((module_name, Some(method_name))) =
+                    ctx.lookup_native_module(obj_ident.sym.as_ref())
+                {
+                    if (module_name == "util" || module_name == "node:util")
+                        && method_name == "inspect"
+                    {
+                        return Ok(Expr::SymbolFor(Box::new(Expr::String(
+                            "nodejs.util.inspect.custom".to_string(),
+                        ))));
+                    }
+                }
+            }
+            // Case B: `util.inspect.custom` where `util` is a whole-module
+            // alias (`import * as util from "node:util"` or
+            // `import util from "node:util"`).
+            if let ast::Expr::Member(inner) = member.obj.as_ref() {
+                if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(inner_prop)) =
+                    (inner.obj.as_ref(), &inner.prop)
+                {
+                    let obj_name = obj_ident.sym.to_string();
+                    let is_util_module = obj_name == "util"
+                        || ctx.lookup_builtin_module_alias(&obj_name) == Some("util");
+                    if is_util_module && inner_prop.sym.as_ref() == "inspect" {
+                        return Ok(Expr::SymbolFor(Box::new(Expr::String(
+                            "nodejs.util.inspect.custom".to_string(),
+                        ))));
+                    }
+                }
+            }
+        }
+    }
+
     // Check if this is path.sep / path.delimiter constant access
     // (where `path` is an imported alias of the node:path module).
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {

@@ -916,6 +916,14 @@ unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize> {
 ///
 /// `options_value` must be a valid NaN-boxed JSValue.
 unsafe fn decode_dir_show_hidden_option(options_value: f64) -> Option<bool> {
+    decode_dir_bool_option(options_value, "showHidden")
+}
+
+/// Generic boolean-option decoder for the options object passed to
+/// `console.dir` / `util.inspect`. Honors Node's truthy/falsy coercion for
+/// the common scalar shapes (bool, int, number, null/undefined). Returns
+/// `None` when the option is absent so callers can supply a default.
+pub(crate) unsafe fn decode_dir_bool_option(options_value: f64, option_name: &str) -> Option<bool> {
     let jsval = JSValue::from_bits(options_value.to_bits());
     if !jsval.is_pointer() {
         return None;
@@ -933,6 +941,7 @@ unsafe fn decode_dir_show_hidden_option(options_value: f64) -> Option<bool> {
     if keys_array.is_null() {
         return None;
     }
+    let target = option_name.as_bytes();
     let key_count = crate::array::js_array_length(keys_array) as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys_array, i as u32);
@@ -946,7 +955,7 @@ unsafe fn decode_dir_show_hidden_option(options_value: f64) -> Option<bool> {
         let key_len = (*key_ptr).byte_len as usize;
         let key_data = (key_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let key_bytes = std::slice::from_raw_parts(key_data, key_len);
-        if key_bytes != b"showHidden" {
+        if key_bytes != target {
             continue;
         }
         let raw = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
@@ -964,7 +973,6 @@ unsafe fn decode_dir_show_hidden_option(options_value: f64) -> Option<bool> {
         if v.is_null() || v.is_undefined() {
             return Some(false);
         }
-        // Any other pointer-shaped value is truthy in Node's coercion.
         return Some(true);
     }
     None
@@ -981,8 +989,14 @@ unsafe fn decode_dir_show_hidden_option(options_value: f64) -> Option<bool> {
 pub unsafe extern "C" fn js_console_dir_with_options(value: f64, options_value: f64) {
     let max_depth = decode_dir_depth_option(options_value).unwrap_or(2);
     let show_hidden = decode_dir_show_hidden_option(options_value).unwrap_or(false);
+    // Node's `console.dir` defaults to `customInspect: false`, surfacing the
+    // hook as a regular `[Symbol(nodejs.util.inspect.custom)]: ...` property
+    // instead of invoking it. The option is overridable via the second arg.
+    // Refs #1201.
+    let custom_inspect = decode_dir_bool_option(options_value, "customInspect").unwrap_or(false);
     let _depth_guard = InspectDepthLimitGuard::new(max_depth);
     let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
+    let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
     println!("{}", format_jsvalue(value, 0));
 }
 

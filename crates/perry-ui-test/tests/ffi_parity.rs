@@ -1,5 +1,7 @@
 use perry_ui_test::{Support, FEATURES};
 use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
 
 /// Extract `perry_ui_*` / `perry_system_*` FFI symbols from Rust source.
 /// Matches: `pub extern "C" fn perry_...(` across one or more lines.
@@ -17,6 +19,38 @@ fn extract_ffi_symbols(source: &str) -> HashSet<String> {
             }
         }
     }
+    symbols
+}
+
+/// Extract native FFI symbols from a platform crate's whole `src` tree.
+///
+/// The native UI crates now split linker-visible `#[no_mangle]` FFI exports
+/// across topical modules under `src/ffi*/` or `src/lib_ffi/`, so scanning
+/// only `lib.rs` misses the actual exported surface.
+fn extract_native_crate_symbols(src_dir: &Path) -> HashSet<String> {
+    fn visit(path: &Path, symbols: &mut HashSet<String>) {
+        if path.is_dir() {
+            let Ok(entries) = fs::read_dir(path) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                visit(&entry.path(), symbols);
+            }
+            return;
+        }
+
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            return;
+        }
+
+        let Ok(source) = fs::read_to_string(path) else {
+            return;
+        };
+        symbols.extend(extract_ffi_symbols(&source));
+    }
+
+    let mut symbols = HashSet::new();
+    visit(src_dir, &mut symbols);
     symbols
 }
 
@@ -102,36 +136,21 @@ fn check_platform(
 // ── Platform Tests ───────────────────────────────────────────────────────────
 
 macro_rules! native_platform_test {
-    ($test_name:ident, $platform_name:expr, $source_path:expr, $field:ident) => {
+    ($test_name:ident, $platform_name:expr, $src_path:expr, $field:ident) => {
         #[test]
         fn $test_name() {
-            let source = include_str!($source_path);
-            let symbols = extract_ffi_symbols(source);
+            let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+            let symbols = extract_native_crate_symbols(&manifest_dir.join($src_path));
             check_platform($platform_name, &symbols, |f| f.$field, |f| f.name);
         }
     };
 }
 
-native_platform_test!(
-    test_macos,
-    "macOS",
-    "../../perry-ui-macos/src/lib.rs",
-    macos
-);
-native_platform_test!(test_ios, "iOS", "../../perry-ui-ios/src/lib.rs", ios);
-native_platform_test!(
-    test_android,
-    "Android",
-    "../../perry-ui-android/src/lib.rs",
-    android
-);
-native_platform_test!(test_gtk4, "GTK4", "../../perry-ui-gtk4/src/lib.rs", gtk4);
-native_platform_test!(
-    test_windows,
-    "Windows",
-    "../../perry-ui-windows/src/lib.rs",
-    windows
-);
+native_platform_test!(test_macos, "macOS", "../perry-ui-macos/src", macos);
+native_platform_test!(test_ios, "iOS", "../perry-ui-ios/src", ios);
+native_platform_test!(test_android, "Android", "../perry-ui-android/src", android);
+native_platform_test!(test_gtk4, "GTK4", "../perry-ui-gtk4/src", gtk4);
+native_platform_test!(test_windows, "Windows", "../perry-ui-windows/src", windows);
 
 #[test]
 fn test_web() {

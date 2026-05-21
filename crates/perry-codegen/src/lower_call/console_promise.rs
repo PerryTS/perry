@@ -346,27 +346,25 @@ pub fn try_lower_console_call(
                     crate::nanbox::TAG_UNDEFINED,
                 ))));
             }
-            // console.dir(obj[, options]) — Node prints just the formatted
-            // object. Without an options arg we hit the fast path and route
-            // through `js_console_log_dynamic` (default depth=2). With options
-            // we call `js_console_dir_with_options` so the runtime can read
-            // `options.depth` (#1199) and override INSPECT_MAX_DEPTH for the
-            // print. showHidden / colors / util.inspect.custom etc. remain
-            // best-effort (#1200–#1204).
+            // console.dir(obj[, options]) — always routes through
+            // `js_console_dir_with_options` so the runtime can apply Node's
+            // dir-specific defaults (depth=2 #1199, showHidden=false #1200,
+            // customInspect=false #1201). Missing `options` arg becomes
+            // `undefined` and the option decoders fall back to their
+            // Node-compatible defaults.
             if property == "dir" && !args.is_empty() {
                 let v = lower_expr(ctx, &args[0])?;
-                if args.len() >= 2 {
-                    let opts = lower_expr(ctx, &args[1])?;
-                    ctx.block().call_void(
-                        "js_console_dir_with_options",
-                        &[(DOUBLE, &v), (DOUBLE, &opts)],
-                    );
-                    for a in args.iter().skip(2) {
-                        let _ = lower_expr(ctx, a)?;
-                    }
+                let opts = if args.len() >= 2 {
+                    lower_expr(ctx, &args[1])?
                 } else {
-                    ctx.block()
-                        .call_void("js_console_log_dynamic", &[(DOUBLE, &v)]);
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                ctx.block().call_void(
+                    "js_console_dir_with_options",
+                    &[(DOUBLE, &v), (DOUBLE, &opts)],
+                );
+                for a in args.iter().skip(2) {
+                    let _ = lower_expr(ctx, a)?;
                 }
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,

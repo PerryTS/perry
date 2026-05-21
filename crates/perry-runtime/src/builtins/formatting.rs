@@ -291,6 +291,24 @@ pub unsafe extern "C" fn js_register_function_name(
     }
 }
 
+/// Register `name` for `func_ptr` only if no name was previously registered.
+/// Used by computed-key object literal assignment: when `{ [sym]: fn }` is
+/// stored, Node infers the function's name from the symbol's description
+/// (`[Function: [<desc>]]`). Anonymous closures hit this; closures that
+/// already have a real name (`function f(){}`) are left alone.
+///
+/// Safe to call from any runtime path — uses the same mutex as
+/// `js_register_function_name`.
+pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
+    if func_ptr == 0 || name.is_empty() {
+        return;
+    }
+    if let Ok(mut map) = function_name_registry().lock() {
+        map.entry(func_ptr)
+            .or_insert_with(|| std::sync::Arc::from(name));
+    }
+}
+
 /// Per-thread override for the `showHidden` inspect option. Defaults to
 /// `false` (Node default): `util.inspect` / `console.log` only show
 /// enumerable properties. `console.dir(value, { showHidden: true })`
@@ -318,6 +336,35 @@ impl InspectShowHiddenGuard {
 impl Drop for InspectShowHiddenGuard {
     fn drop(&mut self) {
         INSPECT_SHOW_HIDDEN.with(|c| c.set(self.0));
+    }
+}
+
+/// Per-thread override for the `customInspect` inspect option. Defaults to
+/// `true` (Node default for `util.inspect` / `console.log`): when an object
+/// has a `[util.inspect.custom]` symbol-keyed method, the hook is invoked
+/// and its return value replaces the default object body. `console.dir`
+/// flips this to `false` so the symbol surfaces as a property listing.
+/// See #1201.
+thread_local! {
+    static INSPECT_CUSTOM_INSPECT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+pub(crate) fn inspect_custom_inspect_enabled() -> bool {
+    INSPECT_CUSTOM_INSPECT.with(|c| c.get())
+}
+
+pub(crate) struct InspectCustomInspectGuard(bool);
+
+impl InspectCustomInspectGuard {
+    pub(crate) fn new(enabled: bool) -> Self {
+        let prev = INSPECT_CUSTOM_INSPECT.with(|c| c.replace(enabled));
+        Self(prev)
+    }
+}
+
+impl Drop for InspectCustomInspectGuard {
+    fn drop(&mut self) {
+        INSPECT_CUSTOM_INSPECT.with(|c| c.set(self.0));
     }
 }
 
@@ -681,6 +728,49 @@ unsafe fn format_object_as_json(
         return "{...}".to_string();
     }
 
+    let obj_addr = obj_ptr as usize;
+
+    // `[util.inspect.custom]` hook: when the object carries a symbol-keyed
+    // entry for `Symbol.for("nodejs.util.inspect.custom")` and the
+    // `customInspect` inspect option is enabled (Node default for
+    // `util.inspect` and `console.log` — `console.dir` opts out via
+    // `InspectCustomInspectGuard`), invoke it and use the return value
+    // verbatim when it's a string, or recursively inspect otherwise. The
+    // hook itself runs with `customInspect` temporarily disabled to prevent
+    // unbounded recursion if the hook returns `this`. Refs #1201.
+    if inspect_custom_inspect_enabled() {
+        let custom_sym = crate::symbol::inspect_custom_symbol_ptr();
+        if custom_sym != 0 {
+            let entries = crate::symbol::clone_symbol_entries_for_obj_ptr(obj_addr);
+            for (sym_ptr, val_bits) in &entries {
+                if *sym_ptr != custom_sym {
+                    continue;
+                }
+                let val_tag = val_bits & 0xFFFF_0000_0000_0000;
+                if val_tag != 0x7FFD_0000_0000_0000 {
+                    break;
+                }
+                let val_ptr = (val_bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
+                if val_ptr.is_null() || (val_ptr as usize) < 0x10000 {
+                    break;
+                }
+                let gc_header =
+                    val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*gc_header).obj_type != crate::gc::GC_TYPE_CLOSURE {
+                    break;
+                }
+                let closure_ptr = val_ptr as *const crate::closure::ClosureHeader;
+                let _guard = InspectCustomInspectGuard::new(false);
+                let ret = crate::closure::js_closure_call0(closure_ptr);
+                let ret_jv = crate::value::JSValue::from_bits(ret.to_bits());
+                if ret_jv.is_any_string() {
+                    return jsvalue_string_content(ret).unwrap_or_default();
+                }
+                return format_jsvalue(ret, depth);
+            }
+        }
+    }
+
     let keys_array = (*obj_ptr).keys_array;
     if keys_array.is_null() {
         return "{}".to_string();
@@ -702,7 +792,6 @@ unsafe fn format_object_as_json(
     // See #1200.
     let show_hidden = inspect_show_hidden();
     let descriptors_in_use = crate::object::descriptors_in_use();
-    let obj_addr = obj_ptr as usize;
 
     let mut parts: Vec<String> = Vec::with_capacity(key_count);
 
@@ -745,10 +834,52 @@ unsafe fn format_object_as_json(
         }
     }
 
+    // Append symbol-keyed properties last (matches Node's enumeration order:
+    // string keys first, then symbol keys). Each entry renders as
+    // `[Symbol(<desc>)]: <value>`. By default Node prints enumerable symbol
+    // properties even without `showHidden` (they're own enumerable props).
+    // Refs #1201.
+    let sym_entries = crate::symbol::clone_symbol_entries_for_obj_ptr(obj_addr);
+    for (sym_ptr_usize, val_bits) in sym_entries {
+        let sym_f64 = f64::from_bits(
+            0x7FFD_0000_0000_0000u64 | (sym_ptr_usize as u64 & 0x0000_FFFF_FFFF_FFFFu64),
+        );
+        let sym_label = {
+            let s_ptr = crate::symbol::js_symbol_to_string(sym_f64) as *const StringHeader;
+            if s_ptr.is_null() {
+                "Symbol()".to_string()
+            } else {
+                let len = (*s_ptr).byte_len as usize;
+                let data = (s_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                let bytes = std::slice::from_raw_parts(data, len);
+                std::str::from_utf8(bytes).unwrap_or("Symbol()").to_string()
+            }
+        };
+        let value = f64::from_bits(val_bits);
+        let value_str = format_jsvalue_for_json(value, depth + 1);
+        parts.push(format!("[{}]: {}", sym_label, value_str));
+    }
+
     if parts.is_empty() {
         return "{}".to_string();
     }
-    format!("{{ {} }}", parts.join(", "))
+    let single_line = format!("{{ {} }}", parts.join(", "));
+    // Node's `util.inspect` switches to multi-line layout when the single-line
+    // rendering would exceed `breakLength` (default 80). The threshold is
+    // measured against the body alone — we approximate with 72 here because
+    // outer callers (arrays, nested objects) may prepend indentation that
+    // pushes the final width past 80. Empty / short bodies stay on one line
+    // so `console.dir({ foo: 1 })` keeps printing `{ foo: 1 }`. Refs #1201.
+    if single_line.len() <= 72 {
+        return single_line;
+    }
+    let indent = "  ";
+    let body = parts
+        .iter()
+        .map(|p| format!("{}{}", indent, p))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!("{{\n{}\n}}", body)
 }
 
 /// Format a JSValue for JSON output (strings get quotes)
@@ -1182,7 +1313,13 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
 }
 
 #[no_mangle]
-pub extern "C" fn js_util_inspect(value: f64, _options: f64) -> f64 {
+pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
+    // `util.inspect` defaults to `customInspect: true`; an explicit
+    // `{ customInspect: false }` opts out and surfaces the hook as a
+    // symbol property. Refs #1201.
+    let custom_inspect =
+        unsafe { super::console::decode_dir_bool_option(options, "customInspect") }.unwrap_or(true);
+    let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     let out = if jv.is_any_string() {
         let s = jsvalue_string_content(value).unwrap_or_default();

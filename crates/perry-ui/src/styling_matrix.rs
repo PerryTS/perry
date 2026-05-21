@@ -524,29 +524,58 @@ pub mod drift {
     use std::fs;
     use std::path::Path;
 
-    /// Scan a `lib.rs` file and return every `perry_ui_*` symbol it
-    /// exports as a `pub extern "C" fn`. Handles both multi-line and
-    /// single-line `#[no_mangle] pub extern "C" fn ...` styles (watchOS
-    /// uses single-line for compactness).
+    /// Scan a platform crate's `src` tree and return every `perry_ui_*`
+    /// symbol it exports as a `pub extern "C" fn`.
+    ///
+    /// Historically the native backends kept all FFI entry points directly
+    /// in `lib.rs`, but the large-file split moved many `#[no_mangle]`
+    /// functions into topical `src/ffi*/` or `src/lib_ffi/` modules that are
+    /// re-exported or otherwise linker-visible from the crate. Start from the
+    /// supplied `lib.rs`, then scan sibling Rust source files recursively so
+    /// the drift check follows that split while preserving the old call site.
+    /// Handles both multi-line and single-line `#[no_mangle] pub extern "C"
+    /// fn ...` styles (watchOS uses single-line for compactness).
     pub fn scan_exports(lib_rs: &Path) -> Vec<String> {
-        let Ok(src) = fs::read_to_string(lib_rs) else {
-            return Vec::new();
-        };
         let mut out = Vec::new();
         let needle = "pub extern \"C\" fn perry_ui_";
-        for line in src.lines() {
-            let mut start = 0;
-            while let Some(idx) = line[start..].find(needle) {
-                let abs = start + idx + needle.len() - "perry_ui_".len();
-                let rest = &line[abs..];
-                let after_prefix = &rest["perry_ui_".len()..];
-                let end = after_prefix
-                    .find(|c: char| !(c.is_alphanumeric() || c == '_'))
-                    .unwrap_or(after_prefix.len());
-                out.push(format!("perry_ui_{}", &after_prefix[..end]));
-                start = abs + "perry_ui_".len() + end;
+
+        fn scan_file(path: &Path, needle: &str, out: &mut Vec<String>) {
+            let Ok(src) = fs::read_to_string(path) else {
+                return;
+            };
+            for line in src.lines() {
+                let mut start = 0;
+                while let Some(idx) = line[start..].find(needle) {
+                    let abs = start + idx + needle.len() - "perry_ui_".len();
+                    let rest = &line[abs..];
+                    let after_prefix = &rest["perry_ui_".len()..];
+                    let end = after_prefix
+                        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .unwrap_or(after_prefix.len());
+                    out.push(format!("perry_ui_{}", &after_prefix[..end]));
+                    start = abs + "perry_ui_".len() + end;
+                }
             }
         }
+
+        fn scan_dir(dir: &Path, needle: &str, out: &mut Vec<String>) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    scan_dir(&path, needle, out);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    scan_file(&path, needle, out);
+                }
+            }
+        }
+
+        let Some(src_dir) = lib_rs.parent() else {
+            return out;
+        };
+        scan_dir(src_dir, needle, &mut out);
         out.sort();
         out.dedup();
         out
