@@ -236,7 +236,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let tag: i32 = match lower.as_str() {
                         "utf8" | "utf-8" | "ascii" | "latin1" | "binary" => 0,
                         "hex" => 1,
-                        "base64" | "base64url" => 2,
+                        "base64" => 2,
+                        "base64url" => 3,
                         _ => bail!(
                             "perry-codegen: unknown Buffer encoding \"{}\": expected one of utf8, utf-8, hex, base64, base64url, ascii, latin1, binary",
                             s
@@ -319,25 +320,51 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.sitofp(I32, &len_i32, DOUBLE))
         }
 
-        Expr::BufferAlloc { size, fill } => {
+        Expr::BufferAlloc {
+            size,
+            fill,
+            encoding,
+        } => {
             // Phase H: call js_buffer_alloc(size, fill) which returns
             // a raw *mut BufferHeader i64. NaN-box with POINTER_TAG
             // so downstream BUFFER_REGISTRY checks + `.length` paths
             // can use it. Missing fill defaults to 0.
             let size_box = lower_expr(ctx, size)?;
-            let fill_i32 = if let Some(fill_expr) = fill {
+            let size_i32 = ctx.block().fptosi(DOUBLE, &size_box, I32);
+            let buf_handle = if let Some(fill_expr) = fill {
                 let fill_box = lower_expr(ctx, fill_expr)?;
-                ctx.block().fptosi(DOUBLE, &fill_box, I32)
+                let enc_tag_i32 = if let Some(enc_expr) = encoding {
+                    if let Expr::String(s) = enc_expr.as_ref() {
+                        let lower = s.to_ascii_lowercase();
+                        let tag: i32 = match lower.as_str() {
+                            "utf8" | "utf-8" | "ascii" | "latin1" | "binary" => 0,
+                            "hex" => 1,
+                            "base64" => 2,
+                            "base64url" => 3,
+                            _ => bail!(
+                                "perry-codegen: unknown Buffer encoding \"{}\": expected one of utf8, utf-8, hex, base64, base64url, ascii, latin1, binary",
+                                s
+                            ),
+                        };
+                        tag.to_string()
+                    } else {
+                        let enc_box = lower_expr(ctx, enc_expr)?;
+                        ctx.block()
+                            .call(I32, "js_encoding_tag_from_value", &[(DOUBLE, &enc_box)])
+                    }
+                } else {
+                    "0".to_string()
+                };
+                ctx.block().call(
+                    I64,
+                    "js_buffer_alloc_fill_value",
+                    &[(I32, &size_i32), (DOUBLE, &fill_box), (I32, &enc_tag_i32)],
+                )
             } else {
-                "0".to_string()
+                ctx.block()
+                    .call(I64, "js_buffer_alloc", &[(I32, &size_i32), (I32, "0")])
             };
             let blk = ctx.block();
-            let size_i32 = blk.fptosi(DOUBLE, &size_box, I32);
-            let buf_handle = blk.call(
-                I64,
-                "js_buffer_alloc",
-                &[(I32, &size_i32), (I32, &fill_i32)],
-            );
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
 

@@ -23,7 +23,7 @@ pub extern "C" fn js_buffer_from_string(
             // and the final `to_vec` (legacy helper) was a 2nd allocation; the
             // in-place writer skips both. ~2× speedup on 4 KB hex round-trips.
             1 => hex_decode_into_buffer(str_bytes),
-            2 => base64_decode_into_buffer(str_bytes),
+            2 | 3 => base64_decode_into_buffer(str_bytes),
             _ => {
                 // UTF-8 (default)
                 let buf = buffer_alloc(len as u32);
@@ -40,7 +40,8 @@ pub extern "C" fn js_buffer_from_string(
 /// and `js_buffer_to_string`:
 /// - 0 = utf8 / utf-8 / ascii / latin1 / binary (fallback default)
 /// - 1 = hex
-/// - 2 = base64 / base64url
+/// - 2 = base64 decode-compatible
+/// - 3 = base64url encode tag (decode uses the same permissive table)
 ///
 /// Used by codegen for non-literal encoding arguments to `Buffer.from(str, enc)`
 /// and `buf.toString(enc)` where the encoding expression cannot be statically
@@ -71,8 +72,10 @@ pub extern "C" fn js_encoding_tag_from_value(value: f64) -> i32 {
         }
         if eq_ascii_lower(bytes, b"hex") {
             1
-        } else if eq_ascii_lower(bytes, b"base64") || eq_ascii_lower(bytes, b"base64url") {
+        } else if eq_ascii_lower(bytes, b"base64") {
             2
+        } else if eq_ascii_lower(bytes, b"base64url") {
+            3
         } else {
             // utf8, utf-8, ascii, latin1, binary, and unknown all fall through to UTF-8.
             // Matches the runtime's `_ =>` arm in js_buffer_from_string/js_buffer_to_string.
@@ -329,6 +332,46 @@ pub extern "C" fn js_buffer_alloc(size: i32, fill: i32) -> *mut BufferHeader {
         (*buf).length = size;
         let data = buffer_data_mut(buf);
         ptr::write_bytes(data, fill as u8, size as usize);
+    }
+    buf
+}
+
+/// Allocate a buffer and repeat/truncate a Node-compatible fill value.
+/// Numeric fills use the low byte; string/Buffer/Uint8Array/array fills reuse
+/// the same coercion path as `Buffer.from(value, encoding)`.
+#[no_mangle]
+pub extern "C" fn js_buffer_alloc_fill_value(
+    size: i32,
+    fill_value: f64,
+    encoding: i32,
+) -> *mut BufferHeader {
+    let size = size.max(0) as u32;
+    let buf = buffer_alloc(size);
+    unsafe {
+        (*buf).length = size;
+        let data = buffer_data_mut(buf);
+        if size == 0 {
+            return buf;
+        }
+
+        let bits = fill_value.to_bits();
+        let jsval = crate::JSValue::from_bits(bits);
+        if !jsval.is_string() && (bits >> 48) < 0x7FF8 {
+            ptr::write_bytes(data, fill_value as u8, size as usize);
+            return buf;
+        }
+
+        let src = js_buffer_from_value(bits as i64, encoding);
+        if src.is_null() || (*src).length == 0 {
+            ptr::write_bytes(data, 0, size as usize);
+            return buf;
+        }
+
+        let src_len = (*src).length as usize;
+        let src_data = buffer_data(src);
+        for i in 0..(size as usize) {
+            *data.add(i) = *src_data.add(i % src_len);
+        }
     }
     buf
 }

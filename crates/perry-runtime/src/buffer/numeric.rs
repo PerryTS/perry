@@ -37,6 +37,56 @@ fn buffer_slice_at_mut<'a>(buf: *mut BufferHeader, offset: i32, n: usize) -> Opt
     }
 }
 
+fn throw_out_of_range() -> ! {
+    static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
+    REGISTER_RANGE_ERROR.call_once(|| {
+        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
+    });
+    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
+    unsafe {
+        let set = |key: &[u8], value: f64| {
+            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            crate::object::js_object_set_field_by_name(obj, key_ptr, value);
+        };
+        let str_val = |s: &[u8]| -> f64 {
+            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
+        };
+        set(b"name", str_val(b"RangeError"));
+        set(b"code", str_val(b"ERR_OUT_OF_RANGE"));
+        set(b"message", str_val(b"The value is out of range"));
+    }
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+}
+
+#[inline]
+fn normalize_integer_write_value(value: f64, min: f64, max: f64) -> f64 {
+    if value.is_nan() {
+        return 0.0;
+    }
+    if !value.is_finite() || value < min || value > max {
+        throw_out_of_range();
+    }
+    value
+}
+
+#[inline]
+fn checked_uint_write_value(value: f64, bits: u32) -> u64 {
+    let max = if bits == 64 {
+        u64::MAX as f64
+    } else {
+        ((1u64 << bits) - 1) as f64
+    };
+    normalize_integer_write_value(value, 0.0, max) as u64
+}
+
+#[inline]
+fn checked_int_write_value(value: f64, bits: u32) -> i64 {
+    let min = -(1i64 << (bits - 1)) as f64;
+    let max = ((1i64 << (bits - 1)) - 1) as f64;
+    normalize_integer_write_value(value, min, max) as i64
+}
+
 #[no_mangle]
 pub extern "C" fn js_buffer_read_uint8(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
@@ -165,22 +215,28 @@ pub extern "C" fn js_buffer_read_double_le(buf_ptr: f64, offset: i32) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_uint8(buf_ptr: f64, value: f64, offset: i32) {
+    let value = checked_uint_write_value(value, 8);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     if let Some(s) = buffer_slice_at_mut(buf, offset, 1) {
-        s[0] = (value as i64 & 0xFF) as u8;
+        s[0] = value as u8;
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_int8(buf_ptr: f64, value: f64, offset: i32) {
-    js_buffer_write_uint8(buf_ptr, value, offset);
+    let value = checked_int_write_value(value, 8);
+    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
+    if let Some(s) = buffer_slice_at_mut(buf, offset, 1) {
+        s[0] = value as i8 as u8;
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_uint16_be(buf_ptr: f64, value: f64, offset: i32) {
+    let value = checked_uint_write_value(value, 16);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     if let Some(s) = buffer_slice_at_mut(buf, offset, 2) {
-        let bytes = (value as i64 as u16).to_be_bytes();
+        let bytes = (value as u16).to_be_bytes();
         s[0] = bytes[0];
         s[1] = bytes[1];
     }
@@ -188,9 +244,10 @@ pub extern "C" fn js_buffer_write_uint16_be(buf_ptr: f64, value: f64, offset: i3
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_uint16_le(buf_ptr: f64, value: f64, offset: i32) {
+    let value = checked_uint_write_value(value, 16);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     if let Some(s) = buffer_slice_at_mut(buf, offset, 2) {
-        let bytes = (value as i64 as u16).to_le_bytes();
+        let bytes = (value as u16).to_le_bytes();
         s[0] = bytes[0];
         s[1] = bytes[1];
     }
@@ -198,40 +255,58 @@ pub extern "C" fn js_buffer_write_uint16_le(buf_ptr: f64, value: f64, offset: i3
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_int16_be(buf_ptr: f64, value: f64, offset: i32) {
-    js_buffer_write_uint16_be(buf_ptr, value, offset);
+    let value = checked_int_write_value(value, 16);
+    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
+    if let Some(s) = buffer_slice_at_mut(buf, offset, 2) {
+        s.copy_from_slice(&(value as i16).to_be_bytes());
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_int16_le(buf_ptr: f64, value: f64, offset: i32) {
-    js_buffer_write_uint16_le(buf_ptr, value, offset);
+    let value = checked_int_write_value(value, 16);
+    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
+    if let Some(s) = buffer_slice_at_mut(buf, offset, 2) {
+        s.copy_from_slice(&(value as i16).to_le_bytes());
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_uint32_be(buf_ptr: f64, value: f64, offset: i32) {
+    let value = checked_uint_write_value(value, 32);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     if let Some(s) = buffer_slice_at_mut(buf, offset, 4) {
-        let bytes = (value as i64 as u32).to_be_bytes();
+        let bytes = (value as u32).to_be_bytes();
         s[..4].copy_from_slice(&bytes);
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_uint32_le(buf_ptr: f64, value: f64, offset: i32) {
+    let value = checked_uint_write_value(value, 32);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     if let Some(s) = buffer_slice_at_mut(buf, offset, 4) {
-        let bytes = (value as i64 as u32).to_le_bytes();
+        let bytes = (value as u32).to_le_bytes();
         s[..4].copy_from_slice(&bytes);
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_int32_be(buf_ptr: f64, value: f64, offset: i32) {
-    js_buffer_write_uint32_be(buf_ptr, value, offset);
+    let value = checked_int_write_value(value, 32);
+    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
+    if let Some(s) = buffer_slice_at_mut(buf, offset, 4) {
+        s[..4].copy_from_slice(&(value as i32).to_be_bytes());
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_int32_le(buf_ptr: f64, value: f64, offset: i32) {
-    js_buffer_write_uint32_le(buf_ptr, value, offset);
+    let value = checked_int_write_value(value, 32);
+    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
+    if let Some(s) = buffer_slice_at_mut(buf, offset, 4) {
+        s[..4].copy_from_slice(&(value as i32).to_le_bytes());
+    }
 }
 
 #[no_mangle]
@@ -371,12 +446,12 @@ pub extern "C" fn js_buffer_read_int_le(buf_ptr: f64, offset: i32, byte_length: 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_uint_be(buf_ptr: f64, value: f64, offset: i32, byte_length: i32) {
     if !(1..=6).contains(&byte_length) {
-        return;
+        throw_out_of_range();
     }
+    let v = checked_uint_write_value(value, (byte_length as u32) * 8);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     let n = byte_length as usize;
     if let Some(s) = buffer_slice_at_mut(buf, offset, n) {
-        let v = value as i64 as u64;
         for i in 0..n {
             s[n - 1 - i] = ((v >> (i * 8)) & 0xFF) as u8;
         }
@@ -386,12 +461,12 @@ pub extern "C" fn js_buffer_write_uint_be(buf_ptr: f64, value: f64, offset: i32,
 #[no_mangle]
 pub extern "C" fn js_buffer_write_uint_le(buf_ptr: f64, value: f64, offset: i32, byte_length: i32) {
     if !(1..=6).contains(&byte_length) {
-        return;
+        throw_out_of_range();
     }
+    let v = checked_uint_write_value(value, (byte_length as u32) * 8);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     let n = byte_length as usize;
     if let Some(s) = buffer_slice_at_mut(buf, offset, n) {
-        let v = value as i64 as u64;
         for i in 0..n {
             s[i] = ((v >> (i * 8)) & 0xFF) as u8;
         }
@@ -400,12 +475,32 @@ pub extern "C" fn js_buffer_write_uint_le(buf_ptr: f64, value: f64, offset: i32,
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_int_be(buf_ptr: f64, value: f64, offset: i32, byte_length: i32) {
-    js_buffer_write_uint_be(buf_ptr, value, offset, byte_length);
+    if !(1..=6).contains(&byte_length) {
+        throw_out_of_range();
+    }
+    let v = checked_int_write_value(value, (byte_length as u32) * 8) as u64;
+    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
+    let n = byte_length as usize;
+    if let Some(s) = buffer_slice_at_mut(buf, offset, n) {
+        for i in 0..n {
+            s[n - 1 - i] = ((v >> (i * 8)) & 0xFF) as u8;
+        }
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_int_le(buf_ptr: f64, value: f64, offset: i32, byte_length: i32) {
-    js_buffer_write_uint_le(buf_ptr, value, offset, byte_length);
+    if !(1..=6).contains(&byte_length) {
+        throw_out_of_range();
+    }
+    let v = checked_int_write_value(value, (byte_length as u32) * 8) as u64;
+    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
+    let n = byte_length as usize;
+    if let Some(s) = buffer_slice_at_mut(buf, offset, n) {
+        for i in 0..n {
+            s[i] = ((v >> (i * 8)) & 0xFF) as u8;
+        }
+    }
 }
 
 // ---- BigInt 64-bit read/write ----
@@ -436,10 +531,10 @@ pub extern "C" fn js_buffer_read_bigint64_le(buf_ptr: f64, offset: i32) -> f64 {
 pub extern "C" fn js_buffer_read_biguint64_be(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
     let val = match buffer_slice_at(buf, offset, 8) {
-        Some(s) => u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]) as i64,
+        Some(s) => u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]),
         None => 0,
     };
-    let bi = crate::bigint::js_bigint_from_i64(val);
+    let bi = crate::bigint::js_bigint_from_u64(val);
     f64::from_bits(crate::JSValue::bigint_ptr(bi).bits())
 }
 
@@ -447,10 +542,10 @@ pub extern "C" fn js_buffer_read_biguint64_be(buf_ptr: f64, offset: i32) -> f64 
 pub extern "C" fn js_buffer_read_biguint64_le(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
     let val = match buffer_slice_at(buf, offset, 8) {
-        Some(s) => u64::from_le_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]) as i64,
+        Some(s) => u64::from_le_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]),
         None => 0,
     };
-    let bi = crate::bigint::js_bigint_from_i64(val);
+    let bi = crate::bigint::js_bigint_from_u64(val);
     f64::from_bits(crate::JSValue::bigint_ptr(bi).bits())
 }
 

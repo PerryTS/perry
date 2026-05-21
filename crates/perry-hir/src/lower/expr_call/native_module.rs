@@ -174,9 +174,11 @@ pub(super) fn try_native_module_methods(
                         "alloc" => {
                             let size = args.first().cloned().unwrap_or(Expr::Number(0.0));
                             let fill = args.get(1).cloned().map(Box::new);
+                            let encoding = args.get(2).cloned().map(Box::new);
                             return Ok(Ok(Expr::BufferAlloc {
                                 size: Box::new(size),
                                 fill,
+                                encoding,
                             }));
                         }
                         "allocUnsafe" | "allocUnsafeSlow" => {

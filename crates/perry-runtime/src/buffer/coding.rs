@@ -44,6 +44,8 @@ const BASE64_DECODE_TABLE: [u8; 256] = {
 
 const BASE64_ENCODE_TABLE: &[u8; 64] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const BASE64URL_ENCODE_TABLE: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 const HEX_ENCODE_TABLE: &[u8; 16] = b"0123456789abcdef";
 
@@ -244,6 +246,54 @@ pub fn base64_encode_into_string(input: &[u8]) -> *mut StringHeader {
             *dst.add(o + 1) = *table.get_unchecked(((n >> 12) & 0x3F) as usize);
             *dst.add(o + 2) = *table.get_unchecked(((n >> 6) & 0x3F) as usize);
             *dst.add(o + 3) = b'=';
+        }
+    }
+    hdr
+}
+
+/// Base64url-encode `input` using the URL-safe alphabet and no `=` padding.
+#[inline]
+pub fn base64url_encode_into_string(input: &[u8]) -> *mut StringHeader {
+    let rem = input.len() % 3;
+    let out_len = (input.len() / 3) * 4
+        + match rem {
+            0 => 0,
+            1 => 2,
+            _ => 3,
+        };
+    if out_len == 0 {
+        return js_string_from_ascii_bytes(std::ptr::null(), 0);
+    }
+    let (hdr, dst) = js_string_alloc_ascii_uninit(out_len as u32);
+    let table = BASE64URL_ENCODE_TABLE;
+    unsafe {
+        let mut i = 0usize;
+        let mut o = 0usize;
+        let triple_end = input.len() - rem;
+        while i < triple_end {
+            let a = *input.get_unchecked(i) as u32;
+            let b = *input.get_unchecked(i + 1) as u32;
+            let c = *input.get_unchecked(i + 2) as u32;
+            let n = (a << 16) | (b << 8) | c;
+            *dst.add(o) = *table.get_unchecked((n >> 18) as usize);
+            *dst.add(o + 1) = *table.get_unchecked(((n >> 12) & 0x3F) as usize);
+            *dst.add(o + 2) = *table.get_unchecked(((n >> 6) & 0x3F) as usize);
+            *dst.add(o + 3) = *table.get_unchecked((n & 0x3F) as usize);
+            i += 3;
+            o += 4;
+        }
+        if rem == 1 {
+            let a = *input.get_unchecked(i) as u32;
+            let n = a << 16;
+            *dst.add(o) = *table.get_unchecked((n >> 18) as usize);
+            *dst.add(o + 1) = *table.get_unchecked(((n >> 12) & 0x3F) as usize);
+        } else if rem == 2 {
+            let a = *input.get_unchecked(i) as u32;
+            let b = *input.get_unchecked(i + 1) as u32;
+            let n = (a << 16) | (b << 8);
+            *dst.add(o) = *table.get_unchecked((n >> 18) as usize);
+            *dst.add(o + 1) = *table.get_unchecked(((n >> 12) & 0x3F) as usize);
+            *dst.add(o + 2) = *table.get_unchecked(((n >> 6) & 0x3F) as usize);
         }
     }
     hdr

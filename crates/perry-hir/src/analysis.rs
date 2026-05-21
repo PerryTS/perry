@@ -717,10 +717,17 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(len, assigned);
             }
         }
-        Expr::BufferAlloc { size, fill } => {
+        Expr::BufferAlloc {
+            size,
+            fill,
+            encoding,
+        } => {
             collect_assigned_locals_expr(size, assigned);
             if let Some(f) = fill {
                 collect_assigned_locals_expr(f, assigned);
+            }
+            if let Some(e) = encoding {
+                collect_assigned_locals_expr(e, assigned);
             }
         }
         Expr::BufferAllocUnsafe(expr)

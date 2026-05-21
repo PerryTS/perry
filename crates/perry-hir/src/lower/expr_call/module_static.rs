@@ -1003,9 +1003,11 @@ pub(super) fn try_module_static_methods(
                                 let mut args_iter = args.into_iter();
                                 let size = args_iter.next().unwrap();
                                 let fill = args_iter.next().map(Box::new);
+                                let encoding = args_iter.next().map(Box::new);
                                 return Ok(Ok(Expr::BufferAlloc {
                                     size: Box::new(size),
                                     fill,
+                                    encoding,
                                 }));
                             }
                         }

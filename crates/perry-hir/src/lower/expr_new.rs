@@ -324,6 +324,25 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     handler: Box::new(handler),
                 });
             }
+            if matches!(class_name.as_str(), "Number" | "String" | "Boolean") {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(Expr::NativeMethodCall {
+                    module: "__primitive_box".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: class_name,
+                    args,
+                });
+            }
             if ctx.proxy_locals.contains(&class_name) {
                 let args = new_expr
                     .args

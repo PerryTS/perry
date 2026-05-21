@@ -872,9 +872,16 @@ where
                 f(e);
             }
         }
-        Expr::BufferAlloc { size, fill } => {
+        Expr::BufferAlloc {
+            size,
+            fill,
+            encoding,
+        } => {
             f(size);
             if let Some(v) = fill {
+                f(v);
+            }
+            if let Some(v) = encoding {
                 f(v);
             }
         }

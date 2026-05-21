@@ -30,15 +30,16 @@ pub use header::{
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
 pub use from::{
-    js_array_buffer_new, js_buffer_alloc, js_buffer_alloc_unsafe, js_buffer_concat, js_buffer_fill,
-    js_buffer_fill_range, js_buffer_from_array, js_buffer_from_arraybuffer_slice,
-    js_buffer_from_string, js_buffer_from_value, js_encoding_tag_from_value, js_uint8array_alloc,
-    js_uint8array_from_array, js_uint8array_new,
+    js_array_buffer_new, js_buffer_alloc, js_buffer_alloc_fill_value, js_buffer_alloc_unsafe,
+    js_buffer_concat, js_buffer_fill, js_buffer_fill_range, js_buffer_from_array,
+    js_buffer_from_arraybuffer_slice, js_buffer_from_string, js_buffer_from_value,
+    js_encoding_tag_from_value, js_uint8array_alloc, js_uint8array_from_array, js_uint8array_new,
 };
 
 // ---- Re-exports: predicates / byteLength (FFI) ----
 pub use query::{
-    js_buffer_byte_length, js_buffer_byte_length_value, js_buffer_is_buffer, js_buffer_is_encoding,
+    js_buffer_byte_length, js_buffer_byte_length_value, js_buffer_is_ascii, js_buffer_is_buffer,
+    js_buffer_is_encoding, js_buffer_is_utf8,
 };
 
 // ---- Re-exports: toString / print / length / to-array ----
@@ -51,12 +52,13 @@ pub use encode::{
 pub use access::{js_buffer_get, js_buffer_set, js_buffer_set_from, js_buffer_slice};
 
 // ---- Re-exports: copy / write ----
-pub use copy_write::{js_buffer_copy, js_buffer_write};
+pub use copy_write::{js_buffer_copy, js_buffer_write, js_buffer_write_len};
 
 // ---- Re-exports: compare / search ----
 pub use cmp::{
-    js_buffer_compare, js_buffer_equals, js_buffer_includes, js_buffer_index_of,
-    js_buffer_last_index_of, unbox_buffer_ptr,
+    js_buffer_compare, js_buffer_compare_range, js_buffer_equals, js_buffer_includes,
+    js_buffer_includes_enc, js_buffer_index_of, js_buffer_index_of_enc, js_buffer_last_index_of,
+    js_buffer_last_index_of_enc, js_buffer_to_json, unbox_buffer_ptr,
 };
 
 // ---- Re-exports: random / swap mutators ----
@@ -83,8 +85,8 @@ pub use numeric::{
 
 // ---- Re-exports: hex / base64 codec helpers ----
 pub use coding::{
-    base64_decode_into_buffer, base64_encode_into_string, decode_base64, decode_hex,
-    hex_decode_into_buffer, hex_encode_into_string,
+    base64_decode_into_buffer, base64_encode_into_string, base64url_encode_into_string,
+    decode_base64, decode_hex, hex_decode_into_buffer, hex_encode_into_string,
 };
 
 #[cfg(test)]

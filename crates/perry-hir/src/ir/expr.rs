@@ -897,9 +897,10 @@ pub enum Expr {
         length: Option<Box<Expr>>,
     },
     BufferAlloc {
-        // Buffer.alloc(size, fill?) -> Buffer
+        // Buffer.alloc(size, fill?, encoding?) -> Buffer
         size: Box<Expr>,
         fill: Option<Box<Expr>>,
+        encoding: Option<Box<Expr>>,
     },
     BufferAllocUnsafe(Box<Expr>), // Buffer.allocUnsafe(size) -> Buffer
     BufferConcat(Box<Expr>),      // Buffer.concat(list) -> Buffer

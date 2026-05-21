@@ -103,7 +103,14 @@ pub(super) fn try_url_date_weakref_instance(
         };
         // #809: `Some("Object")` (object literal / `Object.create`)
         // joins URL as a "definitely not a Date" receiver.
-        let allow_ambiguous_date = !matches!(recv_class, Some("URL") | Some("Object"));
+        let allow_ambiguous_date = !matches!(
+            recv_class,
+            Some("URL")
+                | Some("Object")
+                | Some("Buffer")
+                | Some("Uint8Array")
+                | Some("Uint8ClampedArray")
+        );
         // Methods we treat as Date-only when the receiver is unambiguously
         // Date or unknown (current behavior). `toString` / `toJSON` etc.
         // skip these arms when `recv_class` proves the receiver is NOT a Date.
@@ -111,6 +118,26 @@ pub(super) fn try_url_date_weakref_instance(
         // Check for Date instance method calls (date.getTime(), etc.)
         if let ast::MemberProp::Ident(method_ident) = &member.prop {
             let method_name = method_ident.sym.as_ref();
+            if method_name == "toJSON" {
+                let recv_expr = lower_expr(ctx, &member.obj)?;
+                if matches!(
+                    recv_expr,
+                    Expr::BufferFrom { .. }
+                        | Expr::BufferFromArrayBuffer { .. }
+                        | Expr::BufferAlloc { .. }
+                        | Expr::BufferAllocUnsafe(_)
+                        | Expr::BufferConcat(_)
+                ) {
+                    return Ok(Ok(Expr::Call {
+                        callee: Box::new(Expr::PropertyGet {
+                            object: Box::new(recv_expr),
+                            property: "toJSON".to_string(),
+                        }),
+                        args,
+                        type_args: vec![],
+                    }));
+                }
+            }
             let ambiguous = matches!(
                 method_name,
                 "toJSON"

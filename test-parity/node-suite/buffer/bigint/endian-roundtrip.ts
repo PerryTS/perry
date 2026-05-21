@@ -11,4 +11,4 @@ b.writeBigInt64LE(BigInt("-9223372036854775808"), 8);
 console.log("hex:", b.toString("hex"));
 console.log("int64 BE:", b.readBigInt64BE(0).toString());
 console.log("int64 LE:", b.readBigInt64LE(8).toString());
-console.log("int64 cross BE→LE:", b.readBigInt64LE(0).toString());
+console.log("int64 cross BE to LE:", b.readBigInt64LE(0).toString());

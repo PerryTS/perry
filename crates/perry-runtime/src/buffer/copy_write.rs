@@ -79,3 +79,41 @@ pub extern "C" fn js_buffer_write(
         write_len as i32
     }
 }
+
+/// Write a string to a buffer, honoring Node's optional `length` argument.
+#[no_mangle]
+pub extern "C" fn js_buffer_write_len(
+    buf_ptr: *mut BufferHeader,
+    str_ptr: *const StringHeader,
+    offset: i32,
+    max_len: i32,
+    encoding: i32,
+) -> i32 {
+    if buf_ptr.is_null() || str_ptr.is_null() {
+        return 0;
+    }
+
+    unsafe {
+        let buf_len = (*buf_ptr).length as i32;
+        let offset = offset.max(0).min(buf_len);
+
+        let str_len = (*str_ptr).byte_len as usize;
+        let str_data = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let str_bytes = std::slice::from_raw_parts(str_data, str_len);
+
+        let bytes_to_write = match encoding {
+            1 => decode_hex(str_bytes),
+            2 | 3 => decode_base64(str_bytes),
+            _ => str_bytes.to_vec(),
+        };
+
+        let available = (buf_len - offset) as usize;
+        let cap = max_len.max(0) as usize;
+        let write_len = bytes_to_write.len().min(available).min(cap);
+
+        let dst_data = buffer_data_mut(buf_ptr).add(offset as usize);
+        ptr::copy_nonoverlapping(bytes_to_write.as_ptr(), dst_data, write_len);
+
+        write_len as i32
+    }
+}

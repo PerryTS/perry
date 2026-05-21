@@ -4,7 +4,7 @@ use super::*;
 /// range (Node semantics: `start` clamped to `[0, len]`, `end` clamped to
 /// `[start, len]`; defaults are `start=0, end=len`).
 ///
-/// `encoding`: 0 = utf8 (default), 1 = hex, 2 = base64.
+/// `encoding`: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url.
 #[no_mangle]
 pub extern "C" fn js_buffer_to_string_range(
     buf_ptr: *const BufferHeader,
@@ -39,13 +39,14 @@ pub extern "C" fn js_buffer_to_string_range(
             // ASCII-only string allocator skips compute_utf16_len's byte-walk.
             1 => hex_encode_into_string(bytes),
             2 => base64_encode_into_string(bytes),
+            3 => base64url_encode_into_string(bytes),
             _ => buf_bytes_to_utf8_string(bytes),
         }
     }
 }
 
 /// Convert a buffer to a string
-/// encoding: 0 = utf8 (default), 1 = hex, 2 = base64
+/// encoding: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url.
 #[no_mangle]
 pub extern "C" fn js_buffer_to_string(
     buf_ptr: *const BufferHeader,
@@ -80,6 +81,7 @@ pub extern "C" fn js_buffer_to_string(
             // `js_string_from_ascii_bytes` (no compute_utf16_len byte-walk).
             1 => hex_encode_into_string(bytes),
             2 => base64_encode_into_string(bytes),
+            3 => base64url_encode_into_string(bytes),
             _ => {
                 // UTF-8 (default) — Node spec: invalid UTF-8 sequences are
                 // replaced with U+FFFD. Pre-fix this path passed the raw

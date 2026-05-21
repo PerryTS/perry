@@ -553,6 +553,15 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "events",
         has_receiver: false,
+        method: "on",
+        class_filter: None,
+        runtime: "js_events_on",
+        args: &[NA_PTR, NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "events",
+        has_receiver: false,
         method: "addAbortListener",
         class_filter: None,
         runtime: "js_events_add_abort_listener",

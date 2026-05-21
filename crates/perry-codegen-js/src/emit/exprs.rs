@@ -848,7 +848,7 @@ impl JsEmitter {
                 }
                 self.output.push(')');
             }
-            Expr::BufferAlloc { size, fill } => {
+            Expr::BufferAlloc { size, fill, .. } => {
                 self.output.push_str("new Uint8Array(");
                 self.emit_expr(size);
                 self.output.push(')');

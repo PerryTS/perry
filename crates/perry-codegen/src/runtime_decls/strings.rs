@@ -412,6 +412,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_inspect", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_boxed_number_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_boxed_string_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_boxed_boolean_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_promise", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_array_buffer", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_array_buffer_view", DOUBLE, &[DOUBLE]);
@@ -424,6 +427,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_set", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_date", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_reg_exp", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_number_object", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_string_object", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_boolean_object", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_boxed_primitive", DOUBLE, &[DOUBLE]);
     module.declare_function("js_getenv", I64, &[I64]);
     module.declare_function("js_console_table", VOID, &[DOUBLE]);
     module.declare_function("js_console_table_with_properties", VOID, &[DOUBLE, DOUBLE]);
@@ -1106,6 +1113,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_from_wtf8_bytes", I64, &[I64, I32]);
     // Buffer.alloc(size, fill) — returns raw *mut BufferHeader.
     module.declare_function("js_buffer_alloc", I64, &[I32, I32]);
+    module.declare_function("js_buffer_alloc_fill_value", I64, &[I32, DOUBLE, I32]);
     // Issue #579: `new ArrayBuffer(size)` — zero-filled BufferHeader of `size`
     // bytes that subsequent `new Uint8Array(ab)` views ALIAS via shared pointer.
     module.declare_function("js_array_buffer_new", I64, &[I32]);

@@ -80,6 +80,45 @@ pub extern "C" fn js_buffer_compare(a: *const BufferHeader, b: *const BufferHead
     }
 }
 
+/// Lexicographic compare over Node's range-argument form:
+/// `buf.compare(target, targetStart, targetEnd, sourceStart, sourceEnd)`.
+#[no_mangle]
+pub extern "C" fn js_buffer_compare_range(
+    a: *const BufferHeader,
+    b: *const BufferHeader,
+    target_start: i32,
+    target_end: i32,
+    source_start: i32,
+    source_end: i32,
+) -> i32 {
+    let pa = unbox_buffer_ptr(a as u64) as *const BufferHeader;
+    let pb = unbox_buffer_ptr(b as u64) as *const BufferHeader;
+    if pa.is_null() && pb.is_null() {
+        return 0;
+    }
+    if pa.is_null() {
+        return -1;
+    }
+    if pb.is_null() {
+        return 1;
+    }
+    unsafe {
+        let la = (*pa).length as i32;
+        let lb = (*pb).length as i32;
+        let ss = source_start.max(0).min(la);
+        let se = source_end.max(ss).min(la);
+        let ts = target_start.max(0).min(lb);
+        let te = target_end.max(ts).min(lb);
+        let da = std::slice::from_raw_parts(buffer_data(pa).add(ss as usize), (se - ss) as usize);
+        let db = std::slice::from_raw_parts(buffer_data(pb).add(ts as usize), (te - ts) as usize);
+        match da.cmp(db) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }
+    }
+}
+
 /// Search for a byte sequence in a buffer.
 fn buffer_index_of_bytes(buf: *const BufferHeader, needle: &[u8], start: i32) -> i32 {
     if buf.is_null() {
@@ -141,7 +180,11 @@ fn buffer_last_index_of_bytes(buf: *const BufferHeader, needle: &[u8], start: i3
     }
 }
 
-fn buffer_search_needle(buf: *const BufferHeader, needle: f64) -> Option<Vec<u8>> {
+fn buffer_search_needle_with_encoding(
+    buf: *const BufferHeader,
+    needle: f64,
+    encoding: i32,
+) -> Option<Vec<u8>> {
     if buf.is_null() {
         return None;
     }
@@ -167,7 +210,13 @@ fn buffer_search_needle(buf: *const BufferHeader, needle: f64) -> Option<Vec<u8>
             return unsafe {
                 let len = (*str_ptr).byte_len as usize;
                 let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                Some(std::slice::from_raw_parts(data_ptr, len).to_vec())
+                let bytes = std::slice::from_raw_parts(data_ptr, len);
+                let decoded = match encoding {
+                    1 => decode_hex(bytes),
+                    2 | 3 => decode_base64(bytes),
+                    _ => bytes.to_vec(),
+                };
+                Some(decoded)
             };
         }
     }
@@ -181,10 +230,24 @@ fn buffer_search_needle(buf: *const BufferHeader, needle: f64) -> Option<Vec<u8>
     Some(vec![byte_val as u8])
 }
 
+fn buffer_search_needle(buf: *const BufferHeader, needle: f64) -> Option<Vec<u8>> {
+    buffer_search_needle_with_encoding(buf, needle, 0)
+}
+
 /// `buf.indexOf(needle, start?)` where `needle` is a string, buffer,
 /// or numeric byte value (NaN-boxed value).
 #[no_mangle]
 pub extern "C" fn js_buffer_index_of(buf_ptr: f64, needle: f64, start: i32) -> i32 {
+    js_buffer_index_of_enc(buf_ptr, needle, start, 0)
+}
+
+#[no_mangle]
+pub extern "C" fn js_buffer_index_of_enc(
+    buf_ptr: f64,
+    needle: f64,
+    start: i32,
+    encoding: i32,
+) -> i32 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
     if buf.is_null() {
         return -1;
@@ -214,7 +277,12 @@ pub extern "C" fn js_buffer_index_of(buf_ptr: f64, needle: f64, start: i32) -> i
                 let len = (*str_ptr).byte_len as usize;
                 let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
                 let bytes = std::slice::from_raw_parts(data_ptr, len);
-                return buffer_index_of_bytes(buf, bytes, start);
+                let decoded = match encoding {
+                    1 => decode_hex(bytes),
+                    2 | 3 => decode_base64(bytes),
+                    _ => bytes.to_vec(),
+                };
+                return buffer_index_of_bytes(buf, &decoded, start);
             }
         }
     }
@@ -243,6 +311,20 @@ pub extern "C" fn js_buffer_last_index_of(buf_ptr: f64, needle: f64, start: i32)
     buffer_last_index_of_bytes(buf, &bytes, start)
 }
 
+#[no_mangle]
+pub extern "C" fn js_buffer_last_index_of_enc(
+    buf_ptr: f64,
+    needle: f64,
+    start: i32,
+    encoding: i32,
+) -> i32 {
+    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
+    let Some(bytes) = buffer_search_needle_with_encoding(buf, needle, encoding) else {
+        return -1;
+    };
+    buffer_last_index_of_bytes(buf, &bytes, start)
+}
+
 /// `buf.includes(needle, start?)` — boolean i32.
 #[no_mangle]
 pub extern "C" fn js_buffer_includes(buf_ptr: f64, needle: f64, start: i32) -> i32 {
@@ -251,4 +333,50 @@ pub extern "C" fn js_buffer_includes(buf_ptr: f64, needle: f64, start: i32) -> i
     } else {
         0
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_buffer_includes_enc(
+    buf_ptr: f64,
+    needle: f64,
+    start: i32,
+    encoding: i32,
+) -> i32 {
+    if js_buffer_index_of_enc(buf_ptr, needle, start, encoding) >= 0 {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_buffer_to_json(buf_ptr: f64) -> f64 {
+    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
+    let obj = crate::object::js_object_alloc(0, 2);
+    unsafe {
+        let type_key = crate::string::js_string_from_bytes(b"type".as_ptr(), 4);
+        let type_val = crate::string::js_string_from_bytes(b"Buffer".as_ptr(), 6);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            type_key,
+            f64::from_bits(crate::JSValue::string_ptr(type_val).bits()),
+        );
+
+        let arr = crate::array::js_array_alloc(0);
+        let mut arr_ptr = arr;
+        if !buf.is_null() {
+            let len = (*buf).length as usize;
+            let data = buffer_data(buf);
+            for i in 0..len {
+                arr_ptr = crate::array::js_array_push_f64(arr_ptr, *data.add(i) as f64);
+            }
+        }
+        let data_key = crate::string::js_string_from_bytes(b"data".as_ptr(), 4);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            data_key,
+            f64::from_bits(crate::JSValue::pointer(arr_ptr as *mut u8).bits()),
+        );
+    }
+    f64::from_bits(crate::JSValue::pointer(obj as *mut u8).bits())
 }

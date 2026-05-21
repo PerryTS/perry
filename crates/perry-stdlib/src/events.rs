@@ -632,6 +632,48 @@ pub unsafe extern "C" fn js_events_once(
     promise
 }
 
+extern "C" fn events_on_queue_listener(closure: *const ClosureHeader, arg0: f64) -> f64 {
+    use perry_runtime::closure::js_closure_get_capture_ptr;
+
+    let queue = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
+    if !queue.is_null() {
+        let mut args = js_array_alloc(0);
+        args = js_array_push_f64(args, arg0);
+        let args_val = js_nanbox_pointer(args as i64);
+        let _ = js_array_push_f64(queue, args_val);
+    }
+
+    f64::from_bits(TAG_UNDEFINED_F64_BITS)
+}
+
+/// `events.on(emitter, eventName)` — returns an async-iterable queue of
+/// argument arrays. Perry's `for await` lowering already accepts plain arrays
+/// as async-iterable inputs, so the current implementation backs the iterator
+/// with an Array and appends one `[arg]` entry per emitted event.
+#[no_mangle]
+pub unsafe extern "C" fn js_events_on(
+    handle: Handle,
+    event_name_ptr: *const StringHeader,
+) -> *mut ArrayHeader {
+    use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+
+    ensure_gc_scanner_registered();
+    let queue = js_array_alloc(0);
+    let event_name = match string_from_header(event_name_ptr) {
+        Some(name) => name,
+        None => return queue,
+    };
+
+    let listener = js_closure_alloc(events_on_queue_listener as *const u8, 1);
+    js_closure_set_capture_ptr(listener, 0, queue as i64);
+
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        emitter.add_listener(&event_name, listener as i64, false, false);
+    }
+
+    queue
+}
+
 /// `events.addAbortListener(signal, listener)` — attach listener to AbortSignal
 /// and return a disposable-shaped object. The dispose method is currently a
 /// function-shaped placeholder; listener removal can be tightened later.

@@ -57,6 +57,44 @@ pub extern "C" fn js_buffer_is_encoding(value: f64) -> i32 {
     }
 }
 
+fn value_bytes(value: f64) -> Option<&'static [u8]> {
+    let bits = value.to_bits();
+    let jsval = crate::JSValue::from_bits(bits);
+    let raw_ptr = if jsval.is_pointer() || jsval.is_string() {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
+        bits as usize
+    } else {
+        0
+    };
+    if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
+        let buf = raw_ptr as *const BufferHeader;
+        return unsafe {
+            Some(std::slice::from_raw_parts(
+                buffer_data(buf),
+                (*buf).length as usize,
+            ))
+        };
+    }
+    None
+}
+
+#[no_mangle]
+pub extern "C" fn js_buffer_is_ascii(value: f64) -> f64 {
+    let ok = value_bytes(value)
+        .map(|bytes| bytes.iter().all(|b| *b <= 0x7f))
+        .unwrap_or(false);
+    f64::from_bits(crate::JSValue::bool(ok).bits())
+}
+
+#[no_mangle]
+pub extern "C" fn js_buffer_is_utf8(value: f64) -> f64 {
+    let ok = value_bytes(value)
+        .map(|bytes| std::str::from_utf8(bytes).is_ok())
+        .unwrap_or(false);
+    f64::from_bits(crate::JSValue::bool(ok).bits())
+}
+
 /// Get the byte length of a string (when encoded to UTF-8)
 #[no_mangle]
 pub extern "C" fn js_buffer_byte_length(str_ptr: *const StringHeader) -> i32 {

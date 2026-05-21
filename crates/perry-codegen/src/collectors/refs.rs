@@ -642,10 +642,17 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(e, out);
             }
         }
-        Expr::BufferAlloc { size, fill } => {
+        Expr::BufferAlloc {
+            size,
+            fill,
+            encoding,
+        } => {
             walk(size, out);
             if let Some(f) = fill {
                 walk(f, out);
+            }
+            if let Some(e) = encoding {
+                walk(e, out);
             }
         }
         Expr::FinalizationRegistryRegister {

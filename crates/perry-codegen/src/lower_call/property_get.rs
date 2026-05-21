@@ -122,7 +122,8 @@ pub fn try_lower_property_get_method_call(
                 let tag: i32 = match lower.as_str() {
                     "utf8" | "utf-8" | "ascii" | "latin1" | "binary" => 0,
                     "hex" => 1,
-                    "base64" | "base64url" => 2,
+                    "base64" => 2,
+                    "base64url" => 3,
                     _ => 0,
                 };
                 tag.to_string()

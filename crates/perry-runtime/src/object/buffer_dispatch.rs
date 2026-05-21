@@ -25,6 +25,7 @@ pub fn is_buffer_method_name(name: &str) -> bool {
             | "subarray"
             | "copy"
             | "write"
+            | "toJSON"
             | "fill"
             | "equals"
             | "compare"
@@ -187,6 +188,7 @@ pub unsafe fn dispatch_buffer_method(
             crate::buffer::js_buffer_copy(buf_ptr, dst_ptr, target_start, source_start, source_end)
                 as f64
         }
+        "toJSON" => crate::buffer::js_buffer_to_json(buf_f64),
         // `buf.write(string, offset?, length?, encoding?)` — writes the
         // utf8/hex/base64 encoding of `string` into `buf` at `offset`.
         // Returns the number of bytes written.
@@ -202,14 +204,25 @@ pub unsafe fn dispatch_buffer_method(
             // Detect trailing encoding arg (string) vs length arg (number).
             // Common forms: write(str), write(str, offset), write(str, offset, enc),
             // write(str, offset, length, enc).
-            let enc = if args.len() >= 4 {
-                crate::buffer::js_encoding_tag_from_value(args[3])
+            let (max_len, enc) = if args.len() >= 4 {
+                (
+                    arg_i32(2),
+                    crate::buffer::js_encoding_tag_from_value(args[3]),
+                )
             } else if args.len() >= 3 {
-                crate::buffer::js_encoding_tag_from_value(args[2])
+                let third_bits = args[2].to_bits();
+                if (third_bits >> 48) == 0x7FFF {
+                    (
+                        (*buf_ptr).length as i32 - offset,
+                        crate::buffer::js_encoding_tag_from_value(args[2]),
+                    )
+                } else {
+                    (arg_i32(2), 0)
+                }
             } else {
-                0
+                ((*buf_ptr).length as i32 - offset, 0)
             };
-            crate::buffer::js_buffer_write(buf_ptr, str_ptr, offset, enc) as f64
+            crate::buffer::js_buffer_write_len(buf_ptr, str_ptr, offset, max_len, enc) as f64
         }
         "fill" => {
             let len = (*buf_ptr).length as i32;
@@ -242,27 +255,60 @@ pub unsafe fn dispatch_buffer_method(
                 other_bits
             };
             let other = other_addr as *const crate::buffer::BufferHeader;
-            i32_num(crate::buffer::js_buffer_compare(buf_ptr, other))
+            if args.len() >= 5 {
+                i32_num(crate::buffer::js_buffer_compare_range(
+                    buf_ptr,
+                    other,
+                    arg_i32(1),
+                    arg_i32(2),
+                    arg_i32(3),
+                    arg_i32(4),
+                ))
+            } else {
+                i32_num(crate::buffer::js_buffer_compare(buf_ptr, other))
+            }
         }
-        "indexOf" => i32_num(crate::buffer::js_buffer_index_of(
-            buf_f64,
-            arg_or_zero(0),
-            arg_i32(1),
-        )),
+        "indexOf" => {
+            let enc = if args.len() >= 3 {
+                crate::buffer::js_encoding_tag_from_value(args[2])
+            } else {
+                0
+            };
+            i32_num(crate::buffer::js_buffer_index_of_enc(
+                buf_f64,
+                arg_or_zero(0),
+                arg_i32(1),
+                enc,
+            ))
+        }
         "lastIndexOf" => {
             let len = (*buf_ptr).length as i32;
             let start = if args.len() >= 2 { arg_i32(1) } else { len - 1 };
-            i32_num(crate::buffer::js_buffer_last_index_of(
+            let enc = if args.len() >= 3 {
+                crate::buffer::js_encoding_tag_from_value(args[2])
+            } else {
+                0
+            };
+            i32_num(crate::buffer::js_buffer_last_index_of_enc(
                 buf_f64,
                 arg_or_zero(0),
                 start,
+                enc,
             ))
         }
-        "includes" => i32_bool(crate::buffer::js_buffer_includes(
-            buf_f64,
-            arg_or_zero(0),
-            arg_i32(1),
-        )),
+        "includes" => {
+            let enc = if args.len() >= 3 {
+                crate::buffer::js_encoding_tag_from_value(args[2])
+            } else {
+                0
+            };
+            i32_bool(crate::buffer::js_buffer_includes_enc(
+                buf_f64,
+                arg_or_zero(0),
+                arg_i32(1),
+                enc,
+            ))
+        }
         // `buf.at(i)` — supports negative indices like Array.prototype.at.
         "at" => {
             let len = (*buf_ptr).length as i32;

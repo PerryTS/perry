@@ -38,6 +38,46 @@ fn jsvalue_typed_array_kind(v: f64) -> Option<u8> {
     }
 }
 
+#[inline]
+fn object_class_id(value: f64) -> Option<u32> {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return None;
+    }
+    let ptr = v.as_pointer::<ObjectHeader>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    Some(unsafe { (*ptr).class_id })
+}
+
+const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
+const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
+const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_number_object(value: f64) -> f64 {
+    nanbox_bool(object_class_id(value) == Some(CLASS_ID_BOXED_NUMBER))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_string_object(value: f64) -> f64 {
+    nanbox_bool(object_class_id(value) == Some(CLASS_ID_BOXED_STRING))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_boolean_object(value: f64) -> f64 {
+    nanbox_bool(object_class_id(value) == Some(CLASS_ID_BOXED_BOOLEAN))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_boxed_primitive(value: f64) -> f64 {
+    nanbox_bool(matches!(
+        object_class_id(value),
+        Some(CLASS_ID_BOXED_NUMBER | CLASS_ID_BOXED_STRING | CLASS_ID_BOXED_BOOLEAN)
+    ))
+}
+
 #[no_mangle]
 pub extern "C" fn js_util_types_is_promise(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());

@@ -13,6 +13,17 @@ use super::*;
 /// This is used to identify objects that represent native module namespaces
 pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFFFFFE;
 
+static BUFFER_POOL_SIZE_BITS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(8192f64.to_bits());
+
+pub(crate) fn buffer_pool_size() -> f64 {
+    f64::from_bits(BUFFER_POOL_SIZE_BITS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+pub(crate) fn set_buffer_pool_size(value: f64) {
+    BUFFER_POOL_SIZE_BITS.store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Create a native module namespace object
 /// This is used for `import * as X from 'module'` patterns
 /// The returned object identifies itself as an object (typeof returns "object")
@@ -130,6 +141,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
             | ("events", "EventEmitter")
+            | ("events", "on")
             | ("string_decoder", "StringDecoder")
             | ("assert", "ok")
             | ("assert", "fail")
@@ -208,6 +220,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util.types", "isSet")
             | ("util.types", "isDate")
             | ("util.types", "isRegExp")
+            | ("util.types", "isNumberObject")
+            | ("util.types", "isStringObject")
+            | ("util.types", "isBooleanObject")
+            | ("util.types", "isBoxedPrimitive")
             | ("util/types", "isPromise")
             | ("timers", "setTimeout")
             | ("timers", "clearTimeout")
@@ -230,6 +246,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util/types", "isSet")
             | ("util/types", "isDate")
             | ("util/types", "isRegExp")
+            | ("util/types", "isNumberObject")
+            | ("util/types", "isStringObject")
+            | ("util/types", "isBooleanObject")
+            | ("util/types", "isBoxedPrimitive")
             | ("url", "URL")
             | ("url", "URLSearchParams")
             | ("url", "fileURLToPath")
@@ -944,6 +964,7 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "fs.constants" => fs_const(property),
         "buffer" => match property {
+            "Buffer" => Some(create_sub_namespace("buffer.Buffer")),
             "constants" => Some(create_sub_namespace("buffer.constants")),
             // Match Node's common 64-bit max Buffer length value. Perry won't
             // actually allocate buffers this large, but shape/value parity lets
@@ -955,6 +976,10 @@ pub(crate) unsafe fn get_native_module_constant(
         "buffer.constants" => match property {
             "MAX_LENGTH" => Some(4294967296.0),
             "MAX_STRING_LENGTH" => Some(536870888.0),
+            _ => None,
+        },
+        "buffer.Buffer" => match property {
+            "poolSize" => Some(buffer_pool_size()),
             _ => None,
         },
         "os" => match property {

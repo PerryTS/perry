@@ -154,6 +154,19 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
 
+        if (*obj).class_id == NATIVE_MODULE_CLASS_ID && !key.is_null() {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let property_name =
+                std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
+            let module_name =
+                get_module_name_from_namespace(crate::value::js_nanbox_pointer(obj as i64));
+            if module_name == "buffer.Buffer" && property_name == "poolSize" {
+                super::set_buffer_pool_size(value);
+                return;
+            }
+        }
+
         // Refs #486 (hono): class setter dispatch. JS spec: a `set X(...)`
         // accessor on the prototype intercepts `obj.X = value` writes
         // before they hit the instance's data slots. Hono's `set res(_res)

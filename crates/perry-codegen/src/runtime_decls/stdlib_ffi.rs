@@ -358,8 +358,10 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_buffer_equals", I32, &[I64, I64]);
     module.declare_function("js_buffer_fill", I64, &[I64, I32]);
     module.declare_function("js_buffer_from_value", I64, &[I64, I32]);
+    module.declare_function("js_buffer_is_ascii", DOUBLE, &[DOUBLE]);
     module.declare_function("js_buffer_is_buffer", I32, &[I64]);
     module.declare_function("js_buffer_is_encoding", I32, &[DOUBLE]);
+    module.declare_function("js_buffer_is_utf8", DOUBLE, &[DOUBLE]);
     module.declare_function("js_buffer_print", VOID, &[I64]);
     module.declare_function("js_buffer_set", VOID, &[I64, I32, I32]);
     module.declare_function("js_buffer_set_from", VOID, &[I64, I64, I32]);
@@ -805,6 +807,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_raw_listeners", I64, &[I64, I64]);
     // Module-level helpers
     module.declare_function("js_events_once", I64, &[I64, I64]);
+    module.declare_function("js_events_on", I64, &[I64, I64]);
     module.declare_function("js_events_add_abort_listener", I64, &[I64, I64]);
     module.declare_function("js_events_get_event_listeners", I64, &[I64, I64]);
     module.declare_function("js_events_listener_count", DOUBLE, &[I64, I64]);
