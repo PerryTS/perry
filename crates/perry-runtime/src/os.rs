@@ -387,7 +387,7 @@ pub extern "C" fn js_os_loadavg() -> *mut ArrayHeader {
     use crate::array::{js_array_alloc, js_array_push_f64};
 
     let arr = js_array_alloc(3);
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "android")))]
     {
         let mut loads = [0.0_f64; 3];
         unsafe {
@@ -401,8 +401,10 @@ pub extern "C" fn js_os_loadavg() -> *mut ArrayHeader {
         }
         result
     }
-    #[cfg(not(unix))]
+    #[cfg(not(all(unix, not(target_os = "android"))))]
     {
+        // Android's bionic libc does not provide getloadavg(3); Node's
+        // os.loadavg() returns [0, 0, 0] there too, so match that.
         let mut result = arr;
         for _ in 0..3 {
             result = js_array_push_f64(result, 0.0);

@@ -585,10 +585,11 @@ object PerryBridge {
             uiHandler.post { requestGeolocationPermission(callbackKey) }
             return
         }
-        val granted = ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED
+        val granted =
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
         if (granted) {
             nativeInvokeCallbackWithString(callbackKey, "granted")
         } else {
@@ -1760,8 +1761,8 @@ object PerryBridge {
 
     private inline fun <reified T : android.text.style.CharacterStyle> richTextToggleSpan(
         et: EditText,
-        factory: () -> T,
-        matches: (T) -> Boolean
+        crossinline factory: () -> T,
+        crossinline matches: (T) -> Boolean,
     ) {
         uiHandler.post {
             val editable = et.text ?: return@post
