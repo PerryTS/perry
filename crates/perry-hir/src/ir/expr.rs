@@ -443,6 +443,11 @@ pub enum Expr {
         event: Box<Expr>,
         handler: Box<Expr>,
     },
+    // process.once(event, handler) -> void (one-shot listener)
+    ProcessOnce {
+        event: Box<Expr>,
+        handler: Box<Expr>,
+    },
     // process.chdir(directory) -> void
     ProcessChdir(Box<Expr>),
     // process.kill(pid, signal?) -> void

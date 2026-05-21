@@ -1076,7 +1076,7 @@ pub fn check_escapes_in_expr(
         Expr::StaticFieldSet { value, .. } => {
             check_escapes_in_expr(value, candidates, classes, escaped);
         }
-        Expr::ProcessOn { event, handler } => {
+        Expr::ProcessOn { event, handler } | Expr::ProcessOnce { event, handler } => {
             check_escapes_in_expr(event, candidates, classes, escaped);
             check_escapes_in_expr(handler, candidates, classes, escaped);
         }

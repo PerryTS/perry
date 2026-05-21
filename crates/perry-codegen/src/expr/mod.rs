@@ -1046,6 +1046,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::DateGetUtcDay(..)
         | Expr::DateValueOf(..)
         | Expr::ProcessOn { .. }
+        | Expr::ProcessOnce { .. }
         | Expr::ProcessStdinSetRawMode(..)
         | Expr::ProcessStdinOn { .. }
         | Expr::ProcessStdoutOn { .. }

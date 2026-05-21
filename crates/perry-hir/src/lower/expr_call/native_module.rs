@@ -43,12 +43,23 @@ pub(super) fn try_native_module_methods(
                                 ))));
                             }
                         }
-                        "on" | "once" => {
+                        "on" => {
                             if args.len() >= 2 {
                                 let mut iter = args.into_iter();
                                 let event = iter.next().unwrap();
                                 let handler = iter.next().unwrap();
                                 return Ok(Ok(Expr::ProcessOn {
+                                    event: Box::new(event),
+                                    handler: Box::new(handler),
+                                }));
+                            }
+                        }
+                        "once" => {
+                            if args.len() >= 2 {
+                                let mut iter = args.into_iter();
+                                let event = iter.next().unwrap();
+                                let handler = iter.next().unwrap();
+                                return Ok(Ok(Expr::ProcessOnce {
                                     event: Box::new(event),
                                     handler: Box::new(handler),
                                 }));

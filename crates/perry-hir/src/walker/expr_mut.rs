@@ -1013,6 +1013,10 @@ where
             f(event);
             f(handler);
         }
+        Expr::ProcessOnce { event, handler } => {
+            f(event);
+            f(handler);
+        }
         Expr::ProcessStdinOn { event, handler } => {
             f(event);
             f(handler);

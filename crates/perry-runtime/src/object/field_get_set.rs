@@ -1145,21 +1145,21 @@ pub extern "C" fn js_object_get_field_by_name(
                         return JSValue::from_bits(v.to_bits());
                     }
                     b"code" => {
+                        // Errors thrown by runtime validation paths (e.g.
+                        // diagnostics_channel argument checks) register
+                        // their `ERR_*` code in a side table keyed on the
+                        // message StringHeader pointer. This avoids the
+                        // earlier substring-match shim that incorrectly
+                        // applied `ERR_INVALID_ARG_TYPE` to any user
+                        // TypeError whose `.message` happened to equal
+                        // the placeholder text.
                         let msg = crate::error::js_error_get_message(err_ptr);
-                        if !msg.is_null() {
-                            let msg_ptr =
-                                (msg as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                            let msg_len = (*msg).byte_len as usize;
-                            let msg_bytes = std::slice::from_raw_parts(msg_ptr, msg_len);
-                            if msg_bytes == b"The argument is invalid" {
-                                let code = crate::string::js_string_from_bytes(
-                                    b"ERR_INVALID_ARG_TYPE".as_ptr(),
-                                    20,
-                                );
-                                return JSValue::from_bits(
-                                    crate::js_nanbox_string(code as i64).to_bits(),
-                                );
-                            }
+                        if let Some(code) = crate::node_submodules::error_code_for_message(msg) {
+                            let s = crate::string::js_string_from_bytes(
+                                code.as_ptr(),
+                                code.len() as u32,
+                            );
+                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
                         }
                         return JSValue::undefined();
                     }

@@ -254,10 +254,7 @@ fn decode_string_value(value: f64) -> Option<String> {
     if tag != crate::value::STRING_TAG {
         return None;
     }
-    let mut ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
-    if ptr.is_null() && value.is_finite() && value >= 10000.0 {
-        ptr = value as usize as *const StringHeader;
-    }
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
     if ptr.is_null() || (ptr as usize) < 0x10000 {
         return None;
     }
@@ -280,9 +277,42 @@ fn channel_key(name: f64) -> Option<DiagChannelKey> {
     None
 }
 
+thread_local! {
+    /// Side table keyed on an ErrorHeader's `message` string pointer (which
+    /// is allocated fresh per throw via `js_string_from_bytes`). The
+    /// `.code` getter in `object::field_get_set` consults this map to
+    /// recover an `ERR_*` code without resorting to substring matches on
+    /// the message text — which would have applied to any user-thrown
+    /// error sharing the same message string. Stale entries (after the
+    /// referenced StringHeader is GC'd) are harmless: a fresh allocation
+    /// will overwrite the slot via `register_error_code` the next time we
+    /// register a code, and lookups for unrelated message pointers miss.
+    static ERROR_MESSAGE_CODES: RefCell<HashMap<usize, &'static str>> =
+        RefCell::new(HashMap::new());
+}
+
+fn register_error_code(message_ptr: *const StringHeader, code: &'static str) {
+    if message_ptr.is_null() {
+        return;
+    }
+    ERROR_MESSAGE_CODES.with(|m| {
+        m.borrow_mut().insert(message_ptr as usize, code);
+    });
+}
+
+/// Returns the explicit `ERR_*` code registered for an Error's `message`
+/// pointer, if any. Called from the `.code` property getter.
+pub fn error_code_for_message(message_ptr: *const StringHeader) -> Option<&'static str> {
+    if message_ptr.is_null() {
+        return None;
+    }
+    ERROR_MESSAGE_CODES.with(|m| m.borrow().get(&(message_ptr as usize)).copied())
+}
+
 fn throw_invalid_arg() -> ! {
     let msg = b"The argument is invalid";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    register_error_code(s, "ERR_INVALID_ARG_TYPE");
     let err = crate::error::js_typeerror_new(s);
     crate::exception::js_throw(boxed_ptr(err))
 }
@@ -542,14 +572,20 @@ fn remove_subscriber(id: i64, subscriber: f64) -> bool {
 }
 
 fn publish_channel(id: i64, data: f64) {
+    // Fast path: no subscribers means publish is a no-op. Avoid the
+    // Vec clone entirely. `console.*` hits this path on every call when
+    // nobody is subscribed to a `console.{method}` channel.
     let (name, subscribers) = DIAG_CHANNELS.with(|m| {
         let m = m.borrow();
-        if let Some(c) = m.get(&id) {
-            (c.name, c.subscribers.clone())
-        } else {
-            (undefined(), Vec::new())
+        match m.get(&id) {
+            Some(c) if !c.subscribers.is_empty() => (c.name, c.subscribers.clone()),
+            Some(c) => (c.name, Vec::new()),
+            None => (undefined(), Vec::new()),
         }
     });
+    if subscribers.is_empty() {
+        return;
+    }
     for subscriber in subscribers {
         // Match Node's safe subscriber behavior for the happy path; exceptions
         // propagate through Perry's exception mechanism and are catchable.
@@ -560,15 +596,68 @@ fn publish_channel(id: i64, data: f64) {
     }
 }
 
+// Cached channel ids for the five `console.*` diagnostics channels.
+// Zero means "not yet looked up". The five-element static keeps the
+// `console.log` hot path branch-free: load atomic, miss → check by-key
+// map, hit → check subscriber count. No string formatting or string
+// allocation happens unless a subscriber actually exists.
+static CONSOLE_LOG_CHANNEL_ID: AtomicI64 = AtomicI64::new(0);
+static CONSOLE_INFO_CHANNEL_ID: AtomicI64 = AtomicI64::new(0);
+static CONSOLE_DEBUG_CHANNEL_ID: AtomicI64 = AtomicI64::new(0);
+static CONSOLE_ERROR_CHANNEL_ID: AtomicI64 = AtomicI64::new(0);
+static CONSOLE_WARN_CHANNEL_ID: AtomicI64 = AtomicI64::new(0);
+
+fn console_channel_slot(method: &str) -> Option<(&'static AtomicI64, &'static str)> {
+    match method {
+        "log" => Some((&CONSOLE_LOG_CHANNEL_ID, "console.log")),
+        "info" => Some((&CONSOLE_INFO_CHANNEL_ID, "console.info")),
+        "debug" => Some((&CONSOLE_DEBUG_CHANNEL_ID, "console.debug")),
+        "error" => Some((&CONSOLE_ERROR_CHANNEL_ID, "console.error")),
+        "warn" => Some((&CONSOLE_WARN_CHANNEL_ID, "console.warn")),
+        _ => None,
+    }
+}
+
 /// Publish the argument array for Node's console diagnostics channels.
 /// Called by `builtins::console` before formatting so subscribers can inspect
 /// and mutate arguments, matching Node's `console.*` integration.
 pub fn diagnostics_channel_publish_console(method: &str, arr: *const crate::array::ArrayHeader) {
-    let name = format!("console.{method}");
-    let s = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let name_value =
-        f64::from_bits(crate::value::STRING_TAG | (s as u64 & crate::value::POINTER_MASK));
-    let id = ensure_channel(name_value);
+    // Hot path: bail out before ANY allocation when no diag channels exist
+    // at all. The atomic load is roughly free on x86; `Relaxed` is fine here
+    // because we don't synchronize anything beyond the flag itself.
+    if ANY_SINGLETON_ALLOCATED.load(Ordering::Relaxed) == 0 {
+        return;
+    }
+    let Some((slot, key)) = console_channel_slot(method) else {
+        return;
+    };
+    // Resolve the channel id without allocating. If nobody has subscribed
+    // (or even called `dc.channel("console.<m>")`), the by-key lookup
+    // misses and we return without formatting anything.
+    let mut id = slot.load(Ordering::Relaxed);
+    if id == 0 {
+        let lookup = DIAG_CHANNEL_BY_KEY.with(|m| {
+            m.borrow()
+                .get(&DiagChannelKey::String(key.to_string()))
+                .copied()
+        });
+        match lookup {
+            Some(real_id) => {
+                slot.store(real_id, Ordering::Relaxed);
+                id = real_id;
+            }
+            None => return,
+        }
+    }
+    // Fast subscriber check: if the channel exists but is empty, skip.
+    let has_subs = DIAG_CHANNELS.with(|m| {
+        m.borrow()
+            .get(&id)
+            .is_some_and(|c| !c.subscribers.is_empty())
+    });
+    if !has_subs {
+        return;
+    }
     let arr_value = if arr.is_null() {
         undefined()
     } else {
@@ -834,9 +923,17 @@ extern "C" fn diag_trace_subscribe(closure: *const ClosureHeader, handlers: f64)
             crate::value::js_nanbox_get_pointer(handlers) as *mut ObjectHeader,
             name,
         );
-        if valid_closure_value(h) {
-            add_subscriber(events[idx], h);
+        // Absent keys (undefined OR null) are silently skipped — Node
+        // only requires that *present-and-defined* handler values be
+        // callable. Anything else present throws ERR_INVALID_ARG_TYPE.
+        let h_bits = h.to_bits();
+        if h_bits == TAG_UNDEFINED || h_bits == crate::value::TAG_NULL {
+            continue;
         }
+        if !valid_closure_value(h) {
+            throw_invalid_arg();
+        }
+        add_subscriber(events[idx], h);
     }
     undefined()
 }
@@ -949,6 +1046,11 @@ extern "C" fn diag_trace_promise(
             publish_channel(events[3], context);
             return result;
         } else if state == 2 {
+            // Node's TracingChannel#tracePromise rejection order is
+            // start, end, error, asyncStart, asyncEnd — confirmed
+            // against `node --experimental-strip-types` 24.x. The
+            // earlier handwritten ordering shipped here matches that
+            // sequence after the `end` publish.
             publish_channel(events[1], context);
             let reason = crate::promise::js_promise_reason(result_ptr);
             set_field_value(
@@ -1005,12 +1107,28 @@ extern "C" fn diag_trace_callback(
     });
     publish_channel(events[0], context);
     let ret = call_fn_value(fn_value, this_arg, &[callback, err, res]);
+    // Node's traceCallback fires events in this order around the
+    // wrapped callback: start, (fn → user callback runs synchronously,
+    // possibly producing user-visible "fn" log lines), asyncStart,
+    // [error,] asyncEnd, end. End fires *last*, not second — without
+    // a real callback wrap boundary we approximate by publishing the
+    // async events immediately after `fn` returns. A truthy `err`
+    // publishes `error` between asyncStart and asyncEnd. Full
+    // async-boundary fidelity is tracked by #788.
     set_field_value(
         crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
         "result",
         res,
     );
     publish_channel(events[2], context);
+    if crate::value::js_is_truthy(err) != 0 {
+        set_field_value(
+            crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
+            "error",
+            err,
+        );
+        publish_channel(events[4], context);
+    }
     publish_channel(events[3], context);
     publish_channel(events[1], context);
     ret
