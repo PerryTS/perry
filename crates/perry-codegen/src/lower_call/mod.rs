@@ -2906,8 +2906,10 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
-                ctx.block()
-                    .call_void("js_console_dir_with_options", &[(DOUBLE, &v), (DOUBLE, &opts)]);
+                ctx.block().call_void(
+                    "js_console_dir_with_options",
+                    &[(DOUBLE, &v), (DOUBLE, &opts)],
+                );
                 for a in args.iter().skip(2) {
                     let _ = lower_expr(ctx, a)?;
                 }

@@ -475,8 +475,7 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
     if val_tag == POINTER_TAG {
         let val_ptr = (val_bits & POINTER_MASK) as *const u8;
         if !val_ptr.is_null() && (val_ptr as usize) > 0x10000 {
-            let gc_header =
-                val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            let gc_header = val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_CLOSURE {
                 let closure_ptr = val_ptr as *const crate::closure::ClosureHeader;
                 let func_ptr = (*closure_ptr).func_ptr;
@@ -484,10 +483,7 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
                     let sym_ptr = sym_key as *const SymbolHeader;
                     let desc = str_from_header((*sym_ptr).description).unwrap_or_default();
                     let inferred = format!("[{}]", desc);
-                    crate::builtins::register_function_name_if_absent(
-                        func_ptr as usize,
-                        &inferred,
-                    );
+                    crate::builtins::register_function_name_if_absent(func_ptr as usize, &inferred);
                 }
             }
         }

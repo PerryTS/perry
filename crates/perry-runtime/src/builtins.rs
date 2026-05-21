@@ -1163,7 +1163,9 @@ unsafe fn format_object_as_json(
     // Refs #1201.
     let sym_entries = crate::symbol::clone_symbol_entries_for_obj_ptr(obj_addr);
     for (sym_ptr_usize, val_bits) in sym_entries {
-        let sym_f64 = f64::from_bits(0x7FFD_0000_0000_0000u64 | (sym_ptr_usize as u64 & 0x0000_FFFF_FFFF_FFFFu64));
+        let sym_f64 = f64::from_bits(
+            0x7FFD_0000_0000_0000u64 | (sym_ptr_usize as u64 & 0x0000_FFFF_FFFF_FFFFu64),
+        );
         let sym_label = {
             let s_ptr = crate::symbol::js_symbol_to_string(sym_f64) as *const StringHeader;
             if s_ptr.is_null() {
@@ -3261,8 +3263,7 @@ pub unsafe extern "C" fn js_console_dir_with_options(value: f64, options_value: 
     // hook as a regular `[Symbol(nodejs.util.inspect.custom)]: ...` property
     // instead of invoking it. The option is overridable via the second arg.
     // Refs #1201.
-    let custom_inspect =
-        decode_dir_bool_option(options_value, "customInspect").unwrap_or(false);
+    let custom_inspect = decode_dir_bool_option(options_value, "customInspect").unwrap_or(false);
     let _depth_guard = InspectDepthLimitGuard::new(max_depth);
     let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
     let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
