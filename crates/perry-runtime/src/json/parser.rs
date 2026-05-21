@@ -486,6 +486,10 @@ impl<'a> DirectParser<'a> {
         // object arrays avoids repeated grow/copy cycles while keeping
         // scalar/string arrays on the old 16-slot default.
         let mut js_arr = js_array_alloc(if self.peek() == Some(b'{') {
+            // 96 B/object is an empirical average for small JSON objects
+            // (e.g. `{"id":1,"name":"x"}` ≈ 80-120 B with separators).
+            // Clamped to 16..16_384 so tiny payloads stay cheap and
+            // multi-MB documents don't over-commit when the average drifts.
             ((self.input.len() - self.pos) / 96).clamp(16, 16_384) as u32
         } else {
             16
@@ -679,6 +683,10 @@ impl<'a> DirectParser<'a> {
         let saved_roots = parse_root_save_len();
         // Same `[{...}]` pre-size heuristic as the typed path.
         let mut js_arr = js_array_alloc(if self.peek() == Some(b'{') {
+            // 96 B/object is an empirical average for small JSON objects
+            // (e.g. `{"id":1,"name":"x"}` ≈ 80-120 B with separators).
+            // Clamped to 16..16_384 so tiny payloads stay cheap and
+            // multi-MB documents don't over-commit when the average drifts.
             ((self.input.len() - self.pos) / 96).clamp(16, 16_384) as u32
         } else {
             16

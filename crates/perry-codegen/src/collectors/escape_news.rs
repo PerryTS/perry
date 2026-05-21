@@ -671,6 +671,10 @@ fn collect_used_new_fields_in_expr(
         | Expr::ArrayShift(_)
         | Expr::Update { .. }
         | Expr::BigInt(_) => {}
+        // Any new Expr variant that contains a `new T(...)` allocation
+        // must be listed explicitly above so scalar replacement can see
+        // its used fields. Unhandled variants fall through here safely
+        // (the pass remains correct, just conservative).
         _ => {}
     }
 }
