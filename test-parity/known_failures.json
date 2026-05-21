@@ -452,12 +452,6 @@
     "category": "ci-env",
     "reason": "Brotli decompression path under node:zlib not yet implemented (cf. existing test_parity_zlib module-inventory entry). Same failure observed on #1038 pre-merge \u2014 not a regression."
   },
-  "node-suite/string_decoder/utf16le/end-cases": {
-    "issue": "1182",
-    "added": "2026-05-20",
-    "category": "module-inventory",
-    "reason": "#1182: Perry decodes split valid UTF-16LE surrogate pairs, but runtime strings are UTF-8 and cannot preserve Node's lone surrogate code units returned by end(). Flips to PASS when raw UTF-16 lone-surrogate semantics are modeled or normalized."
-  },
   "node-suite/events/on/async-iterator-basic": {
     "issue": "1183",
     "added": "2026-05-20",
