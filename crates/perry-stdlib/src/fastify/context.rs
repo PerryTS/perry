@@ -535,6 +535,16 @@ pub unsafe extern "C" fn js_fastify_reply_send(ctx_handle: Handle, data: f64) ->
 /// Returns a response marker value
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_ctx_json(ctx_handle: Handle, data: f64, status: f64) -> f64 {
+    // #1240 — `request.json()` (Fetch API) shares the dispatch slot with
+    // `reply.json(data)` / `c.json(data, status)` because both receivers are
+    // backed by the same FastifyContext handle. A zero-arg call from user code
+    // arrives here with `data` padded to NaN-boxed undefined; in that case route
+    // to `js_fastify_req_json` so existing Fetch-style codebases keep working
+    // without touching `request.body`.
+    if data.to_bits() == JSValue::undefined().bits() {
+        return js_fastify_req_json(ctx_handle);
+    }
+
     if let Some(ctx) = get_handle_mut::<FastifyContext>(ctx_handle) {
         if status > 0.0 {
             ctx.status_code = status as u16;
