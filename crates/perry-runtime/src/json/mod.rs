@@ -508,4 +508,63 @@ mod tests {
         assert_eq!(unsafe { (*output).utf16_len }, 3);
         assert_eq!(unsafe { (*output).flags }, 0);
     }
+
+    #[test]
+    fn stringify_wtf8_lone_surrogate_emits_unicode_escape() {
+        // Issue #1182: a string containing a WTF-8 lone high surrogate
+        // (U+D83D as bytes 0xED 0xA0 0xBD) must stringify to the `\ud83d`
+        // escape Node's JSON.stringify produces, not the raw invalid-UTF-8
+        // bytes.
+        let bytes: [u8; 3] = [0xED, 0xA0, 0xBD];
+        let input = crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
+        let value = f64::from_bits(crate::value::JSValue::string_ptr(input).bits());
+        let output = unsafe { js_json_stringify(value, TYPE_UNKNOWN) };
+
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, "\"\\ud83d\"");
+    }
+
+    #[test]
+    fn stringify_pairs_adjacent_wtf8_surrogates_as_astral_utf8() {
+        // Issue #1182 follow-up: when a StringDecoder('utf16le') stream is
+        // flushed mid-pair via .end(), the two halves end up as 6 WTF-8
+        // bytes (high triple + low triple) in the concatenated result.
+        // V8's JSON.stringify pairs them and emits the astral codepoint's
+        // UTF-8; Perry must match. 👍 = U+1F44D = F0 9F 91 8D.
+        let bytes: [u8; 6] = [0xED, 0xA0, 0xBD, 0xED, 0xB1, 0x8D];
+        let input = crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
+        let value = f64::from_bits(crate::value::JSValue::string_ptr(input).bits());
+        let output = unsafe { js_json_stringify(value, TYPE_UNKNOWN) };
+
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, "\"\u{1F44D}\"");
+    }
+
+    #[test]
+    fn stringify_high_surrogate_then_bmp_still_escapes_high() {
+        // Sanity: a high surrogate followed by a non-surrogate must NOT
+        // be re-encoded — only valid adjacent (high, low) pairs collapse.
+        // Input is 0xED A0 BD ('a' = 0x61), expected `"\ud83da"`.
+        let bytes: [u8; 4] = [0xED, 0xA0, 0xBD, b'a'];
+        let input = crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
+        let value = f64::from_bits(crate::value::JSValue::string_ptr(input).bits());
+        let output = unsafe { js_json_stringify(value, TYPE_UNKNOWN) };
+
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, "\"\\ud83da\"");
+    }
+
+    #[test]
+    fn stringify_3byte_utf8_below_surrogate_block_is_unchanged() {
+        // U+D7FF is the codepoint immediately before the surrogate block.
+        // It also starts with 0xED (0xED 0x9F 0xBF) so it exercises the
+        // boundary in the WTF-8 detector — must NOT escape, must pass
+        // through as raw UTF-8 bytes.
+        let s = "\u{D7FF}";
+        let input = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        let value = f64::from_bits(crate::value::JSValue::string_ptr(input).bits());
+        let output = unsafe { js_json_stringify(value, TYPE_UNKNOWN) };
+
+        let mut expected = String::from("\"");
+        expected.push_str(s);
+        expected.push('"');
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, expected);
+    }
 }
