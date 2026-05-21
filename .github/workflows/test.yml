@@ -9,11 +9,26 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+    # `labeled` is here so the optional opt-in jobs (parity, compile-smoke,
+    # doc-tests) re-fire when a maintainer or the PR author applies the
+    # `run-extended-tests` label. Without it, applying the label on an
+    # existing PR wouldn't re-trigger the workflow.
+    types: [opened, synchronize, reopened, labeled]
     paths-ignore:
       - 'docs/src/**'
       - '*.md'
       - '!CLAUDE.md'
       - '!CHANGELOG.md'
+  # Manual escape hatch for the opt-in jobs. Maintainers (write access)
+  # can dispatch the workflow against any ref with `run_extended_tests=true`
+  # to run parity / compile-smoke / doc-tests on demand without tagging
+  # a release.
+  workflow_dispatch:
+    inputs:
+      run_extended_tests:
+        description: 'Run extended tests (parity, compile-smoke, doc-tests)'
+        type: boolean
+        default: false
 
 concurrency:
   group: test-${{ github.ref }}
@@ -192,7 +207,14 @@ jobs:
     # the ~20 min parity bill; release tagging still catches regressions
     # before publish (release-packages.yml await-tests gate waits on
     # this job by name for tag events).
-    if: github.event_name == 'push'
+    #
+    # Opt-in: apply the `run-extended-tests` label to a PR, or dispatch
+    # the workflow manually with `run_extended_tests=true`, to run this
+    # job on demand. PR authors and maintainers can both apply labels.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -314,7 +336,13 @@ jobs:
     # v0.5.1018: gated to tag pushes only (`github.event_name == 'push'`).
     # See the parity job comment above for rationale — release-packages.yml
     # still requires this job on tag events before publishing.
-    if: github.event_name == 'push'
+    #
+    # Opt-in: `run-extended-tests` PR label or `workflow_dispatch` with
+    # `run_extended_tests=true` runs this job on demand.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -733,8 +761,21 @@ jobs:
   # UI examples launch with PERRY_UI_TEST_MODE=1 so they auto-exit after one
   # frame. Gallery screenshots are diffed against per-OS baselines (advisory
   # until Linux/Windows baselines stabilize).
+  #
+  # Gated to tag pushes + opt-in (parity with parity/compile-smoke). The
+  # macOS-14 matrix entry takes ~30 min wall and dominates the PR feedback
+  # loop, so PRs no longer pay the bill by default. Release tags still run
+  # doc-tests as part of the release-packages.yml gate.
+  #
+  # Opt-in: apply the `run-extended-tests` label to a PR, or dispatch the
+  # workflow manually with `run_extended_tests=true`, to run this job on
+  # demand. PR authors and maintainers can both apply labels.
   # ---------------------------------------------------------------------------
   doc-tests:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     strategy:
       fail-fast: false
       matrix:
