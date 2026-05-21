@@ -26,6 +26,7 @@
 
 use crate::common::handle::{get_handle_mut, register_handle, with_handle};
 use perry_runtime::buffer::{is_registered_buffer, BufferHeader};
+use perry_runtime::string::js_string_from_wtf8_bytes;
 use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 
 /// Which textual encoding the StringDecoder was constructed with.
@@ -337,7 +338,34 @@ fn end_utf8(state: &mut StringDecoderHandle, bytes: Option<&[u8]>) -> String {
 
 /// UTF-16LE write: pair bytes as little-endian u16 code units. The last
 /// odd byte (if any) is buffered into `utf16_partial`.
-fn write_utf16le(state: &mut StringDecoderHandle, bytes: &[u8]) -> String {
+/// Encode a UTF-16 surrogate code unit (U+D800..=U+DFFF) as 3 WTF-8 bytes.
+/// This is the same 3-byte form regular UTF-8 would use for a BMP codepoint
+/// in that range — invalid as strict UTF-8, valid as WTF-8. Perry's runtime
+/// understands the encoding (`STRING_FLAG_HAS_LONE_SURROGATES`,
+/// `isWellFormed`/`toWellFormed`, JSON.stringify escape).
+fn push_wtf8_surrogate(out: &mut Vec<u8>, unit: u16) {
+    let cp = unit as u32;
+    out.push(0xE0 | ((cp >> 12) as u8 & 0x0F));
+    out.push(0x80 | ((cp >> 6) as u8 & 0x3F));
+    out.push(0x80 | (cp as u8 & 0x3F));
+}
+
+/// Encode any BMP code unit (or astral codepoint via surrogate pair input
+/// path) into UTF-8 / WTF-8. For surrogates routes to `push_wtf8_surrogate`.
+fn push_unit_wtf8(out: &mut Vec<u8>, unit: u16) {
+    match unit {
+        0xD800..=0xDFFF => push_wtf8_surrogate(out, unit),
+        _ => {
+            // Safe: non-surrogate BMP always has a char form.
+            let c = unsafe { char::from_u32_unchecked(unit as u32) };
+            let mut buf = [0u8; 4];
+            let s = c.encode_utf8(&mut buf);
+            out.extend_from_slice(s.as_bytes());
+        }
+    }
+}
+
+fn write_utf16le(state: &mut StringDecoderHandle, bytes: &[u8]) -> Vec<u8> {
     let mut combined: Vec<u8> =
         Vec::with_capacity(bytes.len() + if state.utf16_partial.is_some() { 1 } else { 0 });
     if let Some(b) = state.utf16_partial.take() {
@@ -351,7 +379,7 @@ fn write_utf16le(state: &mut StringDecoderHandle, bytes: &[u8]) -> String {
         state.utf16_partial = Some(combined[take]);
     }
     let head = &combined[..take];
-    let mut out = String::with_capacity(take / 2);
+    let mut out: Vec<u8> = Vec::with_capacity(take);
     let mut iter = head.chunks_exact(2);
     for pair in iter.by_ref() {
         let unit = u16::from_le_bytes([pair[0], pair[1]]);
@@ -360,13 +388,17 @@ fn write_utf16le(state: &mut StringDecoderHandle, bytes: &[u8]) -> String {
             if (0xDC00..=0xDFFF).contains(&unit) {
                 let cp = 0x10000 + (((h - 0xD800) as u32) << 10) + ((unit - 0xDC00) as u32);
                 if let Some(c) = char::from_u32(cp) {
-                    out.push(c);
+                    let mut buf = [0u8; 4];
+                    let s = c.encode_utf8(&mut buf);
+                    out.extend_from_slice(s.as_bytes());
                 } else {
-                    out.push('\u{FFFD}');
+                    push_unit_wtf8(&mut out, 0xFFFD);
                 }
             } else {
-                // Lone high → replacement, then reprocess this unit.
-                out.push('\u{FFFD}');
+                // Lone high → emit the buffered high as WTF-8, then reprocess
+                // this unit (which may itself be a high surrogate, BMP char,
+                // or another lone low surrogate).
+                push_wtf8_surrogate(&mut out, h);
                 process_utf16_unit(&mut out, &mut state.utf16_high_surrogate, unit);
             }
         } else {
@@ -376,29 +408,58 @@ fn write_utf16le(state: &mut StringDecoderHandle, bytes: &[u8]) -> String {
     out
 }
 
-fn process_utf16_unit(out: &mut String, high: &mut Option<u16>, unit: u16) {
+fn process_utf16_unit(out: &mut Vec<u8>, high: &mut Option<u16>, unit: u16) {
     match unit {
         0xD800..=0xDBFF => *high = Some(unit),
-        0xDC00..=0xDFFF => out.push('\u{FFFD}'),
-        _ => out.push(char::from_u32(unit as u32).unwrap_or('\u{FFFD}')),
+        0xDC00..=0xDFFF => push_wtf8_surrogate(out, unit),
+        _ => push_unit_wtf8(out, unit),
     }
 }
 
-fn end_utf16le(state: &mut StringDecoderHandle, bytes: Option<&[u8]>) -> String {
+fn end_utf16le(state: &mut StringDecoderHandle, bytes: Option<&[u8]>) -> Vec<u8> {
     let mut out = match bytes {
         Some(b) => write_utf16le(state, b),
-        None => String::new(),
+        None => Vec::new(),
     };
     // Any leftover lone byte at end is dropped (matches Node — the trailing
     // odd byte produces no character).
     state.utf16_partial = None;
-    // Node can return a JS string containing a lone high surrogate here.
-    // Perry's runtime string is UTF-8, so use U+FFFD for the unpaired scalar
-    // until runtime strings can preserve raw UTF-16 code units.
-    if state.utf16_high_surrogate.take().is_some() {
-        out.push('\u{FFFD}');
+    // Node returns a JS string containing the lone high surrogate code unit
+    // here (e.g. `"\ud83d"` when only the first half of a surrogate pair was
+    // ever fed in). Issue #1182: preserve it as WTF-8 so consumers like
+    // JSON.stringify can re-emit the `\uXXXX` escape Node produces.
+    if let Some(h) = state.utf16_high_surrogate.take() {
+        push_wtf8_surrogate(&mut out, h);
     }
     out
+}
+
+/// Build a StringHeader from utf16le-decoded bytes, picking the WTF-8
+/// constructor (which sets `STRING_FLAG_HAS_LONE_SURROGATES`) only when the
+/// payload actually contains a lone surrogate triple. Strings with no
+/// surrogates stay strictly UTF-8 so `isWellFormed()` keeps reporting true.
+unsafe fn string_from_wtf8_bytes_if_needed(bytes: &[u8]) -> *mut StringHeader {
+    if contains_wtf8_surrogate(bytes) {
+        js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32)
+    } else {
+        js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    }
+}
+
+/// Returns true if `bytes` contains at least one WTF-8 lone-surrogate
+/// 3-byte sequence (0xED, 0xA0..=0xBF, 0x80..=0xBF).
+fn contains_wtf8_surrogate(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if bytes[i] == 0xED
+            && (0xA0..=0xBF).contains(&bytes[i + 1])
+            && (0x80..=0xBF).contains(&bytes[i + 2])
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Base64 alphabet for `STANDARD` (RFC 4648), matching Node's
@@ -629,15 +690,23 @@ pub unsafe fn dispatch_string_decoder(handle: i64, method: &str, args: &[f64]) -
             } else {
                 bytes_from_write_arg(args[0])
             };
-            let s = match h.mode {
-                DecodingMode::Utf8 => write_utf8(h, &bytes),
-                DecodingMode::Utf16Le => write_utf16le(h, &bytes),
-                DecodingMode::Base64 | DecodingMode::Base64Url => write_base64(h, &bytes),
-                DecodingMode::Hex => write_hex(h, &bytes),
-                DecodingMode::Latin1 => write_latin1(h, &bytes),
-                DecodingMode::Ascii => write_ascii(h, &bytes),
+            let sh = match h.mode {
+                DecodingMode::Utf16Le => {
+                    let v = write_utf16le(h, &bytes);
+                    string_from_wtf8_bytes_if_needed(&v)
+                }
+                _ => {
+                    let s = match h.mode {
+                        DecodingMode::Utf8 => write_utf8(h, &bytes),
+                        DecodingMode::Base64 | DecodingMode::Base64Url => write_base64(h, &bytes),
+                        DecodingMode::Hex => write_hex(h, &bytes),
+                        DecodingMode::Latin1 => write_latin1(h, &bytes),
+                        DecodingMode::Ascii => write_ascii(h, &bytes),
+                        DecodingMode::Utf16Le => unreachable!(),
+                    };
+                    js_string_from_bytes(s.as_ptr(), s.len() as u32)
+                }
             };
-            let sh = js_string_from_bytes(s.as_ptr(), s.len() as u32);
             f64::from_bits(0x7FFF_0000_0000_0000u64 | ((sh as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
         "end" => {
@@ -653,27 +722,35 @@ pub unsafe fn dispatch_string_decoder(handle: i64, method: &str, args: &[f64]) -
                 }
             };
             let bytes_ref = bytes_opt.as_deref();
-            let s = match h.mode {
-                DecodingMode::Utf8 => end_utf8(h, bytes_ref),
-                DecodingMode::Utf16Le => end_utf16le(h, bytes_ref),
-                DecodingMode::Base64 => end_base64(h, bytes_ref, true),
-                DecodingMode::Base64Url => end_base64(h, bytes_ref, false),
-                // Hex / Latin1 / Ascii have no carry-over state — `end`
-                // is just a `write` with no trailing flush.
-                DecodingMode::Hex => match bytes_ref {
-                    Some(b) => write_hex(h, b),
-                    None => String::new(),
-                },
-                DecodingMode::Latin1 => match bytes_ref {
-                    Some(b) => write_latin1(h, b),
-                    None => String::new(),
-                },
-                DecodingMode::Ascii => match bytes_ref {
-                    Some(b) => write_ascii(h, b),
-                    None => String::new(),
-                },
+            let sh = match h.mode {
+                DecodingMode::Utf16Le => {
+                    let v = end_utf16le(h, bytes_ref);
+                    string_from_wtf8_bytes_if_needed(&v)
+                }
+                _ => {
+                    let s = match h.mode {
+                        DecodingMode::Utf8 => end_utf8(h, bytes_ref),
+                        DecodingMode::Base64 => end_base64(h, bytes_ref, true),
+                        DecodingMode::Base64Url => end_base64(h, bytes_ref, false),
+                        // Hex / Latin1 / Ascii have no carry-over state — `end`
+                        // is just a `write` with no trailing flush.
+                        DecodingMode::Hex => match bytes_ref {
+                            Some(b) => write_hex(h, b),
+                            None => String::new(),
+                        },
+                        DecodingMode::Latin1 => match bytes_ref {
+                            Some(b) => write_latin1(h, b),
+                            None => String::new(),
+                        },
+                        DecodingMode::Ascii => match bytes_ref {
+                            Some(b) => write_ascii(h, b),
+                            None => String::new(),
+                        },
+                        DecodingMode::Utf16Le => unreachable!(),
+                    };
+                    js_string_from_bytes(s.as_ptr(), s.len() as u32)
+                }
             };
-            let sh = js_string_from_bytes(s.as_ptr(), s.len() as u32);
             f64::from_bits(0x7FFF_0000_0000_0000u64 | ((sh as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
         _ => f64::from_bits(JSValue::undefined().bits()),
@@ -788,5 +865,40 @@ mod tests {
         let mut s = StringDecoderHandle::new();
         assert_eq!(write_utf8(&mut s, "hello".as_bytes()), "hello");
         assert_eq!(s.last_need, 0);
+    }
+
+    #[test]
+    fn utf16le_end_emits_lone_high_surrogate_as_wtf8() {
+        // Issue #1182: a high surrogate fed in with no matching low must be
+        // returned verbatim by .end() — Node yields a JS string whose single
+        // code unit is 0xD83D. We carry it across in WTF-8 (0xED 0xA0 0xBD).
+        let mut s = StringDecoderHandle::with_mode(DecodingMode::Utf16Le);
+        assert!(write_utf16le(&mut s, &[0x3D, 0xD8]).is_empty());
+        assert_eq!(s.utf16_high_surrogate, Some(0xD83D));
+        let tail = end_utf16le(&mut s, None);
+        assert_eq!(tail, vec![0xED, 0xA0, 0xBD]);
+        assert!(contains_wtf8_surrogate(&tail));
+    }
+
+    #[test]
+    fn utf16le_lone_high_then_bmp_emits_wtf8_then_char() {
+        // Buffered high surrogate followed by a non-low unit: Node emits the
+        // lone high *and* the trailing BMP char (it does not collapse to
+        // U+FFFD as the pre-#1182 behaviour did).
+        let mut s = StringDecoderHandle::with_mode(DecodingMode::Utf16Le);
+        // 0x3DD8 (high surrogate) + 0x6100 ('a' in UTF-16LE).
+        let out = write_utf16le(&mut s, &[0x3D, 0xD8, 0x61, 0x00]);
+        assert_eq!(out, vec![0xED, 0xA0, 0xBD, b'a']);
+    }
+
+    #[test]
+    fn utf16le_valid_pair_still_decodes_to_astral() {
+        // The fix must NOT regress the well-formed split-surrogate case.
+        // 0x3DD8 0x4DDC is the UTF-16LE encoding of U+1F44D 👍.
+        let mut s = StringDecoderHandle::with_mode(DecodingMode::Utf16Le);
+        assert!(write_utf16le(&mut s, &[0x3D, 0xD8]).is_empty());
+        let out = write_utf16le(&mut s, &[0x4D, 0xDC]);
+        assert_eq!(out, "\u{1F44D}".as_bytes());
+        assert!(!contains_wtf8_surrogate(&out));
     }
 }

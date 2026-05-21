@@ -1745,7 +1745,13 @@ unsafe fn write_escaped_string(buf: &mut String, s: &str) {
     // a straight-line SIMD-friendly scan + one `push_str` beats the
     // scalar per-byte escape loop. Needs_escape fires for `"`, `\`, or
     // any control byte (< 0x20).
-    let needs_escape = bytes.iter().any(|&b| b < 0x20 || b == b'"' || b == b'\\');
+    // Also trip the slow path for WTF-8 lone surrogate sequences
+    // (issue #1182): a lead byte of 0xED followed by 0xA0..=0xBF means
+    // we have a 3-byte encoding of U+D800..=U+DFFF and need to emit a
+    // `\uXXXX` escape rather than the raw (invalid-UTF-8) bytes.
+    let needs_escape = bytes
+        .iter()
+        .any(|&b| b < 0x20 || b == b'"' || b == b'\\' || b == 0xED);
     if !needs_escape {
         buf.reserve(bytes.len() + 2);
         buf.push('"');
@@ -1772,7 +1778,64 @@ unsafe fn write_escaped_string(buf: &mut String, s: &str) {
     // codebase treats stringify output as a byte stream — and an
     // ill-formed result is strictly preferable to a SIGABRT.
     let buf_vec = buf.as_mut_vec();
-    for (i, &b) in bytes.iter().enumerate() {
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        // WTF-8 surrogate handling (issue #1182). A 0xED 0xA0..=0xBF
+        // 0x80..=0xBF triple encodes a code unit in U+D800..=U+DFFF.
+        // Two cases mirror Node's JSON.stringify:
+        //
+        //   * A high surrogate (0xA0..=0xAF mid byte) immediately
+        //     followed by a low surrogate (0xB0..=0xBF mid byte) is
+        //     a *valid* UTF-16 pair — re-encode it as the 4-byte
+        //     UTF-8 of the astral codepoint, no escape. This is the
+        //     only way `'\uD83D' + '\uDC4D'` round-trips through
+        //     `dec.end()` + concat as 👍 instead of two escapes.
+        //
+        //   * Any remaining (lone) surrogate triple emits the
+        //     `\uXXXX` escape.
+        if b == 0xED
+            && i + 2 < bytes.len()
+            && (0xA0..=0xBF).contains(&bytes[i + 1])
+            && (0x80..=0xBF).contains(&bytes[i + 2])
+        {
+            let high_cu: u32 = (((b & 0x0F) as u32) << 12)
+                | (((bytes[i + 1] & 0x3F) as u32) << 6)
+                | ((bytes[i + 2] & 0x3F) as u32);
+            // Valid pair? Need the next 3 bytes to be a low surrogate
+            // (0xED 0xB0..=0xBF 0x80..=0xBF) directly adjacent.
+            let pair_low = if (0xD800..=0xDBFF).contains(&high_cu)
+                && i + 5 < bytes.len()
+                && bytes[i + 3] == 0xED
+                && (0xB0..=0xBF).contains(&bytes[i + 4])
+                && (0x80..=0xBF).contains(&bytes[i + 5])
+            {
+                let low_cu: u32 = (((bytes[i + 3] & 0x0F) as u32) << 12)
+                    | (((bytes[i + 4] & 0x3F) as u32) << 6)
+                    | ((bytes[i + 5] & 0x3F) as u32);
+                Some(low_cu)
+            } else {
+                None
+            };
+            if start < i {
+                buf_vec.extend_from_slice(&bytes[start..i]);
+            }
+            if let Some(low_cu) = pair_low {
+                let cp = 0x10000 + ((high_cu - 0xD800) << 10) + (low_cu - 0xDC00);
+                if let Some(c) = char::from_u32(cp) {
+                    let mut tmp = [0u8; 4];
+                    let s = c.encode_utf8(&mut tmp);
+                    buf_vec.extend_from_slice(s.as_bytes());
+                    i += 6;
+                    start = i;
+                    continue;
+                }
+            }
+            buf_vec.extend_from_slice(format!("\\u{:04x}", high_cu).as_bytes());
+            i += 3;
+            start = i;
+            continue;
+        }
         let escape = match b {
             b'"' => Some("\\\""),
             b'\\' => Some("\\\\"),
@@ -1785,6 +1848,7 @@ unsafe fn write_escaped_string(buf: &mut String, s: &str) {
                 }
                 buf_vec.extend_from_slice(format!("\\u{:04x}", b).as_bytes());
                 start = i + 1;
+                i += 1;
                 continue;
             }
             _ => None,
@@ -1796,6 +1860,7 @@ unsafe fn write_escaped_string(buf: &mut String, s: &str) {
             buf_vec.extend_from_slice(esc.as_bytes());
             start = i + 1;
         }
+        i += 1;
     }
     if start < bytes.len() {
         buf_vec.extend_from_slice(&bytes[start..]);
@@ -4203,5 +4268,64 @@ mod tests {
         assert_eq!(unsafe { (*output).byte_len }, 4);
         assert_eq!(unsafe { (*output).utf16_len }, 3);
         assert_eq!(unsafe { (*output).flags }, 0);
+    }
+
+    #[test]
+    fn stringify_wtf8_lone_surrogate_emits_unicode_escape() {
+        // Issue #1182: a string containing a WTF-8 lone high surrogate
+        // (U+D83D as bytes 0xED 0xA0 0xBD) must stringify to the `\ud83d`
+        // escape Node's JSON.stringify produces, not the raw invalid-UTF-8
+        // bytes.
+        let bytes: [u8; 3] = [0xED, 0xA0, 0xBD];
+        let input = crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
+        let value = f64::from_bits(crate::value::JSValue::string_ptr(input).bits());
+        let output = unsafe { js_json_stringify(value, TYPE_UNKNOWN) };
+
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, "\"\\ud83d\"");
+    }
+
+    #[test]
+    fn stringify_pairs_adjacent_wtf8_surrogates_as_astral_utf8() {
+        // Issue #1182 follow-up: when a StringDecoder('utf16le') stream is
+        // flushed mid-pair via .end(), the two halves end up as 6 WTF-8
+        // bytes (high triple + low triple) in the concatenated result.
+        // V8's JSON.stringify pairs them and emits the astral codepoint's
+        // UTF-8; Perry must match. 👍 = U+1F44D = F0 9F 91 8D.
+        let bytes: [u8; 6] = [0xED, 0xA0, 0xBD, 0xED, 0xB1, 0x8D];
+        let input = crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
+        let value = f64::from_bits(crate::value::JSValue::string_ptr(input).bits());
+        let output = unsafe { js_json_stringify(value, TYPE_UNKNOWN) };
+
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, "\"\u{1F44D}\"");
+    }
+
+    #[test]
+    fn stringify_high_surrogate_then_bmp_still_escapes_high() {
+        // Sanity: a high surrogate followed by a non-surrogate must NOT
+        // be re-encoded — only valid adjacent (high, low) pairs collapse.
+        // Input is 0xED A0 BD ('a' = 0x61), expected `"\ud83da"`.
+        let bytes: [u8; 4] = [0xED, 0xA0, 0xBD, b'a'];
+        let input = crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
+        let value = f64::from_bits(crate::value::JSValue::string_ptr(input).bits());
+        let output = unsafe { js_json_stringify(value, TYPE_UNKNOWN) };
+
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, "\"\\ud83da\"");
+    }
+
+    #[test]
+    fn stringify_3byte_utf8_below_surrogate_block_is_unchanged() {
+        // U+D7FF is the codepoint immediately before the surrogate block.
+        // It also starts with 0xED (0xED 0x9F 0xBF) so it exercises the
+        // boundary in the WTF-8 detector — must NOT escape, must pass
+        // through as raw UTF-8 bytes.
+        let s = "\u{D7FF}";
+        let input = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        let value = f64::from_bits(crate::value::JSValue::string_ptr(input).bits());
+        let output = unsafe { js_json_stringify(value, TYPE_UNKNOWN) };
+
+        let mut expected = String::from("\"");
+        expected.push_str(s);
+        expected.push('"');
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, expected);
     }
 }
