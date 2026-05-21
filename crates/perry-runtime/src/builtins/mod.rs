@@ -1,0 +1,103 @@
+//! Built-in functions and objects.
+//!
+//! Provides runtime implementations of JavaScript built-ins like console.log,
+//! `util.format`, `parseInt`, `Number(...)` coercion, etc. Originally a single
+//! ~4,100 line file; split into topical submodules so no individual file
+//! exceeds the 2,000-line ceiling.
+//!
+//! Re-exports below preserve the historical `crate::builtins::js_*` import
+//! paths used by sibling runtime modules (`gc`, `object`, `promise`,
+//! `proxy`, `value`, …) and by the rest of the crate's externally-visible
+//! `#[no_mangle] pub extern "C"` FFI surface consumed by perry-emitted LLVM.
+
+// On harmonyos, the .so is loaded by ArkTS and stdout/stderr have no
+// terminal — every `println!("foo")` from inside Perry's runtime
+// disappears into the void. Override `println!` to route through hilog
+// (libhilog_ndk.z.so::OH_LOG_Print) instead, so `console.log("hi")`
+// surfaces in DevEco/hdc the same way ArkTS's console.log does. The
+// shadowing is module-scoped (only this builtins tree) so other runtime
+// modules keep their normal stdout-bound println! semantics — only the
+// user-facing console.* family routes to hilog.
+#[cfg(feature = "ohos-napi")]
+macro_rules! println {
+    () => {
+        $crate::arkts_callbacks::ohos_stdout_println("")
+    };
+    ($($arg:tt)*) => {
+        $crate::arkts_callbacks::ohos_stdout_println(&format!($($arg)*))
+    };
+}
+
+// Make the override visible to the topical submodules below via `use
+// super::println;` (each submodule that prints needs the same shadow so
+// stdout output on harmonyos routes through hilog the same way it did
+// pre-split).
+#[cfg(feature = "ohos-napi")]
+pub(crate) use println;
+
+pub(crate) use crate::string::{js_string_from_bytes, StringHeader};
+pub(crate) use crate::JSValue;
+
+mod arithmetic;
+mod console;
+mod formatting;
+mod globals;
+mod numbers;
+mod table;
+
+// Explicit named re-exports (NOT globs — globs don't propagate transitively
+// through `pub use` chains, and external callers reach in via the historical
+// `crate::builtins::js_*` path).
+
+pub use arithmetic::{
+    js_add, js_div, js_eq, js_ge, js_gt, js_le, js_loose_eq, js_lt, js_mod, js_mul, js_sub,
+    js_value_typeof,
+};
+
+pub use console::{
+    js_console_assert, js_console_assert_spread, js_console_clear, js_console_count,
+    js_console_count_reset, js_console_count_reset_value, js_console_count_value,
+    js_console_dir_with_options, js_console_error_dynamic, js_console_error_i32,
+    js_console_error_number, js_console_error_spread, js_console_group, js_console_group_begin,
+    js_console_group_end, js_console_log, js_console_log_as_closure, js_console_log_dynamic,
+    js_console_log_i32, js_console_log_i64, js_console_log_number, js_console_log_spread,
+    js_console_noop, js_console_time, js_console_time_end, js_console_time_end_value,
+    js_console_time_log, js_console_time_log_spread, js_console_time_log_value,
+    js_console_time_value, js_console_trace, js_console_trace_spread, js_console_warn_dynamic,
+    js_console_warn_i32, js_console_warn_number, js_console_warn_spread, perry_debug_trace_init,
+    perry_debug_trace_init_done, scan_console_log_singleton_roots,
+    scan_console_log_singleton_roots_mut,
+};
+
+pub use formatting::{
+    js_array_print, js_register_function_name, js_util_format, js_util_inspect,
+    js_util_is_deep_strict_equal, js_util_strip_vt_control_characters,
+};
+
+pub(crate) use formatting::{
+    format_finite_number_js, format_jsvalue, is_negative_zero, jsvalue_string_content,
+    InspectDepthLimitGuard, InspectShowHiddenGuard,
+};
+
+pub use globals::{
+    js_decode_uri, js_decode_uri_component, js_drain_queued_microtasks, js_encode_uri,
+    js_encode_uri_component, js_queue_microtask, js_queue_next_tick, js_structured_clone,
+    js_text_decoder_decode, js_text_encoder_encode, restore_queued_microtask_contexts,
+    scan_queued_microtask_roots, scan_queued_microtask_roots_mut,
+};
+
+pub use numbers::{
+    js_is_finite, js_is_nan, js_number_coerce, js_number_is_finite, js_number_is_integer,
+    js_number_is_nan, js_number_is_safe_integer, js_parse_float, js_parse_int, js_string_coerce,
+};
+
+#[cfg(test)]
+pub(crate) use numbers::parse_float_bytes;
+
+pub use table::{js_console_table, js_console_table_with_properties};
+
+#[cfg(test)]
+pub(crate) use console::{test_console_log_singleton, test_set_console_log_singleton};
+
+#[cfg(test)]
+pub(crate) use globals::{test_queued_microtask_snapshot, test_seed_queued_microtask};
