@@ -1212,13 +1212,25 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
         let mut arg_idx: usize = 1;
         let bytes = fmt.as_bytes();
         let mut i = 0;
+        // Issue #1275: emit literal-text segments as UTF-8 `&str` slices
+        // so multi-byte codepoints (e.g. "…", "é", "中") survive the format
+        // pass. The previous `out.push(byte as char)` cast each UTF-8 byte
+        // to a Latin-1 codepoint and produced mojibake on the terminal.
+        let mut seg_start = 0usize;
         while i < bytes.len() {
             let b = bytes[i];
             if b != b'%' || i + 1 >= bytes.len() {
-                out.push(b as char);
                 i += 1;
                 continue;
             }
+            // Flush the literal text accumulated since the last % handled.
+            if seg_start < i {
+                out.push_str(&fmt[seg_start..i]);
+            }
+            // Advance the literal-segment cursor past the %spec; the
+            // various branches below all consume exactly 2 bytes via
+            // `i += 2`, so this stays in sync regardless of which arm runs.
+            seg_start = i + 2;
             let spec = bytes[i + 1];
             // `%%` → literal `%` (no arg consumed).
             if spec == b'%' {
@@ -1351,6 +1363,11 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                 }
             }
             i += 2;
+        }
+        // Flush the trailing literal segment (everything after the last %spec
+        // or the entire string if no specifier was found).
+        if seg_start < bytes.len() {
+            out.push_str(&fmt[seg_start..]);
         }
 
         // Append any remaining args separated by spaces, again matching

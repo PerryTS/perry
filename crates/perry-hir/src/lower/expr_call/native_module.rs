@@ -156,7 +156,22 @@ pub(super) fn try_native_module_methods(
                     match method_name {
                         "from" => {
                             let data = args.first().cloned().unwrap_or(Expr::Undefined);
-                            if args.len() >= 2 && !matches!(args.get(1), Some(Expr::String(_))) {
+                            // Disambiguate `Buffer.from(data, encoding?)` vs
+                            // `Buffer.from(arrayBuffer, byteOffset?, length?)`.
+                            // Encoding args are strings, byteOffset/length are
+                            // numbers. Issue #1273: previously any non-string
+                            // literal second arg routed to BufferFromArrayBuffer,
+                            // so `Buffer.from(str, encVar)` produced an empty
+                            // buffer. Now: 3+ args, or a Number-literal second
+                            // arg, or a string-literal first arg with a Number
+                            // second arg → ArrayBuffer form. Otherwise default
+                            // to BufferFrom (the runtime helper dispatches on
+                            // the actual type of `data`, and routes through
+                            // `js_encoding_tag_from_value` for runtime-string
+                            // encodings).
+                            let is_arraybuffer_form =
+                                args.len() >= 3 || matches!(args.get(1), Some(Expr::Number(_)));
+                            if args.len() >= 2 && is_arraybuffer_form {
                                 let byte_offset = args.get(1).cloned().unwrap_or(Expr::Number(0.0));
                                 let length = args.get(2).cloned().map(Box::new);
                                 return Ok(Ok(Expr::BufferFromArrayBuffer {

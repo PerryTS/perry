@@ -92,6 +92,12 @@
     "category": "gap-bisect",
     "reason": "Array method coverage probe \u2014 small divergences (flat/flatMap/finally specific edge cases). Targeted bisect needed; not a recent regression. File a tracking issue once a specific sub-case is pinned."
   },
+  "test_gap_console_methods": {
+    "issue": "1278",
+    "added": "2026-05-21",
+    "category": "gap-categorical",
+    "reason": "#1278: console.trace / Error.stack frame format diverges from Node (Perry prints native frame addresses like `0: __mh_execute_header` instead of `at <fn> (file:///…:line:col)`). Requires source-position retention through HIR/transform + native-frame → TS-source mapping. The other two divergences in this fixture (#1276 spurious `Values` column on array-of-arrays, #1277 timer ms numbers) are not gating: #1276 was fixed in v0.5.1019+; #1277 is a misdiagnosis — Perry's `Instant::now()` is correct and the apparent 1000× gap is just AOT-vs-interpreted speedup on the trivial loop workload. Flips to PASS when #1278 lands."
+  },
   "test_gap_class_advanced": {
     "issue": null,
     "added": "2026-05-17",

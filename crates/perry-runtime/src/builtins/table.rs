@@ -388,10 +388,12 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
 
                 render_table(&headers, &rows);
             } else if has_array {
-                // Mixed array / array-of-arrays: numeric columns for nested
-                // arrays plus a Values column for primitive rows, matching
-                // Node's console.table([Symbol(), 5, [10]]) shape.
+                // Array of arrays (or mixed array / primitive). Issue #1276:
+                // Node skips the "Values" column entirely when *every* row is
+                // an array — only mixed cases (e.g. `[Symbol(), 5, [10]]`)
+                // get the trailing Values column for the non-array rows.
                 let mut max_len = 0usize;
+                let mut all_arrays = true;
                 for i in 0..length {
                     let elem = *data_ptr.add(i);
                     let elem_jsval = JSValue::from_bits(elem.to_bits());
@@ -401,15 +403,20 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                         if l > max_len {
                             max_len = l;
                         }
+                    } else {
+                        all_arrays = false;
                     }
                 }
 
+                let include_values_col = !all_arrays;
                 let mut headers: Vec<String> = Vec::with_capacity(2 + max_len);
                 headers.push("(index)".to_string());
                 for j in 0..max_len {
                     headers.push(j.to_string());
                 }
-                headers.push("Values".to_string());
+                if include_values_col {
+                    headers.push("Values".to_string());
+                }
 
                 let mut rows: Vec<Vec<String>> = Vec::with_capacity(length);
                 for i in 0..length {
@@ -431,7 +438,9 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                                 row.push("".to_string());
                             }
                         }
-                        row.push("".to_string());
+                        if include_values_col {
+                            row.push("".to_string());
+                        }
                     } else {
                         for _ in 0..max_len {
                             row.push("".to_string());

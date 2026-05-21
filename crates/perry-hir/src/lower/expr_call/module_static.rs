@@ -983,7 +983,11 @@ pub(super) fn try_module_static_methods(
                     match method_name {
                         "from" => {
                             let data = args.first().cloned().unwrap_or(Expr::Undefined);
-                            if args.len() >= 2 && !matches!(args.get(1), Some(Expr::String(_))) {
+                            // See native_module.rs for the disambiguation rule
+                            // — issue #1273.
+                            let is_arraybuffer_form =
+                                args.len() >= 3 || matches!(args.get(1), Some(Expr::Number(_)));
+                            if args.len() >= 2 && is_arraybuffer_form {
                                 let byte_offset = args.get(1).cloned().unwrap_or(Expr::Number(0.0));
                                 let length = args.get(2).cloned().map(Box::new);
                                 return Ok(Ok(Expr::BufferFromArrayBuffer {
