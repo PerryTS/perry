@@ -877,7 +877,10 @@ fn discard_pure_expr(expr: &perry_hir::Expr, param_id: perry_types::LocalId) -> 
         | perry_hir::Expr::String(_)
         | perry_hir::Expr::WtfString(_) => true,
         perry_hir::Expr::LocalGet(id) => *id == param_id,
-        perry_hir::Expr::PropertyGet { object, .. } => discard_pure_expr(object, param_id),
+        // PropertyGet is deliberately *not* in the pure set: TypeScript
+        // `get` accessors can run user code, so eliding the map body
+        // would drop visible side effects. The intended target of this
+        // optimization is the anonymous-shape `Expr::New` arm below.
         perry_hir::Expr::New { class_name, args, .. } if class_name.starts_with("__AnonShape_") => {
             args.iter().all(|arg| discard_pure_expr(arg, param_id))
         }
