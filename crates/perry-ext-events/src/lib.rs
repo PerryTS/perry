@@ -21,8 +21,9 @@
 
 use perry_ffi::{
     gc_register_mutable_root_scanner, get_handle_mut, iter_handles_of_mut, js_array_alloc,
-    js_array_push, nanbox_string_bits, read_string, register_handle, ArrayHeader, GcRootVisitor,
-    Handle, JsClosure, JsPromise, JsString, JsValue, Promise, RawClosureHeader, StringHeader,
+    js_array_get, js_array_push, nanbox_string_bits, read_string, register_handle, ArrayHeader,
+    GcRootVisitor, Handle, JsClosure, JsPromise, JsString, JsValue, Promise, RawClosureHeader,
+    StringHeader,
 };
 use std::collections::HashMap;
 
@@ -267,39 +268,67 @@ pub unsafe extern "C" fn js_event_emitter_prepend_once_listener(
     handle
 }
 
+/// Read `args_ptr[0]` or return NaN-boxed `undefined` when args is
+/// null or empty. Mirrors `first_arg_or_undefined` in
+/// `perry-stdlib::events` so both implementations of
+/// `js_event_emitter_emit` use the same shape.
+unsafe fn first_arg_or_undefined(args_ptr: *const ArrayHeader) -> f64 {
+    if args_ptr.is_null() || (*args_ptr).length == 0 {
+        return f64::from_bits(JsValue::UNDEFINED.bits());
+    }
+    f64::from_bits(js_array_get(args_ptr, 0).bits())
+}
+
 /// Drain pending `events.once` promises for `event_name` on the given
-/// emitter, resolving each with a single-element array `[arg]` (or
-/// `[]` if `has_arg = false`).
+/// emitter, resolving each with the full args array passed to `emit`.
+///
+/// Pre-#1186 we synthesized a fresh 1-element `[arg]` array because
+/// `emit` only received a single `f64` arg. Post-#1186 the codegen
+/// passes the full variadic args as `*mut ArrayHeader` (`NA_VARARGS`),
+/// so we resolve each Promise with that array directly — matches
+/// `perry-stdlib::events::drain_pending_once_promises` and Node's
+/// `events.once` semantics where the resolution value is the full args
+/// tuple.
 unsafe fn drain_pending_once_promises(
     emitter: &mut EventEmitterHandle,
     event_name: &str,
-    arg: f64,
-    has_arg: bool,
+    args_ptr: *mut ArrayHeader,
 ) {
     let pending = match emitter.pending_once_promises.remove(event_name) {
         Some(v) => v,
         None => return,
     };
+    let arr = if args_ptr.is_null() {
+        js_array_alloc(0)
+    } else {
+        args_ptr
+    };
+    let boxed_arr = JsValue::from_object_ptr(arr);
+    let bits = boxed_arr.bits();
     for promise_ptr in pending {
         if promise_ptr.is_null() {
             continue;
         }
-        let arr = js_array_alloc(1);
-        let arr = if has_arg {
-            js_array_push(arr, JsValue::from_bits(arg.to_bits()))
-        } else {
-            arr
-        };
-        let boxed_arr = JsValue::from_object_ptr(arr);
         // Synchronous resolve — see the comment on the extern at the
         // top of this file for why we bypass `JsPromise::resolve`.
-        let bits = boxed_arr.bits();
         js_promise_resolve(promise_ptr, f64::from_bits(bits));
     }
 }
 
-/// `emitter.emit(eventName, arg)` — fire `arg` to every listener.
-/// Returns true if any listeners ran.
+/// `emitter.emit(eventName, ...args)` — fire variadic `args` to every
+/// listener (and to any pending `events.once` Promise for the event).
+///
+/// Signature must match `perry-stdlib::events::js_event_emitter_emit`
+/// because `perry-codegen`'s native_table lowers `emit` calls via
+/// `NA_VARARGS` (single `*mut ArrayHeader` ABI slot) and `NR_F64`
+/// return. Pre-#1186 perry-ext-events still used the legacy
+/// `(handle, name, arg: f64) -> bool` ABI; codegen then mis-passed the
+/// args-array pointer as `arg: f64`, which the listener interpreted as
+/// `NaN` because the high pointer bits set the NaN-box quiet tag —
+/// see issue #1274.
+///
+/// Returns `TAG_TRUE` / `TAG_FALSE` (NaN-boxed booleans) so
+/// `had_listeners` round-trips through codegen's f64 ABI.
 ///
 /// # Safety
 ///
@@ -308,10 +337,12 @@ unsafe fn drain_pending_once_promises(
 pub unsafe extern "C" fn js_event_emitter_emit(
     handle: Handle,
     event_name_ptr: *const StringHeader,
-    arg: f64,
-) -> bool {
+    args_ptr: *mut ArrayHeader,
+) -> f64 {
+    const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
+    const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
     let Some(event_name) = read_str(event_name_ptr) else {
-        return false;
+        return TAG_FALSE_F64;
     };
     let mut had_listeners = false;
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
@@ -329,19 +360,28 @@ pub unsafe extern "C" fn js_event_emitter_emit(
             }
         }
 
-        drain_pending_once_promises(emitter, &event_name, arg, true);
+        drain_pending_once_promises(emitter, &event_name, args_ptr);
 
+        let first_arg = first_arg_or_undefined(args_ptr);
         for l in snapshot {
             if l.callback != 0 {
                 let closure = JsClosure::from_raw(l.callback as *const RawClosureHeader);
-                let _ = closure.call1(arg);
+                let _ = closure.call1(first_arg);
             }
         }
     }
-    had_listeners
+    if had_listeners {
+        TAG_TRUE_F64
+    } else {
+        TAG_FALSE_F64
+    }
 }
 
 /// `emitter.emit(eventName)` — no-args variant.
+///
+/// Same return-type contract as `js_event_emitter_emit`: returns a
+/// NaN-boxed boolean (`TAG_TRUE` / `TAG_FALSE`) so callers see the
+/// same shape regardless of which path they hit.
 ///
 /// # Safety
 ///
@@ -350,9 +390,11 @@ pub unsafe extern "C" fn js_event_emitter_emit(
 pub unsafe extern "C" fn js_event_emitter_emit0(
     handle: Handle,
     event_name_ptr: *const StringHeader,
-) -> bool {
+) -> f64 {
+    const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
+    const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
     let Some(event_name) = read_str(event_name_ptr) else {
-        return false;
+        return TAG_FALSE_F64;
     };
     let mut had_listeners = false;
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
@@ -370,12 +412,8 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
             }
         }
 
-        drain_pending_once_promises(
-            emitter,
-            &event_name,
-            f64::from_bits(0x7FFC_0000_0000_0001),
-            false,
-        );
+        let empty_args = js_array_alloc(0);
+        drain_pending_once_promises(emitter, &event_name, empty_args);
 
         for l in snapshot {
             if l.callback != 0 {
@@ -384,7 +422,11 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
             }
         }
     }
-    had_listeners
+    if had_listeners {
+        TAG_TRUE_F64
+    } else {
+        TAG_FALSE_F64
+    }
 }
 
 /// `emitter.removeListener(event, listener)`. Removes the first
