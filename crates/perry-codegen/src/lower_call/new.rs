@@ -788,6 +788,30 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         }
     }
 
+    if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
+        let (typed_slot_count, typed_mask_words) =
+            crate::typed_shape::class_typed_layout(ctx.classes, class_name);
+        let slot_count_str = typed_slot_count.to_string();
+        let mask_word_count_str = typed_mask_words.len().to_string();
+        let mask_ref = if typed_mask_words.is_empty() {
+            "null".to_string()
+        } else {
+            format!(
+                "@{}",
+                crate::typed_shape::mask_global_name_from_keys_global(&keys_global_name)
+            )
+        };
+        ctx.block().call_void(
+            "js_gc_init_typed_shape_layout",
+            &[
+                (I64, &obj_handle),
+                (I32, &slot_count_str),
+                (PTR, &mask_ref),
+                (I32, &mask_word_count_str),
+            ],
+        );
+    }
+
     ctx.this_stack.pop();
     ctx.class_stack.pop();
     Ok(obj_box)

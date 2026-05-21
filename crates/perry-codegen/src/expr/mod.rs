@@ -53,8 +53,10 @@ pub(crate) use channel::{
     variant_name, ChannelReduction,
 };
 pub(crate) use helpers::{
-    buffer_alias_metadata_suffix, is_global_this_builtin_function_name,
-    is_global_this_builtin_name, lower_js_args_array, proxy_build_args_array, unbox_str_handle,
+    array_store_needs_layout_note, buffer_alias_metadata_suffix,
+    expr_has_numeric_pointer_free_array_layout, is_global_this_builtin_function_name,
+    is_global_this_builtin_name, lower_expr_with_expected_type, lower_js_args_array,
+    proxy_build_args_array, type_has_numeric_pointer_free_array_layout, unbox_str_handle,
     unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{

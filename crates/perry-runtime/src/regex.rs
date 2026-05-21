@@ -356,6 +356,7 @@ pub extern "C" fn js_string_match(
                     let str_ptr = js_string_from_str(m);
                     let nanboxed = js_nanbox_string(str_ptr as i64);
                     std::ptr::write(elements_ptr.add(i), nanboxed);
+                    crate::array::note_array_slot(arr, i, nanboxed.to_bits());
                 }
                 return arr;
             } else {
@@ -372,11 +373,11 @@ pub extern "C" fn js_string_match(
                                 let str_ptr = js_string_from_str(m.as_str());
                                 let nanboxed = js_nanbox_string(str_ptr as i64);
                                 std::ptr::write(elements_ptr.add(i), nanboxed);
+                                crate::array::note_array_slot(arr, i, nanboxed.to_bits());
                             } else {
-                                std::ptr::write(
-                                    elements_ptr.add(i),
-                                    f64::from_bits(0x7FFC_0000_0000_0001),
-                                );
+                                let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
+                                std::ptr::write(elements_ptr.add(i), undefined);
+                                crate::array::note_array_slot(arr, i, undefined.to_bits());
                             }
                         }
                         LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
@@ -407,6 +408,7 @@ pub extern "C" fn js_string_match(
                 let str_ptr = js_string_from_str(m);
                 let nanboxed = js_nanbox_string(str_ptr as i64);
                 std::ptr::write(elements_ptr.add(i), nanboxed);
+                crate::array::note_array_slot(arr, i, nanboxed.to_bits());
             }
 
             arr
@@ -425,12 +427,12 @@ pub extern "C" fn js_string_match(
                             let str_ptr = js_string_from_str(m.as_str());
                             let nanboxed = js_nanbox_string(str_ptr as i64);
                             std::ptr::write(elements_ptr.add(i), nanboxed);
+                            crate::array::note_array_slot(arr, i, nanboxed.to_bits());
                         } else {
                             // Undefined capture group - store as undefined (TAG_UNDEFINED = 0x7FFC_0000_0000_0001)
-                            std::ptr::write(
-                                elements_ptr.add(i),
-                                f64::from_bits(0x7FFC_0000_0000_0001),
-                            );
+                            let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
+                            std::ptr::write(elements_ptr.add(i), undefined);
+                            crate::array::note_array_slot(arr, i, undefined.to_bits());
                         }
                     }
 
@@ -531,9 +533,12 @@ pub extern "C" fn js_string_match_all(
                     let str_ptr = js_string_from_str(m.as_str());
                     let nanboxed = js_nanbox_string(str_ptr as i64);
                     std::ptr::write(inner_elements.add(j), nanboxed);
+                    crate::array::note_array_slot(inner, j, nanboxed.to_bits());
                 } else {
                     // Undefined capture group
-                    std::ptr::write(inner_elements.add(j), f64::from_bits(0x7FFC_0000_0000_0001));
+                    let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
+                    std::ptr::write(inner_elements.add(j), undefined);
+                    crate::array::note_array_slot(inner, j, undefined.to_bits());
                 }
             }
 
@@ -542,10 +547,9 @@ pub extern "C" fn js_string_match_all(
             // double whose bits happen to alias the heap pointer; the codegen
             // IndexGet path then reads `arr[i]` as a plain number and crashes
             // when iterating with `for (const m of arr) m[1]`.
-            std::ptr::write(
-                outer_elements.add(i),
-                crate::value::js_nanbox_pointer(inner as i64),
-            );
+            let inner_boxed = crate::value::js_nanbox_pointer(inner as i64);
+            std::ptr::write(outer_elements.add(i), inner_boxed);
+            crate::array::note_array_slot(outer, i, inner_boxed.to_bits());
         }
 
         outer
@@ -687,6 +691,7 @@ pub extern "C" fn js_string_split_regex_n(
             let str_ptr = js_string_from_str(str_data) as u64;
             let nanboxed = STRING_TAG | (str_ptr & POINTER_MASK);
             std::ptr::write(elements_ptr, f64::from_bits(nanboxed));
+            crate::array::note_array_slot(arr, 0, nanboxed);
         }
         return arr;
     }
@@ -706,6 +711,7 @@ pub extern "C" fn js_string_split_regex_n(
             let str_ptr = js_string_from_str(part) as u64;
             let nanboxed = STRING_TAG | (str_ptr & POINTER_MASK);
             std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
+            crate::array::note_array_slot(arr, i, nanboxed);
         }
         arr
     }
@@ -813,6 +819,11 @@ pub extern "C" fn js_regexp_exec(
                     *elements = f64::from_bits(
                         crate::value::STRING_TAG | (match_ptr as u64 & crate::value::POINTER_MASK),
                     );
+                    crate::array::note_array_slot(
+                        arr,
+                        0,
+                        crate::value::STRING_TAG | (match_ptr as u64 & crate::value::POINTER_MASK),
+                    );
                     if global {
                         (*re).last_index = (match_char_offset + match_str.chars().count()) as u32;
                     }
@@ -858,8 +869,11 @@ pub extern "C" fn js_regexp_exec(
                         let str_ptr = js_string_from_str(m.as_str());
                         let nanboxed = js_nanbox_string(str_ptr as i64);
                         std::ptr::write(elements_ptr.add(i), nanboxed);
+                        crate::array::note_array_slot(arr, i, nanboxed.to_bits());
                     } else {
-                        std::ptr::write(elements_ptr.add(i), f64::from_bits(TAG_UNDEFINED));
+                        let undefined = f64::from_bits(TAG_UNDEFINED);
+                        std::ptr::write(elements_ptr.add(i), undefined);
+                        crate::array::note_array_slot(arr, i, TAG_UNDEFINED);
                     }
                 }
 

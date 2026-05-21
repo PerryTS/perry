@@ -55,6 +55,7 @@ tests/test-*
 !tests/test-*.ts
 !tests/test_*.sh
 !tests/test-*.sh
+!tests/test_copied_minor_fallback_report.py
 !tests/*/
 bench_*
 !bench_*.ts

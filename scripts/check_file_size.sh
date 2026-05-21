@@ -21,8 +21,11 @@
 #   - test fixture binaries under tests/modules/
 #
 # Allowlisted (real source, refactor in progress, tracked separately):
-#   - crates/perry-runtime/src/gc.rs — owner-tracked refactor in flight;
-#     re-evaluate once that lands.
+#   - crates/perry-runtime/src/gc/tests.rs — left behind by the gc.rs
+#     split in the #1090 GC architecture checkpoint. The companion
+#     production files in `gc/` (mod.rs, copying.rs, oldgen.rs, etc.)
+#     all stayed under 2k; only the test fixture remained big.
+#     Re-evaluate once the GC owner peels it apart.
 #
 set -euo pipefail
 
@@ -30,7 +33,7 @@ THRESHOLD="${PERRY_FILE_SIZE_THRESHOLD:-5000}"
 
 # Allowlist (one file per line; blank lines + `#` comments OK).
 ALLOWLIST=$(cat <<'EOF'
-crates/perry-runtime/src/gc.rs
+crates/perry-runtime/src/gc/tests.rs
 EOF
 )
 

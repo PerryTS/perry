@@ -505,6 +505,7 @@ pub extern "C" fn js_set_to_array(set: *const SetHeader) -> *mut crate::array::A
                 as *mut f64;
             ptr::copy_nonoverlapping(src, dst, size);
             (*result).length = size as u32;
+            crate::array::rebuild_array_layout_exact(result);
         }
         result
     }

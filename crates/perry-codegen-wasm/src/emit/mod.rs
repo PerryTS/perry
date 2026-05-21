@@ -1301,6 +1301,14 @@ impl WasmModuleEmitter {
                     module_async_entries.push((func.id, async_import_idx));
                     self.func_name_map
                         .insert(func.name.clone(), async_import_idx);
+                    // Record the param count so optional-arg padding at call sites
+                    // (expr.rs Expr::Call → FuncRef/ExternFuncRef) works for async
+                    // imports too. Without this, `await foo(a, b)` where foo is
+                    // declared as `async function foo(a, b, c?)` emits only two
+                    // i64 pushes before the call, while the import is declared as
+                    // `(i64, i64, i64) -> i64`. Validator fails with
+                    // "expected i64 but nothing on stack" (#1081 sibling instance).
+                    self.func_param_counts.insert(async_import_idx, param_count);
                     self.async_func_imports.push((
                         func.name.clone(),
                         async_import_idx,
@@ -1921,7 +1929,15 @@ impl WasmModuleEmitter {
                     code_section.function(&func);
                 }
                 for method in &class.static_methods {
-                    let func = self.compile_function(method);
+                    // Static methods are declared as `(params) -> i64` in
+                    // func_section (mod.rs:1701) unconditionally, so the
+                    // body emitter must also assume i64-returning regardless
+                    // of whether the body has an explicit `Stmt::Return`.
+                    // Otherwise a static method that only throws (or only
+                    // falls through) produces a WASM body whose `return`
+                    // instructions leave an empty operand stack — V8 rejects
+                    // with "expected i64 but nothing on stack".
+                    let func = self.compile_function_with_signature(method, true);
                     code_section.function(&func);
                 }
                 for (_name, getter) in &class.getters {

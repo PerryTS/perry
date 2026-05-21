@@ -11,6 +11,23 @@ use super::*;
 
 impl WasmModuleEmitter {
     pub(super) fn compile_function(&self, hir_func: &perry_hir::ir::Function) -> Function {
+        self.compile_function_with_signature(hir_func, /*force_returning=*/ false)
+    }
+
+    /// Same as `compile_function` but allows the caller to force `wasm_returns_i64 = true`.
+    ///
+    /// Class static methods need this: the type-section pass at func_section
+    /// emits their type as `(params) -> i64` unconditionally (mod.rs:1701),
+    /// but the body-based `body.iter().any(has_return)` heuristic returns
+    /// false for static methods that only `throw` (no explicit return). The
+    /// mismatch produced a `return` instruction with an empty operand stack
+    /// inside the compiled body — V8 rejected the WASM with
+    /// "expected i64 but nothing on stack" (#1081 sibling instance).
+    pub(super) fn compile_function_with_signature(
+        &self,
+        hir_func: &perry_hir::ir::Function,
+        force_returning: bool,
+    ) -> Function {
         // Build local map: param locals come first, then body locals
         let mut local_map = BTreeMap::new();
         for (i, param) in hir_func.params.iter().enumerate() {
@@ -33,8 +50,11 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
 
         // Must match func_section: `main` is always emitted as `()->i64` even when the body has no
-        // `return` statement (HIR doesn't guarantee tail-return lowering yet).
-        let wasm_returns_i64 = hir_func.body.iter().any(has_return) || hir_func.name == "main";
+        // `return` statement (HIR doesn't guarantee tail-return lowering yet). Class static
+        // methods get `force_returning=true` because func_section also declares them as `-> i64`
+        // unconditionally — see compile_function_with_signature's doc-comment.
+        let wasm_returns_i64 =
+            force_returning || hir_func.body.iter().any(has_return) || hir_func.name == "main";
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
 
         for stmt in &hir_func.body {
@@ -165,14 +185,22 @@ impl WasmModuleEmitter {
             }
         }
 
-        // Emit constructor body
+        // Emit constructor body.
+        //
+        // Constructors are declared in func_section as `(this, ...params) -> i64`
+        // unconditionally (see mod.rs around line 1688). Pass `in_returning_func=true`
+        // so that any explicit `return;` / `return expr;` inside the constructor
+        // body properly leaves an i64 on the operand stack before the WASM `return`
+        // instruction. Without this, an early `return` produced a bare `return`
+        // with empty stack, failing V8 validation with
+        // "expected i64 but nothing on stack" (#1081 sibling instance, constructor case).
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.current_class = Some(class.name.clone());
         for stmt in &ctor.body {
-            ctx.emit_stmt(&mut func, stmt, false);
+            ctx.emit_stmt(&mut func, stmt, true);
         }
 
-        // Return this
+        // Fallthrough: return `this` as the constructor's result.
         func.instruction(&Instruction::LocalGet(0));
         func.instruction(&Instruction::End);
         func

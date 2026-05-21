@@ -3,11 +3,240 @@
 
 use anyhow::Result;
 use perry_hir::Expr;
+use perry_types::Type as HirType;
 
 use super::{lower_expr, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::POINTER_MASK_I64;
-use crate::type_analysis::compute_auto_captures;
+use crate::type_analysis::{compute_auto_captures, is_numeric_expr};
 use crate::types::{DOUBLE, I32, I64, PTR};
+
+fn expected_interface_property_type(
+    ctx: &FnCtx<'_>,
+    iface: &perry_hir::Interface,
+    key: &str,
+    depth: usize,
+) -> Option<HirType> {
+    if let Some(prop) = iface.properties.iter().find(|prop| prop.name == key) {
+        return Some(prop.ty.clone());
+    }
+    if iface.methods.iter().any(|method| method.name == key) {
+        return Some(HirType::Any);
+    }
+    for ext in &iface.extends {
+        if let Some(ty) = expected_object_property_type(ctx, ext, key, depth + 1) {
+            return Some(ty);
+        }
+    }
+    None
+}
+
+fn expected_class_property_type(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    key: &str,
+    depth: usize,
+) -> Option<HirType> {
+    if depth > 32 {
+        return None;
+    }
+    let class = ctx.classes.get(class_name).copied()?;
+    if let Some(field) = class
+        .fields
+        .iter()
+        .find(|field| field.key_expr.is_none() && field.name == key)
+    {
+        return Some(field.ty.clone());
+    }
+    class
+        .extends_name
+        .as_deref()
+        .and_then(|parent| expected_class_property_type(ctx, parent, key, depth + 1))
+}
+
+fn expected_object_property_type(
+    ctx: &FnCtx<'_>,
+    ty: &HirType,
+    key: &str,
+    depth: usize,
+) -> Option<HirType> {
+    if depth > 32 {
+        return None;
+    }
+    match ty {
+        HirType::Object(obj) => {
+            if obj.index_signature.is_some() {
+                return None;
+            }
+            obj.properties.get(key).map(|prop| prop.ty.clone())
+        }
+        HirType::Named(name) => {
+            if let Some(alias) = ctx.type_aliases.get(name) {
+                if let Some(ty) = expected_object_property_type(ctx, alias, key, depth + 1) {
+                    return Some(ty);
+                }
+            }
+            if let Some(iface) = ctx.interfaces.get(name) {
+                return expected_interface_property_type(ctx, iface, key, depth + 1);
+            }
+            expected_class_property_type(ctx, name, key, depth + 1)
+        }
+        _ => None,
+    }
+}
+
+fn typed_object_literal_layout(
+    ctx: &FnCtx<'_>,
+    props: &[(String, Expr)],
+    expected_ty: Option<&HirType>,
+) -> Option<(u32, Vec<u64>)> {
+    let expected_ty = expected_ty?;
+    let mut words = Vec::new();
+    for (slot, (key, _)) in props.iter().enumerate() {
+        let prop_ty = expected_object_property_type(ctx, expected_ty, key, 0)?;
+        if crate::typed_shape::type_is_pointer_bearing(&prop_ty) {
+            let word = slot / 64;
+            if words.len() <= word {
+                words.resize(word + 1, 0);
+            }
+            words[word] |= 1u64 << (slot % 64);
+        }
+    }
+    Some((
+        props.len() as u32,
+        crate::typed_shape::trim_mask_words(words),
+    ))
+}
+
+fn unboxed_object_fields_enabled() -> bool {
+    matches!(
+        std::env::var("PERRY_UNBOXED_OBJECT_FIELDS").as_deref(),
+        Ok("1")
+    )
+}
+
+fn is_number_type(ty: &HirType) -> bool {
+    matches!(ty, HirType::Number)
+}
+
+fn object_type_is_exact_xy_number(ty: &perry_types::ObjectType) -> bool {
+    ty.index_signature.is_none()
+        && ty.properties.len() == 2
+        && ty
+            .properties
+            .get("x")
+            .map(|prop| is_number_type(&prop.ty))
+            .unwrap_or(false)
+        && ty
+            .properties
+            .get("y")
+            .map(|prop| is_number_type(&prop.ty))
+            .unwrap_or(false)
+}
+
+fn interface_is_exact_xy_number(iface: &perry_hir::Interface) -> bool {
+    iface.extends.is_empty()
+        && iface.methods.is_empty()
+        && iface.properties.len() == 2
+        && iface
+            .properties
+            .iter()
+            .any(|prop| prop.name == "x" && is_number_type(&prop.ty))
+        && iface
+            .properties
+            .iter()
+            .any(|prop| prop.name == "y" && is_number_type(&prop.ty))
+}
+
+fn expected_type_is_exact_xy_number(ctx: &FnCtx<'_>, expected_ty: &HirType, depth: usize) -> bool {
+    if depth > 32 {
+        return false;
+    }
+    match expected_ty {
+        HirType::Object(obj) => object_type_is_exact_xy_number(obj),
+        HirType::Named(name) => {
+            if let Some(alias) = ctx.type_aliases.get(name) {
+                if expected_type_is_exact_xy_number(ctx, alias, depth + 1) {
+                    return true;
+                }
+            }
+            ctx.interfaces
+                .get(name)
+                .map(interface_is_exact_xy_number)
+                .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+fn unboxed_xy_object_literal(
+    ctx: &FnCtx<'_>,
+    props: &[(String, Expr)],
+    expected_ty: Option<&HirType>,
+) -> bool {
+    if !unboxed_object_fields_enabled() {
+        return false;
+    }
+    if props.len() != 2 || props[0].0 != "x" || props[1].0 != "y" {
+        return false;
+    }
+    let Some(expected_ty) = expected_ty else {
+        return false;
+    };
+    expected_type_is_exact_xy_number(ctx, expected_ty, 0)
+        && props
+            .iter()
+            .all(|(_, value_expr)| is_numeric_expr(ctx, value_expr))
+}
+
+fn emit_object_typed_shape_init(
+    ctx: &mut FnCtx<'_>,
+    obj_handle: &str,
+    slot_count: u32,
+    mask_words: &[u64],
+) {
+    let slot_count_str = slot_count.to_string();
+    let mask_word_count_str = mask_words.len().to_string();
+    let mask_ref = if mask_words.is_empty() {
+        "null".to_string()
+    } else {
+        let site_id = ctx.ic_site_counter;
+        ctx.ic_site_counter += 1;
+        let prefix = ctx.strings.module_prefix().to_string();
+        let global_name = if prefix.is_empty() {
+            format!("perry_typed_obj_shape_mask_{}", site_id)
+        } else {
+            format!("perry_typed_obj_shape_mask_{}__{}", prefix, site_id)
+        };
+        let words = mask_words
+            .iter()
+            .map(|word| format!("i64 {}", word))
+            .collect::<Vec<_>>()
+            .join(", ");
+        ctx.typed_parse_rodata.push(format!(
+            "@{} = private unnamed_addr constant [{} x i64] [{}]",
+            global_name,
+            mask_words.len(),
+            words
+        ));
+        format!("@{}", global_name)
+    };
+    ctx.block().call_void(
+        "js_gc_init_typed_shape_layout",
+        &[
+            (I64, obj_handle),
+            (I32, &slot_count_str),
+            (PTR, &mask_ref),
+            (I32, &mask_word_count_str),
+        ],
+    );
+}
+
+fn emit_unboxed_object_layout_init(ctx: &mut FnCtx<'_>, obj_handle: &str) {
+    ctx.block().call_void(
+        "js_gc_init_unboxed_object_layout",
+        &[(I64, obj_handle), (I32, "2"), (I64, "3"), (I64, "0")],
+    );
+}
 
 /// Lower an object literal `{ k1: v1, k2: v2, … }`.
 ///
@@ -32,10 +261,12 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 pub(crate) fn lower_object_literal(
     ctx: &mut FnCtx<'_>,
     props: &[(String, Expr)],
+    expected_ty: Option<&HirType>,
 ) -> Result<String> {
     let field_count = props.len() as u32;
     let zero_str = "0".to_string();
     let n_str = field_count.to_string();
+    let typed_layout = typed_object_literal_layout(ctx, props, expected_ty);
 
     // Fast path: no closure-with-`this` props. Use the shape-cache allocator
     // and write fields by INDEX — this skips the per-field linear key-search
@@ -54,6 +285,50 @@ pub(crate) fn lower_object_literal(
             }
         )
     });
+
+    if !any_method_closure && unboxed_xy_object_literal(ctx, props, expected_ty) {
+        let mut packed_keys = String::new();
+        for (k, _) in props {
+            packed_keys.push_str(k);
+            packed_keys.push('\0');
+        }
+        let keys_idx = ctx.strings.intern(&packed_keys);
+        let keys_entry = ctx.strings.entry(keys_idx);
+        let keys_global = format!("@{}", keys_entry.bytes_global);
+        let keys_len_str = keys_entry.byte_len.to_string();
+
+        let mut shape_id: u32 = 0x811c9dc5;
+        for b in packed_keys.as_bytes() {
+            shape_id ^= *b as u32;
+            shape_id = shape_id.wrapping_mul(0x01000193);
+        }
+        if shape_id == 0 {
+            shape_id = 1;
+        }
+        let shape_id_str = shape_id.to_string();
+
+        let obj_handle = ctx.block().call(
+            I64,
+            "js_object_alloc_with_shape",
+            &[
+                (I32, &shape_id_str),
+                (I32, &n_str),
+                (PTR, &keys_global),
+                (I32, &keys_len_str),
+            ],
+        );
+
+        for (i, (_, value_expr)) in props.iter().enumerate() {
+            let v = lower_expr(ctx, value_expr)?;
+            let idx_str = i.to_string();
+            ctx.block().call_void(
+                "js_object_set_unboxed_f64_field",
+                &[(I64, &obj_handle), (I32, &idx_str), (DOUBLE, &v)],
+            );
+        }
+        emit_unboxed_object_layout_init(ctx, &obj_handle);
+        return Ok(nanbox_pointer_inline(ctx.block(), &obj_handle));
+    }
 
     if !any_method_closure && field_count > 0 {
         // Build packed keys "k1\0k2\0…" interned in the StringPool (shared
@@ -116,6 +391,9 @@ pub(crate) fn lower_object_literal(
                 "js_object_set_field",
                 &[(I64, &obj_handle), (I32, &idx_str), (I64, &v_bits)],
             );
+        }
+        if let Some((slot_count, mask_words)) = typed_layout.as_ref() {
+            emit_object_typed_shape_init(ctx, &obj_handle, *slot_count, mask_words);
         }
         return Ok(nanbox_pointer_inline(ctx.block(), &obj_handle));
     }
@@ -191,6 +469,10 @@ pub(crate) fn lower_object_literal(
                 ],
             );
         }
+    }
+
+    if let Some((slot_count, mask_words)) = typed_layout.as_ref() {
+        emit_object_typed_shape_init(ctx, &obj_handle, *slot_count, mask_words);
     }
 
     Ok(nanbox_pointer_inline(ctx.block(), &obj_handle))

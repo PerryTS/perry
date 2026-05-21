@@ -31,10 +31,10 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
-    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
-    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
-    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    array_store_needs_layout_note, buffer_alias_metadata_suffix, can_lower_expr_as_i32,
+    emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
+    emit_string_literal_global, emit_v8_export_call, emit_v8_member_method_call,
+    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
@@ -53,8 +53,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // capture (slot in the closure header), local alloca slot,
             // module-level global. The realloc-pointer write-back must
             // go to whichever storage we read from.
+            let array_expr = Expr::LocalGet(*array_id);
+            let layout_note_needed = array_store_needs_layout_note(ctx, &array_expr, value);
+            let write_barrier_needed = !is_numeric_expr(ctx, value);
             let v = lower_expr(ctx, value)?;
-            let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
+            let arr_box = lower_expr(ctx, &array_expr)?;
 
             // Fast path: local-bound, non-captured, non-boxed array.
             // This is the canonical hot shape — `out.push(...)` over a
@@ -159,7 +162,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let arr_ptr = blk.inttoptr(I64, &arr_handle);
                     blk.store(I32, &new_length, &arr_ptr);
                     let value_bits = blk.bitcast_double_to_i64(&v);
-                    emit_layout_note_slot_on_block(blk, &arr_handle, &length, &value_bits);
+                    if layout_note_needed {
+                        emit_layout_note_slot_on_block(blk, &arr_handle, &length, &value_bits);
+                    }
+                    if write_barrier_needed {
+                        emit_write_barrier_slot_on_block(
+                            blk,
+                            &arr_handle,
+                            &element_addr,
+                            &value_bits,
+                        );
+                    }
                     blk.br(&merge_label);
                 }
 

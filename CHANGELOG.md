@@ -2,6 +2,21 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1019 — deps: bump fancy-regex 0.14 → 0.18
+
+Dependabot bump in `crates/perry-runtime/Cargo.toml` (PR #1155). `fancy-regex`
+is Perry's fallback for JS regex features the `regex` crate rejects
+(lookbehind, lookahead, backreferences) — see `crates/perry-runtime/src/regex.rs`
+where `FANCY_CACHE` stores compiled patterns and `js_string_match` routes
+through `find_iter`/`captures` when a pattern lands in the fallback cache.
+
+API surface we use (`Regex::new`, `find_iter`, `captures`, `Match::as_str`,
+`Captures::{len,get}`) is unchanged across 0.14 → 0.18. New upstream features
+that could unlock more JS-regex parity later: subroutine calls `\g<1>`,
+variable-width lookbehinds at top level, `\R` general newline, `\N` non-newline,
+broader `\p{...}` aliases, and `(*FAIL)`. No code changes required to consume
+the bump.
+
 ## v0.5.1018 — ci(test.yml): gate parity + compile-smoke to tag pushes only
 
 `parity` and `compile-smoke` now run only when the workflow is triggered by a

@@ -28,6 +28,17 @@ fn buffer_layout(capacity: usize) -> Layout {
     Layout::from_size_align(total_size, 8).unwrap()
 }
 
+#[inline]
+fn buffer_payload_size(capacity: usize) -> usize {
+    std::mem::size_of::<BufferHeader>() + capacity
+}
+
+#[inline]
+fn buffer_gc_total_size(capacity: usize) -> usize {
+    let payload = buffer_payload_size(capacity);
+    (crate::gc::GC_HEADER_SIZE + payload + 7) & !7
+}
+
 /// Thread-local registry of buffer pointers for instanceof checks.
 /// Since BufferHeader has the same layout as ArrayHeader (no type_id field),
 /// we track buffer pointers separately to distinguish them from arrays.
@@ -183,6 +194,22 @@ pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
     // no HashSet insert).  Large buffers fall through to the existing malloc path.
     if capacity < SMALL_BUF_THRESHOLD {
         return buffer_alloc_small(capacity);
+    }
+    if crate::gc::is_large_object_total_size(buffer_gc_total_size(capacity as usize)) {
+        let ptr = crate::arena::arena_alloc_gc_old(
+            buffer_payload_size(capacity as usize),
+            8,
+            crate::gc::GC_TYPE_BUFFER,
+        ) as *mut BufferHeader;
+        unsafe {
+            let header =
+                (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
+            (*ptr).length = 0;
+            (*ptr).capacity = capacity;
+        }
+        register_buffer(ptr);
+        return ptr;
     }
     let layout = buffer_layout(capacity as usize);
     unsafe {
@@ -2430,6 +2457,27 @@ mod tests {
             "large buffer not in BUFFER_REGISTRY"
         );
         assert_eq!(unsafe { (*buf).capacity }, SMALL_BUF_THRESHOLD);
+    }
+
+    #[test]
+    fn large_object_buffer_alloc_uses_old_gc_header_and_stays_usable() {
+        let cap = crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32;
+        let buf = buffer_alloc(cap);
+        assert!(!buf.is_null());
+        assert!(is_registered_buffer(buf as usize));
+        assert!(crate::arena::pointer_in_old_gen(buf as usize));
+        unsafe {
+            let header =
+                (buf as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            assert_eq!((*header).obj_type, crate::gc::GC_TYPE_BUFFER);
+            assert_ne!((*header).gc_flags & crate::gc::GC_FLAG_TENURED, 0);
+            (*buf).length = cap;
+        }
+
+        js_buffer_set(buf, 0, 0x12);
+        js_buffer_set(buf, cap as i32 - 1, 0x34);
+        assert_eq!(js_buffer_get(buf, 0), 0x12);
+        assert_eq!(js_buffer_get(buf, cap as i32 - 1), 0x34);
     }
 
     #[test]

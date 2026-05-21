@@ -7,7 +7,7 @@
 use anyhow::{anyhow, bail, Result};
 use perry_hir::Stmt;
 
-use crate::expr::{lower_expr, FnCtx};
+use crate::expr::{lower_expr, lower_expr_with_expected_type, FnCtx};
 use crate::loop_purity::body_needs_asm_barrier;
 use crate::lower_conditional::lower_truthy;
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
@@ -589,9 +589,9 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // For module globals we register first, then lower init,
             // then store. Same for stack-local lets.
             if let Some(global_name) = ctx.module_globals.get(id).cloned() {
-                ctx.local_types.insert(*id, refined_ty);
+                ctx.local_types.insert(*id, refined_ty.clone());
                 if let Some(init_expr) = init {
-                    let v = lower_expr(ctx, init_expr)?;
+                    let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
                     let g_ref = format!("@{}", global_name);
                     ctx.block().store(DOUBLE, &v, &g_ref);
 
@@ -632,9 +632,10 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 // the existing box. The slot is already registered in
                 // `ctx.locals` from the prealloc pass.
                 if ctx.prealloc_boxes.contains(id) {
-                    ctx.local_types.insert(*id, refined_ty);
+                    ctx.local_types.insert(*id, refined_ty.clone());
                     if let Some(init_expr) = init {
-                        let init_val = lower_expr(ctx, init_expr)?;
+                        let init_val =
+                            lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
                         let slot_clone = ctx.locals[id].clone();
                         let blk = ctx.block();
                         let box_dbl = blk.load(DOUBLE, &slot_clone);
@@ -659,10 +660,11 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 ctx.block().store(DOUBLE, &box_as_double, &slot);
                 // Step 2: register BEFORE lowering init.
                 ctx.locals.insert(*id, slot);
-                ctx.local_types.insert(*id, refined_ty);
+                ctx.local_types.insert(*id, refined_ty.clone());
                 // Step 3: lower init and store into the box.
                 if let Some(init_expr) = init {
-                    let init_val = lower_expr(ctx, init_expr)?;
+                    let init_val =
+                        lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
                     // Read the box pointer back from the slot and
                     // js_box_set the real init value.
                     let slot_clone = ctx.locals[id].clone();
@@ -692,7 +694,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
             }
             ctx.locals.insert(*id, slot.clone());
-            ctx.local_types.insert(*id, refined_ty);
+            ctx.local_types.insert(*id, refined_ty.clone());
             // Int32 specialization (issue #48): if this local qualifies as
             // integer-valued (all writes are `| 0` / `>>> 0` / bitwise / int
             // literal / ++/--), allocate a parallel i32 slot. Update/LocalSet
@@ -815,7 +817,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                     false
                 };
                 let v = if !used_i32_init {
-                    let v = lower_expr(ctx, init_expr)?;
+                    let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
                     // String aliasing fix: `let y = x` (init is `LocalGet`
                     // of a string-typed local) shares the same heap
                     // pointer between `y` and `x`. A later

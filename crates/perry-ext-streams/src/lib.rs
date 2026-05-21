@@ -51,9 +51,10 @@
 
 use lazy_static::lazy_static;
 use perry_ffi::{
-    alloc_buffer, alloc_string, build_object_shape, gc_register_root_scanner, js_array_alloc,
-    js_array_push, js_object_alloc_with_shape, js_object_set_field, ArrayHeader, BufferHeader,
-    JsClosure, JsValue, ObjectHeader, Promise, RawClosureHeader, StringHeader,
+    alloc_buffer, alloc_string, build_object_shape, gc_register_mutable_root_scanner,
+    js_array_alloc, js_array_push, js_object_alloc_with_shape, js_object_set_field, ArrayHeader,
+    BufferHeader, GcRootVisitor, JsClosure, JsValue, ObjectHeader, Promise, RawClosureHeader,
+    StringHeader,
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, Once};
@@ -69,7 +70,10 @@ const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+#[cfg(test)]
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+#[cfg(test)]
+const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 // Runtime exit points used by the deferred-feature stubs. perry-ffi
@@ -205,78 +209,65 @@ static GC_REGISTERED: Once = Once::new();
 /// shape as perry-ext-events / perry-ext-http.
 fn ensure_gc_registered() {
     GC_REGISTERED.call_once(|| {
-        gc_register_root_scanner(scan_stream_roots);
+        gc_register_mutable_root_scanner(scan_stream_roots);
     });
 }
 
-fn scan_stream_roots(mark: &mut dyn FnMut(f64)) {
-    let mark_cb = |cb: i64, mark: &mut dyn FnMut(f64)| {
-        if cb != 0 {
-            let boxed = f64::from_bits(POINTER_TAG | (cb as u64 & POINTER_MASK));
-            mark(boxed);
-        }
-    };
-    let mark_promise = |p: *mut Promise, mark: &mut dyn FnMut(f64)| {
-        let raw = p as i64;
-        if raw != 0 {
-            let boxed = f64::from_bits(POINTER_TAG | (raw as u64 & POINTER_MASK));
-            mark(boxed);
-        }
-    };
-    let mark_chunk = |bits: u64, mark: &mut dyn FnMut(f64)| {
-        let top = bits >> 48;
+fn scan_stream_roots(visitor: &mut GcRootVisitor<'_>) {
+    let visit_chunk = |bits: &mut u64, visitor: &mut GcRootVisitor<'_>| {
+        let top = *bits >> 48;
         if top == 0x7FFD || top == 0x7FFF {
-            mark(f64::from_bits(bits));
+            visitor.visit_nanbox_u64_slot(bits);
         }
     };
 
-    if let Ok(map) = READABLE_STREAMS.lock() {
-        for s in map.values() {
-            mark_cb(s.start_cb, mark);
-            mark_cb(s.pull_cb, mark);
-            mark_cb(s.cancel_cb, mark);
-            for &c in s.chunks.iter() {
-                mark_chunk(c, mark);
+    if let Ok(mut map) = READABLE_STREAMS.lock() {
+        for s in map.values_mut() {
+            visitor.visit_i64_slot(&mut s.start_cb);
+            visitor.visit_i64_slot(&mut s.pull_cb);
+            visitor.visit_i64_slot(&mut s.cancel_cb);
+            for c in s.chunks.iter_mut() {
+                visit_chunk(c, visitor);
             }
-            for &p in s.pending_reads.iter() {
-                mark_promise(p, mark);
+            for p in s.pending_reads.iter_mut() {
+                visitor.visit_raw_mut_ptr_slot(p);
             }
             if s.state == ReadableState::Errored {
-                mark_chunk(s.error_value, mark);
+                visit_chunk(&mut s.error_value, visitor);
             }
         }
     }
-    if let Ok(map) = WRITABLE_STREAMS.lock() {
-        for s in map.values() {
-            mark_cb(s.write_cb, mark);
-            mark_cb(s.close_cb, mark);
-            mark_cb(s.abort_cb, mark);
-            for (chunk, p) in s.write_queue.iter() {
-                mark_chunk(*chunk, mark);
-                mark_promise(*p, mark);
+    if let Ok(mut map) = WRITABLE_STREAMS.lock() {
+        for s in map.values_mut() {
+            visitor.visit_i64_slot(&mut s.write_cb);
+            visitor.visit_i64_slot(&mut s.close_cb);
+            visitor.visit_i64_slot(&mut s.abort_cb);
+            for (chunk, p) in s.write_queue.iter_mut() {
+                visit_chunk(chunk, visitor);
+                visitor.visit_raw_mut_ptr_slot(p);
             }
-            mark_promise(s.ready_promise, mark);
-            mark_promise(s.closed_promise, mark);
+            visitor.visit_raw_mut_ptr_slot(&mut s.ready_promise);
+            visitor.visit_raw_mut_ptr_slot(&mut s.closed_promise);
             if s.state == WritableState::Errored {
-                mark_chunk(s.error_value, mark);
+                visit_chunk(&mut s.error_value, visitor);
             }
         }
     }
-    if let Ok(map) = TRANSFORM_STREAMS.lock() {
-        for t in map.values() {
-            mark_cb(t.transform_cb, mark);
-            mark_cb(t.flush_cb, mark);
+    if let Ok(mut map) = TRANSFORM_STREAMS.lock() {
+        for t in map.values_mut() {
+            visitor.visit_i64_slot(&mut t.transform_cb);
+            visitor.visit_i64_slot(&mut t.flush_cb);
         }
     }
-    if let Ok(map) = READERS.lock() {
-        for r in map.values() {
-            mark_promise(r.closed_promise, mark);
+    if let Ok(mut map) = READERS.lock() {
+        for r in map.values_mut() {
+            visitor.visit_raw_mut_ptr_slot(&mut r.closed_promise);
         }
     }
-    if let Ok(map) = WRITERS.lock() {
-        for w in map.values() {
-            mark_promise(w.closed_promise, mark);
-            mark_promise(w.ready_promise, mark);
+    if let Ok(mut map) = WRITERS.lock() {
+        for w in map.values_mut() {
+            visitor.visit_raw_mut_ptr_slot(&mut w.closed_promise);
+            visitor.visit_raw_mut_ptr_slot(&mut w.ready_promise);
         }
     }
 }
@@ -1462,6 +1453,75 @@ mod tests {
     // sweep — same model perry-ext-bcrypt / perry-ext-argon2 /
     // perry-ext-mongodb use.
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct GcTestGuard {
+        frame: u64,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl GcTestGuard {
+        fn new() -> Self {
+            let lock = GC_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            perry_runtime::gc::js_gc_write_barriers_emitted(1);
+            let frame = perry_runtime::gc::js_shadow_frame_push(0);
+            Self { frame, _lock: lock }
+        }
+    }
+
+    impl Drop for GcTestGuard {
+        fn drop(&mut self) {
+            perry_runtime::gc::js_shadow_frame_pop(self.frame);
+            perry_runtime::gc::js_gc_write_barriers_emitted(0);
+        }
+    }
+
+    fn young_gc_root() -> i64 {
+        perry_runtime::arena::arena_alloc_gc(32, 8, perry_runtime::gc::GC_TYPE_STRING) as i64
+    }
+
+    fn young_nanbox_root(tag: u64) -> u64 {
+        let ptr =
+            perry_runtime::arena::arena_alloc_gc(32, 8, perry_runtime::gc::GC_TYPE_STRING) as u64;
+        tag | (ptr & POINTER_MASK)
+    }
+
+    fn young_promise_root() -> *mut Promise {
+        let ptr = perry_runtime::arena::arena_alloc_gc(
+            std::mem::size_of::<perry_runtime::Promise>(),
+            std::mem::align_of::<perry_runtime::Promise>(),
+            perry_runtime::gc::GC_TYPE_PROMISE,
+        );
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, std::mem::size_of::<perry_runtime::Promise>());
+        }
+        ptr as *mut Promise
+    }
+
+    fn assert_rewritten_addr(before: usize, after: usize) {
+        assert_ne!(after, before);
+        assert!(perry_runtime::arena::pointer_in_nursery(after));
+    }
+
+    fn assert_rewritten_i64(before: i64, after: i64) {
+        assert_rewritten_addr(before as usize, after as usize);
+    }
+
+    fn assert_rewritten_bits(before: u64, after: u64) {
+        assert_eq!(after & !POINTER_MASK, before & !POINTER_MASK);
+        assert_rewritten_addr(
+            (before & POINTER_MASK) as usize,
+            (after & POINTER_MASK) as usize,
+        );
+    }
+
+    fn assert_rewritten_ptr<T>(before: *mut T, after: *mut T) {
+        assert_rewritten_addr(before as usize, after as usize);
+    }
 
     #[test]
     fn gc_scanner_registers_idempotently() {
@@ -1472,6 +1532,160 @@ mod tests {
         ensure_gc_registered();
         ensure_gc_registered();
         ensure_gc_registered();
+    }
+
+    #[test]
+    fn gc_mutable_scanner_rewrites_all_stream_root_surfaces() {
+        let _guard = GcTestGuard::new();
+        perry_ffi::gc_register_mutable_root_scanner(scan_stream_roots);
+
+        let readable_id = usize::MAX - 9_100;
+        let readable_start = young_gc_root();
+        let readable_pull = young_gc_root();
+        let readable_cancel = young_gc_root();
+        let readable_chunk = young_nanbox_root(POINTER_TAG);
+        let readable_error = young_nanbox_root(STRING_TAG);
+        let readable_pending = young_promise_root();
+        let mut readable_chunks = VecDeque::new();
+        readable_chunks.push_back(readable_chunk);
+        let mut pending_reads = VecDeque::new();
+        pending_reads.push_back(readable_pending);
+        READABLE_STREAMS.lock().unwrap().insert(
+            readable_id,
+            ReadableStreamData {
+                state: ReadableState::Errored,
+                chunks: readable_chunks,
+                pending_reads,
+                start_cb: readable_start,
+                pull_cb: readable_pull,
+                cancel_cb: readable_cancel,
+                high_water_mark: 1.0,
+                pulling: false,
+                started: true,
+                reader_handle: None,
+                error_value: readable_error,
+                canceled: false,
+            },
+        );
+
+        let writable_id = usize::MAX - 9_101;
+        let writable_write = young_gc_root();
+        let writable_close = young_gc_root();
+        let writable_abort = young_gc_root();
+        let write_queue_chunk = young_nanbox_root(POINTER_TAG);
+        let write_queue_promise = young_promise_root();
+        let writable_ready = young_promise_root();
+        let writable_closed = young_promise_root();
+        let writable_error = young_nanbox_root(STRING_TAG);
+        let mut write_queue = VecDeque::new();
+        write_queue.push_back((write_queue_chunk, write_queue_promise));
+        WRITABLE_STREAMS.lock().unwrap().insert(
+            writable_id,
+            WritableStreamData {
+                state: WritableState::Errored,
+                write_cb: writable_write,
+                close_cb: writable_close,
+                abort_cb: writable_abort,
+                write_queue,
+                in_flight: false,
+                high_water_mark: 1.0,
+                writer_handle: None,
+                error_value: writable_error,
+                ready_promise: writable_ready,
+                closed_promise: writable_closed,
+            },
+        );
+
+        let transform_id = usize::MAX - 9_102;
+        let transform_cb = young_gc_root();
+        let flush_cb = young_gc_root();
+        TRANSFORM_STREAMS.lock().unwrap().insert(
+            transform_id,
+            TransformStreamData {
+                readable_handle: readable_id,
+                writable_handle: writable_id,
+                transform_cb,
+                flush_cb,
+            },
+        );
+
+        let reader_id = usize::MAX - 9_103;
+        let reader_closed = young_promise_root();
+        READERS.lock().unwrap().insert(
+            reader_id,
+            ReaderData {
+                stream_handle: readable_id,
+                locked: true,
+                closed_promise: reader_closed,
+            },
+        );
+
+        let writer_id = usize::MAX - 9_104;
+        let writer_closed = young_promise_root();
+        let writer_ready = young_promise_root();
+        WRITERS.lock().unwrap().insert(
+            writer_id,
+            WriterData {
+                stream_handle: writable_id,
+                locked: true,
+                closed_promise: writer_closed,
+                ready_promise: writer_ready,
+            },
+        );
+
+        let _ = perry_runtime::gc::gc_collect_minor();
+
+        {
+            let readable = READABLE_STREAMS.lock().unwrap();
+            let s = readable
+                .get(&readable_id)
+                .expect("readable stream should remain live");
+            assert_rewritten_i64(readable_start, s.start_cb);
+            assert_rewritten_i64(readable_pull, s.pull_cb);
+            assert_rewritten_i64(readable_cancel, s.cancel_cb);
+            assert_rewritten_bits(readable_chunk, s.chunks[0]);
+            assert_rewritten_ptr(readable_pending, s.pending_reads[0]);
+            assert_rewritten_bits(readable_error, s.error_value);
+        }
+        {
+            let writable = WRITABLE_STREAMS.lock().unwrap();
+            let s = writable
+                .get(&writable_id)
+                .expect("writable stream should remain live");
+            assert_rewritten_i64(writable_write, s.write_cb);
+            assert_rewritten_i64(writable_close, s.close_cb);
+            assert_rewritten_i64(writable_abort, s.abort_cb);
+            assert_rewritten_bits(write_queue_chunk, s.write_queue[0].0);
+            assert_rewritten_ptr(write_queue_promise, s.write_queue[0].1);
+            assert_rewritten_ptr(writable_ready, s.ready_promise);
+            assert_rewritten_ptr(writable_closed, s.closed_promise);
+            assert_rewritten_bits(writable_error, s.error_value);
+        }
+        {
+            let transforms = TRANSFORM_STREAMS.lock().unwrap();
+            let t = transforms
+                .get(&transform_id)
+                .expect("transform stream should remain live");
+            assert_rewritten_i64(transform_cb, t.transform_cb);
+            assert_rewritten_i64(flush_cb, t.flush_cb);
+        }
+        {
+            let readers = READERS.lock().unwrap();
+            let r = readers.get(&reader_id).expect("reader should remain live");
+            assert_rewritten_ptr(reader_closed, r.closed_promise);
+        }
+        {
+            let writers = WRITERS.lock().unwrap();
+            let w = writers.get(&writer_id).expect("writer should remain live");
+            assert_rewritten_ptr(writer_closed, w.closed_promise);
+            assert_rewritten_ptr(writer_ready, w.ready_promise);
+        }
+
+        READABLE_STREAMS.lock().unwrap().remove(&readable_id);
+        WRITABLE_STREAMS.lock().unwrap().remove(&writable_id);
+        TRANSFORM_STREAMS.lock().unwrap().remove(&transform_id);
+        READERS.lock().unwrap().remove(&reader_id);
+        WRITERS.lock().unwrap().remove(&writer_id);
     }
 
     #[test]

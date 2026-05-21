@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::common::async_bridge::spawn;
-use crate::common::{for_each_handle_of, get_handle_mut, register_handle, Handle};
+use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
 
 /// Pending HTTP events to be processed on the main thread
 static HTTP_PENDING_EVENTS: once_cell::sync::Lazy<Mutex<Vec<PendingHttpEvent>>> =
@@ -39,7 +39,7 @@ static HTTP_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 /// issue #35 pattern, same root cause as net.Socket listeners.
 fn ensure_gc_scanner_registered() {
     HTTP_GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_root_scanner(scan_http_roots);
+        perry_runtime::gc::gc_register_mutable_root_scanner(scan_http_roots_mut);
     });
 }
 
@@ -47,27 +47,26 @@ fn ensure_gc_scanner_registered() {
 /// ClientRequestHandle (response callback + 'error' listeners) and
 /// IncomingMessageHandle ('data' / 'end' / 'error' listeners) in the
 /// handle registry.
+#[allow(dead_code)]
 fn scan_http_roots(mark: &mut dyn FnMut(f64)) {
-    let mark_cb = |cb: i64, mark: &mut dyn FnMut(f64)| {
-        if cb != 0 {
-            let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF));
-            mark(boxed);
-        }
-    };
+    let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_http_roots_mut(&mut visitor);
+}
 
-    for_each_handle_of::<ClientRequestHandle, _>(|req| {
-        mark_cb(req.response_callback, mark);
-        for cb_vec in req.listeners.values() {
-            for &cb in cb_vec.iter() {
-                mark_cb(cb, mark);
+fn scan_http_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    for_each_handle_mut_of::<ClientRequestHandle, _>(|req| {
+        visitor.visit_i64_slot(&mut req.response_callback);
+        for cb_vec in req.listeners.values_mut() {
+            for cb in cb_vec.iter_mut() {
+                visitor.visit_i64_slot(cb);
             }
         }
     });
 
-    for_each_handle_of::<IncomingMessageHandle, _>(|msg| {
-        for cb_vec in msg.listeners.values() {
-            for &cb in cb_vec.iter() {
-                mark_cb(cb, mark);
+    for_each_handle_mut_of::<IncomingMessageHandle, _>(|msg| {
+        for cb_vec in msg.listeners.values_mut() {
+            for cb in cb_vec.iter_mut() {
+                visitor.visit_i64_slot(cb);
             }
         }
     });
@@ -911,4 +910,44 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
     });
 
     count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_scanner_emits_request_and_response_listeners() {
+        let mut req_listeners = HashMap::new();
+        req_listeners.insert("error".to_string(), vec![0x1234_5678]);
+        let req_handle = register_handle(ClientRequestHandle {
+            method: "GET".to_string(),
+            url: "http://example.test".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+            response_callback: 0x2345_6780,
+            listeners: req_listeners,
+            timeout_ms: None,
+            ended: false,
+        });
+
+        let mut msg_listeners = HashMap::new();
+        msg_listeners.insert("data".to_string(), vec![0x3456_7890]);
+        let msg_handle = register_handle(IncomingMessageHandle {
+            status_code: 200,
+            status_message: "OK".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+            listeners: msg_listeners,
+        });
+
+        let mut emitted = Vec::new();
+        scan_http_roots(&mut |value| emitted.push(value.to_bits()));
+
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x1234_5678)));
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x2345_6780)));
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x3456_7890)));
+        crate::common::drop_handle(req_handle);
+        crate::common::drop_handle(msg_handle);
+    }
 }

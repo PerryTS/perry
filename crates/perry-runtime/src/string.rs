@@ -128,19 +128,69 @@ fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
     s[..byte_off].encode_utf16().count()
 }
 
-/// Allocate `total_size` bytes for a string (StringHeader + payload) from the
-/// thread-local arena bump allocator. Issue #62 phase B: strings in tight
-/// allocation loops (`"item_" + i`, `i.toString()`, template literals) were
-/// the dominant `gc_malloc` caller. `gc_malloc` costs ~30-40ns even with
-/// mimalloc (per-thread free list + GcHeader init + MALLOC_STATE tracking).
-/// The arena is a pointer bump (~10-15ns with sync) and needs no tracking —
-/// strings are discovered by walking arena blocks linearly, same as objects
-/// and arrays. Block-persistence keeps interned/long-lived strings alive
-/// for as long as any other arena object in the same block is reachable;
-/// truly dead blocks reset to offset=0 in O(1).
+/// Heap storage policy for `StringHeader` strings.
+///
+/// - `js_string_new_sso` returns inline `SHORT_STRING_TAG` values for short boxed
+///   strings that do not require a real `StringHeader*`.
+/// - Every heap `StringHeader` allocation uses GC-managed arenas, not
+///   `gc_malloc`, so it stays out of `MALLOC_STATE`.
+/// - `arena_alloc_gc` routes small and medium payloads to nursery pages and
+///   large payloads to old-gen pages using `LARGE_OBJECT_THRESHOLD_BYTES`.
+///
+/// Keep this helper as the single normal heap-string storage entry point. Other
+/// `GC_TYPE_STRING` users, notably `SymbolHeader` and JSON tape scratch buffers,
+/// are compatibility residents with different layouts and should not be forced
+/// through `StringHeader` initialization.
 #[inline]
-fn string_arena_alloc(total_size: usize) -> *mut u8 {
-    crate::arena::arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_STRING)
+fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8) {
+    let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+    let raw = crate::arena::arena_alloc_gc(payload_size, 8, crate::gc::GC_TYPE_STRING);
+    let ptr = raw as *mut StringHeader;
+    let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
+    (ptr, data)
+}
+
+#[inline]
+fn string_storage_alloc_longlived(capacity: u32) -> (*mut StringHeader, *mut u8) {
+    let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+    let raw = crate::arena::arena_alloc_gc_longlived(payload_size, 8, crate::gc::GC_TYPE_STRING);
+    let ptr = raw as *mut StringHeader;
+    let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
+    (ptr, data)
+}
+
+#[inline]
+unsafe fn init_string_header(
+    ptr: *mut StringHeader,
+    utf16_len: u32,
+    byte_len: u32,
+    capacity: u32,
+    refcount: u32,
+    flags: u32,
+) {
+    debug_assert!(byte_len <= capacity);
+    (*ptr).utf16_len = utf16_len;
+    (*ptr).byte_len = byte_len;
+    (*ptr).capacity = capacity;
+    (*ptr).refcount = refcount;
+    (*ptr).flags = flags;
+}
+
+#[inline]
+pub(crate) fn js_string_from_bytes_known_utf16(
+    data: *const u8,
+    len: u32,
+    utf16_len: u32,
+    flags: u32,
+) -> *mut StringHeader {
+    let (ptr, data_ptr) = string_storage_alloc(len);
+    unsafe {
+        init_string_header(ptr, utf16_len, len, len, 0, flags);
+        if len > 0 && !data.is_null() {
+            ptr::copy_nonoverlapping(data, data_ptr, len as usize);
+        }
+    }
+    ptr
 }
 
 /// Create a string from raw bytes
@@ -252,17 +302,11 @@ pub extern "C" fn js_string_new_sso(data: *const u8, len: u32) -> f64 {
 /// backing arena differs.
 #[no_mangle]
 pub extern "C" fn js_string_from_bytes_longlived(data: *const u8, len: u32) -> *mut StringHeader {
-    let total_size = std::mem::size_of::<StringHeader>() + len as usize;
-    let raw = crate::arena::arena_alloc_gc_longlived(total_size, 8, crate::gc::GC_TYPE_STRING);
-    let ptr = raw as *mut StringHeader;
+    let (ptr, data_ptr) = string_storage_alloc_longlived(len);
     unsafe {
         let u16len = compute_utf16_len(data, len);
-        (*ptr).utf16_len = u16len;
-        (*ptr).byte_len = len;
-        (*ptr).capacity = len;
-        (*ptr).refcount = 0;
+        init_string_header(ptr, u16len, len, len, 0, 0);
         if len > 0 && !data.is_null() {
-            let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
             ptr::copy_nonoverlapping(data, data_ptr, len as usize);
         }
     }
@@ -273,21 +317,7 @@ pub extern "C" fn js_string_from_bytes_longlived(data: *const u8, len: u32) -> *
 /// Skips the `compute_utf16_len` byte scan — sets utf16_len = byte_len directly.
 #[inline]
 pub(crate) fn js_string_from_ascii_bytes(data: *const u8, len: u32) -> *mut StringHeader {
-    let total_size = std::mem::size_of::<StringHeader>() + len as usize;
-    let raw = string_arena_alloc(total_size);
-    let ptr = raw as *mut StringHeader;
-    unsafe {
-        (*ptr).utf16_len = len; // ASCII: utf16_len == byte_len
-        (*ptr).byte_len = len;
-        (*ptr).capacity = len;
-        (*ptr).refcount = 0;
-        (*ptr).flags = 0;
-        if len > 0 && !data.is_null() {
-            let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
-            ptr::copy_nonoverlapping(data, data_ptr, len as usize);
-        }
-    }
-    ptr
+    js_string_from_bytes_known_utf16(data, len, len, 0)
 }
 
 /// Allocate an uninitialised ASCII-typed string of `len` bytes and return
@@ -299,17 +329,10 @@ pub(crate) fn js_string_from_ascii_bytes(data: *const u8, len: u32) -> *mut Stri
 /// an intermediate `Vec<u8>` allocation + a follow-up `copy_nonoverlapping`.
 #[inline]
 pub(crate) fn js_string_alloc_ascii_uninit(len: u32) -> (*mut StringHeader, *mut u8) {
-    let total_size = std::mem::size_of::<StringHeader>() + len as usize;
-    let raw = string_arena_alloc(total_size);
-    let ptr = raw as *mut StringHeader;
+    let (ptr, data_ptr) = string_storage_alloc(len);
     unsafe {
-        (*ptr).utf16_len = len;
-        (*ptr).byte_len = len;
-        (*ptr).capacity = len;
-        (*ptr).refcount = 0;
-        (*ptr).flags = 0;
+        init_string_header(ptr, len, len, len, 0, 0);
     }
-    let data_ptr = unsafe { (ptr as *mut u8).add(std::mem::size_of::<StringHeader>()) };
     (ptr, data_ptr)
 }
 
@@ -321,22 +344,15 @@ pub extern "C" fn js_string_from_bytes_with_capacity(
     capacity: u32,
 ) -> *mut StringHeader {
     let capacity = capacity.max(len); // Ensure capacity >= len
-    let total_size = std::mem::size_of::<StringHeader>() + capacity as usize;
-
-    let raw = string_arena_alloc(total_size);
-    let ptr = raw as *mut StringHeader;
+    let (ptr, data_ptr) = string_storage_alloc(capacity);
 
     unsafe {
         let u16len = compute_utf16_len(data, len);
-        (*ptr).utf16_len = u16len;
-        (*ptr).byte_len = len;
-        (*ptr).capacity = capacity;
-        (*ptr).refcount = 0; // shared by default — caller can set to 1 if uniquely owned
-        (*ptr).flags = 0;
+        // shared by default — caller can set refcount to 1 if uniquely owned.
+        init_string_header(ptr, u16len, len, capacity, 0, 0);
 
         // Copy string data after header
         if len > 0 && !data.is_null() {
-            let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
             ptr::copy_nonoverlapping(data, data_ptr, len as usize);
         }
     }
@@ -379,9 +395,7 @@ fn compute_utf16_len_wtf8(bytes: &[u8]) -> u32 {
 /// Sets STRING_FLAG_HAS_LONE_SURROGATES so isWellFormed()/toWellFormed() work correctly.
 #[no_mangle]
 pub extern "C" fn js_string_from_wtf8_bytes(data: *const u8, len: u32) -> *mut StringHeader {
-    let total_size = std::mem::size_of::<StringHeader>() + len as usize;
-    let raw = string_arena_alloc(total_size);
-    let ptr = raw as *mut StringHeader;
+    let (ptr, data_ptr) = string_storage_alloc(len);
     unsafe {
         let bytes = if len > 0 && !data.is_null() {
             slice::from_raw_parts(data, len as usize)
@@ -389,13 +403,8 @@ pub extern "C" fn js_string_from_wtf8_bytes(data: *const u8, len: u32) -> *mut S
             &[]
         };
         let u16len = compute_utf16_len_wtf8(bytes);
-        (*ptr).utf16_len = u16len;
-        (*ptr).byte_len = len;
-        (*ptr).capacity = len;
-        (*ptr).refcount = 0;
-        (*ptr).flags = STRING_FLAG_HAS_LONE_SURROGATES;
+        init_string_header(ptr, u16len, len, len, 0, STRING_FLAG_HAS_LONE_SURROGATES);
         if len > 0 && !data.is_null() {
-            let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
             ptr::copy_nonoverlapping(data, data_ptr, len as usize);
         }
     }
@@ -420,9 +429,21 @@ pub extern "C" fn js_string_append(
         if !is_valid_string_ptr(src) {
             return js_string_from_bytes(ptr::null(), 0);
         }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let src_handle = scope.root_string_ptr(src);
         let src_blen = unsafe { (*src).byte_len };
-        let src_data = string_data(src);
-        return js_string_from_bytes(src_data, src_blen);
+        let new_ptr = js_string_from_bytes_with_capacity(ptr::null(), 0, src_blen);
+        let src = src_handle.get_raw_const_ptr::<StringHeader>();
+        if is_valid_string_ptr(src) {
+            unsafe {
+                let src_data = string_data(src);
+                let new_data = (new_ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
+                ptr::copy_nonoverlapping(src_data, new_data, src_blen as usize);
+                (*new_ptr).byte_len = src_blen;
+                (*new_ptr).utf16_len = (*src).utf16_len;
+            }
+        }
+        return new_ptr;
     }
 
     if !is_valid_string_ptr(src) {
@@ -434,6 +455,10 @@ pub extern "C" fn js_string_append(
     if std::ptr::eq(dest, src) {
         return js_string_concat(dest as *const StringHeader, src);
     }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let dest_handle = scope.root_string_ptr(dest as *const StringHeader);
+    let src_handle = scope.root_string_ptr(src);
 
     unsafe {
         let dest_blen = (*dest).byte_len;
@@ -470,6 +495,8 @@ pub extern "C" fn js_string_append(
         // is safe: old string becomes garbage for the next GC cycle.
         let new_cap = (new_blen * 2).max(32);
         let new_ptr = js_string_from_bytes_with_capacity(ptr::null(), 0, new_cap);
+        let dest = dest_handle.get_raw_mut_ptr::<StringHeader>();
+        let src = src_handle.get_raw_const_ptr::<StringHeader>();
 
         // Copy old dest content
         let new_data = (new_ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
@@ -599,9 +626,7 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
     // Heap path — allocate a StringHeader and memcpy. Decode both
     // operands' byte slices via `str_bytes_from_jsvalue` (already done
     // above) and write directly into the new header's payload region.
-    let total_size = std::mem::size_of::<StringHeader>() + total_blen as usize;
-    let raw = string_arena_alloc(total_size);
-    let ptr = raw as *mut StringHeader;
+    let (ptr, data_ptr) = string_storage_alloc(total_blen);
     unsafe {
         // ASCII-fast utf16 length: count bytes < 0x80 in both slices in
         // one pass. Most concat results are pure ASCII (number formatting,
@@ -631,13 +656,7 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
             u16
         };
 
-        (*ptr).utf16_len = utf16_len;
-        (*ptr).byte_len = total_blen;
-        (*ptr).capacity = total_blen;
-        (*ptr).refcount = 0;
-        (*ptr).flags = 0;
-
-        let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
+        init_string_header(ptr, utf16_len, total_blen, total_blen, 0, 0);
         if !l_slice.is_empty() {
             ptr::copy_nonoverlapping(l.0, data_ptr, l.1 as usize);
         }
@@ -661,6 +680,10 @@ pub extern "C" fn js_string_concat(
     a: *const StringHeader,
     b: *const StringHeader,
 ) -> *mut StringHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a_handle = scope.root_string_ptr(a);
+    let b_handle = scope.root_string_ptr(b);
+
     // Snapshot all validity-gated reads from `a` in one pass. For invalid
     // pointers this stays at the zero-defaults so the rest of the function
     // sees a "behaves like an empty string" view.
@@ -698,19 +721,19 @@ pub extern "C" fn js_string_concat(
         }
     }
 
-    let total_size = std::mem::size_of::<StringHeader>() + total_blen as usize;
-
-    let raw = string_arena_alloc(total_size);
-    let ptr = raw as *mut StringHeader;
+    let (ptr, data_ptr) = string_storage_alloc(total_blen);
+    let a = a_handle.get_raw_const_ptr::<StringHeader>();
+    let b = b_handle.get_raw_const_ptr::<StringHeader>();
 
     unsafe {
-        (*ptr).utf16_len = u16len_a + u16len_b;
-        (*ptr).byte_len = total_blen;
-        (*ptr).capacity = total_blen;
-        (*ptr).refcount = 0; // shared by default
-        (*ptr).flags = flags_a | flags_b;
-
-        let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
+        init_string_header(
+            ptr,
+            u16len_a + u16len_b,
+            total_blen,
+            total_blen,
+            0,
+            flags_a | flags_b,
+        );
 
         if a_valid && blen_a > 0 {
             ptr::copy_nonoverlapping(string_data(a), data_ptr, blen_a as usize);
@@ -801,23 +824,24 @@ pub extern "C" fn js_string_concat_value(
 
         // Single allocation for prefix + number string
         let total_blen = prefix_blen as usize + num_len;
-        let total_size = std::mem::size_of::<StringHeader>() + total_blen;
-        let raw = string_arena_alloc(total_size);
-        let ptr = raw as *mut StringHeader;
+        let (ptr, data_ptr) = string_storage_alloc(total_blen as u32);
 
         unsafe {
             // Both prefix and number digits are ASCII, so utf16_len == byte_len for the number part
-            (*ptr).utf16_len = prefix_u16 + num_len as u32;
-            (*ptr).byte_len = total_blen as u32;
-            (*ptr).capacity = total_blen as u32;
-            (*ptr).refcount = 0;
-            (*ptr).flags = if is_valid_string_ptr(prefix) {
+            let flags = if is_valid_string_ptr(prefix) {
                 (*prefix).flags
             } else {
                 0
             };
+            init_string_header(
+                ptr,
+                prefix_u16 + num_len as u32,
+                total_blen as u32,
+                total_blen as u32,
+                0,
+                flags,
+            );
 
-            let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
             if is_valid_string_ptr(prefix) && prefix_blen > 0 {
                 ptr::copy_nonoverlapping(string_data(prefix), data_ptr, prefix_blen as usize);
             }
@@ -878,9 +902,11 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
     // for any f64 string representation (max ~24 chars).
     let mut num_bufs: [[u8; 32]; MAX_PARTS] = [[0u8; 32]; MAX_PARTS];
     // For each part: (ptr, len, flags). ptr is either a pointer into
-    // num_bufs[i] (numeric path) or string_data(s) (string path); len
-    // is the byte count; flags carries STRING_FLAG_HAS_LONE_SURROGATES
+    // num_bufs[i] (numeric path) or null for a rooted string handle;
+    // len is the byte count; flags carries STRING_FLAG_HAS_LONE_SURROGATES
     // if the part is a string with that flag set.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut piece_string_handles = [None; MAX_PARTS];
     let mut piece_ptrs: [*const u8; MAX_PARTS] = [std::ptr::null(); MAX_PARTS];
     let mut piece_lens: [u32; MAX_PARTS] = [0; MAX_PARTS];
     let mut piece_u16: [u32; MAX_PARTS] = [0; MAX_PARTS];
@@ -905,8 +931,7 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
                 let u16len = unsafe { (*ptr).utf16_len };
                 let flags = unsafe { (*ptr).flags };
                 if blen > 0 {
-                    piece_ptrs[i] =
-                        unsafe { (ptr as *const u8).add(std::mem::size_of::<StringHeader>()) };
+                    piece_string_handles[i] = Some(scope.root_string_ptr(ptr));
                     piece_lens[i] = blen;
                     piece_u16[i] = u16len;
                     piece_flags |= flags;
@@ -926,8 +951,7 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
                 let u16len = unsafe { (*s).utf16_len };
                 let flags = unsafe { (*s).flags };
                 if blen > 0 {
-                    piece_ptrs[i] =
-                        unsafe { (s as *const u8).add(std::mem::size_of::<StringHeader>()) };
+                    piece_string_handles[i] = Some(scope.root_string_ptr(s));
                     piece_lens[i] = blen;
                     piece_u16[i] = u16len;
                     piece_flags |= flags;
@@ -976,8 +1000,7 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
             let u16len = unsafe { (*s).utf16_len };
             let flags = unsafe { (*s).flags };
             if blen > 0 {
-                piece_ptrs[i] =
-                    unsafe { (s as *const u8).add(std::mem::size_of::<StringHeader>()) };
+                piece_string_handles[i] = Some(scope.root_string_ptr(s));
                 piece_lens[i] = blen;
                 piece_u16[i] = u16len;
                 piece_flags |= flags;
@@ -988,21 +1011,22 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
     }
 
     // Single allocation for the entire result.
-    let total_size = std::mem::size_of::<StringHeader>() + total_blen as usize;
-    let raw = string_arena_alloc(total_size);
-    let ptr = raw as *mut StringHeader;
+    let (ptr, mut cursor) = string_storage_alloc(total_blen);
 
     unsafe {
-        (*ptr).utf16_len = total_u16;
-        (*ptr).byte_len = total_blen;
-        (*ptr).capacity = total_blen;
-        (*ptr).refcount = 0;
-        (*ptr).flags = piece_flags;
-
-        let mut cursor = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
+        init_string_header(ptr, total_u16, total_blen, total_blen, 0, piece_flags);
         for i in 0..n {
             let l = piece_lens[i] as usize;
-            if l > 0 && !piece_ptrs[i].is_null() {
+            if l == 0 {
+                continue;
+            }
+            if let Some(handle) = piece_string_handles[i] {
+                let piece = handle.get_raw_const_ptr::<StringHeader>();
+                if is_valid_string_ptr(piece) {
+                    ptr::copy_nonoverlapping(string_data(piece), cursor, l);
+                    cursor = cursor.add(l);
+                }
+            } else if !piece_ptrs[i].is_null() {
                 ptr::copy_nonoverlapping(piece_ptrs[i], cursor, l);
                 cursor = cursor.add(l);
             }
@@ -1107,22 +1131,23 @@ pub extern "C" fn js_value_concat_string(
         }
 
         let total_blen = num_len + suffix_blen as usize;
-        let total_size = std::mem::size_of::<StringHeader>() + total_blen;
-        let raw = string_arena_alloc(total_size);
-        let ptr = raw as *mut StringHeader;
+        let (ptr, data_ptr) = string_storage_alloc(total_blen as u32);
 
         unsafe {
-            (*ptr).utf16_len = num_len as u32 + suffix_u16;
-            (*ptr).byte_len = total_blen as u32;
-            (*ptr).capacity = total_blen as u32;
-            (*ptr).refcount = 0;
-            (*ptr).flags = if is_valid_string_ptr(suffix) {
+            let flags = if is_valid_string_ptr(suffix) {
                 (*suffix).flags
             } else {
                 0
             };
+            init_string_header(
+                ptr,
+                num_len as u32 + suffix_u16,
+                total_blen as u32,
+                total_blen as u32,
+                0,
+                flags,
+            );
 
-            let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
             ptr::copy_nonoverlapping(num_buf.as_ptr(), data_ptr, num_len);
             if is_valid_string_ptr(suffix) && suffix_blen > 0 {
                 ptr::copy_nonoverlapping(
@@ -2051,6 +2076,7 @@ pub extern "C" fn js_string_to_char_array(s: i64) -> i64 {
             f64::from_bits(crate::value::STRING_TAG | (ch_ptr as u64 & crate::value::POINTER_MASK));
         unsafe {
             *elements.add(i) = nanboxed;
+            crate::array::note_array_slot(arr, i, nanboxed.to_bits());
         }
     }
     arr as i64
@@ -2428,8 +2454,6 @@ pub extern "C" fn js_string_split_n(
 
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-    let header_size = std::mem::size_of::<StringHeader>();
-
     if delim.is_empty() {
         // Empty delimiter: split into individual characters (single pass)
         let mut parts: Vec<*mut StringHeader> = str_data
@@ -2451,6 +2475,7 @@ pub extern "C" fn js_string_split_n(
             for (i, p) in parts.iter().enumerate() {
                 let nanboxed = STRING_TAG | (*p as u64 & POINTER_MASK);
                 std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
+                crate::array::note_array_slot(arr, i, nanboxed);
             }
         }
         return arr;
@@ -2471,23 +2496,19 @@ pub extern "C" fn js_string_split_n(
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         for (i, part) in part_slices.iter().enumerate() {
             let byte_len = part.len() as u32;
-            let alloc_size = header_size + byte_len as usize;
-            let raw = crate::arena::arena_alloc_gc(alloc_size, 8, crate::gc::GC_TYPE_STRING);
-            let sh = raw as *mut StringHeader;
-            (*sh).byte_len = byte_len;
-            (*sh).capacity = byte_len;
-            (*sh).refcount = 0;
-            (*sh).utf16_len = if src_is_ascii {
+            let (sh, data_ptr) = string_storage_alloc(byte_len);
+            let utf16_len = if src_is_ascii {
                 byte_len
             } else {
                 compute_utf16_len(part.as_ptr(), byte_len)
             };
+            init_string_header(sh, utf16_len, byte_len, byte_len, 0, 0);
             if byte_len > 0 {
-                let data_ptr = (sh as *mut u8).add(header_size);
                 ptr::copy_nonoverlapping(part.as_ptr(), data_ptr, byte_len as usize);
             }
-            let nanboxed = STRING_TAG | (raw as u64 & POINTER_MASK);
+            let nanboxed = STRING_TAG | (sh as u64 & POINTER_MASK);
             std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
+            crate::array::note_array_slot(arr, i, nanboxed);
         }
     }
 
@@ -2870,6 +2891,23 @@ pub(crate) fn test_clear_intern_table_root() {
 mod tests {
     use super::*;
 
+    fn malloc_object_count_for_test() -> usize {
+        crate::gc::MALLOC_STATE.with(|s| s.borrow().objects.len())
+    }
+
+    unsafe fn gc_header_for_string(s: *const StringHeader) -> *const crate::gc::GcHeader {
+        unsafe { (s as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader }
+    }
+
+    fn fnv1a_for_test(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        h
+    }
+
     #[test]
     fn test_string_create() {
         let data = b"hello";
@@ -2884,6 +2922,95 @@ mod tests {
         let c = js_string_concat(a, b);
         assert_eq!(js_string_length(c), 11);
         assert_eq!(string_as_str(c), "hello world");
+    }
+
+    #[test]
+    fn short_boxed_strings_use_sso_without_malloc_tracking() {
+        let before = malloc_object_count_for_test();
+        let value = js_string_new_sso(b"abc".as_ptr(), 3);
+        let after = malloc_object_count_for_test();
+        let js_value = crate::value::JSValue::from_bits(value.to_bits());
+
+        assert!(js_value.is_short_string());
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn small_and_medium_heap_strings_use_nursery_gc_pages() {
+        let data = vec![b'x'; 1024];
+        let before = malloc_object_count_for_test();
+        let s = js_string_from_bytes(data.as_ptr(), data.len() as u32);
+        let after = malloc_object_count_for_test();
+
+        assert_eq!(after, before);
+        assert_eq!(unsafe { (*s).byte_len }, data.len() as u32);
+        assert_eq!(unsafe { (*s).flags }, 0);
+        assert!(crate::arena::pointer_in_nursery(s as usize));
+        assert!(!crate::arena::pointer_in_old_gen(s as usize));
+
+        unsafe {
+            let header = gc_header_for_string(s);
+            assert_eq!((*header).obj_type, crate::gc::GC_TYPE_STRING);
+            assert_ne!((*header).gc_flags & crate::gc::GC_FLAG_ARENA, 0);
+            assert_eq!((*header).gc_flags & crate::gc::GC_FLAG_TENURED, 0);
+        }
+    }
+
+    #[test]
+    fn large_heap_strings_use_old_gc_pages_without_malloc_tracking() {
+        let len = crate::gc::LARGE_OBJECT_THRESHOLD_BYTES + 1;
+        let data = vec![b'L'; len];
+        let before = malloc_object_count_for_test();
+        let s = js_string_from_bytes(data.as_ptr(), data.len() as u32);
+        let after = malloc_object_count_for_test();
+
+        assert_eq!(after, before);
+        assert_eq!(unsafe { (*s).byte_len }, len as u32);
+        assert_eq!(unsafe { (*s).flags }, 0);
+        assert!(crate::arena::pointer_in_old_gen(s as usize));
+        assert!(!crate::arena::pointer_in_nursery(s as usize));
+        assert_eq!(string_as_str(s), std::str::from_utf8(&data).unwrap());
+
+        unsafe {
+            let header = gc_header_for_string(s);
+            assert_eq!((*header).obj_type, crate::gc::GC_TYPE_STRING);
+            assert_ne!((*header).gc_flags & crate::gc::GC_FLAG_ARENA, 0);
+            assert_ne!((*header).gc_flags & crate::gc::GC_FLAG_TENURED, 0);
+        }
+    }
+
+    #[test]
+    fn interned_strings_remain_scannable_and_content_equal() {
+        let key = b"gc-managed-intern-key";
+        let hash = fnv1a_for_test(key);
+        let slot = (hash as usize) & INTERN_TABLE_MASK;
+        let old_entry = unsafe { INTERN_TABLE[slot] };
+
+        let first = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let canonical = js_string_intern(first, hash);
+        let second = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let reinterned = js_string_intern(second, hash);
+
+        assert_eq!(canonical, first);
+        assert_eq!(reinterned, canonical);
+        assert_eq!(js_string_equals(canonical, second), 1);
+
+        let mut scanned = false;
+        scan_intern_table_roots(&mut |value| {
+            let bits = value.to_bits();
+            if (bits & !crate::value::POINTER_MASK) == crate::value::STRING_TAG
+                && (bits & crate::value::POINTER_MASK) as usize == canonical as usize
+            {
+                scanned = true;
+            }
+        });
+        assert!(scanned);
+
+        unsafe {
+            let header = gc_header_for_string(canonical);
+            assert_ne!((*header).gc_flags & crate::gc::GC_FLAG_INTERNED, 0);
+            INTERN_TABLE[slot] = old_entry;
+        }
     }
 
     #[test]
@@ -2918,7 +3045,6 @@ mod tests {
 
         // Get the string pointers from the array and verify their contents
         // Note: split() stores NaN-boxed string pointers with STRING_TAG
-        const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
         const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
         unsafe {
@@ -2930,6 +3056,9 @@ mod tests {
             assert_eq!(string_as_str(ptr0), "a");
             assert_eq!(string_as_str(ptr1), "b");
             assert_eq!(string_as_str(ptr2), "c");
+            assert_eq!((*ptr0).flags, 0);
+            assert_eq!((*ptr1).flags, 0);
+            assert_eq!((*ptr2).flags, 0);
         }
     }
 

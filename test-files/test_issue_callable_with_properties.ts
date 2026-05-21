@@ -17,6 +17,12 @@
 // `TAG_UNDEFINED & POINTER_MASK`), and the unguarded `(*obj).keys_array`
 // load SIGSEGV'd at 0x14. Now those callers see an empty array instead.
 
+declare function gc(): void;
+
+function hasGc(): boolean {
+    return typeof gc === "function";
+}
+
 // ---------- 1. Function with directly-attached properties (ms shape) ----------
 function base(s: string): string {
     return "base:" + s;
@@ -28,6 +34,9 @@ console.log("typeof base:", typeof base);
 console.log("base call:", base("x"));
 console.log("base.extra:", (base as any).extra);
 console.log("base.greet call:", (base as any).greet("y"));
+if (hasGc()) gc();
+console.log("base.extra after gc:", (base as any).extra);
+console.log("base.greet after gc:", (base as any).greet("z"));
 
 // ---------- 2. Object.assign(fn, props) (ms / common decorate shape) ----------
 const fn1 = function (s: string): string {

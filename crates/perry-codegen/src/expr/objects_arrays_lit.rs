@@ -48,7 +48,7 @@ use super::{
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
-        Expr::Object(props) => lower_object_literal(ctx, props),
+        Expr::Object(props) => lower_object_literal(ctx, props, None),
 
         // -------- Arrays (Phase B.3) --------
         // `[a, b, c]` literal: allocate via js_array_alloc(N), then

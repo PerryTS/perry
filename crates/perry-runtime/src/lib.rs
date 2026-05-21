@@ -158,8 +158,8 @@ pub use object::js_object_set_field_by_name;
 pub use object::{
     js_object_alloc, js_object_alloc_with_shape, js_object_entries, js_object_get_field,
     js_object_get_field_by_name, js_object_get_field_by_name_f64, js_object_get_own_field_or_undef,
-    js_object_keys, js_object_set_field, js_object_set_field_f64, js_object_set_keys,
-    js_object_values,
+    js_object_get_unboxed_f64_field, js_object_keys, js_object_set_field, js_object_set_field_f64,
+    js_object_set_keys, js_object_set_unboxed_f64_field, js_object_values,
 };
 pub use promise::{js_is_promise, js_promise_run_microtasks, js_promise_state, js_promise_value};
 pub use promise::{js_promise_new, js_promise_reject, js_promise_resolve, js_promise_resolved};

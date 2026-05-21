@@ -899,14 +899,19 @@ pub extern "C" fn js_map_entries(map: *const MapHeader) -> *mut crate::array::Ar
             let pair_elems =
                 (pair as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
             std::ptr::write(pair_elems, key.to_bits());
+            crate::array::note_array_slot(pair, 0, key.to_bits());
             std::ptr::write(pair_elems.add(1), value.to_bits());
+            crate::array::note_array_slot(pair, 1, value.to_bits());
             (*pair).length = 2;
+            crate::array::rebuild_array_layout_exact(pair);
 
             // Write the NaN-boxed pair pointer directly into the outer
             // array's element slot — no push.
             let pair_boxed = crate::value::js_nanbox_pointer(pair as i64);
             std::ptr::write(result_elems.add(i), pair_boxed.to_bits());
+            crate::array::note_array_slot(result, i, pair_boxed.to_bits());
         }
+        crate::array::rebuild_array_layout_exact(result);
 
         result
     }

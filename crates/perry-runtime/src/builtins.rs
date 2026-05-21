@@ -31,6 +31,69 @@ fn is_negative_zero(n: f64) -> bool {
     n.to_bits() == 0x8000_0000_0000_0000u64
 }
 
+// Circular-reference tracking for `format_jsvalue` / `format_jsvalue_for_json`.
+// Node's `util.inspect` detects cycles and prints `<ref *N>` at the head of
+// the cycle plus `[Circular *N]` at the back-edge. We track:
+//   - `stack`: pointer addresses currently mid-format (the ancestor chain)
+//   - `ids`: pointer address → assigned ref ID (only populated for cyclic refs)
+//   - `next_id`: monotonic ID counter, allocated lazily on first back-edge
+// Reset at every top-level `format_jsvalue(_, 0)` call so each print starts
+// fresh. See #1204.
+#[derive(Default)]
+struct CircularState {
+    stack: Vec<usize>,
+    ids: std::collections::HashMap<usize, usize>,
+    next_id: usize,
+}
+
+impl CircularState {
+    fn reset(&mut self) {
+        self.stack.clear();
+        self.ids.clear();
+        self.next_id = 0;
+    }
+}
+
+thread_local! {
+    static INSPECT_CIRCULAR: std::cell::RefCell<CircularState> =
+        std::cell::RefCell::new(CircularState::default());
+}
+
+/// Enter an object/array for formatting. Returns:
+/// - `Err(id)` if `ptr_addr` is already on the ancestor stack — caller should
+///   return `[Circular *id]` immediately (no push, no body).
+/// - `Ok(())` after pushing `ptr_addr` — caller must call
+///   `inspect_finish_circular(ptr_addr, body)` to pop + maybe prepend `<ref *N>`.
+fn inspect_enter_circular(ptr_addr: usize) -> Result<(), usize> {
+    INSPECT_CIRCULAR.with(|c| {
+        let mut st = c.borrow_mut();
+        if st.stack.contains(&ptr_addr) {
+            if let Some(&id) = st.ids.get(&ptr_addr) {
+                return Err(id);
+            }
+            st.next_id += 1;
+            let id = st.next_id;
+            st.ids.insert(ptr_addr, id);
+            return Err(id);
+        }
+        st.stack.push(ptr_addr);
+        Ok(())
+    })
+}
+
+/// Pop `ptr_addr` from the ancestor stack and prepend `<ref *N> ` if a
+/// back-edge to it was discovered during body formatting.
+fn inspect_finish_circular(ptr_addr: usize, body: String) -> String {
+    INSPECT_CIRCULAR.with(|c| {
+        let mut st = c.borrow_mut();
+        st.stack.pop();
+        match st.ids.get(&ptr_addr).copied() {
+            Some(id) => format!("<ref *{}> {}", id, body),
+            None => body,
+        }
+    })
+}
+
 /// Format a finite, non-zero, non-integer-like f64 per ECMAScript
 /// NumberToString. Caller has already filtered NaN / ±Infinity / ±0 /
 /// integer-shaped values; this only decides decimal vs scientific
@@ -462,18 +525,64 @@ fn function_name_registry(
 /// Format a JS function/closure for `console.log` / `util.inspect`. Returns
 /// `[Function: <name>]` when codegen has registered a name for the
 /// function pointer, otherwise `[Function (anonymous)]` (matching Node's
-/// output for nameless closures). See #1202.
-fn format_function_for_console(func_ptr: *const u8) -> String {
-    if !func_ptr.is_null() {
-        if let Ok(map) = function_name_registry().lock() {
-            if let Some(name) = map.get(&(func_ptr as usize)) {
-                if !name.is_empty() {
-                    return format!("[Function: {}]", name);
-                }
-            }
-        }
+/// output for nameless closures). When the closure carries user-attached
+/// own properties (`func.toString = …`, `func.x = 1`, etc.), append a
+/// Node-style `{ key: value, … }` listing — without invoking any user
+/// coercion hook. Built-in slots (`name`, `prototype`, `length`,
+/// `arguments`, `caller`) are filtered out so the output matches Node's
+/// `util.inspect` for `function f() {}; console.log(f)` (no decoration)
+/// vs. `f.x = 1; console.log(f)` (decorated). See #1202 / #1203.
+fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader) -> String {
+    if closure_ptr.is_null() {
+        return "[Function (anonymous)]".to_string();
     }
-    "[Function (anonymous)]".to_string()
+    let label = unsafe {
+        let func_ptr = (*closure_ptr).func_ptr;
+        if !func_ptr.is_null() {
+            if let Ok(map) = function_name_registry().lock() {
+                if let Some(name) = map.get(&(func_ptr as usize)) {
+                    if !name.is_empty() {
+                        format!("[Function: {}]", name)
+                    } else {
+                        "[Function (anonymous)]".to_string()
+                    }
+                } else {
+                    "[Function (anonymous)]".to_string()
+                }
+            } else {
+                "[Function (anonymous)]".to_string()
+            }
+        } else {
+            "[Function (anonymous)]".to_string()
+        }
+    };
+
+    // Snapshot user-attached own properties and filter out the built-in
+    // function slots that Node hides from `util.inspect`. Node prints
+    // these only when the user reassigned them — but `prototype` and
+    // `name` are runtime-allocated on every function, so always hiding
+    // them yields parity for the common case (`f.x = 1`).
+    let props = crate::closure::closure_dynamic_props_snapshot(closure_ptr as usize);
+    let user_props: Vec<(String, f64)> = props
+        .into_iter()
+        .filter(|(k, _)| {
+            !matches!(
+                k.as_str(),
+                "name" | "prototype" | "length" | "arguments" | "caller"
+            )
+        })
+        .collect();
+    if user_props.is_empty() {
+        return label;
+    }
+    let mut parts: Vec<String> = Vec::with_capacity(user_props.len());
+    for (k, v) in user_props {
+        // `format_jsvalue` skips toString/Symbol.toPrimitive coercion
+        // hooks — exactly what #1203 needs (Node MUST NOT call the
+        // user's `toString` while inspecting).
+        parts.push(format!("{}: {}", k, format_jsvalue(v, 1)));
+    }
+    format!("{} {{ {} }}", label, parts.join(", "))
 }
 
 /// Codegen-facing entry point: register `func_ptr` as the compiled address
@@ -504,10 +613,45 @@ pub unsafe extern "C" fn js_register_function_name(
     }
 }
 
+/// Per-thread override for the `showHidden` inspect option. Defaults to
+/// `false` (Node default): `util.inspect` / `console.log` only show
+/// enumerable properties. `console.dir(value, { showHidden: true })`
+/// flips this for the duration of the print so non-enumerable props
+/// surface in `[bracketed]` form. See #1200.
+thread_local! {
+    static INSPECT_SHOW_HIDDEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn inspect_show_hidden() -> bool {
+    INSPECT_SHOW_HIDDEN.with(|c| c.get())
+}
+
+/// RAII guard for `INSPECT_SHOW_HIDDEN`; restores the previous value on
+/// drop so nested format calls don't leak the override.
+pub(crate) struct InspectShowHiddenGuard(bool);
+
+impl InspectShowHiddenGuard {
+    pub(crate) fn new(show: bool) -> Self {
+        let prev = INSPECT_SHOW_HIDDEN.with(|c| c.replace(show));
+        Self(prev)
+    }
+}
+
+impl Drop for InspectShowHiddenGuard {
+    fn drop(&mut self) {
+        INSPECT_SHOW_HIDDEN.with(|c| c.set(self.0));
+    }
+}
+
 /// Print multiple values from an array (console.log with spread support)
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
 pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
+    // Top-level entry: clear circular-tracking state so each print starts
+    // fresh and ref IDs restart at 1. See #1204.
+    if depth == 0 {
+        INSPECT_CIRCULAR.with(|c| c.borrow_mut().reset());
+    }
     // Prevent stack overflow with deeply nested structures
     if depth > 10 {
         return "[...]".to_string();
@@ -619,17 +763,24 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     }
                 } else if gc_type == crate::gc::GC_TYPE_ARRAY {
                     // Array — format as [ elem1, elem2, ... ] matching Node.js util.inspect.
-                    // Node's default depth cap is 2: anything more than 2
-                    // levels of nesting collapses to `[Array]`. `%o` (`%O`'s
-                    // unbounded-depth sibling) and `console.dir(v, { depth })`
-                    // both override the cap via INSPECT_DEPTH_LIMIT.
+                    // Cycle check FIRST so back-edges win over depth truncation
+                    // (#1204): `a=[]; a.push(a); console.log(a)` should print
+                    // `<ref *1> [ [Circular *1] ]` even when depth would have
+                    // collapsed nested arrays. Then the Node default depth cap
+                    // (overridable via INSPECT_DEPTH_LIMIT for `%o` /
+                    // `console.dir(v, { depth })`): past that, nested arrays
+                    // collapse to `[Array]`.
+                    if let Err(id) = inspect_enter_circular(ptr as usize) {
+                        return format!("[Circular *{}]", id);
+                    }
                     if depth > inspect_depth_limit() {
-                        return "[Array]".to_string();
+                        // We just pushed; finish to keep the stack balanced.
+                        return inspect_finish_circular(ptr as usize, "[Array]".to_string());
                     }
                     let maybe_arr = ptr;
                     let length = (*maybe_arr).length as usize;
                     if length == 0 {
-                        return "[]".to_string();
+                        return inspect_finish_circular(ptr as usize, "[]".to_string());
                     }
                     let data_ptr = (maybe_arr as *const u8)
                         .add(std::mem::size_of::<crate::array::ArrayHeader>())
@@ -654,7 +805,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     let inner = parts.join(", ");
                     // Node uses multi-line when length > 6 or single-line exceeds breakLength (76)
                     let use_multiline = length > 6 || inner.len() + 4 > 76;
-                    if !use_multiline {
+                    let body_str = if !use_multiline {
                         format!("[ {} ]", inner)
                     } else if all_numeric {
                         // Node.js groupArrayElements for numeric arrays:
@@ -704,19 +855,23 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                             line.push(',');
                         }
                         format!("[\n{}\n]", row_strs.join("\n"))
-                    }
+                    };
+                    inspect_finish_circular(ptr as usize, body_str)
                 } else if gc_type == crate::gc::GC_TYPE_OBJECT {
-                    // Object — check for keys_array. Node's default depth
-                    // cap is 2: anything past that collapses to `[Object]`.
-                    // `%o` and `console.dir(v, { depth })` override via
-                    // INSPECT_DEPTH_LIMIT.
+                    // Object — check for keys_array. Cycle check FIRST so the
+                    // self-referencing case wins over the depth-2 collapse to
+                    // `[Object]` (#1204). The depth cap is overridable via
+                    // INSPECT_DEPTH_LIMIT for `%o` / `console.dir(v, { depth })`.
+                    if let Err(id) = inspect_enter_circular(ptr as usize) {
+                        return format!("[Circular *{}]", id);
+                    }
                     if depth > inspect_depth_limit() {
-                        return "[Object]".to_string();
+                        return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                     }
                     let obj_ptr = ptr as *const crate::object::ObjectHeader;
                     let keys_array = (*obj_ptr).keys_array;
 
-                    if !keys_array.is_null()
+                    let body_str = if !keys_array.is_null()
                         && (keys_array as usize) > 0x10000
                         && ((keys_array as u64) >> 48) == 0
                     {
@@ -731,12 +886,12 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                         // `js_jsvalue_to_string` (a separate path), so
                         // returning `{}` here doesn't break that contract.
                         "{}".to_string()
-                    }
+                    };
+                    inspect_finish_circular(ptr as usize, body_str)
                 } else if gc_type == crate::gc::GC_TYPE_MAP {
                     "Map {}".to_string()
                 } else if gc_type == crate::gc::GC_TYPE_CLOSURE {
-                    let closure = ptr as *const crate::closure::ClosureHeader;
-                    format_function_for_console((*closure).func_ptr)
+                    format_function_for_console(ptr as *const crate::closure::ClosureHeader)
                 } else if gc_type == crate::gc::GC_TYPE_PROMISE {
                     "Promise { <pending> }".to_string()
                 } else {
@@ -858,6 +1013,19 @@ unsafe fn format_object_as_json(
         return "{}".to_string();
     }
 
+    // Honor `Object.defineProperty(..., { enumerable: false })`. By default
+    // we include every key in the `keys_array` (enumerability is rarely
+    // overridden, so the descriptor table is empty — early-out via the
+    // global flag avoids per-key lookups on the common path). When at
+    // least one descriptor exists, consult it per key:
+    //   - enumerable + any case → print as `key: value`
+    //   - non-enumerable + showHidden → print as `[key]: value` (Node-style)
+    //   - non-enumerable + !showHidden → skip
+    // See #1200.
+    let show_hidden = inspect_show_hidden();
+    let descriptors_in_use = crate::object::descriptors_in_use();
+    let obj_addr = obj_ptr as usize;
+
     let mut parts: Vec<String> = Vec::with_capacity(key_count);
 
     for i in 0..key_count {
@@ -876,13 +1044,32 @@ unsafe fn format_object_as_json(
             continue;
         };
 
+        let is_enumerable = if descriptors_in_use {
+            crate::object::get_property_attrs(obj_addr, &key_str)
+                .map(|a| a.enumerable())
+                .unwrap_or(true)
+        } else {
+            true
+        };
+        if !is_enumerable && !show_hidden {
+            continue;
+        }
+
         // Get the value
         let value = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
         let value_str = format_jsvalue_for_json(value, depth + 1);
 
-        parts.push(format!("{}: {}", key_str, value_str));
+        if is_enumerable {
+            parts.push(format!("{}: {}", key_str, value_str));
+        } else {
+            // Node wraps non-enumerable keys in brackets under showHidden.
+            parts.push(format!("[{}]: {}", key_str, value_str));
+        }
     }
 
+    if parts.is_empty() {
+        return "{}".to_string();
+    }
     format!("{{ {} }}", parts.join(", "))
 }
 
@@ -894,6 +1081,12 @@ unsafe fn format_object_as_json(
 /// The hard guard at depth > 10 remains as a crash safety net for pathological
 /// cyclic structures.
 fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
+    // Top-level callers (`deep_equal`, JSON stringify) reach this directly,
+    // not through `format_jsvalue`. Reset circular state at depth=0 so we
+    // don't accumulate stale ref IDs across unrelated print/compare calls.
+    if depth == 0 {
+        INSPECT_CIRCULAR.with(|c| c.borrow_mut().reset());
+    }
     if depth > 10 {
         return "\"...\"".to_string();
     }
@@ -974,17 +1167,20 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     let gc_type = (*gc_header).obj_type;
 
                     if gc_type == crate::gc::GC_TYPE_ARRAY {
-                        // Node's default depth cap: beyond 2 levels of
-                        // nesting, arrays collapse to `[Array]`. `%o` and
-                        // `console.dir(v, { depth })` override via
-                        // INSPECT_DEPTH_LIMIT.
+                        // Cycle check FIRST so back-edges always print as
+                        // `[Circular *N]` regardless of depth (#1204). The
+                        // depth cap is overridable via INSPECT_DEPTH_LIMIT
+                        // for `%o` / `console.dir(v, { depth })`.
+                        if let Err(id) = inspect_enter_circular(ptr as usize) {
+                            return format!("[Circular *{}]", id);
+                        }
                         if depth > inspect_depth_limit() {
-                            return "[Array]".to_string();
+                            return inspect_finish_circular(ptr as usize, "[Array]".to_string());
                         }
                         let maybe_arr = ptr;
                         let length = (*maybe_arr).length as usize;
                         if length > 1_000_000 {
-                            return "[Array]".to_string();
+                            return inspect_finish_circular(ptr as usize, "[Array]".to_string());
                         }
                         let data_ptr = (maybe_arr as *const u8)
                             .add(std::mem::size_of::<crate::array::ArrayHeader>())
@@ -997,29 +1193,34 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // Node formats empty arrays as `[]` and non-empty
                         // arrays with a space inside the brackets:
                         // `[ 1, 2, 3 ]`. Match byte-for-byte.
-                        if length == 0 {
+                        let body_str = if length == 0 {
                             "[]".to_string()
                         } else {
                             format!("[ {} ]", parts.join(", "))
-                        }
+                        };
+                        inspect_finish_circular(ptr as usize, body_str)
                     } else if gc_type == crate::gc::GC_TYPE_OBJECT {
-                        // Past Node's default depth cap, nested objects
-                        // collapse to the literal token `[Object]`. `%o` and
-                        // `console.dir(v, { depth })` override via
-                        // INSPECT_DEPTH_LIMIT.
+                        // Cycle check FIRST so back-edges win over the
+                        // depth-limit collapse to `[Object]` (#1204). The
+                        // depth cap is overridable via INSPECT_DEPTH_LIMIT
+                        // for `%o` / `console.dir(v, { depth })`.
+                        if let Err(id) = inspect_enter_circular(ptr as usize) {
+                            return format!("[Circular *{}]", id);
+                        }
                         if depth > inspect_depth_limit() {
-                            return "[Object]".to_string();
+                            return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                         }
                         let obj_ptr = ptr as *const crate::object::ObjectHeader;
                         let keys_array = (*obj_ptr).keys_array;
-                        if !keys_array.is_null()
+                        let body_str = if !keys_array.is_null()
                             && (keys_array as usize) > 0x10000
                             && ((keys_array as u64) >> 48) == 0
                         {
                             format_object_as_json(obj_ptr, depth)
                         } else {
                             "[object Object]".to_string()
-                        }
+                        };
+                        inspect_finish_circular(ptr as usize, body_str)
                     } else if gc_type == crate::gc::GC_TYPE_CLOSURE {
                         // Function-valued object fields used to fall through
                         // to the `[object Object]` catch-all below, hiding
@@ -1028,12 +1229,8 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // collapsed `myFn` to `[object Object]`). Route
                         // through the same display path `format_jsvalue`'s
                         // own GC_TYPE_CLOSURE branch uses so the registered
-                        // function name flows out. Refs #1201 (the eventual
-                        // util.inspect.custom Symbol-key support builds on
-                        // this — without it the custom inspector value
-                        // would still print as `[object Object]`).
-                        let closure = ptr as *const crate::closure::ClosureHeader;
-                        format_function_for_console((*closure).func_ptr)
+                        // function name flows out.
+                        format_function_for_console(ptr as *const crate::closure::ClosureHeader)
                     } else {
                         "[object Object]".to_string()
                     }
@@ -2842,8 +3039,73 @@ unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize> {
     None
 }
 
+/// Decode `options.showHidden` from a NaN-boxed `console.dir` second arg.
+/// Returns the bool value when present; `None` when the key is missing
+/// or the options arg isn't an object. Node coerces any truthy value to
+/// `true`; we accept either explicit `true`/`false` or non-zero numeric
+/// values to match.
+///
+/// # Safety
+///
+/// `options_value` must be a valid NaN-boxed JSValue.
+unsafe fn decode_dir_show_hidden_option(options_value: f64) -> Option<bool> {
+    let jsval = JSValue::from_bits(options_value.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let ptr: *const crate::array::ArrayHeader = jsval.as_pointer();
+    if ptr.is_null() || (ptr as usize) < 0x10000 || ((ptr as u64) >> 48) != 0 {
+        return None;
+    }
+    let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    let obj_ptr = ptr as *const crate::object::ObjectHeader;
+    let keys_array = (*obj_ptr).keys_array;
+    if keys_array.is_null() {
+        return None;
+    }
+    let key_count = crate::array::js_array_length(keys_array) as usize;
+    for i in 0..key_count {
+        let key_val = crate::array::js_array_get(keys_array, i as u32);
+        if !key_val.is_string() {
+            continue;
+        }
+        let key_ptr = key_val.as_string_ptr();
+        if key_ptr.is_null() {
+            continue;
+        }
+        let key_len = (*key_ptr).byte_len as usize;
+        let key_data = (key_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let key_bytes = std::slice::from_raw_parts(key_data, key_len);
+        if key_bytes != b"showHidden" {
+            continue;
+        }
+        let raw = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
+        let v = JSValue::from_bits(raw.to_bits());
+        if v.is_bool() {
+            return Some(v.as_bool());
+        }
+        if v.is_int32() {
+            return Some(v.as_int32() != 0);
+        }
+        if v.is_number() {
+            let n = v.as_number();
+            return Some(!n.is_nan() && n != 0.0);
+        }
+        if v.is_null() || v.is_undefined() {
+            return Some(false);
+        }
+        // Any other pointer-shaped value is truthy in Node's coercion.
+        return Some(true);
+    }
+    None
+}
+
 /// `console.dir(value, options)` — formats `value` with the same surface used
-/// by `console.log`, but honors `options.depth` (Node default: 2). Issue #1199.
+/// by `console.log`, but honors `options.depth` (Node default: 2; #1199) and
+/// `options.showHidden` (default: false; #1200).
 ///
 /// # Safety
 ///
@@ -2851,7 +3113,9 @@ unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize> {
 #[no_mangle]
 pub unsafe extern "C" fn js_console_dir_with_options(value: f64, options_value: f64) {
     let max_depth = decode_dir_depth_option(options_value).unwrap_or(2);
-    let _guard = InspectDepthLimitGuard::new(max_depth);
+    let show_hidden = decode_dir_show_hidden_option(options_value).unwrap_or(false);
+    let _depth_guard = InspectDepthLimitGuard::new(max_depth);
+    let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
     println!("{}", format_jsvalue(value, 0));
 }
 
@@ -3626,7 +3890,9 @@ pub extern "C" fn js_structured_clone(value: f64) -> f64 {
                         as *mut f64;
                     for i in 0..len as usize {
                         let elem = *elements.add(i);
-                        *elements.add(i) = js_structured_clone(elem);
+                        let cloned = js_structured_clone(elem);
+                        *elements.add(i) = cloned;
+                        crate::array::note_array_slot(new_arr, i, cloned.to_bits());
                     }
                     let new_bits =
                         0x7FFD_0000_0000_0000u64 | (new_arr as u64 & 0x0000_FFFF_FFFF_FFFF);

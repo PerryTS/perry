@@ -18,7 +18,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[cfg(not(target_os = "ios"))]
 use crate::common::async_bridge::{queue_promise_resolution, spawn};
-use crate::common::{for_each_handle_of, get_handle_mut, register_handle, Handle};
+use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
 
 fn ws_file_log(msg: &str) {
     use std::io::Write;
@@ -72,7 +72,7 @@ static WS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 #[cfg(not(target_os = "ios"))]
 fn ensure_gc_scanner_registered() {
     WS_GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_root_scanner(scan_ws_roots);
+        perry_runtime::gc::gc_register_mutable_root_scanner(scan_ws_roots_mut);
     });
 }
 
@@ -81,28 +81,28 @@ fn ensure_gc_scanner_registered() {
 /// every `WsServerHandle` currently in the handle registry (for
 /// `WebSocketServer` instances).
 #[cfg(not(target_os = "ios"))]
+#[allow(dead_code)]
 fn scan_ws_roots(mark: &mut dyn FnMut(f64)) {
-    let mark_cb = |cb: i64, mark: &mut dyn FnMut(f64)| {
-        if cb != 0 {
-            let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF));
-            mark(boxed);
-        }
-    };
+    let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_ws_roots_mut(&mut visitor);
+}
 
-    if let Ok(per_client) = WS_CLIENT_LISTENERS.lock() {
-        for client in per_client.values() {
-            for cb_vec in client.listeners.values() {
-                for &cb in cb_vec.iter() {
-                    mark_cb(cb, mark);
+#[cfg(not(target_os = "ios"))]
+fn scan_ws_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    if let Ok(mut per_client) = WS_CLIENT_LISTENERS.lock() {
+        for client in per_client.values_mut() {
+            for cb_vec in client.listeners.values_mut() {
+                for cb in cb_vec.iter_mut() {
+                    visitor.visit_i64_slot(cb);
                 }
             }
         }
     }
 
-    for_each_handle_of::<WsServerHandle, _>(|server| {
-        for cb_vec in server.listeners.values() {
-            for &cb in cb_vec.iter() {
-                mark_cb(cb, mark);
+    for_each_handle_mut_of::<WsServerHandle, _>(|server| {
+        for cb_vec in server.listeners.values_mut() {
+            for cb in cb_vec.iter_mut() {
+                visitor.visit_i64_slot(cb);
             }
         }
     });
@@ -1350,4 +1350,38 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
     0
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_scanner_emits_client_and_server_listeners() {
+        {
+            let mut clients = WS_CLIENT_LISTENERS.lock().unwrap();
+            clients.clear();
+            clients.insert(
+                42,
+                WsClientListeners {
+                    listeners: HashMap::from([("message".to_string(), vec![0x1234_5678])]),
+                },
+            );
+        }
+        let server_handle = register_handle(WsServerHandle {
+            listeners: HashMap::from([("connection".to_string(), vec![0x2345_6780])]),
+            port: 0,
+            is_listening: false,
+            client_ids: Vec::new(),
+            shutdown_tx: None,
+        });
+
+        let mut emitted = Vec::new();
+        scan_ws_roots(&mut |value| emitted.push(value.to_bits()));
+
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x1234_5678)));
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x2345_6780)));
+        crate::common::drop_handle(server_handle);
+        WS_CLIENT_LISTENERS.lock().unwrap().clear();
+    }
 }

@@ -8,16 +8,15 @@
 //! automatic --help / --version, post-parse query accessors.
 
 use perry_ffi::{
-    alloc_string, gc_register_root_scanner, get_handle, get_handle_mut, iter_handles_of,
-    js_object_alloc_with_shape, js_object_set_field, read_string, register_handle, with_handle_mut,
-    Handle, JsClosure, JsString, JsValue, RawClosureHeader, StringHeader,
+    alloc_string, gc_register_mutable_root_scanner, get_handle, get_handle_mut,
+    iter_handles_of_mut, js_object_alloc_with_shape, js_object_set_field, read_string,
+    register_handle, with_handle_mut, GcRootVisitor, Handle, JsClosure, JsString, JsValue,
+    RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-
 pub struct CommanderHandle {
     name: String,
     description: String,
@@ -75,17 +74,13 @@ static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 fn ensure_gc_scanner_registered() {
     GC_REGISTERED.call_once(|| {
-        gc_register_root_scanner(scan_commander_roots);
+        gc_register_mutable_root_scanner(scan_commander_roots);
     });
 }
 
-fn scan_commander_roots(mark: &mut dyn FnMut(f64)) {
-    iter_handles_of::<CommanderHandle, _>(|cmd| {
-        if cmd.action_callback != 0 {
-            let boxed =
-                f64::from_bits(POINTER_TAG | (cmd.action_callback as u64 & 0x0000_FFFF_FFFF_FFFF));
-            mark(boxed);
-        }
+fn scan_commander_roots(visitor: &mut GcRootVisitor<'_>) {
+    iter_handles_of_mut::<CommanderHandle, _>(|cmd| {
+        visitor.visit_i64_slot(&mut cmd.action_callback);
     });
 }
 
@@ -568,6 +563,42 @@ pub extern "C" fn js_commander_get_arg(handle: Handle, index: f64) -> *const Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_ffi::drop_handle;
+    use std::sync::{Mutex, MutexGuard};
+
+    static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct GcTestGuard {
+        frame: u64,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl GcTestGuard {
+        fn new() -> Self {
+            let lock = GC_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            perry_runtime::gc::js_gc_write_barriers_emitted(1);
+            let frame = perry_runtime::gc::js_shadow_frame_push(0);
+            Self { frame, _lock: lock }
+        }
+    }
+
+    impl Drop for GcTestGuard {
+        fn drop(&mut self) {
+            perry_runtime::gc::js_shadow_frame_pop(self.frame);
+            perry_runtime::gc::js_gc_write_barriers_emitted(0);
+        }
+    }
+
+    fn young_gc_root() -> i64 {
+        perry_runtime::arena::arena_alloc_gc(32, 8, perry_runtime::gc::GC_TYPE_STRING) as i64
+    }
+
+    fn assert_rewritten(before: i64, after: i64) {
+        assert_ne!(after, before);
+        assert!(perry_runtime::arena::pointer_in_nursery(after as usize));
+    }
 
     #[test]
     fn parse_flag_spec_value_with_short() {
@@ -591,6 +622,26 @@ mod tests {
         assert_eq!(s, Some('c'));
         assert_eq!(l, "config");
         assert!(!f);
+    }
+
+    #[test]
+    fn gc_mutable_scanner_rewrites_action_callback_root() {
+        let _guard = GcTestGuard::new();
+        perry_ffi::gc_register_mutable_root_scanner(scan_commander_roots);
+
+        let callback = young_gc_root();
+        let mut cmd = CommanderHandle::new();
+        cmd.action_callback = callback;
+        let handle = register_handle(cmd);
+
+        let _ = perry_runtime::gc::gc_collect_minor();
+
+        {
+            let cmd =
+                get_handle::<CommanderHandle>(handle).expect("commander handle should remain live");
+            assert_rewritten(callback, cmd.action_callback);
+        }
+        drop_handle(handle);
     }
 
     #[test]

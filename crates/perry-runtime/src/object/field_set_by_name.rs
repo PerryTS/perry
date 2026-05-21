@@ -28,6 +28,7 @@ unsafe fn key_to_str_for_diag(key: *const crate::StringHeader) -> String {
 /// Set a field value by its string key name (dynamic property access)
 /// This searches the keys array for a match and sets the corresponding value.
 /// If the key doesn't exist, it adds it to the object.
+#[allow(unused_assignments)]
 #[no_mangle]
 pub extern "C" fn js_object_set_field_by_name(
     obj: *mut ObjectHeader,
@@ -107,6 +108,13 @@ pub extern "C" fn js_object_set_field_by_name(
         }
         return;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let key_handle = scope.root_string_ptr(key);
+    let value_handle = scope.root_nanbox_f64(value);
+    let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let mut key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+    let mut value = value_handle.get_nanbox_f64();
     // Safety: obj is a valid heap pointer (> 0x10000) at this point
     unsafe {
         // Validate this is an ObjectHeader, not some other heap type.
@@ -217,12 +225,12 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
 
-        let prev_keys_usize = keys as usize;
+        let mut prev_keys_usize = keys as usize;
 
         // Resolve to interned pointer for transition cache (pointer identity).
         // If the key is already interned (GC_FLAG_INTERNED set — e.g. from
         // js_string_concat intern hit), skip the FNV-1a hash entirely.
-        let interned_key = if !key.is_null() && (key as usize) > 0x10000 {
+        let mut interned_key = if !key.is_null() && (key as usize) > 0x10000 {
             let gc_hdr =
                 (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_hdr).gc_flags & crate::gc::GC_FLAG_INTERNED != 0 {
@@ -234,6 +242,16 @@ pub extern "C" fn js_object_set_field_by_name(
         } else {
             key
         };
+        let interned_key_handle = scope.root_string_ptr(interned_key);
+        interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+        macro_rules! refresh_roots_after_alloc {
+            () => {{
+                obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+                key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+                value = value_handle.get_nanbox_f64();
+                interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+            }};
+        }
 
         // FAST PATH: shape-transition cache with interned string pointer identity.
         if !key.is_null()
@@ -255,6 +273,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     vbits
                 };
                 set_object_keys_array(obj, next_keys as *mut ArrayHeader);
+                super::mark_object_dynamic_shape_unknown(obj);
                 let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
                 if (slot_idx as usize) < alloc_limit {
                     // Inline the field write — `obj` has already been
@@ -300,9 +319,12 @@ pub extern "C" fn js_object_set_field_by_name(
             }
             // Create a new keys array with the key
             let new_keys = crate::array::js_array_alloc(4);
+            refresh_roots_after_alloc!();
             let new_keys =
                 crate::array::js_array_push(new_keys, JSValue::string_ptr(key as *mut _));
+            refresh_roots_after_alloc!();
             set_object_keys_array(obj, new_keys);
+            super::mark_object_dynamic_shape_unknown(obj);
 
             // Reallocate fields to hold at least one value
             // Note: We assume the object has enough field slots pre-allocated
@@ -400,6 +422,9 @@ pub extern "C" fn js_object_set_field_by_name(
             };
             let owned_keys = if keys_shared {
                 let cloned = crate::array::js_array_alloc(key_count as u32 + 4);
+                refresh_roots_after_alloc!();
+                let keys = (*obj).keys_array;
+                prev_keys_usize = keys as usize;
                 let src_data = (keys as *const u8).add(8) as *const f64;
                 let dst_data = (cloned as *mut u8).add(8) as *mut f64;
                 for i in 0..key_count {
@@ -420,9 +445,17 @@ pub extern "C" fn js_object_set_field_by_name(
                 } else {
                     vbits
                 };
+                let owned_keys_handle = scope.root_raw_mut_ptr(owned_keys);
                 let new_keys =
                     crate::array::js_array_push(owned_keys, JSValue::string_ptr(key as *mut _));
+                prev_keys_usize = if keys_shared {
+                    prev_keys_usize
+                } else {
+                    owned_keys_handle.get_raw_mut_ptr::<ArrayHeader>() as usize
+                };
+                refresh_roots_after_alloc!();
                 set_object_keys_array(obj, new_keys);
+                super::mark_object_dynamic_shape_unknown(obj);
                 overflow_set(obj as usize, new_index, vbits);
                 transition_cache_insert(
                     prev_keys_usize,
@@ -438,9 +471,17 @@ pub extern "C" fn js_object_set_field_by_name(
                 );
                 return;
             }
+            let owned_keys_handle = scope.root_raw_mut_ptr(owned_keys);
             let new_keys =
                 crate::array::js_array_push(owned_keys, JSValue::string_ptr(key as *mut _));
+            prev_keys_usize = if keys_shared {
+                prev_keys_usize
+            } else {
+                owned_keys_handle.get_raw_mut_ptr::<ArrayHeader>() as usize
+            };
+            refresh_roots_after_alloc!();
             set_object_keys_array(obj, new_keys);
+            super::mark_object_dynamic_shape_unknown(obj);
             js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
             if new_index as u32 >= (*obj).field_count {
                 (*obj).field_count = new_index as u32 + 1;
@@ -555,6 +596,9 @@ pub extern "C" fn js_object_set_field_by_name(
         };
         let owned_keys = if keys_shared {
             let cloned = crate::array::js_array_alloc(key_count as u32 + 4);
+            refresh_roots_after_alloc!();
+            let keys = (*obj).keys_array;
+            prev_keys_usize = keys as usize;
             let src_data = (keys as *const u8).add(8) as *const f64;
             let dst_data = (cloned as *mut u8).add(8) as *mut f64;
             for i in 0..key_count {
@@ -582,9 +626,17 @@ pub extern "C" fn js_object_set_field_by_name(
             } else {
                 vbits
             };
+            let owned_keys_handle = scope.root_raw_mut_ptr(owned_keys);
             let new_keys =
                 crate::array::js_array_push(owned_keys, JSValue::string_ptr(key as *mut _));
+            prev_keys_usize = if keys_shared {
+                prev_keys_usize
+            } else {
+                owned_keys_handle.get_raw_mut_ptr::<ArrayHeader>() as usize
+            };
+            refresh_roots_after_alloc!();
             set_object_keys_array(obj, new_keys);
+            super::mark_object_dynamic_shape_unknown(obj);
             overflow_set(obj as usize, new_index, vbits);
             // Record the shape transition so the next object sharing
             // `prev_keys` that adds the same key hits the fast path.
@@ -600,9 +652,17 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
         // First, add the key to the keys array (may reallocate)
+        let owned_keys_handle = scope.root_raw_mut_ptr(owned_keys);
         let new_keys = crate::array::js_array_push(owned_keys, JSValue::string_ptr(key as *mut _));
+        prev_keys_usize = if keys_shared {
+            prev_keys_usize
+        } else {
+            owned_keys_handle.get_raw_mut_ptr::<ArrayHeader>() as usize
+        };
+        refresh_roots_after_alloc!();
         // Update the object's keys_array pointer in case js_array_push reallocated
         set_object_keys_array(obj, new_keys);
+        super::mark_object_dynamic_shape_unknown(obj);
 
         // Set the field at the new index and update logical field_count
         js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));

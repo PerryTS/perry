@@ -4,11 +4,59 @@
 
 use anyhow::Result;
 use perry_hir::Expr;
+use perry_types::Type as HirType;
 
 use super::{lower_expr, FnCtx};
 use crate::block::LlBlock;
 use crate::nanbox::POINTER_MASK_I64;
+use crate::type_analysis::is_numeric_expr;
 use crate::types::{DOUBLE, I32, I64};
+
+/// Static-type predicate: the type's runtime array layout has no pointer
+/// payloads, so a pointer-mask layout note isn't necessary for stores.
+/// Folded into the codegen for `IndexSet` / `ArrayPush` to skip the
+/// note-emission path on statically-numeric arrays.
+pub(crate) fn type_has_numeric_pointer_free_array_layout(ty: &HirType) -> bool {
+    match ty {
+        HirType::Array(elem) => matches!(elem.as_ref(), HirType::Number | HirType::Int32),
+        HirType::Tuple(elems) => elems
+            .iter()
+            .all(|elem| matches!(elem, HirType::Number | HirType::Int32)),
+        HirType::Union(variants) => variants.iter().all(|variant| {
+            matches!(variant, HirType::Null | HirType::Void | HirType::Never)
+                || type_has_numeric_pointer_free_array_layout(variant)
+        }),
+        _ => false,
+    }
+}
+
+pub(crate) fn expr_has_numeric_pointer_free_array_layout(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    crate::type_analysis::static_type_of(ctx, expr)
+        .as_ref()
+        .is_some_and(type_has_numeric_pointer_free_array_layout)
+}
+
+/// Numeric stores into statically numeric arrays preserve the initial
+/// pointer-free layout. Other stores still update the mask so pointer writes
+/// and pointer-clearing overwrites on mixed arrays remain precise.
+pub(crate) fn array_store_needs_layout_note(ctx: &FnCtx<'_>, array: &Expr, value: &Expr) -> bool {
+    !(expr_has_numeric_pointer_free_array_layout(ctx, array) && is_numeric_expr(ctx, value))
+}
+
+/// `lower_expr` variant that hands an expected-type hint down to the
+/// object-literal lowerer (so it can pick raw f64 slots when the
+/// destination has a typed shape). All other expression kinds ignore
+/// the hint.
+pub(crate) fn lower_expr_with_expected_type(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+    expected_ty: Option<&HirType>,
+) -> Result<String> {
+    match expr {
+        Expr::Object(props) => super::lower_object_literal(ctx, props, expected_ty),
+        _ => lower_expr(ctx, expr),
+    }
+}
 
 /// Build a NaN-boxed Array JSValue from a slice of Expr arguments.
 pub(crate) fn proxy_build_args_array(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Result<String> {

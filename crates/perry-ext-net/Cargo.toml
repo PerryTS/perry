@@ -17,3 +17,4 @@ rustls-native-certs = "0.8"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
+perry-runtime.workspace = true

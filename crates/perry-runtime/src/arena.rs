@@ -49,6 +49,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 ///   iteration as it did with 16 × 8 MB blocks — the adaptive step
 ///   shrinks appropriately on the first productive collection.
 const BLOCK_SIZE: usize = 1024 * 1024;
+const FRESH_GENERAL_BLOCK_MIN_USED_BYTES: usize = 256 * 1024;
 const GENERATION_PAGE_SHIFT: usize = 12;
 // Generation classification wants exact range answers, but it does
 // not need a separate hash entry for every 4 KiB remembered-set card.
@@ -56,6 +57,7 @@ const GENERATION_PAGE_SHIFT: usize = 12;
 // and avoids thousands of metadata entries for low-pressure nursery
 // churn before the first GC.
 const GENERATION_CLASS_SHIFT: usize = 20;
+const GENERATION_PAGE_SIZE: usize = 1 << GENERATION_PAGE_SHIFT;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HeapGeneration {
@@ -182,6 +184,84 @@ impl Hasher for IdentityHasher {
 
 type PageGenerationMap = HashMap<usize, PageGenerationSlot, BuildHasherDefault<IdentityHasher>>;
 type OldGenPageObjectMap = crate::fast_hash::PtrHashMap<usize, Vec<usize>>;
+type OldGenPageMetaMap = crate::fast_hash::PtrHashMap<usize, OldPageMeta>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OldPageMeta {
+    pub(crate) page_base: usize,
+    pub(crate) page_end: usize,
+    pub(crate) allocated_bytes: usize,
+    pub(crate) live_bytes: usize,
+    pub(crate) dead_bytes: usize,
+    pub(crate) object_count: usize,
+    pub(crate) live_object_count: usize,
+    pub(crate) dead_object_count: usize,
+    pub(crate) pinned_bytes: usize,
+    pub(crate) pinned_object_count: usize,
+    pub(crate) dirty_slots: usize,
+    pub(crate) dirty: bool,
+    pub(crate) evacuation_eligible: bool,
+}
+
+impl OldPageMeta {
+    #[inline]
+    fn zero_for_page(page: usize) -> Self {
+        let page_base = generation_page_base(page);
+        Self {
+            page_base,
+            page_end: page_base + GENERATION_PAGE_SIZE,
+            allocated_bytes: 0,
+            live_bytes: 0,
+            dead_bytes: 0,
+            object_count: 0,
+            live_object_count: 0,
+            dead_object_count: 0,
+            pinned_bytes: 0,
+            pinned_object_count: 0,
+            dirty_slots: 0,
+            dirty: false,
+            evacuation_eligible: false,
+        }
+    }
+
+    #[inline]
+    fn reset_cycle_sweep_accounting(&mut self) {
+        self.live_bytes = 0;
+        self.dead_bytes = 0;
+        self.pinned_bytes = 0;
+        self.live_object_count = 0;
+        self.dead_object_count = 0;
+        self.pinned_object_count = 0;
+        self.evacuation_eligible = false;
+    }
+
+    #[inline]
+    fn refresh_policy_bits(&mut self) {
+        self.evacuation_eligible = self.allocated_bytes > 0
+            && self.live_bytes > 0
+            && self.dead_bytes > 0
+            && self.pinned_bytes == 0;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct OldPageSummary {
+    pub(crate) pages: usize,
+    pub(crate) allocated_bytes: usize,
+    pub(crate) live_bytes: usize,
+    pub(crate) dead_bytes: usize,
+    pub(crate) reusable_bytes: usize,
+    pub(crate) returned_bytes: usize,
+    pub(crate) pinned_bytes: usize,
+    pub(crate) object_count: usize,
+    pub(crate) live_object_count: usize,
+    pub(crate) dead_object_count: usize,
+    pub(crate) pinned_object_count: usize,
+    pub(crate) dirty_pages: usize,
+    pub(crate) dirty_slots: usize,
+    pub(crate) fragmented_pages: usize,
+    pub(crate) evacuation_eligible_pages: usize,
+}
 
 thread_local! {
     static PAGE_GENERATIONS: RefCell<PageGenerationMap> =
@@ -192,6 +272,12 @@ thread_local! {
 
     static OLD_GEN_PAGE_OBJECTS: RefCell<OldGenPageObjectMap> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
+    static OLD_GEN_PAGE_META: RefCell<OldGenPageMetaMap> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
+    static OLD_GEN_RECLAIM_REUSABLE_BYTES: Cell<usize> = const { Cell::new(0) };
+    static OLD_GEN_RECLAIM_RETURNED_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
 #[inline]
@@ -205,8 +291,64 @@ fn generation_class_key_for_addr(addr: usize) -> usize {
 }
 
 #[inline]
+fn generation_page_base(page: usize) -> usize {
+    page << GENERATION_PAGE_SHIFT
+}
+
+#[inline]
 fn invalidate_generation_cache() {
     PAGE_GENERATION_CACHE.with(|cache| cache.set(PageGenerationCache::empty()));
+}
+
+fn register_old_block_pages(base: usize, size: usize) {
+    if base == 0 || size == 0 {
+        return;
+    }
+    let end = base + size;
+    let first_page = generation_page_for_addr(base);
+    let last_page = generation_page_for_addr(end - 1);
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        for page in first_page..=last_page {
+            meta.entry(page)
+                .or_insert_with(|| OldPageMeta::zero_for_page(page));
+        }
+    });
+}
+
+fn unregister_old_block_pages(pages: &[usize]) {
+    if pages.is_empty() {
+        return;
+    }
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        for &page in pages {
+            meta.remove(&page);
+        }
+    });
+    OLD_GEN_PAGE_OBJECTS.with(|index| {
+        let mut index = index.borrow_mut();
+        for &page in pages {
+            index.remove(&page);
+        }
+    });
+}
+
+#[inline]
+fn address_span_overlaps_pages(
+    start: usize,
+    size: usize,
+    pages: &crate::fast_hash::PtrHashSet<usize>,
+) -> bool {
+    if start == 0 || size == 0 || pages.is_empty() {
+        return false;
+    }
+    let Some(end) = start.checked_add(size) else {
+        return true;
+    };
+    let first_page = generation_page_for_addr(start);
+    let last_page = generation_page_for_addr(end - 1);
+    (first_page..=last_page).any(|page| pages.contains(&page))
 }
 
 fn register_block_space(base: usize, size: usize, generation: HeapGeneration, space: HeapSpace) {
@@ -233,6 +375,9 @@ fn register_block_space(base: usize, size: usize, generation: HeapGeneration, sp
             }
         }
     });
+    if matches!(generation, HeapGeneration::Old) {
+        register_old_block_pages(base, size);
+    }
     invalidate_generation_cache();
 }
 
@@ -243,6 +388,7 @@ fn unregister_block_generation(base: usize, size: usize) {
     let end = base + size;
     let first_key = generation_class_key_for_addr(base);
     let last_key = generation_class_key_for_addr(end - 1);
+    let mut removed_old_block = false;
     PAGE_GENERATIONS.with(|pages| {
         let mut pages = pages.borrow_mut();
         for key in first_key..=last_key {
@@ -251,10 +397,19 @@ fn unregister_block_generation(base: usize, size: usize) {
             if let Some(slot) = pages.get_mut(&key) {
                 match slot {
                     PageGenerationSlot::Single(range) => {
-                        remove_page = range.base == base && range.end == end;
+                        if range.base == base && range.end == end {
+                            removed_old_block |= matches!(range.generation, HeapGeneration::Old);
+                            remove_page = true;
+                        }
                     }
                     PageGenerationSlot::Multiple(ranges) => {
-                        ranges.retain(|range| !(range.base == base && range.end == end));
+                        ranges.retain(|range| {
+                            let remove = range.base == base && range.end == end;
+                            if remove && matches!(range.generation, HeapGeneration::Old) {
+                                removed_old_block = true;
+                            }
+                            !remove
+                        });
                         if ranges.is_empty() {
                             remove_page = true;
                         } else if ranges.len() == 1 {
@@ -270,6 +425,12 @@ fn unregister_block_generation(base: usize, size: usize) {
             }
         }
     });
+    if removed_old_block {
+        let first_page = generation_page_for_addr(base);
+        let last_page = generation_page_for_addr(end - 1);
+        let old_pages_to_unregister: Vec<usize> = (first_page..=last_page).collect();
+        unregister_old_block_pages(&old_pages_to_unregister);
+    }
     invalidate_generation_cache();
 }
 
@@ -337,21 +498,241 @@ pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
     }
 }
 
+pub(crate) fn old_object_page_overlaps(
+    header_addr: usize,
+    total_size: usize,
+) -> Vec<(usize, usize)> {
+    if header_addr == 0 || total_size == 0 {
+        return Vec::new();
+    }
+    let object_end = header_addr + total_size;
+    let first_page = generation_page_for_addr(header_addr);
+    let last_page = generation_page_for_addr(object_end - 1);
+    let mut overlaps = Vec::with_capacity(last_page - first_page + 1);
+    for page in first_page..=last_page {
+        let page_base = generation_page_base(page);
+        let page_end = page_base + GENERATION_PAGE_SIZE;
+        let overlap_start = header_addr.max(page_base);
+        let overlap_end = object_end.min(page_end);
+        if overlap_start < overlap_end {
+            overlaps.push((page, overlap_end - overlap_start));
+        }
+    }
+    overlaps
+}
+
+fn update_old_page_meta_for_object(page_updates: &[(usize, usize)], adding: bool) {
+    if page_updates.is_empty() {
+        return;
+    }
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        for &(page, bytes) in page_updates {
+            let page_meta = meta
+                .entry(page)
+                .or_insert_with(|| OldPageMeta::zero_for_page(page));
+            if adding {
+                page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_add(bytes);
+                page_meta.object_count = page_meta.object_count.saturating_add(1);
+            } else {
+                page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_sub(bytes);
+                page_meta.object_count = page_meta.object_count.saturating_sub(1);
+                if page_meta.allocated_bytes == 0 && page_meta.object_count == 0 {
+                    page_meta.reset_cycle_sweep_accounting();
+                }
+            }
+            page_meta.refresh_policy_bits();
+        }
+    });
+}
+
 fn register_old_object_pages(header_addr: usize, total_size: usize) {
     if header_addr == 0 || total_size == 0 {
         return;
     }
-    let first_page = generation_page_for_addr(header_addr);
-    let last_page = generation_page_for_addr(header_addr + total_size - 1);
+    let overlaps = old_object_page_overlaps(header_addr, total_size);
+    let mut added_pages = Vec::with_capacity(overlaps.len());
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
-        for page in first_page..=last_page {
+        for &(page, bytes) in &overlaps {
             let headers = index.entry(page).or_insert_with(Vec::new);
             if !headers.contains(&header_addr) {
                 headers.push(header_addr);
+                added_pages.push((page, bytes));
             }
         }
     });
+    update_old_page_meta_for_object(&added_pages, true);
+}
+
+#[allow(dead_code)]
+pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize) {
+    if header_addr == 0 || total_size == 0 {
+        return;
+    }
+    let overlaps = old_object_page_overlaps(header_addr, total_size);
+    let mut removed_pages = Vec::with_capacity(overlaps.len());
+    OLD_GEN_PAGE_OBJECTS.with(|index| {
+        let mut index = index.borrow_mut();
+        for &(page, bytes) in &overlaps {
+            let mut remove_page = false;
+            if let Some(headers) = index.get_mut(&page) {
+                if let Some(pos) = headers.iter().position(|&addr| addr == header_addr) {
+                    headers.swap_remove(pos);
+                    removed_pages.push((page, bytes));
+                }
+                remove_page = headers.is_empty();
+            }
+            if remove_page {
+                index.remove(&page);
+            }
+        }
+    });
+    update_old_page_meta_for_object(&removed_pages, false);
+}
+
+pub(crate) fn old_pages_begin_gc_cycle() {
+    OLD_GEN_PAGE_META.with(|meta| {
+        for page_meta in meta.borrow_mut().values_mut() {
+            page_meta.dirty_slots = 0;
+        }
+    });
+    OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.set(0));
+    OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.set(0));
+}
+
+pub(crate) fn old_pages_reset_sweep_accounting() {
+    OLD_GEN_PAGE_META.with(|meta| {
+        for page_meta in meta.borrow_mut().values_mut() {
+            page_meta.reset_cycle_sweep_accounting();
+        }
+    });
+}
+
+pub(crate) fn old_page_account_swept_object(
+    header_addr: usize,
+    total_size: usize,
+    live: bool,
+    pinned: bool,
+) {
+    if header_addr == 0 || total_size == 0 {
+        return;
+    }
+    let overlaps = old_object_page_overlaps(header_addr, total_size);
+    if overlaps.is_empty() {
+        return;
+    }
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        for (page, bytes) in overlaps {
+            let page_meta = meta
+                .entry(page)
+                .or_insert_with(|| OldPageMeta::zero_for_page(page));
+            if live {
+                page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
+                page_meta.live_object_count = page_meta.live_object_count.saturating_add(1);
+                if pinned {
+                    page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(bytes);
+                    page_meta.pinned_object_count = page_meta.pinned_object_count.saturating_add(1);
+                }
+            } else {
+                page_meta.dead_bytes = page_meta.dead_bytes.saturating_add(bytes);
+                page_meta.dead_object_count = page_meta.dead_object_count.saturating_add(1);
+            }
+            page_meta.refresh_policy_bits();
+        }
+    });
+}
+
+pub(crate) fn old_page_account_promoted_object(
+    header_addr: usize,
+    total_size: usize,
+    pinned: bool,
+) {
+    if header_addr == 0 || total_size == 0 {
+        return;
+    }
+    let overlaps = old_object_page_overlaps(header_addr, total_size);
+    if overlaps.is_empty() {
+        return;
+    }
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        for (page, bytes) in overlaps {
+            let page_meta = meta
+                .entry(page)
+                .or_insert_with(|| OldPageMeta::zero_for_page(page));
+            page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
+            page_meta.live_object_count = page_meta.live_object_count.saturating_add(1);
+            if pinned {
+                page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(bytes);
+                page_meta.pinned_object_count = page_meta.pinned_object_count.saturating_add(1);
+            }
+            page_meta.refresh_policy_bits();
+        }
+    });
+}
+
+pub(crate) fn old_page_account_dirty_slot(slot_addr: usize) {
+    if slot_addr == 0 {
+        return;
+    }
+    let page = generation_page_for_addr(slot_addr);
+    OLD_GEN_PAGE_META.with(|meta| {
+        if let Some(page_meta) = meta.borrow_mut().get_mut(&page) {
+            page_meta.dirty_slots = page_meta.dirty_slots.saturating_add(1);
+        }
+    });
+}
+
+pub(crate) fn old_page_summary() -> OldPageSummary {
+    OLD_GEN_PAGE_META.with(|meta| {
+        let meta = meta.borrow();
+        let mut summary = OldPageSummary {
+            pages: meta.len(),
+            ..OldPageSummary::default()
+        };
+        for page_meta in meta.values() {
+            summary.allocated_bytes = summary
+                .allocated_bytes
+                .saturating_add(page_meta.allocated_bytes);
+            summary.live_bytes = summary.live_bytes.saturating_add(page_meta.live_bytes);
+            summary.dead_bytes = summary.dead_bytes.saturating_add(page_meta.dead_bytes);
+            summary.pinned_bytes = summary.pinned_bytes.saturating_add(page_meta.pinned_bytes);
+            summary.object_count = summary.object_count.saturating_add(page_meta.object_count);
+            summary.live_object_count = summary
+                .live_object_count
+                .saturating_add(page_meta.live_object_count);
+            summary.dead_object_count = summary
+                .dead_object_count
+                .saturating_add(page_meta.dead_object_count);
+            summary.pinned_object_count = summary
+                .pinned_object_count
+                .saturating_add(page_meta.pinned_object_count);
+            if page_meta.dirty || page_meta.dirty_slots > 0 {
+                summary.dirty_pages = summary.dirty_pages.saturating_add(1);
+            }
+            summary.dirty_slots = summary.dirty_slots.saturating_add(page_meta.dirty_slots);
+            if page_meta.live_bytes > 0 && page_meta.dead_bytes > 0 {
+                summary.fragmented_pages = summary.fragmented_pages.saturating_add(1);
+            }
+            if page_meta.evacuation_eligible {
+                summary.evacuation_eligible_pages =
+                    summary.evacuation_eligible_pages.saturating_add(1);
+            }
+        }
+        summary.reusable_bytes = OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.get());
+        summary.returned_bytes = OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.get());
+        summary
+    })
+}
+
+pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut snapshot = meta.borrow().values().copied().collect::<Vec<_>>();
+        snapshot.sort_unstable_by_key(|page_meta| page_meta.page_base);
+        snapshot
+    })
 }
 
 pub(crate) fn old_arena_walk_objects_on_pages(
@@ -384,9 +765,53 @@ pub(crate) fn old_arena_walk_objects_on_pages(
     count
 }
 
+pub(crate) fn old_arena_page_index_remove_object(header_addr: usize, total_size: usize) {
+    if header_addr == 0 || total_size == 0 {
+        return;
+    }
+    let overlaps = old_object_page_overlaps(header_addr, total_size);
+    if overlaps.is_empty() {
+        return;
+    }
+    OLD_GEN_PAGE_OBJECTS.with(|index| {
+        let mut index = index.borrow_mut();
+        for (page, _) in overlaps {
+            let mut remove_page = false;
+            if let Some(headers) = index.get_mut(&page) {
+                headers.retain(|&addr| addr != header_addr);
+                remove_page = headers.is_empty();
+            }
+            if remove_page {
+                index.remove(&page);
+            }
+        }
+    });
+}
+
+pub(crate) fn old_page_mark_dirty(page: usize) {
+    OLD_GEN_PAGE_META.with(|meta| {
+        if let Some(page_meta) = meta.borrow_mut().get_mut(&page) {
+            page_meta.dirty = true;
+        }
+    });
+}
+
+pub(crate) fn old_page_clear_dirty(page: usize) {
+    OLD_GEN_PAGE_META.with(|meta| {
+        if let Some(page_meta) = meta.borrow_mut().get_mut(&page) {
+            page_meta.dirty = false;
+        }
+    });
+}
+
 #[cfg(test)]
 pub(crate) fn old_arena_page_index_clear_for_tests() {
     OLD_GEN_PAGE_OBJECTS.with(|index| index.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(crate) fn old_page_meta_for_tests(page: usize) -> Option<OldPageMeta> {
+    OLD_GEN_PAGE_META.with(|meta| meta.borrow().get(&page).copied())
 }
 
 /// Create a block of at least the given size (for oversized allocations)
@@ -460,6 +885,34 @@ impl ArenaBlock {
         self.offset = (bumped + pad - 1) & !(pad - 1);
         Some(ptr)
     }
+
+    #[inline]
+    fn allocation_start(&self, size: usize, align: usize) -> Option<usize> {
+        if self.data.is_null() {
+            return None;
+        }
+        let pad = align.max(8);
+        let aligned_offset = (self.offset + pad - 1) & !(pad - 1);
+        let bumped = aligned_offset.checked_add(size)?;
+        if bumped > self.size {
+            return None;
+        }
+        (self.data as usize).checked_add(aligned_offset)
+    }
+
+    #[inline]
+    fn alloc_excluding_pages(
+        &mut self,
+        size: usize,
+        align: usize,
+        excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
+    ) -> Option<*mut u8> {
+        let start = self.allocation_start(size, align)?;
+        if address_span_overlaps_pages(start, size, excluded_pages) {
+            return None;
+        }
+        self.alloc(size, align)
+    }
 }
 
 /// Thread-local arena allocator
@@ -506,6 +959,68 @@ impl Arena {
     }
 
     #[inline]
+    fn resync_inline_to_current(&self) {
+        INLINE_STATE.with(|s| unsafe {
+            let inline = &mut *s.get();
+            if !inline.data.is_null() {
+                let block = &self.blocks[self.current];
+                inline.data = block.data;
+                inline.offset = block.offset;
+                inline.size = block.size;
+            }
+        });
+    }
+
+    fn install_fresh_block(&mut self, size: usize) {
+        let fresh = alloc_block(size);
+        let fresh_size = fresh.size;
+        let fresh_base = fresh.data as usize;
+        register_block_space(fresh_base, fresh_size, self.generation, self.space);
+        let mut tomb_idx: Option<usize> = None;
+        for i in 0..self.blocks.len() {
+            if self.blocks[i].data.is_null() {
+                tomb_idx = Some(i);
+                break;
+            }
+        }
+        let new_idx = match tomb_idx {
+            Some(i) => {
+                self.blocks[i] = fresh;
+                i
+            }
+            None => {
+                self.blocks.push(fresh);
+                self.blocks.len() - 1
+            }
+        };
+        self.current = new_idx;
+        ARENA_TOTAL_BYTES.with(|t| t.set(t.get() + fresh_size));
+    }
+
+    fn alloc_fresh_block(&mut self, size: usize, align: usize) -> *mut u8 {
+        self.install_fresh_block(size);
+        self.blocks[self.current]
+            .alloc(size, align)
+            .expect("Fresh block should have space")
+    }
+
+    fn alloc_fresh_block_excluding_pages(
+        &mut self,
+        size: usize,
+        align: usize,
+        excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
+    ) -> *mut u8 {
+        loop {
+            self.install_fresh_block(size);
+            if let Some(ptr) =
+                self.blocks[self.current].alloc_excluding_pages(size, align, excluded_pages)
+            {
+                return ptr;
+            }
+        }
+    }
+
+    #[inline]
     fn alloc(&mut self, size: usize, align: usize) -> *mut u8 {
         // Try current block first
         if let Some(ptr) = self.blocks[self.current].alloc(size, align) {
@@ -536,15 +1051,7 @@ impl Arena {
             if let Some(ptr) = self.blocks[i].alloc(size, align) {
                 self.current = i;
                 // Resync inline state to the new current block.
-                INLINE_STATE.with(|s| unsafe {
-                    let inline = &mut *s.get();
-                    if !inline.data.is_null() {
-                        let block = &self.blocks[self.current];
-                        inline.data = block.data;
-                        inline.offset = block.offset;
-                        inline.size = block.size;
-                    }
-                });
+                self.resync_inline_to_current();
                 return ptr;
             }
         }
@@ -555,33 +1062,34 @@ impl Arena {
         // dealloc threshold) over growing the Vec, so block_idx
         // semantics stay bounded even on workloads that churn
         // through nursery blocks.
-        let fresh = alloc_block(size);
-        let fresh_size = fresh.size;
-        let fresh_base = fresh.data as usize;
-        register_block_space(fresh_base, fresh_size, self.generation, self.space);
-        let mut tomb_idx: Option<usize> = None;
+        self.alloc_fresh_block(size, align)
+    }
+
+    fn alloc_excluding_pages(
+        &mut self,
+        size: usize,
+        align: usize,
+        excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
+    ) -> *mut u8 {
+        if excluded_pages.is_empty() {
+            return self.alloc(size, align);
+        }
+        if let Some(ptr) =
+            self.blocks[self.current].alloc_excluding_pages(size, align, excluded_pages)
+        {
+            return ptr;
+        }
         for i in 0..self.blocks.len() {
-            if self.blocks[i].data.is_null() {
-                tomb_idx = Some(i);
-                break;
+            if i == self.current {
+                continue;
+            }
+            if let Some(ptr) = self.blocks[i].alloc_excluding_pages(size, align, excluded_pages) {
+                self.current = i;
+                self.resync_inline_to_current();
+                return ptr;
             }
         }
-        let new_idx = match tomb_idx {
-            Some(i) => {
-                self.blocks[i] = fresh;
-                i
-            }
-            None => {
-                self.blocks.push(fresh);
-                self.blocks.len() - 1
-            }
-        };
-        self.current = new_idx;
-        ARENA_TOTAL_BYTES.with(|t| t.set(t.get() + fresh_size));
-
-        self.blocks[self.current]
-            .alloc(size, align)
-            .expect("Fresh block should have space")
+        self.alloc_fresh_block_excluding_pages(size, align, excluded_pages)
     }
 }
 
@@ -640,11 +1148,10 @@ thread_local! {
     /// extends to a third region.
     ///
     /// Old-arena blocks are never reset by `arena_reset_empty_blocks`
-    /// (same lifetime contract as longlived blocks — promotion
-    /// implies "expected to live indefinitely"), and never feed
-    /// the inline bump allocator. Major GC will eventually mark-
-    /// sweep them in Phase C+; today they accumulate forever
-    /// because nothing allocates into them.
+    /// (same lifetime contract as longlived blocks from the nursery
+    /// reset path), and never feed the inline bump allocator. Full
+    /// mark-sweep can reclaim completely dead old blocks through the
+    /// dedicated old-arena reset/deallocation path.
     static OLD_ARENA: UnsafeCell<Arena> =
         UnsafeCell::new(Arena::new(HeapGeneration::Old, HeapSpace::Old));
 
@@ -763,6 +1270,38 @@ pub fn sync_inline_arena_state() {
     });
 }
 
+/// Move subsequent general-arena allocations onto a fresh block when the
+/// active block is occupied enough that phase mixing would pin meaningful RSS.
+///
+/// This is intentionally a phase-boundary tool, not an allocation fast path.
+/// The non-generational collector cannot compact a block that mixes a live
+/// JSON source string with dead parse/build objects, so JSON.parse uses this
+/// to keep source-building, parse, and post-parse allocation phases from
+/// sharing a busy 1 MB block under full mark-sweep fallback. Tiny parse loops
+/// with explicit GCs often return to an almost-empty current block; forcing a
+/// fresh block there only raises the process RSS high-water mark.
+pub fn arena_start_fresh_general_block() {
+    INLINE_STATE.with(|inline_s| unsafe {
+        let inline = &mut *inline_s.get();
+        ARENA.with(|a| {
+            let arena = &mut *(*a).get();
+            if !inline.data.is_null() {
+                arena.blocks[arena.current].offset = inline.offset;
+            }
+            if arena.blocks[arena.current].offset < FRESH_GENERAL_BLOCK_MIN_USED_BYTES {
+                return;
+            }
+            arena.install_fresh_block(BLOCK_SIZE);
+            if !inline.data.is_null() {
+                let block = &arena.blocks[arena.current];
+                inline.data = block.data;
+                inline.offset = block.offset;
+                inline.size = block.size;
+            }
+        });
+    });
+}
+
 /// Allocate memory from the thread-local arena
 /// This is very fast - just a pointer bump in the common case
 ///
@@ -858,6 +1397,17 @@ pub fn arena_alloc_old(size: usize, align: usize) -> *mut u8 {
     })
 }
 
+pub(crate) fn arena_alloc_old_excluding_pages(
+    size: usize,
+    align: usize,
+    excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
+) -> *mut u8 {
+    OLD_ARENA.with(|a| unsafe {
+        let arena = &mut *a.get();
+        arena.alloc_excluding_pages(size, align, excluded_pages)
+    })
+}
+
 /// GcHeader-prefixed counterpart of `arena_alloc_old`. See
 /// `arena_alloc_gc_longlived` for the same shape on the longlived
 /// arena — only the backing region differs.
@@ -879,6 +1429,36 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     register_old_object_pages(raw as usize, total);
 
     unsafe { raw.add(GC_HEADER_SIZE) }
+}
+
+pub(crate) fn arena_alloc_gc_old_excluding_pages(
+    size: usize,
+    align: usize,
+    obj_type: u8,
+    excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
+) -> *mut u8 {
+    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
+
+    let pad = align.max(8);
+    let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
+    let raw = arena_alloc_old_excluding_pages(total, align, excluded_pages);
+
+    unsafe {
+        let header = raw as *mut GcHeader;
+        (*header).obj_type = obj_type;
+        (*header).gc_flags = GC_FLAG_ARENA;
+        (*header)._reserved = 0;
+        (*header).size = total as u32;
+    }
+    register_old_object_pages(raw as usize, total);
+
+    unsafe { raw.add(GC_HEADER_SIZE) }
+}
+
+#[inline(always)]
+fn gc_padded_total_size(size: usize, align: usize) -> usize {
+    let pad = align.max(8);
+    (crate::gc::GC_HEADER_SIZE + size + pad - 1) & !(pad - 1)
 }
 
 fn inactive_survivor_index() -> usize {
@@ -906,8 +1486,7 @@ fn with_survivor_arena<R>(idx: usize, f: impl FnOnce(&Arena) -> R) -> R {
 pub(crate) fn arena_alloc_gc_survivor(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
-    let pad = align.max(8);
-    let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
+    let total = gc_padded_total_size(size, align);
     let idx = inactive_survivor_index();
     let raw = with_survivor_arena_mut(idx, |arena| arena.alloc(total, align));
 
@@ -934,7 +1513,20 @@ pub(crate) fn arena_alloc_gc_survivor(size: usize, align: usize, obj_type: u8) -
 /// behind a cold branch.
 #[inline(always)]
 pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
-    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
+    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_FLAG_TENURED, GC_HEADER_SIZE};
+
+    // Large arena-backed GC objects are born directly in non-moving old
+    // generation. The threshold applies to the actual bytes a copying nursery
+    // would otherwise move: GcHeader + payload + alignment padding.
+    let total = gc_padded_total_size(size, align);
+    if crate::gc::is_large_object_total_size(total) {
+        let user_ptr = arena_alloc_gc_old(size, align, obj_type);
+        unsafe {
+            let header = user_ptr.sub(GC_HEADER_SIZE) as *mut GcHeader;
+            (*header).gc_flags |= GC_FLAG_TENURED;
+        }
+        return user_ptr;
+    }
 
     // Hot path: bump-allocate from the current arena block, skipping the
     // free-list walk entirely. The free-list-nonempty `Cell` is a single
@@ -1004,8 +1596,6 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // first componentData key drifted to a denormal (~1.086e-311),
     // throwing "Component type 1 is not in this archetype" on the
     // next query.
-    let pad = align.max(8);
-    let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
     let raw = arena_alloc(total, align);
 
     unsafe {
@@ -1099,6 +1689,7 @@ pub(crate) struct ArenaTelemetrySnapshot {
 #[derive(Clone, Copy, Default)]
 pub struct ArenaResetStats {
     pub reset_blocks: usize,
+    pub reusable_bytes: usize,
     pub deallocated_blocks: usize,
     pub deallocated_bytes: usize,
 }
@@ -1209,7 +1800,7 @@ pub fn arena_walk_objects_addr_sorted(mut callback: impl FnMut(*mut u8)) {
                     break;
                 }
                 let obj_type = (*header).obj_type;
-                if (1..=9).contains(&obj_type) {
+                if crate::gc::gc_type_is_arena_walkable(obj_type) {
                     callback(header_ptr);
                 }
                 offset = aligned + total_size;
@@ -1253,7 +1844,7 @@ pub fn arena_walk_objects(mut callback: impl FnMut(*mut u8)) {
 
                     // Only process if this looks like a valid GC object
                     let obj_type = (*header).obj_type;
-                    if (1..=9).contains(&obj_type) {
+                    if crate::gc::gc_type_is_arena_walkable(obj_type) {
                         callback(header_ptr);
                     }
 
@@ -1314,7 +1905,7 @@ pub fn old_arena_walk_objects(mut callback: impl FnMut(*mut u8)) {
                     }
 
                     let obj_type = (*header).obj_type;
-                    if (1..=9).contains(&obj_type) {
+                    if crate::gc::gc_type_is_arena_walkable(obj_type) {
                         callback(header_ptr);
                     }
 
@@ -1358,7 +1949,7 @@ pub fn arena_walk_objects_with_block_index(mut callback: impl FnMut(*mut u8, usi
                         break;
                     }
                     let obj_type = (*header).obj_type;
-                    if (1..=9).contains(&obj_type) {
+                    if crate::gc::gc_type_is_arena_walkable(obj_type) {
                         callback(header_ptr, block_idx);
                     }
                     offset = aligned + total_size;
@@ -1437,7 +2028,7 @@ pub fn arena_walk_objects_filtered(
                         break;
                     }
                     let obj_type = (*header).obj_type;
-                    if (1..=9).contains(&obj_type) {
+                    if crate::gc::gc_type_is_arena_walkable(obj_type) {
                         callback(header_ptr, block_idx);
                     }
                     offset = aligned + total_size;
@@ -1511,6 +2102,20 @@ pub fn general_block_count() -> usize {
     ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() })
 }
 
+/// Whether a general-arena block is in the caller-saved-register safety
+/// window used by `arena_reset_empty_blocks`.
+#[inline]
+pub(crate) fn general_block_in_recent_window(block_idx: usize) -> bool {
+    ARENA.with(|arena| unsafe {
+        let arena = &*arena.get();
+        if block_idx >= arena.blocks.len() {
+            return false;
+        }
+        let keep_low = arena.current.saturating_sub(4);
+        block_idx >= keep_low && block_idx <= arena.current
+    })
+}
+
 /// Boundary between longlived and old-gen blocks. Indices
 /// `general_block_count()..longlived_end()` are longlived;
 /// `longlived_end()..arena_block_count()` are old-gen (gen-GC Phase B).
@@ -1558,26 +2163,36 @@ pub fn arena_reset_all_blocks_to_zero() {
     });
 }
 
-fn reset_region_to_zero(arena: &mut Arena) -> usize {
+fn reset_region_to_zero(arena: &mut Arena) -> (usize, usize) {
     let mut reset_blocks = 0usize;
+    let mut reusable_bytes = 0usize;
     for block in arena.blocks.iter_mut() {
         if block.data.is_null() {
             continue;
         }
         if block.offset != 0 {
             reset_blocks += 1;
+            reusable_bytes = reusable_bytes.saturating_add(block.offset);
         }
         block.offset = 0;
         block.dead_cycles = 0;
     }
     arena.current = 0;
-    reset_blocks
+    (reset_blocks, reusable_bytes)
 }
 
 /// Reset the inactive survivor semispace before a copying minor starts.
 pub(crate) fn copying_prepare_to_space() -> usize {
     let idx = inactive_survivor_index();
-    with_survivor_arena_mut(idx, reset_region_to_zero)
+    with_survivor_arena_mut(idx, reset_region_to_zero).0
+}
+
+/// Bytes currently allocated in the active survivor from-space.
+pub(crate) fn copying_active_survivor_in_use_bytes() -> usize {
+    let active = ACTIVE_SURVIVOR.with(|active| active.get());
+    with_survivor_arena(active, |arena| {
+        arena.blocks.iter().map(|b| b.offset).sum::<usize>()
+    })
 }
 
 /// Bytes currently allocated in Eden plus the active survivor from-space.
@@ -1594,14 +2209,28 @@ pub(crate) fn copying_from_space_in_use_bytes() -> usize {
     eden + survivor
 }
 
+pub(crate) fn active_survivor_block_index_range() -> std::ops::Range<usize> {
+    let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
+    let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });
+    let survivor1_n = SURVIVOR_ARENA_1.with(|a| unsafe { (*a.get()).blocks.len() });
+    match ACTIVE_SURVIVOR.with(|active| active.get()) {
+        0 => general_n..general_n + survivor0_n,
+        1 => general_n + survivor0_n..general_n + survivor0_n + survivor1_n,
+        _ => general_n..general_n,
+    }
+}
+
 /// Reset Eden and the active survivor from-space, then flip the survivor
 /// roles so the to-space populated by the copying collector becomes active.
 pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
     sync_inline_arena_state();
     let mut reset_blocks = 0usize;
+    let mut reusable_bytes = 0usize;
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
-        reset_blocks += reset_region_to_zero(arena);
+        let (blocks, bytes) = reset_region_to_zero(arena);
+        reset_blocks += blocks;
+        reusable_bytes = reusable_bytes.saturating_add(bytes);
         crate::gc::ARENA_FREE_LIST.with(|fl| fl.borrow_mut().clear());
         crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
         INLINE_STATE.with(|s| {
@@ -1616,11 +2245,14 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
     });
 
     let active = ACTIVE_SURVIVOR.with(|active| active.get());
-    reset_blocks += with_survivor_arena_mut(active, reset_region_to_zero);
+    let (blocks, bytes) = with_survivor_arena_mut(active, reset_region_to_zero);
+    reset_blocks += blocks;
+    reusable_bytes = reusable_bytes.saturating_add(bytes);
     ACTIVE_SURVIVOR.with(|active_cell| active_cell.set(1 - active));
 
     ArenaResetStats {
         reset_blocks,
+        reusable_bytes,
         deallocated_blocks: 0,
         deallocated_bytes: 0,
     }
@@ -1650,7 +2282,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
     // root-tracked caches.
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
-        let mut reset_block_ranges: Vec<(usize, usize)> = Vec::new();
+        let mut reset_block_ranges: Vec<(usize, usize, usize)> = Vec::new();
         // Issue #73: never reset the current block or the four blocks
         // immediately before it. Those are the most recent allocation
         // targets — they contain freshly-allocated objects whose
@@ -1712,7 +2344,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
             // (`keep_low..=current`) still get the full "never reset"
             // protection above, which is where the scan-miss risk
             // actually lives.
-            reset_block_ranges.push((block.data as usize, block.size));
+            reset_block_ranges.push((block.data as usize, block.size, block.offset));
             block.offset = 0;
             // Don't write dead_cycles — the dealloc-candidate loop
             // below sees offset==0 + outside-recent-window and
@@ -1729,7 +2361,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
                     let p = ptr as usize;
                     !reset_block_ranges
                         .iter()
-                        .any(|&(base, size)| p >= base && p < base + size)
+                        .any(|&(base, size, _)| p >= base && p < base + size)
                 });
                 if fl.is_empty() {
                     crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
@@ -1802,8 +2434,18 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
         let reset_blocks = reset_block_ranges.len();
         let deallocated_blocks = deallocated_ranges.len();
         let deallocated_bytes: usize = deallocated_ranges.iter().map(|&(_, s)| s).sum();
+        let reusable_bytes: usize = reset_block_ranges
+            .iter()
+            .filter(|&&(base, _, _)| {
+                !deallocated_ranges
+                    .iter()
+                    .any(|&(deallocated_base, _)| deallocated_base == base)
+            })
+            .map(|&(_, _, used)| used)
+            .sum();
         let stats = ArenaResetStats {
             reset_blocks,
+            reusable_bytes,
             deallocated_blocks,
             deallocated_bytes,
         };
@@ -1873,6 +2515,200 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
             stats
         }
     })
+}
+
+pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaResetStats {
+    let old_block_start = longlived_end();
+    let stats = OLD_ARENA.with(|arena| unsafe {
+        let arena = &mut *arena.get();
+        let original_current = arena.current;
+        let mut stats = ArenaResetStats::default();
+        let mut changed = false;
+
+        for (i, block) in arena.blocks.iter_mut().enumerate() {
+            if block.data.is_null() {
+                continue;
+            }
+
+            let block_idx = old_block_start + i;
+            if block_has_live.get(block_idx).copied().unwrap_or(false) {
+                block.dead_cycles = 0;
+                continue;
+            }
+
+            let base = block.data as usize;
+            let size = block.size;
+            let used = block.offset;
+            let first_page = generation_page_for_addr(base);
+            let last_page = generation_page_for_addr(base + size - 1);
+            let pages: Vec<usize> = (first_page..=last_page).collect();
+            unregister_old_block_pages(&pages);
+
+            if used != 0 {
+                stats.reset_blocks = stats.reset_blocks.saturating_add(1);
+            }
+            block.offset = 0;
+            block.dead_cycles = 0;
+            changed = true;
+
+            // Keep the current old allocation target mapped and reusable.
+            // Arena::alloc assumes `current` points at a non-tombstone block.
+            if i == original_current {
+                stats.reusable_bytes = stats.reusable_bytes.saturating_add(used);
+                continue;
+            }
+
+            let layout = Layout::from_size_align(size, 16).unwrap();
+            unregister_block_generation(base, size);
+            std::alloc::dealloc(block.data, layout);
+            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            block.data = std::ptr::null_mut();
+            block.size = 0;
+            block.offset = 0;
+            block.dead_cycles = 0;
+            stats.deallocated_blocks = stats.deallocated_blocks.saturating_add(1);
+            stats.deallocated_bytes = stats.deallocated_bytes.saturating_add(size);
+        }
+
+        if changed {
+            if let Some((idx, _)) = arena
+                .blocks
+                .iter()
+                .enumerate()
+                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
+            {
+                arena.current = idx;
+            } else if arena
+                .blocks
+                .get(arena.current)
+                .map(|block| block.data.is_null())
+                .unwrap_or(true)
+            {
+                if let Some((idx, _)) = arena
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .find(|(_, block)| !block.data.is_null())
+                {
+                    arena.current = idx;
+                }
+            }
+        }
+
+        stats
+    });
+
+    OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.set(stats.reusable_bytes));
+    OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.set(stats.deallocated_bytes));
+    stats
+}
+
+fn reclaim_dead_survivor_arena_blocks(
+    arena_idx: usize,
+    block_start: usize,
+    block_has_live: &[bool],
+) -> ArenaResetStats {
+    with_survivor_arena_mut(arena_idx, |arena| unsafe {
+        let keep_idx = arena
+            .blocks
+            .get(arena.current)
+            .filter(|block| !block.data.is_null())
+            .map(|_| arena.current)
+            .or_else(|| {
+                arena
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .find(|(_, block)| !block.data.is_null())
+                    .map(|(i, _)| i)
+            });
+        let mut stats = ArenaResetStats::default();
+        let mut changed = false;
+
+        for (i, block) in arena.blocks.iter_mut().enumerate() {
+            if block.data.is_null() {
+                continue;
+            }
+
+            let block_idx = block_start + i;
+            if block_has_live.get(block_idx).copied().unwrap_or(false) {
+                block.dead_cycles = 0;
+                continue;
+            }
+
+            let used = block.offset;
+            if used != 0 {
+                stats.reset_blocks = stats.reset_blocks.saturating_add(1);
+            }
+            block.offset = 0;
+            block.dead_cycles = 0;
+            changed = true;
+
+            // Keep one allocation target per survivor semispace mapped so
+            // Arena::alloc never observes a tombstoned current block.
+            if Some(i) == keep_idx {
+                stats.reusable_bytes = stats.reusable_bytes.saturating_add(used);
+                continue;
+            }
+
+            let base = block.data as usize;
+            let size = block.size;
+            let layout = Layout::from_size_align(size, 16).unwrap();
+            unregister_block_generation(base, size);
+            std::alloc::dealloc(block.data, layout);
+            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            block.data = std::ptr::null_mut();
+            block.size = 0;
+            block.offset = 0;
+            block.dead_cycles = 0;
+            stats.deallocated_blocks = stats.deallocated_blocks.saturating_add(1);
+            stats.deallocated_bytes = stats.deallocated_bytes.saturating_add(size);
+        }
+
+        if changed {
+            if let Some((idx, _)) = arena
+                .blocks
+                .iter()
+                .enumerate()
+                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
+            {
+                arena.current = idx;
+            } else if arena
+                .blocks
+                .get(arena.current)
+                .map(|block| block.data.is_null())
+                .unwrap_or(true)
+            {
+                if let Some((idx, _)) = arena
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .find(|(_, block)| !block.data.is_null())
+                {
+                    arena.current = idx;
+                }
+            }
+        }
+
+        stats
+    })
+}
+
+pub(crate) fn survivor_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaResetStats {
+    let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
+    let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });
+    let stats0 = reclaim_dead_survivor_arena_blocks(0, general_n, block_has_live);
+    let stats1 = reclaim_dead_survivor_arena_blocks(1, general_n + survivor0_n, block_has_live);
+    ArenaResetStats {
+        reset_blocks: stats0.reset_blocks.saturating_add(stats1.reset_blocks),
+        reusable_bytes: stats0.reusable_bytes.saturating_add(stats1.reusable_bytes),
+        deallocated_blocks: stats0
+            .deallocated_blocks
+            .saturating_add(stats1.deallocated_blocks),
+        deallocated_bytes: stats0
+            .deallocated_bytes
+            .saturating_add(stats1.deallocated_bytes),
+    }
 }
 
 /// Get arena memory statistics: (heap_used, heap_total)
@@ -1980,7 +2816,10 @@ pub fn pointer_in_old_gen(addr: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gc::{GcHeader, GC_FLAG_MARKED, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_STRING};
+    use crate::gc::{
+        GcHeader, GC_FLAG_MARKED, GC_FLAG_TENURED, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_BUFFER,
+        GC_TYPE_STRING, GC_TYPE_TYPED_ARRAY, LARGE_OBJECT_THRESHOLD_BYTES,
+    };
 
     fn general_block_index_for(addr: usize) -> Option<usize> {
         sync_inline_arena_state();
@@ -2009,10 +2848,9 @@ mod tests {
     }
 
     fn reset_old_nursery_block(dead_cycles_before: u32) -> (usize, usize, usize, ArenaResetStats) {
-        let full_block_payload = BLOCK_SIZE - GC_HEADER_SIZE;
         let mut blocks = Vec::new();
         for _ in 0..7 {
-            let ptr = arena_alloc_gc(full_block_payload, 8, GC_TYPE_STRING) as usize;
+            let ptr = arena_alloc(BLOCK_SIZE, 8) as usize;
             let idx = general_block_index_for(ptr).expect("allocation should be in nursery");
             blocks.push(idx);
         }
@@ -2043,6 +2881,284 @@ mod tests {
         block_has_live[current] = true;
         let stats = arena_reset_empty_blocks(&block_has_live);
         (candidate, base, size, stats)
+    }
+
+    fn reset_single_reclaimable_nursery_block(
+        dead_cycles_before: u32,
+    ) -> (usize, usize, usize, usize, ArenaResetStats) {
+        let mut blocks = Vec::new();
+        for _ in 0..6 {
+            let ptr = arena_alloc(BLOCK_SIZE, 8) as usize;
+            let idx = general_block_index_for(ptr).expect("allocation should be in nursery");
+            blocks.push(idx);
+        }
+        blocks.sort_unstable();
+        blocks.dedup();
+        assert_eq!(
+            blocks.len(),
+            6,
+            "test setup should force six distinct nursery blocks"
+        );
+
+        let current = ARENA.with(|a| unsafe { (&*a.get()).current });
+        let keep_low = current.saturating_sub(4);
+        let candidate = blocks
+            .into_iter()
+            .find(|&idx| idx < keep_low)
+            .expect("test setup should leave exactly one block outside the keep window");
+
+        let (base, size, before_offset) = ARENA.with(|a| unsafe {
+            let arena = &mut *a.get();
+            let block = &mut arena.blocks[candidate];
+            assert!(!block.data.is_null());
+            assert!(block.offset > 0);
+            block.dead_cycles = dead_cycles_before;
+            (block.data as usize, block.size, block.offset)
+        });
+
+        let mut block_has_live = vec![false; arena_block_count()];
+        block_has_live[current] = true;
+        let stats = arena_reset_empty_blocks(&block_has_live);
+        (candidate, base, size, before_offset, stats)
+    }
+
+    #[test]
+    fn survivor_reclaim_resets_dead_blocks() {
+        run_with_fresh_arenas(|| {
+            let baseline = arena_telemetry_snapshot();
+            let _dead = arena_alloc_gc_survivor(2 * 1024 * 1024, 8, GC_TYPE_STRING);
+            let after_alloc = arena_telemetry_snapshot();
+            let survivor_in_use = after_alloc
+                .survivor0
+                .in_use_bytes
+                .saturating_add(after_alloc.survivor1.in_use_bytes);
+            assert!(
+                survivor_in_use > baseline.survivor0.in_use_bytes + baseline.survivor1.in_use_bytes,
+                "test allocation should occupy a survivor semispace"
+            );
+
+            let block_has_live = vec![false; arena_block_count()];
+            let stats = survivor_arena_reclaim_dead_blocks(&block_has_live);
+            let after_reclaim = arena_telemetry_snapshot();
+            let survivor_after = after_reclaim
+                .survivor0
+                .in_use_bytes
+                .saturating_add(after_reclaim.survivor1.in_use_bytes);
+
+            assert_eq!(survivor_after, 0);
+            assert!(stats.reset_blocks > 0);
+            assert!(stats.reusable_bytes > 0 || stats.deallocated_bytes > 0);
+            assert!(
+                after_reclaim.total_reserved_bytes <= after_alloc.total_reserved_bytes,
+                "dead survivor blocks should become reusable or be returned"
+            );
+        });
+    }
+
+    fn page_range_for(base: usize, size: usize) -> std::ops::RangeInclusive<usize> {
+        generation_page_for_addr(base)..=generation_page_for_addr(base + size - 1)
+    }
+
+    fn old_page_meta(page: usize) -> OldPageMeta {
+        old_page_meta_for_tests(page).expect("old page metadata should be registered")
+    }
+
+    fn old_header_and_size(user_ptr: usize) -> (usize, usize) {
+        let header_addr = user_ptr - GC_HEADER_SIZE;
+        let total_size = unsafe { (*(header_addr as *const GcHeader)).size as usize };
+        (header_addr, total_size)
+    }
+
+    fn assert_seen_headers(label: &str, seen: &[usize], expected: &[usize]) {
+        for &header in expected {
+            assert!(
+                seen.contains(&header),
+                "{label} did not visit expected header {header:#x}"
+            );
+        }
+    }
+
+    fn synthetic_old_block_range() -> (usize, usize) {
+        (0x4000_0000_0000usize, GENERATION_PAGE_SIZE * 3)
+    }
+
+    #[test]
+    fn old_page_metadata_registers_old_block_pages() {
+        run_with_fresh_arenas(|| {
+            OLD_ARENA.with(|a| unsafe {
+                let arena = &*a.get();
+                let block = &arena.blocks[arena.current];
+                for page in page_range_for(block.data as usize, block.size) {
+                    let meta = old_page_meta(page);
+                    assert_eq!(meta.page_base, generation_page_base(page));
+                    assert_eq!(
+                        meta.page_end,
+                        generation_page_base(page) + GENERATION_PAGE_SIZE
+                    );
+                    assert_eq!(meta.allocated_bytes, 0);
+                    assert_eq!(meta.live_bytes, 0);
+                    assert_eq!(meta.dead_bytes, 0);
+                    assert_eq!(meta.object_count, 0);
+                    assert_eq!(meta.live_object_count, 0);
+                    assert_eq!(meta.dead_object_count, 0);
+                    assert_eq!(meta.pinned_bytes, 0);
+                    assert_eq!(meta.pinned_object_count, 0);
+                    assert_eq!(meta.dirty_slots, 0);
+                    assert!(!meta.dirty);
+                    assert!(!meta.evacuation_eligible);
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn old_page_metadata_tracks_old_object_allocation() {
+        run_with_fresh_arenas(|| {
+            let old_ptr = arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+            let (header_addr, total_size) = old_header_and_size(old_ptr);
+            let overlaps = old_object_page_overlaps(header_addr, total_size);
+
+            let mut total_overlap = 0usize;
+            for (page, bytes) in overlaps {
+                total_overlap += bytes;
+                let meta = old_page_meta(page);
+                assert_eq!(meta.allocated_bytes, bytes);
+                assert_eq!(meta.live_bytes, 0);
+                assert_eq!(meta.dead_bytes, 0);
+                assert_eq!(meta.object_count, 1);
+                assert_eq!(meta.live_object_count, 0);
+                assert_eq!(meta.dead_object_count, 0);
+                assert_eq!(meta.pinned_bytes, 0);
+                assert_eq!(meta.pinned_object_count, 0);
+                assert!(!meta.dirty);
+                assert!(!meta.evacuation_eligible);
+            }
+            assert_eq!(total_overlap, total_size);
+        });
+    }
+
+    #[test]
+    fn old_page_metadata_snapshot_is_sorted_by_page() {
+        run_with_fresh_arenas(|| {
+            let _first = arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+            let _second = arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+
+            let snapshot = old_page_meta_snapshot();
+            assert!(!snapshot.is_empty());
+            assert!(
+                snapshot
+                    .windows(2)
+                    .all(|pair| pair[0].page_base <= pair[1].page_base),
+                "old page metadata snapshot should be deterministic"
+            );
+        });
+    }
+
+    #[test]
+    fn old_page_metadata_reregisters_after_block_metadata_removal() {
+        run_with_fresh_arenas(|| {
+            let (base, size) = synthetic_old_block_range();
+            register_block_space(base, size, HeapGeneration::Old, HeapSpace::Old);
+            let pages: Vec<usize> = page_range_for(base, size).collect();
+            assert!(pages
+                .iter()
+                .all(|&page| old_page_meta_for_tests(page).is_some()));
+
+            unregister_block_generation(base, size);
+            assert!(
+                pages
+                    .iter()
+                    .all(|&page| old_page_meta_for_tests(page).is_none()),
+                "old page metadata should be removed with the old block"
+            );
+
+            register_block_space(base, size, HeapGeneration::Old, HeapSpace::Old);
+            for &page in &pages {
+                let meta = old_page_meta(page);
+                assert_eq!(meta.allocated_bytes, 0);
+                assert_eq!(meta.live_bytes, 0);
+                assert_eq!(meta.dead_bytes, 0);
+                assert_eq!(meta.object_count, 0);
+                assert_eq!(meta.live_object_count, 0);
+                assert_eq!(meta.dead_object_count, 0);
+            }
+            unregister_block_generation(base, size);
+        });
+    }
+
+    #[test]
+    fn old_page_metadata_distributes_multi_page_object_bytes_and_indexes_pages() {
+        run_with_fresh_arenas(|| {
+            let old_ptr =
+                arena_alloc_gc_old(GENERATION_PAGE_SIZE * 2 + 77, 8, GC_TYPE_STRING) as usize;
+            let (header_addr, total_size) = old_header_and_size(old_ptr);
+            let overlaps = old_object_page_overlaps(header_addr, total_size);
+            assert!(
+                overlaps.len() > 1,
+                "test allocation should span multiple old pages"
+            );
+
+            let mut pages = crate::fast_hash::new_ptr_hash_set();
+            let mut total_overlap = 0usize;
+            for &(page, bytes) in &overlaps {
+                pages.insert(page);
+                total_overlap += bytes;
+                let meta = old_page_meta(page);
+                assert_eq!(meta.allocated_bytes, bytes);
+                assert_eq!(meta.live_bytes, 0);
+                assert_eq!(meta.dead_bytes, 0);
+                assert_eq!(meta.object_count, 1);
+                assert_eq!(meta.live_object_count, 0);
+                assert_eq!(meta.dead_object_count, 0);
+                assert_eq!(meta.pinned_bytes, 0);
+                assert_eq!(meta.pinned_object_count, 0);
+                assert!(!meta.evacuation_eligible);
+            }
+            assert_eq!(total_overlap, total_size);
+
+            let mut visited = Vec::new();
+            let count = old_arena_walk_objects_on_pages(&pages, |header| {
+                visited.push(header as usize);
+            });
+            assert_eq!(count, 1);
+            assert_eq!(visited, vec![header_addr]);
+        });
+    }
+
+    #[test]
+    fn old_page_metadata_removes_object_and_block_metadata() {
+        run_with_fresh_arenas(|| {
+            let old_ptr = arena_alloc_gc_old(96, 8, GC_TYPE_STRING) as usize;
+            let (header_addr, total_size) = old_header_and_size(old_ptr);
+            let overlaps = old_object_page_overlaps(header_addr, total_size);
+            let mut pages = crate::fast_hash::new_ptr_hash_set();
+            for &(page, _) in &overlaps {
+                pages.insert(page);
+            }
+            unregister_old_object_pages(header_addr, total_size);
+            for &(page, _) in &overlaps {
+                let meta = old_page_meta(page);
+                assert_eq!(meta.allocated_bytes, 0);
+                assert_eq!(meta.live_bytes, 0);
+                assert_eq!(meta.dead_bytes, 0);
+                assert_eq!(meta.object_count, 0);
+                assert_eq!(meta.live_object_count, 0);
+                assert_eq!(meta.dead_object_count, 0);
+                assert!(!meta.evacuation_eligible);
+            }
+            assert_eq!(old_arena_walk_objects_on_pages(&pages, |_| {}), 0);
+
+            let (base, size) = synthetic_old_block_range();
+            register_block_space(base, size, HeapGeneration::Old, HeapSpace::Old);
+            let block_pages: Vec<usize> = page_range_for(base, size).collect();
+            assert!(block_pages
+                .iter()
+                .all(|&page| old_page_meta_for_tests(page).is_some()));
+            unregister_block_generation(base, size);
+            assert!(block_pages
+                .iter()
+                .all(|&page| old_page_meta_for_tests(page).is_none()));
+        });
     }
 
     #[test]
@@ -2115,6 +3231,115 @@ mod tests {
     }
 
     #[test]
+    fn large_object_arena_alloc_gc_is_old_tenured_and_indexed() {
+        run_with_fresh_arenas(|| {
+            let payload = crate::gc::LARGE_OBJECT_THRESHOLD_BYTES;
+            let ptr = arena_alloc_gc(payload, 8, GC_TYPE_STRING) as usize;
+            let header_addr = ptr - GC_HEADER_SIZE;
+            let total = unsafe { (*(header_addr as *const GcHeader)).size as usize };
+
+            assert!(
+                crate::gc::is_large_object_total_size(total),
+                "test allocation should exceed the large-object threshold"
+            );
+            assert_eq!(classify_heap_generation(ptr), HeapGeneration::Old);
+            assert!(pointer_in_old_gen(ptr));
+            assert!(!pointer_in_nursery(ptr));
+            unsafe {
+                let header = header_addr as *const GcHeader;
+                assert_ne!((*header).gc_flags & GC_FLAG_TENURED, 0);
+            }
+
+            let overlaps = old_object_page_overlaps(header_addr, total);
+            assert!(!overlaps.is_empty());
+            for &(page, _) in &overlaps {
+                let meta = old_page_meta(page);
+                assert_eq!(meta.object_count, 1);
+            }
+        });
+    }
+
+    #[test]
+    fn large_buffer_and_typed_array_old_objects_are_seen_by_arena_walkers() {
+        run_with_fresh_arenas(|| {
+            let buf = crate::buffer::buffer_alloc(LARGE_OBJECT_THRESHOLD_BYTES as u32) as usize;
+            let ta = crate::typedarray::typed_array_alloc(
+                crate::typedarray::KIND_UINT8,
+                LARGE_OBJECT_THRESHOLD_BYTES as u32,
+            ) as usize;
+            let buf_header = buf - GC_HEADER_SIZE;
+            let ta_header = ta - GC_HEADER_SIZE;
+            let expected = [buf_header, ta_header];
+
+            unsafe {
+                assert_eq!((*(buf_header as *const GcHeader)).obj_type, GC_TYPE_BUFFER);
+                assert_eq!(
+                    (*(ta_header as *const GcHeader)).obj_type,
+                    GC_TYPE_TYPED_ARRAY
+                );
+            }
+            assert!(pointer_in_old_gen(buf));
+            assert!(pointer_in_old_gen(ta));
+
+            let mut normal = Vec::new();
+            arena_walk_objects(|header| {
+                let header = header as usize;
+                if expected.contains(&header) {
+                    normal.push(header);
+                }
+            });
+            assert_seen_headers("arena_walk_objects", &normal, &expected);
+
+            let mut old_only = Vec::new();
+            old_arena_walk_objects(|header| {
+                let header = header as usize;
+                if expected.contains(&header) {
+                    old_only.push(header);
+                }
+            });
+            assert_seen_headers("old_arena_walk_objects", &old_only, &expected);
+
+            let mut addr_sorted = Vec::new();
+            arena_walk_objects_addr_sorted(|header| {
+                let header = header as usize;
+                if expected.contains(&header) {
+                    addr_sorted.push(header);
+                }
+            });
+            assert_seen_headers("arena_walk_objects_addr_sorted", &addr_sorted, &expected);
+
+            let mut indexed = Vec::new();
+            let mut selected_blocks = Vec::new();
+            arena_walk_objects_with_block_index(|header, block_idx| {
+                let header = header as usize;
+                if expected.contains(&header) {
+                    indexed.push(header);
+                    if !selected_blocks.contains(&block_idx) {
+                        selected_blocks.push(block_idx);
+                    }
+                }
+            });
+            assert_seen_headers("arena_walk_objects_with_block_index", &indexed, &expected);
+            assert!(
+                !selected_blocks.is_empty(),
+                "indexed walk should identify target old blocks"
+            );
+
+            let mut filtered = Vec::new();
+            arena_walk_objects_filtered(
+                |block_idx| selected_blocks.contains(&block_idx),
+                |header, _block_idx| {
+                    let header = header as usize;
+                    if expected.contains(&header) {
+                        filtered.push(header);
+                    }
+                },
+            );
+            assert_seen_headers("arena_walk_objects_filtered", &filtered, &expected);
+        });
+    }
+
+    #[test]
     fn generation_metadata_survives_nursery_block_reset() {
         run_with_fresh_arenas(|| {
             let (idx, base, size, stats) = reset_old_nursery_block(0);
@@ -2132,6 +3357,23 @@ mod tests {
                 classify_heap_generation(base + size - 1),
                 HeapGeneration::Nursery
             );
+        });
+    }
+
+    #[test]
+    fn generation_metadata_arena_reset_stats_reports_reusable_bytes_for_retained_reset_blocks() {
+        run_with_fresh_arenas(|| {
+            let (idx, _base, _size, before_offset, stats) =
+                reset_single_reclaimable_nursery_block(0);
+            assert_eq!(stats.reset_blocks, 1);
+            assert_eq!(stats.reusable_bytes, before_offset);
+            assert_eq!(stats.deallocated_blocks, 0);
+            assert_eq!(stats.deallocated_bytes, 0);
+            ARENA.with(|a| unsafe {
+                let arena = &*a.get();
+                assert!(!arena.blocks[idx].data.is_null());
+                assert_eq!(arena.blocks[idx].offset, 0);
+            });
         });
     }
 
@@ -2154,6 +3396,24 @@ mod tests {
     }
 
     #[test]
+    fn generation_metadata_arena_reset_stats_reports_deallocated_blocks_as_returned_not_reusable() {
+        run_with_fresh_arenas(|| {
+            let (idx, base, size, _before_offset, stats) =
+                reset_single_reclaimable_nursery_block(1);
+            assert_eq!(stats.reset_blocks, 1);
+            assert_eq!(stats.reusable_bytes, 0);
+            assert_eq!(stats.deallocated_blocks, 1);
+            assert_eq!(stats.deallocated_bytes, size);
+            ARENA.with(|a| unsafe {
+                let arena = &*a.get();
+                assert!(arena.blocks[idx].data.is_null());
+                assert_eq!(arena.blocks[idx].size, 0);
+            });
+            assert_eq!(classify_heap_generation(base), HeapGeneration::Unknown);
+        });
+    }
+
+    #[test]
     fn generation_metadata_registered_on_tombstone_reuse() {
         run_with_fresh_arenas(|| {
             let (idx, _base, _size, stats) = reset_old_nursery_block(1);
@@ -2162,7 +3422,7 @@ mod tests {
                 "test setup should create a nursery tombstone"
             );
 
-            let oversized = arena_alloc_gc(BLOCK_SIZE + 64, 8, GC_TYPE_STRING) as usize;
+            let oversized = arena_alloc(BLOCK_SIZE + 64, 8) as usize;
             ARENA.with(|a| unsafe {
                 let arena = &*a.get();
                 assert!(!arena.blocks[idx].data.is_null());
@@ -2217,11 +3477,10 @@ mod tests {
 
     #[test]
     fn test_arena_reset_reuses_dead_general_block_without_touching_live_block() {
-        let full_block_payload = BLOCK_SIZE - GC_HEADER_SIZE;
         let mut dead_blocks = Vec::new();
 
         for _ in 0..6 {
-            let ptr = arena_alloc_gc(full_block_payload, 8, GC_TYPE_STRING) as usize;
+            let ptr = arena_alloc(BLOCK_SIZE, 8) as usize;
             let block_idx =
                 general_block_index_for(ptr).expect("dead allocation should land in general arena");
             dead_blocks.push(block_idx);
@@ -2234,7 +3493,7 @@ mod tests {
             "test setup should force six distinct full general blocks"
         );
 
-        let live_ptr = arena_alloc_gc(full_block_payload, 8, GC_TYPE_STRING);
+        let live_ptr = arena_alloc_gc(24, 8, GC_TYPE_STRING);
         let live_addr = live_ptr as usize;
         let live_header_addr = live_addr - GC_HEADER_SIZE;
         let live_block =

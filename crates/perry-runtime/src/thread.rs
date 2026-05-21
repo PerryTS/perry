@@ -477,6 +477,8 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
             for (i, elem) in elements.iter().enumerate() {
                 let bits = deserialize_jsvalue(elem);
                 *arr_elements.add(i) = f64::from_bits(bits);
+                (*arr).length = (i + 1) as u32;
+                crate::array::note_array_slot(arr, i, bits);
             }
             (*arr).length = elements.len() as u32;
             JSValue::pointer(arr as *const u8).bits()
@@ -501,6 +503,7 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
             for (i, field) in fields.iter().enumerate() {
                 let bits = deserialize_jsvalue(field);
                 *fields_ptr.add(i) = f64::from_bits(bits);
+                crate::gc::layout_note_slot(obj as usize, i, bits);
             }
 
             // Reconstruct keys array if present
@@ -520,6 +523,8 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
                     );
                     let key_val = JSValue::string_ptr(str_ptr);
                     *keys_elements.add(i) = f64::from_bits(key_val.bits());
+                    (*keys_arr).length = (i + 1) as u32;
+                    crate::array::note_array_slot(keys_arr, i, key_val.bits());
                 }
                 (*keys_arr).length = key_strings.len() as u32;
                 (*obj).keys_array = keys_arr;
@@ -539,6 +544,7 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
             for (i, cap) in captures.iter().enumerate() {
                 let bits = deserialize_jsvalue(cap);
                 *captures_base.add(i) = f64::from_bits(bits);
+                crate::gc::layout_note_slot(closure as usize, i, bits);
             }
             JSValue::pointer(closure as *const u8).bits()
         }
@@ -709,7 +715,9 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                     let c = closure::js_closure_alloc(fp as *const u8, cc);
                     let base = (c as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
                     for (i, cap) in cap_vals.iter().enumerate() {
-                        *base.add(i) = f64::from_bits(deserialize_jsvalue(cap));
+                        let bits = deserialize_jsvalue(cap);
+                        *base.add(i) = f64::from_bits(bits);
+                        crate::gc::layout_note_slot(c as usize, i, bits);
                     }
                     c as *const ClosureHeader
                 } else {
@@ -748,6 +756,8 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
         for sv in chunk_results {
             let bits = deserialize_jsvalue(sv);
             *result_elements.add(write_idx) = f64::from_bits(bits);
+            (*result_arr).length = (write_idx + 1) as u32;
+            crate::array::note_array_slot(result_arr, write_idx, bits);
             write_idx += 1;
         }
     }
@@ -781,6 +791,8 @@ unsafe fn single_thread_map(
         let arg = *elements_ptr.add(i);
         let result = call_fn(closure, arg);
         *result_elements.add(i) = result;
+        (*result_arr).length = (i + 1) as u32;
+        crate::array::note_array_slot(result_arr, i, result.to_bits());
     }
     (*result_arr).length = len as u32;
 
@@ -897,7 +909,9 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                     let c = closure::js_closure_alloc(fp as *const u8, cc);
                     let base = (c as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
                     for (i, cap) in cap_vals.iter().enumerate() {
-                        *base.add(i) = f64::from_bits(deserialize_jsvalue(cap));
+                        let bits = deserialize_jsvalue(cap);
+                        *base.add(i) = f64::from_bits(bits);
+                        crate::gc::layout_note_slot(c as usize, i, bits);
                     }
                     c as *const ClosureHeader
                 } else {
@@ -938,6 +952,8 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
         for sv in chunk_kept {
             let bits = deserialize_jsvalue(sv);
             *result_elements.add(write_idx) = f64::from_bits(bits);
+            (*result_arr).length = (write_idx + 1) as u32;
+            crate::array::note_array_slot(result_arr, write_idx, bits);
             write_idx += 1;
         }
     }
@@ -968,6 +984,8 @@ unsafe fn single_thread_filter(
         let keep = is_truthy_bits(result.to_bits());
         if keep {
             *result_elements.add(count as usize) = arg;
+            (*result_arr).length = count + 1;
+            crate::array::note_array_slot(result_arr, count as usize, arg.to_bits());
             count += 1;
         }
     }
@@ -1043,7 +1061,9 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
                 let base = (c as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
                 for (i, cap) in cap_vals.iter().enumerate() {
                     unsafe {
-                        *base.add(i) = f64::from_bits(deserialize_jsvalue(cap));
+                        let bits = deserialize_jsvalue(cap);
+                        *base.add(i) = f64::from_bits(bits);
+                        crate::gc::layout_note_slot(c as usize, i, bits);
                     }
                 }
                 c as *const ClosureHeader

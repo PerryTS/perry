@@ -19,7 +19,7 @@ pub(super) fn emit_string_pool(
     llmod: &mut LlModule,
     strings: &StringPool,
     module_prefix: &str,
-    class_keys_init_data: &[(String, String, u32)],
+    class_keys_init_data: &[(String, String, u32, Vec<u64>)],
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
     closure_rest_params: &HashMap<u32, usize>,
@@ -70,7 +70,7 @@ pub(super) fn emit_string_pool(
     // Naming: `@perry_class_keys_packed_<modprefix>__<idx>` so we
     // don't collide with anything else.
     let mut packed_global_names: Vec<String> = Vec::with_capacity(class_keys_init_data.len());
-    for (idx, (_global_name, packed, _fc)) in class_keys_init_data.iter().enumerate() {
+    for (idx, (_global_name, packed, _fc, _mask_words)) in class_keys_init_data.iter().enumerate() {
         if packed.is_empty() {
             packed_global_names.push(String::new());
             continue;
@@ -132,6 +132,29 @@ pub(super) fn emit_string_pool(
         }
     }
 
+    // Emit per-class typed-shape pointer-mask globals. Empty mask = nothing
+    // to emit (no typed slots in this class shape). Must run BEFORE
+    // `init_fn = llmod.define_function(...)` because that call holds a
+    // mutable borrow of `llmod` for the lifetime of the function/block
+    // used by everything below.
+    for (global_name, _packed, _field_count, mask_words) in class_keys_init_data.iter() {
+        if mask_words.is_empty() {
+            continue;
+        }
+        let mask_global = crate::typed_shape::mask_global_name_from_keys_global(global_name);
+        let words = mask_words
+            .iter()
+            .map(|word| format!("i64 {}", word))
+            .collect::<Vec<_>>()
+            .join(", ");
+        llmod.add_raw_global(format!(
+            "@{} = private unnamed_addr constant [{} x i64] [{}]",
+            mask_global,
+            mask_words.len(),
+            words
+        ));
+    }
+
     let init_name = format!("__perry_init_strings_{}", module_prefix);
     let init_fn = llmod.define_function(&init_name, VOID, vec![]);
     let _ = init_fn.create_block("entry");
@@ -175,7 +198,9 @@ pub(super) fn emit_string_pool(
     // module init; every `new ClassName()` call from then on does a
     // single global load + inline allocator call (no SHAPE_CACHE
     // lookup, no js_build_class_keys_array overhead).
-    for (idx, (global_name, packed, field_count)) in class_keys_init_data.iter().enumerate() {
+    for (idx, (global_name, packed, field_count, _mask_words)) in
+        class_keys_init_data.iter().enumerate()
+    {
         // Resolve class id from the global name. The global name is
         // `perry_class_keys_<modprefix>__<class>` so we strip the
         // prefix to recover the sanitized class name and look up

@@ -4,9 +4,10 @@
 //! First wrapper port that exercises perry-ffi's GC-root-scanner
 //! surface (added in v0.5.546). User closures passed to
 //! `emitter.on(event, cb)` live inside an `EventEmitterHandle`
-//! value in the registry; without an explicit GC scanner, a
-//! malloc-triggered GC between `.on()` and `.emit()` would sweep
-//! the closure (issue #35 pattern).
+//! value in the registry; without an explicit mutable GC scanner, a
+//! malloc-triggered GC between `.on()` and `.emit()` would sweep the
+//! closure or leave copied-minor forwarding pointers stale (issue #35
+//! pattern).
 //!
 //! Issue #850 — rewrote the listener storage to match Node semantics
 //! (per-event ordered `Vec<Listener>` with `once` flag, insertion-order
@@ -19,11 +20,14 @@
 //! `events.getMaxListeners` / `events.setMaxListeners` helpers.
 
 use perry_ffi::{
-    gc_register_root_scanner, get_handle_mut, iter_handles_of, js_array_alloc, js_array_push,
-    nanbox_string_bits, read_string, register_handle, ArrayHeader, Handle, JsClosure, JsPromise,
-    JsString, JsValue, Promise, RawClosureHeader, StringHeader,
+    gc_register_mutable_root_scanner, get_handle_mut, iter_handles_of_mut, js_array_alloc,
+    js_array_push, nanbox_string_bits, read_string, register_handle, ArrayHeader, GcRootVisitor,
+    Handle, JsClosure, JsPromise, JsString, JsValue, Promise, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
+
+const MIN_HEAP_POINTER: u64 = 0x1000;
+const MAX_HEAP_POINTER: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 // Direct hook into perry-runtime's sync Promise resolve.
 //
@@ -62,9 +66,9 @@ pub struct EventEmitterHandle {
     max_listeners: i32,
 }
 
-// SAFETY: `*mut Promise` is not Send/Sync by default, but the runtime
-// pins Promise allocations and the registry's GC scanner marks them
-// through `pending_once_promises` so they survive minor GC cycles.
+// SAFETY: `*mut Promise` is not Send/Sync by default, but the registry's
+// mutable GC scanner visits pending promise slots so they survive minor
+// GC cycles and are rewritten after copied-minor evacuation.
 unsafe impl Send for EventEmitterHandle {}
 unsafe impl Sync for EventEmitterHandle {}
 
@@ -121,36 +125,35 @@ static EVENTS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 fn ensure_gc_scanner_registered() {
     EVENTS_GC_REGISTERED.call_once(|| {
-        gc_register_root_scanner(scan_events_roots);
+        gc_register_mutable_root_scanner(scan_events_roots);
     });
 }
 
 /// GC root scanner: visit every registered EventEmitterHandle,
-/// mark every listener closure pointer + pending Promise as a root.
-fn scan_events_roots(mark: &mut dyn FnMut(f64)) {
-    iter_handles_of::<EventEmitterHandle, _>(|emitter| {
-        for listeners in emitter.events.values() {
-            for l in listeners.iter() {
-                if l.callback != 0 {
-                    // POINTER_TAG (0x7FFD) over the closure pointer.
-                    let boxed = f64::from_bits(
-                        0x7FFD_0000_0000_0000 | (l.callback as u64 & 0x0000_FFFF_FFFF_FFFF),
-                    );
-                    mark(boxed);
+/// and expose every listener closure pointer + pending Promise slot.
+fn scan_events_roots(visitor: &mut GcRootVisitor<'_>) {
+    iter_handles_of_mut::<EventEmitterHandle, _>(|emitter| {
+        for listeners in emitter.events.values_mut() {
+            for l in listeners.iter_mut() {
+                if is_heap_pointer_candidate(l.callback) {
+                    visitor.visit_i64_slot(&mut l.callback);
                 }
             }
         }
-        for proms in emitter.pending_once_promises.values() {
-            for &p in proms.iter() {
-                if !p.is_null() {
-                    let boxed = f64::from_bits(
-                        0x7FFD_0000_0000_0000 | ((p as u64) & 0x0000_FFFF_FFFF_FFFF),
-                    );
-                    mark(boxed);
-                }
+        for proms in emitter.pending_once_promises.values_mut() {
+            for p in proms.iter_mut() {
+                visitor.visit_raw_mut_ptr_slot(p);
             }
         }
     });
+}
+
+fn is_heap_pointer_candidate(callback: i64) -> bool {
+    if callback <= 0 {
+        return false;
+    }
+    let addr = callback as u64;
+    (MIN_HEAP_POINTER..=MAX_HEAP_POINTER).contains(&addr) && addr & 0x7 == 0
 }
 
 unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
@@ -626,7 +629,55 @@ pub unsafe extern "C" fn js_events_set_max_listeners(n: f64, handle: Handle) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use perry_ffi::alloc_string;
+    use perry_ffi::{alloc_string, drop_handle, get_handle, register_handle};
+    use std::collections::HashMap;
+    use std::sync::{Mutex, MutexGuard};
+
+    static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct GcTestGuard {
+        frame: u64,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl GcTestGuard {
+        fn new() -> Self {
+            let lock = GC_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            perry_runtime::gc::js_gc_write_barriers_emitted(1);
+            let frame = perry_runtime::gc::js_shadow_frame_push(0);
+            Self { frame, _lock: lock }
+        }
+    }
+
+    impl Drop for GcTestGuard {
+        fn drop(&mut self) {
+            perry_runtime::gc::js_shadow_frame_pop(self.frame);
+            perry_runtime::gc::js_gc_write_barriers_emitted(0);
+        }
+    }
+
+    fn young_gc_root() -> i64 {
+        perry_runtime::arena::arena_alloc_gc(32, 8, perry_runtime::gc::GC_TYPE_STRING) as i64
+    }
+
+    fn young_promise_root() -> *mut Promise {
+        let ptr = perry_runtime::arena::arena_alloc_gc(
+            std::mem::size_of::<perry_runtime::Promise>(),
+            std::mem::align_of::<perry_runtime::Promise>(),
+            perry_runtime::gc::GC_TYPE_PROMISE,
+        );
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, std::mem::size_of::<perry_runtime::Promise>());
+        }
+        ptr as *mut Promise
+    }
+
+    fn assert_rewritten(before: usize, after: usize) {
+        assert_ne!(after, before);
+        assert!(perry_runtime::arena::pointer_in_nursery(after));
+    }
 
     #[test]
     fn new_emitter_starts_empty() {
@@ -634,6 +685,7 @@ mod tests {
         let event_name = alloc_string("foo");
         let count = unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _) };
         assert_eq!(count, 0.0);
+        drop_handle(h);
     }
 
     #[test]
@@ -645,6 +697,7 @@ mod tests {
         let _ = unsafe { js_event_emitter_on(h, event_name.as_raw() as *const _, 0xCAFEBABE_i64) };
         let count = unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _) };
         assert_eq!(count, 2.0);
+        drop_handle(h);
     }
 
     #[test]
@@ -658,6 +711,7 @@ mod tests {
         }
         let count = unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _) };
         assert_eq!(count, 1.0);
+        drop_handle(h);
     }
 
     #[test]
@@ -671,6 +725,7 @@ mod tests {
         }
         let count = unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _) };
         assert_eq!(count, 0.0);
+        drop_handle(h);
     }
 
     #[test]
@@ -683,6 +738,7 @@ mod tests {
         }
         let arr = unsafe { js_event_emitter_listeners(h, event_name.as_raw() as *const _) };
         assert!(!arr.is_null());
+        drop_handle(h);
     }
 
     #[test]
@@ -694,5 +750,47 @@ mod tests {
             js_event_emitter_set_max_listeners(h, 42.0);
         }
         assert_eq!(unsafe { js_event_emitter_get_max_listeners(h) }, 42.0);
+        drop_handle(h);
+    }
+
+    #[test]
+    fn gc_mutable_scanner_rewrites_listener_and_pending_promise_roots() {
+        let _guard = GcTestGuard::new();
+        perry_ffi::gc_register_mutable_root_scanner(scan_events_roots);
+
+        let listener = young_gc_root();
+        let promise = young_promise_root();
+        let mut events = HashMap::new();
+        events.insert(
+            "ready".to_string(),
+            vec![Listener {
+                callback: listener,
+                once: false,
+            }],
+        );
+        let mut pending_once_promises = HashMap::new();
+        pending_once_promises.insert("ready".to_string(), vec![promise]);
+        let handle = register_handle(EventEmitterHandle {
+            events,
+            event_order: vec!["ready".to_string()],
+            pending_once_promises,
+            max_listeners: 10,
+        });
+
+        let _ = perry_runtime::gc::gc_collect_minor();
+
+        {
+            let emitter = get_handle::<EventEmitterHandle>(handle)
+                .expect("emitter handle should remain live");
+            assert_rewritten(
+                listener as usize,
+                emitter.events["ready"][0].callback as usize,
+            );
+            assert_rewritten(
+                promise as usize,
+                emitter.pending_once_promises["ready"][0] as usize,
+            );
+        }
+        drop_handle(handle);
     }
 }

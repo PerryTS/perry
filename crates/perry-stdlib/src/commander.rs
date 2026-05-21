@@ -16,7 +16,7 @@ use perry_runtime::{
 };
 use std::collections::HashMap;
 
-use crate::common::{for_each_handle_of, get_handle_mut, register_handle, Handle};
+use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
 
 // NaN-box tags. Mirror perry-runtime/src/value.rs constants. Duplicated
 // here because they're not exported across crate boundaries; if either
@@ -89,15 +89,19 @@ static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 fn ensure_gc_scanner_registered() {
     GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_root_scanner(scan_commander_roots);
+        perry_runtime::gc::gc_register_mutable_root_scanner(scan_commander_roots_mut);
     });
 }
 
+#[allow(dead_code)]
 fn scan_commander_roots(mark: &mut dyn FnMut(f64)) {
-    for_each_handle_of::<CommanderHandle, _>(|cmd| {
-        if cmd.action_callback != 0 {
-            mark(f64::from_bits(nanbox_pointer(cmd.action_callback as u64)));
-        }
+    let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_commander_roots_mut(&mut visitor);
+}
+
+fn scan_commander_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    for_each_handle_mut_of::<CommanderHandle, _>(|cmd| {
+        visitor.visit_i64_slot(&mut cmd.action_callback);
     });
 }
 
@@ -600,5 +604,23 @@ mod tests {
         assert_eq!(s, Some('c'));
         assert_eq!(l, "config");
         assert!(!f);
+    }
+
+    #[test]
+    fn root_scanner_emits_action_callback() {
+        let handle = register_handle(CommanderHandle {
+            name: String::new(),
+            description: String::new(),
+            version: String::new(),
+            options: Vec::new(),
+            parsed_values: HashMap::new(),
+            args: Vec::new(),
+            subcommands: Vec::new(),
+            action_callback: 0x1234_5678,
+        });
+        let mut emitted = Vec::new();
+        scan_commander_roots(&mut |value| emitted.push(value.to_bits()));
+        assert!(emitted.contains(&nanbox_pointer(0x1234_5678)));
+        crate::common::drop_handle(handle);
     }
 }

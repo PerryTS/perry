@@ -30,6 +30,7 @@
 //! when Phase 2+ intercept access and skip materialization.
 
 use crate::value::JSValue;
+use std::cell::Cell;
 
 /// One tape entry. Kind + byte offset + (for container kinds) a
 /// parent/sibling pointer that lets materialization skip over
@@ -64,6 +65,41 @@ pub struct Tape {
     pub entries: Vec<TapeEntry>,
 }
 
+struct TapeScratch {
+    entries: Vec<TapeEntry>,
+    stack: Vec<u32>,
+}
+
+impl TapeScratch {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            stack: Vec::new(),
+        }
+    }
+
+    fn trim_for_reuse(&mut self) {
+        self.entries.clear();
+        self.stack.clear();
+
+        if self.entries.capacity() * std::mem::size_of::<TapeEntry>()
+            > MAX_RETAINED_TAPE_SCRATCH_BYTES
+        {
+            self.entries = Vec::new();
+        }
+        if self.stack.capacity() * std::mem::size_of::<u32>() > MAX_RETAINED_TAPE_STACK_BYTES {
+            self.stack = Vec::new();
+        }
+    }
+}
+
+const MAX_RETAINED_TAPE_SCRATCH_BYTES: usize = 1024 * 1024;
+const MAX_RETAINED_TAPE_STACK_BYTES: usize = 64 * 1024;
+
+thread_local! {
+    static TAPE_SCRATCH: Cell<Option<TapeScratch>> = Cell::new(Some(TapeScratch::new()));
+}
+
 /// Build a tape from JSON bytes in one pass. Returns `None` on
 /// malformed input (caller should fall through to the direct parser
 /// which has richer error reporting).
@@ -74,15 +110,29 @@ pub struct Tape {
 /// pass be byte-scan-only (SIMD-friendly in future revisions) and
 /// avoids allocating for values that lazy access will never read.
 pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
+    let mut entries: Vec<TapeEntry> = Vec::new();
+    let mut stack: Vec<u32> = Vec::new();
+    if build_tape_into(bytes, &mut entries, &mut stack) {
+        Some(Tape { entries })
+    } else {
+        None
+    }
+}
+
+/// Build a tape into caller-provided storage. This is the hot-path
+/// variant used by `JSON.parse` so repeated parse-churn workloads do
+/// not allocate and free a fresh tape vector on every iteration.
+fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u32>) -> bool {
+    entries.clear();
+    stack.clear();
     // Pre-size: worst case is one tape entry per ~4 bytes of input
     // (single-digit integers in an array), though typical JSON is
     // closer to one per 15-20 bytes. Pre-allocating to len/8 is a
     // reasonable middle.
-    let mut entries: Vec<TapeEntry> = Vec::with_capacity(bytes.len() / 8 + 8);
+    entries.reserve(bytes.len() / 8 + 8);
     // Parallel stack of (tape index of the matching OBJ/ARR start).
     // On end-of-container, we pop and backfill the start entry's
     // `link` field with the end's tape index.
-    let mut stack: Vec<u32> = Vec::new();
     let mut pos = 0usize;
 
     // Helper: skip whitespace.
@@ -193,11 +243,11 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                             state = State::Value;
                             // Immediately parse the key.
                             if pos >= bytes.len() || bytes[pos] != b'"' {
-                                return None;
+                                return false;
                             }
                             let key_off = pos as u32;
                             if !skip_string(bytes, &mut pos) {
-                                return None;
+                                return false;
                             }
                             entries.push(TapeEntry {
                                 offset: key_off,
@@ -206,7 +256,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                             });
                             skip_ws(bytes, &mut pos);
                             if pos >= bytes.len() || bytes[pos] != b':' {
-                                return None;
+                                return false;
                             }
                             pos += 1;
                         }
@@ -238,7 +288,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                     }
                     b'"' => {
                         if !skip_string(bytes, &mut pos) {
-                            return None;
+                            return false;
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -249,7 +299,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                     }
                     b't' => {
                         if pos + 4 > bytes.len() || &bytes[pos..pos + 4] != b"true" {
-                            return None;
+                            return false;
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -261,7 +311,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                     }
                     b'f' => {
                         if pos + 5 > bytes.len() || &bytes[pos..pos + 5] != b"false" {
-                            return None;
+                            return false;
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -273,7 +323,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                     }
                     b'n' => {
                         if pos + 4 > bytes.len() || &bytes[pos..pos + 4] != b"null" {
-                            return None;
+                            return false;
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -292,7 +342,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                         });
                         state = State::AfterValue;
                     }
-                    _ => return None,
+                    _ => return false,
                 }
             }
             State::AfterValue => {
@@ -310,11 +360,11 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                             // Expect next key.
                             skip_ws(bytes, &mut pos);
                             if pos >= bytes.len() || bytes[pos] != b'"' {
-                                return None;
+                                return false;
                             }
                             let key_off = pos as u32;
                             if !skip_string(bytes, &mut pos) {
-                                return None;
+                                return false;
                             }
                             entries.push(TapeEntry {
                                 offset: key_off,
@@ -323,7 +373,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                             });
                             skip_ws(bytes, &mut pos);
                             if pos >= bytes.len() || bytes[pos] != b':' {
-                                return None;
+                                return false;
                             }
                             pos += 1;
                         }
@@ -353,19 +403,38 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                         pos += 1;
                         state = State::AfterValue;
                     }
-                    _ => return None,
+                    _ => return false,
                 }
             }
         }
     }
 
     if !stack.is_empty() {
-        return None;
+        return false;
     } // unclosed container
     if entries.is_empty() {
-        return None;
+        return false;
     }
-    Some(Tape { entries })
+    true
+}
+
+/// Build a tape using thread-local scratch storage, then borrow the
+/// completed entries for a caller-provided operation. Scratch is kept
+/// only while it remains modest; large blobs are allowed to return
+/// their backing allocation to the system allocator instead of pinning
+/// a high-water tape buffer for the rest of the thread.
+pub(crate) fn with_built_tape<R>(bytes: &[u8], f: impl FnOnce(&[TapeEntry]) -> R) -> Option<R> {
+    TAPE_SCRATCH.with(|cell| {
+        let mut scratch = cell.take().unwrap_or_else(TapeScratch::new);
+        let result = if build_tape_into(bytes, &mut scratch.entries, &mut scratch.stack) {
+            Some(f(&scratch.entries))
+        } else {
+            None
+        };
+        scratch.trim_for_reuse();
+        cell.set(Some(scratch));
+        result
+    })
 }
 
 /// Materialize a tape into a `JSValue` tree identical to what the
@@ -486,14 +555,26 @@ unsafe fn materialize_array(
 unsafe fn decode_key_to_interned_string(bytes: &[u8], offset: usize) -> *mut crate::StringHeader {
     let bytes_at_key = &bytes[offset..];
     let key_bytes: Vec<u8> = match parse_string_bytes_static(bytes_at_key) {
-        Some(ParsedStr::Borrowed(slice)) => slice.to_vec(),
+        Some(ParsedStr::Borrowed(slice)) => {
+            let cached = crate::json::PARSE_KEY_CACHE.with(|c| c.borrow().get(slice).copied());
+            if let Some(p) = cached {
+                return p as *mut crate::StringHeader;
+            }
+            let p =
+                crate::string::js_string_from_bytes_longlived(slice.as_ptr(), slice.len() as u32);
+            crate::json::PARSE_KEY_CACHE.with(|c| {
+                c.borrow_mut().insert(slice.to_vec(), p);
+            });
+            return p;
+        }
         Some(ParsedStr::Owned(v)) => v,
         None => return std::ptr::null_mut(),
     };
     // Two-phase lookup: check cache with immutable borrow first, then
     // allocate OUTSIDE the borrow (allocation may trigger GC →
     // `scan_parse_roots` → borrow() on same RefCell).
-    let cached = crate::json::PARSE_KEY_CACHE.with(|c| c.borrow().get(&key_bytes).copied());
+    let cached =
+        crate::json::PARSE_KEY_CACHE.with(|c| c.borrow().get(key_bytes.as_slice()).copied());
     if let Some(p) = cached {
         return p as *mut crate::StringHeader;
     }
@@ -1174,6 +1255,8 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
                 materialize_value_slice(tape, bytes, &mut walk_idx)
             };
             *elements_ptr.add(i) = value.bits();
+            (*arr_ptr).length = (i + 1) as u32;
+            crate::array::note_array_slot(arr_ptr, i, value.bits());
             // Advance tape cursor past this element.
             let k = tape[idx].kind;
             if k == KIND_OBJ_START || k == KIND_ARR_START {

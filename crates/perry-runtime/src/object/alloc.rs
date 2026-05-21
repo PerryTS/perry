@@ -418,7 +418,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         crate::gc::layout_init_pointer_free(new_ptr as *mut u8);
         // Empty keys array with capacity reserved for the static props to come.
         let new_keys_arr = crate::array::js_array_alloc(extra_count);
-        (*new_ptr).keys_array = new_keys_arr;
+        set_object_keys_array(new_ptr, new_keys_arr);
         return new_ptr;
     }
 
@@ -481,7 +481,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         (*new_keys_arr).length = 0;
     }
 
-    (*new_ptr).keys_array = new_keys_arr;
+    set_object_keys_array(new_ptr, new_keys_arr);
 
     new_ptr
 }

@@ -257,13 +257,32 @@ unsafe fn array_elements_ptr(arr: *mut ArrayHeader) -> *mut u64 {
     (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64
 }
 
-#[inline]
-unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
-    crate::gc::layout_note_slot(arr as usize, index, value_bits);
+pub(crate) unsafe fn gc_element_slot_range(
+    arr: *mut ArrayHeader,
+) -> Option<crate::gc::HeapSlotRange> {
+    if arr.is_null() {
+        return None;
+    }
+    let length = (*arr).length as usize;
+    let capacity = (*arr).capacity as usize;
+    if length > capacity || length > 16_000_000 {
+        return None;
+    }
+    Some(crate::gc::HeapSlotRange::new(
+        array_elements_ptr(arr),
+        length,
+    ))
 }
 
 #[inline]
-unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
+pub(crate) unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
+    crate::gc::layout_note_slot(arr as usize, index, value_bits);
+    let slot = array_elements_ptr(arr).add(index) as usize;
+    crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
+}
+
+#[inline]
+pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
     if arr.is_null() {
         return;
     }
@@ -274,6 +293,59 @@ unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
         return;
     }
     crate::gc::layout_rebuild_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
+    if crate::arena::pointer_in_old_gen(arr as usize) {
+        let slots = array_elements_ptr(arr);
+        for i in 0..length {
+            let slot = slots.add(i);
+            crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
+        }
+    }
+}
+
+#[inline]
+pub(crate) unsafe fn rebuild_array_layout_exact(arr: *mut ArrayHeader) {
+    if arr.is_null() {
+        return;
+    }
+    let length = (*arr).length as usize;
+    let capacity = (*arr).capacity as usize;
+    if length > capacity || length > 16_000_000 {
+        crate::gc::layout_mark_unknown(arr as *mut u8);
+        return;
+    }
+    crate::gc::layout_rebuild_exact_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
+    if crate::arena::pointer_in_old_gen(arr as usize) {
+        let slots = array_elements_ptr(arr);
+        for i in 0..length {
+            let slot = slots.add(i);
+            crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
+        }
+    }
+}
+
+#[inline]
+unsafe fn replay_array_growth_write_barriers(arr: *mut ArrayHeader) {
+    if arr.is_null() || !crate::arena::pointer_in_old_gen(arr as usize) {
+        return;
+    }
+
+    let length = (*arr).length as usize;
+    if length == 0 || length > 16_000_000 {
+        return;
+    }
+
+    let slots = array_elements_ptr(arr);
+    if crate::gc::layout_visit_pointer_slots_for_user(arr as usize, length, |index| {
+        let slot = slots.add(index);
+        crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
+    }) {
+        return;
+    }
+
+    for i in 0..length {
+        let slot = slots.add(i);
+        crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
+    }
 }
 
 #[inline]
@@ -812,6 +884,9 @@ pub extern "C" fn js_array_set_f64_extend(
         );
         return arr;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _arr_handle = scope.root_raw_mut_ptr(arr);
+    let value_handle = scope.root_nanbox_f64(value);
     unsafe {
         let length = (*arr).length;
 
@@ -830,6 +905,7 @@ pub extern "C" fn js_array_set_f64_extend(
         } else {
             arr
         };
+        let value = value_handle.get_nanbox_f64();
 
         // Fill any gap with TAG_HOLE so subsequent reads / iteration /
         // JSON.stringify treat them as holes (per ECMA-262 §22.1.3.30
@@ -997,6 +1073,8 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
     if arr.is_null() {
         return js_array_alloc(min_capacity);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
     unsafe {
         let old_capacity = (*arr).capacity;
         if min_capacity <= old_capacity {
@@ -1010,6 +1088,7 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
 
         // Allocate new from arena and copy old data.
         let new_ptr = arena_alloc_gc(new_size, 8, crate::gc::GC_TYPE_ARRAY) as *mut ArrayHeader;
+        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         ptr::copy_nonoverlapping(arr as *const u8, new_ptr as *mut u8, old_size);
 
         (*new_ptr).capacity = new_capacity;
@@ -1019,6 +1098,7 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             (new_ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*new_header)._reserved = (*old_header)._reserved;
         crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
+        replay_array_growth_write_barriers(new_ptr);
 
         // Issue #233: install a forwarding pointer at the OLD location
         // so any stale reference (e.g. an async function's caller still
@@ -1064,11 +1144,9 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
         let length = (*arr).length;
         let capacity = (*arr).capacity;
 
-        let arr = if length >= capacity {
-            js_array_grow(arr, length + 1)
-        } else {
-            arr
-        };
+        if length >= capacity {
+            return js_array_push_f64_grow(arr, length, value);
+        }
 
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         ptr::write(elements_ptr.add(length as usize), value);
@@ -1076,6 +1154,26 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
         (*arr).length = length + 1;
         arr
     }
+}
+
+#[cold]
+unsafe fn js_array_push_f64_grow(
+    arr: *mut ArrayHeader,
+    length: u32,
+    value: f64,
+) -> *mut ArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    let value_handle = scope.root_nanbox_f64(value);
+
+    let arr = js_array_grow(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), length + 1);
+    let value = value_handle.get_nanbox_f64();
+
+    let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    ptr::write(elements_ptr.add(length as usize), value);
+    note_array_slot(arr, length as usize, value.to_bits());
+    (*arr).length = length + 1;
+    arr
 }
 
 /// Push every element of `source` to the end of `target`, growing as needed.
@@ -1099,15 +1197,21 @@ pub extern "C" fn js_array_push_spread_f64(
     if source.is_null() {
         return target;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source_handle = scope.root_raw_const_ptr(source);
     unsafe {
         let src_len = (*source).length;
         if src_len == 0 {
             return target;
         }
-        let src_elements_ptr =
-            (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let mut current = target;
         for i in 0..src_len {
+            let source = clean_arr_ptr(source_handle.get_raw_const_ptr::<ArrayHeader>());
+            if source.is_null() {
+                break;
+            }
+            let src_elements_ptr =
+                (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
             let value = *src_elements_ptr.add(i as usize);
             current = js_array_push_f64(current, value);
         }
@@ -1162,6 +1266,8 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
     if arr.is_null() {
         return;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _arr_handle = scope.root_raw_mut_ptr(arr);
     let n: u32 = if new_length.is_nan() || new_length < 0.0 || new_length > u32::MAX as f64 {
         0
     } else {
@@ -1269,6 +1375,9 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
     if arr.is_null() {
         return js_array_alloc(0);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _arr_handle = scope.root_raw_mut_ptr(arr);
+    let value_handle = scope.root_nanbox_f64(value);
     unsafe {
         let length = (*arr).length;
         let capacity = (*arr).capacity;
@@ -1278,6 +1387,7 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
         } else {
             arr
         };
+        let value = value_handle.get_nanbox_f64();
 
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
 
@@ -1685,7 +1795,7 @@ pub extern "C" fn js_array_concat(
                 src_len as usize,
             );
             (*result).length = new_len;
-            rebuild_array_layout(result);
+            rebuild_array_layout_exact(result);
             return result;
         }
 
@@ -2198,7 +2308,7 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                 (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
             (*result).length = len;
-            rebuild_array_layout(result);
+            rebuild_array_layout_exact(result);
         }
         result
     }
@@ -3347,6 +3457,12 @@ pub extern "C" fn js_array_copy_within(
 mod tests {
     use super::*;
 
+    fn gc_collection_count_for_tests() -> u64 {
+        let mut collections = 0;
+        crate::gc::js_gc_stats(&mut collections, ptr::null_mut(), ptr::null_mut());
+        collections
+    }
+
     #[test]
     fn test_array_alloc_and_access() {
         let arr = js_array_alloc(5);
@@ -3468,6 +3584,83 @@ mod tests {
                 i
             );
         }
+        assert_eq!(
+            crate::gc::test_layout_pointer_slot_count(arr as usize, 50),
+            Some(0),
+            "numeric grow path should preserve pointer-free array layout"
+        );
+    }
+
+    #[test]
+    fn test_array_push_f64_no_grow_fast_path() {
+        let arr = js_array_alloc(4);
+        let value = 42.5;
+        let initial_capacity = unsafe { (*arr).capacity };
+
+        let before = gc_collection_count_for_tests();
+        let pushed = js_array_push_f64(arr, value);
+        let after = gc_collection_count_for_tests();
+
+        assert_eq!(pushed, arr);
+        assert_eq!(after, before, "no-grow push must not trigger GC");
+        assert_eq!(js_array_length(pushed), 1);
+        assert_eq!(js_array_get_f64(pushed, 0), value);
+        unsafe {
+            assert_eq!((*pushed).capacity, initial_capacity);
+        }
+
+        let str_ptr = crate::string::js_string_from_bytes(b"fast-path".as_ptr(), 9);
+        let str_value = f64::from_bits(
+            crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
+        );
+
+        let before = gc_collection_count_for_tests();
+        let pushed_again = js_array_push_f64(pushed, str_value);
+        let after = gc_collection_count_for_tests();
+
+        assert_eq!(pushed_again, pushed);
+        assert_eq!(after, before, "tagged no-grow push must not trigger GC");
+        assert_eq!(js_array_length(pushed_again), 2);
+        assert_eq!(
+            js_array_get_f64(pushed_again, 1).to_bits(),
+            str_value.to_bits()
+        );
+    }
+
+    #[test]
+    fn test_array_push_f64_grow_path_preserves_value_and_forwarding() {
+        let mut arr = js_array_alloc(0);
+        let initial = arr;
+        let capacity = unsafe { (*arr).capacity };
+
+        for i in 0..capacity {
+            let pushed = js_array_push_f64(arr, i as f64);
+            assert_eq!(pushed, arr);
+            arr = pushed;
+        }
+
+        let str_ptr = crate::string::js_string_from_bytes(b"grow-path".as_ptr(), 9);
+        let str_value = f64::from_bits(
+            crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
+        );
+
+        let grown = js_array_push_f64(arr, str_value);
+
+        assert_ne!(grown, arr, "push at capacity should grow the array");
+        assert_eq!(js_array_length(grown), capacity + 1);
+        assert_eq!(
+            js_array_get_f64(grown, capacity).to_bits(),
+            str_value.to_bits()
+        );
+        assert_eq!(
+            js_array_length(initial),
+            capacity + 1,
+            "stale pre-grow pointer should follow the forwarding chain"
+        );
+        assert_eq!(
+            js_array_get_f64(initial, capacity).to_bits(),
+            str_value.to_bits()
+        );
     }
 
     #[test]

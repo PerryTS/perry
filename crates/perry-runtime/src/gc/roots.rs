@@ -1,0 +1,1826 @@
+use super::*;
+
+pub type MutableRootScanner = for<'a> fn(&mut RuntimeRootVisitor<'a>);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RuntimeHandleSlot {
+    Nanbox(u64),
+    RawTagged { addr: usize, tag: u64 },
+    HeapWord(u64),
+}
+
+thread_local! {
+    pub(super) static ROOT_SCANNERS: RefCell<Vec<fn(&mut dyn FnMut(f64))>> = RefCell::new(Vec::new());
+    pub(super) static MUTABLE_ROOT_SCANNERS: RefCell<Vec<MutableRootScanner>> = RefCell::new(Vec::new());
+    pub(super) static FFI_ROOT_SCANNERS: RefCell<Vec<PerryFfiRootScanner>> = RefCell::new(Vec::new());
+    pub(super) static FFI_MUTABLE_ROOT_SCANNERS: RefCell<Vec<PerryFfiMutableRootScanner>> = RefCell::new(Vec::new());
+    pub(super) static GLOBAL_ROOTS: RefCell<Vec<*mut u64>> = const { RefCell::new(Vec::new()) };
+    pub(super) static RUNTIME_HANDLE_STACK: RefCell<Vec<RuntimeHandleSlot>> = const { RefCell::new(Vec::new()) };
+    pub(super) static GC_ROOT_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Guard returned by `lock_gc_root_registry`.
+///
+/// The mutex is released before any deferred GC request is flushed. That
+/// drop order is what lets scanner-owned registries use ordinary blocking
+/// locks in their root scanners: a GC request made while the same mutex is
+/// held records pending work, returns immediately, and the final guard drop
+/// runs the collection only after the scanner can reacquire the mutex.
+pub(crate) struct GcRootRegistryGuard<'a, T> {
+    pub(super) guard: Option<MutexGuard<'a, T>>,
+}
+
+impl<T> std::ops::Deref for GcRootRegistryGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.guard
+            .as_deref()
+            .expect("GC root registry guard missing")
+    }
+}
+
+impl<T> std::ops::DerefMut for GcRootRegistryGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.guard
+            .as_deref_mut()
+            .expect("GC root registry guard missing")
+    }
+}
+
+impl<T> Drop for GcRootRegistryGuard<'_, T> {
+    fn drop(&mut self) {
+        drop(self.guard.take());
+        exit_gc_root_lock();
+    }
+}
+
+pub(crate) fn lock_gc_root_registry<T>(mutex: &Mutex<T>) -> GcRootRegistryGuard<'_, T> {
+    let guard = mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    enter_gc_root_lock();
+    GcRootRegistryGuard { guard: Some(guard) }
+}
+
+#[inline]
+pub(super) fn enter_gc_root_lock() {
+    GC_ROOT_LOCK_DEPTH.with(|depth| depth.set(depth.get() + 1));
+}
+
+pub(super) fn exit_gc_root_lock() {
+    let should_flush = GC_ROOT_LOCK_DEPTH.with(|depth| {
+        let current = depth.get();
+        debug_assert!(current > 0, "GC root lock depth underflow");
+        if current == 0 {
+            return false;
+        }
+        depth.set(current - 1);
+        current == 1
+    });
+    if should_flush {
+        flush_deferred_gc_request();
+    }
+}
+
+pub const SHADOW_STACK_HEADER_SLOTS: usize = 2; // prev_frame_top + slot_count
+pub const SHADOW_STACK_GROW_RESERVE: usize = 1024; // initial capacity (slots)
+
+/// Combined shadow-stack state. Holding both fields in one TLS slot
+/// halves the macOS `tlv_get_addr` calls in every shadow-stack op
+/// (push / pop / slot_set / slot_get / scanner) — those ops fired
+/// ~3 M+ times per perf-comprehensive run, and TLS access was the
+/// single biggest leaf cost in the post-iter-3 profile (20.9 % leaf
+/// samples on `tlv_get_addr`). Replacing `RefCell<Vec<u64>>` with
+/// `UnsafeCell<ShadowStackState>` also drops the per-op RefCell
+/// borrow accounting.
+///
+/// Safety: shadow-stack ops are only invoked from compiled JS code
+/// (runtime-generated, single-threaded for this TLS) and from GC
+/// scanner / rewriter passes. The two never overlap — GC is
+/// stop-the-world relative to this TLS, and compiled code can't
+/// re-enter the runtime through a path that would touch this state
+/// while a GC walk is in progress (no allocation occurs inside the
+/// scanner/rewriter, and `GC_FLAG_IN_ALLOC` blocks reentrant GC).
+pub(crate) struct ShadowStackState {
+    /// `Vec<u64>` instead of `Vec<*mut u8>` because slots hold
+    /// NaN-boxed JSValue bits (upper 16 bits are the tag, lower 48
+    /// the pointer) — the GC tracer unwraps the NaN-box the same way
+    /// it already does for closure captures.
+    pub(crate) stack: Vec<u64>,
+    /// Index into `stack` where the current frame's slot_0 lives.
+    /// `usize::MAX` when no frame is pushed (initial state + after
+    /// the outermost function returns).
+    pub(crate) frame_top: usize,
+}
+
+thread_local! {
+    pub(crate) static SHADOW: std::cell::UnsafeCell<ShadowStackState> =
+        std::cell::UnsafeCell::new(ShadowStackState {
+            stack: Vec::with_capacity(SHADOW_STACK_GROW_RESERVE),
+            frame_top: usize::MAX,
+        });
+}
+
+/// Push a new shadow-stack frame with `slot_count` live-pointer
+/// slots. Slots start zero-initialized (codegen fills them with
+/// NaN-boxed pointer values via `js_shadow_slot_set`). Returns an
+/// opaque `frame_handle` (the pre-push top index) that the matching
+/// pop must be passed — lets the GC assert frame balance in debug
+/// builds and detects codegen misemission.
+///
+/// Not marked `#[inline(always)]` because it's called once per
+/// function entry; the 3-line body inlines naturally.
+#[no_mangle]
+pub extern "C" fn js_shadow_frame_push(slot_count: u32) -> u64 {
+    SHADOW.with(|cell| unsafe {
+        let s = &mut *cell.get();
+        let prev_top = s.frame_top;
+        let base = s.stack.len();
+        // Header: prev_frame_top + slot_count. Slots follow,
+        // initialized to 0 (GC_FLAG_NONE + null pointer).
+        s.stack.push(prev_top as u64);
+        s.stack.push(slot_count as u64);
+        let slots_start = s.stack.len();
+        s.stack.resize(slots_start + slot_count as usize, 0);
+        s.frame_top = slots_start;
+        base as u64
+    })
+}
+
+/// Pop the current shadow-stack frame. `frame_handle` must match
+/// the return value of the matching `js_shadow_frame_push`. Restores
+/// the prior `SHADOW.frame_top`.
+///
+/// Robustness: the bounds check below was previously a `debug_assert!`,
+/// which is **compiled out in release builds**. A corrupted / out-of-range
+/// `frame_handle` therefore reached `s.stack[base]` unchecked and aborted
+/// the entire process with an out-of-bounds panic. This was observed on
+/// Windows release builds, where codegen could thread a NaN-boxed value
+/// (e.g. boxed `undefined`, `0x7FFC_0000_0000_0001`) into this `extern "C"`
+/// argument instead of the small index `js_shadow_frame_push` returned —
+/// `js_shadow_frame_pop(9222246136947933185)` → `s.stack[huge]` →
+/// hard crash a few seconds into startup. The shadow stack is Phase A
+/// (built but not yet consumed by the GC tracer), so skipping a malformed
+/// pop is memory-safe and GC-correctness-neutral; aborting the host
+/// program is not. Promote the check to a real release-safe guard and
+/// bail out — mirrors the bounds checks `js_shadow_slot_set` /
+/// `js_shadow_slot_get` already perform on every access.
+#[no_mangle]
+pub extern "C" fn js_shadow_frame_pop(frame_handle: u64) {
+    SHADOW.with(|cell| unsafe {
+        let s = &mut *cell.get();
+        let base = frame_handle as usize;
+        if base + SHADOW_STACK_HEADER_SLOTS > s.stack.len() {
+            debug_assert!(false, "shadow-stack pop past end (corrupted frame handle)");
+            return;
+        }
+        let prev_top = s.stack[base] as usize;
+        s.stack.truncate(base);
+        s.frame_top = prev_top;
+    });
+}
+
+/// Update slot `idx` in the current frame with NaN-boxed `value`.
+/// Codegen emits this at safepoints for each live pointer-typed
+/// local. Hot path — compiled code calls this directly or inlines
+/// an equivalent sequence; Rust version exists for runtime tests
+/// and debug builds.
+#[no_mangle]
+pub extern "C" fn js_shadow_slot_set(idx: u32, value: u64) {
+    SHADOW.with(|cell| unsafe {
+        let s = &mut *cell.get();
+        let top = s.frame_top;
+        if top == usize::MAX {
+            return; // no frame active — no-op
+        }
+        let slot = top + idx as usize;
+        if slot < s.stack.len() {
+            s.stack[slot] = value;
+        }
+    });
+}
+
+/// Read the current frame's slot `idx` — test-only; Phase B GC
+/// tracer walks the raw Vec directly instead of going through a
+/// function call per slot.
+#[no_mangle]
+pub extern "C" fn js_shadow_slot_get(idx: u32) -> u64 {
+    SHADOW.with(|cell| unsafe {
+        let s = &*cell.get();
+        let top = s.frame_top;
+        if top == usize::MAX {
+            return 0;
+        }
+        let slot = top + idx as usize;
+        if slot < s.stack.len() {
+            s.stack[slot]
+        } else {
+            0
+        }
+    })
+}
+
+/// Current frame depth — test-only.
+pub fn shadow_stack_depth() -> usize {
+    SHADOW.with(|cell| unsafe {
+        let s = &*cell.get();
+        // Count frames by walking prev_frame_top pointers from the
+        // top back to the bottom. Depth = number of hops to reach
+        // `usize::MAX`.
+        let mut top = s.frame_top;
+        let mut depth = 0;
+        while top != usize::MAX && top >= SHADOW_STACK_HEADER_SLOTS {
+            depth += 1;
+            let header_base = top - SHADOW_STACK_HEADER_SLOTS;
+            if header_base >= s.stack.len() {
+                break;
+            }
+            top = s.stack[header_base] as usize;
+        }
+        depth
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ConservativeStackScanMode {
+    Auto,
+    Disabled,
+    Full,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ConservativeStackScanDecision {
+    Scan,
+    SkipDisabled,
+    SkipShadowStackActive,
+}
+
+pub(super) fn conservative_stack_scan_mode_from_value(
+    value: Option<&str>,
+) -> ConservativeStackScanMode {
+    let Some(value) = value else {
+        return ConservativeStackScanMode::Auto;
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" => ConservativeStackScanMode::Auto,
+        "0" | "off" | "false" => ConservativeStackScanMode::Disabled,
+        "1" | "on" | "true" | "full" | "debug" => ConservativeStackScanMode::Full,
+        _ => ConservativeStackScanMode::Auto,
+    }
+}
+
+pub(super) fn conservative_stack_scan_mode() -> ConservativeStackScanMode {
+    match std::env::var("PERRY_CONSERVATIVE_STACK_SCAN") {
+        Ok(value) => conservative_stack_scan_mode_from_value(Some(&value)),
+        Err(_) => ConservativeStackScanMode::Auto,
+    }
+}
+
+#[inline]
+pub(super) fn shadow_stack_has_active_frame() -> bool {
+    SHADOW.with(|cell| unsafe { (*cell.get()).frame_top != usize::MAX })
+}
+
+#[inline]
+pub(super) fn conservative_stack_scan_decision_for(
+    mode: ConservativeStackScanMode,
+    shadow_frame_active: bool,
+) -> ConservativeStackScanDecision {
+    match mode {
+        ConservativeStackScanMode::Disabled => ConservativeStackScanDecision::SkipDisabled,
+        ConservativeStackScanMode::Full => ConservativeStackScanDecision::Scan,
+        ConservativeStackScanMode::Auto if shadow_frame_active => {
+            ConservativeStackScanDecision::SkipShadowStackActive
+        }
+        ConservativeStackScanMode::Auto => ConservativeStackScanDecision::Scan,
+    }
+}
+
+pub(super) fn conservative_stack_scan_decision() -> ConservativeStackScanDecision {
+    conservative_stack_scan_decision_for(
+        conservative_stack_scan_mode(),
+        shadow_stack_has_active_frame(),
+    )
+}
+
+/// Register a root scanner function.
+/// Each scanner is called during the mark phase to discover roots.
+/// This legacy API exposes copied values only. When evacuation is
+/// enabled, every discovered target is treated as pinned because the GC
+/// has no mutable slot it can rewrite after forwarding.
+pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
+    ROOT_SCANNERS.with(|scanners| {
+        scanners.borrow_mut().push(scanner);
+    });
+}
+
+/// Register a runtime-owned root scanner that exposes mutable slots.
+/// These scanners are marked like ordinary roots, but their storage is
+/// revisited after evacuation so forwarded references can be rewritten.
+pub fn gc_register_mutable_root_scanner(scanner: MutableRootScanner) {
+    MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners.borrow_mut().push(scanner);
+    });
+}
+
+pub(super) type PerryFfiRootMarker = extern "C" fn(value: f64, ctx: *mut c_void);
+pub(super) type PerryFfiRootScanner = extern "C" fn(mark: PerryFfiRootMarker, ctx: *mut c_void);
+pub(super) type PerryFfiMutableRootVisitor =
+    extern "C" fn(kind: u32, slot: *mut c_void, ctx: *mut c_void) -> bool;
+pub(super) type PerryFfiMutableRootScanner =
+    extern "C" fn(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void);
+
+pub(super) const PERRY_FFI_ROOT_SLOT_I64: u32 = 1;
+pub(super) const PERRY_FFI_ROOT_SLOT_USIZE: u32 = 2;
+pub(super) const PERRY_FFI_ROOT_SLOT_RAW_MUT_PTR: u32 = 3;
+pub(super) const PERRY_FFI_ROOT_SLOT_NANBOX_F64: u32 = 4;
+pub(super) const PERRY_FFI_ROOT_SLOT_NANBOX_U64: u32 = 5;
+
+/// Register a native-package root scanner through a stable C ABI.
+///
+/// `perry-ffi` adapts its Rust-facing `fn(&mut dyn FnMut(f64))`
+/// convenience API to this callback shape so native wrapper archives
+/// can stay runtime-free. Like the Rust legacy scanner API, this is
+/// copy-only storage from the GC's perspective; evacuation pins those
+/// roots instead of attempting to rewrite native-owned slots.
+#[no_mangle]
+pub extern "C" fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanner) {
+    FFI_ROOT_SCANNERS.with(|scanners| {
+        scanners.borrow_mut().push(scanner);
+    });
+}
+
+/// Register a native-package root scanner that exposes mutable slots
+/// through the stable C ABI.
+///
+/// Unlike `perry_ffi_gc_register_root_scanner`, this scanner can be
+/// revisited after copied-minor evacuation so native-owned slots are
+/// rewritten to forwarded addresses instead of forcing copy-only
+/// pinning/fallback behavior.
+#[no_mangle]
+pub extern "C" fn perry_ffi_gc_register_mutable_root_scanner(scanner: PerryFfiMutableRootScanner) {
+    FFI_MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners.borrow_mut().push(scanner);
+    });
+}
+
+/// Register a global variable address as a GC root.
+/// Called by codegen in module init functions.
+#[no_mangle]
+pub extern "C" fn js_gc_register_global_root(ptr: i64) {
+    GLOBAL_ROOTS.with(|roots| {
+        roots.borrow_mut().push(ptr as *mut u64);
+    });
+}
+
+/// Suppress GC triggers. While suppressed, `gc_check_trigger` is a no-op.
+
+pub(super) fn mark_stack_roots(valid_ptrs: &ValidPointerSet) -> ConservativeRootTraceStats {
+    mark_stack_roots_for_decision(valid_ptrs, conservative_stack_scan_decision())
+}
+
+pub(super) fn mark_stack_roots_for_decision(
+    valid_ptrs: &ValidPointerSet,
+    decision: ConservativeStackScanDecision,
+) -> ConservativeRootTraceStats {
+    match decision {
+        ConservativeStackScanDecision::Scan => mark_stack_roots_unchecked(valid_ptrs),
+        ConservativeStackScanDecision::SkipDisabled
+        | ConservativeStackScanDecision::SkipShadowStackActive => {
+            ConservativeRootTraceStats::default()
+        }
+    }
+}
+
+/// Conservative stack scan: scan the current thread's stack for heap pointers.
+/// Handles BOTH NaN-boxed pointers (POINTER_TAG/STRING_TAG/BIGINT_TAG) AND raw I64 pointers.
+/// Raw I64 pointers arise from Perry's `is_array`/`is_string`/`is_pointer`/`is_closure` local
+/// variables — codegen stores these as raw I64 words (not NaN-boxed) in registers and on stack.
+pub(super) fn mark_stack_roots_unchecked(
+    valid_ptrs: &ValidPointerSet,
+) -> ConservativeRootTraceStats {
+    let mut stats = ConservativeRootTraceStats::default();
+    // Capture callee-saved registers into a buffer via setjmp.
+    //
+    // On Apple platforms the C `setjmp(3)` saves the signal mask via a
+    // `sigprocmask` system call, which dominates GC cost (~25 μs per
+    // call on arm64). We only need register capture, not signal-state
+    // save — switch to `_setjmp(3)` (linker symbol `__setjmp`) on
+    // Apple targets. See the matching switch in
+    // `promise.rs::js_promise_run_microtasks` for the full rationale.
+    //
+    // The `setjmp` extern lives in `crate::ffi::setjmp` so this and
+    // `promise.rs` share one libc-matching declaration (issue #856).
+    // We view the buffer as `u64` slots here because the goal of this
+    // path is to scan register-sized words for potential NaN-boxed /
+    // raw pointers; the cast to `*mut c_int` at the FFI boundary is
+    // the inverse of the cast `promise.rs` does from its `*mut i32`
+    // buffer.
+    //
+    // Size check: 32 * 8 = 256 bytes, which exceeds the darwin arm64
+    // `jmp_buf` (48 * 4 = 192 bytes) and every other platform we
+    // currently support — see `crate::ffi::setjmp::JMP_BUF_MIN_BYTES`.
+    let mut jmp_buf = [0u64; 32]; // oversized for safety
+    unsafe {
+        crate::ffi::setjmp::setjmp(jmp_buf.as_mut_ptr() as *mut std::os::raw::c_int);
+    }
+
+    // Scan the register buffer (covers callee-saved regs: x19-x28 on AArch64, rbx/rbp/r12-r15 on x86_64)
+    for &word in &jmp_buf {
+        if try_mark_value_or_raw(word, valid_ptrs) {
+            stats.root_count += 1;
+        }
+    }
+
+    // Issue #73: setjmp only captures callee-saved registers. On
+    // macOS ARM64 that's x19-x28 + d8-d15 — it misses d0-d7 and
+    // d16-d31 (caller-saved FP regs where LLVM may be holding a
+    // NaN-boxed pointer across the async poll loop's internal calls,
+    // especially under heavy optimization). Capture them explicitly
+    // via inline asm so any spilling LLVM hasn't performed is
+    // irrelevant — we read the regs directly as they stand at GC
+    // entry. A value in d0-d31 ANY of which happens to be a
+    // NaN-boxed heap pointer gets marked here.
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        let mut fp_regs: [u64; 32] = [0; 32];
+        std::arch::asm!(
+            "str d0,  [{buf}, #0x00]",
+            "str d1,  [{buf}, #0x08]",
+            "str d2,  [{buf}, #0x10]",
+            "str d3,  [{buf}, #0x18]",
+            "str d4,  [{buf}, #0x20]",
+            "str d5,  [{buf}, #0x28]",
+            "str d6,  [{buf}, #0x30]",
+            "str d7,  [{buf}, #0x38]",
+            "str d8,  [{buf}, #0x40]",
+            "str d9,  [{buf}, #0x48]",
+            "str d10, [{buf}, #0x50]",
+            "str d11, [{buf}, #0x58]",
+            "str d12, [{buf}, #0x60]",
+            "str d13, [{buf}, #0x68]",
+            "str d14, [{buf}, #0x70]",
+            "str d15, [{buf}, #0x78]",
+            "str d16, [{buf}, #0x80]",
+            "str d17, [{buf}, #0x88]",
+            "str d18, [{buf}, #0x90]",
+            "str d19, [{buf}, #0x98]",
+            "str d20, [{buf}, #0xa0]",
+            "str d21, [{buf}, #0xa8]",
+            "str d22, [{buf}, #0xb0]",
+            "str d23, [{buf}, #0xb8]",
+            "str d24, [{buf}, #0xc0]",
+            "str d25, [{buf}, #0xc8]",
+            "str d26, [{buf}, #0xd0]",
+            "str d27, [{buf}, #0xd8]",
+            "str d28, [{buf}, #0xe0]",
+            "str d29, [{buf}, #0xe8]",
+            "str d30, [{buf}, #0xf0]",
+            "str d31, [{buf}, #0xf8]",
+            buf = in(reg) fp_regs.as_mut_ptr(),
+            options(nostack, preserves_flags),
+        );
+        for &word in &fp_regs {
+            if try_mark_value_or_raw(word, valid_ptrs) {
+                stats.root_count += 1;
+            }
+        }
+    }
+
+    // Get stack bounds
+    let stack_top: usize;
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        let sp: u64;
+        std::arch::asm!("mov {}, sp", out(reg) sp);
+        stack_top = sp as usize;
+    }
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        let sp: u64;
+        std::arch::asm!("mov {}, rsp", out(reg) sp);
+        stack_top = sp as usize;
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    {
+        // Fallback: skip stack scan on unsupported architectures
+        return stats;
+    }
+
+    let stack_bottom = get_stack_bottom();
+    if stack_bottom == 0 {
+        return stats; // Can't determine stack bounds
+    }
+
+    // Walk the stack from current SP to stack bottom.
+    // Each 8-byte word may be: NaN-boxed pointer, raw I64 heap pointer, return addr, or plain value.
+    let mut addr = stack_top;
+    while addr < stack_bottom {
+        let word = unsafe { *(addr as *const u64) };
+        if try_mark_value_or_raw(word, valid_ptrs) {
+            stats.root_count += 1;
+        }
+        addr += 8;
+    }
+    stats
+}
+
+/// Mark a value if it is a heap pointer — either NaN-boxed OR a raw I64 pointer.
+/// Returns true if newly marked.
+/// This is used for conservative scanning where Perry stores raw I64 pointers (for is_string/
+/// is_array/is_pointer/is_closure vars) alongside NaN-boxed F64 values.
+#[inline]
+pub(super) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> bool {
+    // First try NaN-boxed interpretation (POINTER_TAG / STRING_TAG / BIGINT_TAG)
+    if try_mark_value(word, valid_ptrs) {
+        return true;
+    }
+    // Fallback: treat as raw (non-NaN-boxed) heap pointer.
+    // Perry's is_string/is_array/is_pointer/is_closure locals store raw I64 addresses.
+    // Validate against the known-heap-pointer set to avoid false positives from return addresses
+    // and plain integers. Valid heap pointers are in the lower 48-bit address space and
+    // won't have NaN-boxing tags in upper bits (already rejected above).
+    let raw_ptr_u64 = word;
+    if !(0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&raw_ptr_u64) {
+        return false; // Too small (null/invalid) or has upper bits set (NaN tag or non-address)
+    }
+    let raw_ptr = raw_ptr_u64 as usize;
+    // Heap-range short-circuit: every valid raw heap pointer (object
+    // start OR interior) must lie within [range_min, range_max + max
+    // object size]. The interior-pointer case can land up to one
+    // object-size past `range_max`, so we widen the upper bound by
+    // an absolute slack to keep `enclosing_object` reachable for the
+    // few real interior pointers that exist (`js_array_reduce`'s
+    // `elements_ptr = arr + 8` shape, etc.). The slack is bounded by
+    // the largest GcHeader.size field actually used — Perry's biggest
+    // legitimate single allocation is a class instance with many
+    // string fields, well under 4 KB. Anything larger came from a
+    // pinned arena object (rare; doesn't reach this path) so 1 MB
+    // gives plenty of headroom while still rejecting the typical
+    // mis-tagged stack word.
+    if !valid_ptrs.maybe_contains(raw_ptr)
+        && raw_ptr.saturating_sub(0x10_0000) > valid_ptrs.range_max
+    {
+        return false;
+    }
+    // Try direct match first (pointer to object start).
+    let target = if valid_ptrs.contains(&raw_ptr) {
+        raw_ptr
+    } else {
+        // Issue #73: interior-pointer fallback. Runtime functions like
+        // `js_array_reduce` derive `elements_ptr = arr + 8` and hold
+        // only the interior pointer across user-callback invocations.
+        // A conservative scan that only matches object-start addresses
+        // would miss this, letting the GC sweep the backing array
+        // mid-iteration. Look up the enclosing object and mark that.
+        match valid_ptrs.enclosing_object(raw_ptr) {
+            Some(start) => start,
+            None => return false,
+        }
+    };
+    unsafe {
+        let header = header_from_user_ptr(target as *const u8);
+        if (*header).gc_flags & GC_FLAG_MARKED != 0 {
+            return false; // Already marked
+        }
+        if (*header).gc_flags & GC_FLAG_PINNED != 0 {
+            return false; // Pinned objects are always live
+        }
+        (*header).gc_flags |= GC_FLAG_MARKED;
+        push_mark_seed(header);
+    }
+    true
+}
+
+/// Specialized mark-and-enqueue for trace-phase field walks.
+///
+/// `trace_closure`, `trace_array`, `trace_object`, `trace_map`,
+/// `trace_promise.value/.reason` all share the same pattern: read a
+/// heap-field word that is either a NaN-boxed JSValue or a raw I64
+/// pointer at an object start, mark it if live, and push the marked
+/// header onto the local worklist. The generic
+/// `try_mark_value_or_raw` is general enough to also handle
+/// conservative stack scans (raw interior pointers via
+/// `enclosing_object`) and root scans (push to MARK_SEEDS so the
+/// trace-marked-objects entry point can pick them up), but BOTH of
+/// those features are pure overhead inside `drain_trace_worklist`:
+///
+/// 1. Field words never hold interior pointers — they're written via
+///    `arr[i] = x` / `obj.f = x` / closure capture stores, all of
+///    which use the object-start user pointer. Skipping
+///    `enclosing_object` saves a binary-search lookup per field.
+///
+/// 2. The MARK_SEEDS push happens once per newly-marked object during
+///    trace, but the same header is also pushed onto the local
+///    worklist by the caller (so the trace drain visits it). The
+///    extra MARK_SEEDS push goes onto a TLS vec, gets cleared at the
+///    start of the next cycle, and is pure waste while we're already
+///    in the trace phase. Skipping it saves a TLS slot deref +
+///    Vec::push per marked object.
+///
+/// 3. The caller-side re-decode of the NaN-tag (to figure out
+///    POINTER_MASK extraction vs raw-pointer extraction) is folded
+///    into this function, so the caller doesn't pay that switch a
+///    second time.
+///
+/// The valid-pointer hashset check is still load-bearing here — we
+/// only elide the secondary `enclosing_object` fallback.
+#[inline(always)]
+#[cfg(target_os = "macos")]
+pub(super) fn get_stack_bottom() -> usize {
+    extern "C" {
+        fn pthread_self() -> *mut std::ffi::c_void;
+        fn pthread_get_stackaddr_np(thread: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    }
+    unsafe {
+        let thread = pthread_self();
+        pthread_get_stackaddr_np(thread) as usize
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn get_stack_bottom() -> usize {
+    extern "C" {
+        fn pthread_self() -> usize;
+        fn pthread_attr_init(attr: *mut [u64; 8]) -> i32;
+        fn pthread_getattr_np(thread: usize, attr: *mut [u64; 8]) -> i32;
+        fn pthread_attr_getstack(
+            attr: *const [u64; 8],
+            stackaddr: *mut *mut u8,
+            stacksize: *mut usize,
+        ) -> i32;
+        fn pthread_attr_destroy(attr: *mut [u64; 8]) -> i32;
+    }
+    unsafe {
+        let thread = pthread_self();
+        let mut attr = [0u64; 8];
+        pthread_attr_init(&mut attr);
+        if pthread_getattr_np(thread, &mut attr) != 0 {
+            return 0;
+        }
+        let mut stackaddr: *mut u8 = std::ptr::null_mut();
+        let mut stacksize: usize = 0;
+        pthread_attr_getstack(&attr, &mut stackaddr, &mut stacksize);
+        pthread_attr_destroy(&mut attr);
+        stackaddr as usize + stacksize
+    }
+}
+
+// Windows: read TEB.StackBase. Works on every supported Windows version
+// (Windows 7+) without needing GetCurrentThreadStackLimits (Win8+), so it
+// stays correct on the `--min-windows-version=7` build path. The TEB lives
+// at GS:[0] on x86_64 (FS:[0] on x86); StackBase sits at offset 0x08
+// (the highest address — i.e. where the stack starts and grows down from).
+// This is the same pointer kernel32!GetCurrentThreadStackLimits returns as
+// `HighLimit`, just read directly from the TEB to avoid the kernel32 dep.
+//
+// Without this, conservative stack scan early-returns with stack_bottom=0,
+// the GC sees no stack roots, and any heap pointer that lives only in a
+// stack slot during a callback gets swept (issues #385/#386/#387 — the
+// `Array.prototype.map` / `JSON.parse(...).property` / supported_features
+// segfaults all traced back to here).
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub(super) fn get_stack_bottom() -> usize {
+    let stack_base: usize;
+    unsafe {
+        std::arch::asm!(
+            "mov {out}, gs:[0x08]",
+            out = out(reg) stack_base,
+            options(nostack, preserves_flags, readonly),
+        );
+    }
+    stack_base
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86"))]
+pub(super) fn get_stack_bottom() -> usize {
+    let stack_base: usize;
+    unsafe {
+        std::arch::asm!(
+            "mov {out}, fs:[0x04]",
+            out = out(reg) stack_base,
+            options(nostack, preserves_flags, readonly),
+        );
+    }
+    stack_base
+}
+
+#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+pub(super) fn get_stack_bottom() -> usize {
+    // ARM64 Windows: TEB pointer is in x18; StackBase at offset 0x08.
+    let stack_base: usize;
+    unsafe {
+        let teb: usize;
+        std::arch::asm!("mov {}, x18", out(reg) teb, options(nostack, preserves_flags, readonly));
+        stack_base = *((teb + 0x08) as *const usize);
+    }
+    stack_base
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    all(
+        target_os = "windows",
+        any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")
+    ),
+)))]
+pub(super) fn get_stack_bottom() -> usize {
+    0 // Stack scanning not supported on this OS/arch
+}
+
+pub(super) enum RuntimeRootVisitMode<'a> {
+    Mark {
+        valid_ptrs: &'a ValidPointerSet,
+    },
+    CopyingCheck {
+        checker: &'a mut CopyingNurseryPreflight,
+    },
+    CopyingMark {
+        collector: &'a mut CopyingNurseryCollector,
+    },
+    CopyingRewrite {
+        collector: &'a CopyingNurseryCollector,
+    },
+    Rewrite {
+        valid_ptrs: &'a ValidPointerSet,
+    },
+    Verify {
+        valid_ptrs: &'a ValidPointerSet,
+        surface: &'static str,
+    },
+    Copy {
+        mark: &'a mut dyn FnMut(f64),
+    },
+}
+
+/// Mutable runtime-root visitor used by GC-owned scanner families.
+///
+/// A scanner calls the slot method that matches its storage. During mark,
+/// root slots mark their current referent. During evacuation rewrite, the
+/// same scanner is revisited and any forwarded referent is written back to
+/// the runtime-owned slot. Compatibility copy mode powers the legacy
+/// `scan_*_roots(mark)` wrappers.
+pub struct RuntimeRootVisitor<'a> {
+    pub(super) mode: RuntimeRootVisitMode<'a>,
+}
+
+impl<'a> RuntimeRootVisitor<'a> {
+    pub(super) fn for_mark(valid_ptrs: &'a ValidPointerSet) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::Mark { valid_ptrs },
+        }
+    }
+
+    pub(super) fn for_rewrite(valid_ptrs: &'a ValidPointerSet) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::Rewrite { valid_ptrs },
+        }
+    }
+
+    pub(super) fn for_copying_check(checker: &'a mut CopyingNurseryPreflight) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::CopyingCheck { checker },
+        }
+    }
+
+    pub(super) fn for_copying_mark(collector: &'a mut CopyingNurseryCollector) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::CopyingMark { collector },
+        }
+    }
+
+    pub(super) fn for_copying_rewrite(collector: &'a CopyingNurseryCollector) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::CopyingRewrite { collector },
+        }
+    }
+
+    pub(super) fn for_verify(valid_ptrs: &'a ValidPointerSet, surface: &'static str) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::Verify {
+                valid_ptrs,
+                surface,
+            },
+        }
+    }
+
+    pub fn for_copy(mark: &'a mut dyn FnMut(f64)) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::Copy { mark },
+        }
+    }
+
+    /// True during post-move fixup/verification passes where
+    /// metadata-only pointer keys can be rewritten without making those
+    /// keys roots.
+    pub fn is_metadata_rewrite_phase(&self) -> bool {
+        matches!(
+            &self.mode,
+            RuntimeRootVisitMode::Rewrite { .. }
+                | RuntimeRootVisitMode::CopyingRewrite { .. }
+                | RuntimeRootVisitMode::Verify { .. }
+        )
+    }
+
+    #[inline]
+    pub(super) fn visit_nanbox_bits(&mut self, bits: u64) -> Option<u64> {
+        match &mut self.mode {
+            RuntimeRootVisitMode::Mark { valid_ptrs } => {
+                try_mark_value(bits, valid_ptrs);
+                None
+            }
+            RuntimeRootVisitMode::CopyingCheck { checker } => {
+                checker.check_bits(bits);
+                None
+            }
+            RuntimeRootVisitMode::CopyingMark { collector } => collector.visit_value_bits(bits),
+            RuntimeRootVisitMode::CopyingRewrite { collector } => {
+                collector.rewrite_value_bits(bits)
+            }
+            RuntimeRootVisitMode::Rewrite { valid_ptrs } => {
+                try_rewrite_nanboxed_value(bits, valid_ptrs)
+            }
+            RuntimeRootVisitMode::Verify {
+                valid_ptrs,
+                surface,
+            } => {
+                if let Some(new_bits) = try_rewrite_nanboxed_value(bits, valid_ptrs) {
+                    panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+                }
+                None
+            }
+            RuntimeRootVisitMode::Copy { mark } => {
+                (*mark)(f64::from_bits(bits));
+                None
+            }
+        }
+    }
+
+    #[inline]
+    pub(super) fn visit_heap_word_bits(&mut self, bits: u64) -> Option<u64> {
+        match &mut self.mode {
+            RuntimeRootVisitMode::Mark { valid_ptrs } => {
+                try_mark_value_or_raw(bits, valid_ptrs);
+                None
+            }
+            RuntimeRootVisitMode::CopyingCheck { checker } => {
+                checker.check_bits(bits);
+                None
+            }
+            RuntimeRootVisitMode::CopyingMark { collector } => collector.visit_value_bits(bits),
+            RuntimeRootVisitMode::CopyingRewrite { collector } => {
+                collector.rewrite_value_bits(bits)
+            }
+            RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_value(bits, valid_ptrs),
+            RuntimeRootVisitMode::Verify {
+                valid_ptrs,
+                surface,
+            } => {
+                if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
+                    panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+                }
+                None
+            }
+            RuntimeRootVisitMode::Copy { mark } => {
+                let tag = bits & TAG_MASK;
+                if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
+                    (*mark)(f64::from_bits(bits));
+                } else if tag < 0x7FF8_0000_0000_0000
+                    && (0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits)
+                {
+                    (*mark)(f64::from_bits(POINTER_TAG | (bits & POINTER_MASK)));
+                }
+                None
+            }
+        }
+    }
+
+    #[inline]
+    pub(super) fn visit_tagged_raw_addr(&mut self, addr: usize, copy_tag: u64) -> Option<usize> {
+        if addr == 0 {
+            return None;
+        }
+        match &mut self.mode {
+            RuntimeRootVisitMode::Mark { valid_ptrs } => {
+                try_mark_raw_root_addr(addr, valid_ptrs);
+                None
+            }
+            RuntimeRootVisitMode::CopyingCheck { checker } => {
+                checker.check_addr(addr);
+                None
+            }
+            RuntimeRootVisitMode::CopyingMark { collector } => collector.visit_raw_addr(addr),
+            RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
+            RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_raw_addr(addr, valid_ptrs),
+            RuntimeRootVisitMode::Verify {
+                valid_ptrs,
+                surface,
+            } => {
+                if let Some(new_addr) = try_rewrite_raw_addr(addr, valid_ptrs) {
+                    panic_stale_forwarded_reference(
+                        surface,
+                        0,
+                        copy_tag | (addr as u64 & POINTER_MASK),
+                        copy_tag | (new_addr as u64 & POINTER_MASK),
+                    );
+                }
+                None
+            }
+            RuntimeRootVisitMode::Copy { mark } => {
+                (*mark)(f64::from_bits(copy_tag | (addr as u64 & POINTER_MASK)));
+                None
+            }
+        }
+    }
+
+    #[inline]
+    pub(super) fn visit_metadata_raw_addr(&mut self, addr: usize) -> Option<usize> {
+        if addr == 0 {
+            return None;
+        }
+        match &mut self.mode {
+            RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_raw_addr(addr, valid_ptrs),
+            RuntimeRootVisitMode::CopyingCheck { .. } => None,
+            RuntimeRootVisitMode::CopyingMark { .. } => None,
+            RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
+            RuntimeRootVisitMode::Verify {
+                valid_ptrs,
+                surface,
+            } => {
+                if let Some(new_addr) = try_rewrite_raw_addr(addr, valid_ptrs) {
+                    panic_stale_forwarded_reference(surface, 0, addr as u64, new_addr as u64);
+                }
+                None
+            }
+            RuntimeRootVisitMode::Mark { .. } | RuntimeRootVisitMode::Copy { .. } => None,
+        }
+    }
+
+    /// Visit a mutable NaN-boxed JSValue stored as `f64`.
+    /// Returns true when rewrite mode changed the slot.
+    pub fn visit_nanbox_f64_slot(&mut self, slot: &mut f64) -> bool {
+        let bits = slot.to_bits();
+        if let Some(new_bits) = self.visit_nanbox_bits(bits) {
+            *slot = f64::from_bits(new_bits);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a mutable NaN-boxed JSValue stored as `u64` bits.
+    /// Returns true when rewrite mode changed the slot.
+    pub fn visit_nanbox_u64_slot(&mut self, slot: &mut u64) -> bool {
+        if let Some(new_bits) = self.visit_nanbox_bits(*slot) {
+            *slot = new_bits;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a mutable heap word that may store either a NaN-boxed JSValue
+    /// pointer or a raw heap pointer.
+    ///
+    /// This matches heap-field rewrite semantics for runtime-owned caches
+    /// whose keys are bit copies of closure captures or object fields.
+    pub fn visit_heap_word_u64_slot(&mut self, slot: &mut u64) -> bool {
+        if let Some(new_bits) = self.visit_heap_word_bits(*slot) {
+            *slot = new_bits;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a raw `f64` slot address when the owner cannot hand out a
+    /// Rust `&mut f64` (for example `static mut` storage).
+    ///
+    /// # Safety
+    /// `slot` must be valid for a read and, in rewrite mode, a write.
+    pub unsafe fn visit_nanbox_f64_raw_slot(&mut self, slot: *mut f64) -> bool {
+        if slot.is_null() {
+            return false;
+        }
+        let bits = (*slot).to_bits();
+        if let Some(new_bits) = self.visit_nanbox_bits(bits) {
+            *slot = f64::from_bits(new_bits);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a raw `u64` slot address when the owner cannot hand out a
+    /// Rust `&mut u64`.
+    ///
+    /// # Safety
+    /// `slot` must be valid for a read and, in rewrite mode, a write.
+    pub unsafe fn visit_nanbox_u64_raw_slot(&mut self, slot: *mut u64) -> bool {
+        if slot.is_null() {
+            return false;
+        }
+        if let Some(new_bits) = self.visit_nanbox_bits(*slot) {
+            *slot = new_bits;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a `Cell<f64>` that stores a NaN-boxed JSValue.
+    pub fn visit_cell_f64_slot(&mut self, slot: &Cell<f64>) -> bool {
+        let bits = slot.get().to_bits();
+        if let Some(new_bits) = self.visit_nanbox_bits(bits) {
+            slot.set(f64::from_bits(new_bits));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a root slot that stores a raw mutable heap pointer.
+    pub fn visit_raw_mut_ptr_slot<T>(&mut self, slot: &mut *mut T) -> bool {
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot as usize, POINTER_TAG) {
+            *slot = new_addr as *mut T;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a root slot that stores a raw const heap pointer.
+    pub fn visit_raw_const_ptr_slot<T>(&mut self, slot: &mut *const T) -> bool {
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot as usize, POINTER_TAG) {
+            *slot = new_addr as *const T;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a raw const heap pointer slot, using a specific NaN-box tag
+    /// when the visitor is running in compatibility copy mode.
+    pub fn visit_tagged_raw_const_ptr_slot<T>(&mut self, slot: &mut *const T, tag: u64) -> bool {
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot as usize, tag) {
+            *slot = new_addr as *const T;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a root slot that stores a raw heap pointer as `usize`.
+    pub fn visit_usize_slot(&mut self, slot: &mut usize) -> bool {
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot, POINTER_TAG) {
+            *slot = new_addr;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a raw heap pointer stored as `usize`, using a specific
+    /// NaN-box tag when the visitor is running in compatibility copy mode.
+    pub fn visit_tagged_usize_slot(&mut self, slot: &mut usize, tag: u64) -> bool {
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot, tag) {
+            *slot = new_addr;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a root slot that stores a raw heap pointer as `i64`.
+    pub fn visit_i64_slot(&mut self, slot: &mut i64) -> bool {
+        if *slot <= 0 {
+            return false;
+        }
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot as usize, POINTER_TAG) {
+            *slot = new_addr as i64;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a raw `usize` slot address.
+    ///
+    /// # Safety
+    /// `slot` must be valid for a read and, in rewrite mode, a write.
+    pub unsafe fn visit_usize_raw_slot(&mut self, slot: *mut usize) -> bool {
+        if slot.is_null() {
+            return false;
+        }
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot, POINTER_TAG) {
+            *slot = new_addr;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit an atomic raw pointer root slot.
+    pub fn visit_atomic_raw_mut_ptr_slot<T>(
+        &mut self,
+        slot: &std::sync::atomic::AtomicPtr<T>,
+        load_ordering: std::sync::atomic::Ordering,
+        store_ordering: std::sync::atomic::Ordering,
+    ) -> bool {
+        let current = slot.load(load_ordering);
+        if let Some(new_addr) = self.visit_tagged_raw_addr(current as usize, POINTER_TAG) {
+            slot.store(new_addr as *mut T, atomic_store_ordering(store_ordering));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit an atomic `i64` root slot containing a raw heap pointer.
+    pub fn visit_atomic_i64_slot(
+        &mut self,
+        slot: &std::sync::atomic::AtomicI64,
+        load_ordering: std::sync::atomic::Ordering,
+        store_ordering: std::sync::atomic::Ordering,
+    ) -> bool {
+        let current = slot.load(load_ordering);
+        if current <= 0 {
+            return false;
+        }
+        if let Some(new_addr) = self.visit_tagged_raw_addr(current as usize, POINTER_TAG) {
+            slot.store(new_addr as i64, atomic_store_ordering(store_ordering));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a metadata-only raw heap pointer key. The value is rewritten
+    /// if forwarded, but it is not marked as a root. Mark/copy modes emit
+    /// nothing; post-copy rewrite only follows forwarding pointers that
+    /// already exist.
+    pub fn visit_metadata_usize_slot(&mut self, slot: &mut usize) -> bool {
+        if let Some(new_addr) = self.visit_metadata_raw_addr(*slot) {
+            *slot = new_addr;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a metadata-only raw heap pointer key stored as `i64`.
+    pub fn visit_metadata_i64_slot(&mut self, slot: &mut i64) -> bool {
+        if *slot <= 0 {
+            return false;
+        }
+        if let Some(new_addr) = self.visit_metadata_raw_addr(*slot as usize) {
+            *slot = new_addr as i64;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a raw metadata-only `usize` slot address.
+    ///
+    /// # Safety
+    /// `slot` must be valid for a read and, in rewrite mode, a write.
+    pub unsafe fn visit_metadata_usize_raw_slot(&mut self, slot: *mut usize) -> bool {
+        if slot.is_null() {
+            return false;
+        }
+        if let Some(new_addr) = self.visit_metadata_raw_addr(*slot) {
+            *slot = new_addr;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Scoped owner for transient runtime handles.
+///
+/// Handles are mutable GC roots for values that live only in a runtime
+/// helper's local variables while that helper may allocate. Dropping the
+/// scope removes every handle created from it.
+pub struct RuntimeHandleScope {
+    pub(super) base: usize,
+}
+
+impl RuntimeHandleScope {
+    pub fn new() -> Self {
+        let base = RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len());
+        Self { base }
+    }
+
+    #[inline]
+    pub(super) fn push<'scope>(&'scope self, slot: RuntimeHandleSlot) -> RuntimeHandle<'scope> {
+        let index = RUNTIME_HANDLE_STACK.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            let index = stack.len();
+            stack.push(slot);
+            index
+        });
+        RuntimeHandle {
+            index,
+            _scope: PhantomData,
+        }
+    }
+
+    pub fn root_nanbox_f64<'scope>(&'scope self, value: f64) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::Nanbox(value.to_bits()))
+    }
+
+    pub fn root_nanbox_u64<'scope>(&'scope self, bits: u64) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::Nanbox(bits))
+    }
+
+    pub fn root_heap_word_u64<'scope>(&'scope self, bits: u64) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::HeapWord(bits))
+    }
+
+    pub fn root_raw_mut_ptr<'scope, T>(&'scope self, ptr: *mut T) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::RawTagged {
+            addr: ptr as usize,
+            tag: POINTER_TAG,
+        })
+    }
+
+    pub fn root_raw_const_ptr<'scope, T>(&'scope self, ptr: *const T) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::RawTagged {
+            addr: ptr as usize,
+            tag: POINTER_TAG,
+        })
+    }
+
+    pub fn root_string_ptr<'scope>(
+        &'scope self,
+        ptr: *const crate::StringHeader,
+    ) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::RawTagged {
+            addr: ptr as usize,
+            tag: STRING_TAG,
+        })
+    }
+
+    pub fn root_bigint_ptr<'scope, T>(&'scope self, ptr: *const T) -> RuntimeHandle<'scope> {
+        self.push(RuntimeHandleSlot::RawTagged {
+            addr: ptr as usize,
+            tag: BIGINT_TAG,
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_len_for_tests() -> usize {
+        RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len())
+    }
+}
+
+impl Default for RuntimeHandleScope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for RuntimeHandleScope {
+    fn drop(&mut self) {
+        RUNTIME_HANDLE_STACK.with(|stack| {
+            stack.borrow_mut().truncate(self.base);
+        });
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct RuntimeHandle<'scope> {
+    pub(super) index: usize,
+    pub(super) _scope: PhantomData<&'scope RuntimeHandleScope>,
+}
+
+impl<'scope> RuntimeHandle<'scope> {
+    #[inline]
+    pub(super) fn with_slot<R>(&self, f: impl FnOnce(RuntimeHandleSlot) -> R) -> R {
+        RUNTIME_HANDLE_STACK.with(|stack| {
+            let stack = stack.borrow();
+            let slot = *stack
+                .get(self.index)
+                .expect("runtime handle used after its scope was dropped");
+            f(slot)
+        })
+    }
+
+    #[inline]
+    pub(super) fn with_slot_mut<R>(&self, f: impl FnOnce(&mut RuntimeHandleSlot) -> R) -> R {
+        RUNTIME_HANDLE_STACK.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            let slot = stack
+                .get_mut(self.index)
+                .expect("runtime handle used after its scope was dropped");
+            f(slot)
+        })
+    }
+
+    pub fn get_nanbox_f64(&self) -> f64 {
+        f64::from_bits(self.get_nanbox_u64())
+    }
+
+    pub fn get_nanbox_u64(&self) -> u64 {
+        self.with_slot(|slot| match slot {
+            RuntimeHandleSlot::Nanbox(bits) => bits,
+            _ => panic!("runtime handle kind mismatch: expected NaN-boxed value"),
+        })
+    }
+
+    pub fn set_nanbox_f64(&self, value: f64) {
+        self.set_nanbox_u64(value.to_bits());
+    }
+
+    pub fn set_nanbox_u64(&self, bits: u64) {
+        self.with_slot_mut(|slot| match slot {
+            RuntimeHandleSlot::Nanbox(current) => *current = bits,
+            _ => panic!("runtime handle kind mismatch: expected NaN-boxed value"),
+        });
+    }
+
+    pub fn get_heap_word_u64(&self) -> u64 {
+        self.with_slot(|slot| match slot {
+            RuntimeHandleSlot::HeapWord(bits) => bits,
+            _ => panic!("runtime handle kind mismatch: expected heap word"),
+        })
+    }
+
+    pub fn set_heap_word_u64(&self, bits: u64) {
+        self.with_slot_mut(|slot| match slot {
+            RuntimeHandleSlot::HeapWord(current) => *current = bits,
+            _ => panic!("runtime handle kind mismatch: expected heap word"),
+        });
+    }
+
+    pub fn get_raw_mut_ptr<T>(&self) -> *mut T {
+        self.with_slot(|slot| match slot {
+            RuntimeHandleSlot::RawTagged { addr, .. } => addr as *mut T,
+            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
+        })
+    }
+
+    pub fn get_raw_const_ptr<T>(&self) -> *const T {
+        self.with_slot(|slot| match slot {
+            RuntimeHandleSlot::RawTagged { addr, .. } => addr as *const T,
+            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
+        })
+    }
+}
+
+pub(super) fn scan_runtime_handle_roots_mut(visitor: &mut RuntimeRootVisitor<'_>) {
+    RUNTIME_HANDLE_STACK.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        for slot in stack.iter_mut() {
+            match slot {
+                RuntimeHandleSlot::Nanbox(bits) => {
+                    visitor.visit_nanbox_u64_slot(bits);
+                }
+                RuntimeHandleSlot::RawTagged { addr, tag } => {
+                    visitor.visit_tagged_usize_slot(addr, *tag);
+                }
+                RuntimeHandleSlot::HeapWord(bits) => {
+                    visitor.visit_heap_word_u64_slot(bits);
+                }
+            }
+        }
+    });
+}
+
+#[inline]
+pub(super) fn atomic_store_ordering(
+    ordering: std::sync::atomic::Ordering,
+) -> std::sync::atomic::Ordering {
+    match ordering {
+        std::sync::atomic::Ordering::Relaxed => std::sync::atomic::Ordering::Relaxed,
+        std::sync::atomic::Ordering::Acquire | std::sync::atomic::Ordering::Release => {
+            std::sync::atomic::Ordering::Release
+        }
+        std::sync::atomic::Ordering::AcqRel => std::sync::atomic::Ordering::Release,
+        std::sync::atomic::Ordering::SeqCst => std::sync::atomic::Ordering::SeqCst,
+        _ => std::sync::atomic::Ordering::SeqCst,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MutableRootSlotKind {
+    ShadowStack,
+    GlobalRoot,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct MutableRootSlot {
+    pub(super) kind: MutableRootSlotKind,
+    pub(super) ptr: *mut u64,
+}
+
+impl MutableRootSlot {
+    #[inline]
+    pub(super) unsafe fn read(self) -> u64 {
+        *self.ptr
+    }
+
+    #[inline]
+    pub(super) unsafe fn write(self, bits: u64) {
+        *self.ptr = bits;
+    }
+}
+
+/// Visit every live shadow-stack slot. The visitor receives real
+/// mutable slot addresses so the same walk can support mark-only
+/// scanning and post-forwarding rewrites.
+pub(super) fn visit_shadow_stack_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
+    SHADOW.with(|cell| unsafe {
+        let s = &mut *cell.get();
+        if s.stack.is_empty() {
+            return;
+        }
+        let mut top = s.frame_top;
+        while top != usize::MAX && top >= SHADOW_STACK_HEADER_SLOTS {
+            let header_base = top - SHADOW_STACK_HEADER_SLOTS;
+            if header_base + 1 >= s.stack.len() {
+                break;
+            }
+            let slot_count = s.stack[header_base + 1] as usize;
+            let slots_end = top + slot_count;
+            if slots_end > s.stack.len() {
+                break;
+            }
+            let base = s.stack.as_mut_ptr().add(top);
+            for i in 0..slot_count {
+                visit(MutableRootSlot {
+                    kind: MutableRootSlotKind::ShadowStack,
+                    ptr: base.add(i),
+                });
+            }
+            top = s.stack[header_base] as usize;
+        }
+    });
+}
+
+/// Visit every registered module-global root slot.
+pub(super) fn visit_global_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
+    GLOBAL_ROOTS.with(|roots| {
+        let roots = roots.borrow();
+        for &root_ptr in roots.iter() {
+            if root_ptr.is_null() {
+                continue;
+            }
+            visit(MutableRootSlot {
+                kind: MutableRootSlotKind::GlobalRoot,
+                ptr: root_ptr,
+            });
+        }
+    });
+}
+
+/// Visit the root slots whose storage is owned by this runtime and can
+/// therefore be rewritten after evacuation.
+pub(super) fn visit_mutable_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
+    visit_shadow_stack_root_slots(&mut visit);
+    visit_global_root_slots(&mut visit);
+}
+
+#[inline]
+pub(super) fn shadow_slot_pointer_root(bits: u64) -> bool {
+    let tag = bits & TAG_MASK;
+    let addr = bits & POINTER_MASK;
+    addr != 0 && (tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG)
+}
+
+#[inline]
+pub(super) fn mark_global_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
+    // First try NaN-boxed interpretation (exported globals, closures, etc.).
+    if try_mark_value(bits, valid_ptrs) {
+        return;
+    }
+    // Module variable globals store raw I64 pointers (not NaN-boxed).
+    // Preserve the historical direct-object-start behavior: validate
+    // against valid_ptrs and mark the target, without the conservative
+    // interior-pointer fallback used by stack scanning.
+    let raw_ptr = bits as usize;
+    try_mark_raw_root_addr(raw_ptr, valid_ptrs);
+}
+
+/// Mark mutable roots (shadow-stack slots and registered globals).
+pub(super) fn mark_mutable_root_slots(
+    valid_ptrs: &ValidPointerSet,
+    mut shadow_stats: Option<&mut ShadowRootTraceStats>,
+) {
+    visit_mutable_root_slots(|slot| unsafe {
+        let bits = slot.read();
+        if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
+            if let Some(stats) = shadow_stats.as_mut() {
+                stats.record_scan(bits);
+            }
+        }
+        if bits == 0 {
+            return;
+        }
+        match slot.kind {
+            MutableRootSlotKind::ShadowStack => {
+                try_mark_value(bits, valid_ptrs);
+            }
+            MutableRootSlotKind::GlobalRoot => mark_global_root_bits(bits, valid_ptrs),
+        }
+    });
+}
+
+#[inline]
+pub(super) fn nanboxed_root_header(
+    value_bits: u64,
+    valid_ptrs: &ValidPointerSet,
+) -> Option<*mut GcHeader> {
+    let tag = value_bits & TAG_MASK;
+    if tag != POINTER_TAG && tag != STRING_TAG && tag != BIGINT_TAG {
+        return None;
+    }
+    let ptr_val = (value_bits & POINTER_MASK) as usize;
+    if ptr_val == 0 || !valid_ptrs.maybe_contains(ptr_val) || !valid_ptrs.contains(&ptr_val) {
+        return None;
+    }
+    Some(unsafe { header_from_user_ptr(ptr_val as *const u8) })
+}
+
+#[inline]
+pub(super) fn pin_conservative_root_header(header: *mut GcHeader) -> bool {
+    CONS_PINNED.with(|s| {
+        let mut pinned = s.borrow_mut();
+        pinned.insert(header as usize)
+    })
+}
+
+#[inline]
+pub(super) fn mark_copy_only_scanner_bits(
+    bits: u64,
+    valid_ptrs: &ValidPointerSet,
+    pin_discoveries: bool,
+) -> Option<usize> {
+    let Some(header) = nanboxed_root_header(bits, valid_ptrs) else {
+        return None;
+    };
+    unsafe {
+        let flags = (*header).gc_flags;
+        if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+            (*header).gc_flags = flags | GC_FLAG_MARKED;
+            push_mark_seed(header);
+        }
+    }
+    if pin_discoveries {
+        if pin_conservative_root_header(header) {
+            return Some(unsafe { (*header).size as usize });
+        }
+    }
+    None
+}
+
+#[inline]
+pub(super) fn record_copy_only_scanner_mark_emission(
+    bits: u64,
+    valid_ptrs: &ValidPointerSet,
+    legacy_stats: &mut LegacyRootTraceStats,
+) {
+    legacy_stats.emitted_roots += 1;
+    let Some(header) = nanboxed_root_header(bits, valid_ptrs) else {
+        legacy_stats.malformed_roots += 1;
+        return;
+    };
+    let user = unsafe { (header as *mut u8).add(GC_HEADER_SIZE) as usize };
+    if crate::arena::pointer_in_nursery(user) {
+        legacy_stats.emitted_young_roots += 1;
+    } else if MALLOC_STATE.with(|s| s.borrow().objects.iter().any(|&tracked| tracked == header)) {
+        legacy_stats.emitted_malloc_roots += 1;
+    } else {
+        legacy_stats.emitted_old_roots += 1;
+    }
+}
+
+pub(super) struct RegisteredRootMarkContext {
+    pub(super) valid_ptrs: *const ValidPointerSet,
+    pub(super) pin_discoveries: bool,
+    pub(super) legacy_stats: *mut LegacyRootTraceStats,
+}
+
+pub(super) extern "C" fn perry_ffi_visit_mutable_root_slot(
+    kind: u32,
+    slot: *mut c_void,
+    ctx: *mut c_void,
+) -> bool {
+    if slot.is_null() || ctx.is_null() {
+        return false;
+    }
+    let visitor = unsafe { &mut *(ctx as *mut RuntimeRootVisitor<'_>) };
+    unsafe {
+        match kind {
+            PERRY_FFI_ROOT_SLOT_I64 => visitor.visit_i64_slot(&mut *(slot as *mut i64)),
+            PERRY_FFI_ROOT_SLOT_USIZE => visitor.visit_usize_slot(&mut *(slot as *mut usize)),
+            PERRY_FFI_ROOT_SLOT_RAW_MUT_PTR => {
+                visitor.visit_raw_mut_ptr_slot(&mut *(slot as *mut *mut c_void))
+            }
+            PERRY_FFI_ROOT_SLOT_NANBOX_F64 => {
+                visitor.visit_nanbox_f64_slot(&mut *(slot as *mut f64))
+            }
+            PERRY_FFI_ROOT_SLOT_NANBOX_U64 => {
+                visitor.visit_nanbox_u64_slot(&mut *(slot as *mut u64))
+            }
+            _ => false,
+        }
+    }
+}
+
+pub(super) fn visit_ffi_mutable_registered_roots(visitor: &mut RuntimeRootVisitor<'_>) {
+    let scanners: Vec<PerryFfiMutableRootScanner> =
+        FFI_MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let ctx = visitor as *mut RuntimeRootVisitor<'_> as *mut c_void;
+    for scanner in scanners {
+        scanner(perry_ffi_visit_mutable_root_slot, ctx);
+    }
+}
+
+/// Run registered runtime-owned scanners that expose mutable slots.
+pub(super) fn mark_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
+    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let mut visitor = RuntimeRootVisitor::for_mark(valid_ptrs);
+    for scanner in scanners {
+        scanner(&mut visitor);
+    }
+    visit_ffi_mutable_registered_roots(&mut visitor);
+}
+
+/// Run legacy copy-only root scanners. When evacuation is enabled,
+/// every discovered root is pinned because the scanner API gives us no
+/// slot to rewrite after forwarding.
+pub(super) fn mark_registered_roots(
+    valid_ptrs: &ValidPointerSet,
+    pin_discoveries: bool,
+) -> LegacyRootTraceStats {
+    let mut legacy_stats = LegacyRootTraceStats::default();
+    // Collect scanners first to avoid borrow conflicts
+    let scanners: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    legacy_stats.registered_rust_scanners = scanners.len();
+    legacy_stats.registered_ffi_scanners = ffi_scanners.len();
+
+    for scanner in scanners {
+        scanner(&mut |value: f64| {
+            record_copy_only_scanner_mark_emission(value.to_bits(), valid_ptrs, &mut legacy_stats);
+            if let Some(bytes) =
+                mark_copy_only_scanner_bits(value.to_bits(), valid_ptrs, pin_discoveries)
+            {
+                legacy_stats.pinned_roots += 1;
+                legacy_stats.pinned_bytes += bytes;
+            }
+        });
+    }
+
+    let mut ctx = RegisteredRootMarkContext {
+        valid_ptrs: valid_ptrs as *const ValidPointerSet,
+        pin_discoveries,
+        legacy_stats: &mut legacy_stats as *mut LegacyRootTraceStats,
+    };
+    let ctx = &mut ctx as *mut RegisteredRootMarkContext as *mut c_void;
+    for scanner in ffi_scanners {
+        scanner(perry_ffi_mark_root, ctx);
+    }
+    legacy_stats
+}
+
+pub(super) extern "C" fn perry_ffi_mark_root(value: f64, ctx: *mut c_void) {
+    if ctx.is_null() {
+        return;
+    }
+    let ctx = unsafe { &*(ctx as *const RegisteredRootMarkContext) };
+    if ctx.valid_ptrs.is_null() {
+        return;
+    }
+    let valid_ptrs = unsafe { &*ctx.valid_ptrs };
+    if !ctx.legacy_stats.is_null() {
+        unsafe {
+            record_copy_only_scanner_mark_emission(
+                value.to_bits(),
+                valid_ptrs,
+                &mut *ctx.legacy_stats,
+            );
+        }
+    }
+    if let Some(bytes) =
+        mark_copy_only_scanner_bits(value.to_bits(), valid_ptrs, ctx.pin_discoveries)
+    {
+        if !ctx.legacy_stats.is_null() {
+            unsafe {
+                (*ctx.legacy_stats).pinned_roots += 1;
+                (*ctx.legacy_stats).pinned_bytes += bytes;
+            }
+        }
+    }
+}
+
+pub fn promise_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::promise::scan_promise_roots(mark);
+}
+
+pub fn promise_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::promise::scan_promise_roots_mut(visitor);
+}
+
+/// Root scanner for timer callbacks
+pub fn timer_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::timer::scan_timer_roots(mark);
+}
+
+pub fn timer_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::timer::scan_timer_roots_mut(visitor);
+}
+
+/// Root scanner for current exception
+pub fn exception_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::exception::scan_exception_roots(mark);
+}
+
+pub fn exception_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::exception::scan_exception_roots_mut(visitor);
+}
+
+/// Root scanner for active AsyncLocalStorage context.
+pub fn async_context_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::async_context::scan_active_context_roots(mark);
+    crate::builtins::scan_queued_microtask_roots(mark);
+}
+
+pub fn async_context_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::async_context::scan_active_context_roots_mut(visitor);
+    crate::builtins::scan_queued_microtask_roots_mut(visitor);
+}
+
+/// Root scanner for async_hooks hook callbacks and user resource references.
+pub fn async_hooks_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::async_hooks::scan_async_hooks_roots(mark);
+}
+
+pub fn async_hooks_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::async_hooks::scan_async_hooks_roots_mut(visitor);
+}
+
+/// Root scanner for object shape cache (keys arrays shared across objects with same shape)
+pub fn shape_cache_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::object::scan_shape_cache_roots(mark);
+}
+
+pub fn shape_cache_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::object::scan_shape_cache_roots_mut(visitor);
+}
+
+/// Root scanner for the shape-transition cache used by the dynamic-key
+/// write path (`obj[name] = value`). Same role as `shape_cache_root_scanner`
+/// — without it, GC would free cached target keys_arrays that no live
+/// object currently references directly.
+pub fn transition_cache_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::object::scan_transition_cache_roots(mark);
+}
+
+pub fn transition_cache_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::object::scan_transition_cache_roots_mut(visitor);
+}
+
+/// Root scanner for OVERFLOW_FIELDS (per-object extra properties beyond inline slots)
+pub fn overflow_fields_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::object::scan_overflow_fields_roots(mark);
+}
+
+pub fn overflow_fields_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::object::scan_overflow_fields_roots_mut(visitor);
+}
+
+/// Root scanner for in-progress JSON.parse frames (issue #46).
+/// Without this, GC triggered mid-parse would sweep in-progress arrays/objects
+/// and the fresh string/object values about to be pushed into them.
+pub fn json_parse_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::json::scan_parse_roots(mark);
+}
+
+pub fn json_parse_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::json::scan_parse_roots_mut(visitor);
+}
+
+pub fn shadow_stack_root_scanner(mark: &mut dyn FnMut(f64)) {
+    visit_shadow_stack_root_slots(|slot| unsafe {
+        let bits = slot.read();
+        if bits != 0 {
+            mark(f64::from_bits(bits));
+        }
+    });
+}
+
+/// Initialize GC root scanners. Called once at runtime startup.
+
+pub fn intern_table_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::string::scan_intern_table_roots(mark);
+}
+
+pub fn intern_table_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::string::scan_intern_table_roots_mut(visitor);
+}

@@ -4,7 +4,11 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use super::{emit_layout_note_slot_on_block, lower_expr, nanbox_pointer_inline, FnCtx};
+use super::{
+    emit_layout_note_slot_on_block, emit_write_barrier_slot_on_block, lower_expr,
+    nanbox_pointer_inline, FnCtx,
+};
+use crate::type_analysis::is_numeric_expr;
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
 /// Lower an array literal `[a, b, c, …]`.
@@ -45,7 +49,9 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
     // conservative stack scanner) so nested allocations inside element
     // expressions don't see a half-initialized outer array.
     let mut vals = Vec::with_capacity(n);
+    let mut layout_notes_needed = Vec::with_capacity(n);
     for value_expr in elements {
+        layout_notes_needed.push(!is_numeric_expr(ctx, value_expr));
         vals.push(lower_expr(ctx, value_expr)?);
     }
 
@@ -158,9 +164,11 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
             let offset = (16 + i * 8).to_string();
             let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
             blk.store(DOUBLE, v, &elem_ptr);
-            let value_bits = blk.bitcast_double_to_i64(v);
-            let slot_index = i.to_string();
-            emit_layout_note_slot_on_block(blk, &user_ptr_as_i64, &slot_index, &value_bits);
+            if layout_notes_needed[i] {
+                let value_bits = blk.bitcast_double_to_i64(v);
+                let slot_index = i.to_string();
+                emit_layout_note_slot_on_block(blk, &user_ptr_as_i64, &slot_index, &value_bits);
+            }
         }
 
         return Ok(nanbox_pointer_inline(ctx.block(), &user_ptr_as_i64));
@@ -179,9 +187,13 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
         let offset = (8 + i * 8).to_string();
         let elem_ptr = ctx.block().gep_inbounds(I8, &arr_ptr, &[(I64, &offset)]);
         ctx.block().store(DOUBLE, v, &elem_ptr);
-        let value_bits = ctx.block().bitcast_double_to_i64(v);
-        let slot_index = i.to_string();
-        emit_layout_note_slot_on_block(ctx.block(), &arr, &slot_index, &value_bits);
+        if layout_notes_needed[i] {
+            let value_bits = ctx.block().bitcast_double_to_i64(v);
+            let elem_addr = ctx.block().ptrtoint(&elem_ptr, I64);
+            let slot_index = i.to_string();
+            emit_layout_note_slot_on_block(ctx.block(), &arr, &slot_index, &value_bits);
+            emit_write_barrier_slot_on_block(ctx.block(), &arr, &elem_addr, &value_bits);
+        }
     }
 
     Ok(nanbox_pointer_inline(ctx.block(), &arr))

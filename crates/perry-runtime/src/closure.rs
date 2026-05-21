@@ -279,10 +279,15 @@ pub fn closure_arity(closure: *const ClosureHeader) -> Option<u32> {
 /// NaN-boxed as a pointer. Used by the rest-bundling helper below.
 #[inline(always)]
 unsafe fn build_rest_array(values: &[f64]) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handles: Vec<_> = values
+        .iter()
+        .map(|value| scope.root_nanbox_f64(*value))
+        .collect();
     let arr = crate::array::js_array_alloc(values.len() as u32);
     let mut cur = arr;
-    for v in values {
-        cur = crate::array::js_array_push_f64(cur, *v);
+    for handle in value_handles.iter() {
+        cur = crate::array::js_array_push_f64(cur, handle.get_nanbox_f64());
     }
     f64::from_bits(crate::value::JSValue::pointer(cur as *mut u8).bits())
 }
@@ -312,6 +317,11 @@ unsafe fn dispatch_rest_bundled(
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let k = fixed_arity as usize;
     let provided = args.len();
+    let arg_scope = crate::gc::RuntimeHandleScope::new();
+    let arg_handles: Vec<_> = args
+        .iter()
+        .map(|value| arg_scope.root_nanbox_f64(*value))
+        .collect();
 
     // Bundle args into the rest array.
     //
@@ -336,7 +346,7 @@ unsafe fn dispatch_rest_bundled(
     macro_rules! a {
         ($i:expr) => {
             if $i < provided {
-                args[$i]
+                arg_handles[$i].get_nanbox_f64()
             } else {
                 undef
             }
@@ -549,6 +559,63 @@ pub struct ClosureHeader {
     pub type_tag: u32,
 }
 
+#[inline]
+fn closure_payload_size(actual_count: usize) -> usize {
+    std::mem::size_of::<ClosureHeader>() + actual_count * std::mem::size_of::<u64>()
+}
+
+#[inline]
+fn closure_alloc_storage(actual_count: usize) -> *mut u8 {
+    let payload = closure_payload_size(actual_count);
+    if crate::gc::GC_HEADER_SIZE + payload <= crate::gc::LARGE_OBJECT_THRESHOLD_BYTES {
+        crate::arena::arena_alloc_gc(
+            payload,
+            std::mem::align_of::<ClosureHeader>(),
+            crate::gc::GC_TYPE_CLOSURE,
+        )
+    } else {
+        crate::gc::gc_malloc(payload, crate::gc::GC_TYPE_CLOSURE)
+    }
+}
+
+#[inline]
+unsafe fn closure_capture_slots_mut(closure: *mut ClosureHeader) -> *mut u64 {
+    (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut u64
+}
+
+#[inline]
+unsafe fn note_closure_capture_slot(closure: *mut ClosureHeader, index: usize, value_bits: u64) {
+    crate::gc::layout_note_slot(closure as usize, index, value_bits);
+    let slot = closure_capture_slots_mut(closure).add(index);
+    crate::gc::runtime_write_barrier_slot(closure as usize, slot as usize, value_bits);
+}
+
+#[inline]
+unsafe fn rebuild_closure_layout_and_barriers(closure: *mut ClosureHeader, slot_count: usize) {
+    let slots = closure_capture_slots_mut(closure);
+    crate::gc::layout_rebuild_from_slots(closure as *mut u8, slots as *const u64, slot_count);
+    for i in 0..slot_count {
+        let slot = slots.add(i);
+        crate::gc::runtime_write_barrier_slot(closure as usize, slot as usize, *slot);
+    }
+}
+
+pub(crate) unsafe fn gc_capture_slot_range(
+    closure: *mut ClosureHeader,
+) -> Option<crate::gc::HeapSlotRange> {
+    if closure.is_null() {
+        return None;
+    }
+    let capture_count = real_capture_count((*closure).capture_count) as usize;
+    if capture_count > 1_000_000 {
+        return None;
+    }
+    Some(crate::gc::HeapSlotRange::new(
+        closure_capture_slots_mut(closure),
+        capture_count,
+    ))
+}
+
 /// Allocate a closure with space for captured values.
 /// The high bit of `capture_count` may contain CAPTURES_THIS_FLAG to indicate
 /// that slot 0 is reserved for `this`. The flag is preserved in the header
@@ -559,10 +626,8 @@ pub struct ClosureHeader {
 pub extern "C" fn js_closure_alloc(func_ptr: *const u8, capture_count: u32) -> *mut ClosureHeader {
     crate::promise::bump(&CLOSURE_ALLOC_COUNT);
     let actual_count = real_capture_count(capture_count) as usize;
-    let captures_size = actual_count * 8; // Each capture is 8 bytes (f64 or i64)
-    let total_size = std::mem::size_of::<ClosureHeader>() + captures_size;
 
-    let raw = crate::gc::gc_malloc(total_size, crate::gc::GC_TYPE_CLOSURE);
+    let raw = closure_alloc_storage(actual_count);
     let ptr = raw as *mut ClosureHeader;
 
     unsafe {
@@ -587,12 +652,9 @@ pub static CLOSURE_CAP_SINGLETON_MISS: std::sync::atomic::AtomicU64 =
 /// trigger GC against) a fresh closure on every iteration.
 ///
 /// Per-call cost: one thread-local hashmap lookup + one branch + one load.
-/// Roughly 50× faster than `js_closure_alloc` for the no-capture case
-/// because the gc_malloc path runs `gc_check_trigger` which can fire a
-/// minor collection — a single hot non-capturing closure inside a tight
-/// for-loop was the dominant cost in sync-hotpath / perf-comprehensive
-/// (sample profile pinned 7/11 samples on `isDontFragmentRelation` →
-/// `js_closure_alloc` → `gc_collect_minor`).
+/// Avoids even the nursery allocation for hot no-capture cases — a single
+/// hot non-capturing closure inside a tight for-loop used to be a visible
+/// allocation source in sync-hotpath / perf-comprehensive.
 ///
 /// Safety: the cached closure has zero captures, so it has no per-call
 /// state — sharing it across all call sites is observationally identical
@@ -601,7 +663,7 @@ pub static CLOSURE_CAP_SINGLETON_MISS: std::sync::atomic::AtomicU64 =
 #[no_mangle]
 pub extern "C" fn js_closure_alloc_singleton(func_ptr: *const u8) -> *mut ClosureHeader {
     // Fast path: already cached. Drop the borrow before any potential
-    // alloc so gc_malloc can re-enter SINGLETON_CLOSURES if it ever needs to.
+    // alloc so allocation/GC can re-enter SINGLETON_CLOSURES if needed.
     if let Some(cached) = SINGLETON_CLOSURES.with(|s| s.borrow().get(&(func_ptr as usize)).copied())
     {
         return cached;
@@ -743,19 +805,26 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     // a row, skip the cache entirely. Async-step closures (`__step` /
     // `next` / `throw` / `__then_v` / `__then_e`) all capture a fresh
     // box pointer per invocation so they miss 100% of the time; the
-    // bypass turns ~150 ns of cache-lookup overhead per call into a
-    // ~50 ns direct `gc_malloc + memcpy`.
+    // bypass turns cache-lookup overhead into a direct allocation + memcpy.
     let streak =
         CAPTURED_MISS_STREAK.with(|m| m.borrow().get(&(func_ptr as usize)).copied().unwrap_or(0));
     if streak == CAPTURED_DISABLED_SENTINEL {
         crate::promise::bump(&CLOSURE_CAP_SINGLETON_MISS);
+        let capture_scope = crate::gc::RuntimeHandleScope::new();
+        let capture_handles: Vec<_> = captures_slice
+            .iter()
+            .map(|bits| capture_scope.root_heap_word_u64(*bits))
+            .collect();
         let allocated = js_closure_alloc(func_ptr, capture_count);
         if n > 0 && !captures_ptr.is_null() {
+            let rewritten_captures: Vec<u64> = capture_handles
+                .iter()
+                .map(|handle| handle.get_heap_word_u64())
+                .collect();
             unsafe {
-                let dest =
-                    (allocated as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut u64;
-                std::ptr::copy_nonoverlapping(captures_ptr, dest, n);
-                crate::gc::layout_rebuild_from_slots(allocated as *mut u8, dest as *const u64, n);
+                let dest = closure_capture_slots_mut(allocated);
+                std::ptr::copy_nonoverlapping(rewritten_captures.as_ptr(), dest, n);
+                rebuild_closure_layout_and_barriers(allocated, n);
             }
         }
         return allocated;
@@ -794,18 +863,27 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     // Slow path: allocate, populate captures, insert into cache as
     // the most-recent entry. If the slot list is full, drop the
     // least-recent (back of the Vec).
+    let capture_scope = crate::gc::RuntimeHandleScope::new();
+    let capture_handles: Vec<_> = captures_slice
+        .iter()
+        .map(|bits| capture_scope.root_heap_word_u64(*bits))
+        .collect();
     let allocated = js_closure_alloc(func_ptr, capture_count);
+    let rewritten_captures: Vec<u64> = capture_handles
+        .iter()
+        .map(|handle| handle.get_heap_word_u64())
+        .collect();
     if n > 0 && !captures_ptr.is_null() {
         unsafe {
-            let dest = (allocated as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut u64;
-            std::ptr::copy_nonoverlapping(captures_ptr, dest, n);
-            crate::gc::layout_rebuild_from_slots(allocated as *mut u8, dest as *const u64, n);
+            let dest = closure_capture_slots_mut(allocated);
+            std::ptr::copy_nonoverlapping(rewritten_captures.as_ptr(), dest, n);
+            rebuild_closure_layout_and_barriers(allocated, n);
         }
     }
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
         let mut s = s.borrow_mut();
         let slots = s.entry(func_ptr as usize).or_insert_with(Vec::new);
-        slots.insert(0, (captures_slice.to_vec(), allocated));
+        slots.insert(0, (rewritten_captures, allocated));
         if slots.len() > MAX_CAPTURED_CLOSURE_SLOTS {
             slots.truncate(MAX_CAPTURED_CLOSURE_SLOTS);
         }
@@ -851,10 +929,9 @@ pub extern "C" fn js_closure_set_capture_f64(closure: *mut ClosureHeader, index:
         return;
     }
     unsafe {
-        let captures_ptr =
-            (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
+        let captures_ptr = closure_capture_slots_mut(closure) as *mut f64;
         *captures_ptr.add(index as usize) = value;
-        crate::gc::layout_note_slot(closure as usize, index as usize, value.to_bits());
+        note_closure_capture_slot(closure, index as usize, value.to_bits());
     }
 }
 
@@ -878,10 +955,9 @@ pub extern "C" fn js_closure_set_capture_ptr(closure: *mut ClosureHeader, index:
         return;
     }
     unsafe {
-        let captures_ptr =
-            (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut i64;
+        let captures_ptr = closure_capture_slots_mut(closure) as *mut i64;
         *captures_ptr.add(index as usize) = value;
-        crate::gc::layout_note_slot(closure as usize, index as usize, value as u64);
+        note_closure_capture_slot(closure, index as usize, value as u64);
     }
 }
 
@@ -1862,6 +1938,102 @@ fn get_closure_props() -> &'static Mutex<HashMap<usize, HashMap<String, f64>>> {
     CLOSURE_PROPS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn barrier_closure_dynamic_props(owner: usize, props: &mut HashMap<String, f64>) {
+    for value in props.values_mut() {
+        crate::gc::runtime_write_barrier_external_slot(
+            owner,
+            value as *mut f64 as usize,
+            value.to_bits(),
+        );
+    }
+}
+
+fn merge_closure_prop_map(
+    props: &mut HashMap<usize, HashMap<String, f64>>,
+    owner: usize,
+    owner_props: HashMap<String, f64>,
+) {
+    match props.entry(owner) {
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+            entry.get_mut().extend(owner_props);
+        }
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(owner_props);
+        }
+    }
+}
+
+pub(crate) fn closure_dynamic_props_owner_moved(old_owner: usize, new_owner: usize) {
+    if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
+        return;
+    }
+    if let Ok(mut props) = get_closure_props().lock() {
+        if let Some(old_props) = props.remove(&old_owner) {
+            merge_closure_prop_map(&mut props, new_owner, old_props);
+        }
+    }
+}
+
+pub(crate) fn visit_closure_dynamic_prop_values_mut(owner: usize, mut visit: impl FnMut(&mut f64)) {
+    if owner == 0 {
+        return;
+    }
+    let Some(mut owner_props) = get_closure_props()
+        .lock()
+        .ok()
+        .and_then(|mut props| props.remove(&owner))
+    else {
+        return;
+    };
+
+    for value in owner_props.values_mut() {
+        visit(value);
+    }
+
+    if let Ok(mut props) = get_closure_props().lock() {
+        merge_closure_prop_map(&mut props, owner, owner_props);
+    }
+}
+
+pub(crate) fn visit_closure_dynamic_prop_value_slots_mut(
+    owner: usize,
+    mut visit: impl FnMut(*mut u64),
+) {
+    visit_closure_dynamic_prop_values_mut(owner, |value| {
+        visit(value as *mut f64 as *mut u64);
+    });
+}
+
+/// Mutable GC scanner for closure dynamic-property side-table metadata.
+///
+/// The side table is keyed by closure address, but that key is metadata:
+/// it must follow forwarding pointers without itself keeping the closure
+/// alive. Property values are traced from `trace_closure`/copied-minor object
+/// scanning when their owner closure is live; this scanner handles only
+/// post-move key/value fixup and stale-reference verification.
+pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    if !visitor.is_metadata_rewrite_phase() {
+        return;
+    }
+    let mut moved = Vec::new();
+    if let Ok(mut props) = get_closure_props().lock() {
+        for (&owner, closure_props) in props.iter_mut() {
+            let mut new_owner = owner;
+            if visitor.visit_metadata_usize_slot(&mut new_owner) {
+                moved.push((owner, new_owner));
+            }
+            for value in closure_props.values_mut() {
+                visitor.visit_nanbox_f64_slot(value);
+            }
+        }
+        for (old_owner, new_owner) in moved {
+            if let Some(old_props) = props.remove(&old_owner) {
+                merge_closure_prop_map(&mut props, new_owner, old_props);
+            }
+        }
+    }
+}
+
 /// Check if a raw pointer points to a ClosureHeader by checking CLOSURE_MAGIC at offset 12.
 /// Safe to call with any non-null, sufficiently aligned pointer >= 0x10000.
 pub fn is_closure_ptr(ptr: usize) -> bool {
@@ -1890,11 +2062,26 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
 /// Set a dynamic property on a closure.
 pub fn closure_set_dynamic_prop(ptr: usize, prop: &str, value: f64) {
     if let Ok(mut props) = get_closure_props().lock() {
-        props
-            .entry(ptr)
-            .or_insert_with(HashMap::new)
-            .insert(prop.to_string(), value);
+        let closure_props = props.entry(ptr).or_insert_with(HashMap::new);
+        closure_props.insert(prop.to_string(), value);
+        barrier_closure_dynamic_props(ptr, closure_props);
     }
+}
+
+/// Snapshot every dynamic property on a closure as `(name, value)` pairs.
+/// Sorted alphabetically for stable output (`HashMap` iteration order is
+/// non-deterministic). Used by `format_jsvalue` to emit `[Function: f]
+/// { ownProp: value }` for functions with user-attached properties. See
+/// #1203.
+pub fn closure_dynamic_props_snapshot(ptr: usize) -> Vec<(String, f64)> {
+    if let Ok(props) = get_closure_props().lock() {
+        if let Some(map) = props.get(&ptr) {
+            let mut out: Vec<(String, f64)> = map.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            out.sort_by(|a, b| a.0.cmp(&b.0));
+            return out;
+        }
+    }
+    Vec::new()
 }
 
 /// Unbind `this` from a detached method closure.
@@ -1934,22 +2121,26 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
             return val;
         }
         // Clone the closure with slot 0 set to undefined
-        let new_closure = js_closure_alloc((*header).func_ptr, raw_count);
-        let src_captures =
-            (ptr as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
-        let dst_captures =
-            (new_closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let val_handle = scope.root_nanbox_f64(val);
+        let func_ptr = (*header).func_ptr;
+        let new_closure = js_closure_alloc(func_ptr, raw_count);
+        let source_bits = val_handle.get_nanbox_f64().to_bits();
+        let source_ptr = (source_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        let source_type_tag =
+            std::ptr::read_volatile((source_ptr as *const u8).add(12) as *const u32);
+        if source_type_tag != CLOSURE_MAGIC {
+            return val_handle.get_nanbox_f64();
+        }
+        let src_captures = closure_capture_slots_mut(source_ptr as *mut ClosureHeader);
+        let dst_captures = closure_capture_slots_mut(new_closure);
         // Set slot 0 to undefined
-        *dst_captures = f64::from_bits(crate::value::TAG_UNDEFINED);
+        *dst_captures = crate::value::TAG_UNDEFINED;
         // Copy remaining captures (slots 1..count)
         for i in 1..count {
             *dst_captures.add(i) = *src_captures.add(i);
         }
-        crate::gc::layout_rebuild_from_slots(
-            new_closure as *mut u8,
-            dst_captures as *const u64,
-            count,
-        );
+        rebuild_closure_layout_and_barriers(new_closure, count);
         // NaN-box the new closure pointer
         let new_ptr = new_closure as u64;
         f64::from_bits(0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF))
@@ -1999,22 +2190,27 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
             return closure_bits;
         }
         // Allocate a fresh closure with the same func_ptr + capture_count (preserving the flag).
-        let new_closure = js_closure_alloc((*header).func_ptr, raw_count);
-        let src_captures =
-            (ptr as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
-        let dst_captures =
-            (new_closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let closure_handle = scope.root_nanbox_u64(closure_bits);
+        let recv_handle = scope.root_nanbox_f64(recv_box);
+        let func_ptr = (*header).func_ptr;
+        let new_closure = js_closure_alloc(func_ptr, raw_count);
+        let source_bits = closure_handle.get_nanbox_u64();
+        let source_ptr = (source_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        let source_type_tag =
+            std::ptr::read_volatile((source_ptr as *const u8).add(12) as *const u32);
+        if source_type_tag != CLOSURE_MAGIC {
+            return source_bits;
+        }
+        let src_captures = closure_capture_slots_mut(source_ptr as *mut ClosureHeader);
+        let dst_captures = closure_capture_slots_mut(new_closure);
         // Copy every capture verbatim, then overwrite the `this` slot (last) with recv_box.
         for i in 0..count {
             *dst_captures.add(i) = *src_captures.add(i);
         }
         let this_slot = count - 1;
-        *dst_captures.add(this_slot) = recv_box;
-        crate::gc::layout_rebuild_from_slots(
-            new_closure as *mut u8,
-            dst_captures as *const u64,
-            count,
-        );
+        *dst_captures.add(this_slot) = recv_handle.get_nanbox_f64().to_bits();
+        rebuild_closure_layout_and_barriers(new_closure, count);
         let new_ptr = new_closure as u64;
         0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF)
     }

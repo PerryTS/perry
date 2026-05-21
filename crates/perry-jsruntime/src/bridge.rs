@@ -2184,7 +2184,7 @@ fn v8_object_to_native(scope: &mut v8::PinScope<'_, '_>, obj: v8::Local<v8::Obje
 
 /// Convert a V8 array to a native array pointer
 fn v8_array_to_native(scope: &mut v8::PinScope<'_, '_>, array: v8::Local<v8::Array>) -> *mut u8 {
-    use perry_runtime::js_array_alloc;
+    use perry_runtime::{array::js_array_set_f64, js_array_alloc};
 
     let length = array.length();
 
@@ -2199,13 +2199,7 @@ fn v8_array_to_native(scope: &mut v8::PinScope<'_, '_>, array: v8::Local<v8::Arr
     for i in 0..length {
         if let Some(val) = array.get_index(scope, i) {
             let native_val = v8_to_native(scope, val);
-            unsafe {
-                // Set the value directly using pointer arithmetic
-                // ArrayHeader is { length: u32, capacity: u32 } = 8 bytes
-                // Followed by array of f64 values
-                let data_ptr = (native_array as *mut u8).add(8) as *mut f64;
-                *data_ptr.add(i as usize) = native_val;
-            }
+            js_array_set_f64(native_array, i, native_val);
         }
     }
 
@@ -2216,7 +2210,7 @@ fn v8_array_to_native_metadata(
     scope: &mut v8::PinScope<'_, '_>,
     array: v8::Local<v8::Array>,
 ) -> *mut u8 {
-    use perry_runtime::js_array_alloc;
+    use perry_runtime::{array::js_array_set_f64, js_array_alloc};
 
     let length = array.length();
     let native_array = js_array_alloc(length);
@@ -2227,10 +2221,7 @@ fn v8_array_to_native_metadata(
     for i in 0..length {
         if let Some(val) = array.get_index(scope, i) {
             let native_val = v8_to_native_metadata_value(scope, val);
-            unsafe {
-                let data_ptr = (native_array as *mut u8).add(8) as *mut f64;
-                *data_ptr.add(i as usize) = native_val;
-            }
+            js_array_set_f64(native_array, i, native_val);
         }
     }
 

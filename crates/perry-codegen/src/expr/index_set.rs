@@ -31,10 +31,10 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
-    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
-    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
-    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    array_store_needs_layout_note, buffer_alias_metadata_suffix, can_lower_expr_as_i32,
+    emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
+    emit_string_literal_global, emit_v8_export_call, emit_v8_member_method_call,
+    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
@@ -182,6 +182,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (object.as_ref(), index.as_ref())
                 {
                     if ctx.bounded_index_pairs.contains(&(*idx_id, *arr_id)) {
+                        let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
+                        let write_barrier_needed = !is_numeric_expr(ctx, value);
                         let arr_box = lower_expr(ctx, object)?;
                         let val_double = lower_expr(ctx, value)?;
                         // Grab i32 slot name before mutably borrowing ctx for block().
@@ -203,17 +205,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let element_ptr = blk.inttoptr(I64, &element_addr);
                         blk.store(DOUBLE, &val_double, &element_ptr);
                         let val_bits = blk.bitcast_double_to_i64(&val_double);
-                        emit_layout_note_slot_on_block(blk, &arr_handle, &idx_i32, &val_bits);
-                        emit_write_barrier_slot_on_block(
-                            blk,
-                            &arr_handle,
-                            &element_addr,
-                            &val_bits,
-                        );
+                        if layout_note_needed {
+                            emit_layout_note_slot_on_block(blk, &arr_handle, &idx_i32, &val_bits);
+                        }
+                        if write_barrier_needed {
+                            emit_write_barrier_slot_on_block(
+                                blk,
+                                &arr_handle,
+                                &element_addr,
+                                &val_bits,
+                            );
+                        }
                         return Ok(val_double);
                     }
                 }
 
+                let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
+                let write_barrier_needed = !is_numeric_expr(ctx, value);
                 let arr_box = lower_expr(ctx, object)?;
                 let idx_double = lower_expr(ctx, index)?;
                 let val_double = lower_expr(ctx, value)?;
@@ -236,7 +244,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // and the implicit length update vanishing.
                 if let Some(id) = local_id {
                     if ctx.locals.contains_key(&id) {
-                        lower_index_set_fast(ctx, &arr_box, &idx_double, &val_double, id)?;
+                        lower_index_set_fast(
+                            ctx,
+                            &arr_box,
+                            &idx_double,
+                            &val_double,
+                            id,
+                            layout_note_needed,
+                            write_barrier_needed,
+                        )?;
                     } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {
                         let blk = ctx.block();
                         let arr_bits = blk.bitcast_double_to_i64(&arr_box);
@@ -251,8 +267,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let g_ref = format!("@{}", global_name);
                         ctx.block().store(DOUBLE, &new_box, &g_ref);
                         // Gen-GC Phase C2: write barrier on array element store.
-                        let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
-                        emit_write_barrier(ctx, &arr_bits, &val_bits);
+                        if write_barrier_needed {
+                            let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
+                            emit_write_barrier(ctx, &arr_bits, &val_bits);
+                        }
                     } else {
                         // Closure-captured array, or local without a
                         // stack slot (rare). Issue #637 followup / hono r2:
@@ -279,8 +297,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, &val_double)],
                         );
                         // Gen-GC Phase C2: write barrier on array element store.
-                        let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
-                        emit_write_barrier(ctx, &arr_bits, &val_bits);
+                        if write_barrier_needed {
+                            let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
+                            emit_write_barrier(ctx, &arr_bits, &val_bits);
+                        }
                     }
                 } else {
                     let blk = ctx.block();
@@ -304,8 +324,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, &val_double)],
                     );
                     // Gen-GC Phase C2: write barrier on array element store.
-                    let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
-                    emit_write_barrier(ctx, &arr_bits, &val_bits);
+                    if write_barrier_needed {
+                        let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
+                        emit_write_barrier(ctx, &arr_bits, &val_bits);
+                    }
                 }
                 return Ok(val_double);
             }

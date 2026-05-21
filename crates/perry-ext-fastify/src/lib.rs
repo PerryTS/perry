@@ -23,10 +23,10 @@
 //!   back via a oneshot channel.
 //! - User closures (route handlers, hooks, error handler, plugin
 //!   bodies) are stored as raw `i64` pointers inside the
-//!   `FastifyApp`. A GC root scanner pins each closure across
-//!   malloc-triggered sweeps so a `gc()` call between registration
-//!   and incoming-request dispatch can't free them (issue #35
-//!   pattern in perry-stdlib's existing copy).
+//!   `FastifyApp`. A mutable GC root scanner keeps each closure live
+//!   and rewrites moved pointers after copied-minor GC so a `gc()`
+//!   call between registration and incoming-request dispatch can't
+//!   free them (issue #35 pattern in perry-stdlib's existing copy).
 //!
 //! # Punted gaps
 //!
@@ -59,7 +59,7 @@
 
 use std::sync::Once;
 
-use perry_ffi::{gc_register_root_scanner, iter_handles_of};
+use perry_ffi::{gc_register_mutable_root_scanner, iter_handles_of_mut, GcRootVisitor};
 
 mod app;
 mod context;
@@ -71,9 +71,6 @@ pub use app::*;
 pub use context::*;
 pub use router::*;
 pub use server::*;
-
-const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 // ============================================================================
 // GC root scanner
@@ -89,52 +86,43 @@ static GC_REGISTERED: Once = Once::new();
 /// same root cause as issue #35 for net.Socket listeners.
 pub(crate) fn ensure_gc_scanner_registered() {
     GC_REGISTERED.call_once(|| {
-        gc_register_root_scanner(scan_fastify_roots);
+        gc_register_mutable_root_scanner(scan_fastify_roots);
     });
 }
 
-/// GC root scanner — walk every registered FastifyApp and mark every
-/// closure pointer the wrapper has stashed. Closures are stored as
-/// raw `i64`s; the scanner re-NaN-boxes them with POINTER_TAG before
-/// handing to the runtime's `mark` callback.
-fn scan_fastify_roots(mark: &mut dyn FnMut(f64)) {
-    let mark_cb = |cb: ClosurePtr, m: &mut dyn FnMut(f64)| {
-        if cb != 0 {
-            let boxed = f64::from_bits(POINTER_TAG | (cb as u64 & PTR_MASK));
-            m(boxed);
-        }
-    };
-
-    iter_handles_of::<FastifyApp, _>(|app| {
-        for route in app.routes.iter() {
-            mark_cb(route.handler, mark);
+/// GC root scanner — walk every registered FastifyApp and visit every
+/// closure pointer the wrapper has stashed. Closures are stored as raw
+/// `i64`s so copied-minor GC can rewrite the slots directly.
+fn scan_fastify_roots(visitor: &mut GcRootVisitor<'_>) {
+    iter_handles_of_mut::<FastifyApp, _>(|app| {
+        for route in app.routes.iter_mut() {
+            visitor.visit_i64_slot(&mut route.handler);
         }
         for cb in app
             .hooks
             .on_request
-            .iter()
-            .chain(app.hooks.pre_parsing.iter())
-            .chain(app.hooks.pre_validation.iter())
-            .chain(app.hooks.pre_handler.iter())
-            .chain(app.hooks.pre_serialization.iter())
-            .chain(app.hooks.on_send.iter())
-            .chain(app.hooks.on_response.iter())
-            .chain(app.hooks.on_error.iter())
+            .iter_mut()
+            .chain(app.hooks.pre_parsing.iter_mut())
+            .chain(app.hooks.pre_validation.iter_mut())
+            .chain(app.hooks.pre_handler.iter_mut())
+            .chain(app.hooks.pre_serialization.iter_mut())
+            .chain(app.hooks.on_send.iter_mut())
+            .chain(app.hooks.on_response.iter_mut())
+            .chain(app.hooks.on_error.iter_mut())
         {
-            mark_cb(*cb, mark);
+            visitor.visit_i64_slot(cb);
         }
-        if let Some(eh) = app.error_handler {
-            mark_cb(eh, mark);
+        if let Some(eh) = app.error_handler.as_mut() {
+            visitor.visit_i64_slot(eh);
         }
-        for plugin in app.plugins.iter() {
-            mark_cb(plugin.handler, mark);
+        for plugin in app.plugins.iter_mut() {
+            visitor.visit_i64_slot(&mut plugin.handler);
         }
         // #1113: upgrade handlers registered via
-        // `app.server.on("upgrade", cb)`. Pin them so a GC cycle
-        // between registration and an Upgrade request doesn't sweep
-        // the closure.
-        for cb in app.upgrade_handlers.iter() {
-            mark_cb(*cb, mark);
+        // `app.server.on("upgrade", cb)`. Visit slots mutably so
+        // copied-minor GC can rewrite closures if they move.
+        for cb in app.upgrade_handlers.iter_mut() {
+            visitor.visit_i64_slot(cb);
         }
     });
 }
@@ -146,7 +134,43 @@ fn scan_fastify_roots(mark: &mut dyn FnMut(f64)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_ffi::{drop_handle, get_handle, register_handle};
     use std::collections::HashMap;
+    use std::sync::{Mutex, MutexGuard};
+
+    static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct GcTestGuard {
+        frame: u64,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl GcTestGuard {
+        fn new() -> Self {
+            let lock = GC_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            perry_runtime::gc::js_gc_write_barriers_emitted(1);
+            let frame = perry_runtime::gc::js_shadow_frame_push(0);
+            Self { frame, _lock: lock }
+        }
+    }
+
+    impl Drop for GcTestGuard {
+        fn drop(&mut self) {
+            perry_runtime::gc::js_shadow_frame_pop(self.frame);
+            perry_runtime::gc::js_gc_write_barriers_emitted(0);
+        }
+    }
+
+    fn young_gc_root() -> i64 {
+        perry_runtime::arena::arena_alloc_gc(32, 8, perry_runtime::gc::GC_TYPE_STRING) as i64
+    }
+
+    fn assert_rewritten(before: i64, after: i64) {
+        assert_ne!(after, before);
+        assert!(perry_runtime::arena::pointer_in_nursery(after as usize));
+    }
 
     #[test]
     fn gc_scanner_registers_idempotently() {
@@ -156,6 +180,37 @@ mod tests {
         ensure_gc_scanner_registered();
         ensure_gc_scanner_registered();
         ensure_gc_scanner_registered();
+    }
+
+    #[test]
+    fn gc_mutable_scanner_rewrites_registered_roots() {
+        let _guard = GcTestGuard::new();
+        perry_ffi::gc_register_mutable_root_scanner(scan_fastify_roots);
+
+        let route = young_gc_root();
+        let hook = young_gc_root();
+        let error = young_gc_root();
+        let plugin = young_gc_root();
+        let mut app = FastifyApp::new();
+        app.add_route("GET", "/gc", route);
+        app.add_hook("onRequest", hook);
+        app.set_error_handler(error);
+        app.plugins.push(Plugin {
+            handler: plugin,
+            prefix: "/api".to_string(),
+        });
+        let handle = register_handle(app);
+
+        let _ = perry_runtime::gc::gc_collect_minor();
+
+        {
+            let app = get_handle::<FastifyApp>(handle).expect("fastify handle should remain live");
+            assert_rewritten(route, app.routes[0].handler);
+            assert_rewritten(hook, app.hooks.on_request[0]);
+            assert_rewritten(error, app.error_handler.expect("error handler"));
+            assert_rewritten(plugin, app.plugins[0].handler);
+        }
+        drop_handle(handle);
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub(crate) mod stmt;
 pub mod strings;
 pub mod stubs;
 pub(crate) mod type_analysis;
+pub(crate) mod typed_shape;
 pub mod types;
 
 pub use codegen::{
