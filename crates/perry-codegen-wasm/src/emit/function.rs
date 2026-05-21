@@ -53,9 +53,8 @@ impl WasmModuleEmitter {
         // `return` statement (HIR doesn't guarantee tail-return lowering yet). Class static
         // methods get `force_returning=true` because func_section also declares them as `-> i64`
         // unconditionally — see compile_function_with_signature's doc-comment.
-        let wasm_returns_i64 = force_returning
-            || hir_func.body.iter().any(has_return)
-            || hir_func.name == "main";
+        let wasm_returns_i64 =
+            force_returning || hir_func.body.iter().any(has_return) || hir_func.name == "main";
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
 
         for stmt in &hir_func.body {
