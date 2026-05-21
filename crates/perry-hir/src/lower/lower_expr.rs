@@ -1025,11 +1025,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         }
         ast::Expr::TsTypeAssertion(ts_assertion) => {
             // TypeScript angle-bracket type assertion (<Type>value) - same as 'as', compile-time only
-            lower_expr_with_json_parse_type_hint(
-                ctx,
-                &ts_assertion.expr,
-                &ts_assertion.type_ann,
-            )
+            lower_expr_with_json_parse_type_hint(ctx, &ts_assertion.expr, &ts_assertion.type_ann)
         }
         ast::Expr::TsConstAssertion(ts_const) => {
             // TypeScript 'as const' assertion - at runtime, just evaluate the expression

@@ -104,7 +104,12 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
             TASK_QUEUE.with(|q| {
                 let mut q = q.borrow_mut();
                 for all_state in promise_all_states {
-                    q.push_back(Task::PromiseAll(all_state, value, true, task_context.clone()));
+                    q.push_back(Task::PromiseAll(
+                        all_state,
+                        value,
+                        true,
+                        task_context.clone(),
+                    ));
                 }
                 if has_normal_handler {
                     q.push_back(Task::Promise(promise, value, true, task_context));
@@ -244,7 +249,12 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
             TASK_QUEUE.with(|q| {
                 let mut q = q.borrow_mut();
                 for all_state in promise_all_states {
-                    q.push_back(Task::PromiseAll(all_state, reason, false, task_context.clone()));
+                    q.push_back(Task::PromiseAll(
+                        all_state,
+                        reason,
+                        false,
+                        task_context.clone(),
+                    ));
                 }
                 if has_normal_handler {
                     q.push_back(Task::Promise(promise, reason, false, task_context));

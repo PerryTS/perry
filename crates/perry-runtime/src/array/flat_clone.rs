@@ -173,7 +173,11 @@ pub extern "C" fn js_array_clone_for_spread(boxed: f64) -> *mut ArrayHeader {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     let bits = boxed.to_bits();
     if bits == TAG_UNDEFINED || bits == TAG_NULL {
-        let receiver = if bits == TAG_NULL { "null" } else { "undefined" };
+        let receiver = if bits == TAG_NULL {
+            "null"
+        } else {
+            "undefined"
+        };
         let msg = format!("{} is not iterable", receiver);
         let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         let err_ptr = crate::error::js_typeerror_new(msg_str);

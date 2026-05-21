@@ -811,7 +811,9 @@ pub(crate) fn collect_scalar_class_data(
 
 fn lower_unused_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<bool> {
     match expr {
-        perry_hir::Expr::New { class_name, args, .. } if class_name.starts_with("__AnonShape_") => {
+        perry_hir::Expr::New {
+            class_name, args, ..
+        } if class_name.starts_with("__AnonShape_") => {
             // Anonymous-shape `new` is how object literals lower. When the
             // constructed value is immediately discarded by scalar replacement
             // we still must preserve evaluation order of every property value,
@@ -860,7 +862,12 @@ fn array_map_callback_is_discard_pure(callback: &perry_hir::Expr) -> bool {
     else {
         return false;
     };
-    if *is_async || *captures_this || !captures.is_empty() || !mutable_captures.is_empty() || params.is_empty() {
+    if *is_async
+        || *captures_this
+        || !captures.is_empty()
+        || !mutable_captures.is_empty()
+        || params.is_empty()
+    {
         return false;
     }
     let param_id = params[0].id;
@@ -881,7 +888,9 @@ fn discard_pure_expr(expr: &perry_hir::Expr, param_id: perry_types::LocalId) -> 
         // `get` accessors can run user code, so eliding the map body
         // would drop visible side effects. The intended target of this
         // optimization is the anonymous-shape `Expr::New` arm below.
-        perry_hir::Expr::New { class_name, args, .. } if class_name.starts_with("__AnonShape_") => {
+        perry_hir::Expr::New {
+            class_name, args, ..
+        } if class_name.starts_with("__AnonShape_") => {
             args.iter().all(|arg| discard_pure_expr(arg, param_id))
         }
         _ => false,

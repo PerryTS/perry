@@ -78,9 +78,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // null/undefined throws while every other input is
                 // forwarded to the regular clone path.
                 let src_box = lower_expr(ctx, e)?;
-                let cloned = ctx
-                    .block()
-                    .call(I64, "js_array_clone_for_spread", &[(DOUBLE, &src_box)]);
+                let cloned =
+                    ctx.block()
+                        .call(I64, "js_array_clone_for_spread", &[(DOUBLE, &src_box)]);
                 return Ok(nanbox_pointer_inline(ctx.block(), &cloned));
             }
             let cap_str = (elements.len() as u32).to_string();
