@@ -35,9 +35,9 @@ pub(crate) use windows::windows_wizard;
 // Cross-platform helpers shared across wizards.
 pub(crate) use common_apple::{generate_asc_jwt, prompt_api_credentials};
 pub(crate) use helpers::{
-    expand_tilde, press_enter_to_continue, prompt_file_path, update_perry_toml_android,
-    update_perry_toml_encryption_exempt, update_perry_toml_ios, update_perry_toml_macos,
-    update_perry_toml_section_bool,
+    expand_tilde, press_enter_to_continue, prompt_file_path, prompt_output_path,
+    update_perry_toml_android, update_perry_toml_encryption_exempt, update_perry_toml_ios,
+    update_perry_toml_macos, update_perry_toml_section_bool,
 };
 
 // Cert utilities used by macos (re-exported in case any other module wants them).

@@ -27,6 +27,69 @@ pub fn expand_tilde(path: &str) -> String {
     }
 }
 
+/// Prompt for a writable *output* file path (file doesn't have to exist
+/// yet, but its parent directory must exist and be writable by the
+/// current user). Re-prompts on failure instead of bailing — typo-tolerant
+/// for interactive flows like `perry setup android` where a slipped
+/// `~/../foo` would otherwise crash the whole command after the user has
+/// already entered an alias + password.
+pub fn prompt_output_path(prompt: &str) -> Result<String> {
+    loop {
+        let raw = Input::<String>::new().with_prompt(prompt).interact_text()?;
+        let expanded = expand_tilde(&raw);
+        match check_writable_output(&expanded) {
+            Ok(()) => return Ok(expanded),
+            Err(msg) => {
+                println!();
+                println!("  {} {msg}", style("✗").red());
+                println!("    Try a path inside your home directory, e.g. ~/release-key.keystore");
+                println!();
+            }
+        }
+    }
+}
+
+/// Probe whether the given output path is writable by the current user:
+/// resolves the parent directory (canonicalizing through any `..`
+/// components so the error message names the *real* directory the OS
+/// will refuse), then attempts to create-and-delete a tiny probe file.
+/// Returns a human-readable message on failure rather than a typed error,
+/// because the only consumer formats it straight back to the prompt.
+fn check_writable_output(path: &str) -> std::result::Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("Path cannot be empty".to_string());
+    }
+    let p = std::path::Path::new(path);
+    let parent = p
+        .parent()
+        .filter(|pp| !pp.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let canonical_parent = parent.canonicalize().map_err(|e| {
+        format!(
+            "Parent directory {} is not reachable: {e}",
+            parent.display()
+        )
+    })?;
+    if !canonical_parent.is_dir() {
+        return Err(format!(
+            "Parent path {} is not a directory",
+            canonical_parent.display()
+        ));
+    }
+    let probe = canonical_parent.join(format!(".perry-write-test-{}", std::process::id()));
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            Ok(())
+        }
+        Err(e) => Err(format!(
+            "Cannot write to {} ({})",
+            canonical_parent.display(),
+            e.kind()
+        )),
+    }
+}
+
 /// Prompt for a file path, validate it exists and has the expected extension.
 pub fn prompt_file_path(prompt: &str, expected_ext: &str) -> Result<String> {
     let path = Input::<String>::new().with_prompt(prompt).interact_text()?;

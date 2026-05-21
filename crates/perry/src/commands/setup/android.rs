@@ -56,10 +56,7 @@ pub fn android_wizard(saved: &mut PerryConfig) -> Result<()> {
         println!("  Generating a new Android release keystore...");
         println!();
 
-        let path = Input::<String>::new()
-            .with_prompt("  Output path (e.g. ~/release-key.keystore)")
-            .interact_text()?;
-        let path = expand_tilde(&path);
+        let path = prompt_output_path("  Output path (e.g. ~/release-key.keystore)")?;
         let alias = Input::<String>::new()
             .with_prompt("  Key alias")
             .default("key0".to_string())
