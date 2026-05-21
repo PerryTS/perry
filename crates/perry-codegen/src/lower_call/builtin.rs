@@ -505,6 +505,83 @@ pub(super) fn lower_builtin_new(
             Ok(Some(handle))
         }
 
+        // Issue #1211: `new Blob(parts, opts)` / `new File(parts, name, opts)`.
+        // `parts` is a JS array of mixed string/Buffer/Blob inputs — the
+        // runtime helper (`js_blob_new` / `js_file_new`) walks the array
+        // and concatenates the bytes. Locals bound by `const b = new Blob(...)`
+        // are tagged `("blob", "Blob")` in `destructuring/var_decl.rs` so
+        // subsequent property/method access dispatches through the
+        // `module == "blob"` arm above.
+        "Blob" => {
+            let parts = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let mut type_str = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            if args.len() >= 2 {
+                if let Some(props) = extract_options_fields(ctx, &args[1]) {
+                    for (k, vexpr) in &props {
+                        if k == "type" {
+                            type_str = lower_expr(ctx, vexpr)?;
+                        } else {
+                            let _ = lower_expr(ctx, vexpr)?;
+                        }
+                    }
+                } else {
+                    let _ = lower_expr(ctx, &args[1])?;
+                }
+            }
+            let handle = ctx.block().call(
+                DOUBLE,
+                "js_blob_new",
+                &[(DOUBLE, &parts), (DOUBLE, &type_str)],
+            );
+            Ok(Some(handle))
+        }
+
+        "File" => {
+            let parts = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let name = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let mut type_str = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            // NaN signals "use Date.now()" inside the runtime helper.
+            let mut last_modified = double_literal(f64::NAN);
+            if args.len() >= 3 {
+                if let Some(props) = extract_options_fields(ctx, &args[2]) {
+                    for (k, vexpr) in &props {
+                        match k.as_str() {
+                            "type" => type_str = lower_expr(ctx, vexpr)?,
+                            "lastModified" => last_modified = lower_expr(ctx, vexpr)?,
+                            _ => {
+                                let _ = lower_expr(ctx, vexpr)?;
+                            }
+                        }
+                    }
+                } else {
+                    let _ = lower_expr(ctx, &args[2])?;
+                }
+            }
+            let handle = ctx.block().call(
+                DOUBLE,
+                "js_file_new",
+                &[
+                    (DOUBLE, &parts),
+                    (DOUBLE, &name),
+                    (DOUBLE, &type_str),
+                    (DOUBLE, &last_modified),
+                ],
+            );
+            Ok(Some(handle))
+        }
+
         "Headers" => {
             // new Headers(init?) — init can be an object literal or another
             // Headers/array iterable. Only inline object literals are

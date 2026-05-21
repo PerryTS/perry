@@ -20,6 +20,7 @@ mod mutate;
 mod numeric;
 mod query;
 mod transcode;
+mod view;
 
 // ---- Re-exports: types & constants ----
 pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};

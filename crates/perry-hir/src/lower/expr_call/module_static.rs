@@ -1254,6 +1254,29 @@ pub(super) fn try_module_static_methods(
                             args.into_iter().next().unwrap(),
                         ))));
                     }
+                    // Issue #1211: `URL.createObjectURL(blob)` /
+                    // `URL.revokeObjectURL(url)` route to the
+                    // Blob-registry helpers. Modelled as receiver-less
+                    // `NativeMethodCall { module: "url" }` so the
+                    // native dispatch table picks them up.
+                    if method_name == "createObjectURL" {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "url".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "createObjectURL".to_string(),
+                            args,
+                        }));
+                    }
+                    if method_name == "revokeObjectURL" {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "url".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "revokeObjectURL".to_string(),
+                            args,
+                        }));
+                    }
                 }
             }
         }

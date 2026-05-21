@@ -502,19 +502,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let result_i32 = blk.zext(I8, &byte_val, I32);
                 return Ok(ctx.block().sitofp(I32, &result_i32, DOUBLE));
             }
+            // Issue #1205 slow path: route the indexed read through
+            // `js_buffer_get` so a view receiver (registered in the
+            // runtime view registry by `js_buffer_slice`) reads from
+            // the ultimate backing buffer instead of its own
+            // possibly-stale snapshot.  Fast path above stays direct
+            // since `buffer_data_slots` is only populated for
+            // `Buffer.alloc` locals, which are never views.
             let a = lower_expr(ctx, array)?;
             let blk = ctx.block();
             let handle = unbox_to_i64(blk, &a);
-            let len_i32 = blk.safe_load_i32_from_ptr(&handle);
-            let in_bounds = blk.icmp_ult(I32, &idx_i32, &len_i32);
-            blk.emit_raw(format!("call void @llvm.assume(i1 {})", in_bounds));
-            let idx_i64 = blk.zext(I32, &idx_i32, I64);
-            let data_offset = blk.add(I64, &idx_i64, "8");
-            let byte_addr = blk.add(I64, &handle, &data_offset);
-            let byte_ptr = blk.inttoptr(I64, &byte_addr);
-            let byte_val = blk.load(I8, &byte_ptr);
-            let result_i32 = blk.zext(I8, &byte_val, I32);
-            Ok(ctx.block().sitofp(I32, &result_i32, DOUBLE))
+            let byte_i32 = blk.call(I32, "js_buffer_get", &[(I64, &handle), (I32, &idx_i32)]);
+            Ok(ctx.block().sitofp(I32, &byte_i32, DOUBLE))
         }
         Expr::Uint8ArraySet {
             array,
@@ -572,18 +571,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 blk.emit_raw(format!("store i8 {}, ptr {}{}", byte_val, byte_ptr, meta));
                 return Ok(ctx.block().sitofp(I32, &val_i32, DOUBLE));
             }
+            // Issue #1205 slow path: route the indexed store through
+            // `js_buffer_set` so a view receiver propagates the write
+            // to its backing buffer (and any sister views).  Fast
+            // path above stays direct — `buffer_data_slots` only
+            // tracks `Buffer.alloc` locals, which are never views.
             let a = lower_expr(ctx, array)?;
             let blk = ctx.block();
             let handle = unbox_to_i64(blk, &a);
-            let len_i32 = blk.safe_load_i32_from_ptr(&handle);
-            let in_bounds = blk.icmp_ult(I32, &idx_i32, &len_i32);
-            blk.emit_raw(format!("call void @llvm.assume(i1 {})", in_bounds));
-            let idx_i64 = blk.zext(I32, &idx_i32, I64);
-            let data_offset = blk.add(I64, &idx_i64, "8");
-            let byte_addr = blk.add(I64, &handle, &data_offset);
-            let byte_ptr = blk.inttoptr(I64, &byte_addr);
-            let byte_val = blk.trunc(I32, &val_i32, I8);
-            blk.store(I8, &byte_val, &byte_ptr);
+            blk.call_void(
+                "js_buffer_set",
+                &[(I64, &handle), (I32, &idx_i32), (I32, &val_i32)],
+            );
             // Return the stored value as a double (for expression contexts).
             Ok(ctx.block().sitofp(I32, &val_i32, DOUBLE))
         }

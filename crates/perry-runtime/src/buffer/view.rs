@@ -1,0 +1,187 @@
+//! Issue #1205: shared backing-store semantics for
+//! `Buffer.prototype.slice` / `subarray`.
+//!
+//! Node's `Buffer.slice` / `subarray` return a *view* over the source
+//! buffer's memory: mutating the view is visible through the original
+//! and vice-versa.  Perry historically returned a freshly-allocated
+//! buffer with a copy of the slice bytes.
+//!
+//! Implementation strategy:
+//!
+//! 1.  `js_buffer_slice` still allocates a fresh `BufferHeader` and
+//!     copies the bytes.  The fresh allocation lets the LLVM codegen's
+//!     direct `gep+load/store` against the buffer pointer keep working
+//!     unchanged — `view_ptr + 8 + idx` is always valid memory.
+//! 2.  The view registry below remembers the alias relationship
+//!     between the new view and its ultimate backing buffer plus a
+//!     reverse map from the backing buffer to every live view.
+//! 3.  The runtime byte mutators (`js_buffer_set`, `js_buffer_write`,
+//!     `js_buffer_fill_range`, `js_buffer_copy`) consult the registry
+//!     and propagate writes to every aliased buffer.  Together with
+//!     the codegen slow-path indexed-write change in
+//!     `Uint8ArraySet`/`Uint8ArrayGet` (`crates/perry-codegen/src/
+//!     expr/arrays_finds.rs`), this lets `s[0] = 0x5a; buf[1]`-style
+//!     round-trips observe the mutation through both sides.
+//!
+//! Limitations that remain (tracked under follow-up subtasks of
+//! #1205):
+//! - Codegen `Uint8ArrayGet`/`Uint8ArraySet` *fast paths* (statically
+//!   typed `Buffer` locals fed by `Buffer.alloc`) skip the runtime
+//!   helper and access memory directly.  Slices of `Buffer.alloc`
+//!   buffers therefore lose the back-propagation when the alloc'd
+//!   side is the one being mutated by tight-loop code that hits the
+//!   fast path.  In practice the gap-suite shapes go through the
+//!   slow path (slice receivers and `Buffer.from(...)` initializers
+//!   aren't tracked in `buffer_data_slots`).
+
+use super::*;
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+/// Each live slice/subarray records its ultimate backing buffer plus
+/// the [offset, offset + length) range within that backing.  The
+/// offset is in bytes; `length` matches the view's own `length`
+/// field.  Slices-of-slices flatten on insert — we always resolve
+/// to the *ultimate* backing so writes don't have to walk a chain.
+#[derive(Copy, Clone)]
+pub(crate) struct ViewInfo {
+    pub backing: usize,
+    pub offset: u32,
+    pub length: u32,
+}
+
+thread_local! {
+    /// `view_ptr → ViewInfo`.  Lookups during writes are O(1).
+    static VIEW_REGISTRY: RefCell<HashMap<usize, ViewInfo>> =
+        RefCell::new(HashMap::with_capacity(64));
+    /// `backing_ptr → Vec<view_ptr>`.  Backing-side writes walk this
+    /// list to mirror bytes into every aliased view.  Vector entries
+    /// are tombstoned (set to 0) on view drop rather than removed so
+    /// hot-path iteration stays branch-light.
+    static BACKING_TO_VIEWS: RefCell<HashMap<usize, Vec<usize>>> =
+        RefCell::new(HashMap::with_capacity(64));
+}
+
+#[inline]
+pub(crate) fn lookup(view_ptr: usize) -> Option<ViewInfo> {
+    VIEW_REGISTRY.with(|r| r.borrow().get(&view_ptr).copied())
+}
+
+#[inline]
+pub(crate) fn backing_of(buf_ptr: usize) -> usize {
+    lookup(buf_ptr).map(|v| v.backing).unwrap_or(buf_ptr)
+}
+
+#[inline]
+pub(crate) fn for_each_view<F: FnMut(usize, ViewInfo)>(backing_ptr: usize, mut f: F) {
+    BACKING_TO_VIEWS.with(|m| {
+        if let Some(views) = m.borrow().get(&backing_ptr) {
+            for &view in views.iter() {
+                if view != 0 {
+                    if let Some(info) = lookup(view) {
+                        f(view, info);
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Register a freshly-allocated `view_ptr` as a view over `backing_ptr`
+/// at byte range `[offset, offset+length)`.  Resolves slices-of-slices
+/// to the ultimate backing so reads/writes never walk a chain.
+pub(crate) fn register(
+    view_ptr: usize,
+    backing_ptr_raw: usize,
+    offset_raw: u32,
+    length: u32,
+) -> ViewInfo {
+    // Walk through the chain so `slice.slice()` ends up pointing at
+    // the original `Buffer.from(...)` allocation, not the intermediate
+    // slice.  This keeps every mutation a single registry hop.
+    let (backing, offset) = if let Some(parent) = lookup(backing_ptr_raw) {
+        (parent.backing, parent.offset + offset_raw)
+    } else {
+        (backing_ptr_raw, offset_raw)
+    };
+    let info = ViewInfo {
+        backing,
+        offset,
+        length,
+    };
+    VIEW_REGISTRY.with(|r| {
+        r.borrow_mut().insert(view_ptr, info);
+    });
+    BACKING_TO_VIEWS.with(|m| {
+        m.borrow_mut().entry(backing).or_default().push(view_ptr);
+    });
+    info
+}
+
+/// Write a single byte into every live view of `backing_ptr` whose
+/// range covers `back_offset`.  Skips the originating `skip_view`
+/// pointer so a view-originated write isn't double-applied to itself.
+///
+/// SAFETY: callers must guarantee that every recorded view pointer in
+/// `BACKING_TO_VIEWS` still references a live `BufferHeader` allocation.
+/// Slab/large buffers in Perry today live for the thread's lifetime
+/// (see `buffer_alloc_small` and the malloc path), so that invariant
+/// holds.
+pub(crate) unsafe fn propagate_byte_to_views(
+    backing_ptr: usize,
+    back_offset: u32,
+    value: u8,
+    skip_view: usize,
+) {
+    for_each_view(backing_ptr, |view_ptr, info| {
+        if view_ptr == skip_view {
+            return;
+        }
+        if back_offset < info.offset {
+            return;
+        }
+        let local = back_offset - info.offset;
+        if local >= info.length {
+            return;
+        }
+        let view_data = buffer_data_mut(view_ptr as *mut BufferHeader);
+        *view_data.add(local as usize) = value;
+    });
+}
+
+/// Write a range of bytes from `src` into every live view of
+/// `backing_ptr` whose window overlaps `[back_offset, back_offset+len)`.
+/// Used by `js_buffer_write`, `js_buffer_fill_range`, and the copy
+/// helper so per-byte loops in user code don't have to call into the
+/// registry for every store.
+pub(crate) unsafe fn propagate_range_to_views(
+    backing_ptr: usize,
+    back_offset: u32,
+    src: *const u8,
+    len: u32,
+    skip_view: usize,
+) {
+    if len == 0 || src.is_null() {
+        return;
+    }
+    for_each_view(backing_ptr, |view_ptr, info| {
+        if view_ptr == skip_view {
+            return;
+        }
+        let view_start = info.offset;
+        let view_end = info.offset + info.length;
+        let back_start = back_offset;
+        let back_end = back_offset + len;
+        let lo = view_start.max(back_start);
+        let hi = view_end.min(back_end);
+        if lo >= hi {
+            return;
+        }
+        let view_data = buffer_data_mut(view_ptr as *mut BufferHeader);
+        let src_off = (lo - back_start) as usize;
+        let view_off = (lo - view_start) as usize;
+        let bytes = (hi - lo) as usize;
+        std::ptr::copy_nonoverlapping(src.add(src_off), view_data.add(view_off), bytes);
+    });
+}

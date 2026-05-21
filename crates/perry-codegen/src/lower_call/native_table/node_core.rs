@@ -795,4 +795,36 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
+    // Issue #1211: `import { resolveObjectURL } from "node:buffer"`.
+    NativeModSig {
+        module: "buffer",
+        has_receiver: false,
+        method: "resolveObjectURL",
+        class_filter: None,
+        runtime: "js_buffer_resolve_object_url",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    // Issue #1211: `URL.createObjectURL(blob)` /
+    // `URL.revokeObjectURL(url)` — modelled as receiver-less
+    // `("url", "createObjectURL"/"revokeObjectURL")` so the static
+    // method dispatch in `expr_call/module_static.rs` picks them up.
+    NativeModSig {
+        module: "url",
+        has_receiver: false,
+        method: "createObjectURL",
+        class_filter: None,
+        runtime: "js_url_create_object_url",
+        args: &[NA_F64],
+        ret: NR_STR,
+    },
+    NativeModSig {
+        module: "url",
+        has_receiver: false,
+        method: "revokeObjectURL",
+        class_filter: None,
+        runtime: "js_url_revoke_object_url",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
 ];

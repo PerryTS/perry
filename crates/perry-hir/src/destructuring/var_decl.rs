@@ -730,6 +730,28 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 );
                                 ctx.uses_fetch = true;
                             }
+                            // Issue #1211: `new Blob([...])` / `new File([...], name)`.
+                            // File shares the Blob runtime registry — the codegen
+                            // `module == "blob"` arm dispatches `.name` /
+                            // `.lastModified` regardless of class tag, so File
+                            // tracks as a Blob instance with the class tag
+                            // available for future File-only property checks.
+                            "Blob" => {
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    "blob".to_string(),
+                                    "Blob".to_string(),
+                                );
+                                ctx.uses_fetch = true;
+                            }
+                            "File" => {
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    "blob".to_string(),
+                                    "File".to_string(),
+                                );
+                                ctx.uses_fetch = true;
+                            }
                             // Issue #237: Web Streams API constructors.
                             "ReadableStream" => {
                                 ctx.register_native_instance(

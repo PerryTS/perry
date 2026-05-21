@@ -2151,6 +2151,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("buffer", "isUtf8", false, None),
     // Issue #1210: re-encode bytes between supported encodings.
     method("buffer", "transcode", false, None),
+    // Issue #1211: Blob / File constructors + object-URL helpers
+    // exposed from node:buffer.  Blob/File constructors are recognized
+    // by the codegen builtin path, so they only need to appear here
+    // as class exports.
+    class("buffer", "Blob"),
+    class("buffer", "File"),
+    method("buffer", "resolveObjectURL", false, None),
     property("buffer", "constants"),
     property("buffer", "kMaxLength"),
     property("buffer", "kStringMaxLength"),

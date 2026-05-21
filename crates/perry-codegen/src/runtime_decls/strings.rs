@@ -1371,6 +1371,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_blob_bytes", I64, &[DOUBLE]);
     module.declare_function("js_blob_text", I64, &[DOUBLE]);
     module.declare_function("js_blob_slice", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, I64]);
+    // Issue #1211: Blob / File constructors + object-URL registry.
+    module.declare_function("js_blob_new", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_file_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_file_name", I64, &[DOUBLE]);
+    module.declare_function("js_file_last_modified", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_create_object_url", I64, &[DOUBLE]);
+    module.declare_function("js_url_revoke_object_url", VOID, &[DOUBLE]);
+    module.declare_function("js_buffer_resolve_object_url", DOUBLE, &[DOUBLE]);
     // Static factories.
     module.declare_function("js_response_static_json", DOUBLE, &[DOUBLE]);
     module.declare_function("js_response_static_redirect", DOUBLE, &[I64, DOUBLE]);

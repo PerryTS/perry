@@ -416,6 +416,22 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     .call(DOUBLE, "js_blob_stream", &[(DOUBLE, &recv_handle)]);
                 return Ok(Some(h));
             }
+            // Issue #1211: File-specific properties.  Plain Blob handles
+            // resolve `name` to the empty string and `lastModified` to 0,
+            // which matches Node's behavior for non-File Blobs (no
+            // ambiguity from sharing the registry).
+            "name" => {
+                let str_ptr = ctx
+                    .block()
+                    .call(I64, "js_file_name", &[(DOUBLE, &recv_handle)]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+            }
+            "lastModified" => {
+                let blk = ctx.block();
+                let n = blk.call(DOUBLE, "js_file_last_modified", &[(DOUBLE, &recv_handle)]);
+                return Ok(Some(n));
+            }
             _ => return Ok(None),
         }
     }
