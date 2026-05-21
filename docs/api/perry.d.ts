@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1061 entries across 79 modules
+// Coverage: 1067 entries across 79 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -152,7 +152,11 @@ declare module "bignumber.js" {
 
 declare module "buffer" {
   /** stdlib */
+  export class Blob { [key: string]: any; }
+  /** stdlib */
   export class Buffer { [key: string]: any; }
+  /** stdlib */
+  export class File { [key: string]: any; }
   /** stdlib */
   export const constants: any;
   /** stdlib */
@@ -181,6 +185,10 @@ declare module "buffer" {
   export function isUtf8(...args: any[]): any;
   /** stdlib */
   export function of(...args: any[]): any;
+  /** stdlib */
+  export function resolveObjectURL(...args: any[]): any;
+  /** stdlib */
+  export function transcode(...args: any[]): any;
 }
 
 declare module "cheerio" {
@@ -1520,6 +1528,8 @@ declare module "url" {
   /** stdlib */
   export class URLSearchParams { [key: string]: any; }
   /** stdlib */
+  export function createObjectURL(...args: any[]): any;
+  /** stdlib */
   export function domainToASCII(...args: any[]): any;
   /** stdlib */
   export function domainToUnicode(...args: any[]): any;
@@ -1533,6 +1543,8 @@ declare module "url" {
   export function pathToFileURL(...args: any[]): any;
   /** stdlib */
   export function resolve(...args: any[]): any;
+  /** stdlib */
+  export function revokeObjectURL(...args: any[]): any;
   /** stdlib */
   export function urlToHttpOptions(...args: any[]): any;
 }

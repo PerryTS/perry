@@ -2170,6 +2170,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("url", "format", false, None),
     method("url", "parse", false, None),
     method("url", "resolve", false, None),
+    // Issue #1211: Blob/File object-URL registry — paired with the
+    // `resolveObjectURL` export on `node:buffer`.
+    method("url", "createObjectURL", false, None),
+    method("url", "revokeObjectURL", false, None),
     // --- http (perry-ext-http surface + classes the framework spec
     //     exposes). Both http and https route through the same crate. ---
     method("http", "createServer", false, None),

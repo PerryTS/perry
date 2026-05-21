@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1061 entries across 79 modules.
+Total: 1067 entries across 79 modules.
 
 ## Modules
 
@@ -232,7 +232,9 @@ Total: 1061 entries across 79 modules.
 
 ### Classes
 
+- `Blob`
 - `Buffer`
+- `File`
 
 ### Methods
 
@@ -247,6 +249,8 @@ Total: 1061 entries across 79 modules.
 - `isEncoding` — module
 - `isUtf8` — module
 - `of` — module
+- `resolveObjectURL` — module
+- `transcode` — module
 
 ### Properties
 
@@ -1537,6 +1541,7 @@ Total: 1061 entries across 79 modules.
 
 ### Methods
 
+- `createObjectURL` — module
 - `domainToASCII` — module
 - `domainToUnicode` — module
 - `fileURLToPath` — module
@@ -1544,6 +1549,7 @@ Total: 1061 entries across 79 modules.
 - `parse` — module
 - `pathToFileURL` — module
 - `resolve` — module
+- `revokeObjectURL` — module
 - `urlToHttpOptions` — module
 
 ## `util`
