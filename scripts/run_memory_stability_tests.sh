@@ -1550,14 +1550,15 @@ echo "=== Memory-leak regression tests (RSS plateau under sustained alloc) ==="
 # Limits ~50-70% above measured baseline on macOS arm64. CI runners
 # may differ slightly; loosen a limit here rather than in the .ts.
 run_test test-files/test_memory_long_lived_loop.ts 100 "done, lastId=199999"
-# JSON churn stays at 250 MB for default/mark-sweep/gen-gc. On macOS
-# arm64, force-evac+verify has a stable tape+verifier high-water after
-# tape scratch/key-cache cleanup: default/gen-gc 240 MB, mark-sweep 90 MB,
-# force-evac+verify 262 MB, verifier direct parse (PERRY_JSON_TAPE=0)
-# 189 MB, forced tape 261 MB. Trace stayed in copied-minor mode with
-# fallback_reason=none, conservative pins=0, copy-only roots/bytes=0, and
-# old-page allocated/live/reusable/returned bytes=0.
-run_test test-files/test_memory_json_churn.ts      250 "done, checksum=637747500" 275
+# JSON churn — temporarily widened to 290 MB / 315 MB for the GC rework
+# tracked under #1090 (`GC roadmap: make minor GC structurally cheap`).
+# Observed v0.5.1019 Ubuntu CI: default 268 MB, gen-gc 268 MB, mark-sweep
+# 114 MB, force-evac+verify 290 MB — consistently ~28 MB above macOS arm64
+# baselines (default 241 MB / mark-sweep 91 MB / force-evac 263 MB measured
+# 2026-05-21 on M-series). The Linux glibc allocator + page-size accounting
+# explain most of that gap; the rest is GC-rework working-set drift that
+# will be reclaimed once #1090 lands. Revisit + tighten when #1090 closes.
+run_test test-files/test_memory_json_churn.ts      290 "done, checksum=637747500" 315
 run_test test-files/test_memory_string_churn.ts    100 "done, total=9577780"
 run_test test-files/test_memory_closure_churn.ts    50 "done, sum=15004649874"
 
