@@ -698,9 +698,7 @@ pub unsafe fn dispatch_string_decoder(handle: i64, method: &str, args: &[f64]) -
                 _ => {
                     let s = match h.mode {
                         DecodingMode::Utf8 => write_utf8(h, &bytes),
-                        DecodingMode::Base64 | DecodingMode::Base64Url => {
-                            write_base64(h, &bytes)
-                        }
+                        DecodingMode::Base64 | DecodingMode::Base64Url => write_base64(h, &bytes),
                         DecodingMode::Hex => write_hex(h, &bytes),
                         DecodingMode::Latin1 => write_latin1(h, &bytes),
                         DecodingMode::Ascii => write_ascii(h, &bytes),

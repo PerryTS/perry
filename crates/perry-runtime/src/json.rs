@@ -4277,8 +4277,7 @@ mod tests {
         // escape Node's JSON.stringify produces, not the raw invalid-UTF-8
         // bytes.
         let bytes: [u8; 3] = [0xED, 0xA0, 0xBD];
-        let input =
-            crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
+        let input = crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
         let value = f64::from_bits(crate::value::JSValue::string_ptr(input).bits());
         let output = unsafe { js_json_stringify(value, TYPE_UNKNOWN) };
 
@@ -4293,8 +4292,7 @@ mod tests {
         // V8's JSON.stringify pairs them and emits the astral codepoint's
         // UTF-8; Perry must match. 👍 = U+1F44D = F0 9F 91 8D.
         let bytes: [u8; 6] = [0xED, 0xA0, 0xBD, 0xED, 0xB1, 0x8D];
-        let input =
-            crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
+        let input = crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
         let value = f64::from_bits(crate::value::JSValue::string_ptr(input).bits());
         let output = unsafe { js_json_stringify(value, TYPE_UNKNOWN) };
 
@@ -4307,8 +4305,7 @@ mod tests {
         // be re-encoded — only valid adjacent (high, low) pairs collapse.
         // Input is 0xED A0 BD ('a' = 0x61), expected `"\ud83da"`.
         let bytes: [u8; 4] = [0xED, 0xA0, 0xBD, b'a'];
-        let input =
-            crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
+        let input = crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
         let value = f64::from_bits(crate::value::JSValue::string_ptr(input).bits());
         let output = unsafe { js_json_stringify(value, TYPE_UNKNOWN) };
 
