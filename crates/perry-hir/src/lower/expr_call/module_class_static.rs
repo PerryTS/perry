@@ -49,7 +49,6 @@ pub(super) fn try_module_class_static(
                                 | ("fs", "constants")
                                 | ("path", "posix")
                                 | ("path", "win32")
-                                | ("util", "types")
                         );
                         // Unimplemented-API gate (#463) for the chained
                         // `mod.X.Y()` case. The lower_member gate fires

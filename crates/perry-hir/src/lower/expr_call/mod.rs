@@ -62,7 +62,10 @@ use local_array_methods::try_local_array_methods;
 use module_class_static::try_module_class_static;
 use module_static::try_module_static_methods;
 use native_module::try_native_module_methods;
-use nested_namespace::{try_path_subnamespace, try_process_hrtime_bigint, try_web_crypto_subtle};
+use nested_namespace::{
+    try_path_subnamespace, try_process_hrtime_bigint, try_util_types_namespace,
+    try_web_crypto_subtle,
+};
 use post_args_dispatch::{
     try_object_has_own_call, try_object_prototype_call, try_object_static_alias_call,
     try_proxy_call,
@@ -205,12 +208,17 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
             }
 
             // Nested 3-level Member dispatch: process.hrtime.bigint(),
-            // crypto.subtle.<method>(), path.posix/win32.<method>().
+            // crypto.subtle.<method>(), util.types.<method>(), and
+            // path.posix/win32.<method>().
             args = match try_process_hrtime_bigint(expr, args) {
                 Ok(e) => return Ok(e),
                 Err(a) => a,
             };
             args = match try_web_crypto_subtle(ctx, expr, args)? {
+                Ok(e) => return Ok(e),
+                Err(a) => a,
+            };
+            args = match try_util_types_namespace(ctx, expr, args)? {
                 Ok(e) => return Ok(e),
                 Err(a) => a,
             };

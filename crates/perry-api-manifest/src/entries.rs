@@ -147,16 +147,6 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "tty",
 ];
 
-/// Pseudo-modules that exist in the dispatch table + manifest but are
-/// NOT user-importable. Used to route internal codegen artifacts —
-/// currently just the `util.types` namespace-access alias of
-/// `util/types`, which the dispatch table keys on `module = "util.types"`
-/// so a single set of dispatch rows covers both the `import "util/types"`
-/// form and the `util.types.X(...)` form. Hidden from
-/// `--print-api-manifest` markdown / .d.ts output, but accepted by
-/// `is_known_module` so the manifest consistency tests pass.
-pub const INTERNAL_MODULES: &[&str] = &["util.types"];
-
 const fn method(
     module: &'static str,
     name: &'static str,
@@ -2027,17 +2017,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isSet", false, None),
     method("util/types", "isDate", false, None),
     method("util/types", "isRegExp", false, None),
-    // Boxed primitive introspection (PR #1257). Both the `util/types`
-    // import form and the `util.types` namespace form route through the
-    // same runtime predicates; the API manifest needs entries for each.
+    // Boxed primitive introspection (PR #1257). The `util/types` import form
+    // and the `util.types` namespace-access form both lower to this canonical
+    // module key.
     method("util/types", "isNumberObject", false, None),
     method("util/types", "isStringObject", false, None),
     method("util/types", "isBooleanObject", false, None),
     method("util/types", "isBoxedPrimitive", false, None),
-    method("util.types", "isNumberObject", false, None),
-    method("util.types", "isStringObject", false, None),
-    method("util.types", "isBooleanObject", false, None),
-    method("util.types", "isBoxedPrimitive", false, None),
     // node:assert — assertion helpers used by tests and many npm packages.
     method("assert", "ok", false, None),
     method("assert", "fail", false, None),

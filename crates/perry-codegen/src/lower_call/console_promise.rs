@@ -6,7 +6,8 @@
 //! - Closure-call fallthrough (`recv()` where `recv` is a closure value)
 //!
 //! Plus the `util/types` predicate helper that bypasses the runtime
-//! dispatcher for `util.types.isPromise(x)` and friends.
+//! dispatcher for source-level `util.types.isPromise(x)` and friends after HIR
+//! normalizes them to the canonical `util/types` module key.
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -30,9 +31,8 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
     else {
         return Ok(None);
     };
-    let is_util_types_namespace = module == "util" && class_name.as_deref() == Some("types");
     let is_direct_util_types_module = module == "util/types" && class_name.is_none();
-    if (!is_util_types_namespace && !is_direct_util_types_module) || object.is_some() {
+    if !is_direct_util_types_module || object.is_some() {
         return Ok(None);
     }
     let Some(runtime) = (match method.as_str() {

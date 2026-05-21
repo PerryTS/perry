@@ -1,5 +1,6 @@
 //! Nested-namespace member dispatch: `process.hrtime.bigint()`,
-//! `crypto.subtle.<method>(...)`, and `path.posix/win32.<method>(...)`.
+//! `crypto.subtle.<method>(...)`, `path.posix/win32.<method>(...)`,
+//! and namespace aliases that should lower to a canonical module key.
 //!
 //! These need a 3-level Member AST shape and are resolved BEFORE the
 //! generic `mod.X.Y()` arm so the strict-API gate (#463) doesn't
@@ -205,6 +206,62 @@ pub(super) fn try_web_crypto_subtle(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Err(args))
+}
+
+/// `util.types.<method>(args)` — normalize the namespace-access form to the
+/// direct `util/types` module key used by `import { isX } from "util/types"`.
+///
+/// Keeping this rewrite in HIR means downstream dispatch tables and API docs
+/// only need the canonical module name; `util.types` remains a runtime object
+/// property, not a second API-manifest module.
+pub(super) fn try_util_types_namespace(
+    ctx: &LoweringContext,
+    expr: &ast::Expr,
+    args: Vec<Expr>,
+) -> Result<Result<Expr, Vec<Expr>>> {
+    if let ast::Expr::Member(outer_member) = expr {
+        if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
+            if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
+                let root_name = root_ident.sym.as_ref();
+                let is_util_root = root_name == "util"
+                    || ctx.lookup_builtin_module_alias(root_name) == Some("util")
+                    || ctx
+                        .lookup_native_module(root_name)
+                        .map(|(m, _)| m == "util")
+                        .unwrap_or(false);
+                if is_util_root {
+                    if let (ast::MemberProp::Ident(namespace), ast::MemberProp::Ident(method)) =
+                        (&inner_member.prop, &outer_member.prop)
+                    {
+                        if namespace.sym.as_ref() == "types" {
+                            let method_name = method.sym.as_ref();
+                            let allow_unimplemented =
+                                std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
+                            if !allow_unimplemented
+                                && perry_api_manifest::module_has_symbol("util/types", method_name)
+                                    .is_none()
+                            {
+                                crate::lower_bail!(
+                                    outer_member.span,
+                                    "`util.types.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
+                                     or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463)",
+                                    method_name,
+                                );
+                            }
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "util/types".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name.to_string(),
+                                args,
+                            }));
                         }
                     }
                 }

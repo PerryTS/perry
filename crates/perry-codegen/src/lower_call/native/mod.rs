@@ -79,14 +79,9 @@ pub(crate) fn lower_native_method_call(
         }
     }
 
-    // Node util.types predicate calls lower as receiver-less
-    // NativeMethodCall { module: "util", class_name: Some("types"), ... }.
-    // Route them explicitly so `util.types.isX(value)` does not fall through
-    // to the native-module null-receiver sentinel.
-    if ((module == "util" && class_name == Some("types"))
-        || (module == "util/types" && class_name.is_none()))
-        && object.is_none()
-    {
+    // Node util.types predicate calls lower to the canonical receiver-less
+    // NativeMethodCall { module: "util/types", class_name: None, ... }.
+    if module == "util/types" && class_name.is_none() && object.is_none() {
         let runtime = match method {
             "isPromise" => Some("js_util_types_is_promise"),
             "isArrayBuffer" | "isAnyArrayBuffer" => Some("js_util_types_is_array_buffer"),
