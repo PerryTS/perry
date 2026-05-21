@@ -2705,6 +2705,21 @@ pub fn run_with_parse_cache(
                                 .insert(local.clone(), synthetic_prefix.clone());
                             import_function_v8_specifiers
                                 .insert(local.clone(), specifier.clone());
+                            // #1195 — `import YAML from "yaml"` lands here.
+                            // When the local name is used as a static-method
+                            // receiver (`YAML.parse(...)`), the StaticMethodCall
+                            // arm in expr/static_method.rs looks up
+                            // `import_function_origin_names[class_name]` to
+                            // pick the namespace property name, falling back
+                            // to the local name. Without this insert, the
+                            // bridge would ask V8 for `ns.YAML` (which doesn't
+                            // exist on the proxy module's namespace; it
+                            // re-exports the default under the literal
+                            // "default" key). Record the local→"default"
+                            // override so the bridge resolves the right
+                            // namespace property.
+                            import_function_origin_names
+                                .insert(local.clone(), "default".to_string());
                         }
                         perry_hir::ImportSpecifier::Namespace { local } => {
                             // Namespace bindings (`import * as X from "ink"`)
