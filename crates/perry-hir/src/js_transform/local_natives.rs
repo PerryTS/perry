@@ -934,6 +934,34 @@ pub fn fix_native_instance_expr_with_locals(
     match expr {
         // The key case: method calls that might be on native instances
         Expr::Call { callee, args, .. } => {
+            // Issue #1193: `$(selector)` where `$` is a CheerioAPI handle.
+            // Cheerio's only "call-as-function" shape is `load(html)`'s
+            // return value used as a selector — rewrite to the existing
+            // `cheerio.select` native row.
+            if let Expr::LocalGet(local_id) = callee.as_ref() {
+                if let Some((module, class)) = local_id_instances.get(local_id) {
+                    if module == "cheerio" && class == "CheerioAPI" {
+                        for arg in args.iter_mut() {
+                            fix_native_instance_expr_with_locals(
+                                arg,
+                                native_instances,
+                                local_id_instances,
+                            );
+                        }
+                        let args_owned: Vec<Expr> = std::mem::take(args);
+                        let object_expr = std::mem::replace(callee.as_mut(), Expr::Undefined);
+                        *expr = Expr::NativeMethodCall {
+                            module: "cheerio".to_string(),
+                            class_name: Some("CheerioAPI".to_string()),
+                            object: Some(Box::new(object_expr)),
+                            method: "select".to_string(),
+                            args: args_owned,
+                        };
+                        return;
+                    }
+                }
+            }
+
             // Check if this is a method call: obj.method(args)
             if let Expr::PropertyGet { object, property } = callee.as_mut() {
                 // Check for LocalGet (local variable)
@@ -985,6 +1013,50 @@ pub fn fix_native_instance_expr_with_locals(
                             args: args_owned,
                         };
                         return;
+                    }
+                }
+                // Issue #1193: chained `$(sel).text()` / `$(sel).find(...).html()`.
+                // Recurse into the object first so any nested `$(sel)` Call
+                // has already been rewritten to a cheerio NativeMethodCall.
+                // Then if the (rewritten) object is a cheerio call that
+                // returns a CheerioSelection, rewrite the outer .method(args)
+                // through the cheerio dispatch row too.
+                if matches!(
+                    object.as_ref(),
+                    Expr::Call { .. } | Expr::NativeMethodCall { .. }
+                ) {
+                    fix_native_instance_expr_with_locals(
+                        object,
+                        native_instances,
+                        local_id_instances,
+                    );
+                    if let Expr::NativeMethodCall {
+                        module: inner_module,
+                        method: inner_method,
+                        ..
+                    } = object.as_ref()
+                    {
+                        if inner_module == "cheerio"
+                            && cheerio_returns_selection(inner_method.as_str())
+                        {
+                            for arg in args.iter_mut() {
+                                fix_native_instance_expr_with_locals(
+                                    arg,
+                                    native_instances,
+                                    local_id_instances,
+                                );
+                            }
+                            let args_owned: Vec<Expr> = std::mem::take(args);
+                            let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
+                            *expr = Expr::NativeMethodCall {
+                                module: "cheerio".to_string(),
+                                class_name: Some("CheerioSelection".to_string()),
+                                object: Some(Box::new(object_expr)),
+                                method: property.clone(),
+                                args: args_owned,
+                            };
+                            return;
+                        }
                     }
                 }
             }
@@ -1117,8 +1189,33 @@ pub fn fix_native_instance_expr_with_locals(
                 fix_native_instance_expr_with_locals(value, native_instances, local_id_instances);
             }
         }
-        Expr::PropertyGet { object, .. } => {
+        Expr::PropertyGet { object, property } => {
+            // Recurse into the object first so any nested `$(sel)` Call has
+            // been rewritten to a cheerio NativeMethodCall.
             fix_native_instance_expr_with_locals(object, native_instances, local_id_instances);
+            // Issue #1193: `$(sel).length` reads a property in JS but the
+            // cheerio dispatch row models it as a zero-arg method. Rewrite
+            // to a NativeMethodCall so codegen routes to js_cheerio_selection_length.
+            if property == "length" {
+                if let Expr::NativeMethodCall {
+                    module: inner_module,
+                    method: inner_method,
+                    ..
+                } = object.as_ref()
+                {
+                    if inner_module == "cheerio" && cheerio_returns_selection(inner_method.as_str())
+                    {
+                        let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
+                        *expr = Expr::NativeMethodCall {
+                            module: "cheerio".to_string(),
+                            class_name: Some("CheerioSelection".to_string()),
+                            object: Some(Box::new(object_expr)),
+                            method: "length".to_string(),
+                            args: Vec::new(),
+                        };
+                    }
+                }
+            }
         }
         Expr::PropertySet { object, value, .. } => {
             fix_native_instance_expr_with_locals(object, native_instances, local_id_instances);
@@ -1152,6 +1249,18 @@ pub fn fix_native_instance_expr_with_locals(
         }
         _ => {}
     }
+}
+
+/// Issue #1193: cheerio methods whose return value is another
+/// `CheerioSelection`. Used by the chained-call rewriter so e.g.
+/// `$(sel).first().text()` keeps dispatching through the cheerio
+/// NativeMethodCall path instead of falling through to the generic
+/// "value is not a function" runtime error.
+fn cheerio_returns_selection(method: &str) -> bool {
+    matches!(
+        method,
+        "select" | "find" | "children" | "parent" | "first" | "last" | "eq"
+    )
 }
 
 /// Detect if an expression is creating a native module instance (with context for local variables)
@@ -1188,6 +1297,11 @@ pub fn detect_native_instance_creation_with_context(
                 ("http2", "createSecureServer") => "Http2SecureServer",
                 ("node-cron", "schedule") => "CronJob",
                 ("readline", "createInterface") => "Interface",
+                // Issue #1193: `const $ = load(html)` / `loadFragment(html)`
+                // returns the jQuery-like callable used as `$(selector)`.
+                // Tagging the local as CheerioAPI lets the rewriter below
+                // turn `$(sel)` into `NativeMethodCall(cheerio.select, $)`.
+                ("cheerio", "load" | "loadFragment") => "CheerioAPI",
                 _ => return None,
             };
             // For ("net", _) / ("tls", _) factories, `s` belongs to net.Socket's
