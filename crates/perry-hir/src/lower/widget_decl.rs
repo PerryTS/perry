@@ -435,22 +435,20 @@ pub(crate) fn try_lower_widget_decl(
                 }
             }
             "entryFields" => {
-                // Allow explicit entry field declarations
+                // Allow explicit entry field declarations. Issue #1179
+                // follow-up: parse_entry_field_value_spec recurses through
+                // array literals (`[X]` → `Array<X>`) and object literals
+                // (`{k: 'string'}` → `Object`), so users can describe
+                // nested shapes without falling into the catch-all that
+                // used to collapse everything to `String` and break
+                // SwiftUI `ForEach` over arrays of objects.
                 if let ast::Expr::Object(obj) = kv.value.as_ref() {
                     for field_prop in &obj.props {
                         if let ast::PropOrSpread::Prop(p) = field_prop {
                             if let ast::Prop::KeyValue(field_kv) = p.as_ref() {
                                 let field_name = prop_name_to_string(&field_kv.key);
-                                let field_type = match field_kv.value.as_ref() {
-                                    ast::Expr::Lit(ast::Lit::Str(s)) => {
-                                        match s.value.as_str().unwrap_or("") {
-                                            "number" => WidgetFieldType::Number,
-                                            "boolean" => WidgetFieldType::Boolean,
-                                            _ => WidgetFieldType::String,
-                                        }
-                                    }
-                                    _ => WidgetFieldType::String,
-                                };
+                                let field_type =
+                                    parse_entry_field_value_spec(field_kv.value.as_ref());
                                 entry_fields.push((field_name, field_type));
                             }
                         }
@@ -558,6 +556,70 @@ fn extract_entry_fields_from_param(pat: &ast::Pat, fields: &mut Vec<(String, Wid
                 }
             }
         }
+    }
+}
+
+/// Issue #1179 follow-up: parse an `entryFields` value-position spec
+/// into a `WidgetFieldType`. Recognized forms:
+///
+/// - `'string' | 'number' | 'boolean'` (plus `'string?' | 'number?' | 'boolean?'`,
+///   `'string[]' | 'number[]' | 'boolean[]'`) — primitive specs;
+/// - `[X]` — array literal with a single element, resolves to `Array<X>`;
+/// - `{ k: <spec>, ... }` — object literal, resolves to `Object([(k, X), ...])`.
+///
+/// Anything else falls back to `String` for backwards compatibility with
+/// existing widget configs.
+fn parse_entry_field_value_spec(expr: &ast::Expr) -> WidgetFieldType {
+    match expr {
+        ast::Expr::Lit(ast::Lit::Str(s)) => {
+            parse_entry_field_primitive_spec(s.value.as_str().unwrap_or(""))
+        }
+        ast::Expr::Array(arr) => {
+            // Take the first non-empty element as the array's element
+            // type; widgets declaring `sites: [{...}]` use a single
+            // exemplar object to describe the array shape.
+            let inner = arr
+                .elems
+                .iter()
+                .flatten()
+                .next()
+                .map(|e| parse_entry_field_value_spec(e.expr.as_ref()))
+                .unwrap_or(WidgetFieldType::String);
+            WidgetFieldType::Array(Box::new(inner))
+        }
+        ast::Expr::Object(obj) => {
+            let mut obj_fields = Vec::new();
+            for prop in &obj.props {
+                if let ast::PropOrSpread::Prop(p) = prop {
+                    if let ast::Prop::KeyValue(kv) = p.as_ref() {
+                        let field_name = prop_name_to_string(&kv.key);
+                        let field_type = parse_entry_field_value_spec(kv.value.as_ref());
+                        obj_fields.push((field_name, field_type));
+                    }
+                }
+            }
+            WidgetFieldType::Object(obj_fields)
+        }
+        _ => WidgetFieldType::String,
+    }
+}
+
+/// Helper for `parse_entry_field_value_spec`: turn a primitive string
+/// spec into a `WidgetFieldType`. Supports `?` (optional) and `[]`
+/// (array) suffixes on the recognized base types.
+fn parse_entry_field_primitive_spec(spec: &str) -> WidgetFieldType {
+    let trimmed = spec.trim();
+    if let Some(base) = trimmed.strip_suffix('?') {
+        return WidgetFieldType::Optional(Box::new(parse_entry_field_primitive_spec(base)));
+    }
+    if let Some(base) = trimmed.strip_suffix("[]") {
+        return WidgetFieldType::Array(Box::new(parse_entry_field_primitive_spec(base)));
+    }
+    match trimmed {
+        "number" => WidgetFieldType::Number,
+        "boolean" => WidgetFieldType::Boolean,
+        "string" => WidgetFieldType::String,
+        _ => WidgetFieldType::String,
     }
 }
 
@@ -692,8 +754,20 @@ fn parse_text_content(expr: &ast::Expr) -> WidgetTextContent {
                 WidgetTextContent::Literal(String::new())
             }
         }
+        ast::Expr::Call(_) => {
+            // Issue #1179 follow-up: try the whitelist of known formatters
+            // (`String(x)`, `Number(x)`, `x.toFixed(n)`, `x.toString()`,
+            // `Math.round/floor/ceil(x)`). Anything outside the whitelist
+            // degrades to an empty literal — same behavior as before, but
+            // a follow-up could surface this as a diagnostic.
+            match try_parse_widget_format_expr(expr) {
+                Some(fmt) => WidgetTextContent::Formatted(fmt),
+                None => WidgetTextContent::Literal(String::new()),
+            }
+        }
         ast::Expr::Tpl(tpl) => {
-            // Template literal: `Score: ${entry.score}`
+            // Template literal: `Score: ${entry.score}` or
+            // `Score: ${Math.round(entry.score)}`.
             let mut parts = Vec::new();
             for (i, quasi) in tpl.quasis.iter().enumerate() {
                 let raw = quasi.raw.as_ref().to_string();
@@ -701,16 +775,132 @@ fn parse_text_content(expr: &ast::Expr) -> WidgetTextContent {
                     parts.push(WidgetTemplatePart::Literal(raw));
                 }
                 if i < tpl.exprs.len() {
-                    if let ast::Expr::Member(member) = tpl.exprs[i].as_ref() {
-                        if let ast::MemberProp::Ident(prop) = &member.prop {
-                            parts.push(WidgetTemplatePart::Field(prop.sym.to_string()));
+                    match tpl.exprs[i].as_ref() {
+                        ast::Expr::Member(member) => {
+                            if let ast::MemberProp::Ident(prop) = &member.prop {
+                                parts.push(WidgetTemplatePart::Field(prop.sym.to_string()));
+                            }
                         }
+                        call @ ast::Expr::Call(_) => {
+                            if let Some(fmt) = try_parse_widget_format_expr(call) {
+                                parts.push(WidgetTemplatePart::Formatted(fmt));
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
             WidgetTextContent::Template(parts)
         }
         _ => WidgetTextContent::Literal(String::new()),
+    }
+}
+
+/// Issue #1179 follow-up: recognize one of the whitelisted formatting
+/// calls inside a render text position. Returns `None` for any shape
+/// the codegen path can't transpile (callers fall back to an empty
+/// literal in that case).
+fn try_parse_widget_format_expr(expr: &ast::Expr) -> Option<WidgetFormatExpr> {
+    let call = match expr {
+        ast::Expr::Call(c) => c,
+        _ => return None,
+    };
+    let callee = match &call.callee {
+        ast::Callee::Expr(e) => e.as_ref(),
+        _ => return None,
+    };
+
+    match callee {
+        // `String(x)` / `Number(x)` — global coercion functions.
+        ast::Expr::Ident(ident) => {
+            let arg = call.args.first().and_then(|a| parse_format_arg(&a.expr))?;
+            match ident.sym.as_ref() {
+                "String" => Some(WidgetFormatExpr {
+                    call: WidgetFormatCall::StringCast,
+                    arg,
+                }),
+                "Number" => Some(WidgetFormatExpr {
+                    call: WidgetFormatCall::NumberCast,
+                    arg,
+                }),
+                _ => None,
+            }
+        }
+        // `Math.round(x)` / `Math.floor(x)` / `Math.ceil(x)` and
+        // `x.toFixed(n)` / `x.toString()` member calls.
+        ast::Expr::Member(member) => {
+            let prop_name = match &member.prop {
+                ast::MemberProp::Ident(p) => p.sym.as_ref(),
+                _ => return None,
+            };
+            // Math.*
+            if let ast::Expr::Ident(obj) = member.obj.as_ref() {
+                if obj.sym.as_ref() == "Math" {
+                    let arg = call.args.first().and_then(|a| parse_format_arg(&a.expr))?;
+                    let call_kind = match prop_name {
+                        "round" => WidgetFormatCall::Round,
+                        "floor" => WidgetFormatCall::Floor,
+                        "ceil" => WidgetFormatCall::Ceil,
+                        _ => return None,
+                    };
+                    return Some(WidgetFormatExpr {
+                        call: call_kind,
+                        arg,
+                    });
+                }
+            }
+            // x.toFixed(n) / x.toString() — `x` must be a member access
+            // (entry field) for us to handle it.
+            let arg = match member.obj.as_ref() {
+                ast::Expr::Member(inner) => match &inner.prop {
+                    ast::MemberProp::Ident(p) => WidgetFormatArg::Field(p.sym.to_string()),
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            match prop_name {
+                "toString" if call.args.is_empty() => Some(WidgetFormatExpr {
+                    call: WidgetFormatCall::ToString,
+                    arg,
+                }),
+                "toFixed" => {
+                    let digits = call
+                        .args
+                        .first()
+                        .and_then(|a| match a.expr.as_ref() {
+                            ast::Expr::Lit(ast::Lit::Num(n)) => Some(n.value),
+                            _ => None,
+                        })
+                        .filter(|n| n.is_finite() && *n >= 0.0)
+                        .map(|n| n as u32)
+                        .unwrap_or(0);
+                    Some(WidgetFormatExpr {
+                        call: WidgetFormatCall::ToFixed { digits },
+                        arg,
+                    })
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Parse an argument expression into a `WidgetFormatArg`. Recognized
+/// shapes are `entry.<field>` (member access), numeric literal, and
+/// string literal. Anything else returns `None` and bubbles up to a
+/// non-recognized format call.
+fn parse_format_arg(expr: &ast::Expr) -> Option<WidgetFormatArg> {
+    match expr {
+        ast::Expr::Member(member) => match &member.prop {
+            ast::MemberProp::Ident(p) => Some(WidgetFormatArg::Field(p.sym.to_string())),
+            _ => None,
+        },
+        ast::Expr::Lit(ast::Lit::Num(n)) => Some(WidgetFormatArg::Number(n.value)),
+        ast::Expr::Lit(ast::Lit::Str(s)) => Some(WidgetFormatArg::String(
+            s.value.as_str().unwrap_or("").to_string(),
+        )),
+        _ => None,
     }
 }
 
@@ -1498,5 +1688,301 @@ fn parse_placeholder_value(expr: &ast::Expr) -> WidgetPlaceholderValue {
             WidgetPlaceholderValue::Object(fields)
         }
         _ => WidgetPlaceholderValue::Null,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swc_common::DUMMY_SP;
+    use swc_ecma_ast as ast;
+
+    fn str_lit(value: &str) -> ast::Expr {
+        ast::Expr::Lit(ast::Lit::Str(ast::Str {
+            span: DUMMY_SP,
+            value: value.into(),
+            raw: None,
+        }))
+    }
+
+    fn key_value(key: &str, value: ast::Expr) -> ast::PropOrSpread {
+        ast::PropOrSpread::Prop(Box::new(ast::Prop::KeyValue(ast::KeyValueProp {
+            key: ast::PropName::Ident(ast::IdentName {
+                span: DUMMY_SP,
+                sym: key.into(),
+            }),
+            value: Box::new(value),
+        })))
+    }
+
+    fn array_lit(elems: Vec<ast::Expr>) -> ast::Expr {
+        ast::Expr::Array(ast::ArrayLit {
+            span: DUMMY_SP,
+            elems: elems
+                .into_iter()
+                .map(|e| {
+                    Some(ast::ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(e),
+                    })
+                })
+                .collect(),
+        })
+    }
+
+    fn object_lit(props: Vec<ast::PropOrSpread>) -> ast::Expr {
+        ast::Expr::Object(ast::ObjectLit {
+            span: DUMMY_SP,
+            props,
+        })
+    }
+
+    #[test]
+    fn primitive_spec_recognized_scalars() {
+        assert!(matches!(
+            parse_entry_field_primitive_spec("number"),
+            WidgetFieldType::Number
+        ));
+        assert!(matches!(
+            parse_entry_field_primitive_spec("boolean"),
+            WidgetFieldType::Boolean
+        ));
+        assert!(matches!(
+            parse_entry_field_primitive_spec("string"),
+            WidgetFieldType::String
+        ));
+    }
+
+    #[test]
+    fn primitive_spec_unknown_falls_back_to_string() {
+        assert!(matches!(
+            parse_entry_field_primitive_spec("Date"),
+            WidgetFieldType::String
+        ));
+        assert!(matches!(
+            parse_entry_field_primitive_spec(""),
+            WidgetFieldType::String
+        ));
+    }
+
+    #[test]
+    fn primitive_spec_optional_and_array_suffixes() {
+        assert!(matches!(
+            parse_entry_field_primitive_spec("number?"),
+            WidgetFieldType::Optional(inner) if matches!(*inner, WidgetFieldType::Number)
+        ));
+        assert!(matches!(
+            parse_entry_field_primitive_spec("string[]"),
+            WidgetFieldType::Array(inner) if matches!(*inner, WidgetFieldType::String)
+        ));
+        // `'boolean[]?'` — array suffix is parsed first, then optional.
+        let nested = parse_entry_field_primitive_spec("boolean[]?");
+        let WidgetFieldType::Optional(o) = nested else {
+            panic!("expected Optional, got {:?}", nested);
+        };
+        let WidgetFieldType::Array(a) = *o else {
+            panic!("expected Optional<Array>, got Optional<other>");
+        };
+        assert!(matches!(*a, WidgetFieldType::Boolean));
+    }
+
+    #[test]
+    fn entry_field_value_spec_object_literal_becomes_object() {
+        // Inline `{ url: 'string', clicks: 'number' }`.
+        let expr = object_lit(vec![
+            key_value("url", str_lit("string")),
+            key_value("clicks", str_lit("number")),
+        ]);
+        let ty = parse_entry_field_value_spec(&expr);
+        let WidgetFieldType::Object(fields) = ty else {
+            panic!("expected Object, got {:?}", ty);
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].0, "url");
+        assert!(matches!(fields[0].1, WidgetFieldType::String));
+        assert_eq!(fields[1].0, "clicks");
+        assert!(matches!(fields[1].1, WidgetFieldType::Number));
+    }
+
+    #[test]
+    fn entry_field_value_spec_array_of_objects_does_not_collapse_to_string() {
+        // Inline `[{ url: 'string', clicks: 'number' }]`. This is the
+        // exact shape that used to collapse to `String` in the old
+        // parser, breaking SwiftUI `ForEach` over the field.
+        let inner = object_lit(vec![
+            key_value("url", str_lit("string")),
+            key_value("clicks", str_lit("number")),
+        ]);
+        let expr = array_lit(vec![inner]);
+        let ty = parse_entry_field_value_spec(&expr);
+        let WidgetFieldType::Array(elem) = ty else {
+            panic!("expected Array, got {:?}", ty);
+        };
+        let WidgetFieldType::Object(fields) = *elem else {
+            panic!("expected Array<Object>, got Array<other>");
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].0, "url");
+        assert_eq!(fields[1].0, "clicks");
+    }
+
+    fn ident_expr(name: &str) -> ast::Expr {
+        ast::Expr::Ident(ast::Ident {
+            span: DUMMY_SP,
+            ctxt: Default::default(),
+            sym: name.into(),
+            optional: false,
+        })
+    }
+
+    fn member_expr(obj: ast::Expr, prop: &str) -> ast::Expr {
+        ast::Expr::Member(ast::MemberExpr {
+            span: DUMMY_SP,
+            obj: Box::new(obj),
+            prop: ast::MemberProp::Ident(ast::IdentName {
+                span: DUMMY_SP,
+                sym: prop.into(),
+            }),
+        })
+    }
+
+    fn call_expr(callee: ast::Expr, args: Vec<ast::Expr>) -> ast::Expr {
+        ast::Expr::Call(ast::CallExpr {
+            span: DUMMY_SP,
+            ctxt: Default::default(),
+            callee: ast::Callee::Expr(Box::new(callee)),
+            args: args
+                .into_iter()
+                .map(|e| ast::ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(e),
+                })
+                .collect(),
+            type_args: None,
+        })
+    }
+
+    fn num_lit(n: f64) -> ast::Expr {
+        ast::Expr::Lit(ast::Lit::Num(ast::Number {
+            span: DUMMY_SP,
+            value: n,
+            raw: None,
+        }))
+    }
+
+    #[test]
+    fn format_expr_recognizes_string_cast() {
+        // `String(entry.totalClicks)`
+        let expr = call_expr(
+            ident_expr("String"),
+            vec![member_expr(ident_expr("entry"), "totalClicks")],
+        );
+        let fmt = try_parse_widget_format_expr(&expr).expect("expected Formatted match");
+        assert!(matches!(fmt.call, WidgetFormatCall::StringCast));
+        assert!(matches!(
+            fmt.arg,
+            WidgetFormatArg::Field(ref f) if f == "totalClicks"
+        ));
+    }
+
+    #[test]
+    fn format_expr_recognizes_math_round_floor_ceil() {
+        for (method, expected) in [
+            ("round", WidgetFormatCall::Round),
+            ("floor", WidgetFormatCall::Floor),
+            ("ceil", WidgetFormatCall::Ceil),
+        ] {
+            let callee = member_expr(ident_expr("Math"), method);
+            let expr = call_expr(
+                callee,
+                vec![member_expr(ident_expr("entry"), "totalClicks")],
+            );
+            let fmt =
+                try_parse_widget_format_expr(&expr).expect("expected Math.* to match whitelist");
+            assert!(
+                std::mem::discriminant(&fmt.call) == std::mem::discriminant(&expected),
+                "method `{}` produced {:?}, want {:?}",
+                method,
+                fmt.call,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn format_expr_recognizes_to_fixed_with_digits_literal() {
+        // `entry.totalClicks.toFixed(2)`
+        let target = member_expr(ident_expr("entry"), "totalClicks");
+        let callee = member_expr(target, "toFixed");
+        let expr = call_expr(callee, vec![num_lit(2.0)]);
+        let fmt = try_parse_widget_format_expr(&expr).expect("expected toFixed match");
+        assert!(matches!(fmt.call, WidgetFormatCall::ToFixed { digits: 2 }));
+        assert!(matches!(
+            fmt.arg,
+            WidgetFormatArg::Field(ref f) if f == "totalClicks"
+        ));
+    }
+
+    #[test]
+    fn format_expr_rejects_unknown_call_shape() {
+        // `fmt(entry.totalClicks)` — user-defined function, not in
+        // the whitelist; must return None (caller falls back to an
+        // empty literal rather than producing broken output).
+        let expr = call_expr(
+            ident_expr("fmt"),
+            vec![member_expr(ident_expr("entry"), "totalClicks")],
+        );
+        assert!(try_parse_widget_format_expr(&expr).is_none());
+    }
+
+    #[test]
+    fn parse_text_content_call_path_collapses_for_unknown() {
+        // Same as above but exercising the public entrypoint — verifies
+        // that the call falls through to Literal("") rather than
+        // silently dropping into Field("").
+        let expr = call_expr(
+            ident_expr("fmt"),
+            vec![member_expr(ident_expr("entry"), "totalClicks")],
+        );
+        match parse_text_content(&expr) {
+            WidgetTextContent::Literal(ref s) if s.is_empty() => {}
+            other => panic!("expected Literal(\"\"), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_text_content_call_path_recognized_call_becomes_formatted() {
+        // `Math.round(entry.totalClicks)` — the user's actual bug
+        // shape. Must produce Formatted, not the catch-all empty
+        // literal that lost the call body.
+        let expr = call_expr(
+            member_expr(ident_expr("Math"), "round"),
+            vec![member_expr(ident_expr("entry"), "totalClicks")],
+        );
+        match parse_text_content(&expr) {
+            WidgetTextContent::Formatted(fmt) => {
+                assert!(matches!(fmt.call, WidgetFormatCall::Round));
+                assert!(matches!(
+                    fmt.arg,
+                    WidgetFormatArg::Field(ref f) if f == "totalClicks"
+                ));
+            }
+            other => panic!("expected Formatted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn entry_field_value_spec_array_with_string_suffix_spec() {
+        // `'string[]'` and `['string']` both resolve to `Array<String>`.
+        let by_suffix = parse_entry_field_value_spec(&str_lit("string[]"));
+        let by_literal = parse_entry_field_value_spec(&array_lit(vec![str_lit("string")]));
+        assert!(matches!(
+            by_suffix,
+            WidgetFieldType::Array(inner) if matches!(*inner, WidgetFieldType::String)
+        ));
+        assert!(matches!(
+            by_literal,
+            WidgetFieldType::Array(inner) if matches!(*inner, WidgetFieldType::String)
+        ));
     }
 }

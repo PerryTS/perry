@@ -232,6 +232,10 @@ impl SH for WidgetTextContent {
                 tag(h, 2);
                 parts.hash(h);
             }
+            WidgetTextContent::Formatted(expr) => {
+                tag(h, 3);
+                expr.hash(h);
+            }
         }
     }
 }
@@ -245,6 +249,53 @@ impl SH for WidgetTemplatePart {
             }
             WidgetTemplatePart::Field(s) => {
                 tag(h, 1);
+                s.hash(h);
+            }
+            WidgetTemplatePart::Formatted(expr) => {
+                tag(h, 2);
+                expr.hash(h);
+            }
+        }
+    }
+}
+
+impl SH for WidgetFormatExpr {
+    fn hash<H: StableHasher>(&self, h: &mut H) {
+        self.call.hash(h);
+        self.arg.hash(h);
+    }
+}
+
+impl SH for WidgetFormatCall {
+    fn hash<H: StableHasher>(&self, h: &mut H) {
+        match self {
+            WidgetFormatCall::StringCast => tag(h, 0),
+            WidgetFormatCall::NumberCast => tag(h, 1),
+            WidgetFormatCall::Round => tag(h, 2),
+            WidgetFormatCall::Floor => tag(h, 3),
+            WidgetFormatCall::Ceil => tag(h, 4),
+            WidgetFormatCall::ToFixed { digits } => {
+                tag(h, 5);
+                digits.hash(h);
+            }
+            WidgetFormatCall::ToString => tag(h, 6),
+        }
+    }
+}
+
+impl SH for WidgetFormatArg {
+    fn hash<H: StableHasher>(&self, h: &mut H) {
+        match self {
+            WidgetFormatArg::Field(s) => {
+                tag(h, 0);
+                s.hash(h);
+            }
+            WidgetFormatArg::Number(n) => {
+                tag(h, 1);
+                n.hash(h);
+            }
+            WidgetFormatArg::String(s) => {
+                tag(h, 2);
                 s.hash(h);
             }
         }
