@@ -9,6 +9,16 @@
 use super::*;
 
 /// Get a field from an object by index
+///
+/// #1129/#1136: the small-pointer guard below previously used a 16 MB
+/// floor (0x1000000), which rejected legitimate iOS-device heap
+/// pointers from libsystem_malloc — `splitDeepLink()` returning
+/// `{ segments }` and the caller destructuring `const { segments } = …`
+/// silently produced `undefined`. The real liveness check is the
+/// downstream `is_valid_obj_ptr` / `obj_type` validation; this gate
+/// only needs to keep the small-handle range and null/guard pages
+/// out before unsafe deref. 64 KB matches the bar used elsewhere in
+/// this module (e.g. `js_object_get_field_ic_miss`).
 #[no_mangle]
 pub extern "C" fn js_object_get_field(obj: *const ObjectHeader, field_index: u32) -> JSValue {
     let obj = {
@@ -26,7 +36,7 @@ pub extern "C" fn js_object_get_field(obj: *const ObjectHeader, field_index: u32
             obj
         }
     };
-    if obj.is_null() || (obj as usize) < 0x1000000 {
+    if obj.is_null() || (obj as usize) < 0x10000 {
         return JSValue::undefined();
     }
     unsafe {
@@ -172,7 +182,7 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
             obj
         }
     };
-    if obj.is_null() || (obj as usize) < 0x1000000 {
+    if obj.is_null() || (obj as usize) < 0x10000 {
         return;
     }
     unsafe {
@@ -324,7 +334,7 @@ pub extern "C" fn js_object_set_unboxed_f64_field(
             obj
         }
     };
-    if obj.is_null() || (obj as usize) < 0x1000000 {
+    if obj.is_null() || (obj as usize) < 0x10000 {
         return;
     }
     unsafe {
@@ -371,7 +381,7 @@ pub extern "C" fn js_object_set_field_by_index(
     field_index: u32,
     value: f64,
 ) {
-    if obj.is_null() || (obj as usize) < 0x1000000 {
+    if obj.is_null() || (obj as usize) < 0x10000 {
         return;
     }
     unsafe {
@@ -973,7 +983,7 @@ pub extern "C" fn js_object_get_field_by_name(
         }
         return JSValue::undefined();
     }
-    if (obj as usize) < 0x1000000 {
+    if (obj as usize) < 0x10000 {
         return JSValue::undefined();
     }
     unsafe {

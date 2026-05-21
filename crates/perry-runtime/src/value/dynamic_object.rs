@@ -47,14 +47,35 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
     // nonsense.
     if top16 == 0x7FFD {
         let handle = (bits & POINTER_MASK) as usize;
-        // Heap window: Darwin mimalloc lands in 3-5 TB, but Android scudo,
-        // Linux glibc, and Windows mimalloc all allocate much lower (often
-        // hundreds of GB or less). Using the Darwin-tight 2 TB floor on
-        // Android / Windows null-s every real pointer. See clean_arr_ptr
+        // Heap window: macOS mimalloc lands in 3-5 TB, but Android scudo,
+        // Linux glibc, Windows mimalloc, and iOS-family device
+        // libsystem_malloc all allocate much lower (often hundreds of GB
+        // or less, and on iOS device often in the single-digit GB or even
+        // sub-GB range). Using the macOS-tight 2 TB floor on those
+        // platforms null-s every real pointer — on iOS device this is the
+        // bug behind #1136 (`.length` on an array returned from
+        // `String.split()` collapses to 0, so `for…of` loops zero times
+        // and `segments.length === 0` is wrongly true). See clean_arr_ptr
         // for the same platform split.
-        #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+        #[cfg(any(
+            target_os = "android",
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "visionos",
+        ))]
         let heap_min: usize = 0x1000;
-        #[cfg(not(any(target_os = "android", target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(
+            target_os = "android",
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "visionos",
+        )))]
         let heap_min: usize = 0x200_0000_0000;
         if handle < heap_min || handle >= 0x8000_0000_0000 {
             return 0.0;
@@ -105,9 +126,29 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
     // sometimes hands their pointer through as `bitcast i64 → double`
     // without a POINTER_TAG. Without this path, `Int32Array.length`
     // returned 0 because the value's top16 was 0, not 0x7FFD.
-    #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+    // #1136: mirror the platform split above for raw-pointer-bitcast
+    // values too, so a Buffer/TypedArray pointer handed through as
+    // `bitcast i64 → double` on iOS device still resolves to its real
+    // length via the registry lookups below.
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos",
+    ))]
     let raw_heap_min: u64 = 0x1000;
-    #[cfg(not(any(target_os = "android", target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos",
+    )))]
     let raw_heap_min: u64 = 0x200_0000_0000;
     if top16 == 0 && bits >= raw_heap_min && bits < 0x8000_0000_0000 {
         let handle = bits as usize;

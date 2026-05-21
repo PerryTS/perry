@@ -55,9 +55,29 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // check that mirrors clean_arr_ptr's HEAP_MIN to skip pointers
         // that don't have a real GcHeader behind them (e.g. test-mode
         // synthetic pointers, longlived-arena edge cases).
-        #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+        // #1136: iOS family device allocates via libsystem_malloc in the
+        // same low range as Android/Linux; mirror `clean_arr_ptr`'s
+        // platform split so growth forwarding can install a stub for
+        // arrays that live below 2 TB.
+        #[cfg(any(
+            target_os = "android",
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "visionos",
+        ))]
         const HEAP_MIN: usize = 0x1000;
-        #[cfg(not(any(target_os = "android", target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(
+            target_os = "android",
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "visionos",
+        )))]
         const HEAP_MIN: usize = 0x200_0000_0000;
         if (arr as usize) >= HEAP_MIN + crate::gc::GC_HEADER_SIZE {
             // Only forward arrays that came from the GC arena. A

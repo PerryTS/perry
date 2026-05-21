@@ -119,17 +119,43 @@ pub(crate) fn test_template_raw_roots() -> (usize, usize) {
 /// <= capacity <= 16M (same bound as the GC tracer's sanity guard).
 #[inline(always)]
 pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
-    // Heap window varies by OS: Darwin mimalloc lands in the 3-5 TB range;
+    // Heap window varies by OS: macOS mimalloc lands in the 3-5 TB range;
     // Android scudo + Linux glibc allocate MUCH lower (often < 1 TB); Windows
     // mimalloc lands well under 1 TB (often in the GB-to-tens-of-GB range).
-    // Using the Darwin-tight 2 TB floor on Android / Windows silently null-s
-    // every real array pointer, turning js_array_set_f64 into a no-op and —
-    // at the read side via js_array_map etc. — returning empty arrays for
-    // legitimate inputs (issues #385/#386/#387).
-    #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+    // iOS / tvOS / watchOS / visionOS *device* targets use libsystem_malloc
+    // (mimalloc is host-side only) and allocate in the same low range —
+    // #1136's `for…of` over `split()` reproed empty because the array
+    // pointer landed below 2 TB and `clean_arr_ptr` silently null-ed it.
+    // Using the macOS-tight 2 TB floor on Android / Windows / iOS-family
+    // silently null-s every real array pointer, turning js_array_set_f64
+    // into a no-op and — at the read side via js_array_map etc. —
+    // returning empty arrays for legitimate inputs (issues #385/#386/#387
+    // for non-macOS hosts; #1136 for iOS device).
+    //
+    // The iOS *simulator* runs on the macOS host's mimalloc and lands in
+    // the 3-5 TB range like macOS itself; lowering the floor to 4 KB does
+    // not weaken the guard there because the actual liveness check is the
+    // GcHeader / obj_type validation downstream.
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos",
+    ))]
     const HEAP_MIN: u64 = 0x1000; // 4 KB (classic user-space floor)
-    #[cfg(not(any(target_os = "android", target_os = "linux", target_os = "windows")))]
-    const HEAP_MIN: u64 = 0x200_0000_0000; // 2 TB — above observed corrupt handles on Darwin
+    #[cfg(not(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos",
+    )))]
+    const HEAP_MIN: u64 = 0x200_0000_0000; // 2 TB — above observed corrupt handles on macOS
     const HEAP_MAX: u64 = 0x8000_0000_0000; // 47-bit userspace cap
     let bits = arr as u64;
     let top16 = bits >> 48;

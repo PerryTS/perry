@@ -253,7 +253,7 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
         let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() || (obj as usize) < 0x1000000 {
+        if obj.is_null() || (obj as usize) < 0x10000 {
             return f64::from_bits(TAG_FALSE);
         }
         let key_str = crate::builtins::js_string_coerce(key_value);
@@ -456,7 +456,7 @@ pub extern "C" fn js_object_define_property(
 /// even when the value is undefined or the property is an accessor (no underlying slot).
 #[allow(unused_assignments)]
 unsafe fn ensure_key_in_keys_array(obj: *mut ObjectHeader, key: *const crate::StringHeader) {
-    if obj.is_null() || (obj as usize) < 0x1000000 || key.is_null() {
+    if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
         return;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -646,7 +646,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
 
 /// Helper: does `key` appear in `obj.keys_array`?
 unsafe fn own_key_present(obj: *mut ObjectHeader, key: *const crate::StringHeader) -> bool {
-    if obj.is_null() || (obj as usize) < 0x1000000 || key.is_null() {
+    if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
         return false;
     }
     let keys = (*obj).keys_array;
@@ -697,7 +697,7 @@ pub extern "C" fn js_object_get_own_field_or_undef(
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() || (obj as usize) < 0x1000000 {
+        if obj.is_null() || (obj as usize) < 0x10000 {
             return f64::from_bits(TAG_UNDEF);
         }
         if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {

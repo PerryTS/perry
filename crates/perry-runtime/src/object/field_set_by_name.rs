@@ -92,7 +92,7 @@ pub extern "C" fn js_object_set_field_by_name(
             obj
         }
     };
-    if obj.is_null() || (obj as usize) < 0x1000000 {
+    if obj.is_null() || (obj as usize) < 0x10000 {
         // Small non-null value — could be a stripped handle (after ensure_i64 stripped NaN-box tag)
         if !obj.is_null() && (obj as usize) > 0 {
             unsafe {
