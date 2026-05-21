@@ -737,6 +737,11 @@ pub extern "C" fn perry_ui_app_set_vibrancy(_app_handle: i64, _value_ptr: i64) {
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_activation_policy(_app_handle: i64, _value_ptr: i64) {}
 
+/// Issue #1280 — windowState is a desktop concept; visionOS volumes/windows
+/// have a different model. Stub keeps the linker happy.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_window_state(_app_handle: i64, _value_ptr: i64) {}
+
 // =============================================================================
 // Toolbar
 // =============================================================================

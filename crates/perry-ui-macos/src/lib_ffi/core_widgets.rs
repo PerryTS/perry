@@ -65,6 +65,13 @@ pub extern "C" fn perry_ui_app_set_activation_policy(app_handle: i64, value_ptr:
     app::app_set_activation_policy(app_handle, value_ptr as *const u8);
 }
 
+/// Issue #1280 — initial window state. value_ptr = StringHeader pointer to
+/// one of "normal" | "maximized" | "fullscreen". Applied on app_run().
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_window_state(app_handle: i64, value_ptr: i64) {
+    app::set_window_state(app_handle, value_ptr as *const u8);
+}
+
 /// Poll for pending file-open requests (from macOS Open With or argv).
 /// Returns a StringHeader pointer (empty string if none pending).
 #[no_mangle]

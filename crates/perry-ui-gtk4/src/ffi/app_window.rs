@@ -61,6 +61,13 @@ pub extern "C" fn perry_ui_app_set_activation_policy(app_handle: i64, value_ptr:
     app::app_set_activation_policy(app_handle, value_ptr as *const u8);
 }
 
+/// Issue #1280 — initial window state. value_ptr = StringHeader pointer
+/// ("normal" | "maximized" | "fullscreen"). Applied just before present().
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_window_state(app_handle: i64, value_ptr: i64) {
+    app::app_set_window_state(app_handle, value_ptr as *const u8);
+}
+
 /// Set minimum window size.
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_min_size(app_handle: i64, w: f64, h: f64) {

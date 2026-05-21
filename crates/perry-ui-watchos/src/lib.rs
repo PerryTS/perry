@@ -1123,6 +1123,9 @@ pub extern "C" fn perry_ui_app_set_transparent(_app: i64, _val: f64) {}
 pub extern "C" fn perry_ui_app_set_vibrancy(_app: i64, _ptr: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_activation_policy(_app: i64, _ptr: i64) {}
+/// Issue #1280 — watchOS apps don't have user-resizable windows. Stub.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_window_state(_app: i64, _ptr: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_toolbar_create() -> i64 {
     0

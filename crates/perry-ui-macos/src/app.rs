@@ -45,6 +45,16 @@ pub(crate) struct WindowEntry {
 pub(crate) struct AppEntry {
     pub(crate) window: Retained<NSWindow>,
     pub(crate) _root_widget: Option<i64>,
+    /// Issue #1280 — initial window state applied on `app_run`. `zoom:` /
+    /// `toggleFullScreen:` need the window to be key+ordered front first.
+    pub(crate) window_state: Option<WindowState>,
+}
+
+/// Issue #1280 — initial window state for the main app window.
+#[derive(Copy, Clone)]
+pub(crate) enum WindowState {
+    Maximized,
+    Fullscreen,
 }
 
 /// Extract a &str from a *const StringHeader pointer.
@@ -114,6 +124,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             apps.push(AppEntry {
                 window,
                 _root_widget: None,
+                window_state: None,
             });
             apps.len() as i64 // 1-based handle
         })
@@ -473,6 +484,41 @@ pub fn app_run(_app_handle: i64) {
             }
 
             entry.window.makeKeyAndOrderFront(None);
+
+            // Issue #1280 — apply initial window state. zoom: is the AppKit
+            // "green button" maximize (respects dock + menu bar). The
+            // toggleFullScreen: path enters native fullscreen on its own
+            // Space. Both need the window to be key+ordered front, which is
+            // why this runs here rather than in the setter.
+            if let Some(state) = entry.window_state {
+                unsafe {
+                    match state {
+                        WindowState::Maximized => {
+                            let _: () =
+                                msg_send![&*entry.window, zoom: std::ptr::null::<AnyObject>()];
+                        }
+                        WindowState::Fullscreen => {
+                            let style_mask: usize = msg_send![&*entry.window, styleMask];
+                            // Native fullscreen needs Resizable in the style
+                            // mask; transient borderless / non-resizable
+                            // windows can't enter it cleanly.
+                            let resizable = NSWindowStyleMask::Resizable.0 as usize;
+                            if style_mask & resizable != 0 {
+                                let _: () = msg_send![
+                                    &*entry.window,
+                                    toggleFullScreen: std::ptr::null::<AnyObject>()
+                                ];
+                            } else {
+                                // Fallback: zoom() to maximize within the screen.
+                                let _: () = msg_send![
+                                    &*entry.window,
+                                    zoom: std::ptr::null::<AnyObject>()
+                                ];
+                            }
+                        }
+                    }
+                }
+            }
         }
     });
 
@@ -636,6 +682,27 @@ pub fn set_max_size(app_handle: i64, w: f64, h: f64) {
         let idx = (app_handle - 1) as usize;
         if idx < apps.len() {
             apps[idx].window.setMaxSize(CGSize::new(w, h));
+        }
+    });
+}
+
+/// Issue #1280 — record the requested initial window state. Applied in
+/// `app_run` after the window is key+ordered front (zoom: / toggleFullScreen:
+/// don't take effect on a window that hasn't been shown yet).
+/// `value_ptr` is a StringHeader pointer to one of
+/// "normal" | "maximized" | "fullscreen". Anything else is silently ignored.
+pub fn set_window_state(app_handle: i64, value_ptr: *const u8) {
+    let state_str = str_from_header(value_ptr);
+    let state = match state_str {
+        "maximized" => Some(WindowState::Maximized),
+        "fullscreen" => Some(WindowState::Fullscreen),
+        _ => None,
+    };
+    APPS.with(|a| {
+        let mut apps = a.borrow_mut();
+        let idx = (app_handle - 1) as usize;
+        if idx < apps.len() {
+            apps[idx].window_state = state;
         }
     });
 }

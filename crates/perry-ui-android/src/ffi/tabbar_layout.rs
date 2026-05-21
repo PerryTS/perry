@@ -354,3 +354,7 @@ pub extern "C" fn perry_ui_app_set_vibrancy(_app_handle: i64, _value_ptr: i64) {
 
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_activation_policy(_app_handle: i64, _value_ptr: i64) {}
+
+/// Issue #1280 — Android apps run in a single full-screen Activity. Stub.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_window_state(_app_handle: i64, _value_ptr: i64) {}

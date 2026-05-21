@@ -96,6 +96,16 @@ pub(crate) struct AppEntry {
     root_widget: Option<i64>,
     min_size: Option<(f64, f64)>,
     max_size: Option<(f64, f64)>,
+    /// Issue #1280 — initial window state requested by App({ windowState }).
+    /// Applied at app_run time; None / "normal" => SW_SHOW.
+    window_state: Option<WindowState>,
+}
+
+/// Issue #1280 — initial window state for the main app window.
+#[derive(Copy, Clone)]
+pub(crate) enum WindowState {
+    Maximized,
+    Fullscreen,
 }
 
 struct PendingShortcut {
@@ -217,6 +227,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                     root_widget: None,
                     min_size: None,
                     max_size: None,
+                    window_state: None,
                 });
                 apps.len() as i64
             })
@@ -233,6 +244,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                 root_widget: None,
                 min_size: None,
                 max_size: None,
+                window_state: None,
             });
             apps.len() as i64
         })
@@ -290,9 +302,46 @@ pub fn app_run(app_handle: i64) {
             let apps = apps.borrow();
             let idx = (app_handle - 1) as usize;
             if idx < apps.len() {
+                let hwnd = apps[idx].hwnd;
+                let state = apps[idx].window_state;
                 unsafe {
-                    let _ = ShowWindow(apps[idx].hwnd, SW_SHOW);
-                    let _ = UpdateWindow(apps[idx].hwnd);
+                    // Issue #1280 — apply requested initial window state.
+                    // Fullscreen on Win32 = drop WS_OVERLAPPEDWINDOW frame and
+                    // resize to the monitor's full rect (not just the work
+                    // area, which excludes the taskbar). Maximized = standard
+                    // SW_SHOWMAXIMIZED which respects the taskbar.
+                    match state {
+                        Some(WindowState::Fullscreen) => {
+                            let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+                            let new_style = style & !WS_OVERLAPPEDWINDOW.0;
+                            SetWindowLongW(hwnd, GWL_STYLE, new_style as i32);
+                            let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                            let mut mi = MONITORINFO {
+                                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                                ..Default::default()
+                            };
+                            if GetMonitorInfoW(monitor, &mut mi).as_bool() {
+                                let r = mi.rcMonitor;
+                                let _ = SetWindowPos(
+                                    hwnd,
+                                    HWND_TOP,
+                                    r.left,
+                                    r.top,
+                                    r.right - r.left,
+                                    r.bottom - r.top,
+                                    SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+                                );
+                            }
+                            let _ = ShowWindow(hwnd, SW_SHOW);
+                        }
+                        Some(WindowState::Maximized) => {
+                            let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+                        }
+                        None => {
+                            let _ = ShowWindow(hwnd, SW_SHOW);
+                        }
+                    }
+                    let _ = UpdateWindow(hwnd);
                 }
             }
         });
@@ -556,6 +605,28 @@ pub fn set_max_size(app_handle: i64, w: f64, h: f64) {
         let idx = (app_handle - 1) as usize;
         if idx < apps.len() {
             apps[idx].max_size = Some((w, h));
+        }
+    });
+}
+
+/// Issue #1280 — record the requested initial window state. The state is
+/// applied in `app_run` (Win32 needs the window to exist + be ready before
+/// `ShowWindow(SW_SHOWMAXIMIZED)` or the fullscreen frame swap takes effect).
+/// `value_ptr` is a perry-runtime StringHeader pointer to one of
+/// "normal" | "maximized" | "fullscreen". Anything else is silently ignored.
+pub fn set_window_state(app_handle: i64, value_ptr: *const u8) {
+    let state_str = str_from_header(value_ptr);
+    let state = match state_str {
+        "maximized" => Some(WindowState::Maximized),
+        "fullscreen" => Some(WindowState::Fullscreen),
+        // "normal" or anything else => default behavior (SW_SHOW).
+        _ => None,
+    };
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let idx = (app_handle - 1) as usize;
+        if idx < apps.len() {
+            apps[idx].window_state = state;
         }
     });
 }

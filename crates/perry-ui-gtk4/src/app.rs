@@ -64,6 +64,8 @@ struct AppEntry {
     transparent: bool,
     vibrancy: Option<String>,
     activation_policy: Option<String>,
+    /// Issue #1280 — "maximized" | "fullscreen" | None (= "normal").
+    window_state: Option<String>,
 }
 
 extern "C" {
@@ -116,6 +118,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             transparent: false,
             vibrancy: None,
             activation_policy: None,
+            window_state: None,
         });
         apps.len() as i64 // 1-based handle
     })
@@ -274,6 +277,17 @@ pub fn app_run(_app_handle: i64) {
                 // Enable the menu bar on this window before presenting it
                 if has_menubar {
                     window.set_show_menubar(true);
+                }
+
+                // Issue #1280 — initial window state. GTK4 needs maximize() /
+                // fullscreen() called before `present()` so the window appears
+                // already in the requested state rather than flickering.
+                if let Some(ref state) = entry.window_state {
+                    match state.as_str() {
+                        "maximized" => window.maximize(),
+                        "fullscreen" => window.fullscreen(),
+                        _ => {}
+                    }
                 }
 
                 window.present();
@@ -532,6 +546,26 @@ pub fn app_set_activation_policy(app_handle: i64, value_ptr: *const u8) {
         let idx = (app_handle - 1) as usize;
         if idx < apps.len() {
             apps[idx].activation_policy = Some(policy_str.to_string());
+        }
+    });
+}
+
+/// Issue #1280 — initial window state. value_ptr points at a StringHeader
+/// for one of "normal" | "maximized" | "fullscreen". Anything else is
+/// silently ignored; the state is applied just before `window.present()`.
+pub fn app_set_window_state(app_handle: i64, value_ptr: *const u8) {
+    let state_str = str_from_header(value_ptr);
+    if state_str.is_empty() {
+        return;
+    }
+    APPS.with(|a| {
+        let mut apps = a.borrow_mut();
+        let idx = (app_handle - 1) as usize;
+        if idx < apps.len() {
+            apps[idx].window_state = match state_str {
+                "maximized" | "fullscreen" => Some(state_str.to_string()),
+                _ => None,
+            };
         }
     });
 }

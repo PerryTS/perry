@@ -38,6 +38,13 @@ pub extern "C" fn perry_ui_app_set_max_size(app_handle: i64, w: f64, h: f64) {
     app::set_max_size(app_handle, w, h);
 }
 
+/// Issue #1280 — initial window state. `value_ptr` is a StringHeader for
+/// "normal" | "maximized" | "fullscreen". Applied on app_run().
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_window_state(app_handle: i64, value_ptr: i64) {
+    app::set_window_state(app_handle, value_ptr as *const u8);
+}
+
 /// Register callback for app activation.
 #[no_mangle]
 pub extern "C" fn perry_ui_app_on_activate(callback: f64) {

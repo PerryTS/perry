@@ -192,6 +192,16 @@ export function App(config: {
     height: number;
     icon?: string;
     body: Widget;
+    /**
+     * Initial window state. Default is `"normal"` — the window opens at
+     * the requested `width`/`height`. `"maximized"` zooms the window to
+     * fill the working area (taskbar/dock visible). `"fullscreen"` enters
+     * native fullscreen on macOS, removes the title bar and fills the
+     * monitor on Windows, and maps to `gtk_window_fullscreen` on GTK4.
+     *
+     * Issue #1280.
+     */
+    windowState?: "normal" | "maximized" | "fullscreen";
 }): void;
 
 /** Vertical stack layout. */

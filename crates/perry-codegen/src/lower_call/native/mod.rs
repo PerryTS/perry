@@ -1280,6 +1280,7 @@ pub(crate) fn lower_native_method_call(
         let mut height_d: String = "768.0".to_string();
         let mut body_handle: String = "0".to_string();
         let mut icon_ptr: Option<String> = None;
+        let mut window_state_ptr: Option<String> = None;
         for (key, val) in &props {
             match key.as_str() {
                 "title" => {
@@ -1303,6 +1304,14 @@ pub(crate) fn lower_native_method_call(
                     let blk = ctx.block();
                     icon_ptr = Some(unbox_to_i64(blk, &v));
                 }
+                // Issue #1280 — `windowState: "normal" | "maximized" | "fullscreen"`.
+                // Forwarded to perry_ui_app_set_window_state; each platform
+                // backend applies the state at app_run time.
+                "windowState" => {
+                    let v = lower_expr(ctx, val)?;
+                    let blk = ctx.block();
+                    window_state_ptr = Some(unbox_to_i64(blk, &v));
+                }
                 _ => {
                     let _ = lower_expr(ctx, val)?;
                 }
@@ -1317,6 +1326,11 @@ pub(crate) fn lower_native_method_call(
             "perry_ui_app_set_icon".to_string(),
             crate::types::VOID,
             vec![I64],
+        ));
+        ctx.pending_declares.push((
+            "perry_ui_app_set_window_state".to_string(),
+            crate::types::VOID,
+            vec![I64, I64],
         ));
         ctx.pending_declares.push((
             "perry_ui_app_set_body".to_string(),
@@ -1336,6 +1350,12 @@ pub(crate) fn lower_native_method_call(
         );
         if let Some(icon) = icon_ptr {
             blk.call_void("perry_ui_app_set_icon", &[(I64, &icon)]);
+        }
+        if let Some(state_ptr) = window_state_ptr {
+            blk.call_void(
+                "perry_ui_app_set_window_state",
+                &[(I64, &app_handle), (I64, &state_ptr)],
+            );
         }
         blk.call_void(
             "perry_ui_app_set_body",
