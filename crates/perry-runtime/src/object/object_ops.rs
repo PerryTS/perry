@@ -662,7 +662,7 @@ pub extern "C" fn js_object_get_own_field_or_undef(
     name_len: usize,
 ) -> f64 {
     const TAG_UNDEF: u64 = 0x7FFC_0000_0000_0001;
-    if name_ptr.is_null() || name_len == 0 {
+    if name_ptr.is_null() {
         return f64::from_bits(TAG_UNDEF);
     }
     unsafe {
