@@ -65,10 +65,17 @@ pub extern "C" fn js_array_map(
             ptr::write(result_elements.add(i), mapped);
             let mapped_bits = mapped.to_bits();
             if length <= 64 {
-                // `map` has just allocated `result`; for the small-array hot
-                // path this stays in the nursery, so the generational barrier
-                // is redundant. Keep layout metadata so GC tracing sees the
-                // slot. Larger arrays keep the conservative full helper.
+                // Fast path: skip the generational write barrier.
+                // `result` was just allocated; for length ≤ 64 it stays
+                // in the nursery for the whole loop in practice, so the
+                // young→old barrier is redundant — only the layout slot
+                // metadata is needed for GC tracing. If a future GC
+                // policy starts tenuring nursery objects mid-loop
+                // (e.g. aggressive evacuation under
+                // `PERRY_GC_FORCE_EVACUATE=1` triggered by the callback
+                // allocating), this path needs the full barrier helper
+                // because subsequent stores would miss the remembered
+                // set. The 64-element cap keeps that probability low.
                 crate::gc::layout_note_slot(result as usize, i, mapped_bits);
             } else {
                 note_array_slot(result, i, mapped_bits);
