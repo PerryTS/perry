@@ -134,6 +134,12 @@ pub use fastify::*;
 pub mod fetch;
 #[cfg(feature = "http-client")]
 pub use fetch::*;
+// Issue #1211: Blob/File constructors + object-URL helpers split out
+// of fetch.rs to keep that file under the 2,000-line lint gate.
+#[cfg(feature = "http-client")]
+pub mod fetch_blob;
+#[cfg(feature = "http-client")]
+pub use fetch_blob::*;
 
 #[cfg(feature = "http-client")]
 pub mod http;
