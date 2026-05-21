@@ -26,6 +26,8 @@
 //! symbol.
 
 use crate::common::handle::Handle;
+use std::borrow::Cow;
+
 use perry_runtime::array::{js_array_alloc, js_array_length, js_array_push_f64};
 use perry_runtime::closure::{is_closure_ptr, js_closure_call1, ClosureHeader};
 use perry_runtime::{
@@ -226,11 +228,17 @@ pub unsafe extern "C" fn js_querystring_parse(
             }
         };
         let key = match decode {
-            Some(cb) => apply_codec(cb, key_raw),
+            Some(cb) => {
+                let normalized = normalize_decode_component_input(key_raw);
+                apply_codec(cb, normalized.as_ref())
+            }
             None => percent_decode(key_raw, true),
         };
         let value = match decode {
-            Some(cb) => apply_codec(cb, val_raw),
+            Some(cb) => {
+                let normalized = normalize_decode_component_input(val_raw);
+                apply_codec(cb, normalized.as_ref())
+            }
             None => percent_decode(val_raw, true),
         };
         push_parsed_pair(obj, &key, &value);
@@ -261,6 +269,17 @@ unsafe fn resolve_codec_option(options: f64, name: &str) -> Option<*const Closur
         return None;
     }
     Some(ptr as *const ClosureHeader)
+}
+
+/// Node's querystring parser rewrites `+` to `%20` before invoking a custom
+/// decoder. The decoder is expected to receive percent-encoded input; passing
+/// raw `+` would make identity/custom decoders diverge from Node.
+fn normalize_decode_component_input(input: &str) -> Cow<'_, str> {
+    if input.as_bytes().contains(&b'+') {
+        Cow::Owned(input.replace('+', "%20"))
+    } else {
+        Cow::Borrowed(input)
+    }
 }
 
 /// Call a user-supplied codec closure with `raw` and decode the return.
