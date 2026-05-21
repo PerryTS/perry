@@ -117,6 +117,25 @@ if ! nm "$STATIC_LIB" 2>&1 | grep -qE '^[0-9a-f]+ T _?perry_module_init$'; then
     exit 1
 fi
 
+# Linkdeps sidecar: must exist next to the archive and list at least the
+# runtime archive — that's the one a host can't link without (everything
+# else is optional, but runtime is always required by `perry_module_init`).
+MANIFEST="${STATIC_LIB%.a}.linkdeps.json"
+if [[ ! -f "$MANIFEST" ]]; then
+    echo "[1088] FAIL — linkdeps sidecar not written at $MANIFEST" >&2
+    exit 1
+fi
+if ! grep -q '"role": "runtime"' "$MANIFEST"; then
+    echo "[1088] FAIL — linkdeps sidecar missing runtime archive entry" >&2
+    cat "$MANIFEST" >&2
+    exit 1
+fi
+if ! grep -q '"entry_symbol": "perry_module_init"' "$MANIFEST"; then
+    echo "[1088] FAIL — linkdeps sidecar missing entry_symbol" >&2
+    cat "$MANIFEST" >&2
+    exit 1
+fi
+
 echo "[1088] linking host smoke..."
 cc -o "$HOST_EXE" "$C_SRC" \
     "$STATIC_LIB" "$RUNTIME_LIB" "$STDLIB_LIB" \

@@ -4289,6 +4289,79 @@ pub fn run_with_parse_cache(
             }
         }
 
+        // #1088 follow-up: emit `<output>.linkdeps.json` next to the archive
+        // so the host's build system can discover exactly which extra
+        // archives it must add to its own link line. Perry already resolved
+        // this set above (build_optimized_libs, the well-known table flips,
+        // jsruntime / wasm-host finders) — emit it as a machine-readable
+        // sidecar instead of forcing hosts to scrape the build log or
+        // re-derive it from `well_known_bindings.toml`.
+        // `libfoo.a` -> `libfoo.linkdeps.json`, `foo.lib` -> `foo.linkdeps.json`.
+        // Drops the archive extension so the sidecar isn't named
+        // `*.a.linkdeps.json`, which trips some tooling that strips file
+        // extensions to derive a target's "name".
+        let manifest_path = exe_path.with_extension("linkdeps.json");
+        let mut link_archives: Vec<serde_json::Value> = Vec::new();
+        let push_archive = |link_archives: &mut Vec<serde_json::Value>, role: &str, path: &Path| {
+            let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            link_archives.push(serde_json::json!({
+                "role": role,
+                "path": abs.display().to_string(),
+            }));
+        };
+        let runtime_lib_for_manifest = optimized_libs
+            .runtime
+            .clone()
+            .or_else(|| find_runtime_library(target.as_deref()).ok());
+        if let Some(p) = &runtime_lib_for_manifest {
+            push_archive(&mut link_archives, "runtime", p);
+        }
+        if let Some(p) = &stdlib_lib_resolved {
+            push_archive(&mut link_archives, "stdlib", p);
+        }
+        if ctx.needs_js_runtime || args.enable_js_runtime {
+            if let Some(p) = find_jsruntime_library(target.as_deref()) {
+                push_archive(&mut link_archives, "jsruntime", &p);
+            }
+        }
+        if ctx.needs_wasm_runtime || args.enable_wasm_runtime {
+            if let Some(p) = find_wasm_host_library(target.as_deref()) {
+                push_archive(&mut link_archives, "wasm-host", &p);
+            }
+        }
+        if ctx.needs_ui {
+            if let Some(p) = find_ui_library(target.as_deref()) {
+                push_archive(&mut link_archives, "ui", &p);
+            }
+        }
+        for p in &optimized_libs.well_known_libs {
+            push_archive(&mut link_archives, "well-known", p);
+        }
+        let archive_abs = exe_path.canonicalize().unwrap_or_else(|_| exe_path.clone());
+        let manifest = serde_json::json!({
+            "version": 1,
+            "archive": archive_abs.display().to_string(),
+            "entry_symbol": "perry_module_init",
+            "target": target.clone().unwrap_or_else(|| "native".to_string()),
+            "link_archives": link_archives,
+        });
+        if let Err(e) = fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+        ) {
+            // Best-effort: a failed sidecar write shouldn't fail the
+            // build — the archive is the load-bearing artifact, the
+            // manifest is convenience. Surface the error so the host
+            // can fall back to scraping `--verbose` output if needed.
+            eprintln!(
+                "warning: failed to write linkdeps manifest at {}: {}",
+                manifest_path.display(),
+                e
+            );
+        } else if let OutputFormat::Text = format {
+            println!("Wrote link manifest: {}", manifest_path.display());
+        }
+
         if !args.keep_intermediates {
             for obj_path in &obj_paths {
                 let _ = fs::remove_file(obj_path);
