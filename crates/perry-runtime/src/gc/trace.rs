@@ -400,9 +400,6 @@ pub(super) unsafe fn mark_field_into_worklist(
     true
 }
 
-/// Get the bottom (highest address) of the current thread's stack.
-#[cfg(target_os = "macos")]
-
 pub(super) fn try_mark_young_value_as_seed(value_bits: u64, valid_ptrs: &ValidPointerSet) -> bool {
     let ptr = decode_heap_addr(value_bits);
     try_mark_young_user_ptr_as_seed(ptr, valid_ptrs)

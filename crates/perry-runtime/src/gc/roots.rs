@@ -627,7 +627,7 @@ pub(super) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> 
 /// The valid-pointer hashset check is still load-bearing here — we
 /// only elide the secondary `enclosing_object` fallback.
 #[inline(always)]
-
+#[cfg(target_os = "macos")]
 pub(super) fn get_stack_bottom() -> usize {
     extern "C" {
         fn pthread_self() -> *mut std::ffi::c_void;
