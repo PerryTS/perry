@@ -1,0 +1,241 @@
+//! Array allocation primitives.
+use super::*;
+use crate::arena::arena_alloc_gc;
+use std::ptr;
+
+/// Allocate a new array with the given initial capacity
+#[no_mangle]
+pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
+    // Use at least MIN_ARRAY_CAPACITY to reduce reallocations for growing arrays
+    let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
+    let ptr = arena_alloc_gc(
+        array_byte_size(actual_capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+
+    unsafe {
+        // Initialize header
+        (*ptr).length = 0;
+        (*ptr).capacity = actual_capacity;
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+    }
+
+    ptr
+}
+
+/// Create a new empty array (convenience alias for `js_array_alloc(0)`).
+/// Used by perry-ui audio code.
+#[no_mangle]
+pub extern "C" fn js_array_create() -> i64 {
+    js_array_alloc(0) as i64
+}
+
+/// Allocate a new array with the given capacity AND set length = capacity.
+/// Used for `new Array(n)` which in JavaScript creates an array with length n.
+/// Reachable slots (`0..capacity`) are initialized to TAG_HOLE — a sentinel
+/// distinct from TAG_UNDEFINED so the `in` operator and `Object.keys` can
+/// distinguish a never-written slot from one explicitly set to `undefined`.
+/// Reads via `js_array_get_f64` translate TAG_HOLE → TAG_UNDEFINED so the
+/// sentinel never leaks to user code (matches issue #323).
+/// Slots beyond `capacity` (up to `actual_capacity`) are unreachable through
+/// the bounds-checked accessor, so they're left as-is.
+///
+/// Caveat: keys-arrays built by `js_object_alloc` (via shape) and one-shot
+/// scratch arrays where the caller is about to overwrite every slot pay a
+/// tiny init cost here; the alternative — a separate uninitialized variant —
+/// would silently re-introduce the issue #323 bug class for any future caller
+/// that forgets to overwrite.
+#[no_mangle]
+pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader {
+    let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
+    let ptr = arena_alloc_gc(
+        array_byte_size(actual_capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+
+    unsafe {
+        (*ptr).length = capacity; // Set length = requested capacity
+        (*ptr).capacity = actual_capacity;
+        let elements_ptr = (ptr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        for i in 0..capacity as usize {
+            std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
+        }
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+    }
+
+    ptr
+}
+
+/// Allocate a new array with `length == capacity == capacity` in the
+/// **longlived arena** (issue #179). Used to build the shape-cache
+/// `keys_array` backing storage, which is cache-resident for the life
+/// of the thread and anchored by `scan_shape_cache_roots`.
+///
+/// Caller fills element slots immediately via direct writes (same
+/// contract as `js_array_alloc_with_length`). Uses exact capacity — no
+/// `MIN_ARRAY_CAPACITY` padding — because keys arrays never grow
+/// (shapes are immutable once built).
+#[no_mangle]
+pub extern "C" fn js_array_alloc_with_length_longlived(capacity: u32) -> *mut ArrayHeader {
+    let ptr = crate::arena::arena_alloc_gc_longlived(
+        array_byte_size(capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+
+    unsafe {
+        (*ptr).length = capacity;
+        (*ptr).capacity = capacity;
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+    }
+
+    ptr
+}
+
+/// Allocate and initialize an array from a list of f64 values
+#[no_mangle]
+pub extern "C" fn js_array_from_f64(elements: *const f64, count: u32) -> *mut ArrayHeader {
+    let arr = js_array_alloc(count);
+    unsafe {
+        (*arr).length = count;
+        let arr_elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        ptr::copy_nonoverlapping(elements, arr_elements, count as usize);
+        rebuild_array_layout(arr);
+    }
+    arr
+}
+
+/// `Array.from({length: N, 0: a, 1: b, ...})` — read the `length` property
+/// and emit `obj[0]..obj[N-1]` in order (missing slots fill with `undefined`
+/// per spec). Receivers without a numeric `length` property produce an
+/// empty array (ToLength coerces non-numbers to 0).
+pub(crate) unsafe fn js_array_from_arraylike(
+    obj: *const crate::object::ObjectHeader,
+) -> *mut ArrayHeader {
+    if obj.is_null() {
+        return js_array_alloc(0);
+    }
+    let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let length_val = crate::object::js_object_get_field_by_name_f64(obj, length_key);
+    let length_bits = length_val.to_bits();
+    // ToLength coercion: NaN / undefined / non-finite / negative → 0.
+    let len = if length_val.is_nan()
+        || !length_val.is_finite()
+        || length_val < 0.0
+        || (length_bits >> 48) >= 0x7FF8
+    {
+        0u32
+    } else {
+        length_val as u32
+    };
+    let arr = js_array_alloc(len);
+    (*arr).length = len;
+    let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    for i in 0..len {
+        // Pre-init to undefined in case the key lookup returns the
+        // wrong type / produces a sentinel we want to coerce.
+        *elements.add(i as usize) = undefined;
+        let key_str = i.to_string();
+        let key = crate::string::js_string_from_bytes(key_str.as_ptr(), key_str.len() as u32);
+        let v = crate::object::js_object_get_field_by_name_f64(obj, key);
+        *elements.add(i as usize) = v;
+        note_array_slot(arr, i as usize, v.to_bits());
+    }
+    arr
+}
+
+/// `Array.from(string)` — split the source string into Unicode codepoints
+/// and emit each as a 1-codepoint string element (matches `[..."hello"]` /
+/// `for (const c of "hello")` semantics). Surrogate pairs in UTF-16 source
+/// space materialize as a single codepoint per ECMA-262 §22.1.5 String
+/// Iterator Records, so `[..."🎉"]` yields a 1-element array (not 2).
+pub(crate) unsafe fn js_array_from_string_codepoints(
+    s: *const crate::string::StringHeader,
+) -> *mut ArrayHeader {
+    if s.is_null() {
+        return js_array_alloc(0);
+    }
+    let byte_len = (*s).byte_len as usize;
+    if byte_len == 0 {
+        return js_array_alloc(0);
+    }
+    let data_ptr = (s as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    let bytes = std::slice::from_raw_parts(data_ptr, byte_len);
+    let src = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return js_array_alloc(0),
+    };
+    // Pre-count to size the result exactly.
+    let cp_count = src.chars().count() as u32;
+    let arr = js_array_alloc(cp_count);
+    (*arr).length = cp_count;
+    let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    for (i, ch) in src.chars().enumerate() {
+        let mut buf = [0u8; 4];
+        let s_ref = ch.encode_utf8(&mut buf);
+        let s_ptr = crate::string::js_string_from_bytes(s_ref.as_ptr(), s_ref.len() as u32);
+        let value = crate::value::js_nanbox_string(s_ptr as i64);
+        *elements.add(i) = value;
+        note_array_slot(arr, i, value.to_bits());
+    }
+    arr
+}
+
+/// Exact-sized array allocation for array literals `[a, b, c, ...]`.
+///
+/// Unlike `js_array_alloc`, this does NOT apply `MIN_ARRAY_CAPACITY=16` padding.
+/// Every byte allocated is a byte the literal uses, which keeps tight-loop
+/// allocation pressure proportional to the literal size (a 3-element literal
+/// costs 32 bytes, not 136). `length` is pre-set to `capacity` so the codegen
+/// only needs to emit direct stores for each element; no per-element
+/// `js_array_push_f64` call with redundant capacity check.
+///
+/// Caller contract: the codegen evaluates every element expression *before*
+/// calling this function, then emits direct stores to `(arr+8) + i*8` with no
+/// intervening GC-triggering operation. Between this call and completion of
+/// the stores, the array header reports `length == capacity` but elements are
+/// uninitialized; only pure LLVM stores may execute in that window.
+#[no_mangle]
+pub extern "C" fn js_array_alloc_literal(capacity: u32) -> *mut ArrayHeader {
+    let ptr = arena_alloc_gc(
+        array_byte_size(capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+    unsafe {
+        (*ptr).length = capacity;
+        (*ptr).capacity = capacity;
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+    }
+    ptr
+}
+
+/// Issue #179 Phase 2: if `arr` points at a `LazyArrayHeader`
+/// (`GcHeader::obj_type == GC_TYPE_LAZY_ARRAY`), force the lazy
+/// value to materialize and return the real `ArrayHeader` pointer.
+/// Otherwise returns `arr` unchanged. Every array accessor that
+/// doesn't have a lazy-specific fast path (only `.length` does)
+/// should funnel through this so correctness is preserved under
+/// arbitrary JS code.
+#[inline]
+pub(crate) unsafe fn maybe_force_lazy(arr: *const ArrayHeader) -> *const ArrayHeader {
+    if arr.is_null() {
+        return arr;
+    }
+    if (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return arr;
+    }
+    let gc_header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_LAZY_ARRAY {
+        return arr;
+    }
+    let lazy = arr as *mut crate::json_tape::LazyArrayHeader;
+    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
+        return arr;
+    }
+    crate::json_tape::force_materialize_lazy(lazy) as *const ArrayHeader
+}

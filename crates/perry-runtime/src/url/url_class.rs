@@ -1,0 +1,412 @@
+//! `URL` class FFI surface — constructors, getters, setters, static methods.
+
+use super::*;
+
+use super::parse::{
+    create_url_object, is_valid_absolute_url, rebuild_url_host, rebuild_url_href, resolve_url,
+    throw_invalid_url, URL_HASH, URL_HOST, URL_HOSTNAME, URL_HREF, URL_ORIGIN, URL_PASSWORD,
+    URL_PATHNAME, URL_PORT, URL_PROTOCOL, URL_SEARCH, URL_SEARCH_PARAMS, URL_USERNAME,
+};
+use super::search_params::{
+    create_url_search_params_object, parse_query_string, URL_SEARCH_PARAMS_OWNER,
+};
+
+/// Create a new URL from a string
+/// js_url_new(url: *mut StringHeader) -> *mut ObjectHeader (URL object)
+#[no_mangle]
+pub extern "C" fn js_url_new(url_str: *mut crate::StringHeader) -> *mut ObjectHeader {
+    let url_string = if url_str.is_null() {
+        String::new()
+    } else {
+        unsafe {
+            let len = (*url_str).byte_len as usize;
+            let data_ptr = (url_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let slice = std::slice::from_raw_parts(data_ptr, len);
+            String::from_utf8_lossy(slice).into_owned()
+        }
+    };
+    if !is_valid_absolute_url(&url_string) {
+        throw_invalid_url(&url_string);
+    }
+    create_url_object(&url_string)
+}
+
+/// Create a new URL from a string with a base URL
+/// js_url_new_with_base(url: *mut StringHeader, base: *mut StringHeader) -> *mut ObjectHeader
+#[no_mangle]
+pub extern "C" fn js_url_new_with_base(
+    url_str: *mut crate::StringHeader,
+    base_str: *mut crate::StringHeader,
+) -> *mut ObjectHeader {
+    let url_string = if url_str.is_null() {
+        String::new()
+    } else {
+        unsafe {
+            let len = (*url_str).byte_len as usize;
+            let data_ptr = (url_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let slice = std::slice::from_raw_parts(data_ptr, len);
+            String::from_utf8_lossy(slice).into_owned()
+        }
+    };
+
+    let base_string = if base_str.is_null() {
+        String::new()
+    } else {
+        unsafe {
+            let len = (*base_str).byte_len as usize;
+            let data_ptr = (base_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let slice = std::slice::from_raw_parts(data_ptr, len);
+            String::from_utf8_lossy(slice).into_owned()
+        }
+    };
+
+    // Relative URLs require a parseable base; if the base is bogus and the
+    // input isn't itself absolute, the constructor must throw.
+    let url_is_absolute = is_valid_absolute_url(&url_string);
+    let base_is_absolute = is_valid_absolute_url(&base_string);
+    if !url_is_absolute && !base_is_absolute {
+        throw_invalid_url(&url_string);
+    }
+
+    // Resolve the URL against the base
+    let resolved = resolve_url(&url_string, &base_string);
+    create_url_object(&resolved)
+}
+
+/// Get the href property from a URL (returns field value)
+#[no_mangle]
+pub extern "C" fn js_url_get_href(url: *mut ObjectHeader) -> f64 {
+    if url.is_null() {
+        return create_string_f64("");
+    }
+    crate::object::js_object_get_field_f64(url, URL_HREF)
+}
+
+/// Issue #650: `url.pathname = value` setter. Per WHATWG, the setter
+/// normalizes a leading `/` for hierarchical schemes — but Node's actual
+/// runtime behavior on `u.pathname = "changed"` produces pathname
+/// `"/changed"` ONLY when the URL has an authority component, leaving
+/// opaque (non-hierarchical) URLs alone. We follow Node: prepend `/`
+/// when the URL has a non-empty `host`.
+#[no_mangle]
+pub extern "C" fn js_url_set_pathname(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let raw = if value.is_null() {
+        String::new()
+    } else {
+        unsafe {
+            let len = (*value).byte_len as usize;
+            let data_ptr = (value as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let slice = std::slice::from_raw_parts(data_ptr, len);
+            String::from_utf8_lossy(slice).into_owned()
+        }
+    };
+    unsafe {
+        let host = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOST));
+        let normalized = if !host.is_empty() && !raw.starts_with('/') {
+            format!("/{}", raw)
+        } else {
+            raw
+        };
+        js_object_set_field_f64(url, URL_PATHNAME, create_string_f64(&normalized));
+        rebuild_url_href(url);
+    }
+}
+
+/// Issue #650: `url.search = value` setter. Stores the leading `?`
+/// when the value is non-empty (matching WHATWG: empty search clears
+/// the query string entirely). Also re-parses the new query into the
+/// stored URLSearchParams object so `url.searchParams.get(...)` reflects
+/// the new entries.
+#[no_mangle]
+pub extern "C" fn js_url_set_search(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let raw = if value.is_null() {
+        String::new()
+    } else {
+        unsafe {
+            let len = (*value).byte_len as usize;
+            let data_ptr = (value as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let slice = std::slice::from_raw_parts(data_ptr, len);
+            String::from_utf8_lossy(slice).into_owned()
+        }
+    };
+    let normalized = if raw.is_empty() {
+        String::new()
+    } else if raw.starts_with('?') {
+        raw
+    } else {
+        format!("?{}", raw)
+    };
+    unsafe {
+        js_object_set_field_f64(url, URL_SEARCH, create_string_f64(&normalized));
+        // Refresh the searchParams object's entries to match the new query.
+        let params_entries = parse_query_string(&normalized);
+        let new_params = create_url_search_params_object(params_entries);
+        js_object_set_field_f64(
+            new_params,
+            URL_SEARCH_PARAMS_OWNER,
+            crate::value::js_nanbox_pointer(url as i64),
+        );
+        let params_f64 = crate::value::js_nanbox_pointer(new_params as i64);
+        js_object_set_field_f64(url, URL_SEARCH_PARAMS, params_f64);
+        rebuild_url_href(url);
+    }
+}
+
+/// `url.protocol = value` — strip trailing `:`-free input to match the
+/// canonical `"scheme:"` form, write the field, then re-derive `host`
+/// (default-port stripping depends on protocol) and `href`.
+#[no_mangle]
+pub extern "C" fn js_url_set_protocol(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let mut raw = string_header_to_string(value);
+    if !raw.ends_with(':') {
+        raw.push(':');
+    }
+    unsafe {
+        js_object_set_field_f64(url, URL_PROTOCOL, create_string_f64(&raw));
+        rebuild_url_host(url);
+        rebuild_url_href(url);
+    }
+}
+
+/// `url.hostname = value` — update hostname and reconstruct host.
+#[no_mangle]
+pub extern "C" fn js_url_set_hostname(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let raw = string_header_to_string(value);
+    unsafe {
+        js_object_set_field_f64(url, URL_HOSTNAME, create_string_f64(&raw));
+        rebuild_url_host(url);
+        rebuild_url_href(url);
+    }
+}
+
+/// `url.port = value` — store as a string (Node normalizes to digits-only).
+/// Empty input clears the port. Reconstructs host afterwards.
+#[no_mangle]
+pub extern "C" fn js_url_set_port(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let raw = string_header_to_string(value);
+    // Per WHATWG: parse leading digit run; anything else discards the new port.
+    let parsed: String = raw.chars().take_while(|c| c.is_ascii_digit()).collect();
+    unsafe {
+        js_object_set_field_f64(url, URL_PORT, create_string_f64(&parsed));
+        rebuild_url_host(url);
+        rebuild_url_href(url);
+    }
+}
+
+/// `url.username = value` — update userinfo and rebuild href.
+#[no_mangle]
+pub extern "C" fn js_url_set_username(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let raw = string_header_to_string(value);
+    unsafe {
+        js_object_set_field_f64(url, URL_USERNAME, create_string_f64(&raw));
+        rebuild_url_href(url);
+    }
+}
+
+/// `url.password = value` — update userinfo and rebuild href.
+#[no_mangle]
+pub extern "C" fn js_url_set_password(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let raw = string_header_to_string(value);
+    unsafe {
+        js_object_set_field_f64(url, URL_PASSWORD, create_string_f64(&raw));
+        rebuild_url_href(url);
+    }
+}
+
+/// Issue #650: `url.hash = value` setter. Stores the leading `#` when
+/// the value is non-empty; clears entirely when empty (matches WHATWG).
+#[no_mangle]
+pub extern "C" fn js_url_set_hash(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let raw = if value.is_null() {
+        String::new()
+    } else {
+        unsafe {
+            let len = (*value).byte_len as usize;
+            let data_ptr = (value as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let slice = std::slice::from_raw_parts(data_ptr, len);
+            String::from_utf8_lossy(slice).into_owned()
+        }
+    };
+    let normalized = if raw.is_empty() {
+        String::new()
+    } else if raw.starts_with('#') {
+        raw
+    } else {
+        format!("#{}", raw)
+    };
+    unsafe {
+        js_object_set_field_f64(url, URL_HASH, create_string_f64(&normalized));
+        rebuild_url_href(url);
+    }
+}
+
+/// Issue #650: `URL.canParse(input)` static method (Node 18+).
+/// Returns 1 if `input` parses as a valid URL, 0 otherwise. Treats absent
+/// scheme + non-`file:` relative inputs as failures, matching Node's
+/// stricter validation than `parse_url`'s liberal accept-anything path
+/// (which the constructor still relies on for backwards compat with
+/// pre-existing test fixtures).
+#[no_mangle]
+pub extern "C" fn js_url_can_parse(input: *mut crate::StringHeader) -> i32 {
+    if input.is_null() {
+        return 0;
+    }
+    let s = unsafe {
+        let len = (*input).byte_len as usize;
+        let data_ptr = (input as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let slice = std::slice::from_raw_parts(data_ptr, len);
+        String::from_utf8_lossy(slice).into_owned()
+    };
+    if is_valid_absolute_url(&s) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_can_parse_with_base(
+    input: *mut crate::StringHeader,
+    base: *mut crate::StringHeader,
+) -> i32 {
+    let input_s = string_from_header(input);
+    let base_s = string_from_header(base);
+    if is_valid_absolute_url(&input_s) {
+        return 1;
+    }
+    if !is_valid_absolute_url(&base_s) || input_s.trim().is_empty() {
+        return 0;
+    }
+    let resolved = resolve_url(&input_s, &base_s);
+    if is_valid_absolute_url(&resolved) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Issue #650: `URL.parse(input)` static method (Node 22+) — non-throwing
+/// counterpart to `new URL(input)`. Returns the parsed URL object on
+/// success or null on failure. Wraps `js_url_new` with the same liberal
+/// validation as `URL.canParse` so the two stay in lockstep.
+#[no_mangle]
+pub extern "C" fn js_url_parse(input: *mut crate::StringHeader) -> *mut ObjectHeader {
+    if input.is_null() {
+        return std::ptr::null_mut();
+    }
+    let s = unsafe {
+        let len = (*input).byte_len as usize;
+        let data_ptr = (input as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let slice = std::slice::from_raw_parts(data_ptr, len);
+        String::from_utf8_lossy(slice).into_owned()
+    };
+    if !is_valid_absolute_url(&s) {
+        return std::ptr::null_mut();
+    }
+    create_url_object(&s)
+}
+
+/// Get the pathname property from a URL
+#[no_mangle]
+pub extern "C" fn js_url_get_pathname(url: *mut ObjectHeader) -> f64 {
+    if url.is_null() {
+        return create_string_f64("");
+    }
+    crate::object::js_object_get_field_f64(url, URL_PATHNAME)
+}
+
+/// Get the protocol property from a URL
+#[no_mangle]
+pub extern "C" fn js_url_get_protocol(url: *mut ObjectHeader) -> f64 {
+    if url.is_null() {
+        return create_string_f64("");
+    }
+    crate::object::js_object_get_field_f64(url, URL_PROTOCOL)
+}
+
+/// Get the host property from a URL
+#[no_mangle]
+pub extern "C" fn js_url_get_host(url: *mut ObjectHeader) -> f64 {
+    if url.is_null() {
+        return create_string_f64("");
+    }
+    crate::object::js_object_get_field_f64(url, URL_HOST)
+}
+
+/// Get the hostname property from a URL
+#[no_mangle]
+pub extern "C" fn js_url_get_hostname(url: *mut ObjectHeader) -> f64 {
+    if url.is_null() {
+        return create_string_f64("");
+    }
+    crate::object::js_object_get_field_f64(url, URL_HOSTNAME)
+}
+
+/// Get the port property from a URL
+#[no_mangle]
+pub extern "C" fn js_url_get_port(url: *mut ObjectHeader) -> f64 {
+    if url.is_null() {
+        return create_string_f64("");
+    }
+    crate::object::js_object_get_field_f64(url, URL_PORT)
+}
+
+/// Get the search property from a URL
+#[no_mangle]
+pub extern "C" fn js_url_get_search(url: *mut ObjectHeader) -> f64 {
+    if url.is_null() {
+        return create_string_f64("");
+    }
+    crate::object::js_object_get_field_f64(url, URL_SEARCH)
+}
+
+/// Get the hash property from a URL
+#[no_mangle]
+pub extern "C" fn js_url_get_hash(url: *mut ObjectHeader) -> f64 {
+    if url.is_null() {
+        return create_string_f64("");
+    }
+    crate::object::js_object_get_field_f64(url, URL_HASH)
+}
+
+/// Get the origin property from a URL
+#[no_mangle]
+pub extern "C" fn js_url_get_origin(url: *mut ObjectHeader) -> f64 {
+    if url.is_null() {
+        return create_string_f64("");
+    }
+    crate::object::js_object_get_field_f64(url, URL_ORIGIN)
+}
+
+/// Get the searchParams property from a URL
+#[no_mangle]
+pub extern "C" fn js_url_get_search_params(url: *mut ObjectHeader) -> f64 {
+    if url.is_null() {
+        return create_string_f64("");
+    }
+    crate::object::js_object_get_field_f64(url, URL_SEARCH_PARAMS)
+}
