@@ -2630,7 +2630,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function(
         "js_querystring_stringify",
         DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE],
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
 
     // ========== Fastify ==========
