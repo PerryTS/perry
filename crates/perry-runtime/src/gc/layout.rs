@@ -281,7 +281,10 @@ pub(super) unsafe fn layout_header_for_user(user_ptr: usize) -> Option<*mut GcHe
     matches!(obj_type, GC_TYPE_ARRAY | GC_TYPE_OBJECT | GC_TYPE_CLOSURE).then_some(header)
 }
 
-pub(super) unsafe fn layout_slot_capacity_for_user(header: *const GcHeader, user_ptr: usize) -> usize {
+pub(super) unsafe fn layout_slot_capacity_for_user(
+    header: *const GcHeader,
+    user_ptr: usize,
+) -> usize {
     match (*header).obj_type {
         GC_TYPE_ARRAY => (*(user_ptr as *const crate::array::ArrayHeader)).length as usize,
         GC_TYPE_OBJECT => (*(user_ptr as *const crate::object::ObjectHeader)).field_count as usize,
@@ -768,7 +771,11 @@ impl HeapChildSlotIterator {
         }
     }
 
-    pub(super) fn new(header: *mut GcHeader, prefix_slot: Option<*mut u64>, payload: HeapSlotRange) -> Self {
+    pub(super) fn new(
+        header: *mut GcHeader,
+        prefix_slot: Option<*mut u64>,
+        payload: HeapSlotRange,
+    ) -> Self {
         let selection = unsafe { heap_payload_slot_selection(header, payload) };
         Self {
             prefix_slot,

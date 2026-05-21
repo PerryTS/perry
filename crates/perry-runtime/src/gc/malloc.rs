@@ -51,7 +51,6 @@ pub(super) fn malloc_kind_index(obj_type: u8) -> usize {
     }
 }
 
-
 /// `gc_malloc` touched four separate thread-local slots (`GC_IN_ALLOC`,
 /// `MALLOC_OBJECTS`, `MALLOC_SET`, `GC_IN_ALLOC` again) plus two RefCell
 /// panic-check borrows. Each TLS lookup on macOS/ARM costs ~30-40ns because it
@@ -99,7 +98,6 @@ pub(super) enum MallocRegistryState {
 /// per thread (vs ~2 MB at 128 k); pays for itself on the first 100
 /// allocations.
 pub(super) const MALLOC_STATE_INITIAL_CAPACITY: usize = 256 * 1024;
-
 
 thread_local! {
     pub(crate) static MALLOC_STATE: RefCell<MallocState> = RefCell::new(MallocState {
@@ -264,7 +262,9 @@ impl MallocState {
             counters.copied_minor_validation_lookups.saturating_add(1);
     }
 
-    pub(super) fn take_kind_telemetry(&mut self) -> [MallocKindTelemetry; MALLOC_KIND_BUCKET_COUNT] {
+    pub(super) fn take_kind_telemetry(
+        &mut self,
+    ) -> [MallocKindTelemetry; MALLOC_KIND_BUCKET_COUNT] {
         let snapshot = self.kind_telemetry;
         for counters in &mut self.kind_telemetry {
             counters.reset_cycle_deltas();

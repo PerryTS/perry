@@ -660,7 +660,6 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::arkts_callbacks::arkts_callbacks_root_scanner_mut);
 }
 
-
 #[no_mangle]
 pub extern "C" fn js_gc_init() {
     gc_init();
@@ -688,7 +687,6 @@ pub extern "C" fn js_gc_stats(
         }
     });
 }
-
 
 #[cfg(test)]
 mod tests;

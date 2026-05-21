@@ -240,7 +240,11 @@ impl CopyingNurseryPreflight {
         self.check_bits_with_reason(bits, self.pinned_reason);
     }
 
-    pub(super) fn check_bits_with_reason(&mut self, bits: u64, pinned_reason: CopiedMinorFallbackReason) {
+    pub(super) fn check_bits_with_reason(
+        &mut self,
+        bits: u64,
+        pinned_reason: CopiedMinorFallbackReason,
+    ) {
         if self.fallback_reason.is_some() {
             return;
         }
@@ -255,7 +259,11 @@ impl CopyingNurseryPreflight {
         self.check_addr_with_reason(addr, self.pinned_reason);
     }
 
-    pub(super) fn check_addr_with_reason(&mut self, addr: usize, pinned_reason: CopiedMinorFallbackReason) {
+    pub(super) fn check_addr_with_reason(
+        &mut self,
+        addr: usize,
+        pinned_reason: CopiedMinorFallbackReason,
+    ) {
         if self.fallback_reason.is_some() {
             return;
         }
@@ -425,7 +433,12 @@ pub(super) struct StickyRememberedSet {
 }
 
 impl StickyRememberedSet {
-    pub(super) fn remember_slot(&mut self, parent_header: *mut GcHeader, slot: *mut u64, external: bool) {
+    pub(super) fn remember_slot(
+        &mut self,
+        parent_header: *mut GcHeader,
+        slot: *mut u64,
+        external: bool,
+    ) {
         if parent_header.is_null() || slot.is_null() {
             return;
         }
@@ -737,7 +750,11 @@ impl CopyingNurseryCollector {
         }
     }
 
-    pub(super) unsafe fn scan_lazy_array_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
+    pub(super) unsafe fn scan_lazy_array_fields(
+        &mut self,
+        header: *mut GcHeader,
+        user_ptr: *mut u8,
+    ) {
         let lazy = user_ptr as *mut crate::json_tape::LazyArrayHeader;
         if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
             return;
@@ -1075,7 +1092,9 @@ impl CopiedMinorEligibility {
         checker.fallback_reason
     }
 
-    pub(super) fn dirty_slot_preflight_reason(ptrs: &CopyingPointerSet) -> Option<CopiedMinorFallbackReason> {
+    pub(super) fn dirty_slot_preflight_reason(
+        ptrs: &CopyingPointerSet,
+    ) -> Option<CopiedMinorFallbackReason> {
         let snapshot = remembered_dirty_snapshot();
         let mut dirty_checker =
             CopyingNurseryPreflight::new(ptrs, CopiedMinorFallbackReason::PinnedYoungDirtySlot);
@@ -1223,4 +1242,3 @@ pub(super) fn gc_collect_minor_copying_fast_path(
         malloc_swept: malloc_sweep_due,
     })
 }
-

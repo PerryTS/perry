@@ -1369,43 +1369,44 @@ fn tape_mode_from_env() -> TapeMode {
 /// suppress → parse → unsuppress → bump malloc trigger + cache trim) so
 /// it's a drop-in replacement behind the feature flag.
 unsafe fn try_parse_via_tape(text_ptr: *const StringHeader, bytes: &[u8]) -> Option<JSValue> {
-    let tape = crate::json_tape::build_tape(bytes)?;
+    crate::json_tape::with_built_tape(bytes, |tape_entries| {
+        crate::gc::gc_collect_pending_suppressed_parse();
+        crate::gc::gc_check_trigger();
+        crate::gc::gc_suppress();
+        let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
 
-    crate::gc::gc_collect_pending_suppressed_parse();
-    crate::gc::gc_check_trigger();
-    crate::gc::gc_suppress();
-    let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
-
-    // Phase 2: if the top-level value is an array, return a lazy
-    // array header instead of materializing the tree. Every other
-    // shape (objects, scalars) still materializes eagerly — this
-    // commit's scope is top-level arrays only (the shape that
-    // dominates `bench_json_roundtrip` and most realistic JSON.parse
-    // workloads). Extending to top-level objects in a follow-up is a
-    // straightforward mirror of the same construction.
-    let result =
-        if !tape.entries.is_empty() && tape.entries[0].kind == crate::json_tape::KIND_ARR_START {
-            let len = crate::json_tape::count_array_length(&tape.entries, 0);
-            let hdr = crate::json_tape::alloc_lazy_array(&tape.entries, 0, len, text_ptr);
+        // Phase 2: if the top-level value is an array, return a lazy
+        // array header instead of materializing the tree. Every other
+        // shape (objects, scalars) still materializes eagerly — this
+        // commit's scope is top-level arrays only (the shape that
+        // dominates `bench_json_roundtrip` and most realistic JSON.parse
+        // workloads). Extending to top-level objects in a follow-up is a
+        // straightforward mirror of the same construction.
+        let result = if !tape_entries.is_empty()
+            && tape_entries[0].kind == crate::json_tape::KIND_ARR_START
+        {
+            let len = crate::json_tape::count_array_length(tape_entries, 0);
+            let hdr = crate::json_tape::alloc_lazy_array(tape_entries, 0, len, text_ptr);
             JSValue::object_ptr(hdr as *mut u8)
         } else {
-            crate::json_tape::materialize(&tape, bytes)
+            crate::json_tape::materialize_from_idx(tape_entries, bytes, 0)
         };
-    parse_root_push(result);
+        parse_root_push(result);
 
-    crate::gc::gc_unsuppress();
-    crate::gc::gc_bump_malloc_trigger();
-    parse_root_restore(text_root);
+        crate::gc::gc_unsuppress();
+        crate::gc::gc_bump_malloc_trigger();
+        parse_root_restore(text_root);
 
-    PARSE_KEY_CACHE.with(|c| {
-        let cache = c.borrow();
-        if cache.len() > 4096 {
-            drop(cache);
-            c.borrow_mut().clear();
-        }
-    });
+        PARSE_KEY_CACHE.with(|c| {
+            let cache = c.borrow();
+            if cache.len() > 4096 {
+                drop(cache);
+                c.borrow_mut().clear();
+            }
+        });
 
-    Some(result)
+        result
+    })
 }
 
 // ─── JSON.parse<T[]>: schema-directed typed parse ─────────────────────────────

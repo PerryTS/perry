@@ -119,7 +119,6 @@ pub(super) struct SweepTraceStats {
     pub(super) retained_forwarded_stub_bytes: usize,
 }
 
-
 #[inline]
 pub(super) fn old_page_defrag_eligible(meta: crate::arena::OldPageMeta) -> bool {
     meta.allocated_bytes > 0 && meta.live_bytes > 0 && meta.dead_bytes > 0 && meta.pinned_bytes == 0
@@ -465,7 +464,6 @@ pub(super) fn maybe_print_evacuation_policy_diag(
         evacuation.retained_forwarded_stub_objects,
     );
 }
-
 
 pub(super) fn copied_minor_malloc_sweep_due(trigger_kind: GcTriggerKind) -> bool {
     matches!(trigger_kind, GcTriggerKind::MallocCount)
@@ -1168,7 +1166,9 @@ pub(super) fn release_evacuated_original_forwarding_stubs(
 }
 
 #[cfg(test)]
-pub(super) fn evacuate_tenured_nursery_objects_with_force(force_evacuation: bool) -> EvacuationTraceStats {
+pub(super) fn evacuate_tenured_nursery_objects_with_force(
+    force_evacuation: bool,
+) -> EvacuationTraceStats {
     let mut evacuated_new_headers = Vec::new();
     let mut evacuated_original_headers = Vec::new();
     evacuate_tenured_nursery_objects_collecting(

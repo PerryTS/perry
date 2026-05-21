@@ -282,10 +282,8 @@ fn test_layout_mask_heap_conversion_keeps_sparse_words_zeroed() {
     clear_marks();
     clear_mark_seeds();
 
-    let first_child =
-        crate::string::js_string_from_bytes(b"first-child".as_ptr(), 11) as *mut u8;
-    let later_child =
-        crate::string::js_string_from_bytes(b"later-child".as_ptr(), 11) as *mut u8;
+    let first_child = crate::string::js_string_from_bytes(b"first-child".as_ptr(), 11) as *mut u8;
+    let later_child = crate::string::js_string_from_bytes(b"later-child".as_ptr(), 11) as *mut u8;
     let first_child_header = unsafe { header_from_user_ptr(first_child) };
     let later_child_header = unsafe { header_from_user_ptr(later_child) };
     let arr = crate::array::js_array_alloc_with_length(66);
@@ -322,8 +320,7 @@ fn test_layout_mask_object_and_closure_slots() {
     clear_marks();
     clear_mark_seeds();
 
-    let object_child =
-        crate::string::js_string_from_bytes(b"object-child".as_ptr(), 12) as *mut u8;
+    let object_child = crate::string::js_string_from_bytes(b"object-child".as_ptr(), 12) as *mut u8;
     let object_child_header = unsafe { header_from_user_ptr(object_child) };
     let obj = crate::object::js_object_alloc(0, 3);
     crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.0));
@@ -2390,10 +2387,7 @@ thread_local! {
         RefCell::new(TestFfiMutableRootSlots::default());
 }
 
-extern "C" fn test_ffi_mutable_root_scanner(
-    visit: PerryFfiMutableRootVisitor,
-    ctx: *mut c_void,
-) {
+extern "C" fn test_ffi_mutable_root_scanner(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void) {
     TEST_FFI_MUTABLE_ROOTS.with(|roots| {
         let mut roots = roots.borrow_mut();
         for slot in roots.i64_slots.iter_mut() {
@@ -2514,9 +2508,7 @@ extern "C" fn test_no_capture_singleton_func(
     0.0
 }
 
-extern "C" fn test_captured_singleton_func(
-    _closure: *const crate::closure::ClosureHeader,
-) -> f64 {
+extern "C" fn test_captured_singleton_func(_closure: *const crate::closure::ClosureHeader) -> f64 {
     0.0
 }
 
@@ -2532,8 +2524,7 @@ unsafe fn init_test_closure_with_one_capture(ptr: *mut u8, capture_bits: u64) ->
     (*closure).func_ptr = std::ptr::null();
     (*closure).capture_count = 1;
     (*closure).type_tag = crate::closure::CLOSURE_MAGIC;
-    let capture_slot =
-        ptr.add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64;
+    let capture_slot = ptr.add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64;
     *capture_slot = capture_bits;
     layout_note_slot(ptr as usize, 0, capture_bits);
     capture_slot
@@ -2688,8 +2679,7 @@ fn test_small_js_string_alloc_uses_managed_nursery_page() {
 #[test]
 fn test_small_js_closure_alloc_uses_managed_nursery_page() {
     let _guard = CopyingNurseryTestGuard::new(0);
-    let closure =
-        crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 2);
+    let closure = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 2);
     let header = unsafe { header_from_user_ptr(closure as *const u8) };
 
     unsafe {
@@ -2733,8 +2723,7 @@ fn test_large_js_closure_alloc_remains_malloc_tracked() {
 fn test_old_managed_closure_capture_write_dirties_old_page() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let child = young_leaf();
-    let payload =
-        std::mem::size_of::<crate::closure::ClosureHeader>() + std::mem::size_of::<u64>();
+    let payload = std::mem::size_of::<crate::closure::ClosureHeader>() + std::mem::size_of::<u64>();
     let closure = crate::arena::arena_alloc_gc_old(
         payload,
         std::mem::align_of::<crate::closure::ClosureHeader>(),
@@ -2747,8 +2736,7 @@ fn test_old_managed_closure_capture_write_dirties_old_page() {
         layout_init_pointer_free(closure as *mut u8);
     }
     let slot = unsafe {
-        (closure as *mut u8).add(std::mem::size_of::<crate::closure::ClosureHeader>())
-            as *mut u64
+        (closure as *mut u8).add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64
     };
     let page = crate::arena::generation_page_for_addr(slot as usize);
     crate::arena::old_page_clear_dirty(page);
@@ -2765,8 +2753,7 @@ fn test_copying_minor_relocates_managed_closure_and_rewrites_capture() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let child = young_leaf();
-    let closure =
-        crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 1);
+    let closure = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 1);
     crate::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(ptr_bits(child)));
     js_shadow_slot_set(0, ptr_bits(closure as usize));
 
@@ -2839,8 +2826,7 @@ fn test_copying_minor_preserves_dynamic_object_values_after_numeric_first_growth
     js_shadow_slot_set(0, ptr_bits(obj as usize));
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
-    let obj_after =
-        (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::object::ObjectHeader;
+    let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::object::ObjectHeader;
 
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
     assert_ne!(obj_after as usize, obj as usize);
@@ -2913,16 +2899,14 @@ fn test_copying_minor_marks_array_growth_forwarding_target() {
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     let first_value_bits =
-        crate::array::js_array_get_f64(arr_after as *const crate::array::ArrayHeader, 0)
-            .to_bits();
+        crate::array::js_array_get_f64(arr_after as *const crate::array::ArrayHeader, 0).to_bits();
     let closure_after = (first_value_bits & POINTER_MASK) as usize;
     let closure_header =
         unsafe { (closure_after as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader };
     let capture_after_bits = unsafe {
         let closure = closure_after as *const crate::closure::ClosureHeader;
         assert_eq!((*closure).type_tag, crate::closure::CLOSURE_MAGIC);
-        let slot = (closure as *const u8)
-            .add(std::mem::size_of::<crate::closure::ClosureHeader>())
+        let slot = (closure as *const u8).add(std::mem::size_of::<crate::closure::ClosureHeader>())
             as *const u64;
         *slot
     };
@@ -3183,9 +3167,7 @@ fn test_malloc_kind_telemetry_trace_json() {
     assert_eq!(unknown_row["kind"].as_str(), Some("unknown"));
 }
 
-unsafe fn alloc_old_test_object(
-    field_count: u32,
-) -> (*mut crate::object::ObjectHeader, *mut u64) {
+unsafe fn alloc_old_test_object(field_count: u32) -> (*mut crate::object::ObjectHeader, *mut u64) {
     let payload = std::mem::size_of::<crate::object::ObjectHeader>() + field_count as usize * 8;
     let obj = crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_OBJECT)
         as *mut crate::object::ObjectHeader;
@@ -3267,8 +3249,7 @@ fn test_large_buffer_and_typed_array_enter_valid_pointer_set() {
     );
 
     let buffer_data = buffer + std::mem::size_of::<crate::buffer::BufferHeader>();
-    let typed_array_data =
-        typed_array + std::mem::size_of::<crate::typedarray::TypedArrayHeader>();
+    let typed_array_data = typed_array + std::mem::size_of::<crate::typedarray::TypedArrayHeader>();
     assert_eq!(valid_ptrs.enclosing_object(buffer_data), Some(buffer));
     assert_eq!(
         valid_ptrs.enclosing_object(typed_array_data),
@@ -3694,8 +3675,7 @@ fn test_old_page_defrag_forced_moves_only_marked_old_objects_on_selected_pages()
     let (movable_header, movable_total) = old_test_header_and_size(movable);
     let (unmarked_header, _) = old_test_header_and_size(unmarked);
     let mut selected_pages = crate::fast_hash::new_ptr_hash_set();
-    for (page, _) in
-        crate::arena::old_object_page_overlaps(movable_header as usize, movable_total)
+    for (page, _) in crate::arena::old_object_page_overlaps(movable_header as usize, movable_total)
     {
         selected_pages.insert(page);
     }
@@ -3755,9 +3735,7 @@ fn test_old_page_defrag_copy_avoids_selected_pages_and_rebuilds_remembered_set()
     let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let child_header = unsafe { header_from_user_ptr(child as *const u8) };
     let mut selected_pages = crate::fast_hash::new_ptr_hash_set();
-    for (page, _) in
-        crate::arena::old_object_page_overlaps(parent_header as usize, parent_total)
-    {
+    for (page, _) in crate::arena::old_object_page_overlaps(parent_header as usize, parent_total) {
         selected_pages.insert(page);
     }
     unsafe {
@@ -3830,9 +3808,7 @@ fn test_old_page_defrag_skips_pinned_old_objects() {
     let pinned = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
     let (pinned_header, pinned_total) = old_test_header_and_size(pinned);
     let mut selected_pages = crate::fast_hash::new_ptr_hash_set();
-    for (page, _) in
-        crate::arena::old_object_page_overlaps(pinned_header as usize, pinned_total)
-    {
+    for (page, _) in crate::arena::old_object_page_overlaps(pinned_header as usize, pinned_total) {
         selected_pages.insert(page);
     }
     unsafe {
@@ -3877,9 +3853,7 @@ fn test_old_page_defrag_skips_non_movable_buffer_and_typed_array() {
     let (buffer_header, buffer_total) = old_test_header_and_size(buffer);
     let (typed_array_header, typed_array_total) = old_test_header_and_size(typed_array);
     let mut selected_pages = crate::fast_hash::new_ptr_hash_set();
-    for (page, _) in
-        crate::arena::old_object_page_overlaps(buffer_header as usize, buffer_total)
-    {
+    for (page, _) in crate::arena::old_object_page_overlaps(buffer_header as usize, buffer_total) {
         selected_pages.insert(page);
     }
     for (page, _) in
@@ -4321,8 +4295,8 @@ fn test_ffi_mutable_trampoline_visits_all_slot_kinds() {
     });
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
-    let (i64_after, usize_after, raw_after, f64_after, u64_after) = TEST_FFI_MUTABLE_ROOTS
-        .with(|roots| {
+    let (i64_after, usize_after, raw_after, f64_after, u64_after) =
+        TEST_FFI_MUTABLE_ROOTS.with(|roots| {
             let roots = roots.borrow();
             (
                 roots.i64_slots[0] as usize,
@@ -4366,8 +4340,7 @@ fn test_copied_minor_eligibility_old_only_copy_only_root_stays_eligible() {
 fn test_copied_minor_eligibility_malformed_copy_only_root_stays_eligible() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let _copy_only_root_guard =
-        TemporaryCopyOnlyRootScanner::rust_bits(&[0x7FFD_0000_0000_1000]);
+    let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[0x7FFD_0000_0000_1000]);
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
 
@@ -4618,11 +4591,7 @@ fn large_object_clone_direct_copy_keeps_young_child_alive_and_excludes_parent() 
     let child = young_leaf();
     let child_total = unsafe { (*header_from_user_ptr(child as *const u8)).size as usize };
     let src = crate::object::js_object_alloc(0, 1);
-    crate::object::js_object_set_field(
-        src,
-        0,
-        crate::value::JSValue::from_bits(ptr_bits(child)),
-    );
+    crate::object::js_object_set_field(src, 0, crate::value::JSValue::from_bits(ptr_bits(child)));
 
     let clone = unsafe {
         crate::object::js_object_clone_with_extra(
@@ -4720,8 +4689,7 @@ fn test_copying_minor_copies_transitive_young_graph() {
     let _ = gc_collect_minor();
     let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     let child_after = unsafe {
-        let elements = (arr_after as *mut u8)
-            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+        let elements = (arr_after as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
             as *mut u64;
         (*elements & POINTER_MASK) as usize
     };
@@ -4749,8 +4717,7 @@ fn test_copying_minor_moves_layout_masked_transitive_object() {
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     let child_after = unsafe {
-        let elements = (arr_after as *mut u8)
-            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+        let elements = (arr_after as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
             as *mut u64;
         (*elements & POINTER_MASK) as usize
     };
@@ -4816,8 +4783,7 @@ fn test_copying_minor_rewrites_singleton_closure_caches() {
     assert_eq!(before_entries[0].1, captured);
 
     let capture_slot = unsafe {
-        (captured as *mut u8).add(std::mem::size_of::<crate::closure::ClosureHeader>())
-            as *mut u64
+        (captured as *mut u8).add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64
     };
     assert_eq!(unsafe { *capture_slot }, capture_bits);
 
@@ -5009,12 +4975,9 @@ fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
     for (page, _) in crate::arena::old_object_page_overlaps(dead - GC_HEADER_SIZE, dead_total) {
         fragmented_pages.insert(page);
     }
-    let pinned = crate::arena::arena_alloc_gc_old_excluding_pages(
-        40,
-        8,
-        GC_TYPE_STRING,
-        &fragmented_pages,
-    ) as usize;
+    let pinned =
+        crate::arena::arena_alloc_gc_old_excluding_pages(40, 8, GC_TYPE_STRING, &fragmented_pages)
+            as usize;
     let (pinned_header, pinned_total) = old_test_header_and_size(pinned);
     reset.pinned_header = pinned_header;
 
@@ -5554,10 +5517,7 @@ unsafe fn field_index_not_on_last_page(fields: *mut u64, field_count: u32) -> us
     panic!("test object did not span multiple field pages");
 }
 
-unsafe fn field_indices_on_distinct_pages(
-    fields: *mut u64,
-    field_count: u32,
-) -> (usize, usize) {
+unsafe fn field_indices_on_distinct_pages(fields: *mut u64, field_count: u32) -> (usize, usize) {
     assert!(field_count > 1);
     let first = field_index_not_on_last_page(fields, field_count);
     let first_page = crate::arena::generation_page_for_addr(fields.add(first) as usize);
@@ -6032,8 +5992,8 @@ fn test_dirty_lazy_array_external_cache_scan_marks_bitmap_selected_child() {
         GC_TYPE_LAZY_ARRAY,
     ) as *mut crate::json_tape::LazyArrayHeader;
     let cache_bytes = cached_length * std::mem::size_of::<crate::value::JSValue>();
-    let cache = crate::arena::arena_alloc_gc(cache_bytes, 8, GC_TYPE_STRING)
-        as *mut crate::value::JSValue;
+    let cache =
+        crate::arena::arena_alloc_gc(cache_bytes, 8, GC_TYPE_STRING) as *mut crate::value::JSValue;
     let bitmap =
         crate::arena::arena_alloc_gc(std::mem::size_of::<u64>(), 8, GC_TYPE_STRING) as *mut u64;
     let selected_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -6060,8 +6020,7 @@ fn test_dirty_lazy_array_external_cache_scan_marks_bitmap_selected_child() {
     }
 
     let lazy_header = unsafe { header_from_user_ptr(lazy as *const u8) };
-    let dirty_cache_page =
-        crate::arena::generation_page_for_addr(unsafe { cache.add(1) } as usize);
+    let dirty_cache_page = crate::arena::generation_page_for_addr(unsafe { cache.add(1) } as usize);
     assert!(mark_dirty_external_slot_page(
         lazy_header as usize,
         dirty_cache_page
@@ -6744,10 +6703,8 @@ fn test_transient_runtime_handle_string_concat_gc() {
 
     let left_bytes = vec![b'a'; 600_000];
     let right_bytes = vec![b'b'; 600_000];
-    let left =
-        crate::string::js_string_from_bytes(left_bytes.as_ptr(), left_bytes.len() as u32);
-    let right =
-        crate::string::js_string_from_bytes(right_bytes.as_ptr(), right_bytes.len() as u32);
+    let left = crate::string::js_string_from_bytes(left_bytes.as_ptr(), left_bytes.len() as u32);
+    let right = crate::string::js_string_from_bytes(right_bytes.as_ptr(), right_bytes.len() as u32);
 
     trigger_guard.make_arena_trigger_due();
     let before = gc_collection_count();
@@ -6876,9 +6833,8 @@ fn test_transient_runtime_handle_closure_captures_gc() {
         assert_string_bytes(stored_ptr, b"closure-payload");
     }
 
-    let entries = crate::closure::test_captured_singleton_closure_cache_entries(
-        captured_func as *const u8,
-    );
+    let entries =
+        crate::closure::test_captured_singleton_closure_cache_entries(captured_func as *const u8);
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].0.len(), 1);
     assert_ne!(entries[0].0[0], captures[0]);
@@ -7284,10 +7240,7 @@ fn test_arkts_callbacks_mutable_scanner_rewrites_callback_slots() {
     let fixture = ForwardedRootFixture::new();
     let callback_idx = 3;
     crate::arkts_callbacks::test_clear_arkts_callback_roots();
-    crate::arkts_callbacks::test_seed_arkts_callback_root(
-        callback_idx,
-        fixture.nursery_value(),
-    );
+    crate::arkts_callbacks::test_seed_arkts_callback_root(callback_idx, fixture.nursery_value());
 
     let mut visitor = RuntimeRootVisitor::for_rewrite(&fixture.valid_ptrs);
     crate::arkts_callbacks::arkts_callbacks_root_scanner_mut(&mut visitor);
@@ -7386,8 +7339,7 @@ fn test_conservative_pin_stats_exclude_legacy_copy_only_scanner_pins() {
     clear_marks();
     let conservative_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     let legacy_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
-    let conservative_header =
-        unsafe { header_from_user_ptr(conservative_user) as *mut GcHeader };
+    let conservative_header = unsafe { header_from_user_ptr(conservative_user) as *mut GcHeader };
     let legacy_header = unsafe { header_from_user_ptr(legacy_user) as *mut GcHeader };
     unsafe {
         (*conservative_header).gc_flags |= GC_FLAG_MARKED;
@@ -7585,16 +7537,8 @@ fn test_evacuation_policy() {
     assert!(force.enabled);
     assert_eq!(force.reason, "force");
 
-    let low_pressure = evacuation_policy_initial_decision(
-        0,
-        RSS_PRESSURE_BYTES - 1,
-        0,
-        0,
-        true,
-        false,
-        true,
-        0,
-    );
+    let low_pressure =
+        evacuation_policy_initial_decision(0, RSS_PRESSURE_BYTES - 1, 0, 0, true, false, true, 0);
     assert!(!low_pressure.considered);
     assert!(!low_pressure.enabled);
     assert_eq!(low_pressure.reason, "low_pressure");

@@ -256,7 +256,9 @@ pub(super) enum ConservativeStackScanDecision {
     SkipShadowStackActive,
 }
 
-pub(super) fn conservative_stack_scan_mode_from_value(value: Option<&str>) -> ConservativeStackScanMode {
+pub(super) fn conservative_stack_scan_mode_from_value(
+    value: Option<&str>,
+) -> ConservativeStackScanMode {
     let Some(value) = value else {
         return ConservativeStackScanMode::Auto;
     };
@@ -395,7 +397,9 @@ pub(super) fn mark_stack_roots_for_decision(
 /// Handles BOTH NaN-boxed pointers (POINTER_TAG/STRING_TAG/BIGINT_TAG) AND raw I64 pointers.
 /// Raw I64 pointers arise from Perry's `is_array`/`is_string`/`is_pointer`/`is_closure` local
 /// variables — codegen stores these as raw I64 words (not NaN-boxed) in registers and on stack.
-pub(super) fn mark_stack_roots_unchecked(valid_ptrs: &ValidPointerSet) -> ConservativeRootTraceStats {
+pub(super) fn mark_stack_roots_unchecked(
+    valid_ptrs: &ValidPointerSet,
+) -> ConservativeRootTraceStats {
     let mut stats = ConservativeRootTraceStats::default();
     // Capture callee-saved registers into a buffer via setjmp.
     //
@@ -1388,7 +1392,9 @@ pub(super) fn scan_runtime_handle_roots_mut(visitor: &mut RuntimeRootVisitor<'_>
 }
 
 #[inline]
-pub(super) fn atomic_store_ordering(ordering: std::sync::atomic::Ordering) -> std::sync::atomic::Ordering {
+pub(super) fn atomic_store_ordering(
+    ordering: std::sync::atomic::Ordering,
+) -> std::sync::atomic::Ordering {
     match ordering {
         std::sync::atomic::Ordering::Relaxed => std::sync::atomic::Ordering::Relaxed,
         std::sync::atomic::Ordering::Acquire | std::sync::atomic::Ordering::Release => {
@@ -1525,7 +1531,10 @@ pub(super) fn mark_mutable_root_slots(
 }
 
 #[inline]
-pub(super) fn nanboxed_root_header(value_bits: u64, valid_ptrs: &ValidPointerSet) -> Option<*mut GcHeader> {
+pub(super) fn nanboxed_root_header(
+    value_bits: u64,
+    valid_ptrs: &ValidPointerSet,
+) -> Option<*mut GcHeader> {
     let tag = value_bits & TAG_MASK;
     if tag != POINTER_TAG && tag != STRING_TAG && tag != BIGINT_TAG {
         return None;

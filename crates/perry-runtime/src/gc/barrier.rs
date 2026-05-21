@@ -546,7 +546,6 @@ pub(super) unsafe fn scan_dirty_lazy_array_slots(
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Phase C — write barrier + remembered set
 // (docs/generational-gc-plan.md §Phase C)
@@ -717,7 +716,12 @@ pub extern "C" fn js_write_barrier_slot(parent: u64, slot_addr: u64, child: u64)
     write_barrier_slot_inner(parent, slot_addr as usize, child, false);
 }
 
-pub(super) fn write_barrier_slot_inner(parent: u64, slot_addr: usize, child: u64, external_slot: bool) {
+pub(super) fn write_barrier_slot_inner(
+    parent: u64,
+    slot_addr: usize,
+    child: u64,
+    external_slot: bool,
+) {
     bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
 
     // Decode child first: primitive stores are the most common skip.
@@ -893,7 +897,11 @@ pub(crate) fn runtime_dirty_external_slot_span(
     dirty_external_slot_span(parent_addr, first_slot_addr, slot_count);
 }
 
-pub(super) fn dirty_external_slot_span(parent_addr: usize, first_slot_addr: usize, slot_count: usize) {
+pub(super) fn dirty_external_slot_span(
+    parent_addr: usize,
+    first_slot_addr: usize,
+    slot_count: usize,
+) {
     if parent_addr < GC_HEADER_SIZE || first_slot_addr == 0 || slot_count == 0 {
         return;
     }
@@ -960,4 +968,3 @@ pub fn remembered_set_clear() {
     EXTERNAL_DIRTY_SLOT_PAGES.with(|s| s.borrow_mut().clear());
     REMEMBERED_SET.with(|s| s.borrow_mut().clear());
 }
-

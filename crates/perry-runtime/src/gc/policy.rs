@@ -151,7 +151,11 @@ pub(super) fn gc_suppressed_parse_is_tiny(parse_growth: usize) -> bool {
     parse_growth <= GC_SUPPRESSED_TINY_PARSE_BYTES
 }
 
-pub(super) fn gc_bump_arena_trigger_target(bytes_now: usize, step: usize, is_tiny_parse: bool) -> usize {
+pub(super) fn gc_bump_arena_trigger_target(
+    bytes_now: usize,
+    step: usize,
+    is_tiny_parse: bool,
+) -> usize {
     let bytes_step = step.min(GC_THRESHOLD_INITIAL_BYTES);
     let target = bytes_now.saturating_add(bytes_step);
     if is_tiny_parse {
@@ -364,7 +368,6 @@ pub(super) fn flush_deferred_gc_request() {
         }
     }
 }
-
 
 pub fn gc_suppress() {
     if !gen_gc_enabled()
@@ -853,7 +856,8 @@ pub fn gc_check_trigger() {
 pub static GC_UNSAFE_ZONES: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 /// One-shot warning so we don't spam stderr on every tick.
-pub(super) static GC_UNSAFE_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(super) static GC_UNSAFE_WARNED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Manual GC trigger (callable from TypeScript as `gc()`). Skipped when
 /// worker threads are active (see GC_UNSAFE_ZONES).

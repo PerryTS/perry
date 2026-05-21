@@ -253,7 +253,6 @@ pub(super) fn record_layout_pointer_free_range_skipped(slot_count: usize) {
     });
 }
 
-
 #[derive(Clone, Copy, Default)]
 pub(super) struct BarrierTraceCounters {
     pub(super) calls: u64,
@@ -325,7 +324,10 @@ pub(super) struct GcCycleTrace {
 }
 
 impl GcCycleTrace {
-    pub(super) fn new(collection_kind: GcCollectionKind, trigger: GcTriggerSnapshot) -> Option<Self> {
+    pub(super) fn new(
+        collection_kind: GcCollectionKind,
+        trigger: GcTriggerSnapshot,
+    ) -> Option<Self> {
         let steps_before = trigger.steps_before?;
         begin_layout_scan_trace();
         let mut phase_us = BTreeMap::new();
@@ -576,7 +578,6 @@ pub(super) fn gc_last_pause_us() -> u64 {
     GC_STATS.with(|stats| stats.borrow().last_pause_us)
 }
 
-
 impl GcCollectOutcome {
     #[inline]
     pub(super) fn emit_after_current(self) -> u64 {
@@ -611,7 +612,10 @@ pub(super) fn malloc_object_count() -> usize {
     MALLOC_STATE.with(|s| s.borrow().objects.len())
 }
 
-pub(super) fn malloc_kind_telemetry_row(obj_type: u8, counters: MallocKindTelemetry) -> serde_json::Value {
+pub(super) fn malloc_kind_telemetry_row(
+    obj_type: u8,
+    counters: MallocKindTelemetry,
+) -> serde_json::Value {
     serde_json::json!({
         "obj_type": obj_type,
         "kind": gc_type_name(obj_type),
@@ -659,7 +663,9 @@ pub(super) fn arena_region_json(region: crate::arena::ArenaRegionTelemetry) -> s
     })
 }
 
-pub(super) fn arena_snapshot_json(snapshot: crate::arena::ArenaTelemetrySnapshot) -> serde_json::Value {
+pub(super) fn arena_snapshot_json(
+    snapshot: crate::arena::ArenaTelemetrySnapshot,
+) -> serde_json::Value {
     serde_json::json!({
         "arena": arena_region_json(snapshot.arena),
         "survivor0": arena_region_json(snapshot.survivor0),

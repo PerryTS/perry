@@ -198,7 +198,10 @@ pub(super) unsafe fn rewrite_lazy_array_fields(user_ptr: *mut u8, valid_ptrs: &V
     }
 }
 
-pub(super) unsafe fn rewrite_heap_object_fields(header: *mut GcHeader, valid_ptrs: &ValidPointerSet) {
+pub(super) unsafe fn rewrite_heap_object_fields(
+    header: *mut GcHeader,
+    valid_ptrs: &ValidPointerSet,
+) {
     let flags = (*header).gc_flags;
     if flags & GC_FLAG_FORWARDED != 0 {
         return;
@@ -442,17 +445,29 @@ pub(super) unsafe fn verify_gc_child_slots(
     }
 }
 
-pub(super) unsafe fn verify_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+pub(super) unsafe fn verify_array_fields(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    surface: &str,
+) {
     let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
     verify_gc_child_slots(header, valid_ptrs, surface);
 }
 
-pub(super) unsafe fn verify_object_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+pub(super) unsafe fn verify_object_fields(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    surface: &str,
+) {
     let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
     verify_gc_child_slots(header, valid_ptrs, surface);
 }
 
-pub(super) unsafe fn verify_map_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+pub(super) unsafe fn verify_map_fields(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    surface: &str,
+) {
     let map = user_ptr as *const crate::map::MapHeader;
     let size = (*map).size;
     let capacity = (*map).capacity;
@@ -466,7 +481,11 @@ pub(super) unsafe fn verify_map_fields(user_ptr: *mut u8, valid_ptrs: &ValidPoin
     }
 }
 
-pub(super) unsafe fn verify_closure_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+pub(super) unsafe fn verify_closure_fields(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    surface: &str,
+) {
     let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
     verify_gc_child_slots(header, valid_ptrs, surface);
     crate::closure::visit_closure_dynamic_prop_value_slots_mut(user_ptr as usize, |slot| {
@@ -474,7 +493,11 @@ pub(super) unsafe fn verify_closure_fields(user_ptr: *mut u8, valid_ptrs: &Valid
     });
 }
 
-pub(super) unsafe fn verify_promise_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+pub(super) unsafe fn verify_promise_fields(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    surface: &str,
+) {
     let promise = user_ptr as *const crate::promise::Promise;
     verify_slot(
         &(*promise).value as *const f64 as *const u64,
@@ -503,7 +526,11 @@ pub(super) unsafe fn verify_promise_fields(user_ptr: *mut u8, valid_ptrs: &Valid
     );
 }
 
-pub(super) unsafe fn verify_error_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+pub(super) unsafe fn verify_error_fields(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    surface: &str,
+) {
     let error = user_ptr as *const crate::error::ErrorHeader;
     verify_slot(
         &(*error).message as *const _ as *const u64,
@@ -532,7 +559,11 @@ pub(super) unsafe fn verify_error_fields(user_ptr: *mut u8, valid_ptrs: &ValidPo
     );
 }
 
-pub(super) unsafe fn verify_lazy_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+pub(super) unsafe fn verify_lazy_array_fields(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    surface: &str,
+) {
     let lazy = user_ptr as *const crate::json_tape::LazyArrayHeader;
     if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
         return;
@@ -712,7 +743,11 @@ pub(super) fn verify_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
     visit_ffi_mutable_registered_roots(&mut visitor);
 }
 
-pub(super) fn verify_copy_only_scanner_bits(bits: u64, valid_ptrs: &ValidPointerSet, surface: &'static str) {
+pub(super) fn verify_copy_only_scanner_bits(
+    bits: u64,
+    valid_ptrs: &ValidPointerSet,
+    surface: &'static str,
+) {
     if let Some(new_bits) = try_rewrite_nanboxed_value(bits, valid_ptrs) {
         panic_stale_forwarded_reference(surface, 0, bits, new_bits);
     }
@@ -831,4 +866,3 @@ pub fn is_conservatively_pinned(header: *const GcHeader) -> bool {
 pub fn cons_pinned_count() -> usize {
     CONS_PINNED.with(|s| s.borrow().len())
 }
-

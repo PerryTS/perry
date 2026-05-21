@@ -259,7 +259,6 @@ pub(super) fn build_valid_pointer_set() -> ValidPointerSet {
     set
 }
 
-
 pub(super) fn push_mark_seed(header: *mut GcHeader) {
     MARK_SEEDS.with(|cell| unsafe {
         (*cell.get()).push(header);
@@ -409,7 +408,10 @@ pub(super) fn try_mark_young_value_as_seed(value_bits: u64, valid_ptrs: &ValidPo
     try_mark_young_user_ptr_as_seed(ptr, valid_ptrs)
 }
 
-pub(super) fn try_mark_young_user_ptr_as_seed(ptr_val: usize, valid_ptrs: &ValidPointerSet) -> bool {
+pub(super) fn try_mark_young_user_ptr_as_seed(
+    ptr_val: usize,
+    valid_ptrs: &ValidPointerSet,
+) -> bool {
     if ptr_val == 0 || !valid_ptrs.contains(&ptr_val) {
         return false;
     }
@@ -442,11 +444,17 @@ pub(super) fn try_mark_young_user_ptr_as_seed(ptr_val: usize, valid_ptrs: &Valid
 /// are NOT recursively traced. This is the time-win core of the
 /// generational design: minor GC's transitive closure is bounded
 /// by `O(young live set + RS roots)` instead of `O(all live)`.
-pub(super) fn drain_trace_worklist(worklist: &mut Vec<*mut GcHeader>, valid_ptrs: &ValidPointerSet) {
+pub(super) fn drain_trace_worklist(
+    worklist: &mut Vec<*mut GcHeader>,
+    valid_ptrs: &ValidPointerSet,
+) {
     drain_trace_worklist_inner(worklist, valid_ptrs, false);
 }
 
-pub(super) fn drain_trace_worklist_minor(worklist: &mut Vec<*mut GcHeader>, valid_ptrs: &ValidPointerSet) {
+pub(super) fn drain_trace_worklist_minor(
+    worklist: &mut Vec<*mut GcHeader>,
+    valid_ptrs: &ValidPointerSet,
+) {
     drain_trace_worklist_inner(worklist, valid_ptrs, true);
 }
 
@@ -572,7 +580,9 @@ pub(super) fn trace_marked_objects_minor(valid_ptrs: &ValidPointerSet) {
 /// old-block neighbors as new block-persist candidates.
 pub(super) const BLOCK_PERSIST_WINDOW: usize = 5;
 
-pub(super) fn mark_block_persisting_arena_objects(valid_ptrs: &ValidPointerSet) -> BlockPersistTraceStats {
+pub(super) fn mark_block_persisting_arena_objects(
+    valid_ptrs: &ValidPointerSet,
+) -> BlockPersistTraceStats {
     let mut worklist: Vec<*mut GcHeader> = Vec::new();
     let mut stats = BlockPersistTraceStats::default();
     loop {

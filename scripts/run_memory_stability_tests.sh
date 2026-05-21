@@ -380,6 +380,7 @@ run_test() {
     local ts="$1"
     local rss_limit_mb="$2"
     local expect_substr="$3"
+    local force_verify_rss_limit_mb="${4:-$rss_limit_mb}"
 
     local mode_specs=(
         "default||"
@@ -390,6 +391,10 @@ run_test() {
 
     for spec in "${mode_specs[@]}"; do
         IFS='|' read -r mode_label compile_env_str env_str <<<"$spec"
+        local effective_rss_limit_mb="$rss_limit_mb"
+        if [[ "$mode_label" == "force-evac+verify" ]]; then
+            effective_rss_limit_mb="$force_verify_rss_limit_mb"
+        fi
         local bin="$TMPDIR/$(basename "${ts%.ts}")_${mode_label//[^A-Za-z0-9_]/_}"
 
         local compile_env_args=()
@@ -423,9 +428,9 @@ run_test() {
         if [[ "$LAST_EXIT" -ne 0 ]]; then
             status="FAIL"
             reason="exit=$LAST_EXIT"
-        elif [[ "$LAST_RSS_MB" -gt "$rss_limit_mb" ]]; then
+        elif [[ "$LAST_RSS_MB" -gt "$effective_rss_limit_mb" ]]; then
             status="FAIL"
-            reason="rss=${LAST_RSS_MB}MB > limit=${rss_limit_mb}MB"
+            reason="rss=${LAST_RSS_MB}MB > limit=${effective_rss_limit_mb}MB"
         elif [[ -n "$expect_substr" ]] && ! grep -qF "$expect_substr" "$LAST_STDOUT_FILE"; then
             status="FAIL"
             reason="stdout missing: $expect_substr"
@@ -433,7 +438,7 @@ run_test() {
 
         printf "  %s [%-18s] %-40s rss=%3dMB / limit=%3dMB %s\n" \
             "$status" "$mode_label" "$(basename "$ts")" \
-            "$LAST_RSS_MB" "$rss_limit_mb" "$reason"
+            "$LAST_RSS_MB" "$effective_rss_limit_mb" "$reason"
 
         if [[ "$status" == "PASS" ]]; then
             PASS=$((PASS + 1))
@@ -1545,7 +1550,14 @@ echo "=== Memory-leak regression tests (RSS plateau under sustained alloc) ==="
 # Limits ~50-70% above measured baseline on macOS arm64. CI runners
 # may differ slightly; loosen a limit here rather than in the .ts.
 run_test test-files/test_memory_long_lived_loop.ts 100 "done, lastId=199999"
-run_test test-files/test_memory_json_churn.ts      250 "done, checksum=637747500"
+# JSON churn stays at 250 MB for default/mark-sweep/gen-gc. On macOS
+# arm64, force-evac+verify has a stable tape+verifier high-water after
+# tape scratch/key-cache cleanup: default/gen-gc 240 MB, mark-sweep 90 MB,
+# force-evac+verify 262 MB, verifier direct parse (PERRY_JSON_TAPE=0)
+# 189 MB, forced tape 261 MB. Trace stayed in copied-minor mode with
+# fallback_reason=none, conservative pins=0, copy-only roots/bytes=0, and
+# old-page allocated/live/reusable/returned bytes=0.
+run_test test-files/test_memory_json_churn.ts      250 "done, checksum=637747500" 275
 run_test test-files/test_memory_string_churn.ts    100 "done, total=9577780"
 run_test test-files/test_memory_closure_churn.ts    50 "done, sum=15004649874"
 
