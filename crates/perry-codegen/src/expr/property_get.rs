@@ -454,14 +454,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // Also handle `this` during scalar-replaced ctor inlining
             if let Expr::This = object.as_ref() {
-                if let Some(slot) = ctx
-                    .scalar_ctor_target
-                    .last()
-                    .and_then(|tid| ctx.scalar_replaced.get(tid))
-                    .and_then(|fs| fs.get(property.as_str()))
-                    .cloned()
-                {
-                    return Ok(ctx.block().load(DOUBLE, &slot));
+                if let Some(slot) = ctx.scalar_ctor_target.last().and_then(|tid| {
+                    ctx.scalar_replaced
+                        .get(tid)
+                        .map(|fs| fs.get(property.as_str()).cloned())
+                }) {
+                    if let Some(slot) = slot {
+                        return Ok(ctx.block().load(DOUBLE, &slot));
+                    }
+                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                 }
             }
             // GlobalGet receivers (`console.X`, `Math.PI`, `JSON.parse`,

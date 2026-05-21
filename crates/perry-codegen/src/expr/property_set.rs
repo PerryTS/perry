@@ -94,15 +94,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // Handle `this` during scalar-replaced constructor inlining:
             if let Expr::This = object.as_ref() {
-                if let Some(slot) = ctx
+                if let Some((target_has_slots, slot)) = ctx
                     .scalar_ctor_target
                     .last()
-                    .and_then(|tid| ctx.scalar_replaced.get(tid))
-                    .and_then(|fs| fs.get(property.as_str()))
-                    .cloned()
+                    .and_then(|tid| {
+                        ctx.scalar_replaced
+                            .get(tid)
+                            .map(|fields| (true, fields.get(property.as_str()).cloned()))
+                    })
                 {
                     let val_double = lower_expr(ctx, value)?;
-                    ctx.block().store(DOUBLE, &val_double, &slot);
+                    if target_has_slots {
+                        if let Some(slot) = slot {
+                            ctx.block().store(DOUBLE, &val_double, &slot);
+                        }
+                    }
                     return Ok(val_double);
                 }
             }

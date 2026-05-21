@@ -33,9 +33,10 @@ pub(crate) use escape_arrays::{
 };
 pub(crate) use escape_news::{
     check_escapes_in_expr, check_escapes_in_stmts, class_chain_extends_builtin_error,
-    class_uses_this_as_value, collect_non_escaping_news, expr_contains_local_get,
-    expr_uses_this_as_value, find_new_candidates, is_class_getter, is_class_setter,
-    mark_all_candidate_refs_in_expr, stmts_use_this_as_value, MAX_SCALAR_ARRAY_LEN,
+    class_uses_this_as_value, collect_non_escaping_new_used_fields, collect_non_escaping_news,
+    expr_contains_local_get, expr_uses_this_as_value, find_new_candidates, is_class_getter,
+    is_class_setter, mark_all_candidate_refs_in_expr, stmts_use_this_as_value,
+    MAX_SCALAR_ARRAY_LEN,
 };
 pub(crate) use escape_objects::{
     check_object_literal_escapes_in_expr, check_object_literal_escapes_in_stmts,

@@ -152,6 +152,8 @@ pub(super) fn compile_function(
     // Pre-walk: which `let x = new Class(...)` locals never escape?
     let non_escaping_news =
         crate::collectors::collect_non_escaping_news(&f.body, &boxed_vars, module_globals, classes);
+    let non_escaping_new_used_fields =
+        crate::collectors::collect_non_escaping_new_used_fields(&f.body, &non_escaping_news);
     let non_escaping_arrays =
         crate::collectors::collect_non_escaping_arrays(&f.body, &boxed_vars, module_globals);
     let non_escaping_object_literals = crate::collectors::collect_non_escaping_object_literals(
@@ -235,6 +237,7 @@ pub(super) fn compile_function(
         scalar_replaced_arrays: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news,
+        non_escaping_new_used_fields,
         non_escaping_arrays,
         non_escaping_object_literals,
         flat_const_arrays: &cross_module.flat_const_arrays,

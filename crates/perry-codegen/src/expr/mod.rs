@@ -601,6 +601,13 @@ pub(crate) struct FnCtx<'a> {
     /// intercepts these to emit scalar-replaced field allocas.
     pub non_escaping_news: std::collections::HashMap<u32, String>,
 
+    /// Fields that are actually observed on each scalar-replaced `new` local.
+    /// For synthetic anonymous-shape classes, `Stmt::Let` can allocate only
+    /// these slots while still evaluating constructor args/stores for side
+    /// effects.
+    pub non_escaping_new_used_fields:
+        std::collections::HashMap<u32, std::collections::HashSet<String>>,
+
     /// Scalar-replaced non-escaping array literals. When `let arr =
     /// [a, b, c]` and `arr` is only read at constant indices (and for
     /// `.length`), each slot becomes a stack alloca. Map: local_id →

@@ -64,6 +64,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // may realloc, so we thread the pointer through.
         Expr::ArraySpread(elements) => {
             use perry_hir::ArrayElement;
+            if let [ArrayElement::Spread(e)] = elements.as_slice() {
+                // Hot path for `[...arr]` / `[...set]` / `[...string]`:
+                // avoid allocating an empty destination and then routing
+                // through `js_array_concat`'s append machinery. The clone
+                // helper already contains the same array/string/set/map/
+                // typed-array materialization arms used by Array.from.
+                let src_box = lower_expr(ctx, e)?;
+                let src_handle = unbox_to_i64(ctx.block(), &src_box);
+                let cloned = ctx
+                    .block()
+                    .call(I64, "js_array_clone", &[(I64, &src_handle)]);
+                return Ok(nanbox_pointer_inline(ctx.block(), &cloned));
+            }
             let cap_str = (elements.len() as u32).to_string();
             let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_str)]);
             for elem in elements {

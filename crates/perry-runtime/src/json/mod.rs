@@ -104,6 +104,11 @@ thread_local! {
     /// key and burns 3× the time + RSS vs the direct parser.
     pub(crate) static PARSE_KEY_CACHE: RefCell<std::collections::HashMap<Vec<u8>, *const StringHeader>> =
         RefCell::new(std::collections::HashMap::new());
+    /// Tiny hot-key mirror for homogeneous object parses. Most API JSON
+    /// repeats the same handful of property names thousands of times; a
+    /// short linear probe avoids hashing + HashMap probing on the steady
+    /// state while PARSE_KEY_CACHE remains the owning/rooting store.
+    static PARSE_KEY_RING: RefCell<Vec<*const StringHeader>> = const { RefCell::new(Vec::new()) };
 
     /// Shared keys_array cache for direct JSON.parse objects.
     ///
@@ -227,8 +232,31 @@ pub(crate) fn parse_root_restore(len: usize) {
 
 #[inline]
 pub(crate) fn cached_parse_key_ptr(key_bytes: &[u8]) -> *const StringHeader {
+    let ring_hit = PARSE_KEY_RING.with(|ring| {
+        for &ptr in ring.borrow().iter() {
+            if ptr.is_null() {
+                continue;
+            }
+            unsafe {
+                let len = (*ptr).byte_len as usize;
+                if len != key_bytes.len() {
+                    continue;
+                }
+                let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                if std::slice::from_raw_parts(data, len) == key_bytes {
+                    return Some(ptr);
+                }
+            }
+        }
+        None
+    });
+    if let Some(ptr) = ring_hit {
+        return ptr;
+    }
+
     let cached = PARSE_KEY_CACHE.with(|c| c.borrow().get(key_bytes).copied());
     if let Some(ptr) = cached {
+        remember_parse_key_ring(ptr);
         return ptr;
     }
 
@@ -240,7 +268,26 @@ pub(crate) fn cached_parse_key_ptr(key_bytes: &[u8]) -> *const StringHeader {
     PARSE_KEY_CACHE.with(|c| {
         c.borrow_mut().insert(key_bytes.to_vec(), ptr);
     });
+    remember_parse_key_ring(ptr);
     ptr
+}
+
+#[inline]
+fn remember_parse_key_ring(ptr: *const StringHeader) {
+    PARSE_KEY_RING.with(|ring| {
+        let mut ring = ring.borrow_mut();
+        if ring.contains(&ptr) {
+            return;
+        }
+        if ring.len() == 16 {
+            ring.remove(0);
+        }
+        ring.push(ptr);
+    });
+}
+
+pub(crate) fn clear_parse_key_ring() {
+    PARSE_KEY_RING.with(|ring| ring.borrow_mut().clear());
 }
 
 #[inline]

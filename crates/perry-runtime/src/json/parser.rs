@@ -5,7 +5,9 @@
 //! hint" specialization used by `js_json_parse_typed_array`.
 
 use super::*;
-use crate::{js_array_alloc, js_array_push, js_string_from_bytes, JSValue, StringHeader};
+use crate::{
+    array::ArrayHeader, js_array_alloc, js_array_push, js_string_from_bytes, JSValue, StringHeader,
+};
 
 // ─── Direct JSON parser ────────────────────────────────────────────────────────
 
@@ -61,6 +63,14 @@ pub(crate) struct DirectParser<'a> {
     /// record uses the fast path; mismatches silently fall through
     /// to the generic field-setting logic.
     shape: Option<ObjectShapeHint>,
+    /// Per-parse one-entry shape cache for homogeneous object arrays.
+    /// `parse_shape_keys_array` already has a thread-local cache, but
+    /// repeatedly entering TLS + RefCell for every object is visible on
+    /// 5k-record JSON feeds. Most direct-parser objects repeat one shape,
+    /// so keep the last <=8-key shape in the parser itself.
+    hot_shape_len: usize,
+    hot_shape_keys: [*const StringHeader; 8],
+    hot_shape_array: *mut ArrayHeader,
 }
 
 impl<'a> DirectParser<'a> {
@@ -69,6 +79,9 @@ impl<'a> DirectParser<'a> {
             input,
             pos: 0,
             shape: None,
+            hot_shape_len: 0,
+            hot_shape_keys: [std::ptr::null(); 8],
+            hot_shape_array: std::ptr::null_mut(),
         }
     }
 
@@ -77,6 +90,57 @@ impl<'a> DirectParser<'a> {
             input,
             pos: 0,
             shape: Some(shape),
+            hot_shape_len: 0,
+            hot_shape_keys: [std::ptr::null(); 8],
+            hot_shape_array: std::ptr::null_mut(),
+        }
+    }
+
+    #[inline]
+    unsafe fn parse_shape_keys_array_hot(
+        &mut self,
+        keys: &[*const StringHeader],
+    ) -> *mut ArrayHeader {
+        if keys.len() <= self.hot_shape_keys.len()
+            && keys.len() == self.hot_shape_len
+            && !self.hot_shape_array.is_null()
+            && self.hot_shape_keys[..self.hot_shape_len]
+                .iter()
+                .zip(keys.iter())
+                .all(|(a, b)| std::ptr::eq(*a, *b))
+        {
+            return self.hot_shape_array;
+        }
+
+        let keys_array = parse_shape_keys_array(keys);
+        if keys.len() <= self.hot_shape_keys.len() {
+            self.hot_shape_len = keys.len();
+            self.hot_shape_keys[..keys.len()].copy_from_slice(keys);
+            self.hot_shape_array = keys_array;
+        }
+        keys_array
+    }
+
+    #[inline(always)]
+    unsafe fn array_push_parse_fast(
+        &self,
+        arr: *mut ArrayHeader,
+        value: JSValue,
+    ) -> *mut ArrayHeader {
+        let length = (*arr).length;
+        if length < (*arr).capacity {
+            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+            let value_bits = value.bits();
+            let slot = elements_ptr.add(length as usize);
+            std::ptr::write(slot, value_bits);
+            // JSON.parse suppresses GC and writes only into arrays allocated
+            // by the same parse, so a generational write barrier is redundant.
+            // Keep the layout note so tracing still sees the element slot.
+            crate::gc::layout_note_slot(arr as usize, length as usize, value_bits);
+            (*arr).length = length + 1;
+            arr
+        } else {
+            js_array_push(arr, value)
         }
     }
 
@@ -327,7 +391,9 @@ impl<'a> DirectParser<'a> {
             // shaped record are NOT themselves expected to match the
             // shape (shape is one-level deep by design in Step 1b).
             let value = self.parse_value_generic();
-            parse_root_push(value);
+            // JSON.parse suppresses GC for the whole parse, so there is
+            // no collection point between `parse_value_generic` and the
+            // direct/slow-path field write below.
             js_obj = parse_root_object_ptr(obj_slot);
 
             let key_bytes = key.as_bytes();
@@ -354,12 +420,9 @@ impl<'a> DirectParser<'a> {
                                     as *mut JSValue;
                                 let slot = fields_ptr.add(slot_idx);
                                 std::ptr::write(slot, JSValue::from_bits(value_bits));
+                                // New parse-owned object under GC suppression:
+                                // layout metadata is required, a barrier is not.
                                 crate::gc::layout_note_slot(js_obj as usize, slot_idx, value_bits);
-                                crate::gc::runtime_write_barrier_slot(
-                                    js_obj as usize,
-                                    slot as usize,
-                                    value_bits,
-                                );
                                 fast_idx += 1;
                                 took_fast = true;
                             }
@@ -367,7 +430,6 @@ impl<'a> DirectParser<'a> {
                     }
                 }
             }
-
             if !took_fast {
                 // Slow path: might be an out-of-order field, an extra
                 // field not in the declared shape, or a shape mismatch.
@@ -419,7 +481,15 @@ impl<'a> DirectParser<'a> {
         self.skip_whitespace();
 
         let saved_roots = parse_root_save_len();
-        let mut js_arr = js_array_alloc(16);
+        // Silly-but-effective hot-path guess: large JSON feeds commonly
+        // contain arrays of objects (`[{...}, ...]`). Pre-sizing those
+        // object arrays avoids repeated grow/copy cycles while keeping
+        // scalar/string arrays on the old 16-slot default.
+        let mut js_arr = js_array_alloc(if self.peek() == Some(b'{') {
+            ((self.input.len() - self.pos) / 96).clamp(16, 16_384) as u32
+        } else {
+            16
+        });
         let arr_slot = parse_root_push(JSValue::object_ptr(js_arr as *mut u8));
 
         if self.peek() == Some(b']') {
@@ -441,8 +511,9 @@ impl<'a> DirectParser<'a> {
                 self.parse_value_generic()
             };
             js_arr = parse_root_array_ptr(arr_slot);
-            parse_root_push(value);
-            js_arr = js_array_push(js_arr, value);
+            // GC is suppressed for the whole typed parse, so array growth
+            // cannot collect before `value` is stored.
+            js_arr = self.array_push_parse_fast(js_arr, value);
             parse_root_set(arr_slot, JSValue::object_ptr(js_arr as *mut u8));
 
             self.skip_whitespace();
@@ -495,7 +566,7 @@ impl<'a> DirectParser<'a> {
         if self.peek() == Some(b'}') {
             self.advance();
             let keys: [*const StringHeader; 0] = [];
-            let keys_arr = parse_shape_keys_array(&keys);
+            let keys_arr = self.parse_shape_keys_array_hot(&keys);
             let js_obj = crate::object::js_object_alloc_class_inline_keys(0, 0, 0, keys_arr);
             let fields_ptr =
                 (js_obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
@@ -506,8 +577,10 @@ impl<'a> DirectParser<'a> {
             return JSValue::object_ptr(js_obj as *mut u8);
         }
 
-        let mut keys: Vec<*const StringHeader> = Vec::new();
-        let mut values: Vec<JSValue> = Vec::new();
+        let mut inline_keys: [*const StringHeader; 8] = [std::ptr::null(); 8];
+        let mut inline_values: [JSValue; 8] = [JSValue::undefined(); 8];
+        let mut inline_len: usize = 0;
+        let mut heap_fields: Option<(Vec<*const StringHeader>, Vec<JSValue>)> = None;
 
         loop {
             self.skip_whitespace();
@@ -521,17 +594,36 @@ impl<'a> DirectParser<'a> {
             }
 
             let value = self.parse_value();
-            // Root the value before the key-intern + set_field path
-            // (which may allocate and trigger GC).
-            parse_root_push(value);
+            // JSON.parse suppresses GC for the whole parse, so key
+            // interning cannot collect before `value` is copied into
+            // the temporary values vector below.
 
             let key_bytes = key.as_bytes();
             let key_ptr = cached_parse_key_ptr(key_bytes);
-            if let Some(existing) = keys.iter().position(|&ptr| ptr == key_ptr) {
-                values[existing] = value;
+            if let Some((keys, values)) = heap_fields.as_mut() {
+                if let Some(existing) = keys.iter().position(|&ptr| ptr == key_ptr) {
+                    values[existing] = value;
+                } else {
+                    keys.push(key_ptr);
+                    values.push(value);
+                }
+            } else if let Some(existing) = inline_keys[..inline_len]
+                .iter()
+                .position(|&ptr| ptr == key_ptr)
+            {
+                inline_values[existing] = value;
+            } else if inline_len < inline_keys.len() {
+                inline_keys[inline_len] = key_ptr;
+                inline_values[inline_len] = value;
+                inline_len += 1;
             } else {
+                let mut keys = Vec::with_capacity(16);
+                let mut values = Vec::with_capacity(16);
+                keys.extend_from_slice(&inline_keys);
+                values.extend_from_slice(&inline_values);
                 keys.push(key_ptr);
                 values.push(value);
+                heap_fields = Some((keys, values));
             }
 
             self.skip_whitespace();
@@ -542,8 +634,14 @@ impl<'a> DirectParser<'a> {
             }
         }
         self.expect(b'}');
-        let field_count = keys.len() as u32;
-        let keys_arr = parse_shape_keys_array(&keys);
+        let field_count = heap_fields
+            .as_ref()
+            .map_or(inline_len, |(keys, _)| keys.len()) as u32;
+        let keys_arr = if let Some((keys, _)) = heap_fields.as_ref() {
+            self.parse_shape_keys_array_hot(keys)
+        } else {
+            self.parse_shape_keys_array_hot(&inline_keys[..inline_len])
+        };
         let js_obj = crate::object::js_object_alloc_class_inline_keys(0, 0, field_count, keys_arr);
         let alloc_field_count = std::cmp::max(field_count as usize, 8);
         let fields_ptr =
@@ -551,12 +649,24 @@ impl<'a> DirectParser<'a> {
         for i in 0..alloc_field_count {
             std::ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
-        for (i, value) in values.iter().enumerate() {
+        let write_field = |i: usize, value: JSValue| {
             let value_bits = value.bits();
-            let slot = fields_ptr.add(i);
-            std::ptr::write(slot, JSValue::from_bits(value_bits));
-            crate::gc::layout_note_slot(js_obj as usize, i, value_bits);
-            crate::gc::runtime_write_barrier_slot(js_obj as usize, slot as usize, value_bits);
+            unsafe {
+                let slot = fields_ptr.add(i);
+                std::ptr::write(slot, JSValue::from_bits(value_bits));
+                // New parse-owned object under GC suppression: layout
+                // metadata is required, a barrier is not.
+                crate::gc::layout_note_slot(js_obj as usize, i, value_bits);
+            }
+        };
+        if let Some((_, values)) = heap_fields.as_ref() {
+            for (i, value) in values.iter().copied().enumerate() {
+                write_field(i, value);
+            }
+        } else {
+            for (i, value) in inline_values[..inline_len].iter().copied().enumerate() {
+                write_field(i, value);
+            }
         }
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_obj as *mut u8)
@@ -567,7 +677,12 @@ impl<'a> DirectParser<'a> {
         self.skip_whitespace();
 
         let saved_roots = parse_root_save_len();
-        let mut js_arr = js_array_alloc(16);
+        // Same `[{...}]` pre-size heuristic as the typed path.
+        let mut js_arr = js_array_alloc(if self.peek() == Some(b'{') {
+            ((self.input.len() - self.pos) / 96).clamp(16, 16_384) as u32
+        } else {
+            16
+        });
         let arr_slot = parse_root_push(JSValue::object_ptr(js_arr as *mut u8));
 
         if self.peek() == Some(b']') {
@@ -579,10 +694,9 @@ impl<'a> DirectParser<'a> {
         loop {
             let value = self.parse_value();
             js_arr = parse_root_array_ptr(arr_slot);
-            // Root value before push — js_array_push may grow (arena alloc → GC)
-            // and value's heap ptr lives only in a caller-saved register here.
-            parse_root_push(value);
-            js_arr = js_array_push(js_arr, value);
+            // GC is suppressed for the whole direct parse, so array growth
+            // cannot collect before `value` is stored.
+            js_arr = self.array_push_parse_fast(js_arr, value);
             // js_array_push may have returned a new ArrayHeader* after grow;
             // update the root slot so GC sees the new pointer, not the stale one.
             parse_root_set(arr_slot, JSValue::object_ptr(js_arr as *mut u8));
@@ -636,12 +750,45 @@ impl<'a> DirectParser<'a> {
             }
         }
 
-        // Fallthrough: consume any fractional + exponent parts, then
-        // hand off to the general parser.
+        // Small fixed-point fast path: JSON API feeds often contain
+        // `"score": 123.5`-style values. Avoid the general decimal
+        // parser for short non-exponent decimals by accumulating the
+        // integer and fractional digits once and scaling by a tiny table.
         if has_dot {
             self.pos += 1;
+            let frac_start = self.pos;
             while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
                 self.pos += 1;
+            }
+            let frac_end = self.pos;
+            let exp_after_frac = self.pos < self.input.len()
+                && (self.input[self.pos] == b'e' || self.input[self.pos] == b'E');
+            let int_len = int_end - int_start;
+            let frac_len = frac_end - frac_start;
+            if !exp_after_frac && int_len > 0 && int_len <= 15 && frac_len > 0 && frac_len <= 9 {
+                let mut int_acc: u64 = 0;
+                for &b in &self.input[int_start..int_end] {
+                    int_acc = int_acc * 10 + (b - b'0') as u64;
+                }
+                let mut frac_acc: u64 = 0;
+                for &b in &self.input[frac_start..frac_end] {
+                    frac_acc = frac_acc * 10 + (b - b'0') as u64;
+                }
+                const POW10: [f64; 10] = [
+                    1.0,
+                    10.0,
+                    100.0,
+                    1_000.0,
+                    10_000.0,
+                    100_000.0,
+                    1_000_000.0,
+                    10_000_000.0,
+                    100_000_000.0,
+                    1_000_000_000.0,
+                ];
+                let magnitude = int_acc as f64 + (frac_acc as f64 / POW10[frac_len]);
+                let value = if neg { -magnitude } else { magnitude };
+                return JSValue::number(value);
             }
         }
         if self.pos < self.input.len()

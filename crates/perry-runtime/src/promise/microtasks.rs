@@ -203,6 +203,13 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                 restore_microtask_context();
                 ran += 1;
             }
+            Some(Task::PromiseAll(state, value, is_fulfilled, task_context)) => {
+                bump(&MT_RUN_COUNT);
+                enter_microtask_context(&task_context);
+                combinators::promise_all_settle(state, value, is_fulfilled);
+                restore_microtask_context();
+                ran += 1;
+            }
             Some(Task::Inline(callback, value, next, is_fulfilled, task_context)) => {
                 bump(&MT_RUN_COUNT);
                 enter_microtask_context(&task_context);
@@ -404,7 +411,7 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                 } else {
                     f64::from_bits(0x7FFC_0000_0000_0003) // TAG_FALSE
                 };
-                let result = crate::closure::js_closure_call2(step_closure, value, is_error_bits);
+                let result = call_async_step_direct(step_closure, value, is_error_bits);
                 if let Some(t) = t1 {
                     MT_TIME_NS_CALLBACK.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 }
@@ -444,6 +451,26 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
     crate::exception::js_try_end();
 
     ran
+}
+
+#[inline(always)]
+fn call_async_step_direct(
+    step_closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    is_error_bits: f64,
+) -> f64 {
+    // Task::AsyncStep is only enqueued by Perry's async/await lowering.
+    // Its closure is the compiler-generated two-argument state-machine
+    // step (`__step(value, is_error)`), never a bound method/rest wrapper.
+    // Dispatching through `js_closure_call2` would re-run the generic
+    // closure strategy lookup for every await continuation; direct-call
+    // the stored function pointer instead.
+    unsafe {
+        let func_ptr = (*step_closure).func_ptr;
+        let func: extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64 =
+            std::mem::transmute(func_ptr);
+        func(step_closure, value, is_error_bits)
+    }
 }
 
 /// Common tail of a microtask: take the value the callback returned

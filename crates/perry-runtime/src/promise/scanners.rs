@@ -20,6 +20,13 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
                     visitor.visit_nanbox_f64_slot(value);
                     scan_snapshot_roots_mut(context, visitor);
                 }
+                Task::PromiseAll(state, value, _, context) => {
+                    visitor.visit_raw_mut_ptr_slot(&mut state.result_promise);
+                    visitor.visit_raw_mut_ptr_slot(&mut state.results_arr);
+                    visitor.visit_raw_mut_ptr_slot(&mut state.state_arr);
+                    visitor.visit_nanbox_f64_slot(value);
+                    scan_snapshot_roots_mut(context, visitor);
+                }
                 Task::Inline(cb, value, next, _, context) => {
                     visitor.visit_raw_const_ptr_slot(cb);
                     visitor.visit_raw_mut_ptr_slot(next);
@@ -52,6 +59,8 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             }
         }
     });
+
+    super::combinators::scan_promise_all_states_mut(visitor);
 
     // Scan SCHEDULED_RESOLVES entries
     super::combinators::SCHEDULED_RESOLVES.with(|q| {

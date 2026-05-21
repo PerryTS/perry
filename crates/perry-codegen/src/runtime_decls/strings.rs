@@ -253,6 +253,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Phase B.16 / D follow-ups: more runtime functions discovered
     // by the test-files sweep histogram.
     module.declare_function("js_array_map", I64, &[I64, I64]);
+    module.declare_function("js_array_map_discard", VOID, &[I64, I64]);
     module.declare_function("js_array_filter", I64, &[I64, I64]);
     module.declare_function("js_array_concat", I64, &[I64, I64]);
     module.declare_function("js_array_concat_new", I64, &[I64, I64]);

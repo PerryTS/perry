@@ -356,6 +356,7 @@ impl Promise {
 #[derive(Clone)]
 pub(crate) enum Task {
     Promise(*mut Promise, f64, bool, AsyncContextSnapshot),
+    PromiseAll(combinators::PromiseAllState, f64, bool, AsyncContextSnapshot),
     Inline(ClosurePtr, f64, *mut Promise, bool, AsyncContextSnapshot),
     /// Direct dispatch to a 2-arg async-step closure. Equivalent to
     /// `Inline(then_v_arrow, value, next, true)` where `then_v_arrow`
