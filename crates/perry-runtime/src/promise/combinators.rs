@@ -17,15 +17,38 @@ thread_local! {
         const { RefCell::new(Vec::new()) };
 }
 
+/// Drain ALL `PromiseAllState` entries associated with `promise`.
+///
+/// A pending promise can be reused as an input to multiple
+/// `Promise.all([...])` calls — e.g.:
+///
+/// ```js
+/// const p = somePending();
+/// Promise.all([p, x]);
+/// Promise.all([p, y]);
+/// ```
+///
+/// Each `Promise.all` call registers its own `PromiseAllState` keyed by
+/// `p as usize`. When `p` settles we must complete every registered
+/// state, not just the first one.
 #[inline]
-pub(super) fn promise_all_take_handler(promise: *mut Promise) -> Option<PromiseAllState> {
+pub(super) fn promise_all_take_all_handlers(promise: *mut Promise) -> Vec<PromiseAllState> {
     if promise.is_null() {
-        return None;
+        return Vec::new();
     }
     PROMISE_ALL_STATES.with(|states| {
         let mut states = states.borrow_mut();
-        let pos = states.iter().position(|(key, _)| *key == promise as usize)?;
-        Some(states.swap_remove(pos).1)
+        let key = promise as usize;
+        let mut drained = Vec::new();
+        let mut i = 0;
+        while i < states.len() {
+            if states[i].0 == key {
+                drained.push(states.swap_remove(i).1);
+            } else {
+                i += 1;
+            }
+        }
+        drained
     })
 }
 
@@ -905,4 +928,77 @@ extern "C" fn promise_any_reject_handler(
         js_promise_reject(result_promise, err_f64);
     }
     0.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::array::{js_array_alloc, js_array_set_f64};
+    use crate::value::js_nanbox_pointer;
+
+    /// Regression: a pending promise reused as input to two `Promise.all`
+    /// calls must settle BOTH all-promises when it resolves. Pre-fix,
+    /// `promise_all_take_handler` only popped the first matching state
+    /// (via `swap_remove`), so the second `Promise.all` hung forever.
+    #[test]
+    fn promise_all_with_shared_pending_input_resolves_both() {
+        unsafe {
+            // Pending promise that will be shared across two Promise.all calls.
+            let shared = js_promise_new();
+
+            // Second input for each all() — a pre-resolved promise so the
+            // remaining counter only needs `shared` to settle.
+            let other_a = js_promise_new();
+            js_promise_resolve(other_a, 100.0);
+            let other_b = js_promise_new();
+            js_promise_resolve(other_b, 200.0);
+
+            // Build [shared, other_a]
+            let arr_a = js_array_alloc(2);
+            (*arr_a).length = 2;
+            js_array_set_f64(arr_a, 0, js_nanbox_pointer(shared as i64));
+            js_array_set_f64(arr_a, 1, js_nanbox_pointer(other_a as i64));
+            let all_a = js_promise_all(arr_a);
+
+            // Build [shared, other_b]
+            let arr_b = js_array_alloc(2);
+            (*arr_b).length = 2;
+            js_array_set_f64(arr_b, 0, js_nanbox_pointer(shared as i64));
+            js_array_set_f64(arr_b, 1, js_nanbox_pointer(other_b as i64));
+            let all_b = js_promise_all(arr_b);
+
+            // Both all() results should still be pending.
+            assert_eq!((*all_a).state, PromiseState::Pending);
+            assert_eq!((*all_b).state, PromiseState::Pending);
+
+            // PROMISE_ALL_STATES must hold TWO entries keyed on `shared`.
+            let registered = PROMISE_ALL_STATES.with(|s| {
+                s.borrow()
+                    .iter()
+                    .filter(|(k, _)| *k == shared as usize)
+                    .count()
+            });
+            assert_eq!(
+                registered, 2,
+                "expected two Promise.all states keyed on the shared pending promise"
+            );
+
+            // Settle the shared promise; drain microtasks so PromiseAll tasks
+            // run and update both result arrays.
+            js_promise_resolve(shared, 42.0);
+            crate::promise::js_promise_run_microtasks();
+
+            // Both Promise.all results must now be Fulfilled.
+            assert_eq!(
+                (*all_a).state,
+                PromiseState::Fulfilled,
+                "first Promise.all should have settled"
+            );
+            assert_eq!(
+                (*all_b).state,
+                PromiseState::Fulfilled,
+                "second Promise.all should have settled (was hanging pre-fix)"
+            );
+        }
+    }
 }

@@ -97,13 +97,13 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
         // a NULL ClosurePtr sentinel — see expr.rs:GlobalGet→PropertyGet
         // value path) skipped the queue entirely; the chained promise then
         // never settled and `await chained` busy-waited forever.
-        let promise_all_state = combinators::promise_all_take_handler(promise);
+        let promise_all_states = combinators::promise_all_take_all_handlers(promise);
         let has_normal_handler = !(*promise).on_fulfilled.is_null() || !(*promise).next.is_null();
-        if promise_all_state.is_some() || has_normal_handler {
+        if !promise_all_states.is_empty() || has_normal_handler {
             let task_context = context_for_promise(promise);
             TASK_QUEUE.with(|q| {
                 let mut q = q.borrow_mut();
-                if let Some(all_state) = promise_all_state {
+                for all_state in promise_all_states {
                     q.push_back(Task::PromiseAll(all_state, value, true, task_context.clone()));
                 }
                 if has_normal_handler {
@@ -237,13 +237,13 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
         // Schedule callbacks. Same propagation rule as `js_promise_resolve`
         // (#236): push to the queue whenever there's a callback to invoke
         // OR a chained `next` promise to forward to.
-        let promise_all_state = combinators::promise_all_take_handler(promise);
+        let promise_all_states = combinators::promise_all_take_all_handlers(promise);
         let has_normal_handler = !(*promise).on_rejected.is_null() || !(*promise).next.is_null();
-        if promise_all_state.is_some() || has_normal_handler {
+        if !promise_all_states.is_empty() || has_normal_handler {
             let task_context = context_for_promise(promise);
             TASK_QUEUE.with(|q| {
                 let mut q = q.borrow_mut();
-                if let Some(all_state) = promise_all_state {
+                for all_state in promise_all_states {
                     q.push_back(Task::PromiseAll(all_state, reason, false, task_context.clone()));
                 }
                 if has_normal_handler {
