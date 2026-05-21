@@ -993,8 +993,13 @@ pub extern "C" fn js_object_get_field_by_name(
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
                 if key_bytes == b"buffer" {
+                    // Issue #1225: a copied Buffer aliases its source's
+                    // ArrayBuffer identity so `Buffer.from(src).buffer ===
+                    // src.buffer` matches Node's pool-slab sharing.  Fresh
+                    // buffers without an entry fall back to their own pointer.
+                    let alias = crate::buffer::resolve_buffer_ab_alias(obj as usize);
                     return JSValue::from_bits(
-                        crate::value::js_nanbox_pointer(obj as i64).to_bits(),
+                        crate::value::js_nanbox_pointer(alias as i64).to_bits(),
                     );
                 }
                 // Issue #639 followup: method-as-value reads on a Buffer

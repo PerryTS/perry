@@ -117,6 +117,22 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
             let buf = buffer_alloc(len);
             (*buf).length = len;
             std::ptr::copy_nonoverlapping(buffer_data(src), buffer_data_mut(buf), len as usize);
+            // Issue #1225: Node's `Buffer.from(src)` carves the copy out of the
+            // shared 8 KiB pool slab so `src.buffer === cp.buffer`.  Perry has
+            // no pool, but we still need that `===` identity to hold for
+            // userland code that compares `.buffer` references.  Propagate
+            // src's resolved alias onto the copy; chained copies collapse to
+            // the same root so `Buffer.from(Buffer.from(src)).buffer ===
+            // src.buffer` also holds.
+            //
+            // Skip when src is a plain `Uint8Array` — Node's
+            // `Buffer.from(uint8Array)` allocates a fresh ArrayBuffer for the
+            // copy and never shares with the source.  Only honest Buffers go
+            // through the pool.
+            if !is_uint8array_buffer(ptr) {
+                let alias = resolve_buffer_ab_alias(ptr);
+                set_buffer_ab_alias(buf as usize, alias);
+            }
             buf
         }
     } else {

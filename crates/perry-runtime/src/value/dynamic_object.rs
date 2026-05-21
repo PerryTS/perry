@@ -221,8 +221,16 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
                 return 0.0;
             }
             "buffer" => {
-                // Return the buffer itself (Perry doesn't separate ArrayBuffer)
-                return obj_value;
+                // Issue #1225: return the ArrayBuffer-identity alias when the
+                // buffer is a copy (so `src.buffer === Buffer.from(src).buffer`);
+                // otherwise return the buffer itself, matching the
+                // pre-aliasing behavior where Perry didn't separate
+                // ArrayBuffer from BufferHeader.
+                let alias = crate::buffer::resolve_buffer_ab_alias(ptr as usize);
+                if alias == ptr as usize {
+                    return obj_value;
+                }
+                return f64::from_bits(crate::value::js_nanbox_pointer(alias as i64).to_bits());
             }
             _ => {
                 return f64::from_bits(TAG_UNDEFINED);

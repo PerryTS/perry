@@ -34,7 +34,7 @@ fn buffer_gc_total_size(capacity: usize) -> usize {
 /// Thread-local registry of buffer pointers for instanceof checks.
 /// Since BufferHeader has the same layout as ArrayHeader (no type_id field),
 /// we track buffer pointers separately to distinguish them from arrays.
-use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
+use crate::fast_hash::{new_ptr_hash_map, new_ptr_hash_set, PtrHashMap, PtrHashSet};
 use std::cell::RefCell;
 
 thread_local! {
@@ -49,6 +49,19 @@ thread_local! {
     /// would make the second `js_uint8array_new` call mistake the source
     /// for a Uint8Array and fall into the spec-mandated COPY branch).
     static ARRAY_BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+    /// Issue #1225: ArrayBuffer-identity alias map for Buffers produced by
+    /// copy paths like `Buffer.from(buf)`.  Node-compatible semantics: the
+    /// new Buffer's `.buffer` returns the same ArrayBuffer object as the
+    /// source's `.buffer` because both views live inside the shared 8 KiB
+    /// pool slab.  Perry allocates fresh inline storage per Buffer, so the
+    /// `.buffer` getter would otherwise return the new BufferHeader pointer
+    /// and `src.buffer === cp.buffer` would be false.  Storing the source's
+    /// resolved alias here lets the getter return a stable identity token.
+    /// Limitation: the bytes are not actually inside the aliased buffer, so
+    /// reads/writes through `.buffer` won't observe the view's data — only
+    /// the `===` identity check matches Node.
+    static BUFFER_AB_ALIAS: RefCell<PtrHashMap<usize, usize>> =
+        RefCell::new(new_ptr_hash_map());
 }
 
 pub fn mark_as_array_buffer(addr: usize) {
@@ -178,6 +191,30 @@ pub fn mark_as_uint8array(addr: usize) {
 
 pub fn is_uint8array_buffer(addr: usize) -> bool {
     UINT8ARRAY_FROM_CTOR.with(|r| r.borrow().contains(&addr))
+}
+
+/// Record that `buf`'s `.buffer` property should resolve to `alias` instead of
+/// `buf` itself.  Used by copy paths (`Buffer.from(src)`) to propagate the
+/// source's ArrayBuffer identity onto the new buffer — see #1225.
+pub fn set_buffer_ab_alias(buf: usize, alias: usize) {
+    BUFFER_AB_ALIAS.with(|m| {
+        m.borrow_mut().insert(buf, alias);
+    });
+}
+
+/// Look up the ArrayBuffer-identity alias for a Buffer.  Returns `None` for
+/// buffers that haven't been involved in a copy chain (their `.buffer` just
+/// returns themselves, as before).
+pub fn buffer_ab_alias(buf: usize) -> Option<usize> {
+    BUFFER_AB_ALIAS.with(|m| m.borrow().get(&buf).copied())
+}
+
+/// Collapse an alias chain to its root: if `buf` already aliases something,
+/// return that; otherwise return `buf` itself.  Callers use this to seed the
+/// alias on a fresh copy so chained `Buffer.from(Buffer.from(src))` keeps
+/// `===` identity with the original source.
+pub fn resolve_buffer_ab_alias(buf: usize) -> usize {
+    buffer_ab_alias(buf).unwrap_or(buf)
 }
 
 /// Allocate a buffer with the given capacity
