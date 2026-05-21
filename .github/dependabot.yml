@@ -8,6 +8,36 @@ updates:
     groups:
       cargo-minor-and-patch:
         update-types: [minor, patch]
+    # RustCrypto stack must be bumped together (see issue #1238).
+    # Suppress the breaking 0.x -> 0.(x+1) PRs (dependabot classifies these as
+    # "minor" for pre-1.0 crates) until the whole stack — including aes-gcm 0.11
+    # and the transitive digest-0.10 holdouts (jsonwebtoken, sqlx, elliptic-curve)
+    # — is ready to move in one coordinated PR. Patch bumps still flow through.
+    ignore:
+      - dependency-name: "digest"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "sha1"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "sha2"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "sha3"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "md-5"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "hmac"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "pbkdf2"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "hkdf"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "aes"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "aes-gcm"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "aes-kw"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "cipher"
+        update-types: ["version-update:semver-minor"]
     commit-message:
       prefix: "deps"
       include: scope
