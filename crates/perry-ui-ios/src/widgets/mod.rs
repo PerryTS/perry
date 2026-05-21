@@ -312,16 +312,27 @@ pub unsafe fn create_cg_color(r: f64, g: f64, b: f64, a: f64) -> *mut c_void {
 
 /// Set a solid background color on any widget.
 ///
-/// Issue #1122 — UIStackView's documented iOS 14+ `backgroundColor`
-/// support paints reliably when the stack view is the screen root but
-/// fails to draw on **nested** stack views on iOS 26 device (the inner
-/// "card" VStack rendered transparent over the outer pink screen even
-/// though `setBackgroundColor:` returned). For UIStackView we fall back
-/// to the pre-iOS-14 pattern of inserting a plain UIView pinned to the
-/// stack's bounds as `subview` index 0 (NOT `arrangedSubview`, so it
-/// stays out of the layout). The plain `setBackgroundColor:` is still
-/// issued so non-buggy paths (the root stack, iOS 17 sim) keep their
-/// existing rendering.
+/// Issue #1122 — on iOS 26 device, certain UIKit views silently drop
+/// `setBackgroundColor:` even though the call returns normally. Two
+/// confirmed cases so far:
+///
+/// 1. **Nested `UIStackView`** — the outer/root stack paints, but inner
+///    stacks render transparent. UIStackView's iOS 14+ backgroundColor
+///    routes through a hidden backing layer that the iOS 26 compositor
+///    sometimes skips for non-root stacks.
+/// 2. **`UIButton`** — the reported "no red rectangle at all" symptom
+///    on the Wishare button. PR #1127 worked around it by switching to
+///    `UIButtonTypeCustom` (avoiding the Liquid Glass tint override),
+///    and we keep a `layer.backgroundColor` belt-and-suspenders here in
+///    case a future iOS UIKit version intercepts `setBackgroundColor:`
+///    on UIButton again.
+///
+/// For both we write `setBackgroundColor:` (so non-buggy paths and iOS
+/// 17 simulator keep working unchanged) **and** push the same color
+/// down to `layer.backgroundColor` as a CGColor. CALayer's own
+/// `backgroundColor` paints reliably on iOS 26 regardless of UIKit-side
+/// interception. For ordinary UIViews `setBackgroundColor:` already
+/// routes to `layer.backgroundColor`, so this is a no-op there.
 pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     if let Some(view) = get_widget(handle) {
         unsafe {
@@ -334,21 +345,31 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             ];
             let _: () = objc2::msg_send![&*view, setBackgroundColor: &*ui_color];
 
-            // Stack-view fallback for nested-bg painting (#1122).
-            // Nested UIStackView's `backgroundColor` property doesn't
-            // paint on iOS 26 device. The CALayer underneath always
-            // paints its own `backgroundColor` though, so we hand the
-            // color down to the layer directly (using CGColor) as a
-            // belt-and-suspenders fix.
-            if let Some(stack_cls) = AnyClass::get(c"UIStackView") {
-                let is_stack: bool = objc2::msg_send![&*view, isKindOfClass: stack_cls];
-                if is_stack {
-                    let layer: *mut AnyObject = objc2::msg_send![&*view, layer];
-                    if !layer.is_null() {
-                        let cg_color: *const std::ffi::c_void =
-                            objc2::msg_send![&*ui_color, CGColor];
-                        let _: () = objc2::msg_send![layer, setBackgroundColor: cg_color];
-                    }
+            // Layer-level fallback for views known to drop or override
+            // `setBackgroundColor:` on iOS 26 device (#1122):
+            //   * UIStackView — nested stacks paint transparent
+            //   * UIButton    — Liquid Glass renderer may override
+            // Set CALayer.backgroundColor with CGColor directly so the
+            // pixels paint regardless of UIKit-side interception. For
+            // ordinary UIViews this is a no-op (setBackgroundColor:
+            // already updates layer.backgroundColor).
+            let is_stack = AnyClass::get(c"UIStackView")
+                .map(|cls| {
+                    let r: bool = objc2::msg_send![&*view, isKindOfClass: cls];
+                    r
+                })
+                .unwrap_or(false);
+            let is_button = AnyClass::get(c"UIButton")
+                .map(|cls| {
+                    let r: bool = objc2::msg_send![&*view, isKindOfClass: cls];
+                    r
+                })
+                .unwrap_or(false);
+            if is_stack || is_button {
+                let layer: *mut AnyObject = objc2::msg_send![&*view, layer];
+                if !layer.is_null() {
+                    let cg_color: *const std::ffi::c_void = objc2::msg_send![&*ui_color, CGColor];
+                    let _: () = objc2::msg_send![layer, setBackgroundColor: cg_color];
                 }
             }
         }
