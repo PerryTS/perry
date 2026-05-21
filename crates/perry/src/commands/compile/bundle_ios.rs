@@ -16,7 +16,9 @@ use anyhow::Result;
 
 use crate::OutputFormat;
 
-use super::apple_info_plist::{inject_google_auth_info_plist, inject_ios_deeplinks};
+use super::apple_info_plist::{
+    inject_google_auth_info_plist, inject_ios_app_group_entitlement, inject_ios_deeplinks,
+};
 use super::targets::compile_metallib_for_bundle;
 use super::widget_build;
 use super::CompilationContext;
@@ -454,6 +456,14 @@ pub(super) fn build_ios_app_bundle(
     // automatically when present alongside the .app bundle.
     let info_plist =
         inject_ios_deeplinks(&info_plist, &input, &app_dir, format).unwrap_or(info_plist);
+
+    // #1178 — augment `app.entitlements` with the
+    // `com.apple.security.application-groups` array when
+    // `[ios] app_group` is set in perry.toml. Idempotent with the
+    // deeplinks pass above — it only adds our key, leaving any
+    // existing entitlements (associated-domains, hand-written
+    // entries) intact.
+    inject_ios_app_group_entitlement(&app_dir, ctx.app_metadata.app_group.as_deref(), format);
 
     // #1138 — `[google_auth]` block in perry.toml feeds the
     // GoogleSignIn SDK via Info.plist keys the Swift bridge in

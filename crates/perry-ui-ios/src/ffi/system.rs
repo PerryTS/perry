@@ -33,17 +33,16 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
     );
 }
 
-// #675 — App Group / cross-process shared storage on iOS. MVP uses
-// an in-process HashMap so the API is exercisable from user code;
-// the native impl (UserDefaults(suiteName:) read from
-// `application-groups` entitlement) is tracked under #675 follow-up.
-// First call per process per symbol prints a `[perry] warning` line
-// so developers know they're not getting cross-process behavior yet.
-fn app_group_store_ios() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
-    static STORE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
-        std::sync::OnceLock::new();
-    STORE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-}
+// #675 + #1178 — App Group / cross-process shared storage on iOS.
+//
+// Backed by `NSUserDefaults(suiteName:)`. The suite name is baked
+// into `main()`'s prelude by the CLI from `[ios] app_group` in
+// perry.toml (see `perry-runtime::app_group::perry_app_group_init`)
+// so widget extensions sharing the same App Group container can read
+// keys written here. When no suite is configured we emit a one-shot
+// stub-warn diagnostic naming the missing `[ios] app_group` key so
+// developers see why the widget can't see the value, rather than a
+// silent in-process HashMap that lies about cross-process behavior.
 fn app_group_str_from_header_ios(ptr: *const u8) -> &'static str {
     if ptr.is_null() {
         return "";
@@ -55,20 +54,51 @@ fn app_group_str_from_header_ios(ptr: *const u8) -> &'static str {
         std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
     }
 }
+
+/// Resolve the configured App Group suite, warning once per process
+/// when no `[ios] app_group` was baked in. Returns `None` so the
+/// caller can short-circuit before reaching for `UserDefaults`.
+fn app_group_suite_ios() -> Option<objc2::rc::Retained<objc2_foundation::NSString>> {
+    let suite = perry_runtime::app_group::configured_suite_name()?;
+    Some(objc2_foundation::NSString::from_str(suite))
+}
+
+fn warn_app_group_not_configured(symbol: &'static str) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        symbol,
+        "App Group not configured. Add `[ios] app_group = \"group.com.example.shared\"` to perry.toml (#1178).",
+        Some("#1178"),
+    );
+}
+
+unsafe fn app_group_defaults_ios() -> *mut objc2::runtime::AnyObject {
+    let Some(suite) = app_group_suite_ios() else {
+        return std::ptr::null_mut();
+    };
+    let cls = objc2::runtime::AnyClass::get(c"NSUserDefaults").unwrap();
+    let alloc: *mut objc2::runtime::AnyObject = objc2::msg_send![cls, alloc];
+    let defaults: *mut objc2::runtime::AnyObject =
+        objc2::msg_send![alloc, initWithSuiteName: &*suite];
+    defaults
+}
+
 #[no_mangle]
 pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
-    perry_runtime::stub_diag::perry_stub_warn(
-        "perry_system_app_group_set",
-        "iOS App Group is an in-process HashMap in this MVP (#675 follow-up: UserDefaults(suiteName:))",
-        Some("#675"),
-    );
     let key = app_group_str_from_header_ios(key_ptr as *const u8);
     let value = app_group_str_from_header_ios(value_ptr as *const u8);
     if key.is_empty() {
         return;
     }
-    if let Ok(mut g) = app_group_store_ios().lock() {
-        g.insert(key.to_string(), value.to_string());
+    unsafe {
+        let defaults = app_group_defaults_ios();
+        if defaults.is_null() {
+            warn_app_group_not_configured("perry_system_app_group_set");
+            return;
+        }
+        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_value = objc2_foundation::NSString::from_str(value);
+        let _: () = objc2::msg_send![defaults, setObject: &*ns_value, forKey: &*ns_key];
+        let _: () = objc2::msg_send![defaults, synchronize];
     }
 }
 #[no_mangle]
@@ -76,16 +106,34 @@ pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
     extern "C" {
         fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
     }
+    let empty = || unsafe { js_string_from_bytes(std::ptr::null(), 0) };
     let key = app_group_str_from_header_ios(key_ptr as *const u8);
     if key.is_empty() {
-        return unsafe { js_string_from_bytes(std::ptr::null(), 0) };
+        return empty();
     }
-    let value = app_group_store_ios()
-        .lock()
-        .ok()
-        .and_then(|g| g.get(key).cloned())
-        .unwrap_or_default();
-    unsafe { js_string_from_bytes(value.as_ptr(), value.len() as i32) }
+    unsafe {
+        let defaults = app_group_defaults_ios();
+        if defaults.is_null() {
+            warn_app_group_not_configured("perry_system_app_group_get");
+            return empty();
+        }
+        let ns_key = objc2_foundation::NSString::from_str(key);
+        let value: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![defaults, stringForKey: &*ns_key];
+        if value.is_null() {
+            return empty();
+        }
+        let utf8_ptr: *const u8 = objc2::msg_send![value, UTF8String];
+        if utf8_ptr.is_null() {
+            return empty();
+        }
+        // NSUTF8StringEncoding = 4
+        let utf8_len: usize = objc2::msg_send![value, lengthOfBytesUsingEncoding: 4u64];
+        if utf8_len == 0 {
+            return empty();
+        }
+        js_string_from_bytes(utf8_ptr, utf8_len as i32)
+    }
 }
 #[no_mangle]
 pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
@@ -93,8 +141,15 @@ pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
     if key.is_empty() {
         return;
     }
-    if let Ok(mut g) = app_group_store_ios().lock() {
-        g.remove(key);
+    unsafe {
+        let defaults = app_group_defaults_ios();
+        if defaults.is_null() {
+            warn_app_group_not_configured("perry_system_app_group_delete");
+            return;
+        }
+        let ns_key = objc2_foundation::NSString::from_str(key);
+        let _: () = objc2::msg_send![defaults, removeObjectForKey: &*ns_key];
+        let _: () = objc2::msg_send![defaults, synchronize];
     }
 }
 

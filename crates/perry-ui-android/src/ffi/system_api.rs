@@ -39,23 +39,28 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
     );
 }
 
-// #675 — App Group stubs on Android. Native impl will use scoped
-// `SharedPreferences` keyed by `shared_prefs_name` from perry.toml,
-// dispatched through JNI; tracked as #675 follow-up.
+// #675 — App Group stubs on Android. The iOS side was wired to
+// `UserDefaults(suiteName:)` under #1178; the Android equivalent is
+// `context.getSharedPreferences("perry_shared", MODE_PRIVATE)` —
+// matching the read path the Glance widget bridge already uses in
+// `perry-codegen-glance/src/emit_glue.rs` (`sharedStorageGet`). The
+// JNI plumbing for the WRITE path needs a Kotlin-side helper on
+// `PerryBridge` plus a JNI call here; tracked as #1178 Android
+// follow-up (separate PR).
 #[no_mangle]
 pub extern "C" fn perry_system_app_group_set(_key_ptr: i64, _value_ptr: i64) {
     perry_runtime::stub_diag::perry_stub_warn(
         "perry_system_app_group_set",
-        "Android SharedPreferences not yet implemented (#675 follow-up)",
-        Some("#675"),
+        "Android SharedPreferences write path not yet implemented (#1178 Android follow-up). The Glance widget already reads `perry_shared` SharedPreferences; wiring the write side needs a Kotlin helper on PerryBridge.",
+        Some("#1178"),
     );
 }
 #[no_mangle]
 pub extern "C" fn perry_system_app_group_get(_key_ptr: i64) -> i64 {
     perry_runtime::stub_diag::perry_stub_warn(
         "perry_system_app_group_get",
-        "Android SharedPreferences not yet implemented (#675 follow-up)",
-        Some("#675"),
+        "Android SharedPreferences read path not yet implemented (#1178 Android follow-up).",
+        Some("#1178"),
     );
     extern "C" {
         fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
@@ -66,8 +71,8 @@ pub extern "C" fn perry_system_app_group_get(_key_ptr: i64) -> i64 {
 pub extern "C" fn perry_system_app_group_delete(_key_ptr: i64) {
     perry_runtime::stub_diag::perry_stub_warn(
         "perry_system_app_group_delete",
-        "Android SharedPreferences not yet implemented (#675 follow-up)",
-        Some("#675"),
+        "Android SharedPreferences delete path not yet implemented (#1178 Android follow-up).",
+        Some("#1178"),
     );
 }
 

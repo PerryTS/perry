@@ -105,6 +105,23 @@ pub(super) fn compile_module_entry(
         if cross_module.needs_geisterhand && !is_dylib {
             llmod.declare_function("perry_geisterhand_start", VOID, &[I32]);
         }
+        // #1178 — bake `[ios] app_group` from perry.toml into a single
+        // `perry_app_group_init(ptr, len)` call at the top of `main`,
+        // before any user code runs (and before any `appGroupSet/Get/
+        // Delete` site could fire). Skipped entirely when the manifest
+        // doesn't configure a suite, so non-App-Group apps pay no extra
+        // bytes. Allocated up-front while `llmod` is still mutable —
+        // `main` claims the borrow below.
+        let app_group_init: Option<(String, usize)> = if is_dylib {
+            None
+        } else {
+            cross_module
+                .app_metadata
+                .app_group
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|suite| llmod.add_string_constant(suite))
+        };
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
@@ -116,6 +133,14 @@ pub(super) fn compile_module_entry(
             blk.call_void("js_gc_init", &[]);
             if write_barriers_enabled() {
                 blk.call_void("js_gc_write_barriers_emitted", &[(I32, "1")]);
+            }
+            if let Some((const_name, byte_len)) = app_group_init.as_ref() {
+                let suite_ptr = format!("@{}", const_name);
+                let len_str = byte_len.to_string();
+                blk.call_void(
+                    "perry_app_group_init",
+                    &[(PTR, suite_ptr.as_str()), (I32, len_str.as_str())],
+                );
             }
             // Wire up stdlib HANDLE_METHOD_DISPATCH eagerly when stdlib is
             // linked. Previously this was only called from
