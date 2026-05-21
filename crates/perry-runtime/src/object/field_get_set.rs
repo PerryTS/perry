@@ -1328,23 +1328,9 @@ pub extern "C" fn js_object_get_field_by_name(
                 // `EventEmitter.prototype` read tripped the spec
                 // "Cannot read properties of undefined" throw.
                 if is_native_module_callable_export(module_name, property_name) {
-                    let prop_bytes = property_name.as_bytes();
-                    let heap_name = {
-                        let layout =
-                            std::alloc::Layout::from_size_align(prop_bytes.len().max(1), 1)
-                                .unwrap();
-                        let ptr = std::alloc::alloc(layout);
-                        std::ptr::copy_nonoverlapping(prop_bytes.as_ptr(), ptr, prop_bytes.len());
-                        ptr
-                    };
-                    let closure =
-                        crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
-                    crate::closure::js_closure_set_capture_f64(closure, 0, nb_ptr);
-                    crate::closure::js_closure_set_capture_ptr(closure, 1, heap_name as i64);
-                    crate::closure::js_closure_set_capture_ptr(closure, 2, prop_bytes.len() as i64);
-                    super::set_bound_native_closure_name(closure, property_name);
                     return JSValue::from_bits(
-                        crate::value::js_nanbox_pointer(closure as i64).to_bits(),
+                        super::bound_native_callable_export_value(module_name, property_name)
+                            .to_bits(),
                     );
                 }
                 return JSValue::undefined();

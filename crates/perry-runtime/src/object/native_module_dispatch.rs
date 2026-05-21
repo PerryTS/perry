@@ -109,6 +109,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
     };
 
     match (module_name, method_name) {
+        // ── tty module ──
+        ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
+
         // ── timers module ──
         ("timers", "setTimeout") if args_len >= 2 => {
             let cb = arg(0);

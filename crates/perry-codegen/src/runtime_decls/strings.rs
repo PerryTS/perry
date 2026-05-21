@@ -469,7 +469,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_stderr_isatty", DOUBLE, &[]);
     module.declare_function("js_process_stdout_columns", DOUBLE, &[]);
     module.declare_function("js_process_stdout_rows", DOUBLE, &[]);
-    module.declare_function("js_process_stdout_on", VOID, &[I64, I64]);
+    module.declare_function("js_process_stdout_on", DOUBLE, &[I64, I64]);
     // os.* — also used by Expr::OsArch/Type/Platform/Release/Hostname/EOL.
     module.declare_function("js_os_platform", I64, &[]);
     module.declare_function("js_os_arch", I64, &[]);

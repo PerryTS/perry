@@ -8,6 +8,21 @@
 //! logic changes.
 
 use super::*;
+use std::cell::RefCell;
+
+thread_local! {
+    static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
+        RefCell::new(HashMap::new());
+}
+
+pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    NATIVE_CALLABLE_EXPORTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        for value_bits in cache.values_mut() {
+            visitor.visit_nanbox_u64_slot(value_bits);
+        }
+    });
+}
 
 /// Special class ID for native module namespace objects
 /// This is used to identify objects that represent native module namespaces
@@ -89,21 +104,117 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     // narrow to specific (module, property) pairs so a typo'd access still
     // returns undefined.
     if is_native_module_callable_export(module_name, property_name) {
-        let heap_name = {
-            let layout = std::alloc::Layout::from_size_align(property_name_len.max(1), 1).unwrap();
-            let ptr = std::alloc::alloc(layout);
-            std::ptr::copy_nonoverlapping(property_name_ptr, ptr, property_name_len);
-            ptr
-        };
-        let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
-        let ns = js_create_native_module_namespace(module_name_ptr, module_name_len);
-        crate::closure::js_closure_set_capture_f64(closure, 0, ns);
-        crate::closure::js_closure_set_capture_ptr(closure, 1, heap_name as i64);
-        crate::closure::js_closure_set_capture_ptr(closure, 2, property_name_len as i64);
-        set_bound_native_closure_name(closure, property_name);
-        return crate::value::js_nanbox_pointer(closure as i64);
+        return bound_native_callable_export_value(module_name, property_name);
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+pub(crate) fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
+    let key = format!("{module_name}\0{property_name}");
+    if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
+        return f64::from_bits(bits);
+    }
+
+    let method_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
+    let ns = js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
+    let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
+    crate::closure::js_closure_set_capture_f64(closure, 0, ns);
+    crate::closure::js_closure_set_capture_ptr(closure, 1, method_bytes.as_ptr() as i64);
+    crate::closure::js_closure_set_capture_ptr(closure, 2, method_bytes.len() as i64);
+    set_bound_native_closure_name(closure, property_name);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+
+    if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
+        attach_tty_stream_prototype(value, property_name);
+    }
+
+    NATIVE_CALLABLE_EXPORTS.with(|c| {
+        c.borrow_mut().insert(key, value.to_bits());
+    });
+    value
+}
+
+fn fn_value(func_ptr: *const u8, name: &str) -> f64 {
+    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
+    set_bound_native_closure_name(closure, name);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn attach_tty_stream_prototype(constructor_value: f64, name: &str) {
+    let (packed, count) = if name == "WriteStream" {
+        (b"constructor\0hasColors\0getColorDepth\0".as_ptr(), 3)
+    } else {
+        (b"constructor\0".as_ptr(), 1)
+    };
+    let packed_len = if name == "WriteStream" {
+        b"constructor\0hasColors\0getColorDepth\0".len()
+    } else {
+        b"constructor\0".len()
+    };
+    let shape_id = if name == "WriteStream" {
+        0x7FFF_FF32
+    } else {
+        0x7FFF_FF31
+    };
+    let proto = js_object_alloc_with_shape(shape_id, count, packed, packed_len as u32);
+    js_object_set_field(proto, 0, JSValue::from_bits(constructor_value.to_bits()));
+    if name == "WriteStream" {
+        js_object_set_field(
+            proto,
+            1,
+            JSValue::from_bits(
+                fn_value(
+                    crate::tty::js_tty_write_stream_has_colors as *const u8,
+                    "hasColors",
+                )
+                .to_bits(),
+            ),
+        );
+        js_object_set_field(
+            proto,
+            2,
+            JSValue::from_bits(
+                fn_value(
+                    crate::tty::js_tty_write_stream_get_color_depth as *const u8,
+                    "getColorDepth",
+                )
+                .to_bits(),
+            ),
+        );
+    }
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    crate::closure::closure_set_dynamic_prop(
+        (constructor_value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
+        "prototype",
+        proto_value,
+    );
+}
+
+pub(crate) unsafe fn bound_native_callable_module_and_method(
+    value: f64,
+) -> Option<(String, String)> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let closure = jv.as_pointer::<crate::closure::ClosureHeader>();
+    if closure.is_null()
+        || (*closure).type_tag != crate::closure::CLOSURE_MAGIC
+        || (*closure).func_ptr != crate::closure::BOUND_METHOD_FUNC_PTR
+    {
+        return None;
+    }
+    let ns = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let module = get_module_name_from_namespace(ns).to_string();
+    let method_ptr = crate::closure::js_closure_get_capture_ptr(closure, 1) as *const u8;
+    let method_len = crate::closure::js_closure_get_capture_ptr(closure, 2) as usize;
+    if method_ptr.is_null() {
+        return None;
+    }
+    let method = std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len))
+        .ok()?
+        .to_string();
+    Some((module, method))
 }
 
 pub(crate) fn set_bound_native_closure_name(

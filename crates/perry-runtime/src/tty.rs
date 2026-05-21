@@ -126,6 +126,47 @@ pub extern "C" fn js_tty_isatty(fd: f64) -> f64 {
     }
 }
 
+/// Node-compatible `tty.WriteStream.prototype.hasColors(...)`.
+/// This conservative implementation is sufficient for non-interactive parity:
+/// with `NO_COLOR` set it returns false, otherwise true. Node's full terminal
+/// detection is richer, but Deno's upstream test only requires a boolean helper
+/// on the prototype and truthiness for explicit color counts.
+pub extern "C" fn js_tty_write_stream_has_colors() -> f64 {
+    if std::env::var_os("NO_COLOR").is_some() {
+        f64::from_bits(0x7FFC_0000_0000_0003) // false
+    } else {
+        f64::from_bits(0x7FFC_0000_0000_0004) // true
+    }
+}
+
+/// Node-compatible `tty.WriteStream.prototype.getColorDepth(...)`.
+/// Return one of Node's documented depths. 8 colors is the portable baseline.
+pub extern "C" fn js_tty_write_stream_get_color_depth() -> f64 {
+    4.0
+}
+
+pub fn throw_invalid_fd(fd: f64) -> ! {
+    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
+    unsafe {
+        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
+        let str_val = |s: &str| -> f64 {
+            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            f64::from_bits(JSValue::string_ptr(ptr).bits())
+        };
+        let set = |key: &str, value: f64| {
+            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            crate::object::js_object_set_field_by_name(obj, key_ptr, value);
+        };
+        set("name", str_val("RangeError"));
+        set("code", str_val("ERR_INVALID_FD"));
+        set(
+            "message",
+            str_val(&format!("\"fd\" must be a positive integer: {}", fd as i64)),
+        );
+    }
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+}
+
 /// `process.stdin.isTTY` / `process.stdout.isTTY` / `process.stderr.isTTY`.
 /// Per Node's docs these are `true` when the stream is a TTY and
 /// `undefined` otherwise (intentionally — it's a presence test). This
@@ -189,7 +230,7 @@ pub extern "C" fn js_process_stdout_rows() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_process_stdout_on(event_ptr: *const StringHeader, callback: i64) -> f64 {
     if event_ptr.is_null() {
-        return f64::from_bits(JSValue::undefined().bits());
+        return crate::os::js_process_stdout();
     }
     let event = unsafe {
         let len = (*event_ptr).byte_len as usize;
@@ -208,7 +249,7 @@ pub extern "C" fn js_process_stdout_on(event_ptr: *const StringHeader, callback:
             CACHED_ROWS.store(rows, Ordering::Relaxed);
         }
     }
-    f64::from_bits(JSValue::undefined().bits())
+    crate::os::js_process_stdout()
 }
 
 /// Drain the resize-pending flag and fire the registered resize

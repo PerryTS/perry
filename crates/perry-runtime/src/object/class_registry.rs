@@ -593,6 +593,20 @@ pub unsafe extern "C" fn js_new_function_construct(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
+        if module == "tty" && matches!(method.as_str(), "ReadStream" | "WriteStream") {
+            let fd = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            if !fd.is_finite() || fd < 0.0 || fd.fract() != 0.0 {
+                crate::tty::throw_invalid_fd(fd);
+            }
+            return crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64);
+        }
+    }
+
     // date-fns `constructFrom` clones a Date via
     // `new date.constructor(value)`. `date.constructor` resolves to
     // the global `Date` closure pointer (the noop thunk installed by

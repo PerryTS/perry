@@ -646,6 +646,11 @@ pub fn gc_init() {
     // captured young values or future cache hits miss on stale addresses.
     gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
     gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
+    // Native-module callable export singletons and process stdio stream
+    // singletons store heap pointers in TLS caches; keep them live and rewrite
+    // them if a copying collection moves their backing allocations.
+    gc_register_mutable_root_scanner(crate::object::scan_native_callable_export_roots_mut);
+    gc_register_mutable_root_scanner(crate::os::scan_process_stream_singleton_roots_mut);
     // perry/tui hook + state slot pools — they store raw NaN-boxed
     // value bits but the GC has no other way to know which slots hold
     // heap pointers (arrays/objects/strings stashed via setState /

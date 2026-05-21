@@ -533,11 +533,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let event_handle = unbox_str_handle(blk, &event_box);
             let handler_handle = unbox_to_i64(blk, &handler_box);
-            blk.call_void(
+            Ok(blk.call(
+                DOUBLE,
                 "js_process_stdout_on",
                 &[(I64, &event_handle), (I64, &handler_handle)],
-            );
-            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+            ))
         }
 
         // -------- tty.isatty(fd) (#347 Phase 3) --------

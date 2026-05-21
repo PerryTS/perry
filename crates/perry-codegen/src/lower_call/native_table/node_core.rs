@@ -1,6 +1,16 @@
 use super::*;
 
 pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
+    // ========== Node TTY ==========
+    NativeModSig {
+        module: "tty",
+        has_receiver: false,
+        method: "isatty",
+        class_filter: None,
+        runtime: "js_tty_isatty",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Node URL ==========
     // `new Number/String/Boolean(...)` now lowers to
     // `Expr::BoxedPrimitiveNew` (see crates/perry-hir/src/lower/expr_new.rs)
