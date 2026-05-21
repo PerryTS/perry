@@ -851,7 +851,16 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
             }
         }
     }
-    let obj = js_object_alloc(class_id, 0);
+    // #1175: when `proto_value` is null/undefined/non-object, the resulting
+    // object has no [[Prototype]]. Stamp OBJ_FLAG_NULL_PROTO so
+    // `Object.getPrototypeOf(Object.create(null))` returns null (it
+    // previously returned the object itself).
+    let null_proto = class_id == 0;
+    let obj = if null_proto {
+        js_object_alloc_null_proto(class_id, 0)
+    } else {
+        js_object_alloc(class_id, 0)
+    };
     // Return NaN-boxed pointer
     f64::from_bits((obj as u64) | 0x7FFD_0000_0000_0000)
 }
@@ -1013,11 +1022,27 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     if top16 == 0x7FFD {
         let raw_addr = bits & 0x0000_FFFF_FFFF_FFFF;
         if raw_addr != 0 && raw_addr >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+            // #1175: objects allocated with a null prototype
+            // (Object.create(null), querystring.parse) report null here.
+            unsafe {
+                let obj = raw_addr as *const ObjectHeader;
+                let gc = gc_header_for(obj);
+                if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+                    return f64::from_bits(TAG_NULL);
+                }
+            }
             return obj_value;
         }
     }
     if top16 == 0 {
         if bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+            unsafe {
+                let obj = bits as *const ObjectHeader;
+                let gc = gc_header_for(obj);
+                if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+                    return f64::from_bits(TAG_NULL);
+                }
+            }
             return obj_value;
         }
     }

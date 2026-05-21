@@ -28,7 +28,7 @@
 use crate::common::handle::Handle;
 use perry_runtime::array::{js_array_alloc, js_array_length, js_array_push_f64};
 use perry_runtime::{
-    js_object_alloc, js_object_get_field_by_name, js_object_get_own_field_or_undef,
+    js_object_alloc_null_proto, js_object_get_field_by_name, js_object_get_own_field_or_undef,
     js_object_set_field_by_name, js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader,
     StringHeader,
 };
@@ -195,7 +195,12 @@ pub unsafe extern "C" fn js_querystring_parse(
     let eq = resolve_separator_str(eq_arg, "=");
     let max_keys = resolve_max_keys(options_arg);
 
-    let obj = js_object_alloc(0, 0);
+    // #1175: Node's `querystring.parse` returns an `Object.create(null)`
+    // result so `__proto__` / `constructor` etc. are stored as own data
+    // properties rather than punching through the prototype chain. Mirror
+    // that here — `js_object_alloc_null_proto` stamps a flag the
+    // `Object.getPrototypeOf` path consults so `proto: null` matches Node.
+    let obj = js_object_alloc_null_proto(0, 0);
     if input.is_empty() {
         return obj;
     }

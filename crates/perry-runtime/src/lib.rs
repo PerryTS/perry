@@ -156,7 +156,8 @@ pub use array::{
 pub use bigint::js_bigint_from_string;
 pub use object::js_object_set_field_by_name;
 pub use object::{
-    js_object_alloc, js_object_alloc_with_shape, js_object_entries, js_object_get_field,
+    js_object_alloc, js_object_alloc_null_proto, js_object_alloc_with_shape, js_object_entries,
+    js_object_get_field,
     js_object_get_field_by_name, js_object_get_field_by_name_f64, js_object_get_own_field_or_undef,
     js_object_get_unboxed_f64_field, js_object_keys, js_object_set_field, js_object_set_field_f64,
     js_object_set_keys, js_object_set_unboxed_f64_field, js_object_values,

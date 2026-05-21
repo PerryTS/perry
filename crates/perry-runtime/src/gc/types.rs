@@ -344,6 +344,12 @@ pub unsafe fn set_forwarding_address(header: *mut GcHeader, new_user_addr: *mut 
 pub const OBJ_FLAG_FROZEN: u16 = 0x01;
 pub const OBJ_FLAG_SEALED: u16 = 0x02;
 pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
+// #1175: object was created with a null prototype (Object.create(null) /
+// querystring.parse). `Object.getPrototypeOf` returns null for these.
+// Bit 6 — bits 3..5 are the copied-nursery survival counter
+// (`GC_COPY_SURVIVAL_AGE_MASK = 0x0038`) and bits 14..15 the layout state,
+// so 0x08 would be clobbered on every minor GC. Bits 6..13 are free.
+pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
 
 pub(super) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub(super) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
