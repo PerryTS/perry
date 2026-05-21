@@ -306,6 +306,38 @@ pub extern "C" fn js_object_define_property(
         if obj.is_null() {
             return obj_value;
         }
+        // #1250: when the key is a Symbol, route into the symbol side
+        // table (`SYMBOL_PROPERTIES`) the same way `obj[sym] = value`
+        // does. Without this, `Object.defineProperty(obj, sym, ...)`
+        // would drop the symbol and try to coerce it to a string,
+        // which is exactly the failure mode reported for
+        // `Object.defineProperty(obj, inspect.custom, …)`.
+        let key_bits = key_value.to_bits();
+        let key_tag = key_bits & 0xFFFF_0000_0000_0000;
+        if key_tag == 0x7FFD_0000_0000_0000 {
+            let raw_ptr = (key_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::symbol::SymbolHeader;
+            if !raw_ptr.is_null()
+                && (raw_ptr as usize) >= 0x1000
+                && (*raw_ptr).magic == crate::symbol::SYMBOL_MAGIC
+            {
+                let desc_ptr = extract_obj_ptr(descriptor_value);
+                if !desc_ptr.is_null() {
+                    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+                    let value_field = js_object_get_field_by_name(
+                        desc_ptr as *const ObjectHeader,
+                        value_key,
+                    );
+                    if !value_field.is_undefined() {
+                        crate::symbol::js_object_set_symbol_property(
+                            obj_value,
+                            key_value,
+                            f64::from_bits(value_field.bits()),
+                        );
+                    }
+                }
+                return obj_value;
+            }
+        }
         // Extract key string
         let key_str = crate::builtins::js_string_coerce(key_value);
         if key_str.is_null() {

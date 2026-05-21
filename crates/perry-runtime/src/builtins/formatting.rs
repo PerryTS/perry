@@ -596,22 +596,15 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     let obj_ptr = ptr as *const crate::object::ObjectHeader;
                     let keys_array = (*obj_ptr).keys_array;
 
-                    let body_str = if !keys_array.is_null()
-                        && (keys_array as usize) > 0x10000
-                        && ((keys_array as u64) >> 48) == 0
-                    {
-                        format_object_as_json(obj_ptr, depth)
-                    } else {
-                        // No keys_array → either a freshly-allocated empty
-                        // object or an object whose keys are not tracked
-                        // through this slot. Node's `console.log` /
-                        // `util.inspect` prints `{}` for empty objects;
-                        // `String(obj)` / template-literal coercion print
-                        // `[object Object]` and go through
-                        // `js_jsvalue_to_string` (a separate path), so
-                        // returning `{}` here doesn't break that contract.
-                        "{}".to_string()
-                    };
+                    // Always route through `format_object_as_json` so the
+                    // `[util.inspect.custom]` hook lookup runs even for
+                    // objects with no string-keyed fields (#1247 / #1252):
+                    // an object whose only own key is the inspect symbol
+                    // has `keys_array == null` and the prior fast-path
+                    // skipped the hook entirely, printing `{}`. The
+                    // formatter itself short-circuits to `{}` when no
+                    // hook fires and the keys_array is empty.
+                    let body_str = format_object_as_json(obj_ptr, depth);
                     inspect_finish_circular(ptr as usize, body_str)
                 } else if gc_type == crate::gc::GC_TYPE_MAP {
                     "Map {}".to_string()
@@ -761,11 +754,33 @@ unsafe fn format_object_as_json(
                 }
                 let closure_ptr = val_ptr as *const crate::closure::ClosureHeader;
                 let _guard = InspectCustomInspectGuard::new(false);
-                let ret = crate::closure::js_closure_call0(closure_ptr);
+                // Node invokes the hook as `hook.call(this, depth, options, inspect)`
+                // — see #1247. `depth` is the REMAINING recursion budget (counts
+                // down from `util.inspect`'s `depth` option, default 2). Perry's
+                // internal `depth` counts UP from 0 so we invert it. `options`
+                // is a placeholder object — populating its fields properly is
+                // its own follow-up. `inspect` is undefined since we don't yet
+                // expose a JS-callable equivalent.
+                let remaining = inspect_depth_limit().saturating_sub(depth) as f64;
+                let options_obj = crate::object::js_object_alloc(0, 0);
+                let options_arg = crate::value::js_nanbox_pointer(options_obj as i64);
+                let undef_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let ret = crate::closure::js_closure_call3(
+                    closure_ptr,
+                    remaining,
+                    options_arg,
+                    undef_arg,
+                );
                 let ret_jv = crate::value::JSValue::from_bits(ret.to_bits());
                 if ret_jv.is_any_string() {
                     return jsvalue_string_content(ret).unwrap_or_default();
                 }
+                // #1251: non-string return values count as one nesting
+                // level — but the hook itself was reached from the
+                // formatter at `depth`, so the return value's nested
+                // structure starts at `depth` (NOT `depth + 1`). Node
+                // ends up truncating `[Object]` at the same boundary
+                // because both formatters increment by 1 per descent.
                 return format_jsvalue(ret, depth);
             }
         }
