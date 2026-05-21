@@ -572,6 +572,13 @@ pub extern "C" fn js_process_on(
     EXIT_HANDLERS.with(|h| h.borrow_mut().push(handler));
 }
 
+pub fn emit_process_uncaught_exception(error: f64) {
+    let handlers = EXIT_HANDLERS.with(|h| h.borrow().clone());
+    for handler in handlers {
+        crate::closure::js_closure_call1(handler, error);
+    }
+}
+
 /// process.nextTick(callback) — schedule callback as a microtask.
 #[no_mangle]
 pub extern "C" fn js_process_next_tick(callback: *const crate::closure::ClosureHeader) {

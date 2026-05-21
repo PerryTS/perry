@@ -403,6 +403,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function("js_console_log_spread", VOID, &[I64]);
+    module.declare_function("js_console_info_spread", VOID, &[I64]);
+    module.declare_function("js_console_debug_spread", VOID, &[I64]);
     module.declare_function("js_console_error_spread", VOID, &[I64]);
     module.declare_function("js_console_warn_spread", VOID, &[I64]);
     // #1002: native `util.format` / `util.formatWithOptions`. Codegen

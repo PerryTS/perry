@@ -389,6 +389,8 @@ pub fn try_lower_console_call(
                     &[(I64, &current_arr), (DOUBLE, &v)],
                 );
                 let runtime_fn = match property.as_str() {
+                    "info" => "js_console_info_spread",
+                    "debug" => "js_console_debug_spread",
                     "warn" => "js_console_warn_spread",
                     "error" => "js_console_error_spread",
                     _ => "js_console_log_spread",
@@ -420,6 +422,8 @@ pub fn try_lower_console_call(
                 );
             }
             let runtime_fn = match property.as_str() {
+                "info" => "js_console_info_spread",
+                "debug" => "js_console_debug_spread",
                 "warn" => "js_console_warn_spread",
                 "error" => "js_console_error_spread",
                 _ => "js_console_log_spread",

@@ -43,7 +43,7 @@ pub(super) fn try_native_module_methods(
                                 ))));
                             }
                         }
-                        "on" => {
+                        "on" | "once" => {
                             if args.len() >= 2 {
                                 let mut iter = args.into_iter();
                                 let event = iter.next().unwrap();
