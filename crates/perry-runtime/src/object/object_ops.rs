@@ -323,10 +323,8 @@ pub extern "C" fn js_object_define_property(
                 let desc_ptr = extract_obj_ptr(descriptor_value);
                 if !desc_ptr.is_null() {
                     let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-                    let value_field = js_object_get_field_by_name(
-                        desc_ptr as *const ObjectHeader,
-                        value_key,
-                    );
+                    let value_field =
+                        js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
                     if !value_field.is_undefined() {
                         crate::symbol::js_object_set_symbol_property(
                             obj_value,
