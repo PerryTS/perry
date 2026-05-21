@@ -598,6 +598,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("events", "listenerCount", false, None),
     method("events", "getMaxListeners", false, None),
     method("events", "setMaxListeners", false, None),
+    // Module-level `events.on(emitter, name)` — async-iterable queue,
+    // PR #1257.
+    method("events", "on", false, None),
     method_sig(
         "lru-cache",
         "default",
@@ -2014,6 +2017,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isSet", false, None),
     method("util/types", "isDate", false, None),
     method("util/types", "isRegExp", false, None),
+    // Boxed primitive introspection (PR #1257). Both the `util/types`
+    // import form and the `util.types` namespace form route through the
+    // same runtime predicates; the API manifest needs entries for each.
+    method("util/types", "isNumberObject", false, None),
+    method("util/types", "isStringObject", false, None),
+    method("util/types", "isBooleanObject", false, None),
+    method("util/types", "isBoxedPrimitive", false, None),
+    method("util.types", "isNumberObject", false, None),
+    method("util.types", "isStringObject", false, None),
+    method("util.types", "isBooleanObject", false, None),
+    method("util.types", "isBoxedPrimitive", false, None),
+    // Internal pseudo-module used by `new Number/String/Boolean(...)`
+    // lowering — see crates/perry-codegen/src/lower_call/native_table/node_core.rs.
+    method("__primitive_box", "Number", false, None),
+    method("__primitive_box", "String", false, None),
+    method("__primitive_box", "Boolean", false, None),
     // node:assert — assertion helpers used by tests and many npm packages.
     method("assert", "ok", false, None),
     method("assert", "fail", false, None),
@@ -2122,6 +2141,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("buffer", "isBuffer", false, None),
     method("buffer", "isEncoding", false, None),
     method("buffer", "byteLength", false, None),
+    // Buffer module-level encoding probes added in PR #1257.
+    method("buffer", "isAscii", false, None),
+    method("buffer", "isUtf8", false, None),
     property("buffer", "constants"),
     property("buffer", "kMaxLength"),
     property("buffer", "kStringMaxLength"),
