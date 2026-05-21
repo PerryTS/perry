@@ -97,6 +97,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_set_length", VOID, &[I64, DOUBLE]);
     // Array.from() — js_array_clone handles arrays, Sets, and Maps.
     module.declare_function("js_array_clone", I64, &[I64]);
+    // Spread `[...x]` — wraps js_array_clone with a null/undefined
+    // TypeError check so plain spread matches ECMA semantics.
+    module.declare_function("js_array_clone_for_spread", I64, &[DOUBLE]);
     // Generator / iterator protocol: walk `.next()`/`.value` loop and collect into array.
     module.declare_function("js_iterator_to_array", I64, &[DOUBLE]);
 

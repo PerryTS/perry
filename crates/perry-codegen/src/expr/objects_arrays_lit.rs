@@ -70,11 +70,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // through `js_array_concat`'s append machinery. The clone
                 // helper already contains the same array/string/set/map/
                 // typed-array materialization arms used by Array.from.
+                //
+                // Spread of `null` / `undefined` must throw `TypeError`
+                // per ES2015 §12.2.5 (GetIterator). Route through
+                // `js_array_clone_for_spread`, which checks the NaN-box
+                // tag bits on the raw boxed value before stripping, so
+                // null/undefined throws while every other input is
+                // forwarded to the regular clone path.
                 let src_box = lower_expr(ctx, e)?;
-                let src_handle = unbox_to_i64(ctx.block(), &src_box);
                 let cloned = ctx
                     .block()
-                    .call(I64, "js_array_clone", &[(I64, &src_handle)]);
+                    .call(I64, "js_array_clone_for_spread", &[(DOUBLE, &src_box)]);
                 return Ok(nanbox_pointer_inline(ctx.block(), &cloned));
             }
             let cap_str = (elements.len() as u32).to_string();
