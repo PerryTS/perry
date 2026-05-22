@@ -60,6 +60,53 @@ impl<'a> FuncEmitCtx<'a> {
                     }
                 }
 
+                // Built-in timer globals (setTimeout/setInterval/clearTimeout/
+                // clearInterval). These resolve to `Expr::ExternFuncRef` with no
+                // entry in `func_name_map`, so without this intercept they fall
+                // through to the ExternFuncRef arm below, which drops the args and
+                // pushes `undefined` — the timer is never scheduled and the
+                // callback never fires (#1323). Route them through the mem_call
+                // bridge to `__memDispatch.set_timeout` / `set_interval` /
+                // `clear_timeout` / `clear_interval` in wasm_runtime.js, mirroring
+                // how fetch/closure_call dispatch. The set_* bridges take
+                // (closure, delay) and return the timer id; the clear_* bridges
+                // take (id). Trailing setTimeout(fn, delay, ...args) extras are
+                // dropped (Node passes them to the callback — out of scope here).
+                if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
+                    let timer = match name.as_str() {
+                        "setTimeout" => Some(("set_timeout", 2u32)),
+                        "setInterval" => Some(("set_interval", 2u32)),
+                        "clearTimeout" => Some(("clear_timeout", 1u32)),
+                        "clearInterval" => Some(("clear_interval", 1u32)),
+                        _ => None,
+                    };
+                    if let Some((bridge, arity)) = timer {
+                        self.emit_frame_begin(func, arity);
+                        for slot in 0..arity {
+                            match args.get(slot as usize) {
+                                Some(arg) => self.emit_store_arg(func, slot, arg),
+                                None => {
+                                    // Pad missing arg (e.g. setTimeout(fn)) with undefined.
+                                    self.emit_slot_addr(func, slot);
+                                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                                    func.instruction(&Instruction::I64Store(
+                                        wasm_encoder::MemArg {
+                                            offset: 0,
+                                            align: 3,
+                                            memory_index: 0,
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                        // emit_memcall leaves the i64 result (timer id for set_*,
+                        // NaN-boxed undefined for clear_*) on the stack, satisfying
+                        // the call expression's value requirement.
+                        self.emit_memcall(func, bridge, arity);
+                        return true;
+                    }
+                }
+
                 // Evaluate arguments first
                 for arg in args {
                     self.emit_expr(func, arg);
