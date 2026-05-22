@@ -1785,6 +1785,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createSecretKey", false, None),
     method("crypto", "pbkdf2Sync", false, None),
     method("crypto", "pbkdf2", false, None),
+    // crypto.randomInt([min,] max) — uniform integer in [min, max).
+    // crypto.timingSafeEqual(a, b) — constant-time byte comparison.
+    // crypto.getHashes() / getCiphers() — supported-algorithm name lists.
+    // All wired in codegen `expr/calls.rs` (direct dispatch, like createHash).
+    method("crypto", "randomInt", false, None),
+    method("crypto", "timingSafeEqual", false, None),
+    method("crypto", "getHashes", false, None),
+    method("crypto", "getCiphers", false, None),
     // Web Crypto API (issue #561) — `crypto.subtle.*`. The HIR
     // lowering at `crates/perry-hir/src/lower/expr_call.rs` recognizes
     // the `crypto.subtle.<method>(args)` chain and emits a

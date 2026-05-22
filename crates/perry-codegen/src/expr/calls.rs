@@ -462,6 +462,90 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &handle))
         }
 
+        // Phase H crypto: `crypto.randomInt([min,] max)` — uniform integer
+        // in `[min, max)`. The single-arg form defaults `min` to 0. The
+        // runtime returns the value as a plain double (a JS number), so no
+        // NaN-box is needed at the call site.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "randomInt" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(0.0));
+            }
+            let (min_box, max_box) = if args.len() == 1 {
+                let max_box = lower_expr(ctx, &args[0])?;
+                (double_literal(0.0), max_box)
+            } else {
+                let min_box = lower_expr(ctx, &args[0])?;
+                let max_box = lower_expr(ctx, &args[1])?;
+                (min_box, max_box)
+            };
+            let blk = ctx.block();
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_random_int",
+                &[(DOUBLE, &min_box), (DOUBLE, &max_box)],
+            ))
+        }
+
+        // Phase H crypto: `crypto.timingSafeEqual(a, b)` — constant-time
+        // compare of two byte sequences. Returns a NaN-boxed boolean.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "timingSafeEqual" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 2 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let a_box = lower_expr(ctx, &args[0])?;
+            let b_box = lower_expr(ctx, &args[1])?;
+            let blk = ctx.block();
+            let a_handle = unbox_to_i64(blk, &a_box);
+            let b_handle = unbox_to_i64(blk, &b_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_timing_safe_equal",
+                &[(I64, &a_handle), (I64, &b_handle)],
+            ))
+        }
+
+        // Phase H crypto: `crypto.getHashes()` / `crypto.getCiphers()` —
+        // return a `string[]` of supported algorithm names.
+        Expr::Call { callee, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property }
+                    if (property == "getHashes" || property == "getCiphers") && matches!(
+                        object.as_ref(),
+                        Expr::NativeModuleRef(n) if n == "crypto"
+                    )
+            ) =>
+        {
+            let fn_name = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                if property == "getCiphers" {
+                    "js_crypto_get_ciphers"
+                } else {
+                    "js_crypto_get_hashes"
+                }
+            } else {
+                unreachable!()
+            };
+            let blk = ctx.block();
+            let arr = blk.call(I64, fn_name, &[]);
+            Ok(nanbox_pointer_inline(blk, &arr))
+        }
+
         // `crypto.createSecretKey(key, encoding?)` — JWT signing key for
         // HS* algorithms. Native-side this returns a Uint8Array-marked
         // BufferHeader; the bridge then materializes a real v8::Uint8Array

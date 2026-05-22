@@ -352,6 +352,100 @@ fn resolve_range(total: usize, offset: Option<usize>, size: Option<usize>) -> (u
     (start, end)
 }
 
+/// Decode a NaN-boxed numeric `f64` to a plain `f64`. Number literals
+/// reach the FFI as raw doubles, but a value that flowed through an
+/// integer-typed path may arrive INT32-tagged (`0x7FFE` top16). Handle
+/// both so `randomInt` works regardless of which representation codegen
+/// picked for `min` / `max`.
+fn nanboxed_to_f64_num(bits: f64) -> f64 {
+    let raw = bits.to_bits();
+    let top16 = (raw >> 48) as u16;
+    if top16 == 0x7FFE {
+        return ((raw & 0xFFFF_FFFF) as u32 as i32) as f64;
+    }
+    bits
+}
+
+/// `crypto.randomInt([min, ]max)` — uniform random integer in `[min, max)`.
+/// Codegen passes `min = 0` for the single-argument form. Uses rejection
+/// sampling so the distribution is unbiased (matching Node's guarantee).
+/// Returns the integer as a plain `f64`. A degenerate range (`max <= min`)
+/// returns `min` rather than crashing.
+#[no_mangle]
+pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
+    let min = nanboxed_to_f64_num(min_bits) as i64;
+    let max = nanboxed_to_f64_num(max_bits) as i64;
+    if max <= min {
+        return min as f64;
+    }
+    let range = (max - min) as u64;
+    // Rejection sampling: discard values in the unfair tail so every
+    // outcome in `[0, range)` is equally likely.
+    let limit = u64::MAX - (u64::MAX % range);
+    let mut rng = rand::thread_rng();
+    let mut r = rng.next_u64();
+    while r >= limit {
+        r = rng.next_u64();
+    }
+    (min + (r % range) as i64) as f64
+}
+
+/// `crypto.timingSafeEqual(a, b)` — constant-time comparison of two
+/// equal-length byte sequences (Buffer / TypedArray / string). Returns a
+/// NaN-boxed boolean. Node throws `RangeError` when the lengths differ; the
+/// no-exception FFI path returns `false` instead so a length mismatch
+/// degrades gracefully rather than crashing.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_timing_safe_equal(a_ptr: i64, b_ptr: i64) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    let a = bytes_from_ptr(a_ptr);
+    let b = bytes_from_ptr(b_ptr);
+    if a.len() != b.len() {
+        return f64::from_bits(TAG_FALSE);
+    }
+    let mut diff: u8 = 0;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    f64::from_bits(if diff == 0 { TAG_TRUE } else { TAG_FALSE })
+}
+
+/// `crypto.getHashes()` — the digest algorithms Perry can construct via
+/// `createHash` / `createHmac`. Returns a JS `string[]`.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_get_hashes() -> *mut perry_runtime::ArrayHeader {
+    use perry_runtime::{js_array_alloc, js_array_push, JSValue};
+    const NAMES: [&str; 6] = ["md5", "sha1", "sha224", "sha256", "sha384", "sha512"];
+    let arr = js_array_alloc(0);
+    for n in NAMES {
+        let ptr = js_string_from_bytes(n.as_ptr(), n.len() as u32);
+        js_array_push(arr, JSValue::string_ptr(ptr));
+    }
+    arr
+}
+
+/// `crypto.getCiphers()` — the symmetric ciphers Perry supports
+/// (`createCipheriv` / WebCrypto AES-GCM). Returns a JS `string[]`.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_get_ciphers() -> *mut perry_runtime::ArrayHeader {
+    use perry_runtime::{js_array_alloc, js_array_push, JSValue};
+    const NAMES: [&str; 6] = [
+        "aes-128-cbc",
+        "aes-192-cbc",
+        "aes-256-cbc",
+        "aes-128-gcm",
+        "aes-192-gcm",
+        "aes-256-gcm",
+    ];
+    let arr = js_array_alloc(0);
+    for n in NAMES {
+        let ptr = js_string_from_bytes(n.as_ptr(), n.len() as u32);
+        js_array_push(arr, JSValue::string_ptr(ptr));
+    }
+    arr
+}
+
 /// Create HMAC-SHA256
 /// crypto.createHmac('sha256', key).update(data).digest('hex') -> string
 #[no_mangle]

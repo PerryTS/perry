@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1086 entries across 80 modules
+// Coverage: 1090 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -325,6 +325,10 @@ declare module "crypto" {
   /** stdlib */
   export function createSecretKey(...args: any[]): any;
   /** stdlib */
+  export function getCiphers(...args: any[]): any;
+  /** stdlib */
+  export function getHashes(...args: any[]): any;
+  /** stdlib */
   export function getRandomValues(...args: any[]): any;
   /** stdlib */
   export function md5(...args: any[]): any;
@@ -337,9 +341,13 @@ declare module "crypto" {
   /** stdlib */
   export function randomFillSync(...args: any[]): any;
   /** stdlib */
+  export function randomInt(...args: any[]): any;
+  /** stdlib */
   export function randomUUID(...args: any[]): any;
   /** stdlib */
   export function sha256(...args: any[]): any;
+  /** stdlib */
+  export function timingSafeEqual(...args: any[]): any;
 }
 
 declare module "date-fns" {

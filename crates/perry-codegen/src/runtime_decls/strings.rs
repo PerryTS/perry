@@ -1068,6 +1068,15 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_crypto_pbkdf2_bytes", I64, &[I64, I64, DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_bytes_buffer", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_uuid", I64, &[]);
+    // crypto.randomInt([min,] max) -> number; codegen passes min=0 for the
+    // single-arg form. Returns the integer as a plain double.
+    module.declare_function("js_crypto_random_int", DOUBLE, &[DOUBLE, DOUBLE]);
+    // crypto.timingSafeEqual(a, b) -> boolean (NaN-boxed). Args are unboxed
+    // to raw i64 pointers (Buffer / TypedArray / string).
+    module.declare_function("js_crypto_timing_safe_equal", DOUBLE, &[I64, I64]);
+    // crypto.getHashes() / getCiphers() -> string[]; returns *mut ArrayHeader.
+    module.declare_function("js_crypto_get_hashes", I64, &[]);
+    module.declare_function("js_crypto_get_ciphers", I64, &[]);
     // `crypto.createSecretKey(key, encoding?)` — returns Uint8Array-marked
     // BufferHeader of the key bytes (jose accepts Uint8Array for HS*).
     module.declare_function("js_crypto_create_secret_key", I64, &[I64]);
