@@ -890,12 +890,16 @@ pub fn ios_development_setup(saved: &PerryConfig) -> Result<()> {
     println!();
 
     // --- Register the device + mint the development profile via the ASC API ---
+    // A declared `[ios] app_group` is enabled (best-effort) on the bundle ID and
+    // the remaining manual portal step is surfaced inside the API call (#1301).
+    let app_group = crate::commands::run::read_ios_app_group_from_toml();
     let rt = tokio::runtime::Runtime::new()?;
     let profile_data = rt.block_on(crate::commands::run::create_dev_profile_via_api(
         saved,
         &bundle_id,
         &team_id,
         &udid,
+        app_group.as_deref(),
         crate::OutputFormat::Text,
     ))?;
 

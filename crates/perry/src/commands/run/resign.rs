@@ -53,13 +53,21 @@ pub async fn resign_for_development(
         if let OutputFormat::Text = format {
             println!("  Creating development provisioning profile via App Store Connect...");
         }
-        create_dev_profile_via_api(config, &bundle_id, &team_id, device_udid, format)
-            .await
-            .context(
-                "Could not create development provisioning profile.\n\
+        let app_group = read_ios_app_group_from_toml();
+        create_dev_profile_via_api(
+            config,
+            &bundle_id,
+            &team_id,
+            device_udid,
+            app_group.as_deref(),
+            format,
+        )
+        .await
+        .context(
+            "Could not create development provisioning profile.\n\
                  Ensure your App Store Connect API key has the right permissions,\n\
                  or use a simulator instead: perry run ios --simulator <UDID>",
-            )?
+        )?
     };
 
     // Step 2: Embed the profile and code-sign for development.
@@ -311,6 +319,7 @@ pub async fn create_dev_profile_via_api(
     bundle_id: &str,
     _team_id: &str,
     device_udid: &str,
+    app_group: Option<&str>,
     format: OutputFormat,
 ) -> Result<Vec<u8>> {
     let apple = config.apple.as_ref().ok_or_else(|| {
@@ -410,6 +419,58 @@ pub async fn create_dev_profile_via_api(
     }
     if let OutputFormat::Text = format {
         println!(" done");
+    }
+
+    // 2b. Best-effort App Groups capability enablement (#1301).
+    //
+    // Apple's *public* App Store Connect API can toggle the APP_GROUPS
+    // capability on a bundle ID, but it cannot create the `group.*` App Group
+    // identifier nor bind it to the App ID — that part has no public endpoint
+    // (https://developer.apple.com/forums/thread/127917). So when an App Group
+    // is declared we enable the capability and then print the one manual portal
+    // step that still has to happen, instead of silently producing a profile
+    // that won't validate the `application-groups` entitlement.
+    if let Some(group) = app_group.filter(|g| !g.is_empty()) {
+        if let OutputFormat::Text = format {
+            print!("    Enabling App Groups capability...");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+        }
+        let resp = client
+            .post(format!("{base}/bundleIdCapabilities"))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({
+                "data": {
+                    "type": "bundleIdCapabilities",
+                    "attributes": { "capabilityType": "APP_GROUPS" },
+                    "relationships": {
+                        "bundleId": {
+                            "data": { "type": "bundleIds", "id": bundle_id_resource_id }
+                        }
+                    }
+                }
+            }))
+            .send()
+            .await;
+        // An already-enabled capability comes back as a 409 conflict; treat that
+        // as success, and never fail profile creation over the capability toggle.
+        let enabled = matches!(&resp, Ok(r) if r.status().is_success());
+        if let OutputFormat::Text = format {
+            println!(" {}", if enabled { "done" } else { "already enabled" });
+            println!();
+            println!(
+                "    {} App Group {} needs a one-time manual step — the App Store",
+                style("note:").yellow().bold(),
+                style(group).bold()
+            );
+            println!("    Connect API cannot create or bind App Group identifiers. In the");
+            println!("    Apple Developer portal (Certificates, Identifiers & Profiles):");
+            println!("      1. Identifiers → + → App Groups → register {group}");
+            println!(
+                "      2. Identifiers → App ID {bundle_id} → App Groups → Edit → check {group}"
+            );
+            println!("    Then re-run so the profile picks up the binding.");
+            println!();
+        }
     }
 
     // 3. Find a development certificate
@@ -582,6 +643,30 @@ pub fn read_bundle_id_from_app(app_dir: &Path) -> Option<String> {
     }
 }
 
+/// Read the declared App Group from `./perry.toml`, if any.
+///
+/// Mirrors the `[ios] app_group` → `[app] app_group` → top-level `app_group`
+/// precedence that `app_metadata.rs` uses for Apple targets. Strictly
+/// best-effort — any missing file / key / parse error yields `None`, since App
+/// Group enablement never gates provisioning.
+pub fn read_ios_app_group_from_toml() -> Option<String> {
+    let path = std::env::current_dir().ok()?.join("perry.toml");
+    let content = std::fs::read_to_string(path).ok()?;
+    parse_ios_app_group(&content)
+}
+
+fn parse_ios_app_group(content: &str) -> Option<String> {
+    let parsed = toml::from_str::<toml::Value>(content).ok()?;
+    parsed
+        .get("ios")
+        .and_then(|i| i.get("app_group"))
+        .or_else(|| parsed.get("app").and_then(|a| a.get("app_group")))
+        .or_else(|| parsed.get("app_group"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,5 +720,32 @@ mod tests {
         assert!(!xml.contains("com.apple.security.application-groups"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #1301: App Group resolution follows the `[ios]` → `[app]` → top-level
+    /// precedence so the dev-provisioning path enables the same group the
+    /// compile-time entitlement injection (#1178) writes.
+    #[test]
+    fn parse_ios_app_group_precedence() {
+        // [ios] wins over [app] and top-level.
+        let toml = "app_group = \"group.top\"\n\
+                    [app]\napp_group = \"group.app\"\n\
+                    [ios]\napp_group = \"group.ios\"\n";
+        assert_eq!(parse_ios_app_group(toml).as_deref(), Some("group.ios"));
+
+        // [app] is the fallback when [ios] omits it.
+        let toml = "[app]\napp_group = \"group.app\"\n[ios]\nbundle_id = \"com.x.y\"\n";
+        assert_eq!(parse_ios_app_group(toml).as_deref(), Some("group.app"));
+
+        // Top-level is the last resort.
+        assert_eq!(
+            parse_ios_app_group("app_group = \"group.top\"\n").as_deref(),
+            Some("group.top")
+        );
+
+        // No app_group anywhere, empty string, and invalid toml all yield None.
+        assert_eq!(parse_ios_app_group("[ios]\nbundle_id = \"a\"\n"), None);
+        assert_eq!(parse_ios_app_group("[ios]\napp_group = \"\"\n"), None);
+        assert_eq!(parse_ios_app_group("not = valid = toml"), None);
     }
 }
