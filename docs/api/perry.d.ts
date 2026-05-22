@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1094 entries across 80 modules
+// Coverage: 1095 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -328,6 +328,8 @@ declare module "crypto" {
   export function createSign(...args: any[]): any;
   /** stdlib */
   export function createVerify(...args: any[]): any;
+  /** stdlib */
+  export function generateKeyPairSync(...args: any[]): any;
   /** stdlib */
   export function getCiphers(...args: any[]): any;
   /** stdlib */

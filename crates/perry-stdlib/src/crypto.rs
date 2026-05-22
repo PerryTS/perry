@@ -923,6 +923,93 @@ pub unsafe extern "C" fn js_crypto_hkdf_sync(
     make(&okm)
 }
 
+/// `crypto.generateKeyPairSync(type, options)` → `{ publicKey, privateKey }`
+/// as PEM strings (#1365). Supports `'rsa'` (modulusLength from options,
+/// default 2048) and `'ec'` (NIST P-256 / `prime256v1`). The public key is
+/// SPKI PEM, the private key PKCS#8 PEM — the format the overwhelming
+/// majority of callers request via `publicKeyEncoding`/`privateKeyEncoding:
+/// { type, format: 'pem' }`. The encoding-options object is accepted but only
+/// the PEM string form is produced (KeyObjects and DER are not modeled).
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_generate_key_pair_sync(type_ptr: i64, options_ptr: i64) -> f64 {
+    let ktype = String::from_utf8_lossy(&bytes_from_ptr(type_ptr)).to_ascii_lowercase();
+
+    // RSA modulus length from `options.modulusLength` (default 2048).
+    let modulus_bits = read_options_number(options_ptr, "modulusLength").unwrap_or(2048.0) as usize;
+
+    let pems: Option<(String, String)> = match ktype.as_str() {
+        "rsa" => {
+            use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+            let mut rng = rand::thread_rng();
+            // Clamp to a sane range; Node's default is 2048.
+            let bits = modulus_bits.clamp(512, 8192);
+            rsa::RsaPrivateKey::new(&mut rng, bits).ok().and_then(|sk| {
+                let pk = sk.to_public_key();
+                let priv_pem = sk.to_pkcs8_pem(LineEnding::LF).ok()?.to_string();
+                let pub_pem = pk.to_public_key_pem(LineEnding::LF).ok()?;
+                Some((pub_pem, priv_pem))
+            })
+        }
+        // 'ec' (default/prime256v1) and the explicit 'prime256v1'/'p-256'.
+        "ec" | "prime256v1" | "p-256" | "p256" => {
+            use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+            let secret = p256::SecretKey::random(&mut rand::thread_rng());
+            let priv_pem = secret
+                .to_pkcs8_pem(LineEnding::LF)
+                .ok()
+                .map(|p| p.to_string());
+            let pub_pem = secret.public_key().to_public_key_pem(LineEnding::LF).ok();
+            match (pub_pem, priv_pem) {
+                (Some(pb), Some(pv)) => Some((pb, pv)),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+
+    match pems {
+        Some((pub_pem, priv_pem)) => build_key_pair_object(&pub_pem, &priv_pem),
+        None => nanbox_undefined(),
+    }
+}
+
+/// Read a numeric field from a NaN-unboxed options object pointer (0/null →
+/// `None`). Shared by `generateKeyPairSync`.
+unsafe fn read_options_number(options_ptr: i64, name: &str) -> Option<f64> {
+    if (options_ptr as usize) < 0x1000 {
+        return None;
+    }
+    let obj = options_ptr as *const perry_runtime::ObjectHeader;
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let v = perry_runtime::js_object_get_field_by_name(obj, key);
+    if v.is_undefined() {
+        None
+    } else {
+        Some(v.to_number())
+    }
+}
+
+/// Build a `{ publicKey, privateKey }` JS object holding the two PEM strings,
+/// returned NaN-boxed as POINTER_TAG.
+unsafe fn build_key_pair_object(pub_pem: &str, priv_pem: &str) -> f64 {
+    use perry_runtime::{
+        js_array_alloc, js_array_push, js_object_alloc, js_object_set_field, js_object_set_keys,
+        JSValue,
+    };
+    let obj = js_object_alloc(0, 2);
+    let keys = js_array_alloc(2);
+    let pub_key_name = js_string_from_bytes("publicKey".as_ptr(), 9);
+    js_array_push(keys, JSValue::string_ptr(pub_key_name));
+    let priv_key_name = js_string_from_bytes("privateKey".as_ptr(), 10);
+    js_array_push(keys, JSValue::string_ptr(priv_key_name));
+    let pub_s = js_string_from_bytes(pub_pem.as_ptr(), pub_pem.len() as u32);
+    let priv_s = js_string_from_bytes(priv_pem.as_ptr(), priv_pem.len() as u32);
+    js_object_set_field(obj, 0, JSValue::string_ptr(pub_s));
+    js_object_set_field(obj, 1, JSValue::string_ptr(priv_s));
+    js_object_set_keys(obj, keys);
+    nanbox_pointer_f64(obj as usize)
+}
+
 // ---------------------------------------------------------------------------
 // Hash handle — powers `const h = crypto.createHash('sha1'); h.update(x);
 // h.digest()` (issue #86). The runtime-resident chain-collapse in

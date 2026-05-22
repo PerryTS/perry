@@ -1795,6 +1795,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "scryptSync", false, None),
     // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
     method("crypto", "hkdfSync", false, None),
+    // crypto.generateKeyPairSync(type, options) -> { publicKey, privateKey }
+    // PEM strings (RSA / EC P-256). Wired in codegen `expr/calls.rs`.
+    method("crypto", "generateKeyPairSync", false, None),
     // crypto.randomInt([min,] max) — uniform integer in [min, max).
     // crypto.timingSafeEqual(a, b) — constant-time byte comparison.
     // crypto.getHashes() / getCiphers() — supported-algorithm name lists.
