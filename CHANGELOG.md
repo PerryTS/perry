@@ -2,6 +2,56 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1024 — release sweep: crypto + perf_hooks + ios + wasm timers
+
+Rolls up 26 PRs that merged to `main` post-v0.5.1023 without version
+bumps. Highlights below; full per-PR history is in `git log
+v0.5.1023..HEAD`.
+
+**node:crypto gap-fixes (8 PRs):**
+- **#1352 #1353 #1355 #1361** addressed across **#1386 #1393 #1394 #1402
+  #1405**: `crypto.randomInt`, `crypto.timingSafeEqual`,
+  `crypto.getHashes` / `crypto.getCiphers`, `sha224` / `sha384`, base64
+  digest, Buffer hash input, no-arg `digest()` typed as Buffer,
+  `pbkdf2Sync` honors the digest argument, `crypto.scryptSync`. See
+  project_crypto_1332 (memory) for what's still open under #1332.
+
+**node:perf_hooks (#1321 + coverage):**
+- **#1321** Native `performance` + User Timing API (`mark`/`measure`) +
+  `PerformanceObserver`, plus a granular node-suite covering the surface.
+- **#1328 #1342 (PR-side) + observer-typeof under #1320**: coverage
+  expansions — `timerify`, histogram, `nodeTiming`, `toJSON`,
+  resource-timing, single-type observe, empty-clear, negative duration,
+  multiple observers, `measure(bad-mark)`. See project_perf_hooks_1321.
+
+**Other runtime + codegen:**
+- **#1090** Port GC checkpoint runtime work (#1324).
+- **#1311 / #1316 #1384 #1385** geisterhand on iOS — `--target ios`
+  builds + links the geisterhand inspector + registers SecureField in
+  perry-ui-ios + auto-includes perry-stdlib. See project_geisterhand_ios_1311.
+- **#1312 / #1314** `process.env.X` (unset) is undefined (nullish), so
+  `??` applies as in Node.
+- **#1319** Runtime thread-safety hardening for cross-thread statics.
+- **#1322** Exact-head GC evidence packet (diagnostics tooling).
+- **#1323 / #1329** wasm: dispatch timer builtins through the mem_call
+  bridge. See project_wasm_timers_1323.
+- **#1317 / #1326** Codegen: `node:timers/promises` segfault when a user
+  module shadows global `setTimeout`.
+- **#1330 → #1331** node:process suite (7 of 12 cases).
+- **#1292 / #1307** `bcrypt.hash()` returns a real String (not a
+  string-like object).
+- **#1293 / #1308** fastify: route `(request as any).json()` / `.body`
+  through the external-fastify handle dispatch.
+- **#1296** Performance gaps in common app patterns.
+- **#1297** `diagnostics_channel` parity support.
+- **#1301 / #1313** iOS App Groups capability (best-effort enable +
+  manual-step guidance).
+- **#1318 / #1325** Parity: `os/methods/modern-methods` rewritten on
+  static dispatch.
+- **#1315 #1342** Expanded Node parity test coverage.
+- **#1382** ui-ios: drain stdlib pump so async `fetch` resolves on iOS.
+- **#1392 / #1404** ui-wasm: reactive state + setText on web/wasm target.
+
 ## v0.5.1023 — feat(ios) #1301 setup --development + fix(compile) #1304 vendored optional_frameworks
 
 Folds two PRs that merged post-v0.5.1022 without version bumps:
