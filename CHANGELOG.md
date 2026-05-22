@@ -2,6 +2,54 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1025 — fix(compile): cross-target geisterhand lib lookup + parity skip-list + memory ceiling restore
+
+Unblocks the v0.5.1024 release-packages run by addressing 3 distinct
+gate failures observed on run #26298996134 / #26298996081:
+
+**simctl iOS (`--target ios-simulator --enable-geisterhand`)**
+
+`crates/perry/src/commands/compile/library_search.rs::find_geisterhand_lib`
+fell back to the host `target/release/` directory when the
+cross-target `target/<triple>/release/` directory was missing the
+requested `.a` — so on the iOS-simulator workflow the function returned
+the host macOS `libperry_runtime.a` for an iOS-simulator link, producing
+
+    ld: building for 'iOS-simulator', but linking in object file
+    (target/release/libperry_runtime.a[2]…) built for 'macOS'
+    clang: error: linker command failed with exit code 1
+
+The same fallback also masked the auto-build trigger in
+`link/mod.rs` — `find_geisterhand_runtime(Some("ios-simulator"))`
+returned a path (host `.a`), `gh_missing` stayed `false`, and
+`build_geisterhand_libs(<cross-target>)` never ran. Fix: when a
+cross-compile target is specified, search ONLY the matching triple's
+release directories and `continue` instead of falling through to host
+paths. Host build (target = None) behaviour unchanged.
+
+**Parity gate (2 new failures triaged)**
+
+Both surfaced as NEW (not-in-known_failures.json) on the v0.5.1024
+parity job (442 pass / 38 fail / 2 NEW). Filed granular issues per
+`feedback_granular_gap_issues.md` and added skip-list entries:
+
+- **#1423** `test_async_local_storage_context` — `AsyncLocalStorage`
+  `.enterWith()` / `.exit()` aren't implemented end-to-end. The test
+  prints 10 of 17 expected lines and exits silently. Sibling slice of
+  #788 #789.
+- **#1424** `test_json_lazy_reviver` — `JSON.parse(blob, reviver)` on a
+  lazy-tape top-level array produces zero output (the reviver dispatch
+  on the materialised lazy array crashes / exits before any of the 4
+  `console.log` lines fire). Likely fallout from the GC checkpoint +
+  copied-minor work under #1090 / #1146 / #1235 / #1324.
+
+**compile-smoke memory ceiling**
+
+`scripts/run_memory_stability_tests.sh` `test_memory_json_churn` 290 /
+315 MB ceiling — already merged as PR #1422 / dec43e27 (this changelog
+entry calls it out as part of the v0.5.1024-failure-recovery story for
+completeness).
+
 ## v0.5.1024 — release sweep: crypto + perf_hooks + ios + wasm timers
 
 Rolls up 26 PRs that merged to `main` post-v0.5.1023 without version
