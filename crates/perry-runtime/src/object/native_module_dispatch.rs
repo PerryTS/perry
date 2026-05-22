@@ -131,6 +131,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::perf_hooks::js_perf_event_loop_utilization(arg(0))
         }
         ("perf_hooks", "toJSON") => crate::perf_hooks::js_perf_to_json(),
+        ("perf_hooks", "clearResourceTimings") => {
+            crate::perf_hooks::js_perf_clear_resource_timings()
+        }
+        ("perf_hooks", "setResourceTimingBufferSize") => {
+            crate::perf_hooks::js_perf_set_resource_timing_buffer_size(arg(0))
+        }
 
         // ── PerformanceObserver instance (perf_observer) ──
         // The registry index lives in field[1] of the namespace object; the

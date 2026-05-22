@@ -116,6 +116,18 @@ pub(super) fn lower_perf_hooks_method(
                     .call(DOUBLE, "js_perf_event_loop_utilization", &[(DOUBLE, &a0)])
             }
             "toJSON" => ctx.block().call(DOUBLE, "js_perf_to_json", &[]),
+            "clearResourceTimings" => {
+                ctx.block()
+                    .call(DOUBLE, "js_perf_clear_resource_timings", &[])
+            }
+            "setResourceTimingBufferSize" => {
+                let a0 = lower_or_undef(ctx, 0)?;
+                ctx.block().call(
+                    DOUBLE,
+                    "js_perf_set_resource_timing_buffer_size",
+                    &[(DOUBLE, &a0)],
+                )
+            }
             _ => return Ok(None),
         };
         return Ok(Some(v));

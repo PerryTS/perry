@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1096 entries across 80 modules.
+Total: 1098 entries across 80 modules.
 
 ## Modules
 
@@ -1036,6 +1036,7 @@ Total: 1096 entries across 80 modules.
 
 - `clearMarks` — module
 - `clearMeasures` — module
+- `clearResourceTimings` — module
 - `disconnect` — instance *(class: `PerformanceObserver`)*
 - `eventLoopUtilization` — module
 - `getEntries` — module
@@ -1045,6 +1046,7 @@ Total: 1096 entries across 80 modules.
 - `measure` — module
 - `now` — module
 - `observe` — instance *(class: `PerformanceObserver`)*
+- `setResourceTimingBufferSize` — module
 - `takeRecords` — instance *(class: `PerformanceObserver`)*
 - `toJSON` — module
 

@@ -497,6 +497,21 @@ pub extern "C" fn js_perf_to_json() -> f64 {
     }
 }
 
+// ── clearResourceTimings() / setResourceTimingBufferSize(n) ──────────────────
+// Perry has no Resource Timing buffer (no PerformanceResourceTiming entries are
+// ever recorded), so these are no-ops matching Node's signatures — both return
+// `undefined`. They exist so user code that manages the resource-timing buffer
+// runs unchanged.
+#[no_mangle]
+pub extern "C" fn js_perf_clear_resource_timings() -> f64 {
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+#[no_mangle]
+pub extern "C" fn js_perf_set_resource_timing_buffer_size(_n: f64) -> f64 {
+    f64::from_bits(JSValue::undefined().bits())
+}
+
 // ── PerformanceObserver ──────────────────────────────────────────────────────
 // Observers are stored in a per-thread registry; the JS-visible observer
 // object is a `perf_observer`-tagged native-module namespace object whose

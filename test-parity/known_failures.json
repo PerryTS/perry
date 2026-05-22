@@ -44,12 +44,6 @@
     "category": "bug-open",
     "reason": "node:perf_hooks: performance.nodeTiming (PerformanceNodeTiming) unimplemented (not an object). Flips to PASS when #1337 lands."
   },
-  "node-suite/perf_hooks/resource-timing/clear-and-buffer-size": {
-    "issue": "1339",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: clearResourceTimings() / setResourceTimingBufferSize() unimplemented. Flips to PASS when #1339 lands."
-  },
   "node-suite/perf_hooks/mark/detail-structured-clone": {
     "issue": "1340",
     "added": "2026-05-22",

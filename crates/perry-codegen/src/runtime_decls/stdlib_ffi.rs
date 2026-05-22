@@ -1080,6 +1080,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_perf_clear_measures", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_event_loop_utilization", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_to_json", DOUBLE, &[]);
+    module.declare_function("js_perf_clear_resource_timings", DOUBLE, &[]);
+    module.declare_function("js_perf_set_resource_timing_buffer_size", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_observer_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_observer_observe", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_disconnect", DOUBLE, &[DOUBLE]);
