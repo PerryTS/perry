@@ -80,12 +80,6 @@
     "category": "bug-open",
     "reason": "node:perf_hooks: observe({ buffered: true }) does not deliver pre-existing entries (callback never fires). Flips to PASS when #1390 lands."
   },
-  "node-suite/perf_hooks/errors/measure-nonexistent-mark": {
-    "issue": "1403",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: measure(name, startMark) with a nonexistent mark should throw; Perry does not throw. Flips to PASS when #1403 lands."
-  },
   "node-suite/console/dir/depth-options": {
     "issue": "1199",
     "added": "2026-05-20",

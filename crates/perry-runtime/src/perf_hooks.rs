@@ -170,6 +170,24 @@ unsafe fn resolve_endpoint_value(v: JSValue) -> f64 {
     }
 }
 
+/// Resolve a positional `measure(name, startMark, endMark?)` endpoint. A number
+/// passes through; a string must name an existing mark — Node throws when it
+/// doesn't (the silent-0 fallback used by the options form isn't valid for
+/// positional start/end marks).
+unsafe fn resolve_positional_endpoint(v: JSValue) -> f64 {
+    if let Some(n) = num_of(v) {
+        n
+    } else if v.is_string() {
+        let name = header_to_string(v.as_string_ptr());
+        match lookup_mark_start(&name) {
+            Some(t) => t,
+            None => throw_type_error(&format!("The \"{name}\" performance mark has not been set")),
+        }
+    } else {
+        0.0
+    }
+}
+
 /// Most-recent mark startTime for `name`, if any.
 fn lookup_mark_start(name: &str) -> Option<f64> {
     PERF_ENTRIES.with(|store| {
@@ -293,10 +311,10 @@ pub extern "C" fn js_perf_measure(name_val: f64, arg2: f64, arg3: f64) -> f64 {
             return finish_measure(name, start_time, duration, detail_bits);
         } else if arg2_jv.is_string() {
             // Positional form: measure(name, startMark, endMark?)
-            let start = resolve_endpoint_value(arg2_jv);
+            let start = resolve_positional_endpoint(arg2_jv);
             let arg3_jv = JSValue::from_bits(arg3.to_bits());
             let end = if arg3_jv.is_string() || arg3_jv.is_number() {
-                resolve_endpoint_value(arg3_jv)
+                resolve_positional_endpoint(arg3_jv)
             } else {
                 perf_now()
             };
