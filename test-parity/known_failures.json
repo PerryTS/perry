@@ -20,6 +20,54 @@
     "category": "bug-open",
     "reason": "node:perf_hooks granular parity: globalThis.performance !== the node:perf_hooks named import. The import resolves to a fresh namespace object per read and the global is a separate path; neither is a cached singleton. Flips to PASS when #1327 lands."
   },
+  "node-suite/perf_hooks/timerify/timerify": {
+    "issue": "1335",
+    "added": "2026-05-22",
+    "category": "bug-open",
+    "reason": "node:perf_hooks: performance.timerify(fn) unimplemented (not a function). Flips to PASS when #1335 lands."
+  },
+  "node-suite/perf_hooks/histogram/monitor-event-loop-delay": {
+    "issue": "1336",
+    "added": "2026-05-22",
+    "category": "bug-open",
+    "reason": "node:perf_hooks: monitorEventLoopDelay() unimplemented (not a function). Flips to PASS when #1336 lands."
+  },
+  "node-suite/perf_hooks/histogram/create-histogram": {
+    "issue": "1336",
+    "added": "2026-05-22",
+    "category": "bug-open",
+    "reason": "node:perf_hooks: createHistogram() unimplemented (not a function). Flips to PASS when #1336 lands."
+  },
+  "node-suite/perf_hooks/node-timing/node-timing": {
+    "issue": "1337",
+    "added": "2026-05-22",
+    "category": "bug-open",
+    "reason": "node:perf_hooks: performance.nodeTiming (PerformanceNodeTiming) unimplemented (not an object). Flips to PASS when #1337 lands."
+  },
+  "node-suite/perf_hooks/to-json/to-json": {
+    "issue": "1338",
+    "added": "2026-05-22",
+    "category": "bug-open",
+    "reason": "node:perf_hooks: performance.toJSON() unimplemented (not a function). Flips to PASS when #1338 lands."
+  },
+  "node-suite/perf_hooks/resource-timing/clear-and-buffer-size": {
+    "issue": "1339",
+    "added": "2026-05-22",
+    "category": "bug-open",
+    "reason": "node:perf_hooks: clearResourceTimings() / setResourceTimingBufferSize() unimplemented. Flips to PASS when #1339 lands."
+  },
+  "node-suite/perf_hooks/mark/detail-structured-clone": {
+    "issue": "1340",
+    "added": "2026-05-22",
+    "category": "bug-open",
+    "reason": "node:perf_hooks: mark detail is not structured-cloned (m.detail === input instead of a distinct deep-equal copy). Flips to PASS when #1340 lands."
+  },
+  "node-suite/perf_hooks/observer/supported-entry-types": {
+    "issue": "1341",
+    "added": "2026-05-22",
+    "category": "bug-open",
+    "reason": "node:perf_hooks: PerformanceObserver.supportedEntryTypes.includes('mark'/'measure') is not usable (static array membership). Flips to PASS when #1341 lands."
+  },
   "node-suite/console/dir/depth-options": {
     "issue": "1199",
     "added": "2026-05-20",
