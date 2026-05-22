@@ -220,10 +220,15 @@ function perry_ui_zstack_create(children) {
     return wrapWidget(h);
 }
 
-function perry_ui_text_create(text) {
+function perry_ui_text_create(text, id) {
     const el = document.createElement("span");
-    el.textContent = text;
-    return wrapWidget(allocHandle(el));
+    el.textContent = (text !== undefined && text !== null) ? String(text) : "";
+    const h = allocHandle(el);
+    // Issue #1392 — 2-arg `Text(content, id)` form. state_desugar emits
+    // `count.text()` as `Text("<initial>", "__state_N")`, reusing the synth
+    // id as both state key and setText id so a write fans out to the widget.
+    if (typeof id === "string" && id.length > 0) uiTextRegister(h, id);
+    return wrapWidget(h);
 }
 
 function perry_ui_button_create(label, callback) {
@@ -567,6 +572,83 @@ function perry_ui_state_bind_foreach(stateH, parentH, templateFn) {
 function perry_ui_state_on_change(stateH, callback) {
     if (typeof callback === "function") {
         stateSubscribe(stateH, callback);
+    }
+}
+
+// --- Issue #1392: keyed state + setText registry ---
+// The state_desugar pass (crates/perry-transform/src/state_desugar.rs) lowers
+// `state<T>` to a synthetic, string-keyed registry API rather than the
+// handle-based `perry_ui_state_create` surface above:
+//   let c = state(0)   -> __state_init("__state_0", 0)
+//   c.value / c.get()  -> __state_get("__state_0")
+//   c.set(v)           -> __state_set("__state_0", v)
+//   c.text()           -> Text("0", "__state_0")   (registers via uiTextRegister)
+// The synth id is reused as both the state key and the Text widget's setText
+// id, so a write fans out to every bound widget. Mirrors the native runtime
+// (perry-runtime/src/ui_text_registry.rs: js_state_init / js_state_get /
+// js_state_set + perry_arkts_set_text).
+const keyedStates = new Map();    // synth id -> current value
+const uiTextIds = new Map();      // text id  -> [DOM element handle, ...]
+const keyedNavstack = new Map();  // synth id -> [{ name, widget }, ...]
+const keyedForeach = new Map();   // synth id -> [{ host, render }, ...]
+
+function uiTextRegister(handle, id) {
+    let list = uiTextIds.get(id);
+    if (!list) { list = []; uiTextIds.set(id, list); }
+    list.push(handle);
+}
+
+function perry_ui_set_text(id, value) {
+    const list = uiTextIds.get(id);
+    if (!list) return;
+    const str = (value === undefined || value === null) ? "" : String(value);
+    for (const h of list) { const el = getHandle(h); if (el) el.textContent = str; }
+}
+
+function perry_ui_state_init(id, initial) { keyedStates.set(id, initial); }
+function perry_ui_state_get_keyed(id) {
+    return keyedStates.has(id) ? keyedStates.get(id) : undefined;
+}
+function perry_ui_state_set_keyed(id, value) {
+    keyedStates.set(id, value);
+    perry_ui_set_text(id, value);          // reactive Text re-render
+    navstackDispatchKeyed(id, value);      // route visibility
+    foreachDispatchKeyed(id, value);       // dynamic-list re-render
+}
+
+function foreachRenderKeyed(host, render, value) {
+    const p = getHandle(host); if (!p) return;
+    while (p.firstChild) p.removeChild(p.firstChild);
+    const count = typeof value === "number" ? value : (Array.isArray(value) ? value.length : 0);
+    for (let i = 0; i < count; i++) {
+        const child = (typeof render === "function") ? render(i) : undefined;
+        const childEl = getHandle(child);
+        if (childEl) p.appendChild(childEl);
+    }
+}
+function foreachDispatchKeyed(id, value) {
+    const binds = keyedForeach.get(id); if (!binds) return;
+    for (const b of binds) foreachRenderKeyed(b.host, b.render, value);
+}
+function perry_ui_foreach_register(id, host, render) {
+    let list = keyedForeach.get(id);
+    if (!list) { list = []; keyedForeach.set(id, list); }
+    list.push({ host, render });
+    if (keyedStates.has(id)) foreachRenderKeyed(host, render, keyedStates.get(id));
+}
+
+function navstackDispatchKeyed(id, value) {
+    const routes = keyedNavstack.get(id); if (!routes) return;
+    const cur = (value === undefined || value === null) ? "" : String(value);
+    for (const r of routes) { const el = getHandle(r.widget); if (el) el.style.display = (r.name === cur) ? "" : "none"; }
+}
+function perry_ui_navstack_register_route(id, name, body) {
+    let list = keyedNavstack.get(id);
+    if (!list) { list = []; keyedNavstack.set(id, list); }
+    list.push({ name, widget: body });
+    if (keyedStates.has(id)) {
+        const cur = String(keyedStates.get(id));
+        const el = getHandle(body); if (el && name !== cur) el.style.display = "none";
     }
 }
 
@@ -3363,6 +3445,13 @@ window.__perry = {
     perry_ui_state_bind_visibility,
     perry_ui_state_bind_foreach,
     perry_ui_state_on_change,
+    // Keyed state + setText (issue #1392 — state_desugar synthetic API)
+    perry_ui_set_text,
+    perry_ui_state_init,
+    perry_ui_state_get_keyed,
+    perry_ui_state_set_keyed,
+    perry_ui_foreach_register,
+    perry_ui_navstack_register_route,
     // Text / Button / TextField ops
     perry_ui_text_set_string,
     perry_ui_text_set_selectable,

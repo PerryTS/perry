@@ -207,6 +207,17 @@ impl JsEmitter {
                 self.output.push(')');
                 return;
             }
+            // Issue #1392 — `state<T>` desugar synthetic API (keyed registry).
+            // state_desugar (crates/perry-transform/src/state_desugar.rs) emits
+            // these on non-arkts targets. The native LLVM backend special-cases
+            // them in lower_call/native/mod.rs; on `--target web` they must reach
+            // the keyed-state bridge functions in web_runtime.js or reactive
+            // `state` / `setText` silently no-op (displayed text never updates).
+            "__state_init" => "perry_ui_state_init",
+            "__state_get" => "perry_ui_state_get_keyed",
+            "__state_set" => "perry_ui_state_set_keyed",
+            "__foreach_register" => "perry_ui_foreach_register",
+            "__navstack_register_route" => "perry_ui_navstack_register_route",
             // State bindings
             "bindText" | "state_bind_text" => "perry_ui_state_bind_text",
             "bindTextNumeric" | "state_bind_text_numeric" => "perry_ui_state_bind_text_numeric",
