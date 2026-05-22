@@ -615,6 +615,51 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
 
+        // crypto.scryptSync(password, salt, keylen, options?) -> Buffer.
+        // The runtime returns a Buffer (HIR types scryptSync as Uint8Array)
+        // and reads optional `{ N, r, p }` cost params from the options
+        // object pointer; an absent options arg passes a null pointer and the
+        // runtime uses Node's defaults (N=16384, r=8, p=1).
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "scryptSync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 3 {
+                return Ok(double_literal(0.0));
+            }
+            let pwd_box = lower_expr(ctx, &args[0])?;
+            let salt_box = lower_expr(ctx, &args[1])?;
+            let keylen_box = lower_expr(ctx, &args[2])?;
+            let opts_box = if args.len() >= 4 {
+                Some(lower_expr(ctx, &args[3])?)
+            } else {
+                None
+            };
+            let blk = ctx.block();
+            let pwd_handle = unbox_to_i64(blk, &pwd_box);
+            let salt_handle = unbox_to_i64(blk, &salt_box);
+            let opts_handle = match &opts_box {
+                Some(b) => unbox_to_i64(blk, b),
+                None => "0".to_string(),
+            };
+            let buf_handle = blk.call(
+                I64,
+                "js_crypto_scrypt_bytes",
+                &[
+                    (I64, &pwd_handle),
+                    (I64, &salt_handle),
+                    (DOUBLE, &keylen_box),
+                    (I64, &opts_handle),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
         // Phase H fs: `fs.promises.METHOD(args...)` — HIR shape is a
         // nested PropertyGet { PropertyGet { NativeModuleRef("fs"),
         // "promises" }, method }. We route these to their sync

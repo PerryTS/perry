@@ -768,6 +768,76 @@ pub unsafe extern "C" fn js_crypto_scrypt_custom(
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }
 
+/// `crypto.scryptSync(password, salt, keylen[, options])` → Buffer.
+///
+/// Unlike `js_crypto_scrypt` (which returns a hex string), this returns a
+/// Buffer to match Node's `scryptSync`, and reads password/salt via
+/// `bytes_from_ptr` so Buffer inputs hash correctly. Optional cost
+/// parameters are read from `options_ptr` (a NaN-unboxed object pointer, or
+/// a null/sentinel for none): `N`/`cost`, `r`/`blockSize`, `p`/
+/// `parallelization`. Defaults match Node: N=16384, r=8, p=1.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_scrypt_bytes(
+    password_ptr: i64,
+    salt_ptr: i64,
+    key_length: f64,
+    options_ptr: i64,
+) -> *mut perry_runtime::buffer::BufferHeader {
+    use perry_runtime::{js_object_get_field_by_name, ObjectHeader};
+    let password = bytes_from_ptr(password_ptr);
+    let salt = bytes_from_ptr(salt_ptr);
+    let klen = key_length as usize;
+    if klen == 0 || klen > 1024 {
+        return alloc_buffer_from_slice(&[]);
+    }
+    // Node defaults: N=16384 (cost), r=8 (blockSize), p=1 (parallelization).
+    let (mut n, mut r, mut p) = (16384u64, 8u32, 1u32);
+    if (options_ptr as usize) >= 0x1000 {
+        let obj = options_ptr as *const ObjectHeader;
+        // Read a numeric option by primary or alias name; None if absent.
+        let mut read = |primary: &str, alias: &str| -> Option<f64> {
+            let pk = js_string_from_bytes(primary.as_ptr(), primary.len() as u32);
+            let v = js_object_get_field_by_name(obj, pk);
+            if !v.is_undefined() {
+                return Some(v.to_number());
+            }
+            let ak = js_string_from_bytes(alias.as_ptr(), alias.len() as u32);
+            let v = js_object_get_field_by_name(obj, ak);
+            if v.is_undefined() {
+                None
+            } else {
+                Some(v.to_number())
+            }
+        };
+        if let Some(x) = read("N", "cost") {
+            if x >= 1.0 {
+                n = x as u64;
+            }
+        }
+        if let Some(x) = read("r", "blockSize") {
+            if x >= 1.0 {
+                r = x as u32;
+            }
+        }
+        if let Some(x) = read("p", "parallelization") {
+            if x >= 1.0 {
+                p = x as u32;
+            }
+        }
+    }
+    // `scrypt::Params` takes log2(N); Node requires N to be a power of two,
+    // so trailing_zeros gives the exact exponent. A non-power-of-two or an
+    // otherwise-invalid combo falls back to the Node defaults.
+    let log_n = n.trailing_zeros() as u8;
+    let params = scrypt::Params::new(log_n, r, p, klen)
+        .unwrap_or_else(|_| scrypt::Params::new(14, 8, 1, klen).unwrap());
+    let mut out = vec![0u8; klen];
+    if scrypt::scrypt(&password, &salt, &params, &mut out).is_err() {
+        return alloc_buffer_from_slice(&[]);
+    }
+    alloc_buffer_from_slice(&out)
+}
+
 // ---------------------------------------------------------------------------
 // Hash handle — powers `const h = crypto.createHash('sha1'); h.update(x);
 // h.digest()` (issue #86). The runtime-resident chain-collapse in

@@ -558,6 +558,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_crypto_random_bytes_hex", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_nonce", I64, &[]);
     module.declare_function("js_crypto_scrypt", I64, &[I64, I64, DOUBLE]);
+    // crypto.scryptSync(password, salt, keylen, options?) -> Buffer. The 4th
+    // arg is the NaN-unboxed options-object pointer (0 = none).
+    module.declare_function("js_crypto_scrypt_bytes", I64, &[I64, I64, DOUBLE, I64]);
     module.declare_function(
         "js_crypto_scrypt_custom",
         I64,

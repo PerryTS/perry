@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1090 entries across 80 modules
+// Coverage: 1091 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -344,6 +344,8 @@ declare module "crypto" {
   export function randomInt(...args: any[]): any;
   /** stdlib */
   export function randomUUID(...args: any[]): any;
+  /** stdlib */
+  export function scryptSync(...args: any[]): any;
   /** stdlib */
   export function sha256(...args: any[]): any;
   /** stdlib */
