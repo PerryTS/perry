@@ -12,11 +12,7 @@ pub(super) const GC_COPY_PROMOTION_SURVIVALS: u8 = 4;
 pub const GC_LAYOUT_STATE_MASK: u16 = 0xC000;
 pub(super) const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
 pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
-pub(super) const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
-// Side masks are a win for larger layouts, but a memory tax for the tiny
-// mixed objects that dominate JSON churn. Keep small pointer-bearing layouts
-// in UNKNOWN state so tracing falls back to the legacy full-slot walk.
-pub(super) const GC_LAYOUT_SIDE_MASK_MIN_SLOTS: usize = 16;
+pub(crate) const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
 
 #[derive(Clone)]
 pub(super) enum LayoutSlotMask {
@@ -277,36 +273,15 @@ pub(super) unsafe fn layout_header_for_user(user_ptr: usize) -> Option<*mut GcHe
         return None;
     }
     let header = header_from_user_ptr(user_ptr as *const u8);
-    let obj_type = (*header).obj_type;
-    matches!(obj_type, GC_TYPE_ARRAY | GC_TYPE_OBJECT | GC_TYPE_CLOSURE).then_some(header)
-}
-
-pub(super) unsafe fn layout_slot_capacity_for_user(
-    header: *const GcHeader,
-    user_ptr: usize,
-) -> usize {
-    match (*header).obj_type {
-        GC_TYPE_ARRAY => (*(user_ptr as *const crate::array::ArrayHeader)).length as usize,
-        GC_TYPE_OBJECT => (*(user_ptr as *const crate::object::ObjectHeader)).field_count as usize,
-        GC_TYPE_CLOSURE => crate::closure::real_capture_count(
-            (*(user_ptr as *const crate::closure::ClosureHeader)).capture_count,
-        ) as usize,
-        _ => 0,
+    match gc_type_layout_slot_kind((*header).obj_type) {
+        GcLayoutSlotKind::ArrayElements
+        | GcLayoutSlotKind::ObjectFields
+        | GcLayoutSlotKind::ClosureCaptures => Some(header),
+        GcLayoutSlotKind::None => None,
     }
 }
 
 #[inline]
-pub(super) unsafe fn layout_side_mask_worth_tracking(
-    header: *const GcHeader,
-    user_ptr: usize,
-    slot_index: usize,
-) -> bool {
-    let slot_capacity = layout_slot_capacity_for_user(header, user_ptr);
-    slot_index >= GC_LAYOUT_SIDE_MASK_MIN_SLOTS
-        || slot_capacity >= GC_LAYOUT_SIDE_MASK_MIN_SLOTS
-        || ((*header).obj_type == GC_TYPE_ARRAY && slot_capacity <= 1 && slot_index == 0)
-}
-
 pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
@@ -326,16 +301,22 @@ pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
     };
     let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
     if state == GC_LAYOUT_UNKNOWN {
+        TYPED_LAYOUTS.with(|m| {
+            m.borrow_mut().remove(&(user_ptr as usize));
+        });
+        LAYOUT_SLOT_MASKS.with(|m| {
+            m.borrow_mut().remove(&(user_ptr as usize));
+        });
         return;
     }
     set_layout_state(header, GC_LAYOUT_UNKNOWN);
+    TYPED_LAYOUTS.with(|m| {
+        m.borrow_mut().remove(&(user_ptr as usize));
+    });
     if state == GC_LAYOUT_POINTER_FREE {
         return;
     }
     LAYOUT_SLOT_MASKS.with(|m| {
-        m.borrow_mut().remove(&(user_ptr as usize));
-    });
-    TYPED_LAYOUTS.with(|m| {
         m.borrow_mut().remove(&(user_ptr as usize));
     });
 }
@@ -350,6 +331,13 @@ pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
     TYPED_LAYOUTS.with(|m| {
         m.borrow_mut().remove(&user_ptr);
     });
+}
+
+pub(crate) fn layout_has_typed_descriptor(user_ptr: usize) -> bool {
+    if user_ptr == 0 {
+        return false;
+    }
+    TYPED_LAYOUTS.with(|m| m.borrow().contains_key(&user_ptr))
 }
 
 pub(super) unsafe fn layout_set_typed_unknown(header: *mut GcHeader, user_ptr: usize) {
@@ -396,15 +384,6 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
             }
             return;
         }
-        let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
-        if state == GC_LAYOUT_SIDE_MASK
-            && (*header).obj_type == GC_TYPE_ARRAY
-            && layout_slot_capacity_for_user(header, parent_user) < GC_LAYOUT_SIDE_MASK_MIN_SLOTS
-            && !layout_side_mask_worth_tracking(header, parent_user, slot_index)
-        {
-            layout_set_typed_unknown(header, parent_user);
-            return;
-        }
         if !pointer && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
             return;
         }
@@ -413,9 +392,7 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
             if pointer {
                 if let Some(mask) = masks.get_mut(&parent_user) {
                     mask.set_slot(slot_index);
-                } else if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE
-                    && layout_side_mask_worth_tracking(header, parent_user, slot_index)
-                {
+                } else if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
                     let mut mask = LayoutSlotMask::Inline(0);
                     mask.set_slot(slot_index);
                     masks.insert(parent_user, mask);
@@ -456,7 +433,7 @@ pub extern "C" fn js_gc_init_typed_shape_layout(
         let Some(header) = layout_header_for_user(user_ptr) else {
             return;
         };
-        if (*header).obj_type != GC_TYPE_OBJECT {
+        if gc_type_layout_slot_kind((*header).obj_type) != GcLayoutSlotKind::ObjectFields {
             return;
         }
         let obj_header = user_ptr as *const crate::object::ObjectHeader;
@@ -524,7 +501,7 @@ pub extern "C" fn js_gc_init_unboxed_object_layout(
         let Some(header) = layout_header_for_user(user_ptr) else {
             return;
         };
-        if (*header).obj_type != GC_TYPE_OBJECT {
+        if gc_type_layout_slot_kind((*header).obj_type) != GcLayoutSlotKind::ObjectFields {
             return;
         }
         let obj_header = user_ptr as *const crate::object::ObjectHeader;
@@ -580,7 +557,7 @@ pub(super) unsafe fn layout_rebuild_from_slots_with_policy(
     user_ptr: *mut u8,
     slots: *const u64,
     slot_count: usize,
-    exact_small_mixed: bool,
+    _exact_small_mixed: bool,
 ) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
@@ -609,11 +586,6 @@ pub(super) unsafe fn layout_rebuild_from_slots_with_policy(
 
     if mask.is_empty() {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
-        LAYOUT_SLOT_MASKS.with(|m| {
-            m.borrow_mut().remove(&(user_ptr as usize));
-        });
-    } else if !exact_small_mixed && slot_count != 1 && slot_count < GC_LAYOUT_SIDE_MASK_MIN_SLOTS {
-        set_layout_state(header, GC_LAYOUT_UNKNOWN);
         LAYOUT_SLOT_MASKS.with(|m| {
             m.borrow_mut().remove(&(user_ptr as usize));
         });
@@ -683,6 +655,7 @@ pub(super) fn layout_visit_pointer_slots<F: FnMut(usize)>(
             GC_LAYOUT_SIDE_MASK => {
                 let mask = LAYOUT_SLOT_MASKS.with(|m| m.borrow().get(&user_ptr).cloned());
                 let Some(mask) = mask else {
+                    set_layout_state(header, GC_LAYOUT_UNKNOWN);
                     return false;
                 };
                 mask.visit_slots(slot_count, &mut visit);
@@ -853,7 +826,10 @@ pub(super) unsafe fn heap_payload_slot_selection(
             let mask = LAYOUT_SLOT_MASKS.with(|m| m.borrow().get(&user_ptr).cloned());
             match mask {
                 Some(mask) => HeapPayloadSlotSelection::Masked { mask, cursor: 0 },
-                None => HeapPayloadSlotSelection::All { cursor: 0 },
+                None => {
+                    set_layout_state(header, GC_LAYOUT_UNKNOWN);
+                    HeapPayloadSlotSelection::All { cursor: 0 }
+                }
             }
         }
         _ => HeapPayloadSlotSelection::All { cursor: 0 },
@@ -865,14 +841,14 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
         return HeapChildSlotIterator::empty();
     }
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-    match (*header).obj_type {
-        GC_TYPE_ARRAY => {
+    match gc_type_layout_slot_kind((*header).obj_type) {
+        GcLayoutSlotKind::ArrayElements => {
             let arr = user_ptr as *mut crate::array::ArrayHeader;
             crate::array::gc_element_slot_range(arr)
                 .map(|range| HeapChildSlotIterator::new(header, None, range))
                 .unwrap_or_else(HeapChildSlotIterator::empty)
         }
-        GC_TYPE_OBJECT => {
+        GcLayoutSlotKind::ObjectFields => {
             let obj = user_ptr as *mut crate::object::ObjectHeader;
             let Some(range) = crate::object::gc_field_slot_range(obj) else {
                 return HeapChildSlotIterator::empty();
@@ -880,14 +856,235 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
             let keys_slot = crate::object::gc_keys_array_slot(obj);
             HeapChildSlotIterator::new(header, keys_slot, range)
         }
-        GC_TYPE_CLOSURE => {
+        GcLayoutSlotKind::ClosureCaptures => {
             let closure = user_ptr as *mut crate::closure::ClosureHeader;
             crate::closure::gc_capture_slot_range(closure)
                 .map(|range| HeapChildSlotIterator::new(header, None, range))
                 .unwrap_or_else(HeapChildSlotIterator::empty)
         }
-        _ => HeapChildSlotIterator::empty(),
+        GcLayoutSlotKind::None => HeapChildSlotIterator::empty(),
     }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct GcMutableSlot {
+    pub(super) slot: *mut u64,
+    pub(super) layout_kind: Option<HeapChildSlotReadKind>,
+    pub(super) external: bool,
+}
+
+impl GcMutableSlot {
+    #[inline]
+    pub(super) fn new(slot: *mut u64, layout_kind: Option<HeapChildSlotReadKind>) -> Self {
+        let external = !matches!(
+            crate::arena::classify_heap_generation(slot as usize),
+            crate::arena::HeapGeneration::Old
+        );
+        Self {
+            slot,
+            layout_kind,
+            external,
+        }
+    }
+
+    #[inline]
+    pub(super) fn record_layout_read(self) {
+        if let Some(kind) = self.layout_kind {
+            record_layout_child_slot_read(kind);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum GcMutableSlotDescriptor {
+    Slot(GcMutableSlot),
+    Range {
+        range: HeapSlotRange,
+        layout_kind: Option<HeapChildSlotReadKind>,
+    },
+    PointerFreeRange,
+}
+
+impl GcMutableSlotDescriptor {
+    pub(super) unsafe fn visit_slots(self, visit: &mut dyn FnMut(GcMutableSlot)) {
+        match self {
+            GcMutableSlotDescriptor::Slot(slot) => visit(slot),
+            GcMutableSlotDescriptor::Range { range, layout_kind } => {
+                for i in 0..range.slot_count() {
+                    visit(GcMutableSlot::new(range.slot(i), layout_kind));
+                }
+            }
+            GcMutableSlotDescriptor::PointerFreeRange => {}
+        }
+    }
+}
+
+#[inline]
+fn fixed_slot(slot: *mut u64) -> GcMutableSlotDescriptor {
+    GcMutableSlotDescriptor::Slot(GcMutableSlot::new(slot, None))
+}
+
+pub(super) unsafe fn visit_gc_layout_slot_descriptors(
+    header: *mut GcHeader,
+    visit: &mut dyn FnMut(GcMutableSlotDescriptor),
+) {
+    let mut child_slots = gc_child_slots(header);
+    if let Some(slot) = child_slots.take_prefix_child_slot() {
+        visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
+    }
+
+    match child_slots.payload_scan() {
+        HeapPayloadSlotScan::Empty => {}
+        HeapPayloadSlotScan::PointerFree => {
+            let range = child_slots.payload;
+            record_layout_pointer_free_range_skipped(range.slot_count());
+            visit(GcMutableSlotDescriptor::PointerFreeRange);
+        }
+        HeapPayloadSlotScan::Masked => {
+            for child_slot in child_slots {
+                if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
+                    visit(GcMutableSlotDescriptor::Slot(GcMutableSlot::new(
+                        slot,
+                        Some(layout_kind),
+                    )));
+                }
+            }
+        }
+        HeapPayloadSlotScan::All(range) => visit(GcMutableSlotDescriptor::Range {
+            range,
+            layout_kind: Some(HeapChildSlotReadKind::Unknown),
+        }),
+    }
+}
+
+impl GcMutableSlotDescriptor {
+    #[inline]
+    fn with_layout(self, layout_kind: HeapChildSlotReadKind) -> Self {
+        match self {
+            GcMutableSlotDescriptor::Slot(mut slot) => {
+                slot.layout_kind = Some(layout_kind);
+                GcMutableSlotDescriptor::Slot(slot)
+            }
+            other => other,
+        }
+    }
+}
+
+pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
+    header: *mut GcHeader,
+    mut visit: impl FnMut(GcMutableSlotDescriptor),
+) {
+    if header.is_null() || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+        return;
+    }
+    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+    match gc_type_rewrite_descriptor_kind((*header).obj_type) {
+        GcRewriteDescriptorKind::Array => {
+            visit_gc_layout_slot_descriptors(header, &mut visit);
+        }
+        GcRewriteDescriptorKind::Object => {
+            visit_gc_layout_slot_descriptors(header, &mut visit);
+            crate::object::visit_overflow_field_slots_mut(user_ptr as usize, |slot| {
+                visit(fixed_slot(slot));
+            });
+        }
+        GcRewriteDescriptorKind::Closure => {
+            visit_gc_layout_slot_descriptors(header, &mut visit);
+            crate::closure::visit_closure_dynamic_prop_value_slots_mut(user_ptr as usize, |slot| {
+                visit(fixed_slot(slot));
+            });
+        }
+        GcRewriteDescriptorKind::Promise => {
+            let promise = user_ptr as *mut crate::promise::Promise;
+            visit(fixed_slot(&mut (*promise).value as *mut f64 as *mut u64));
+            visit(fixed_slot(&mut (*promise).reason as *mut f64 as *mut u64));
+            visit(fixed_slot(
+                &mut (*promise).on_fulfilled as *mut _ as *mut u64,
+            ));
+            visit(fixed_slot(
+                &mut (*promise).on_rejected as *mut _ as *mut u64,
+            ));
+            visit(fixed_slot(&mut (*promise).next as *mut _ as *mut u64));
+        }
+        GcRewriteDescriptorKind::Error => {
+            let error = user_ptr as *mut crate::error::ErrorHeader;
+            visit(fixed_slot(&mut (*error).message as *mut _ as *mut u64));
+            visit(fixed_slot(&mut (*error).name as *mut _ as *mut u64));
+            visit(fixed_slot(&mut (*error).stack as *mut _ as *mut u64));
+            visit(fixed_slot(&mut (*error).cause as *mut f64 as *mut u64));
+            visit(fixed_slot(&mut (*error).errors as *mut _ as *mut u64));
+        }
+        GcRewriteDescriptorKind::Map => {
+            let map = user_ptr as *mut crate::map::MapHeader;
+            let size = (*map).size;
+            let capacity = (*map).capacity;
+            if size > capacity || size > 100_000 || (*map).entries.is_null() {
+                return;
+            }
+            visit(GcMutableSlotDescriptor::Range {
+                range: HeapSlotRange::new((*map).entries as *mut u64, size as usize * 2),
+                layout_kind: None,
+            });
+        }
+        GcRewriteDescriptorKind::Set => {
+            let set = user_ptr as *mut crate::set::SetHeader;
+            if let Some(range) = crate::set::gc_element_slot_range(set) {
+                visit(GcMutableSlotDescriptor::Range {
+                    range,
+                    layout_kind: None,
+                });
+            }
+        }
+        GcRewriteDescriptorKind::LazyArray => {
+            let lazy = user_ptr as *mut crate::json_tape::LazyArrayHeader;
+            if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
+                return;
+            }
+            visit(fixed_slot(&mut (*lazy).blob_str as *mut _ as *mut u64));
+            visit(fixed_slot(&mut (*lazy).materialized as *mut _ as *mut u64));
+            visit(fixed_slot(
+                &mut (*lazy).materialized_elements as *mut _ as *mut u64,
+            ));
+            visit(fixed_slot(
+                &mut (*lazy).materialized_bitmap as *mut _ as *mut u64,
+            ));
+
+            let cached_length = (*lazy).cached_length as usize;
+            let cache = (*lazy).materialized_elements;
+            let bitmap = (*lazy).materialized_bitmap;
+            if cache.is_null() || bitmap.is_null() || cached_length == 0 {
+                return;
+            }
+            let bitmap_words = cached_length.div_ceil(64);
+            for w in 0..bitmap_words {
+                let word = *bitmap.add(w);
+                if word == 0 {
+                    continue;
+                }
+                let base_idx = w * 64;
+                for b in 0..64usize {
+                    if word & (1u64 << b) == 0 {
+                        continue;
+                    }
+                    let i = base_idx + b;
+                    if i >= cached_length {
+                        break;
+                    }
+                    visit(fixed_slot(cache.add(i) as *mut u64));
+                }
+            }
+        }
+        GcRewriteDescriptorKind::Leaf => {}
+    }
+}
+
+pub(super) unsafe fn visit_gc_rewrite_slots(
+    header: *mut GcHeader,
+    mut visit: impl FnMut(GcMutableSlot),
+) {
+    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
+        descriptor.visit_slots(&mut visit);
+    });
 }
 
 #[cfg(test)]

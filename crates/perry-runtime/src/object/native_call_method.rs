@@ -72,6 +72,21 @@ pub unsafe extern "C" fn js_native_call_method_apply(
     js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len)
 }
 
+#[inline]
+fn root_string_arg_handle<'scope>(
+    scope: &'scope crate::gc::RuntimeHandleScope,
+    arg_handles: &[crate::gc::RuntimeHandle<'scope>],
+    index: usize,
+) -> Option<crate::gc::RuntimeHandle<'scope>> {
+    let value = arg_handles.get(index)?.get_nanbox_f64();
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
+    if ptr.is_null() {
+        None
+    } else {
+        Some(scope.root_string_ptr(ptr))
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_method(
     object: f64,
@@ -81,12 +96,23 @@ pub unsafe extern "C" fn js_native_call_method(
     args_len: usize,
 ) -> f64 {
     // Get the method name (parsed early for depth guard logging)
-    let method_name = if method_name_ptr.is_null() || method_name_len == 0 {
-        ""
+    let method_name_owned = if method_name_ptr.is_null() || method_name_len == 0 {
+        String::new()
     } else {
         let bytes = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
-        std::str::from_utf8(bytes).unwrap_or("")
+        String::from_utf8_lossy(bytes).into_owned()
     };
+    let method_name = method_name_owned.as_str();
+    let root_scope = crate::gc::RuntimeHandleScope::new();
+    let object_handle = root_scope.root_nanbox_f64(object);
+    let original_args: Vec<f64> = if args_len > 0 && !args_ptr.is_null() {
+        std::slice::from_raw_parts(args_ptr, args_len).to_vec()
+    } else {
+        Vec::new()
+    };
+    let arg_handles = root_scope.root_nanbox_f64_slice(&original_args);
+    let refreshed_args = || crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+    let object = object_handle.get_nanbox_f64();
     // RAII recursion depth guard: prevent stack overflow from circular module deps.
     // The guard auto-decrements on drop, covering all ~20 return points in this function.
     // When max depth is hit, return a pointer to a static empty object instead of undefined.
@@ -125,16 +151,19 @@ pub unsafe extern "C" fn js_native_call_method(
     // resolves to undefined and downstream `data[0].insertId` accesses
     // silently fail.
     if matches!(method_name, "then" | "catch" | "finally")
-        && crate::promise::js_value_is_promise(object) != 0
+        && crate::promise::js_value_is_promise(object_handle.get_nanbox_f64()) != 0
     {
-        let promise_handle = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::Promise;
-        let arg0_box = if args_len >= 1 && !args_ptr.is_null() {
-            *args_ptr
+        let promise_ptr = (object_handle.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF)
+            as *mut crate::Promise;
+        let promise_handle = root_scope.root_raw_mut_ptr(promise_ptr);
+        let args = refreshed_args();
+        let arg0_box = if !args.is_empty() {
+            args[0]
         } else {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         };
-        let arg1_box = if args_len >= 2 && !args_ptr.is_null() {
-            *args_ptr.add(1)
+        let arg1_box = if args.len() >= 2 {
+            args[1]
         } else {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         };
@@ -164,14 +193,18 @@ pub unsafe extern "C" fn js_native_call_method(
         };
         let result = match method_name {
             "then" => crate::promise::js_promise_then(
-                promise_handle,
+                promise_handle.get_raw_mut_ptr(),
                 extract_closure(arg0_box),
                 extract_closure(arg1_box),
             ),
-            "catch" => crate::promise::js_promise_catch(promise_handle, extract_closure(arg0_box)),
-            "finally" => {
-                crate::promise::js_promise_finally(promise_handle, extract_closure(arg0_box))
-            }
+            "catch" => crate::promise::js_promise_catch(
+                promise_handle.get_raw_mut_ptr(),
+                extract_closure(arg0_box),
+            ),
+            "finally" => crate::promise::js_promise_finally(
+                promise_handle.get_raw_mut_ptr(),
+                extract_closure(arg0_box),
+            ),
             _ => unreachable!(),
         };
         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
@@ -280,7 +313,13 @@ pub unsafe extern "C" fn js_native_call_method(
             "add" | "sub" | "mul" | "div" | "mod" | "umod" | "pow" | "and" | "or" | "xor"
             | "shln" | "shrn" | "maskn" | "eq" | "lt" | "lte" | "gt" | "gte" | "cmp"
             | "fromTwos" | "toTwos" => {
-                return dispatch_bigint_binary_method(bigint_ptr, method_name, args_ptr, args_len);
+                let args = refreshed_args();
+                return dispatch_bigint_binary_method(
+                    bigint_ptr,
+                    method_name,
+                    args.as_ptr(),
+                    args.len(),
+                );
             }
             _ => {
                 // Unknown BigInt method - fall through to general dispatch
@@ -294,12 +333,13 @@ pub unsafe extern "C" fn js_native_call_method(
     let raw_bits = object.to_bits();
     if raw_bits > 0 && raw_bits < 0x100000 {
         if let Some(dispatch) = handle_method_dispatch() {
+            let args = refreshed_args();
             return dispatch(
                 raw_bits as i64,
                 method_name.as_ptr(),
                 method_name.len(),
-                args_ptr,
-                args_len,
+                args.as_ptr(),
+                args.len(),
             );
         }
         return f64::from_bits(0x7FF8_0000_0000_0001); // undefined
@@ -418,12 +458,20 @@ pub unsafe extern "C" fn js_native_call_method(
     // `lower_string_method.rs`; this dispatch only catches fallthroughs
     // where codegen couldn't statically prove the type.
     if jsval.is_string() || jsval.is_short_string() {
-        let s_ptr =
-            crate::value::js_get_string_pointer_unified(object) as *const crate::StringHeader;
+        let s_ptr = crate::value::js_get_string_pointer_unified(object_handle.get_nanbox_f64())
+            as *const crate::StringHeader;
         if !s_ptr.is_null() {
+            let s_handle = root_scope.root_string_ptr(s_ptr);
+            let receiver_string = || s_handle.get_raw_const_ptr::<crate::StringHeader>();
+            let arg_at = |i: usize| -> Option<f64> {
+                if i < args_len {
+                    arg_handles.get(i).map(|handle| handle.get_nanbox_f64())
+                } else {
+                    None
+                }
+            };
             let arg_i32 = |i: usize| -> i32 {
-                if i < args_len && !args_ptr.is_null() {
-                    let v = unsafe { *args_ptr.add(i) };
+                if let Some(v) = arg_at(i) {
                     if v.is_nan() || v.is_infinite() {
                         0
                     } else {
@@ -457,7 +505,7 @@ pub unsafe extern "C" fn js_native_call_method(
                     }
                     return f64::from_bits(JSValue::string_ptr(result).bits());
                 }
-                "toString" | "valueOf" => return object,
+                "toString" | "valueOf" => return object_handle.get_nanbox_f64(),
                 // Issue #519 follow-up: hono's matcher.js does
                 // `path2.match(matcher[0])` where `path2` is a string and
                 // `matcher[0]` is a regex. The HIR optimistic
@@ -617,20 +665,19 @@ pub unsafe extern "C" fn js_native_call_method(
                     return f64::from_bits(JSValue::string_ptr(r).bits());
                 }
                 "split" => {
-                    let sep = if args_len >= 1 && !args_ptr.is_null() {
-                        let v = unsafe { *args_ptr };
-                        crate::value::js_get_string_pointer_unified(v) as *const crate::StringHeader
-                    } else {
-                        std::ptr::null()
-                    };
+                    let sep_handle = root_string_arg_handle(&root_scope, &arg_handles, 0);
                     // Issue #567: optional 2nd arg `limit`.
-                    let limit = if args_len >= 2 && !args_ptr.is_null() {
-                        let v = unsafe { *args_ptr.add(1) };
+                    let limit = if let Some(v) = arg_at(1) {
                         let jsv = JSValue::from_bits(v.to_bits());
                         if jsv.is_undefined() || jsv.is_null() {
                             -1
                         } else {
-                            let n = crate::builtins::js_number_coerce(v);
+                            let n = crate::builtins::js_number_coerce(
+                                arg_handles
+                                    .get(1)
+                                    .map(|handle| handle.get_nanbox_f64())
+                                    .unwrap_or(v),
+                            );
                             if n.is_nan() || n < 0.0 {
                                 0
                             } else if n > i32::MAX as f64 {
@@ -642,7 +689,11 @@ pub unsafe extern "C" fn js_native_call_method(
                     } else {
                         -1
                     };
-                    let arr = crate::string::js_string_split_n(s_ptr, sep, limit);
+                    let sep = sep_handle
+                        .as_ref()
+                        .map(|handle| handle.get_raw_const_ptr::<crate::StringHeader>())
+                        .unwrap_or(std::ptr::null());
+                    let arr = crate::string::js_string_split_n(receiver_string(), sep, limit);
                     return f64::from_bits(JSValue::pointer(arr as *mut u8).bits());
                 }
                 "replace" | "replaceAll" => {
@@ -650,21 +701,22 @@ pub unsafe extern "C" fn js_native_call_method(
                     // string OR a RegExp; replacement is a string. Function
                     // replacements aren't supported here yet — they need
                     // closure dispatch and aren't on hono's hot path.
-                    let pat_str = if args_len >= 1 && !args_ptr.is_null() {
-                        let v = unsafe { *args_ptr };
-                        crate::value::js_get_string_pointer_unified(v) as *const crate::StringHeader
-                    } else {
-                        std::ptr::null()
+                    let pat_handle = root_string_arg_handle(&root_scope, &arg_handles, 0);
+                    let repl_handle = root_string_arg_handle(&root_scope, &arg_handles, 1);
+                    let pat_str = || {
+                        pat_handle
+                            .as_ref()
+                            .map(|handle| handle.get_raw_const_ptr::<crate::StringHeader>())
+                            .unwrap_or(std::ptr::null())
                     };
-                    let repl_str = if args_len >= 2 && !args_ptr.is_null() {
-                        let v = unsafe { *args_ptr.add(1) };
-                        crate::value::js_get_string_pointer_unified(v) as *const crate::StringHeader
-                    } else {
-                        std::ptr::null()
+                    let repl_str = || {
+                        repl_handle
+                            .as_ref()
+                            .map(|handle| handle.get_raw_const_ptr::<crate::StringHeader>())
+                            .unwrap_or(std::ptr::null())
                     };
                     // Detect RegExp pattern: NaN-boxed pointer to a RegExpHeader.
-                    if args_len >= 1 && !args_ptr.is_null() {
-                        let v = unsafe { *args_ptr };
+                    if let Some(v) = arg_at(0) {
                         let jsv = JSValue::from_bits(v.to_bits());
                         if jsv.is_pointer() {
                             // Probe whether the pointer is a RegExpHeader by
@@ -681,16 +733,26 @@ pub unsafe extern "C" fn js_native_call_method(
                             // safely on mismatch.
                             if !regex_ptr.is_null() {
                                 let r = crate::regex::js_string_replace_regex(
-                                    s_ptr, regex_ptr, repl_str,
+                                    receiver_string(),
+                                    regex_ptr,
+                                    repl_str(),
                                 );
                                 return f64::from_bits(JSValue::string_ptr(r).bits());
                             }
                         }
                     }
                     let r = if method_name == "replaceAll" {
-                        crate::regex::js_string_replace_all_string(s_ptr, pat_str, repl_str)
+                        crate::regex::js_string_replace_all_string(
+                            receiver_string(),
+                            pat_str(),
+                            repl_str(),
+                        )
                     } else {
-                        crate::regex::js_string_replace_string(s_ptr, pat_str, repl_str)
+                        crate::regex::js_string_replace_string(
+                            receiver_string(),
+                            pat_str(),
+                            repl_str(),
+                        )
                     };
                     return f64::from_bits(JSValue::string_ptr(r).bits());
                 }

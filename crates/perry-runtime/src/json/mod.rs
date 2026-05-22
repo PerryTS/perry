@@ -49,10 +49,14 @@ pub use stringify_api::{
 // home sibling and don't need the re-export there, but keeping the surface
 // uniform makes the split predictable and resilient to future cross-
 // sibling references.
+#[cfg(test)]
+pub(crate) use parse_api::test_json_parse_direct;
 #[allow(unused_imports)]
 pub(crate) use parse_api::{try_parse_via_tape, TapeMode};
 #[allow(unused_imports)]
 pub(crate) use parser::{DirectParser, ObjectShapeHint};
+#[cfg(test)]
+pub(crate) use reviver::test_apply_reviver_for_value;
 #[allow(unused_imports)]
 pub(crate) use simd::find_string_terminator;
 #[allow(unused_imports)]

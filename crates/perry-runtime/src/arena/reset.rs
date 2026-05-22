@@ -475,6 +475,100 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
     stats
 }
 
+pub(crate) fn old_arena_reclaim_selected_dead_blocks(
+    block_has_live: &[bool],
+    selected_old_blocks: &crate::fast_hash::PtrHashSet<usize>,
+) -> ArenaResetStats {
+    if selected_old_blocks.is_empty() {
+        return ArenaResetStats::default();
+    }
+
+    let old_block_start = longlived_end();
+    let stats = OLD_ARENA.with(|arena| unsafe {
+        let arena = &mut *arena.get();
+        let original_current = arena.current;
+        let mut stats = ArenaResetStats::default();
+        let mut changed = false;
+
+        for (i, block) in arena.blocks.iter_mut().enumerate() {
+            if block.data.is_null() {
+                continue;
+            }
+
+            let block_idx = old_block_start + i;
+            if !selected_old_blocks.contains(&block_idx) {
+                continue;
+            }
+            if block_has_live.get(block_idx).copied().unwrap_or(false) {
+                block.dead_cycles = 0;
+                continue;
+            }
+
+            let base = block.data as usize;
+            let size = block.size;
+            let used = block.offset;
+            let first_page = generation_page_for_addr(base);
+            let last_page = generation_page_for_addr(base + size - 1);
+            let pages: Vec<usize> = (first_page..=last_page).collect();
+            unregister_old_block_pages(&pages);
+
+            if used != 0 {
+                stats.reset_blocks = stats.reset_blocks.saturating_add(1);
+            }
+            block.offset = 0;
+            block.dead_cycles = 0;
+            changed = true;
+
+            if i == original_current {
+                stats.reusable_bytes = stats.reusable_bytes.saturating_add(used);
+                continue;
+            }
+
+            let layout = Layout::from_size_align(size, 16).unwrap();
+            unregister_block_generation(base, size);
+            std::alloc::dealloc(block.data, layout);
+            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            block.data = std::ptr::null_mut();
+            block.size = 0;
+            block.offset = 0;
+            block.dead_cycles = 0;
+            stats.deallocated_blocks = stats.deallocated_blocks.saturating_add(1);
+            stats.deallocated_bytes = stats.deallocated_bytes.saturating_add(size);
+        }
+
+        if changed {
+            if let Some((idx, _)) = arena
+                .blocks
+                .iter()
+                .enumerate()
+                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
+            {
+                arena.current = idx;
+            } else if arena
+                .blocks
+                .get(arena.current)
+                .map(|block| block.data.is_null())
+                .unwrap_or(true)
+            {
+                if let Some((idx, _)) = arena
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .find(|(_, block)| !block.data.is_null())
+                {
+                    arena.current = idx;
+                }
+            }
+        }
+
+        stats
+    });
+
+    OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.set(stats.reusable_bytes));
+    OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.set(stats.deallocated_bytes));
+    stats
+}
+
 fn reclaim_dead_survivor_arena_blocks(
     arena_idx: usize,
     block_start: usize,

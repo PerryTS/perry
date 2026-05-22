@@ -11,9 +11,10 @@ use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I32, I64};
 
 /// Gen-GC Phase C2 helper: emit a write barrier after heap-store sites
-/// when `PERRY_WRITE_BARRIERS=1`. Sites with a precise field/element
-/// address use `js_write_barrier_slot`; opaque helper stores keep using
-/// the compatibility wrapper, which conservatively marks the parent span.
+/// by default. Only explicit `PERRY_WRITE_BARRIERS=0`/`off`/`false`
+/// disables emission. Sites with a precise field/element address use
+/// `js_write_barrier_slot`; opaque helper stores keep using the
+/// compatibility wrapper, which conservatively marks the parent span.
 /// The env gate is read once and OnceLock-cached at codegen time.
 pub(crate) fn emit_write_barrier(ctx: &mut FnCtx<'_>, parent_bits: &str, child_bits: &str) {
     if !crate::codegen::write_barriers_enabled() {
@@ -54,6 +55,32 @@ pub(crate) fn emit_layout_note_slot_on_block(
         "js_gc_note_slot_layout",
         &[(I64, parent_bits), (I32, slot_index), (I64, value_bits)],
     );
+}
+
+pub(crate) fn emit_jsvalue_slot_store_on_block(
+    blk: &mut LlBlock,
+    slot_ptr: &str,
+    value_double: &str,
+    layout_parent_bits: &str,
+    slot_index: &str,
+    layout_note_needed: bool,
+    barrier_parent_bits: &str,
+    slot_addr: &str,
+    write_barrier_needed: bool,
+) -> Option<String> {
+    // GC_STORE_AUDIT(BARRIERED): generated heap JSValue stores route through this shared emitter.
+    blk.store(DOUBLE, value_double, slot_ptr);
+    if !layout_note_needed && !write_barrier_needed {
+        return None;
+    }
+    let value_bits = blk.bitcast_double_to_i64(value_double);
+    if layout_note_needed {
+        emit_layout_note_slot_on_block(blk, layout_parent_bits, slot_index, &value_bits);
+    }
+    if write_barrier_needed {
+        emit_write_barrier_slot_on_block(blk, barrier_parent_bits, slot_addr, &value_bits);
+    }
+    Some(value_bits)
 }
 
 /// Issue #562 — `super({ ... })` for `class X extends ReadableStream`,

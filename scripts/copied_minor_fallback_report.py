@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Keep in sync with CopiedMinorFallbackReason::as_str in
 # crates/perry-runtime/src/gc.rs.
@@ -45,7 +45,38 @@ LAYOUT_SCAN_TOTALS = (
     "pointer_free_slots_skipped",
 )
 
-FORBIDDEN_TARGET_MALLOC_KINDS = ("string", "closure")
+ROOT_SOURCE_SLOT_NAMES = (
+    "compiled_shadow",
+    "module_globals",
+    "runtime_handles",
+    "runtime_mutable_scanners",
+    "ffi_mutable_scanners",
+)
+
+ROOT_SOURCE_SLOT_TOTALS = (
+    "registered_scanners",
+    "slots_scanned",
+    "nonzero_slots",
+    "pointer_roots",
+    "rewritten_slots",
+)
+
+NATIVE_STACK_DECISIONS = (
+    "scan",
+    "skip_disabled",
+    "skip_shadow_stack_active",
+)
+
+NATIVE_STACK_TOTALS = (
+    "scanned_cycles",
+    "roots_found",
+    "pinned_roots",
+    "pinned_bytes",
+    "compiled_frame_pinned_roots",
+    "compiled_frame_pinned_bytes",
+)
+
+FORBIDDEN_TARGET_MALLOC_KINDS = ("string", "closure", "promise")
 FORCED_EVACUATION_VERIFIER_WORKLOADS = frozenset(("async_promise_closures",))
 
 DEFAULT_SAFE_FALLBACK_WORKLOADS = (
@@ -53,6 +84,8 @@ DEFAULT_SAFE_FALLBACK_WORKLOADS = (
     "string_churn",
     "object_property_churn",
     "mixed_request_shaping",
+    "map_set_churn",
+    "promise_churn",
 )
 DEFAULT_SAFE_FALLBACK_WORKLOAD_SET = set(DEFAULT_SAFE_FALLBACK_WORKLOADS)
 
@@ -89,6 +122,19 @@ def empty_totals() -> dict[str, Any]:
         },
         "layout_scans": {field: 0 for field in LAYOUT_SCAN_TOTALS},
         "missing_layout_scans": 0,
+        "root_sources": {
+            **{
+                source: {field: 0 for field in ROOT_SOURCE_SLOT_TOTALS}
+                for source in ROOT_SOURCE_SLOT_NAMES
+            },
+            "native_stack_fallback": {
+                "decision_counts": {
+                    decision: 0 for decision in NATIVE_STACK_DECISIONS
+                },
+                **{field: 0 for field in NATIVE_STACK_TOTALS},
+            },
+        },
+        "missing_root_sources": 0,
         "malloc_kind_allocations": {
             kind: 0 for kind in FORBIDDEN_TARGET_MALLOC_KINDS
         },
@@ -222,6 +268,18 @@ def add_totals(dst: dict[str, Any], src: dict[str, Any]) -> None:
     for field in LAYOUT_SCAN_TOTALS:
         dst["layout_scans"][field] += src["layout_scans"][field]
     dst["missing_layout_scans"] += src["missing_layout_scans"]
+    for source in ROOT_SOURCE_SLOT_NAMES:
+        for field in ROOT_SOURCE_SLOT_TOTALS:
+            dst["root_sources"][source][field] += src["root_sources"][source][field]
+    for decision in NATIVE_STACK_DECISIONS:
+        dst["root_sources"]["native_stack_fallback"]["decision_counts"][
+            decision
+        ] += src["root_sources"]["native_stack_fallback"]["decision_counts"][decision]
+    for field in NATIVE_STACK_TOTALS:
+        dst["root_sources"]["native_stack_fallback"][field] += src["root_sources"][
+            "native_stack_fallback"
+        ][field]
+    dst["missing_root_sources"] += src["missing_root_sources"]
     for kind in FORBIDDEN_TARGET_MALLOC_KINDS:
         dst["malloc_kind_allocations"][kind] += src["malloc_kind_allocations"][kind]
     for field in (
@@ -260,6 +318,39 @@ def record_malloc_kind_allocations(cycle: dict[str, Any], totals: dict[str, Any]
             continue
         totals["malloc_kind_allocations"][kind] += non_negative_int(
             row, "allocated_count"
+        )
+
+
+def record_root_sources(cycle: dict[str, Any], totals: dict[str, Any]) -> None:
+    root_sources = nested_dict(cycle, "root_sources")
+    if not root_sources:
+        totals["missing_root_sources"] += 1
+        return
+
+    for source in ROOT_SOURCE_SLOT_NAMES:
+        source_stats = nested_dict(root_sources, source)
+        for field in ROOT_SOURCE_SLOT_TOTALS:
+            totals["root_sources"][source][field] += non_negative_int(
+                source_stats, field
+            )
+
+    native = nested_dict(root_sources, "native_stack_fallback")
+    decision = native.get("decision")
+    if decision in NATIVE_STACK_DECISIONS:
+        totals["root_sources"]["native_stack_fallback"]["decision_counts"][
+            decision
+        ] += 1
+    if native.get("scanned") is True:
+        totals["root_sources"]["native_stack_fallback"]["scanned_cycles"] += 1
+    for field in (
+        "roots_found",
+        "pinned_roots",
+        "pinned_bytes",
+        "compiled_frame_pinned_roots",
+        "compiled_frame_pinned_bytes",
+    ):
+        totals["root_sources"]["native_stack_fallback"][field] += non_negative_int(
+            native, field
         )
 
 
@@ -406,6 +497,7 @@ def aggregate_workload(
             totals["missing_layout_scans"] += 1
 
         record_malloc_kind_allocations(cycle, totals)
+        record_root_sources(cycle, totals)
         if name.startswith("old_page_"):
             check_old_page_accounting(name, line_number, cycle, totals, old_page_errors)
 
@@ -483,7 +575,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         metavar="WORKLOAD:KIND=COUNT",
         help=(
             "Allow up to COUNT allocations of forbidden malloc KIND for one "
-            "target-collector workload. KIND is string or closure. May be repeated."
+            "target-collector workload. KIND is string, closure, or promise. May be repeated."
         ),
     )
     return parser
@@ -532,6 +624,20 @@ def run_strict_fallback_evidence_gates(
                 f"{name}: malloc_registry_rebuilds="
                 f"{workload['copying_nursery']['malloc_registry_rebuilds']}, want 0"
             )
+        for kind, count in workload["malloc_kind_allocations"].items():
+            if count > 0:
+                errors.append(
+                    f"{name}: forbidden malloc allocation kind {kind} count={count} "
+                    "exceeds allowance=0"
+                )
+        if workload["missing_root_sources"] != 0:
+            errors.append(
+                f"{name}: missing root_sources on "
+                f"{workload['missing_root_sources']} cycle(s)"
+            )
+        if mutable_root_source_evidence(workload) == 0:
+            errors.append(f"{name}: no mutable or shadow root source evidence")
+        check_fallback_source_attribution(name, workload, errors)
 
 
 def run_target_collector_gates(
@@ -569,6 +675,12 @@ def run_target_collector_gates(
                 f"{name}: malloc_registry_rebuilds="
                 f"{workload['copying_nursery']['malloc_registry_rebuilds']}, want 0"
             )
+        if workload["missing_root_sources"] != 0:
+            errors.append(
+                f"{name}: missing root_sources on "
+                f"{workload['missing_root_sources']} cycle(s)"
+            )
+        check_fallback_source_attribution(name, workload, errors)
         if workload["conservative_pinned_bytes"] != 0:
             errors.append(
                 f"{name}: conservative_pinned_bytes="
@@ -585,6 +697,8 @@ def run_target_collector_gates(
         )
         if productive == 0:
             errors.append(f"{name}: no copied-minor cycle copied or promoted an object")
+        if mutable_root_source_evidence(workload) == 0:
+            errors.append(f"{name}: no mutable or shadow root source evidence")
     for name, workload in workloads.items():
         for kind, count in workload["malloc_kind_allocations"].items():
             allowed = malloc_kind_allowances.get(name, {}).get(kind, 0)
@@ -623,6 +737,53 @@ def run_target_collector_gates(
                 errors.append(f"{name}: forced old-page workload selected no pages")
             if old_page["old_page_moved_bytes"] == 0:
                 errors.append(f"{name}: forced old-page workload moved no old-page bytes")
+            if old_page["reusable_bytes"] + old_page["returned_bytes"] == 0:
+                errors.append(
+                    f"{name}: forced old-page workload reported no reusable or returned bytes"
+                )
+
+
+def mutable_root_source_evidence(workload: dict[str, Any]) -> int:
+    root_sources = workload["root_sources"]
+    return sum(
+        root_sources[source]["pointer_roots"]
+        + root_sources[source]["rewritten_slots"]
+        for source in ROOT_SOURCE_SLOT_NAMES
+    )
+
+
+def check_fallback_source_attribution(
+    name: str,
+    workload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    reason_counts = workload["fallback_reason_counts"]
+    root_sources = workload["root_sources"]
+    native = root_sources["native_stack_fallback"]
+    native_evidence = (
+        native["scanned_cycles"]
+        + native["roots_found"]
+        + native["pinned_roots"]
+        + native["pinned_bytes"]
+    )
+    mutable_evidence = mutable_root_source_evidence(workload)
+    legacy = workload["legacy_copy_only_scanner_pinned"]
+
+    if reason_counts["conservative_stack"] > 0 and native_evidence == 0:
+        errors.append(f"{name}: conservative_stack fallback has no native stack attribution")
+    if workload["conservative_pinned_bytes"] > 0 and native_evidence == 0:
+        errors.append(f"{name}: conservative pinned bytes have no native stack attribution")
+    if reason_counts["copy_only_roots"] > 0 and legacy["emitted_roots"] == 0:
+        errors.append(f"{name}: copy_only_roots fallback has no copy-only root attribution")
+    if legacy["bytes"] > 0 and legacy["emitted_roots"] == 0:
+        errors.append(f"{name}: legacy copy-only pinned bytes have no emitted-root attribution")
+    for reason in (
+        "pinned_young_root",
+        "pinned_young_dirty_slot",
+        "pinned_young_transitive",
+    ):
+        if reason_counts[reason] > 0 and mutable_evidence == 0:
+            errors.append(f"{name}: {reason} fallback has no mutable root attribution")
 
 
 def main(argv: list[str]) -> int:

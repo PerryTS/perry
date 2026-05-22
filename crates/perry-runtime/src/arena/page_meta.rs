@@ -213,6 +213,12 @@ pub(crate) struct OldPageSummary {
     pub(crate) evacuation_eligible_pages: usize,
 }
 
+#[derive(Default)]
+pub(crate) struct OldArenaSourceBlockSelection {
+    pub(crate) block_indices: crate::fast_hash::PtrHashSet<usize>,
+    pub(crate) pages: crate::fast_hash::PtrHashSet<usize>,
+}
+
 thread_local! {
     static PAGE_GENERATIONS: RefCell<PageGenerationMap> =
         RefCell::new(HashMap::with_hasher(BuildHasherDefault::<IdentityHasher>::default()));
@@ -688,6 +694,37 @@ pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
         snapshot.sort_unstable_by_key(|page_meta| page_meta.page_base);
         snapshot
     })
+}
+
+pub(crate) fn old_arena_source_blocks_for_pages(
+    selected_pages: &crate::fast_hash::PtrHashSet<usize>,
+) -> OldArenaSourceBlockSelection {
+    let mut selection = OldArenaSourceBlockSelection::default();
+    if selected_pages.is_empty() {
+        return selection;
+    }
+
+    let old_block_start = longlived_end();
+    OLD_ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        for (i, block) in arena.blocks.iter().enumerate() {
+            if block.data.is_null() || block.size == 0 {
+                continue;
+            }
+            let base = block.data as usize;
+            let first_page = generation_page_for_addr(base);
+            let last_page = generation_page_for_addr(base + block.size - 1);
+            if !(first_page..=last_page).any(|page| selected_pages.contains(&page)) {
+                continue;
+            }
+
+            selection.block_indices.insert(old_block_start + i);
+            for page in first_page..=last_page {
+                selection.pages.insert(page);
+            }
+        }
+    });
+    selection
 }
 
 pub(crate) fn old_arena_walk_objects_on_pages(

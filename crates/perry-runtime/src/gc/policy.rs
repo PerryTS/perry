@@ -555,6 +555,25 @@ pub(super) fn gc_collect_pending_old_reclaim() -> bool {
     true
 }
 
+pub(super) fn gc_collect_old_reclaim_if_pressure() -> bool {
+    if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0 {
+        return false;
+    }
+    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
+    if !old_reclaim_pressure_due(old_in_use, baseline) {
+        return false;
+    }
+    if defer_gc_request(DeferredGcRequest::FullCollect(GcTriggerKind::OldGenBytes)) {
+        return false;
+    }
+
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::OldGenBytes))
+        .emit_after_current();
+    true
+}
+
 pub(super) fn gc_bump_malloc_trigger_with_snapshot(current: usize, bytes_now: usize) -> bool {
     let step = GC_MALLOC_COUNT_STEP.with(|c| c.get());
     GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(current + step));
@@ -625,6 +644,9 @@ pub fn gc_check_trigger() {
         return;
     }
     if gc_collect_pending_old_reclaim() {
+        return;
+    }
+    if gc_collect_old_reclaim_if_pressure() {
         return;
     }
     use crate::arena::arena_total_bytes;

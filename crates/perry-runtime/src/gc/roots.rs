@@ -3,6 +3,18 @@ use super::*;
 pub type MutableRootScanner = for<'a> fn(&mut RuntimeRootVisitor<'a>);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MutableRootScannerSource {
+    RuntimeHandles,
+    RuntimeMutableScanner,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct MutableRootScannerEntry {
+    pub(super) scanner: MutableRootScanner,
+    pub(super) source: MutableRootScannerSource,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RuntimeHandleSlot {
     Nanbox(u64),
     RawTagged { addr: usize, tag: u64 },
@@ -11,7 +23,7 @@ pub(super) enum RuntimeHandleSlot {
 
 thread_local! {
     pub(super) static ROOT_SCANNERS: RefCell<Vec<fn(&mut dyn FnMut(f64))>> = RefCell::new(Vec::new());
-    pub(super) static MUTABLE_ROOT_SCANNERS: RefCell<Vec<MutableRootScanner>> = RefCell::new(Vec::new());
+    pub(super) static MUTABLE_ROOT_SCANNERS: RefCell<Vec<MutableRootScannerEntry>> = RefCell::new(Vec::new());
     pub(super) static FFI_ROOT_SCANNERS: RefCell<Vec<PerryFfiRootScanner>> = RefCell::new(Vec::new());
     pub(super) static FFI_MUTABLE_ROOT_SCANNERS: RefCell<Vec<PerryFfiMutableRootScanner>> = RefCell::new(Vec::new());
     pub(super) static GLOBAL_ROOTS: RefCell<Vec<*mut u64>> = const { RefCell::new(Vec::new()) };
@@ -108,6 +120,13 @@ pub(crate) struct ShadowStackState {
     /// the pointer) — the GC tracer unwraps the NaN-box the same way
     /// it already does for closure captures.
     pub(crate) stack: Vec<u64>,
+    /// Optional pointer to the compiled local/global slot represented by
+    /// each shadow-stack entry. When present, the GC reads and rewrites the
+    /// original slot, not a stale mirror copy.
+    pub(crate) slot_ptrs: Vec<usize>,
+    /// Liveness bit for each shadow slot. This lets codegen stop reporting a
+    /// dead local without mutating the compiled local slot after last use.
+    pub(crate) active: Vec<bool>,
     /// Index into `stack` where the current frame's slot_0 lives.
     /// `usize::MAX` when no frame is pushed (initial state + after
     /// the outermost function returns).
@@ -118,6 +137,8 @@ thread_local! {
     pub(crate) static SHADOW: std::cell::UnsafeCell<ShadowStackState> =
         std::cell::UnsafeCell::new(ShadowStackState {
             stack: Vec::with_capacity(SHADOW_STACK_GROW_RESERVE),
+            slot_ptrs: Vec::with_capacity(SHADOW_STACK_GROW_RESERVE),
+            active: Vec::with_capacity(SHADOW_STACK_GROW_RESERVE),
             frame_top: usize::MAX,
         });
 }
@@ -143,6 +164,8 @@ pub extern "C" fn js_shadow_frame_push(slot_count: u32) -> u64 {
         s.stack.push(slot_count as u64);
         let slots_start = s.stack.len();
         s.stack.resize(slots_start + slot_count as usize, 0);
+        s.slot_ptrs.resize(s.stack.len(), 0);
+        s.active.resize(s.stack.len(), false);
         s.frame_top = slots_start;
         base as u64
     })
@@ -177,6 +200,8 @@ pub extern "C" fn js_shadow_frame_pop(frame_handle: u64) {
         }
         let prev_top = s.stack[base] as usize;
         s.stack.truncate(base);
+        s.slot_ptrs.truncate(base);
+        s.active.truncate(base);
         s.frame_top = prev_top;
     });
 }
@@ -197,6 +222,36 @@ pub extern "C" fn js_shadow_slot_set(idx: u32, value: u64) {
         let slot = top + idx as usize;
         if slot < s.stack.len() {
             s.stack[slot] = value;
+            s.active[slot] = value != 0;
+            if value != 0 {
+                let ptr = s.slot_ptrs[slot] as *mut u64;
+                if !ptr.is_null() {
+                    *ptr = value;
+                }
+            }
+        }
+    });
+}
+
+/// Bind shadow slot `idx` to the actual compiled local slot that generated code
+/// will read after safepoints. Copied-minor GC can then rewrite the real local
+/// alloca instead of only updating the shadow mirror.
+#[no_mangle]
+pub extern "C" fn js_shadow_slot_bind(idx: u32, value_slot: *mut u64) {
+    if value_slot.is_null() {
+        return;
+    }
+    SHADOW.with(|cell| unsafe {
+        let s = &mut *cell.get();
+        let top = s.frame_top;
+        if top == usize::MAX {
+            return;
+        }
+        let slot = top + idx as usize;
+        if slot < s.stack.len() {
+            s.slot_ptrs[slot] = value_slot as usize;
+            s.stack[slot] = *value_slot;
+            s.active[slot] = true;
         }
     });
 }
@@ -214,7 +269,15 @@ pub extern "C" fn js_shadow_slot_get(idx: u32) -> u64 {
         }
         let slot = top + idx as usize;
         if slot < s.stack.len() {
-            s.stack[slot]
+            if !s.active[slot] {
+                return 0;
+            }
+            let ptr = s.slot_ptrs[slot] as *const u64;
+            if ptr.is_null() {
+                s.stack[slot]
+            } else {
+                *ptr
+            }
         } else {
             0
         }
@@ -254,6 +317,23 @@ pub(super) enum ConservativeStackScanDecision {
     Scan,
     SkipDisabled,
     SkipShadowStackActive,
+}
+
+impl ConservativeStackScanDecision {
+    #[inline]
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scan => "scan",
+            Self::SkipDisabled => "skip_disabled",
+            Self::SkipShadowStackActive => "skip_shadow_stack_active",
+        }
+    }
+}
+
+impl Default for ConservativeStackScanDecision {
+    fn default() -> Self {
+        Self::SkipDisabled
+    }
 }
 
 pub(super) fn conservative_stack_scan_mode_from_value(
@@ -319,8 +399,20 @@ pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
 /// These scanners are marked like ordinary roots, but their storage is
 /// revisited after evacuation so forwarded references can be rewritten.
 pub fn gc_register_mutable_root_scanner(scanner: MutableRootScanner) {
+    gc_register_mutable_root_scanner_with_source(
+        scanner,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+}
+
+pub(super) fn gc_register_mutable_root_scanner_with_source(
+    scanner: MutableRootScanner,
+    source: MutableRootScannerSource,
+) {
     MUTABLE_ROOT_SCANNERS.with(|scanners| {
-        scanners.borrow_mut().push(scanner);
+        scanners
+            .borrow_mut()
+            .push(MutableRootScannerEntry { scanner, source });
     });
 }
 
@@ -375,10 +467,6 @@ pub extern "C" fn js_gc_register_global_root(ptr: i64) {
 }
 
 /// Suppress GC triggers. While suppressed, `gc_check_trigger` is a no-op.
-
-pub(super) fn mark_stack_roots(valid_ptrs: &ValidPointerSet) -> ConservativeRootTraceStats {
-    mark_stack_roots_for_decision(valid_ptrs, conservative_stack_scan_decision())
-}
 
 pub(super) fn mark_stack_roots_for_decision(
     valid_ptrs: &ValidPointerSet,
@@ -595,8 +683,7 @@ pub(super) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> 
 
 /// Specialized mark-and-enqueue for trace-phase field walks.
 ///
-/// `trace_closure`, `trace_array`, `trace_object`, `trace_map`,
-/// `trace_promise.value/.reason` all share the same pattern: read a
+/// Descriptor-driven trace walks all share the same pattern: read a
 /// heap-field word that is either a NaN-boxed JSValue or a raw I64
 /// pointer at an object start, mark it if live, and push the marked
 /// header onto the local worklist. The generic
@@ -764,36 +851,42 @@ pub(super) enum RuntimeRootVisitMode<'a> {
 /// `scan_*_roots(mark)` wrappers.
 pub struct RuntimeRootVisitor<'a> {
     pub(super) mode: RuntimeRootVisitMode<'a>,
+    pub(super) root_source_stats: Option<*mut RootSourceSlotTraceStats>,
 }
 
 impl<'a> RuntimeRootVisitor<'a> {
     pub(super) fn for_mark(valid_ptrs: &'a ValidPointerSet) -> Self {
         Self {
             mode: RuntimeRootVisitMode::Mark { valid_ptrs },
+            root_source_stats: None,
         }
     }
 
     pub(super) fn for_rewrite(valid_ptrs: &'a ValidPointerSet) -> Self {
         Self {
             mode: RuntimeRootVisitMode::Rewrite { valid_ptrs },
+            root_source_stats: None,
         }
     }
 
     pub(super) fn for_copying_check(checker: &'a mut CopyingNurseryPreflight) -> Self {
         Self {
             mode: RuntimeRootVisitMode::CopyingCheck { checker },
+            root_source_stats: None,
         }
     }
 
     pub(super) fn for_copying_mark(collector: &'a mut CopyingNurseryCollector) -> Self {
         Self {
             mode: RuntimeRootVisitMode::CopyingMark { collector },
+            root_source_stats: None,
         }
     }
 
     pub(super) fn for_copying_rewrite(collector: &'a CopyingNurseryCollector) -> Self {
         Self {
             mode: RuntimeRootVisitMode::CopyingRewrite { collector },
+            root_source_stats: None,
         }
     }
 
@@ -803,12 +896,49 @@ impl<'a> RuntimeRootVisitor<'a> {
                 valid_ptrs,
                 surface,
             },
+            root_source_stats: None,
         }
     }
 
     pub fn for_copy(mark: &'a mut dyn FnMut(f64)) -> Self {
         Self {
             mode: RuntimeRootVisitMode::Copy { mark },
+            root_source_stats: None,
+        }
+    }
+
+    #[inline]
+    pub(super) fn set_root_source_stats(
+        &mut self,
+        stats: Option<*mut RootSourceSlotTraceStats>,
+    ) -> Option<*mut RootSourceSlotTraceStats> {
+        std::mem::replace(&mut self.root_source_stats, stats)
+    }
+
+    #[inline]
+    pub(super) fn record_source_scan_bits(&mut self, bits: u64) {
+        if let Some(stats) = self.root_source_stats {
+            unsafe {
+                (*stats).record_scan(bits != 0, root_slot_pointer_candidate(bits));
+            }
+        }
+    }
+
+    #[inline]
+    pub(super) fn record_source_scan_addr(&mut self, addr: usize) {
+        if let Some(stats) = self.root_source_stats {
+            unsafe {
+                (*stats).record_scan(addr != 0, addr != 0);
+            }
+        }
+    }
+
+    #[inline]
+    pub(super) fn record_source_rewrite(&mut self) {
+        if let Some(stats) = self.root_source_stats {
+            unsafe {
+                (*stats).record_rewrite();
+            }
         }
     }
 
@@ -962,8 +1092,10 @@ impl<'a> RuntimeRootVisitor<'a> {
     /// Returns true when rewrite mode changed the slot.
     pub fn visit_nanbox_f64_slot(&mut self, slot: &mut f64) -> bool {
         let bits = slot.to_bits();
+        self.record_source_scan_bits(bits);
         if let Some(new_bits) = self.visit_nanbox_bits(bits) {
             *slot = f64::from_bits(new_bits);
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -973,8 +1105,28 @@ impl<'a> RuntimeRootVisitor<'a> {
     /// Visit a mutable NaN-boxed JSValue stored as `u64` bits.
     /// Returns true when rewrite mode changed the slot.
     pub fn visit_nanbox_u64_slot(&mut self, slot: &mut u64) -> bool {
+        self.record_source_scan_bits(*slot);
         if let Some(new_bits) = self.visit_nanbox_bits(*slot) {
             *slot = new_bits;
+            self.record_source_rewrite();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit an atomic root slot containing NaN-boxed JSValue bits.
+    pub fn visit_atomic_nanbox_u64_slot(
+        &mut self,
+        slot: &std::sync::atomic::AtomicU64,
+        load_ordering: std::sync::atomic::Ordering,
+        store_ordering: std::sync::atomic::Ordering,
+    ) -> bool {
+        let current = slot.load(load_ordering);
+        self.record_source_scan_bits(current);
+        if let Some(new_bits) = self.visit_nanbox_bits(current) {
+            slot.store(new_bits, atomic_store_ordering(store_ordering));
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -987,8 +1139,10 @@ impl<'a> RuntimeRootVisitor<'a> {
     /// This matches heap-field rewrite semantics for runtime-owned caches
     /// whose keys are bit copies of closure captures or object fields.
     pub fn visit_heap_word_u64_slot(&mut self, slot: &mut u64) -> bool {
+        self.record_source_scan_bits(*slot);
         if let Some(new_bits) = self.visit_heap_word_bits(*slot) {
             *slot = new_bits;
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1005,8 +1159,10 @@ impl<'a> RuntimeRootVisitor<'a> {
             return false;
         }
         let bits = (*slot).to_bits();
+        self.record_source_scan_bits(bits);
         if let Some(new_bits) = self.visit_nanbox_bits(bits) {
             *slot = f64::from_bits(new_bits);
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1022,8 +1178,10 @@ impl<'a> RuntimeRootVisitor<'a> {
         if slot.is_null() {
             return false;
         }
+        self.record_source_scan_bits(*slot);
         if let Some(new_bits) = self.visit_nanbox_bits(*slot) {
             *slot = new_bits;
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1033,8 +1191,10 @@ impl<'a> RuntimeRootVisitor<'a> {
     /// Visit a `Cell<f64>` that stores a NaN-boxed JSValue.
     pub fn visit_cell_f64_slot(&mut self, slot: &Cell<f64>) -> bool {
         let bits = slot.get().to_bits();
+        self.record_source_scan_bits(bits);
         if let Some(new_bits) = self.visit_nanbox_bits(bits) {
             slot.set(f64::from_bits(new_bits));
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1043,8 +1203,10 @@ impl<'a> RuntimeRootVisitor<'a> {
 
     /// Visit a root slot that stores a raw mutable heap pointer.
     pub fn visit_raw_mut_ptr_slot<T>(&mut self, slot: &mut *mut T) -> bool {
+        self.record_source_scan_addr(*slot as usize);
         if let Some(new_addr) = self.visit_tagged_raw_addr(*slot as usize, POINTER_TAG) {
             *slot = new_addr as *mut T;
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1053,8 +1215,10 @@ impl<'a> RuntimeRootVisitor<'a> {
 
     /// Visit a root slot that stores a raw const heap pointer.
     pub fn visit_raw_const_ptr_slot<T>(&mut self, slot: &mut *const T) -> bool {
+        self.record_source_scan_addr(*slot as usize);
         if let Some(new_addr) = self.visit_tagged_raw_addr(*slot as usize, POINTER_TAG) {
             *slot = new_addr as *const T;
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1064,8 +1228,10 @@ impl<'a> RuntimeRootVisitor<'a> {
     /// Visit a raw const heap pointer slot, using a specific NaN-box tag
     /// when the visitor is running in compatibility copy mode.
     pub fn visit_tagged_raw_const_ptr_slot<T>(&mut self, slot: &mut *const T, tag: u64) -> bool {
+        self.record_source_scan_addr(*slot as usize);
         if let Some(new_addr) = self.visit_tagged_raw_addr(*slot as usize, tag) {
             *slot = new_addr as *const T;
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1074,8 +1240,10 @@ impl<'a> RuntimeRootVisitor<'a> {
 
     /// Visit a root slot that stores a raw heap pointer as `usize`.
     pub fn visit_usize_slot(&mut self, slot: &mut usize) -> bool {
+        self.record_source_scan_addr(*slot);
         if let Some(new_addr) = self.visit_tagged_raw_addr(*slot, POINTER_TAG) {
             *slot = new_addr;
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1085,8 +1253,10 @@ impl<'a> RuntimeRootVisitor<'a> {
     /// Visit a raw heap pointer stored as `usize`, using a specific
     /// NaN-box tag when the visitor is running in compatibility copy mode.
     pub fn visit_tagged_usize_slot(&mut self, slot: &mut usize, tag: u64) -> bool {
+        self.record_source_scan_addr(*slot);
         if let Some(new_addr) = self.visit_tagged_raw_addr(*slot, tag) {
             *slot = new_addr;
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1095,11 +1265,13 @@ impl<'a> RuntimeRootVisitor<'a> {
 
     /// Visit a root slot that stores a raw heap pointer as `i64`.
     pub fn visit_i64_slot(&mut self, slot: &mut i64) -> bool {
+        self.record_source_scan_addr((*slot > 0).then_some(*slot as usize).unwrap_or(0));
         if *slot <= 0 {
             return false;
         }
         if let Some(new_addr) = self.visit_tagged_raw_addr(*slot as usize, POINTER_TAG) {
             *slot = new_addr as i64;
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1114,8 +1286,10 @@ impl<'a> RuntimeRootVisitor<'a> {
         if slot.is_null() {
             return false;
         }
+        self.record_source_scan_addr(*slot);
         if let Some(new_addr) = self.visit_tagged_raw_addr(*slot, POINTER_TAG) {
             *slot = new_addr;
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1130,8 +1304,10 @@ impl<'a> RuntimeRootVisitor<'a> {
         store_ordering: std::sync::atomic::Ordering,
     ) -> bool {
         let current = slot.load(load_ordering);
+        self.record_source_scan_addr(current as usize);
         if let Some(new_addr) = self.visit_tagged_raw_addr(current as usize, POINTER_TAG) {
             slot.store(new_addr as *mut T, atomic_store_ordering(store_ordering));
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1146,11 +1322,13 @@ impl<'a> RuntimeRootVisitor<'a> {
         store_ordering: std::sync::atomic::Ordering,
     ) -> bool {
         let current = slot.load(load_ordering);
+        self.record_source_scan_addr((current > 0).then_some(current as usize).unwrap_or(0));
         if current <= 0 {
             return false;
         }
         if let Some(new_addr) = self.visit_tagged_raw_addr(current as usize, POINTER_TAG) {
             slot.store(new_addr as i64, atomic_store_ordering(store_ordering));
+            self.record_source_rewrite();
             true
         } else {
             false
@@ -1233,12 +1411,43 @@ impl RuntimeHandleScope {
         self.push(RuntimeHandleSlot::Nanbox(value.to_bits()))
     }
 
+    pub fn root_nanbox_f64_slice<'scope>(
+        &'scope self,
+        values: &[f64],
+    ) -> Vec<RuntimeHandle<'scope>> {
+        values
+            .iter()
+            .map(|value| self.root_nanbox_f64(*value))
+            .collect()
+    }
+
     pub fn root_nanbox_u64<'scope>(&'scope self, bits: u64) -> RuntimeHandle<'scope> {
         self.push(RuntimeHandleSlot::Nanbox(bits))
     }
 
     pub fn root_heap_word_u64<'scope>(&'scope self, bits: u64) -> RuntimeHandle<'scope> {
         self.push(RuntimeHandleSlot::HeapWord(bits))
+    }
+
+    pub fn root_heap_word_u64_slice<'scope>(
+        &'scope self,
+        values: &[u64],
+    ) -> Vec<RuntimeHandle<'scope>> {
+        values
+            .iter()
+            .map(|bits| self.root_heap_word_u64(*bits))
+            .collect()
+    }
+
+    pub fn refreshed_nanbox_f64_slice(handles: &[RuntimeHandle<'_>]) -> Vec<f64> {
+        handles.iter().map(RuntimeHandle::get_nanbox_f64).collect()
+    }
+
+    pub fn refreshed_heap_word_u64_slice(handles: &[RuntimeHandle<'_>]) -> Vec<u64> {
+        handles
+            .iter()
+            .map(RuntimeHandle::get_heap_word_u64)
+            .collect()
     }
 
     pub fn root_raw_mut_ptr<'scope, T>(&'scope self, ptr: *mut T) -> RuntimeHandle<'scope> {
@@ -1364,11 +1573,25 @@ impl<'scope> RuntimeHandle<'scope> {
         })
     }
 
+    pub fn set_raw_mut_ptr<T>(&self, ptr: *mut T) {
+        self.with_slot_mut(|slot| match slot {
+            RuntimeHandleSlot::RawTagged { addr, .. } => *addr = ptr as usize,
+            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
+        });
+    }
+
     pub fn get_raw_const_ptr<T>(&self) -> *const T {
         self.with_slot(|slot| match slot {
             RuntimeHandleSlot::RawTagged { addr, .. } => addr as *const T,
             _ => panic!("runtime handle kind mismatch: expected raw pointer"),
         })
+    }
+
+    pub fn set_raw_const_ptr<T>(&self, ptr: *const T) {
+        self.with_slot_mut(|slot| match slot {
+            RuntimeHandleSlot::RawTagged { addr, .. } => *addr = ptr as usize,
+            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
+        });
     }
 }
 
@@ -1452,9 +1675,19 @@ pub(super) fn visit_shadow_stack_root_slots(mut visit: impl FnMut(MutableRootSlo
             }
             let base = s.stack.as_mut_ptr().add(top);
             for i in 0..slot_count {
+                let slot_idx = top + i;
+                if !s.active.get(slot_idx).copied().unwrap_or(false) {
+                    continue;
+                }
+                let bound_ptr = s.slot_ptrs.get(slot_idx).copied().unwrap_or(0) as *mut u64;
+                let ptr = if bound_ptr.is_null() {
+                    base.add(i)
+                } else {
+                    bound_ptr
+                };
                 visit(MutableRootSlot {
                     kind: MutableRootSlotKind::ShadowStack,
-                    ptr: base.add(i),
+                    ptr,
                 });
             }
             top = s.stack[header_base] as usize;
@@ -1493,6 +1726,61 @@ pub(super) fn shadow_slot_pointer_root(bits: u64) -> bool {
 }
 
 #[inline]
+pub(super) fn root_slot_pointer_candidate(bits: u64) -> bool {
+    if shadow_slot_pointer_root(bits) {
+        return true;
+    }
+    let tag = bits & TAG_MASK;
+    tag < 0x7FF8_0000_0000_0000 && CopyingPointerSet::raw_pointer_candidate(bits)
+}
+
+#[inline]
+pub(super) fn mutable_slot_points_to_valid_root(bits: u64, valid_ptrs: &ValidPointerSet) -> bool {
+    if shadow_slot_pointer_root(bits) {
+        let addr = (bits & POINTER_MASK) as usize;
+        return valid_ptrs.contains(&addr);
+    }
+    let raw_ptr = bits as usize;
+    raw_ptr != 0 && valid_ptrs.contains(&raw_ptr)
+}
+
+#[inline]
+pub(super) fn root_source_for_mutable_slot(
+    sources: &mut RootSourcesTraceStats,
+    kind: MutableRootSlotKind,
+) -> &mut RootSourceSlotTraceStats {
+    match kind {
+        MutableRootSlotKind::ShadowStack => &mut sources.compiled_shadow,
+        MutableRootSlotKind::GlobalRoot => &mut sources.module_globals,
+    }
+}
+
+#[inline]
+pub(super) fn record_mutable_slot_scan_source(
+    slot: MutableRootSlot,
+    bits: u64,
+    valid_ptrs: &ValidPointerSet,
+    root_sources: &mut Option<&mut RootSourcesTraceStats>,
+) {
+    if let Some(sources) = root_sources {
+        root_source_for_mutable_slot(sources, slot.kind).record_scan(
+            bits != 0,
+            mutable_slot_points_to_valid_root(bits, valid_ptrs),
+        );
+    }
+}
+
+#[inline]
+pub(super) fn record_mutable_slot_rewrite_source(
+    slot: MutableRootSlot,
+    root_sources: &mut Option<&mut RootSourcesTraceStats>,
+) {
+    if let Some(sources) = root_sources {
+        root_source_for_mutable_slot(sources, slot.kind).record_rewrite();
+    }
+}
+
+#[inline]
 pub(super) fn mark_global_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
     // First try NaN-boxed interpretation (exported globals, closures, etc.).
     if try_mark_value(bits, valid_ptrs) {
@@ -1510,9 +1798,11 @@ pub(super) fn mark_global_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
 pub(super) fn mark_mutable_root_slots(
     valid_ptrs: &ValidPointerSet,
     mut shadow_stats: Option<&mut ShadowRootTraceStats>,
+    mut root_sources: Option<&mut RootSourcesTraceStats>,
 ) {
     visit_mutable_root_slots(|slot| unsafe {
         let bits = slot.read();
+        record_mutable_slot_scan_source(slot, bits, valid_ptrs, &mut root_sources);
         if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
             if let Some(stats) = shadow_stats.as_mut() {
                 stats.record_scan(bits);
@@ -1633,22 +1923,74 @@ pub(super) extern "C" fn perry_ffi_visit_mutable_root_slot(
 }
 
 pub(super) fn visit_ffi_mutable_registered_roots(visitor: &mut RuntimeRootVisitor<'_>) {
+    visit_ffi_mutable_registered_roots_with_sources(visitor, None);
+}
+
+pub(super) fn visit_ffi_mutable_registered_roots_with_sources(
+    visitor: &mut RuntimeRootVisitor<'_>,
+    mut root_sources: Option<&mut RootSourcesTraceStats>,
+) {
     let scanners: Vec<PerryFfiMutableRootScanner> =
         FFI_MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let stats = match &mut root_sources {
+        Some(sources) => {
+            sources
+                .ffi_mutable_scanners
+                .record_registered_scanners(scanners.len());
+            Some(&mut sources.ffi_mutable_scanners as *mut RootSourceSlotTraceStats)
+        }
+        None => None,
+    };
     let ctx = visitor as *mut RuntimeRootVisitor<'_> as *mut c_void;
+    let previous = visitor.set_root_source_stats(stats);
     for scanner in scanners {
         scanner(perry_ffi_visit_mutable_root_slot, ctx);
     }
+    visitor.set_root_source_stats(previous);
 }
 
 /// Run registered runtime-owned scanners that expose mutable slots.
 pub(super) fn mark_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
-    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
-    let mut visitor = RuntimeRootVisitor::for_mark(valid_ptrs);
-    for scanner in scanners {
-        scanner(&mut visitor);
+    mark_mutable_registered_roots_with_sources(valid_ptrs, None);
+}
+
+pub(super) fn mark_mutable_registered_roots_with_sources(
+    valid_ptrs: &ValidPointerSet,
+    mut root_sources: Option<&mut RootSourcesTraceStats>,
+) {
+    let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    if let Some(sources) = &mut root_sources {
+        sources.runtime_handles.record_registered_scanners(
+            scanners
+                .iter()
+                .filter(|entry| entry.source == MutableRootScannerSource::RuntimeHandles)
+                .count(),
+        );
+        sources.runtime_mutable_scanners.record_registered_scanners(
+            scanners
+                .iter()
+                .filter(|entry| entry.source == MutableRootScannerSource::RuntimeMutableScanner)
+                .count(),
+        );
     }
-    visit_ffi_mutable_registered_roots(&mut visitor);
+    let mut visitor = RuntimeRootVisitor::for_mark(valid_ptrs);
+    for entry in scanners {
+        let stats = match &mut root_sources {
+            Some(sources) => match entry.source {
+                MutableRootScannerSource::RuntimeHandles => {
+                    Some(&mut sources.runtime_handles as *mut RootSourceSlotTraceStats)
+                }
+                MutableRootScannerSource::RuntimeMutableScanner => {
+                    Some(&mut sources.runtime_mutable_scanners as *mut RootSourceSlotTraceStats)
+                }
+            },
+            None => None,
+        };
+        let previous = visitor.set_root_source_stats(stats);
+        (entry.scanner)(&mut visitor);
+        visitor.set_root_source_stats(previous);
+    }
+    visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
 }
 
 /// Run legacy copy-only root scanners. When evacuation is enabled,
@@ -1786,7 +2128,8 @@ pub fn transition_cache_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_
     crate::object::scan_transition_cache_roots_mut(visitor);
 }
 
-/// Root scanner for OVERFLOW_FIELDS (per-object extra properties beyond inline slots)
+/// Legacy scanner shim for OVERFLOW_FIELDS. Overflow fields are object-owned
+/// external slots traced through GC_TYPE_OBJECT.
 pub fn overflow_fields_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::object::scan_overflow_fields_roots(mark);
 }
@@ -1823,4 +2166,12 @@ pub fn intern_table_root_scanner(mark: &mut dyn FnMut(f64)) {
 
 pub fn intern_table_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
     crate::string::scan_intern_table_roots_mut(visitor);
+}
+
+pub fn small_int_cache_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::string::scan_small_int_cache_roots(mark);
+}
+
+pub fn small_int_cache_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::string::scan_small_int_cache_roots_mut(visitor);
 }

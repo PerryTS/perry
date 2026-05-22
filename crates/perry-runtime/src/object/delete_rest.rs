@@ -63,9 +63,11 @@ pub extern "C" fn js_object_delete_field(
             (keys_cloned as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
         // Copy keys [0..i) ++ [i+1..N) into [0..new_count).
         for j in 0..i {
+            // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
             *dst_elements.add(j) = *src_elements.add(j);
         }
         for j in i..new_count {
+            // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
             *dst_elements.add(j) = *src_elements.add(j + 1);
         }
         (*keys_cloned).length = new_count as u32;
@@ -81,8 +83,8 @@ pub extern "C" fn js_object_delete_field(
             if j < alloc_limit {
                 let fields_ptr =
                     (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
-                ptr::write(fields_ptr.add(j), next);
-                super::note_object_field_slot(obj, j, next.bits());
+                let slot = fields_ptr.add(j);
+                crate::gc::runtime_store_jsvalue_slot(obj as usize, slot as usize, j, next.bits());
             } else {
                 overflow_set(obj as usize, j, next.bits());
             }
@@ -91,8 +93,13 @@ pub extern "C" fn js_object_delete_field(
         if new_count < alloc_limit {
             let fields_ptr =
                 (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
-            ptr::write(fields_ptr.add(new_count), JSValue::undefined());
-            super::note_object_field_slot(obj, new_count, crate::value::TAG_UNDEFINED);
+            let slot = fields_ptr.add(new_count);
+            crate::gc::runtime_store_jsvalue_slot(
+                obj as usize,
+                slot as usize,
+                new_count,
+                crate::value::TAG_UNDEFINED,
+            );
         } else {
             overflow_set(obj as usize, new_count, crate::value::TAG_UNDEFINED);
         }
@@ -212,7 +219,7 @@ pub extern "C" fn js_object_rest(
 
         // Create keys array for the rest object
         let rest_keys = crate::array::js_array_alloc_with_length(rest_count);
-        (*rest_obj).keys_array = rest_keys;
+        set_object_keys_array(rest_obj, rest_keys);
 
         // Copy included key-value pairs
         for (new_idx, &src_idx) in include_indices.iter().enumerate() {

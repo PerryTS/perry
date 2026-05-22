@@ -31,10 +31,10 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
-    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
-    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
-    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_jsvalue_slot_store_on_block,
+    emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
+    emit_string_literal_global, emit_v8_export_call, emit_v8_member_method_call,
+    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
@@ -151,11 +151,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
                     let idx_str = field_index.to_string();
                     let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &idx_str)]);
-                    blk.store(DOUBLE, &val_double, &field_ptr);
                     let field_addr = blk.ptrtoint(&field_ptr, I64);
-                    let val_bits = blk.bitcast_double_to_i64(&val_double);
-                    emit_layout_note_slot_on_block(blk, &obj_handle, &idx_str, &val_bits);
-                    emit_write_barrier_slot_on_block(blk, &obj_bits, &field_addr, &val_bits);
+                    emit_jsvalue_slot_store_on_block(
+                        blk,
+                        &field_ptr,
+                        &val_double,
+                        &obj_handle,
+                        &idx_str,
+                        true,
+                        &obj_bits,
+                        &field_addr,
+                        true,
+                    );
                     return Ok(val_double);
                 }
             }

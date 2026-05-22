@@ -69,6 +69,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key = (class_name.clone(), field_name.clone());
             if let Some(global_name) = ctx.static_field_globals.get(&key).cloned() {
                 let g_ref = format!("@{}", global_name);
+                // GC_STORE_AUDIT(ROOT): static field global slot is registered as a mutable GC root.
                 ctx.block().store(DOUBLE, &v, &g_ref);
             }
             // v0.5.747: also register the static field in the runtime
