@@ -99,6 +99,38 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return dispatch_fastify_context(handle, method_name, args);
     }
 
+    // External Fastify path (#1293): when the well-known flip routes
+    // `fastify` to perry-ext-fastify, the request/reply handle lives in
+    // perry-ffi's registry — invisible to the `with_handle::<FastifyContext>`
+    // probe above (separate DashMap, separate type). `(request as any).json()`
+    // / `(request as any).body()` (where the `as any` cast made codegen emit
+    // a generic dynamic dispatch instead of a `NativeMethodCall`) used to
+    // fall through and return NaN. Same dispatch contract as the bundled arm,
+    // but membership + the `js_fastify_*` exports resolve to perry-ext-fastify
+    // at link time. Mirrors the `external-net-pump` arm below.
+    #[cfg(all(not(feature = "http-server"), feature = "external-fastify-pump"))]
+    if matches!(
+        method_name,
+        "send"
+            | "status"
+            | "code"
+            | "header"
+            | "type"
+            | "method"
+            | "url"
+            | "body"
+            | "json"
+            | "params"
+            | "headers"
+    ) {
+        extern "C" {
+            fn js_ext_fastify_is_context_handle(handle: i64) -> i32;
+        }
+        if unsafe { js_ext_fastify_is_context_handle(handle) } != 0 {
+            return dispatch_external_fastify_context(handle, method_name, args);
+        }
+    }
+
     // ioredis client.
     #[cfg(feature = "database-redis")]
     if matches!(
@@ -560,6 +592,76 @@ unsafe fn dispatch_fastify_context(handle: i64, method: &str, args: &[f64]) -> f
     }
 }
 
+/// Dispatch a method call on a perry-ext-fastify request/reply handle via
+/// `extern "C"` symbols (#1293). Same dispatch contract as
+/// `dispatch_fastify_context` above, but the per-method `js_fastify_*`
+/// functions resolve to perry-ext-fastify's archive at link time, not
+/// perry-stdlib's `crate::fastify::*` (which is compiled out when the
+/// well-known flip strips `http-server`). Caller gates on
+/// `js_ext_fastify_is_context_handle` + the same method vocabulary.
+#[cfg(all(not(feature = "http-server"), feature = "external-fastify-pump"))]
+unsafe fn dispatch_external_fastify_context(handle: i64, method: &str, args: &[f64]) -> f64 {
+    use perry_runtime::JSValue;
+
+    extern "C" {
+        fn js_fastify_reply_send(handle: i64, data: f64) -> bool;
+        fn js_fastify_reply_status(handle: i64, code: f64) -> i64;
+        fn js_fastify_reply_header(handle: i64, name: i64, value: i64) -> i64;
+        fn js_fastify_reply_type(handle: i64, value: i64) -> i64;
+        fn js_fastify_req_method(handle: i64) -> *mut perry_runtime::StringHeader;
+        fn js_fastify_req_url(handle: i64) -> *mut perry_runtime::StringHeader;
+        fn js_fastify_req_json(handle: i64) -> f64;
+        fn js_fastify_req_params_object(handle: i64) -> f64;
+        fn js_fastify_req_headers(handle: i64) -> i64;
+    }
+
+    match method {
+        // Reply methods
+        "send" if !args.is_empty() => {
+            if js_fastify_reply_send(handle, args[0]) {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        "status" | "code" if !args.is_empty() => {
+            let result = js_fastify_reply_status(handle, args[0]);
+            // NaN-box the handle as a pointer so `reply.status(200).send(...)`
+            // chains (the next dispatch sees a small-handle pointer again).
+            f64::from_bits(0x7FFD_0000_0000_0000 | (result as u64 & 0x0000_FFFF_FFFF_FFFF))
+        }
+        "header" if args.len() >= 2 => {
+            let name = args[0].to_bits() as i64;
+            let value = args[1].to_bits() as i64;
+            let result = js_fastify_reply_header(handle, name, value);
+            f64::from_bits(0x7FFD_0000_0000_0000 | (result as u64 & 0x0000_FFFF_FFFF_FFFF))
+        }
+        "type" if !args.is_empty() => {
+            let value = args[0].to_bits() as i64;
+            let result = js_fastify_reply_type(handle, value);
+            f64::from_bits(0x7FFD_0000_0000_0000 | (result as u64 & 0x0000_FFFF_FFFF_FFFF))
+        }
+        // Request methods
+        "method" => {
+            let ptr = js_fastify_req_method(handle);
+            f64::from_bits(JSValue::string_ptr(ptr).bits())
+        }
+        "url" => {
+            let ptr = js_fastify_req_url(handle);
+            f64::from_bits(JSValue::string_ptr(ptr).bits())
+        }
+        // Both `request.body` and `request.json()` surface the parsed body;
+        // `js_fastify_req_json` returns NaN-boxed undefined when there is none.
+        "body" | "json" => js_fastify_req_json(handle),
+        "params" => js_fastify_req_params_object(handle),
+        "headers" => {
+            let bits = js_fastify_req_headers(handle);
+            f64::from_bits(bits as u64)
+        }
+        _ => f64::from_bits(0x7FFC_0000_0000_0001), // undefined
+    }
+}
+
 /// Dispatch method calls on net.Socket handles when codegen couldn't tag
 /// the receiver type. Mirrors the static NATIVE_MODULE_TABLE entries for
 /// the same methods (write/end/destroy/on/upgradeToTLS).
@@ -781,6 +883,68 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             }
             _ => f64::from_bits(0x7FFC_0000_0000_0001), // undefined
         };
+    }
+
+    // External Fastify property path (#1293): the well-known-flipped twin of
+    // the `http-server` arm above. `(request as any).body` / `.headers` /
+    // `.params` / ... on a perry-ext-fastify handle (its `as any` cast erased
+    // the type, so codegen routed through `js_object_get_field_by_name` →
+    // here instead of a `NativeMethodCall`). Membership + the `js_fastify_*`
+    // symbols resolve to perry-ext-fastify at link time.
+    #[cfg(all(not(feature = "http-server"), feature = "external-fastify-pump"))]
+    if matches!(
+        property_name,
+        "query" | "params" | "body" | "rawBody" | "text" | "headers" | "method" | "url" | "user"
+    ) {
+        extern "C" {
+            fn js_ext_fastify_is_context_handle(handle: i64) -> i32;
+            fn js_fastify_req_query_object(handle: i64) -> f64;
+            fn js_fastify_req_params_object(handle: i64) -> f64;
+            fn js_fastify_req_json(handle: i64) -> f64;
+            fn js_fastify_req_body(handle: i64) -> *mut perry_runtime::StringHeader;
+            fn js_fastify_req_headers(handle: i64) -> i64;
+            fn js_fastify_req_method(handle: i64) -> *mut perry_runtime::StringHeader;
+            fn js_fastify_req_url(handle: i64) -> *mut perry_runtime::StringHeader;
+            fn js_fastify_req_get_user_data(handle: i64) -> f64;
+        }
+        if unsafe { js_ext_fastify_is_context_handle(handle) } != 0 {
+            use perry_runtime::JSValue;
+            return match property_name {
+                "query" => unsafe { js_fastify_req_query_object(handle) },
+                "params" => unsafe { js_fastify_req_params_object(handle) },
+                "body" => unsafe { js_fastify_req_json(handle) },
+                "rawBody" | "text" => {
+                    let ptr = unsafe { js_fastify_req_body(handle) };
+                    if ptr.is_null() {
+                        f64::from_bits(0x7FFC_0000_0000_0001)
+                    } else {
+                        f64::from_bits(JSValue::string_ptr(ptr).bits())
+                    }
+                }
+                "headers" => {
+                    let bits = unsafe { js_fastify_req_headers(handle) };
+                    f64::from_bits(bits as u64)
+                }
+                "method" => {
+                    let ptr = unsafe { js_fastify_req_method(handle) };
+                    if ptr.is_null() {
+                        f64::from_bits(0x7FFC_0000_0000_0001)
+                    } else {
+                        f64::from_bits(JSValue::string_ptr(ptr).bits())
+                    }
+                }
+                "url" => {
+                    let ptr = unsafe { js_fastify_req_url(handle) };
+                    if ptr.is_null() {
+                        f64::from_bits(0x7FFC_0000_0000_0001)
+                    } else {
+                        f64::from_bits(JSValue::string_ptr(ptr).bits())
+                    }
+                }
+                "user" => unsafe { js_fastify_req_get_user_data(handle) },
+                _ => f64::from_bits(0x7FFC_0000_0000_0001),
+            };
+        }
     }
 
     // Issue #340: axios response — dispatch `r.status` / `r.data` /

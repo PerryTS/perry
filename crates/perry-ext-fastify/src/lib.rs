@@ -285,6 +285,38 @@ mod tests {
     }
 
     #[test]
+    fn ext_fastify_is_context_handle_membership() {
+        // #1293 — the membership probe perry-stdlib's external-fastify
+        // dispatch arms consult before forwarding `(request as any).json()`
+        // / `(request as any).body` to our `js_fastify_*` exports.
+        let ctx = FastifyContext::new(
+            0,
+            "POST".to_string(),
+            "/x".to_string(),
+            HashMap::new(),
+            Some(b"{}".to_vec()),
+            HashMap::new(),
+        );
+        let ctx_handle = register_handle(ctx);
+        // A non-existent handle id is never ours.
+        assert_eq!(unsafe { js_ext_fastify_is_context_handle(0) }, 0);
+        assert_eq!(
+            unsafe { js_ext_fastify_is_context_handle(ctx_handle + 9_999) },
+            0
+        );
+        // A live FastifyContext handle is ours.
+        assert_eq!(unsafe { js_ext_fastify_is_context_handle(ctx_handle) }, 1);
+        // A FastifyApp handle is NOT a context (type-discriminated downcast).
+        let app_handle = register_handle(FastifyApp::new());
+        assert_eq!(unsafe { js_ext_fastify_is_context_handle(app_handle) }, 0);
+
+        drop_handle(ctx_handle);
+        drop_handle(app_handle);
+        // After the context is dropped the probe reports it gone.
+        assert_eq!(unsafe { js_ext_fastify_is_context_handle(ctx_handle) }, 0);
+    }
+
+    #[test]
     fn port_extraction_safe_defaults() {
         // Object literal pattern verified through the wider unit
         // tests; here we exercise the bare-number pattern + the
