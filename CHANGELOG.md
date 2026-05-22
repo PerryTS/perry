@@ -2,6 +2,19 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1023 — feat(ios) #1301 setup --development + fix(compile) #1304 vendored optional_frameworks
+
+Folds two PRs that merged post-v0.5.1022 without version bumps:
+
+- **#1301 / #1302** `feat(ios): perry setup ios --development + on-device
+  dev-sign path` — adds a `--development` flag to `perry setup ios` and an
+  on-device development-signing path so iOS apps can run on physical
+  devices without going through the App Store Connect provisioning flow.
+- **#1304 / #1305** `fix(compile): link vendored optional_frameworks
+  gated on frameworks_env` — `optional_frameworks` from the native
+  manifest are now only linked when the `PERRY_FRAMEWORKS` env var
+  enables them, matching the gating contract the manifest doc spells out.
+
 ## v0.5.1022 — ci(benchmark): refresh binary-size baseline after v0.5.455 → v0.5.1021 release cycle
 
 Regression Check `binary-size` job failed on v0.5.1021 against the old
