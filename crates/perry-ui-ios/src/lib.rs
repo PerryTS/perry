@@ -25,6 +25,21 @@ pub mod geisterhand_style;
 // sub-modules for file-size hygiene (originally inline here, ~2,900 LOC).
 mod ffi;
 
+// Re-export the FFI entry points at the crate root so intra-crate callers that
+// reference `crate::perry_ui_*` paths resolve — mirroring perry-ui-macos. The
+// geisterhand glue (`app.rs` registration + `geisterhand_style.rs` dispatch)
+// relies on this; without it the `geisterhand` feature build fails with E0425
+// "cannot find ... in the crate root" (issue #1311). Linker-visible
+// `#[no_mangle]` symbols are unaffected; this is purely Rust path resolution.
+pub use ffi::camera::*;
+pub use ffi::comms::*;
+pub use ffi::dialogs_lifecycle::*;
+pub use ffi::misc::*;
+pub use ffi::security_notifications::*;
+pub use ffi::system::*;
+pub use ffi::widgets_advanced::*;
+pub use ffi::widgets_basic::*;
+
 /// Debug logging macro that writes to a file (NSLog/eprintln don't work reliably on iOS)
 #[macro_export]
 macro_rules! ws_log {
