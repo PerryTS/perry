@@ -557,6 +557,44 @@ pub extern "C" fn js_process_hrtime_bigint() -> f64 {
     js_nanbox_bigint(bi as i64)
 }
 
+/// process.hrtime([prev]) -> [seconds, nanoseconds]
+///
+/// Returns a 2-element integer tuple of the high-resolution real time
+/// relative to an arbitrary, monotonic process-start baseline (the same
+/// baseline `process.hrtime.bigint()` uses). When `prev` is a previous
+/// `[s, ns]` tuple, returns the non-negative diff `now - prev`, matching
+/// Node; an undefined/non-array `prev` yields the absolute reading.
+/// Returns a NaN-boxed POINTER_TAG f64 so codegen can use it directly.
+#[no_mangle]
+pub extern "C" fn js_process_hrtime(prev: f64) -> f64 {
+    use crate::array::{js_array_alloc, js_array_get_element, js_array_push_f64};
+    use crate::value::JSValue;
+
+    let mut total_ns: u128 = get_hrtime_start().elapsed().as_nanos();
+
+    // Diff form: `process.hrtime(prevTuple)` subtracts the supplied
+    // `[seconds, nanoseconds]` reading. Monotonic baseline guarantees
+    // `now >= prev`, so the saturating subtraction never wraps.
+    let pv = JSValue::from_bits(prev.to_bits());
+    if pv.is_pointer() {
+        let arr_i64 = pv.as_pointer::<ArrayHeader>() as i64;
+        let prev_s = js_array_get_element(arr_i64, 0);
+        let prev_ns = js_array_get_element(arr_i64, 1);
+        if prev_s.is_finite() && prev_ns.is_finite() {
+            let prev_total = (prev_s.max(0.0) as u128) * 1_000_000_000 + (prev_ns.max(0.0) as u128);
+            total_ns = total_ns.saturating_sub(prev_total);
+        }
+    }
+
+    let secs = (total_ns / 1_000_000_000) as f64;
+    let nsec = (total_ns % 1_000_000_000) as f64;
+
+    let arr = js_array_alloc(2);
+    let arr = js_array_push_f64(arr, secs);
+    let arr = js_array_push_f64(arr, nsec);
+    f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+}
+
 // process.on/once handlers, partitioned by event name. Today only
 // 'uncaughtException' actually fires from the runtime (during the diag
 // uncaught-drain hook); 'exit' and any other event names are stored so

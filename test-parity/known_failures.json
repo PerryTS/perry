@@ -20,36 +20,6 @@
     "category": "bug-open",
     "reason": "node:perf_hooks granular parity: globalThis.performance !== the node:perf_hooks named import. The import resolves to a fresh namespace object per read and the global is a separate path; neither is a cached singleton. Flips to PASS when #1327 lands."
   },
-  "node-suite/process/shapes/method-types": {
-    "issue": "1330",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:process granular parity: typeof process.cwd/nextTick/hrtime/exit/on/uptime/memoryUsage/cpuUsage is not 'function' — method values on the process global read as a small handle/number (the call forms work). Flips to PASS when #1330 lands."
-  },
-  "node-suite/process/nexttick/is-function": {
-    "issue": "1330",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:process granular parity: typeof process.nextTick is not 'function' even though process.nextTick(cb) ordering works (nexttick/ordering PASSES). Member-read-as-value gap. Flips to PASS when #1330 lands."
-  },
-  "node-suite/process/env/write": {
-    "issue": "1330",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:process granular parity: process.env.X = v does not persist (read returns undefined). js_process_env() caches the object correctly, so the gap is the assignment lowering not setting a field on it. Flips to PASS when #1330 lands."
-  },
-  "node-suite/process/hrtime/tuple": {
-    "issue": "1330",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:process granular parity: process.hrtime() (direct call) throws 'value is not a function' — only process.hrtime.bigint() is wired. Should return a [seconds, nanoseconds] tuple. Flips to PASS when #1330 lands."
-  },
-  "node-suite/process/props/string-props": {
-    "issue": "1330",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:process granular parity: process.argv0/execPath/title read as a number instead of a string (not exposed as properties). Flips to PASS when #1330 lands."
-  },
   "node-suite/console/dir/depth-options": {
     "issue": "1199",
     "added": "2026-05-20",

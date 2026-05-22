@@ -957,6 +957,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::PathWin32 { .. }
         | Expr::QueueMicrotask(..)
         | Expr::ProcessNextTick(..)
+        | Expr::ProcessHrtime(..)
         | Expr::RegExpTest { .. }
         | Expr::RegExpExec { .. }
         | Expr::GlobalGet(..)

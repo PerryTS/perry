@@ -455,6 +455,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_memory_usage", DOUBLE, &[]);
     module.declare_function("js_process_env", DOUBLE, &[]);
     module.declare_function("js_process_hrtime_bigint", DOUBLE, &[]);
+    // process.hrtime([prev]) -> [s, ns] tuple; prev (or undefined) is a
+    // NaN-boxed f64, result is an already-NaN-boxed array pointer (#1330).
+    module.declare_function("js_process_hrtime", DOUBLE, &[DOUBLE]);
+    // process.env.KEY = v / delete process.env.KEY — write/remove the real
+    // OS environment. Name is a StringHeader* passed as I64 (#1330).
+    module.declare_function("js_setenv", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_removeenv", DOUBLE, &[I64]);
     module.declare_function("js_process_chdir", VOID, &[I64]);
     module.declare_function("js_process_kill", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_process_exit", VOID, &[DOUBLE]);

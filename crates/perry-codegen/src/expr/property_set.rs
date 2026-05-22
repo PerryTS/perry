@@ -53,6 +53,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             property,
             value,
         } => {
+            // process.env.KEY = v — write the real process environment (the
+            // store EnvGet/js_getenv reads), coercing the value to a string
+            // like Node. Pre-fix this lowered to a generic field-set on the
+            // cached js_process_env() object, which EnvGet never consults, so
+            // the write never round-tripped (#1330). The assignment evaluates
+            // to the RHS, so we return the original value double.
+            if matches!(object.as_ref(), Expr::ProcessEnv) {
+                let key_idx = ctx.strings.intern(property);
+                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let val_double = lower_expr(ctx, value)?;
+                let blk = ctx.block();
+                let key_box = blk.load(DOUBLE, &key_handle_global);
+                let key_handle = unbox_to_i64(blk, &key_box);
+                blk.call(
+                    DOUBLE,
+                    "js_setenv",
+                    &[(I64, &key_handle), (DOUBLE, &val_double)],
+                );
+                return Ok(val_double);
+            }
             // Closes #304: `arr.length = N` must mutate the ArrayHeader, not
             // set a "length" field in the object dispatch. Pre-fix the generic
             // `js_object_set_field_by_name(arr, "length", N)` path silently

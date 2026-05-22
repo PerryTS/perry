@@ -102,6 +102,7 @@ where
         | Expr::StaticFieldSet { value: v, .. }
         | Expr::EnvGetDynamic(v)
         | Expr::ProcessNextTick(v)
+        | Expr::ProcessHrtime(v)
         | Expr::ProcessChdir(v)
         | Expr::ProcessStdinSetRawMode(v)
         | Expr::TtyIsAtty(v)

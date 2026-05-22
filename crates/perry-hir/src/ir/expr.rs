@@ -436,6 +436,11 @@ pub enum Expr {
     ProcessVersions,
     // process.hrtime.bigint() -> bigint (nanoseconds since arbitrary point)
     ProcessHrtimeBigint,
+    // process.hrtime([prev]) -> [seconds, nanoseconds] integer tuple.
+    // The operand is the optional previous tuple for the diff form; a
+    // no-arg call carries `Expr::Undefined` so the variant always holds a
+    // child (keeps it in the existing single-operand walker groups).
+    ProcessHrtime(Box<Expr>),
     // process.nextTick(callback) -> void
     ProcessNextTick(Box<Expr>),
     // process.on(event, handler) -> void (registers an event listener)

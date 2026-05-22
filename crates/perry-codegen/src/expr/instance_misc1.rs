@@ -201,6 +201,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     Ok(blk.bitcast_i64_to_double(&tagged))
                 }
+                // delete process.env.KEY — remove the variable from the real
+                // process environment (the store EnvGet reads), so the next
+                // read is undefined. `delete` evaluates to true. (#1330)
+                Expr::EnvGet(name) => {
+                    let key_idx = ctx.strings.intern(name);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_handle = unbox_to_i64(blk, &key_box);
+                    Ok(blk.call(DOUBLE, "js_removeenv", &[(I64, &key_handle)]))
+                }
+                Expr::EnvGetDynamic(name_expr) => {
+                    let key_box = lower_expr(ctx, name_expr)?;
+                    let blk = ctx.block();
+                    let key_handle = unbox_str_handle(blk, &key_box);
+                    Ok(blk.call(DOUBLE, "js_removeenv", &[(I64, &key_handle)]))
+                }
                 _ => {
                     let _ = lower_expr(ctx, operand)?;
                     Ok(double_literal(1.0))
@@ -430,6 +448,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             blk.call_void(runtime, &[(I64, &cb_handle)]);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+        }
+
+        // process.hrtime([prev]) -> [seconds, nanoseconds]. The operand is
+        // the optional previous tuple (Undefined for the no-arg form); the
+        // runtime returns an already-NaN-boxed array pointer. (#1330)
+        Expr::ProcessHrtime(prev) => {
+            let prev_box = lower_expr(ctx, prev)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_process_hrtime", &[(DOUBLE, &prev_box)]))
         }
 
         // -------- RegExpTest --------

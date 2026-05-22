@@ -90,6 +90,58 @@ pub extern "C" fn js_getenv_value(name_ptr: *const StringHeader) -> f64 {
     f64::from_bits(val.bits())
 }
 
+/// Read a `*StringHeader` into an owned `String` (mirrors `js_getenv`'s
+/// inline decode). Returns `None` for a null/low-tagged pointer or
+/// non-UTF-8 bytes.
+unsafe fn header_to_string(ptr: *const StringHeader) -> Option<String> {
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
+}
+
+/// `process.env.KEY = value` — write the real process environment.
+///
+/// `process.env` is backed by the OS environment (the same store
+/// `js_getenv`/`Expr::EnvGet` reads), so writing here makes a subsequent
+/// `process.env.KEY` read round-trip. Node coerces assigned values to
+/// strings (`process.env.N = 42` stores `"42"`); we mirror that via
+/// `js_jsvalue_to_string`. Returns the original RHS so the assignment
+/// expression evaluates to it, matching JS.
+///
+/// Pre-fix, `process.env.KEY = v` lowered to a generic `PropertySet` on
+/// the cached `js_process_env()` object, which `EnvGet` never consults —
+/// so the write silently never round-tripped (#1330).
+#[no_mangle]
+pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) -> f64 {
+    unsafe {
+        let name = match header_to_string(name_ptr) {
+            Some(s) => s,
+            None => return value,
+        };
+        let val_ptr = crate::value::js_jsvalue_to_string(value);
+        let val = header_to_string(val_ptr).unwrap_or_default();
+        std::env::set_var(&name, &val);
+    }
+    value
+}
+
+/// `delete process.env.KEY` — remove the variable from the real
+/// environment so the subsequent read is `undefined` (matching Node).
+/// Returns `true` like the `delete` operator.
+#[no_mangle]
+pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) -> f64 {
+    unsafe {
+        if let Some(name) = header_to_string(name_ptr) {
+            std::env::remove_var(&name);
+        }
+    }
+    f64::from_bits(JSValue::bool(true).bits())
+}
+
 /// Get resident set size (RSS) in bytes using platform-specific APIs
 pub(crate) fn get_rss_bytes() -> u64 {
     #[cfg(target_os = "macos")]

@@ -443,6 +443,23 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("console", "profile")
             | ("console", "profileEnd")
             | ("console", "timeStamp")
+            // node:process — methods read as VALUES (`typeof process.cwd ===
+            // "function"`, `const f = process.nextTick`). The call forms are
+            // lowered to dedicated HIR variants (ProcessCwd/ProcessHrtime/…)
+            // and never reach here; this just keeps the property-read form a
+            // callable closure so `typeof` matches Node (#1330). cpuUsage has
+            // no call lowering yet — the read still reports "function".
+            | ("process", "cwd")
+            | ("process", "nextTick")
+            | ("process", "hrtime")
+            | ("process", "exit")
+            | ("process", "on")
+            | ("process", "once")
+            | ("process", "uptime")
+            | ("process", "memoryUsage")
+            | ("process", "cpuUsage")
+            | ("process", "kill")
+            | ("process", "chdir")
     )
 }
 
@@ -1106,6 +1123,39 @@ pub(crate) unsafe fn get_native_module_constant(
             "NODE_PERFORMANCE_GC_FLAGS_ALL_AVAILABLE_GARBAGE" => Some(16.0),
             "NODE_PERFORMANCE_GC_FLAGS_ALL_EXTERNAL_MEMORY" => Some(32.0),
             "NODE_PERFORMANCE_GC_FLAGS_SCHEDULE_IDLE" => Some(64.0),
+            _ => None,
+        },
+        // node:process — string-valued properties read off the bare global
+        // `process` (lowered to a `GlobalGet` PropertyGet that routes here).
+        // Values differ per runtime; Node guarantees only that they're
+        // strings (#1330).
+        "process" => match property {
+            "argv0" => {
+                let v = std::env::args()
+                    .next()
+                    .unwrap_or_else(|| "perry".to_string());
+                Some(str_val(&v))
+            }
+            "execPath" => {
+                let v = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.to_str().map(|s| s.to_string()))
+                    .or_else(|| std::env::args().next())
+                    .unwrap_or_else(|| "perry".to_string());
+                Some(str_val(&v))
+            }
+            "title" => {
+                let v = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|s| s.to_string())
+                    })
+                    .or_else(|| std::env::args().next())
+                    .unwrap_or_else(|| "perry".to_string());
+                Some(str_val(&v))
+            }
             _ => None,
         },
         "path" => match property {

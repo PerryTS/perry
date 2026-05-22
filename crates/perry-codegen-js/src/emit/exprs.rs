@@ -498,6 +498,12 @@ impl JsEmitter {
                 self.emit_expr(cb);
                 self.output.push_str("))");
             }
+            Expr::ProcessHrtime(prev) => {
+                self.output
+                    .push_str("(typeof process !== 'undefined' ? process.hrtime(");
+                self.emit_expr(prev);
+                self.output.push_str(") : [0, 0])");
+            }
             Expr::ProcessOn { event, handler } => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.on(");
                 self.emit_expr(event);

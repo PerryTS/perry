@@ -968,6 +968,7 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::StructuredClone(operand)
         | Expr::QueueMicrotask(operand)
         | Expr::ProcessNextTick(operand)
+        | Expr::ProcessHrtime(operand)
         | Expr::FsExistsSync(operand)
         | Expr::FsReadFileSync(operand)
         | Expr::FsReadFileBinary(operand)

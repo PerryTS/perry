@@ -364,6 +364,7 @@ pub fn check_escapes_in_expr(
         | Expr::StructuredClone(operand)
         | Expr::QueueMicrotask(operand)
         | Expr::ProcessNextTick(operand)
+        | Expr::ProcessHrtime(operand)
         | Expr::ArrayIsArray(operand) => {
             check_escapes_in_expr(operand, candidates, classes, escaped);
         }

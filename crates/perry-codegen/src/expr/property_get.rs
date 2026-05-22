@@ -533,6 +533,50 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ],
                     ));
                 }
+                // node:process — `process.cwd` / `process.nextTick` / … read
+                // as VALUES (not called), plus the string props argv0 /
+                // execPath / title. Bare `process` lowers to the GlobalGet(0)
+                // sentinel, so the receiver name is gone here; we route by the
+                // process-distinctive property name through the native-module
+                // property helper, which returns a bound-method closure
+                // (typeof "function") for the methods and a string for the
+                // props. The call forms (`process.cwd()`) lower separately to
+                // dedicated HIR variants and never reach here. (#1330)
+                if matches!(
+                    property.as_str(),
+                    "cwd"
+                        | "nextTick"
+                        | "hrtime"
+                        | "exit"
+                        | "on"
+                        | "once"
+                        | "uptime"
+                        | "memoryUsage"
+                        | "cpuUsage"
+                        | "kill"
+                        | "chdir"
+                        | "argv0"
+                        | "execPath"
+                        | "title"
+                ) {
+                    let mod_idx = ctx.strings.intern("process");
+                    let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
+                    let mod_len_str = "process".len().to_string();
+                    let prop_idx = ctx.strings.intern(property);
+                    let prop_bytes_global =
+                        format!("@{}", ctx.strings.entry(prop_idx).bytes_global);
+                    let prop_len_str = property.len().to_string();
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_native_module_property_by_name",
+                        &[
+                            (PTR, &mod_bytes_global),
+                            (I64, &mod_len_str),
+                            (PTR, &prop_bytes_global),
+                            (I64, &prop_len_str),
+                        ],
+                    ));
+                }
                 // Built-in constructors / namespaces exposed on globalThis
                 // (`Array`, `Object`, `Math`, `JSON`, ...): route the read
                 // through the singleton so `globalThis.Array` (and the

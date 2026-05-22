@@ -218,6 +218,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::StructuredClone(operand)
         | Expr::QueueMicrotask(operand)
         | Expr::ProcessNextTick(operand)
+        | Expr::ProcessHrtime(operand)
         | Expr::FsExistsSync(operand)
         | Expr::FsReadFileSync(operand)
         | Expr::FsReadFileBinary(operand)

@@ -115,6 +115,7 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
             Expr::ProcessNextTick(_)
+            | Expr::ProcessHrtime(_)
             | Expr::ProcessChdir(_)
             | Expr::ProcessOn { .. }
             | Expr::ProcessKill { .. }

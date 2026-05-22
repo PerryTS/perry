@@ -36,6 +36,15 @@ pub(super) fn try_native_module_methods(
                         "uptime" => return Ok(Ok(Expr::ProcessUptime)),
                         "cwd" => return Ok(Ok(Expr::ProcessCwd)),
                         "memoryUsage" => return Ok(Ok(Expr::ProcessMemoryUsage)),
+                        // process.hrtime() / process.hrtime(prevTuple). The
+                        // `process.hrtime.bigint()` form is intercepted earlier
+                        // by try_process_hrtime_bigint (nested_namespace.rs), so
+                        // only the direct call reaches here. Carry the optional
+                        // prev arg, defaulting to Undefined for the no-arg form.
+                        "hrtime" => {
+                            let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::ProcessHrtime(Box::new(arg))));
+                        }
                         "nextTick" => {
                             if !args.is_empty() {
                                 return Ok(Ok(Expr::ProcessNextTick(Box::new(
