@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1093 entries across 80 modules
+// Coverage: 1094 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -334,6 +334,8 @@ declare module "crypto" {
   export function getHashes(...args: any[]): any;
   /** stdlib */
   export function getRandomValues(...args: any[]): any;
+  /** stdlib */
+  export function hkdfSync(...args: any[]): any;
   /** stdlib */
   export function md5(...args: any[]): any;
   /** stdlib */

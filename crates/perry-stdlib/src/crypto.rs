@@ -862,6 +862,67 @@ pub unsafe extern "C" fn js_crypto_scrypt_bytes(
     alloc_buffer_from_slice(&out)
 }
 
+/// `crypto.hkdfSync(digest, ikm, salt, info, keylen)` → ArrayBuffer.
+///
+/// HKDF (RFC 5869) extract-and-expand. `ikm`/`salt`/`info` are read as raw
+/// bytes (string or Buffer); `digest` selects the HMAC hash (sha256 default,
+/// plus sha1/sha224/sha384/sha512). Returns the derived key in a real
+/// ArrayBuffer to match Node, so `Buffer.from(result)` / `new
+/// Uint8Array(result)` work. An empty salt means "no salt" per the spec.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_hkdf_sync(
+    digest_ptr: i64,
+    ikm_ptr: i64,
+    salt_ptr: i64,
+    info_ptr: i64,
+    keylen: f64,
+) -> *mut perry_runtime::buffer::BufferHeader {
+    use hkdf::Hkdf;
+    let digest = String::from_utf8_lossy(&bytes_from_ptr(digest_ptr))
+        .to_ascii_lowercase()
+        .replace('-', "");
+    let ikm = bytes_from_ptr(ikm_ptr);
+    let salt = bytes_from_ptr(salt_ptr);
+    let info = bytes_from_ptr(info_ptr);
+    let out_len = keylen as usize;
+    // Cap at the largest HKDF output across supported digests (255*64 for
+    // sha512); per-digest over-length is rejected by `expand` below.
+    let make = |bytes: &[u8]| -> *mut perry_runtime::buffer::BufferHeader {
+        let buf = alloc_buffer_from_slice(bytes);
+        if !buf.is_null() {
+            perry_runtime::buffer::mark_as_array_buffer(buf as usize);
+        }
+        buf
+    };
+    if out_len == 0 || out_len > 255 * 64 {
+        return make(&[]);
+    }
+    let salt_ref: Option<&[u8]> = if salt.is_empty() { None } else { Some(&salt) };
+    let mut okm = vec![0u8; out_len];
+    let ok = match digest.as_str() {
+        "sha1" => Hkdf::<Sha1>::new(salt_ref, &ikm)
+            .expand(&info, &mut okm)
+            .is_ok(),
+        "sha224" => Hkdf::<Sha224>::new(salt_ref, &ikm)
+            .expand(&info, &mut okm)
+            .is_ok(),
+        "sha384" => Hkdf::<Sha384>::new(salt_ref, &ikm)
+            .expand(&info, &mut okm)
+            .is_ok(),
+        "sha512" => Hkdf::<Sha512>::new(salt_ref, &ikm)
+            .expand(&info, &mut okm)
+            .is_ok(),
+        // "sha256" and the empty/unknown default.
+        _ => Hkdf::<Sha256>::new(salt_ref, &ikm)
+            .expand(&info, &mut okm)
+            .is_ok(),
+    };
+    if !ok {
+        return make(&[]);
+    }
+    make(&okm)
+}
+
 // ---------------------------------------------------------------------------
 // Hash handle — powers `const h = crypto.createHash('sha1'); h.update(x);
 // h.digest()` (issue #86). The runtime-resident chain-collapse in

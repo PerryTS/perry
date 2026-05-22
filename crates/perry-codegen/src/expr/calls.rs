@@ -758,6 +758,45 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
 
+        // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
+        // The runtime returns an array-buffer-marked Buffer; callers wrap it
+        // with `Buffer.from(...)` / `new Uint8Array(...)`.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "hkdfSync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 5 {
+                return Ok(double_literal(0.0));
+            }
+            let digest_box = lower_expr(ctx, &args[0])?;
+            let ikm_box = lower_expr(ctx, &args[1])?;
+            let salt_box = lower_expr(ctx, &args[2])?;
+            let info_box = lower_expr(ctx, &args[3])?;
+            let keylen_box = lower_expr(ctx, &args[4])?;
+            let blk = ctx.block();
+            let digest_handle = unbox_to_i64(blk, &digest_box);
+            let ikm_handle = unbox_to_i64(blk, &ikm_box);
+            let salt_handle = unbox_to_i64(blk, &salt_box);
+            let info_handle = unbox_to_i64(blk, &info_box);
+            let buf_handle = blk.call(
+                I64,
+                "js_crypto_hkdf_sync",
+                &[
+                    (I64, &digest_handle),
+                    (I64, &ikm_handle),
+                    (I64, &salt_handle),
+                    (I64, &info_handle),
+                    (DOUBLE, &keylen_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
         // Phase H fs: `fs.promises.METHOD(args...)` — HIR shape is a
         // nested PropertyGet { PropertyGet { NativeModuleRef("fs"),
         // "promises" }, method }. We route these to their sync

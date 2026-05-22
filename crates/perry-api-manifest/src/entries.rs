@@ -1793,6 +1793,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // crypto.scryptSync(password, salt, keylen, options?) -> Buffer. Wired in
     // codegen `expr/calls.rs`; HIR types the result as Uint8Array.
     method("crypto", "scryptSync", false, None),
+    // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
+    method("crypto", "hkdfSync", false, None),
     // crypto.randomInt([min,] max) — uniform integer in [min, max).
     // crypto.timingSafeEqual(a, b) — constant-time byte comparison.
     // crypto.getHashes() / getCiphers() — supported-algorithm name lists.
