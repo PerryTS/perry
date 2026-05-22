@@ -25,6 +25,7 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
     is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+    static_type_of,
 };
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -45,6 +46,29 @@ use super::{
     unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
     I18nLowerCtx,
 };
+
+/// Whether a `createHash(...).update(e)` / `createHmac(alg, e)` argument is a
+/// Buffer / Uint8Array — either a direct buffer-producing expression or a
+/// local/field whose static type is `Buffer` / `Uint8Array`. Such inputs must
+/// not take the inline `*StringHeader` hash fast path, whose UTF-8 string
+/// unboxing reads the wrong bytes for a Buffer (#1354).
+fn hash_input_is_buffer(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if matches!(
+        e,
+        Expr::BufferFrom { .. }
+            | Expr::BufferFromArrayBuffer { .. }
+            | Expr::BufferAlloc { .. }
+            | Expr::BufferAllocUnsafe(_)
+            | Expr::BufferConcat(_)
+            | Expr::CryptoRandomBytes(_)
+    ) {
+        return true;
+    }
+    matches!(
+        static_type_of(ctx, e),
+        Some(HirType::Named(ref n)) if n == "Buffer" || n == "Uint8Array"
+    )
+}
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
@@ -149,8 +173,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let want_buffer = digest_args.first().is_none()
                 || matches!(digest_args.first(), Some(Expr::Undefined));
 
+            // The inline `js_crypto_sha256` / `js_crypto_md5` fast path only
+            // produces a hex string (or, for the no-arg form, a raw-byte
+            // Buffer). Any other digest encoding (`'base64'`, `'base64url'`,
+            // …) must fall through to the runtime handle dispatch, whose
+            // `dispatch_hash` honors the encoding (#1352). A non-literal
+            // encoding arg also can't be folded inline.
+            let enc_fast_ok = match digest_args.first() {
+                None | Some(Expr::Undefined) => true,
+                Some(Expr::String(s)) => s.eq_ignore_ascii_case("hex"),
+                _ => false,
+            };
+            // The inline path unboxes the data/key as a `*StringHeader` and
+            // hashes the UTF-8 string bytes. A Buffer / Uint8Array input has a
+            // different header layout, so hashing it through the string path
+            // reads the wrong bytes (#1354). Route Buffer-typed inputs to the
+            // handle dispatch, whose `bytes_from_ptr` reads either layout.
+            // Detect both inline buffer-producing expressions (`Buffer.from(…)`,
+            // `crypto.randomBytes(…)`, …) and locals/fields whose static type
+            // is Buffer / Uint8Array (see `hash_input_is_buffer`). Each borrow
+            // of `ctx` is scoped to the `is_some_and` call so it does not
+            // collide with the `&mut ctx` borrows in the arm bodies.
+            let data_is_buffer = update_args
+                .first()
+                .is_some_and(|e| hash_input_is_buffer(ctx, e));
+            let key_is_buffer = create_args
+                .get(1)
+                .is_some_and(|e| hash_input_is_buffer(ctx, e));
+            let fast_ok = enc_fast_ok && !data_is_buffer;
+            let hmac_fast_ok = fast_ok && !key_is_buffer;
+
             match (create_method, alg) {
-                ("createHash", "sha256") if !update_args.is_empty() => {
+                ("createHash", "sha256") if fast_ok && !update_args.is_empty() => {
                     let data_box = lower_expr(ctx, &update_args[0])?;
                     let blk = ctx.block();
                     // SSO-safe data unbox — both `js_crypto_sha256` and the
@@ -165,7 +219,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         Ok(nanbox_string_inline(blk, &result))
                     }
                 }
-                ("createHash", "md5") if !update_args.is_empty() => {
+                ("createHash", "md5") if fast_ok && !update_args.is_empty() => {
                     let data_box = lower_expr(ctx, &update_args[0])?;
                     let blk = ctx.block();
                     // SSO-safe — see sha256 arm above.
@@ -173,7 +227,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let result = blk.call(I64, "js_crypto_md5", &[(I64, &data_handle)]);
                     Ok(nanbox_string_inline(blk, &result))
                 }
-                ("createHmac", "sha256") if create_args.len() >= 2 && !update_args.is_empty() => {
+                ("createHmac", "sha256")
+                    if hmac_fast_ok && create_args.len() >= 2 && !update_args.is_empty() =>
+                {
                     let key_box = lower_expr(ctx, &create_args[1])?;
                     let data_box = lower_expr(ctx, &update_args[0])?;
                     let blk = ctx.block();

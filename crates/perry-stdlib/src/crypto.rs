@@ -15,7 +15,7 @@ use md5::{Digest as Md5Digest, Md5};
 use perry_runtime::{js_string_from_bytes, StringHeader};
 use rand::RngCore;
 use sha1::Sha1;
-use sha2::{Digest as Sha256Digest, Sha256, Sha512};
+use sha2::{Digest as Sha256Digest, Sha224, Sha256, Sha384, Sha512};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
@@ -688,7 +688,9 @@ pub unsafe extern "C" fn js_crypto_scrypt_custom(
 
 pub enum HashState {
     Sha1(Sha1),
+    Sha224(Sha224),
     Sha256(Sha256),
+    Sha384(Sha384),
     Sha512(Sha512),
     Md5(Md5),
 }
@@ -713,7 +715,9 @@ pub unsafe extern "C" fn js_crypto_create_hash(alg_ptr: i64) -> f64 {
         .to_ascii_lowercase();
     let state = match alg.as_str() {
         "sha1" | "sha-1" => HashState::Sha1(Sha1::new()),
+        "sha224" | "sha-224" => HashState::Sha224(Sha224::new()),
         "sha256" | "sha-256" => HashState::Sha256(Sha256::new()),
+        "sha384" | "sha-384" => HashState::Sha384(Sha384::new()),
         "sha512" | "sha-512" => HashState::Sha512(Sha512::new()),
         "md5" => HashState::Md5(Md5::new()),
         _ => return f64::from_bits(0x7FFC_0000_0000_0001),
@@ -739,7 +743,9 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
             if let Some(state) = guard.as_mut() {
                 match state {
                     HashState::Sha1(x) => Sha256Digest::update(x, &bytes),
+                    HashState::Sha224(x) => Sha256Digest::update(x, &bytes),
                     HashState::Sha256(x) => Sha256Digest::update(x, &bytes),
+                    HashState::Sha384(x) => Sha256Digest::update(x, &bytes),
                     HashState::Sha512(x) => Sha256Digest::update(x, &bytes),
                     HashState::Md5(x) => Md5Digest::update(x, &bytes),
                 }
@@ -753,7 +759,9 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
             };
             let digest: Vec<u8> = match state {
                 Some(HashState::Sha1(x)) => x.finalize().to_vec(),
+                Some(HashState::Sha224(x)) => x.finalize().to_vec(),
                 Some(HashState::Sha256(x)) => x.finalize().to_vec(),
+                Some(HashState::Sha384(x)) => x.finalize().to_vec(),
                 Some(HashState::Sha512(x)) => x.finalize().to_vec(),
                 Some(HashState::Md5(x)) => x.finalize().to_vec(),
                 None => return f64::from_bits(0x7FFC_0000_0000_0001),
