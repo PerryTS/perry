@@ -324,6 +324,29 @@ pub extern "C" fn js_console_log_spread(arr_ptr: *const crate::array::ArrayHeade
         return;
     }
 
+    crate::node_submodules::diagnostics_channel_publish_console("log", arr_ptr);
+    print_console_formatted(arr_ptr, false);
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_info_spread(arr_ptr: *const crate::array::ArrayHeader) {
+    if arr_ptr.is_null() {
+        println!();
+        return;
+    }
+
+    crate::node_submodules::diagnostics_channel_publish_console("info", arr_ptr);
+    print_console_formatted(arr_ptr, false);
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_debug_spread(arr_ptr: *const crate::array::ArrayHeader) {
+    if arr_ptr.is_null() {
+        println!();
+        return;
+    }
+
+    crate::node_submodules::diagnostics_channel_publish_console("debug", arr_ptr);
     print_console_formatted(arr_ptr, false);
 }
 
@@ -335,6 +358,7 @@ pub extern "C" fn js_console_error_spread(arr_ptr: *const crate::array::ArrayHea
         return;
     }
 
+    crate::node_submodules::diagnostics_channel_publish_console("error", arr_ptr);
     print_console_formatted(arr_ptr, true);
 }
 
@@ -342,13 +366,19 @@ pub extern "C" fn js_console_error_spread(arr_ptr: *const crate::array::ArrayHea
 #[no_mangle]
 pub extern "C" fn js_console_warn_spread(arr_ptr: *const crate::array::ArrayHeader) {
     // console.warn is essentially the same as console.error in Node.js
-    js_console_error_spread(arr_ptr);
+    if arr_ptr.is_null() {
+        eprintln!();
+        return;
+    }
+    crate::node_submodules::diagnostics_channel_publish_console("warn", arr_ptr);
+    print_console_formatted(arr_ptr, true);
 }
 
 fn print_console_formatted(arr_ptr: *const crate::array::ArrayHeader, stderr: bool) {
     let formatted = js_util_format(arr_ptr);
     let text = jsvalue_string_content(formatted).unwrap_or_default();
     print_console_text(&text, stderr);
+    crate::node_submodules::diagnostics_channel_drain_uncaught();
 }
 
 fn print_console_text(text: &str, stderr: bool) {

@@ -59,9 +59,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     //   js_shadow_frame_push(slot_count: u32) -> u64 (frame handle)
     //   js_shadow_frame_pop(frame_handle: u64)
     //   js_shadow_slot_set(idx: u32, value: u64)
+    //   js_shadow_slot_bind(idx: u32, value_slot: *mut u64)
     module.declare_function("js_shadow_frame_push", I64, &[I32]);
     module.declare_function("js_shadow_frame_pop", VOID, &[I64]);
     module.declare_function("js_shadow_slot_set", VOID, &[I32, I64]);
+    module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
     module.declare_function("js_gc_write_barriers_emitted", VOID, &[I32]);
 
     // Write barrier for the generational GC (Phase C per the
@@ -97,6 +99,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_set_length", VOID, &[I64, DOUBLE]);
     // Array.from() — js_array_clone handles arrays, Sets, and Maps.
     module.declare_function("js_array_clone", I64, &[I64]);
+    // Spread `[...x]` — wraps js_array_clone with a null/undefined
+    // TypeError check so plain spread matches ECMA semantics.
+    module.declare_function("js_array_clone_for_spread", I64, &[DOUBLE]);
     // Generator / iterator protocol: walk `.next()`/`.value` loop and collect into array.
     module.declare_function("js_iterator_to_array", I64, &[DOUBLE]);
 

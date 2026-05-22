@@ -365,6 +365,29 @@ pub unsafe extern "C" fn js_fastify_req_set_user_data(ctx_handle: Handle, data: 
     }
 }
 
+/// #1293 — membership probe for the well-known-flipped generic
+/// dispatch path. Returns 1 iff `handle` is a live `FastifyContext`
+/// in *this crate's* perry-ffi registry, 0 otherwise.
+///
+/// When the well-known flip routes `fastify` to perry-ext-fastify,
+/// perry-stdlib's `js_handle_method_dispatch` / `js_handle_property_dispatch`
+/// can no longer see the request/reply handle — it lives in perry-ffi's
+/// registry, not perry-stdlib's. So `(request as any).json()` /
+/// `(request as any).body` (where the `as any` cast erased the static
+/// type and codegen emitted a generic dynamic dispatch rather than a
+/// `NativeMethodCall`) silently returned NaN / undefined. perry-stdlib's
+/// external-fastify dispatch arms call this to confirm the handle is ours
+/// before forwarding to the `js_fastify_req_*` / `js_fastify_ctx_*`
+/// exports. Mirrors `js_ext_net_is_socket_handle` (perry-ext-net).
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_fastify_is_context_handle(ctx_handle: Handle) -> i32 {
+    if get_handle::<FastifyContext>(ctx_handle).is_some() {
+        1
+    } else {
+        0
+    }
+}
+
 // ============================================================================
 // FFI: Reply methods (Fastify style — `reply.status(...).send(...)`)
 // ============================================================================

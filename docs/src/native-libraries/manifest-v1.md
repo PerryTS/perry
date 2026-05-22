@@ -152,7 +152,9 @@ as their device counterpart (`ios` covers both `ios-simulator` and
 |-----------------|------------------|----------|-------|
 | `crate`         | path string      | yes\*    | Path (relative to package.json) to the Cargo crate that produces the staticlib. Required when `prebuilt` is absent. |
 | `lib`           | string           | yes\*    | Library name (without the `lib` prefix or `.a` extension). Required when `prebuilt` is absent. |
-| `frameworks`    | array of string  | no       | Apple-only — frameworks to pass to `clang -framework`. |
+| `frameworks`    | array of string  | no       | Apple-only — system frameworks to pass to `clang -framework` (resolved from the SDK's `System/Library/Frameworks`). |
+| `optionalFrameworks` | array of string | no  | Apple-only — vendored third-party frameworks linked **only** when `frameworksEnv` resolves to a directory containing them. `-framework <name>` per entry. Static frameworks only (see below). Snake_case `optional_frameworks` also accepted. |
+| `frameworksEnv` | string           | no       | Name of an env var that points at the directory holding `optionalFrameworks`. When set + the path is a directory, `-F <dir>` is added to the link line; when unset, the optional frameworks are skipped silently. Snake_case `frameworks_env` also accepted. |
 | `libs`          | array of string  | no       | System libraries to pass to the linker (`-lcurl`, etc.). |
 | `libDirs`       | array of paths   | no       | Extra linker search paths. Emitted before `libs` as `-L<dir>` (or `/LIBPATH:<dir>` on Windows MSVC). Relative entries resolve against `package.json`. |
 | `pkgConfig`     | array of string  | no       | pkg-config package names. The compiler runs `pkg-config --libs` and forwards the output. |
@@ -163,6 +165,48 @@ as their device counterpart (`ios` covers both `ios-simulator` and
 When both `prebuilt` and `crate`/`lib` are absent for the user's
 compile target, the wrapper is silently skipped on that target —
 useful for platform-specific bindings that only exist on macOS, etc.
+
+### Vendored frameworks (`optionalFrameworks` + `frameworksEnv`)
+
+Some Apple SDKs can't be redistributed through npm (licensing) or
+are too large to vendor — GoogleSignIn is the canonical example. For
+these, the wrapper declares the SDK's framework name(s) in
+`optionalFrameworks` and the name of an environment variable in
+`frameworksEnv`. The app developer builds/downloads the framework
+locally, points the env var at the directory holding it, and Perry's
+linker adds `-F <dir>` plus `-framework <name>` for each entry.
+
+```json
+"targets": {
+  "ios": {
+    "crate": "crate-ios",
+    "lib": "perry_google_auth",
+    "optionalFrameworks": ["GoogleSignIn"],
+    "frameworksEnv": "PERRY_GOOGLE_SIGN_IN_FRAMEWORK_DIR"
+  }
+}
+```
+
+```bash
+PERRY_GOOGLE_SIGN_IN_FRAMEWORK_DIR=/path/to/Frameworks \
+  perry compile app.ts --target ios
+```
+
+When the env var is **unset** (or points at a non-directory), the
+optional frameworks are skipped silently. This pairs with a Swift
+bridge guarded by `#if canImport(GoogleSignIn)`: the no-SDK fallback
+compiles and the binary still links, returning a runtime
+"framework not linked" result instead of failing with undefined
+symbols. The same `build.rs` opt-in (`-F $DIR` to `swiftc`) must
+gate the bridge's compile so both halves agree.
+
+**Contract — static frameworks only.** `-framework` links the
+archive directly; Perry does **not** embed the `.framework` into
+`<app>.app/Frameworks/` or add an `@executable_path/Frameworks`
+rpath. A dynamic framework would link but fail to load at runtime.
+Vendor a statically-linked `.framework` (or a `.xcframework` slice
+containing a static Mach-O). Embedding dynamic frameworks +
+resource bundles is tracked as future work (#1304).
 
 ## Resolution
 

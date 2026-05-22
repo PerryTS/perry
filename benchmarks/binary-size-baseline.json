@@ -1,10 +1,10 @@
 {
-  "commit": "7fd1c8b3",
-  "generated_at": "2026-05-01T00:00:00Z",
+  "commit": "f7aaed1a",
+  "generated_at": "2026-05-22T02:22:21Z",
   "sizes": {
-    "perry": 15537232,
-    "libperry_runtime": 31717320,
-    "libperry_stdlib": 211805880
+    "perry": 19054064,
+    "libperry_runtime": 42489880,
+    "libperry_stdlib": 225526744
   },
-  "_note": "Refreshed at v0.5.455 after the v0.5.386 → v0.5.455 release cycle (67 patch versions of accumulated work pushed perry binary +20%). The 15% per-release threshold is meant for incremental drift, not multi-release catch-up gates. Sizes captured from a release-mode build on macos-14-equivalent (aarch64-apple-darwin) — CI macos-14 should match within <1%."
+  "_note": "Refreshed at v0.5.1021 after the v0.5.455 → v0.5.1021 release cycle (566 patch versions of accumulated runtime + stdlib + CLI work). perry +22.6% / libperry_runtime +34.0% vs the prior 7fd1c8b3 baseline — both above the 15% per-release threshold, which is meant for incremental drift, not multi-release catch-up gates (same pattern as the v0.5.455 refresh from 7fd1c8b3). libperry_stdlib +6.5%, within threshold. Production binaries are stripped by the linker; these .a/.bin sizes are the unstripped release-build artefacts used as a regression-trend signal, not a deployment-size measurement. Sizes captured from `cargo build --release` on the Regression Check macos-14 runner (aarch64-apple-darwin)."
 }

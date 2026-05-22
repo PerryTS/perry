@@ -250,10 +250,26 @@ pub(crate) fn lower_let(
             let scalar_data = collect_scalar_class_data(ctx, class_name);
 
             if let Some((all_fields, ctor)) = scalar_data {
-                // Create per-field allocas
+                // Create per-field allocas. For synthetic anonymous-shape
+                // classes, scalar replacement may only need fields that are
+                // observed after construction; unused constructor stores still
+                // evaluate their RHS below but get discarded in property_set.
+                let stored_fields: Vec<String> = if class_name.starts_with("__AnonShape_") {
+                    if let Some(used_fields) = ctx.non_escaping_new_used_fields.get(&id) {
+                        all_fields
+                            .iter()
+                            .filter(|fname| used_fields.contains(*fname))
+                            .cloned()
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    all_fields.clone()
+                };
                 let mut field_slots: std::collections::HashMap<String, String> =
                     std::collections::HashMap::new();
-                for fname in &all_fields {
+                for fname in &stored_fields {
                     let slot = ctx.func.alloca_entry(DOUBLE);
                     let undef =
                         crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
@@ -267,6 +283,30 @@ pub(crate) fn lower_let(
                 ctx.local_types.insert(id, refined_ty);
                 let dummy_slot = ctx.func.alloca_entry(DOUBLE);
                 ctx.locals.insert(id, dummy_slot);
+
+                // Anonymous-shape classes are synthesized for object
+                // literals. Their constructor is a straight field-assigner,
+                // so scalar replacement can bypass parameter allocas and the
+                // inlined ctor body: evaluate args in order, store only the
+                // observed fields, and discard the rest.
+                if class_name.starts_with("__AnonShape_") {
+                    for (idx, arg) in args.iter().enumerate() {
+                        let slot = all_fields.get(idx).and_then(|fname| {
+                            ctx.scalar_replaced
+                                .get(&id)
+                                .and_then(|fields| fields.get(fname))
+                                .cloned()
+                        });
+                        if slot.is_none() && lower_unused_expr(ctx, arg)? {
+                            continue;
+                        }
+                        let arg_val = lower_expr(ctx, arg)?;
+                        if let Some(slot) = slot {
+                            ctx.block().store(DOUBLE, &arg_val, &slot);
+                        }
+                    }
+                    return Ok(());
+                }
 
                 // Lower args first
                 let mut lowered_args: Vec<String> = Vec::new();
@@ -767,4 +807,92 @@ pub(crate) fn collect_scalar_class_data(
     }
     let ctor = class.constructor.clone();
     Some((all_fields, ctor))
+}
+
+fn lower_unused_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<bool> {
+    match expr {
+        perry_hir::Expr::New {
+            class_name, args, ..
+        } if class_name.starts_with("__AnonShape_") => {
+            // Anonymous-shape `new` is how object literals lower. When the
+            // constructed value is immediately discarded by scalar replacement
+            // we still must preserve evaluation order of every property value,
+            // but we can skip the synthetic object allocation/field stores.
+            for arg in args {
+                if !lower_unused_expr(ctx, arg)? {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+            }
+            Ok(true)
+        }
+        perry_hir::Expr::ArrayMap { array, callback } => {
+            if array_map_callback_is_discard_pure(callback) {
+                // The map result is unused and the callback only builds an
+                // anonymous object from its parameter. Evaluate the receiver to
+                // preserve source-order effects, but skip closure allocation,
+                // callback dispatch, and all discarded object construction.
+                let _ = lower_expr(ctx, array)?;
+                return Ok(true);
+            }
+            let arr_box = lower_expr(ctx, array)?;
+            let cb_box = lower_expr(ctx, callback)?;
+            let blk = ctx.block();
+            let arr_handle = crate::expr::unbox_to_i64(blk, &arr_box);
+            let cb_handle = crate::expr::unbox_to_i64(blk, &cb_box);
+            blk.call_void(
+                "js_array_map_discard",
+                &[(I64, &arr_handle), (I64, &cb_handle)],
+            );
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn array_map_callback_is_discard_pure(callback: &perry_hir::Expr) -> bool {
+    let perry_hir::Expr::Closure {
+        params,
+        body,
+        captures,
+        mutable_captures,
+        captures_this,
+        is_async,
+        ..
+    } = callback
+    else {
+        return false;
+    };
+    if *is_async
+        || *captures_this
+        || !captures.is_empty()
+        || !mutable_captures.is_empty()
+        || params.is_empty()
+    {
+        return false;
+    }
+    let param_id = params[0].id;
+    matches!(body.as_slice(), [perry_hir::Stmt::Return(Some(expr))] if discard_pure_expr(expr, param_id))
+}
+
+fn discard_pure_expr(expr: &perry_hir::Expr, param_id: perry_types::LocalId) -> bool {
+    match expr {
+        perry_hir::Expr::Undefined
+        | perry_hir::Expr::Null
+        | perry_hir::Expr::Bool(_)
+        | perry_hir::Expr::Number(_)
+        | perry_hir::Expr::Integer(_)
+        | perry_hir::Expr::String(_)
+        | perry_hir::Expr::WtfString(_) => true,
+        perry_hir::Expr::LocalGet(id) => *id == param_id,
+        // PropertyGet is deliberately *not* in the pure set: TypeScript
+        // `get` accessors can run user code, so eliding the map body
+        // would drop visible side effects. The intended target of this
+        // optimization is the anonymous-shape `Expr::New` arm below.
+        perry_hir::Expr::New {
+            class_name, args, ..
+        } if class_name.starts_with("__AnonShape_") => {
+            args.iter().all(|arg| discard_pure_expr(arg, param_id))
+        }
+        _ => false,
+    }
 }

@@ -300,7 +300,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // `p.then(cb)`, `p.catch(cb)`, etc. Refine the local to
         // `Promise(Any)` so `is_promise_expr` can detect subsequent
         // `.then()` / `.catch()` chains.
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, args, .. } => {
             if is_promise_expr(ctx, init) {
                 return Some(HirType::Promise(Box::new(HirType::Any)));
             }
@@ -324,12 +324,25 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                 }
             }
             // `crypto.createHash(alg).update(data).digest(enc)` chain.
-            // The expr.rs handler collapses this into a runtime call that
-            // returns a NaN-boxed string. Refine the local to String so
-            // `hmac === hmac2` routes through `js_string_equals` instead of
-            // bit-comparing two distinct allocations.
+            // The expr.rs handler collapses this into a runtime call. With an
+            // encoding arg (`'hex'`/`'base64'`/…) it returns a NaN-boxed
+            // string — refine to String so `hmac === hmac2` routes through
+            // `js_string_equals` instead of bit-comparing two distinct
+            // allocations. With no arg (or `undefined`), `digest()` returns a
+            // Buffer; refining to Uint8Array lets `buf.toString('hex')` and
+            // `buf[i]` take the buffer dispatch instead of mis-reading the
+            // raw bytes as a Latin-1 string (#1353).
             if is_crypto_digest_chain(callee) {
-                return Some(HirType::String);
+                let no_encoding = match args.first() {
+                    None => true,
+                    Some(Expr::Undefined) => true,
+                    _ => false,
+                };
+                return Some(if no_encoding {
+                    HirType::Named("Uint8Array".into())
+                } else {
+                    HirType::String
+                });
             }
             // String prototype methods that return strings — when called
             // on a known-string receiver, the result is also a string.
@@ -1023,10 +1036,19 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 .map(|f| matches!(f.ty, HirType::String))
                 .unwrap_or(false)
         }
-        // `crypto.createHash(alg).update(data).digest(enc)` chain.
-        // Recognized so chained `.length`/`.includes`/`===` on the
-        // resulting hex string hit the string fast paths.
-        Expr::Call { callee, .. } if is_crypto_digest_chain(callee) => true,
+        // `crypto.createHash(alg).update(data).digest(enc)` chain — only
+        // when an encoding is given. Recognized so chained `.length` /
+        // `.includes` / `===` on the resulting hex/base64 string hit the
+        // string fast paths. The no-arg `digest()` returns a Buffer, not a
+        // string, so it must NOT be classified here — otherwise
+        // `digest().toString('hex')` skips the buffer encoding path and
+        // mis-reads the bytes as Latin-1 (#1353).
+        Expr::Call { callee, args, .. }
+            if is_crypto_digest_chain(callee)
+                && matches!(args.first(), Some(a) if !matches!(a, Expr::Undefined)) =>
+        {
+            true
+        }
         // atob/btoa always return strings.
         Expr::Atob(_) | Expr::Btoa(_) => true,
         _ => false,
@@ -1514,6 +1536,16 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             ) =>
         {
             Some(HirType::Array(Box::new(HirType::String)))
+        }
+        // `crypto.createHash(alg).update(d).digest()` with no encoding arg
+        // returns a Buffer. Recognizing the inline chain (not just a bound
+        // local) lets `...digest().toString('hex')` / `...digest()[i]` take
+        // the buffer dispatch instead of the Latin-1 string path (#1353).
+        Expr::Call { callee, args, .. }
+            if args.first().map_or(true, |a| matches!(a, Expr::Undefined))
+                && is_crypto_digest_chain(callee) =>
+        {
+            Some(HirType::Named("Uint8Array".into()))
         }
         // `arr[i]` where `arr: Array<T>` has static type `T`. This lets
         // nested access like `grid[i][j]` and `grid[i].length` reach

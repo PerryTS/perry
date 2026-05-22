@@ -33,7 +33,8 @@ pub const GC_TYPE_MAP: u8 = 8;
 pub const GC_TYPE_LAZY_ARRAY: u8 = 9;
 pub const GC_TYPE_BUFFER: u8 = 10;
 pub const GC_TYPE_TYPED_ARRAY: u8 = 11;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_TYPED_ARRAY;
+pub const GC_TYPE_SET: u8 = 12;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_SET;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -56,9 +57,25 @@ pub(crate) enum GcAllocationPolicy {
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GcTraceRewriteKind {
-    FieldScanning,
+pub(crate) enum GcRewriteDescriptorKind {
     Leaf,
+    Array,
+    Object,
+    Closure,
+    Promise,
+    Error,
+    Map,
+    LazyArray,
+    Set,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GcLayoutSlotKind {
+    None,
+    ArrayElements,
+    ObjectFields,
+    ClosureCaptures,
 }
 
 #[allow(dead_code)]
@@ -79,35 +96,77 @@ pub(crate) enum GcLargeObjectPolicy {
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GcMoveHookKind {
+    None,
+    ObjectOverflowFields,
+    ClosureDynamicProps,
+    MapSideTables,
+    SetSideTables,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GcRewriteHookKind {
+    None,
+    SetIndex,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GcFinalizeHookKind {
+    None,
+    MapSideAllocation,
+    SetSideAllocation,
+    PromiseCleanup,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GcTypeInfo {
     pub(crate) type_id: u8,
     pub(crate) name: &'static str,
     pub(crate) allocation_policy: GcAllocationPolicy,
     pub(crate) arena_walkable: bool,
-    pub(crate) trace_rewrite_kind: GcTraceRewriteKind,
+    pub(crate) rewrite_descriptor_kind: GcRewriteDescriptorKind,
+    pub(crate) layout_slot_kind: GcLayoutSlotKind,
     pub(crate) movable: bool,
     pub(crate) external_byte_policy: GcExternalBytePolicy,
     pub(crate) large_object_policy: GcLargeObjectPolicy,
+    pub(crate) pointer_free: bool,
+    pub(crate) move_hook_kind: GcMoveHookKind,
+    pub(crate) rewrite_hook_kind: GcRewriteHookKind,
+    pub(crate) finalize_hook_kind: GcFinalizeHookKind,
 }
 
 pub(super) const fn gc_type_info_entry(
     type_id: u8,
     name: &'static str,
     allocation_policy: GcAllocationPolicy,
-    trace_rewrite_kind: GcTraceRewriteKind,
+    arena_walkable: bool,
+    rewrite_descriptor_kind: GcRewriteDescriptorKind,
+    layout_slot_kind: GcLayoutSlotKind,
     movable: bool,
     external_byte_policy: GcExternalBytePolicy,
     large_object_policy: GcLargeObjectPolicy,
+    pointer_free: bool,
+    move_hook_kind: GcMoveHookKind,
+    rewrite_hook_kind: GcRewriteHookKind,
+    finalize_hook_kind: GcFinalizeHookKind,
 ) -> GcTypeInfo {
     GcTypeInfo {
         type_id,
         name,
         allocation_policy,
-        arena_walkable: true,
-        trace_rewrite_kind,
+        arena_walkable,
+        rewrite_descriptor_kind,
+        layout_slot_kind,
         movable,
         external_byte_policy,
         large_object_policy,
+        pointer_free,
+        move_hook_kind,
+        rewrite_hook_kind,
+        finalize_hook_kind,
     }
 }
 
@@ -117,100 +176,181 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GC_TYPE_ARRAY,
         "array",
         GcAllocationPolicy::Arena,
-        GcTraceRewriteKind::FieldScanning,
+        true,
+        GcRewriteDescriptorKind::Array,
+        GcLayoutSlotKind::ArrayElements,
         true,
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_OBJECT,
         "object",
         GcAllocationPolicy::ArenaOrMalloc,
-        GcTraceRewriteKind::FieldScanning,
+        true,
+        GcRewriteDescriptorKind::Object,
+        GcLayoutSlotKind::ObjectFields,
         true,
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        false,
+        GcMoveHookKind::ObjectOverflowFields,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_STRING,
         "string",
         GcAllocationPolicy::ArenaOrMalloc,
-        GcTraceRewriteKind::Leaf,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_CLOSURE,
         "closure",
         GcAllocationPolicy::ArenaOrMalloc,
-        GcTraceRewriteKind::FieldScanning,
+        true,
+        GcRewriteDescriptorKind::Closure,
+        GcLayoutSlotKind::ClosureCaptures,
         true,
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::MallocTracked,
+        false,
+        GcMoveHookKind::ClosureDynamicProps,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_PROMISE,
         "promise",
-        GcAllocationPolicy::Malloc,
-        GcTraceRewriteKind::FieldScanning,
+        GcAllocationPolicy::ArenaOrMalloc,
+        true,
+        GcRewriteDescriptorKind::Promise,
+        GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::None,
         GcLargeObjectPolicy::MallocTracked,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::PromiseCleanup,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_BIGINT,
         "bigint",
         GcAllocationPolicy::ArenaOrMalloc,
-        GcTraceRewriteKind::Leaf,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_ERROR,
         "error",
-        GcAllocationPolicy::Malloc,
-        GcTraceRewriteKind::FieldScanning,
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Error,
+        GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::None,
-        GcLargeObjectPolicy::MallocTracked,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_MAP,
         "map",
-        GcAllocationPolicy::ArenaOrMalloc,
-        GcTraceRewriteKind::FieldScanning,
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Map,
+        GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::SideAllocation,
-        GcLargeObjectPolicy::MallocTracked,
+        GcLargeObjectPolicy::NotApplicable,
+        false,
+        GcMoveHookKind::MapSideTables,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::MapSideAllocation,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_LAZY_ARRAY,
         "lazy_array",
         GcAllocationPolicy::Arena,
-        GcTraceRewriteKind::FieldScanning,
+        true,
+        GcRewriteDescriptorKind::LazyArray,
+        GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_BUFFER,
         "buffer",
         GcAllocationPolicy::RawOrLargeOldArena,
-        GcTraceRewriteKind::Leaf,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
         false,
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_TYPED_ARRAY,
         "typed_array",
         GcAllocationPolicy::RawOrLargeOldArena,
-        GcTraceRewriteKind::Leaf,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
         false,
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_SET,
+        "set",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Set,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::SideAllocation,
+        GcLargeObjectPolicy::NotApplicable,
+        false,
+        GcMoveHookKind::SetSideTables,
+        GcRewriteHookKind::SetIndex,
+        GcFinalizeHookKind::SetSideAllocation,
     )),
 ];
 
@@ -231,13 +371,151 @@ pub(crate) fn gc_type_is_arena_walkable(obj_type: u8) -> bool {
 }
 
 #[inline]
+pub(crate) fn gc_type_rewrite_descriptor_kind(obj_type: u8) -> GcRewriteDescriptorKind {
+    gc_type_info(obj_type).map_or(GcRewriteDescriptorKind::Leaf, |info| {
+        info.rewrite_descriptor_kind
+    })
+}
+
+#[inline]
+pub(crate) fn gc_type_layout_slot_kind(obj_type: u8) -> GcLayoutSlotKind {
+    gc_type_info(obj_type).map_or(GcLayoutSlotKind::None, |info| info.layout_slot_kind)
+}
+
+#[inline]
 pub(crate) fn gc_type_is_movable(obj_type: u8) -> bool {
     gc_type_info(obj_type).is_some_and(|info| info.movable)
 }
 
 #[inline]
+pub(crate) fn gc_type_external_byte_policy(obj_type: u8) -> GcExternalBytePolicy {
+    gc_type_info(obj_type).map_or(GcExternalBytePolicy::None, |info| info.external_byte_policy)
+}
+
+#[inline]
+pub(crate) fn gc_type_large_object_policy(obj_type: u8) -> GcLargeObjectPolicy {
+    gc_type_info(obj_type).map_or(GcLargeObjectPolicy::NotApplicable, |info| {
+        info.large_object_policy
+    })
+}
+
+#[inline]
+pub(crate) fn gc_type_is_pointer_free(obj_type: u8) -> bool {
+    gc_type_info(obj_type).map_or(true, |info| info.pointer_free)
+}
+
+#[inline]
+pub(crate) fn gc_type_rewrite_hook_kind(obj_type: u8) -> GcRewriteHookKind {
+    gc_type_info(obj_type).map_or(GcRewriteHookKind::None, |info| info.rewrite_hook_kind)
+}
+
+pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user: usize) {
+    match gc_type_info(obj_type).map_or(GcMoveHookKind::None, |info| info.move_hook_kind) {
+        GcMoveHookKind::None => {}
+        GcMoveHookKind::ObjectOverflowFields => {
+            crate::object::overflow_fields_owner_moved(old_user, new_user);
+        }
+        GcMoveHookKind::ClosureDynamicProps => {
+            crate::closure::closure_dynamic_props_owner_moved(old_user, new_user);
+        }
+        GcMoveHookKind::MapSideTables => {
+            crate::map::map_header_moved_for_gc(old_user, new_user);
+        }
+        GcMoveHookKind::SetSideTables => {
+            crate::set::set_header_moved_for_gc(old_user, new_user);
+        }
+    }
+}
+
+pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usize) {
+    match gc_type_info(obj_type).map_or(GcMoveHookKind::None, |info| info.move_hook_kind) {
+        GcMoveHookKind::ObjectOverflowFields => {
+            crate::object::clear_overflow_for_ptr(user_ptr);
+        }
+        GcMoveHookKind::None
+        | GcMoveHookKind::ClosureDynamicProps
+        | GcMoveHookKind::MapSideTables
+        | GcMoveHookKind::SetSideTables => {}
+    }
+}
+
+pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *mut u8) {
+    match gc_type_info(obj_type).map_or(GcFinalizeHookKind::None, |info| info.finalize_hook_kind) {
+        GcFinalizeHookKind::None => {}
+        GcFinalizeHookKind::MapSideAllocation => {
+            crate::map::finalize_map_side_allocation_for_gc(user_ptr as *mut crate::map::MapHeader);
+        }
+        GcFinalizeHookKind::SetSideAllocation => {
+            crate::set::finalize_set_side_allocation_for_gc(user_ptr as *mut crate::set::SetHeader);
+        }
+        GcFinalizeHookKind::PromiseCleanup => {
+            let promise = user_ptr as *mut crate::promise::Promise;
+            crate::async_hooks::enqueue_gc_destroy((*promise).async_id);
+            crate::promise::clear_promise_context_for_gc(promise);
+        }
+    }
+}
+
+#[inline]
 pub(super) fn gc_type_name(obj_type: u8) -> &'static str {
     gc_type_info(obj_type).map_or("unknown", |info| info.name)
+}
+
+pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static str> {
+    let descriptor_is_leaf = info.rewrite_descriptor_kind == GcRewriteDescriptorKind::Leaf;
+    if info.pointer_free {
+        if !descriptor_is_leaf {
+            return Err("pointer-free GC type exposes a rewrite descriptor");
+        }
+        if info.layout_slot_kind != GcLayoutSlotKind::None {
+            return Err("pointer-free GC type exposes pointer slots");
+        }
+        return Ok(());
+    }
+
+    if descriptor_is_leaf {
+        return Err("pointerful GC type lacks rewrite descriptor metadata");
+    }
+
+    match info.rewrite_descriptor_kind {
+        GcRewriteDescriptorKind::Array => {
+            if info.layout_slot_kind != GcLayoutSlotKind::ArrayElements {
+                return Err("array rewrite descriptor must expose array element slots");
+            }
+        }
+        GcRewriteDescriptorKind::Object => {
+            if info.layout_slot_kind != GcLayoutSlotKind::ObjectFields {
+                return Err("object rewrite descriptor must expose object field slots");
+            }
+        }
+        GcRewriteDescriptorKind::Closure => {
+            if info.layout_slot_kind != GcLayoutSlotKind::ClosureCaptures {
+                return Err("closure rewrite descriptor must expose closure capture slots");
+            }
+        }
+        GcRewriteDescriptorKind::Promise
+        | GcRewriteDescriptorKind::Error
+        | GcRewriteDescriptorKind::Map
+        | GcRewriteDescriptorKind::LazyArray
+        | GcRewriteDescriptorKind::Set => {
+            if info.layout_slot_kind != GcLayoutSlotKind::None {
+                return Err(
+                    "external-backed rewrite descriptor must not expose payload layout slots",
+                );
+            }
+        }
+        GcRewriteDescriptorKind::Leaf => unreachable!("leaf handled above"),
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_gc_type_metadata() -> Result<(), String> {
+    for info in gc_type_infos() {
+        validate_gc_type_info(info)
+            .map_err(|reason| format!("invalid GC metadata for {}: {}", info.name, reason))?;
+    }
+    Ok(())
 }
 
 // Flag constants
@@ -346,7 +624,7 @@ pub const OBJ_FLAG_SEALED: u16 = 0x02;
 pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
 // #1175: object was created with a null prototype (Object.create(null) /
 // querystring.parse). `Object.getPrototypeOf` returns null for these.
-// Bit 6 — bits 3..5 are the copied-nursery survival counter
+// Bit 6 -- bits 3..5 are the copied-nursery survival counter
 // (`GC_COPY_SURVIVAL_AGE_MASK = 0x0038`) and bits 14..15 the layout state,
 // so 0x08 would be clobbered on every minor GC. Bits 6..13 are free.
 pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;

@@ -131,7 +131,16 @@ pub extern "C" fn perry_ui_app_set_icon(path_ptr: i64) {
 }
 
 /// Resolve an asset path relative to the executable directory.
-fn resolve_asset_path(path: &str) -> std::path::PathBuf {
+///
+/// `pub(crate)` so `widgets::image` (and any other widget module that
+/// loads files bundled next to the executable) can reuse this exact
+/// resolution rule without duplicating it. Pre-#1246 the function lived
+/// at crate root and was reachable as `crate::resolve_asset_path`;
+/// after the file split it moved here and stayed private, so
+/// `widgets/image.rs`'s `crate::resolve_asset_path(path)` call broke at
+/// link-target time on linux-aarch64-gnu (E0425, surfaced on the
+/// v0.5.1020 release-packages run 26249481496).
+pub(crate) fn resolve_asset_path(path: &str) -> std::path::PathBuf {
     let p = std::path::Path::new(path);
     if p.is_absolute() && p.exists() {
         return p.to_path_buf();

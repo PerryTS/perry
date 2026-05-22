@@ -253,6 +253,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Phase B.16 / D follow-ups: more runtime functions discovered
     // by the test-files sweep histogram.
     module.declare_function("js_array_map", I64, &[I64, I64]);
+    module.declare_function("js_array_map_discard", VOID, &[I64, I64]);
     module.declare_function("js_array_filter", I64, &[I64, I64]);
     module.declare_function("js_array_concat", I64, &[I64, I64]);
     module.declare_function("js_array_concat_new", I64, &[I64, I64]);
@@ -477,6 +478,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function("js_console_log_spread", VOID, &[I64]);
+    module.declare_function("js_console_info_spread", VOID, &[I64]);
+    module.declare_function("js_console_debug_spread", VOID, &[I64]);
     module.declare_function("js_console_error_spread", VOID, &[I64]);
     module.declare_function("js_console_warn_spread", VOID, &[I64]);
     // #1002: native `util.format` / `util.formatWithOptions`. Codegen
@@ -506,6 +509,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_boolean_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_boxed_primitive", DOUBLE, &[DOUBLE]);
     module.declare_function("js_getenv", I64, &[I64]);
+    module.declare_function("js_getenv_value", DOUBLE, &[I64]);
     module.declare_function("js_console_table", VOID, &[DOUBLE]);
     module.declare_function("js_console_table_with_properties", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_console_trace", VOID, &[DOUBLE]);
@@ -529,6 +533,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_kill", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_process_exit", VOID, &[DOUBLE]);
     module.declare_function("js_process_on", VOID, &[I64, I64]);
+    module.declare_function("js_process_once", VOID, &[I64, I64]);
     module.declare_function("js_process_next_tick", VOID, &[I64]);
     module.declare_function("js_process_stdin", DOUBLE, &[]);
     module.declare_function("js_process_stdout", DOUBLE, &[]);
@@ -1134,9 +1139,22 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_crypto_md5", I64, &[I64]);
     module.declare_function("js_crypto_hmac_sha256", I64, &[I64, I64]);
     module.declare_function("js_crypto_hmac_sha256_bytes", I64, &[I64, I64]);
-    module.declare_function("js_crypto_pbkdf2_bytes", I64, &[I64, I64, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_crypto_pbkdf2_bytes",
+        I64,
+        &[I64, I64, DOUBLE, DOUBLE, I64],
+    );
     module.declare_function("js_crypto_random_bytes_buffer", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_uuid", I64, &[]);
+    // crypto.randomInt([min,] max) -> number; codegen passes min=0 for the
+    // single-arg form. Returns the integer as a plain double.
+    module.declare_function("js_crypto_random_int", DOUBLE, &[DOUBLE, DOUBLE]);
+    // crypto.timingSafeEqual(a, b) -> boolean (NaN-boxed). Args are unboxed
+    // to raw i64 pointers (Buffer / TypedArray / string).
+    module.declare_function("js_crypto_timing_safe_equal", DOUBLE, &[I64, I64]);
+    // crypto.getHashes() / getCiphers() -> string[]; returns *mut ArrayHeader.
+    module.declare_function("js_crypto_get_hashes", I64, &[]);
+    module.declare_function("js_crypto_get_ciphers", I64, &[]);
     // `crypto.createSecretKey(key, encoding?)` — returns Uint8Array-marked
     // BufferHeader of the key bytes (jose accepts Uint8Array for HS*).
     module.declare_function("js_crypto_create_secret_key", I64, &[I64]);

@@ -72,6 +72,15 @@ pub(crate) unsafe fn apply_reviver(
     JSValue::from_bits(result.to_bits())
 }
 
+#[cfg(test)]
+pub(crate) unsafe fn test_apply_reviver_for_value(
+    value: JSValue,
+    key_f64: f64,
+    reviver: *const crate::closure::ClosureHeader,
+) -> JSValue {
+    apply_reviver(value, key_f64, reviver)
+}
+
 /// JSON.parse(text, reviver) — parse JSON with a reviver function.
 #[no_mangle]
 pub unsafe extern "C" fn js_json_parse_with_reviver(

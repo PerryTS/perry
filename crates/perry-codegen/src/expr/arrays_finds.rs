@@ -568,6 +568,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let byte_ptr = blk.gep_inbounds(I8, &data_ptr, &[(I32, &idx_i32)]);
                 let byte_val = blk.trunc(I32, &val_i32, I8);
                 let meta = buffer_alias_metadata_suffix(scope_idx);
+                // GC_STORE_AUDIT(POINTER_FREE): inline Buffer byte store writes scalar data only.
                 blk.emit_raw(format!("store i8 {}, ptr {}{}", byte_val, byte_ptr, meta));
                 return Ok(ctx.block().sitofp(I32, &val_i32, DOUBLE));
             }
@@ -676,6 +677,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.block().store(DOUBLE, &new_box, &slot);
             } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
                 let g_ref = format!("@{}", global_name);
+                // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
                 ctx.block().store(DOUBLE, &new_box, &g_ref);
             }
             let blk = ctx.block();

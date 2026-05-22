@@ -76,6 +76,25 @@ fn bigint_alloc() -> *mut BigIntHeader {
     raw as *mut BigIntHeader
 }
 
+#[inline]
+pub(crate) fn bigint_alloc_with_limbs(limbs: [u64; BIGINT_LIMBS]) -> *mut BigIntHeader {
+    let ptr = bigint_alloc();
+    unsafe {
+        (*ptr).limbs = limbs;
+    }
+    ptr
+}
+
+#[inline(always)]
+fn bigint_limbs_or_zero(a: *const BigIntHeader) -> [u64; BIGINT_LIMBS] {
+    let a = clean_bigint_ptr(a);
+    if a.is_null() {
+        ZERO_LIMBS
+    } else {
+        unsafe { (*a).limbs }
+    }
+}
+
 /// Strip NaN-boxing tags from a BigInt pointer (defensive guard).
 /// Returns null if the value is not a valid bigint pointer.
 #[inline(always)]
@@ -108,32 +127,18 @@ pub fn clean_bigint_ptr_mut(p: *mut BigIntHeader) -> *mut BigIntHeader {
 /// Create a BigInt from a u64 value
 #[no_mangle]
 pub extern "C" fn js_bigint_from_u64(value: u64) -> *mut BigIntHeader {
-    let ptr = bigint_alloc();
-    unsafe {
-        (*ptr).limbs = ZERO_LIMBS;
-        (*ptr).limbs[0] = value;
-    }
-    ptr
+    let mut limbs = ZERO_LIMBS;
+    limbs[0] = value;
+    bigint_alloc_with_limbs(limbs)
 }
 
 /// Create a BigInt from a signed i64 value
 #[no_mangle]
 pub extern "C" fn js_bigint_from_i64(value: i64) -> *mut BigIntHeader {
-    let ptr = bigint_alloc();
-    unsafe {
-        if value >= 0 {
-            (*ptr).limbs = ZERO_LIMBS;
-            (*ptr).limbs[0] = value as u64;
-        } else {
-            // Two's complement for negative numbers: sign-extend with u64::MAX
-            (*ptr).limbs = [0u64; BIGINT_LIMBS];
-            (*ptr).limbs[0] = value as u64;
-            for k in 1..BIGINT_LIMBS {
-                (*ptr).limbs[k] = u64::MAX;
-            }
-        }
-        ptr
-    }
+    let fill = if value < 0 { u64::MAX } else { 0u64 };
+    let mut limbs = [fill; BIGINT_LIMBS];
+    limbs[0] = value as u64;
+    bigint_alloc_with_limbs(limbs)
 }
 
 /// Create a BigInt from an f64 value (BigInt() coercion)
@@ -216,7 +221,6 @@ pub extern "C" fn js_bigint_from_string(data: *const u8, len: u32) -> *mut BigIn
             (false, s)
         };
 
-        let ptr = bigint_alloc();
         let mut limbs = ZERO_LIMBS;
 
         if is_hex {
@@ -254,12 +258,10 @@ pub extern "C" fn js_bigint_from_string(data: *const u8, len: u32) -> *mut BigIn
             }
         }
 
-        (*ptr).limbs = limbs;
-
         if is_negative && !limbs.iter().all(|&l| l == 0) {
-            return js_bigint_neg(ptr);
+            limbs = negate_limbs(&limbs);
         }
-        ptr
+        bigint_alloc_with_limbs(limbs)
     }
 }
 
@@ -294,7 +296,6 @@ pub extern "C" fn js_bigint_from_string_radix(
             s
         };
 
-        let ptr = bigint_alloc();
         let mut limbs = ZERO_LIMBS;
         let radix = radix as u64;
 
@@ -339,13 +340,10 @@ pub extern "C" fn js_bigint_from_string_radix(
             }
         }
 
-        (*ptr).limbs = limbs;
-
         if is_negative && !limbs.iter().all(|&l| l == 0) {
-            // Negate: two's complement
-            return js_bigint_neg(ptr);
+            limbs = negate_limbs(&limbs);
         }
-        ptr
+        bigint_alloc_with_limbs(limbs)
     }
 }
 
@@ -356,7 +354,7 @@ pub extern "C" fn js_bigint_to_buffer(
     a: *const BigIntHeader,
     length: i32,
 ) -> *mut crate::buffer::BufferHeader {
-    let a = clean_bigint_ptr(a);
+    let limbs = bigint_limbs_or_zero(a);
     let length = if length <= 0 { 32 } else { length as usize };
 
     let result = crate::buffer::buffer_alloc(length as u32);
@@ -364,23 +362,14 @@ pub extern "C" fn js_bigint_to_buffer(
         (*result).length = length as u32;
         let data = crate::buffer::buffer_data_mut(result);
 
-        if !a.is_null() {
-            // Extract bytes from limbs (little-endian in memory)
-            let limbs = &(*a).limbs;
-            let mut all_bytes = Vec::with_capacity(BIGINT_LIMBS * 8);
-            for limb in limbs.iter() {
-                all_bytes.extend_from_slice(&limb.to_le_bytes());
-            }
-            // Write in big-endian: pad on left with zeros
-            let significant = all_bytes.len().min(length);
-            // Zero-fill the output
-            std::ptr::write_bytes(data, 0, length);
-            // Copy bytes in big-endian order
-            for i in 0..significant {
-                *data.add(length - 1 - i) = all_bytes[i];
-            }
-        } else {
-            std::ptr::write_bytes(data, 0, length);
+        // Extract bytes from the pre-allocation limb snapshot
+        // (little-endian in memory) and write in big-endian order.
+        std::ptr::write_bytes(data, 0, length);
+        let significant = (BIGINT_LIMBS * 8).min(length);
+        for i in 0..significant {
+            let limb = limbs[i / 8];
+            let byte = ((limb >> ((i % 8) * 8)) & 0xff) as u8;
+            *data.add(length - 1 - i) = byte;
         }
     }
     result
@@ -407,26 +396,18 @@ pub extern "C" fn js_bigint_is_negative(a: *const BigIntHeader) -> i32 {
 /// Negate a BigInt (two's complement: flip all bits and add 1)
 #[no_mangle]
 pub extern "C" fn js_bigint_neg(a: *const BigIntHeader) -> *mut BigIntHeader {
-    let a = clean_bigint_ptr(a);
-    if a.is_null() {
-        return bigint_alloc();
-    }
-    let ptr = bigint_alloc();
-    unsafe {
-        let a_limbs = (*a).limbs;
-        let mut result = ZERO_LIMBS;
-        let mut carry = 1u64;
+    let a_limbs = bigint_limbs_or_zero(a);
+    let mut result = ZERO_LIMBS;
+    let mut carry = 1u64;
 
-        for i in 0..BIGINT_LIMBS {
-            let flipped = !a_limbs[i];
-            let sum = (flipped as u128) + (carry as u128);
-            result[i] = sum as u64;
-            carry = (sum >> 64) as u64;
-        }
-
-        (*ptr).limbs = result;
-        ptr
+    for i in 0..BIGINT_LIMBS {
+        let flipped = !a_limbs[i];
+        let sum = (flipped as u128) + (carry as u128);
+        result[i] = sum as u64;
+        carry = (sum >> 64) as u64;
     }
+
+    bigint_alloc_with_limbs(result)
 }
 
 /// Check if a BigInt is zero (all limbs are zero). Returns 1 for zero, 0 for non-zero.
@@ -452,35 +433,27 @@ pub extern "C" fn js_bigint_add(
     a: *const BigIntHeader,
     b: *const BigIntHeader,
 ) -> *mut BigIntHeader {
-    let a = clean_bigint_ptr(a);
-    let b = clean_bigint_ptr(b);
-    if a.is_null() && b.is_null() {
-        return bigint_alloc();
-    }
-    let ptr = bigint_alloc();
-    unsafe {
-        let a_limbs = if a.is_null() { ZERO_LIMBS } else { (*a).limbs };
-        let b_limbs = if b.is_null() { ZERO_LIMBS } else { (*b).limbs };
+    let a_limbs = bigint_limbs_or_zero(a);
+    let b_limbs = bigint_limbs_or_zero(b);
 
-        // Fast path: both operands fit in i64. i64 + i64 fits in i128 with
-        // no overflow possible, then write the result back as a sign-extended
-        // 1024-bit two's-complement value.
-        if let (Some(av), Some(bv)) = (fits_in_i64(&a_limbs), fits_in_i64(&b_limbs)) {
-            write_i128((av as i128) + (bv as i128), &mut (*ptr).limbs);
-            return ptr;
-        }
-
-        // Slow path: 16-limb add with carry.
+    // Fast path: both operands fit in i64. i64 + i64 fits in i128 with
+    // no overflow possible, then write the result back as a sign-extended
+    // 1024-bit two's-complement value.
+    if let (Some(av), Some(bv)) = (fits_in_i64(&a_limbs), fits_in_i64(&b_limbs)) {
         let mut result = ZERO_LIMBS;
-        let mut carry = 0u64;
-        for i in 0..BIGINT_LIMBS {
-            let sum = (a_limbs[i] as u128) + (b_limbs[i] as u128) + (carry as u128);
-            result[i] = sum as u64;
-            carry = (sum >> 64) as u64;
-        }
-        (*ptr).limbs = result;
-        ptr
+        write_i128((av as i128) + (bv as i128), &mut result);
+        return bigint_alloc_with_limbs(result);
     }
+
+    // Slow path: 16-limb add with carry.
+    let mut result = ZERO_LIMBS;
+    let mut carry = 0u64;
+    for i in 0..BIGINT_LIMBS {
+        let sum = (a_limbs[i] as u128) + (b_limbs[i] as u128) + (carry as u128);
+        result[i] = sum as u64;
+        carry = (sum >> 64) as u64;
+    }
+    bigint_alloc_with_limbs(result)
 }
 
 /// Subtract two BigInts (a - b)
@@ -489,35 +462,30 @@ pub extern "C" fn js_bigint_sub(
     a: *const BigIntHeader,
     b: *const BigIntHeader,
 ) -> *mut BigIntHeader {
-    let a = clean_bigint_ptr(a);
-    let b = clean_bigint_ptr(b);
-    let ptr = bigint_alloc();
-    unsafe {
-        let a_limbs = if a.is_null() { ZERO_LIMBS } else { (*a).limbs };
-        let b_limbs = if b.is_null() { ZERO_LIMBS } else { (*b).limbs };
+    let a_limbs = bigint_limbs_or_zero(a);
+    let b_limbs = bigint_limbs_or_zero(b);
 
-        // Fast path: both operands fit in i64. i64 - i64 fits in i128.
-        if let (Some(av), Some(bv)) = (fits_in_i64(&a_limbs), fits_in_i64(&b_limbs)) {
-            write_i128((av as i128) - (bv as i128), &mut (*ptr).limbs);
-            return ptr;
-        }
-
-        // Slow path: 16-limb subtract with borrow.
+    // Fast path: both operands fit in i64. i64 - i64 fits in i128.
+    if let (Some(av), Some(bv)) = (fits_in_i64(&a_limbs), fits_in_i64(&b_limbs)) {
         let mut result = ZERO_LIMBS;
-        let mut borrow = 0i128;
-        for i in 0..BIGINT_LIMBS {
-            let diff = (a_limbs[i] as i128) - (b_limbs[i] as i128) - borrow;
-            if diff < 0 {
-                result[i] = (diff + (1i128 << 64)) as u64;
-                borrow = 1;
-            } else {
-                result[i] = diff as u64;
-                borrow = 0;
-            }
-        }
-        (*ptr).limbs = result;
-        ptr
+        write_i128((av as i128) - (bv as i128), &mut result);
+        return bigint_alloc_with_limbs(result);
     }
+
+    // Slow path: 16-limb subtract with borrow.
+    let mut result = ZERO_LIMBS;
+    let mut borrow = 0i128;
+    for i in 0..BIGINT_LIMBS {
+        let diff = (a_limbs[i] as i128) - (b_limbs[i] as i128) - borrow;
+        if diff < 0 {
+            result[i] = (diff + (1i128 << 64)) as u64;
+            borrow = 1;
+        } else {
+            result[i] = diff as u64;
+            borrow = 0;
+        }
+    }
+    bigint_alloc_with_limbs(result)
 }
 
 /// Multiply two BigInts
@@ -526,54 +494,45 @@ pub extern "C" fn js_bigint_mul(
     a: *const BigIntHeader,
     b: *const BigIntHeader,
 ) -> *mut BigIntHeader {
-    let a = clean_bigint_ptr(a);
-    let b = clean_bigint_ptr(b);
-    let ptr = bigint_alloc();
-    unsafe {
-        if a.is_null() || b.is_null() {
-            (*ptr).limbs = ZERO_LIMBS;
-            return ptr;
-        }
-        let a_limbs = (*a).limbs;
-        let b_limbs = (*b).limbs;
+    let a_limbs = bigint_limbs_or_zero(a);
+    let b_limbs = bigint_limbs_or_zero(b);
 
-        // Fast path: both operands fit in i64. i64 * i64 fits exactly in i128
-        // (max |product| = (2^63)^2 = 2^126 < 2^127). This eliminates the 16×16
-        // schoolbook loop for the common case where values fit in a host word.
-        if let (Some(av), Some(bv)) = (fits_in_i64(&a_limbs), fits_in_i64(&b_limbs)) {
-            write_i128((av as i128) * (bv as i128), &mut (*ptr).limbs);
-            return ptr;
-        }
-
-        // Slow path: 16-limb school multiplication (keeping lower 1024 bits).
-        // Skip trailing all-zero limbs on both operands so e.g. multiplying a
-        // value that uses 3 limbs by one that uses 2 only does 3*2 = 6 word
-        // multiplies instead of 16*16 = 256.
-        let a_len = effective_limb_len(&a_limbs);
-        let b_len = effective_limb_len(&b_limbs);
+    // Fast path: both operands fit in i64. i64 * i64 fits exactly in i128
+    // (max |product| = (2^63)^2 = 2^126 < 2^127). This eliminates the 16×16
+    // schoolbook loop for the common case where values fit in a host word.
+    if let (Some(av), Some(bv)) = (fits_in_i64(&a_limbs), fits_in_i64(&b_limbs)) {
         let mut result = ZERO_LIMBS;
-        for i in 0..a_len {
-            let mut carry = 0u128;
-            let inner_max = b_len.min(BIGINT_LIMBS - i);
-            for j in 0..inner_max {
-                let product =
-                    (a_limbs[i] as u128) * (b_limbs[j] as u128) + (result[i + j] as u128) + carry;
-                result[i + j] = product as u64;
-                carry = product >> 64;
-            }
-            // Propagate the final carry across any zero upper limbs that
-            // remain in the result row, until it dies.
-            let mut k = i + inner_max;
-            while carry != 0 && k < BIGINT_LIMBS {
-                let sum = (result[k] as u128) + carry;
-                result[k] = sum as u64;
-                carry = sum >> 64;
-                k += 1;
-            }
-        }
-        (*ptr).limbs = result;
-        ptr
+        write_i128((av as i128) * (bv as i128), &mut result);
+        return bigint_alloc_with_limbs(result);
     }
+
+    // Slow path: 16-limb school multiplication (keeping lower 1024 bits).
+    // Skip trailing all-zero limbs on both operands so e.g. multiplying a
+    // value that uses 3 limbs by one that uses 2 only does 3*2 = 6 word
+    // multiplies instead of 16*16 = 256.
+    let a_len = effective_limb_len(&a_limbs);
+    let b_len = effective_limb_len(&b_limbs);
+    let mut result = ZERO_LIMBS;
+    for i in 0..a_len {
+        let mut carry = 0u128;
+        let inner_max = b_len.min(BIGINT_LIMBS - i);
+        for j in 0..inner_max {
+            let product =
+                (a_limbs[i] as u128) * (b_limbs[j] as u128) + (result[i + j] as u128) + carry;
+            result[i + j] = product as u64;
+            carry = product >> 64;
+        }
+        // Propagate the final carry across any zero upper limbs that
+        // remain in the result row, until it dies.
+        let mut k = i + inner_max;
+        while carry != 0 && k < BIGINT_LIMBS {
+            let sum = (result[k] as u128) + carry;
+            result[k] = sum as u64;
+            carry = sum >> 64;
+            k += 1;
+        }
+    }
+    bigint_alloc_with_limbs(result)
 }
 
 /// Magnitude of significant limbs for an unsigned-style limb pattern.
@@ -656,54 +615,49 @@ pub extern "C" fn js_bigint_div(
     a: *const BigIntHeader,
     b: *const BigIntHeader,
 ) -> *mut BigIntHeader {
-    let a = clean_bigint_ptr(a);
-    let b = clean_bigint_ptr(b);
-    let ptr = bigint_alloc();
-    unsafe {
-        let a_limbs = if a.is_null() { ZERO_LIMBS } else { (*a).limbs };
-        let b_limbs = if b.is_null() { ZERO_LIMBS } else { (*b).limbs };
+    let a_limbs = bigint_limbs_or_zero(a);
+    let b_limbs = bigint_limbs_or_zero(b);
 
-        // Division by zero: return 0 instead of panicking (panic can't unwind in extern "C")
-        if b_limbs == ZERO_LIMBS {
-            (*ptr).limbs = ZERO_LIMBS;
-            return ptr;
-        }
-
-        // Fast path: both fit in i64. Rust's `/` on i64 truncates toward
-        // zero, which is JavaScript's BigInt division semantics. The only
-        // overflow case is i64::MIN / -1, which we handle via i128.
-        if let (Some(av), Some(bv)) = (fits_in_i64(&a_limbs), fits_in_i64(&b_limbs)) {
-            if bv != 0 {
-                write_i128((av as i128) / (bv as i128), &mut (*ptr).limbs);
-                return ptr;
-            }
-        }
-
-        let a_neg = is_negative(&a_limbs);
-        let b_neg = is_negative(&b_limbs);
-
-        // Get magnitudes
-        let abs_a = if a_neg {
-            negate_limbs(&a_limbs)
-        } else {
-            a_limbs
-        };
-        let abs_b = if b_neg {
-            negate_limbs(&b_limbs)
-        } else {
-            b_limbs
-        };
-
-        let (quotient, _) = unsigned_div_limbs(&abs_a, &abs_b);
-
-        // Result is negative if signs differ
-        (*ptr).limbs = if a_neg != b_neg && quotient != ZERO_LIMBS {
-            negate_limbs(&quotient)
-        } else {
-            quotient
-        };
-        ptr
+    // Division by zero: return 0 instead of panicking (panic can't unwind in extern "C")
+    if b_limbs == ZERO_LIMBS {
+        return bigint_alloc_with_limbs(ZERO_LIMBS);
     }
+
+    // Fast path: both fit in i64. Rust's `/` on i64 truncates toward
+    // zero, which is JavaScript's BigInt division semantics. The only
+    // overflow case is i64::MIN / -1, which we handle via i128.
+    if let (Some(av), Some(bv)) = (fits_in_i64(&a_limbs), fits_in_i64(&b_limbs)) {
+        if bv != 0 {
+            let mut result = ZERO_LIMBS;
+            write_i128((av as i128) / (bv as i128), &mut result);
+            return bigint_alloc_with_limbs(result);
+        }
+    }
+
+    let a_neg = is_negative(&a_limbs);
+    let b_neg = is_negative(&b_limbs);
+
+    // Get magnitudes
+    let abs_a = if a_neg {
+        negate_limbs(&a_limbs)
+    } else {
+        a_limbs
+    };
+    let abs_b = if b_neg {
+        negate_limbs(&b_limbs)
+    } else {
+        b_limbs
+    };
+
+    let (quotient, _) = unsigned_div_limbs(&abs_a, &abs_b);
+
+    // Result is negative if signs differ
+    let result = if a_neg != b_neg && quotient != ZERO_LIMBS {
+        negate_limbs(&quotient)
+    } else {
+        quotient
+    };
+    bigint_alloc_with_limbs(result)
 }
 
 /// Modulo of two BigInts (a % b) — result has sign of dividend (like JavaScript)
@@ -712,55 +666,50 @@ pub extern "C" fn js_bigint_mod(
     a: *const BigIntHeader,
     b: *const BigIntHeader,
 ) -> *mut BigIntHeader {
-    let a = clean_bigint_ptr(a);
-    let b = clean_bigint_ptr(b);
-    let ptr = bigint_alloc();
-    unsafe {
-        let a_limbs = if a.is_null() { ZERO_LIMBS } else { (*a).limbs };
-        let b_limbs = if b.is_null() { ZERO_LIMBS } else { (*b).limbs };
+    let a_limbs = bigint_limbs_or_zero(a);
+    let b_limbs = bigint_limbs_or_zero(b);
 
-        // Division by zero: return 0 instead of panicking (panic can't unwind in extern "C")
-        if b_limbs == ZERO_LIMBS {
-            (*ptr).limbs = ZERO_LIMBS;
-            return ptr;
-        }
-
-        // Fast path: both fit in i64. JavaScript's `%` returns the sign of
-        // the dividend, which is what Rust's `%` on i64 does already.
-        if let (Some(av), Some(bv)) = (fits_in_i64(&a_limbs), fits_in_i64(&b_limbs)) {
-            // bv != 0 because b_limbs != ZERO_LIMBS for a positive small;
-            // for a negative small we still won't hit divide-by-zero.
-            if bv != 0 {
-                write_i64(av % bv, &mut (*ptr).limbs);
-                return ptr;
-            }
-        }
-
-        let a_neg = is_negative(&a_limbs);
-        let b_neg = is_negative(&b_limbs);
-
-        // Get magnitudes
-        let abs_a = if a_neg {
-            negate_limbs(&a_limbs)
-        } else {
-            a_limbs
-        };
-        let abs_b = if b_neg {
-            negate_limbs(&b_limbs)
-        } else {
-            b_limbs
-        };
-
-        let (_, remainder) = unsigned_div_limbs(&abs_a, &abs_b);
-
-        // Remainder has sign of dividend
-        (*ptr).limbs = if a_neg && remainder != ZERO_LIMBS {
-            negate_limbs(&remainder)
-        } else {
-            remainder
-        };
-        ptr
+    // Division by zero: return 0 instead of panicking (panic can't unwind in extern "C")
+    if b_limbs == ZERO_LIMBS {
+        return bigint_alloc_with_limbs(ZERO_LIMBS);
     }
+
+    // Fast path: both fit in i64. JavaScript's `%` returns the sign of
+    // the dividend, which is what Rust's `%` on i64 does already.
+    if let (Some(av), Some(bv)) = (fits_in_i64(&a_limbs), fits_in_i64(&b_limbs)) {
+        // bv != 0 because b_limbs != ZERO_LIMBS for a positive small;
+        // for a negative small we still won't hit divide-by-zero.
+        if bv != 0 {
+            let mut result = ZERO_LIMBS;
+            write_i64(av % bv, &mut result);
+            return bigint_alloc_with_limbs(result);
+        }
+    }
+
+    let a_neg = is_negative(&a_limbs);
+    let b_neg = is_negative(&b_limbs);
+
+    // Get magnitudes
+    let abs_a = if a_neg {
+        negate_limbs(&a_limbs)
+    } else {
+        a_limbs
+    };
+    let abs_b = if b_neg {
+        negate_limbs(&b_limbs)
+    } else {
+        b_limbs
+    };
+
+    let (_, remainder) = unsigned_div_limbs(&abs_a, &abs_b);
+
+    // Remainder has sign of dividend
+    let result = if a_neg && remainder != ZERO_LIMBS {
+        negate_limbs(&remainder)
+    } else {
+        remainder
+    };
+    bigint_alloc_with_limbs(result)
 }
 
 /// Power of two BigInts (a ** b) using binary exponentiation
@@ -770,37 +719,33 @@ pub extern "C" fn js_bigint_pow(
     a: *const BigIntHeader,
     b: *const BigIntHeader,
 ) -> *mut BigIntHeader {
-    let a = clean_bigint_ptr(a);
-    let b = clean_bigint_ptr(b);
-    let ptr = bigint_alloc();
-    unsafe {
-        // Get exponent as u64 (only lower 64 bits)
-        let exp = if b.is_null() { 0u64 } else { (*b).limbs[0] };
+    let a_limbs = bigint_limbs_or_zero(a);
+    let b_limbs = bigint_limbs_or_zero(b);
+    // Get exponent as u64 (only lower 64 bits)
+    let exp = b_limbs[0];
 
-        if exp == 0 {
-            // Anything to the power of 0 is 1
-            (*ptr).limbs = ZERO_LIMBS;
-            (*ptr).limbs[0] = 1;
-            return ptr;
-        }
-
-        // Binary exponentiation
+    if exp == 0 {
+        // Anything to the power of 0 is 1
         let mut result = ZERO_LIMBS;
         result[0] = 1;
-        let mut base = if a.is_null() { ZERO_LIMBS } else { (*a).limbs };
-        let mut e = exp;
-
-        while e > 0 {
-            if e & 1 == 1 {
-                result = mul_limbs(&result, &base);
-            }
-            base = mul_limbs(&base, &base);
-            e >>= 1;
-        }
-
-        (*ptr).limbs = result;
-        ptr
+        return bigint_alloc_with_limbs(result);
     }
+
+    // Binary exponentiation
+    let mut result = ZERO_LIMBS;
+    result[0] = 1;
+    let mut base = a_limbs;
+    let mut e = exp;
+
+    while e > 0 {
+        if e & 1 == 1 {
+            result = mul_limbs(&result, &base);
+        }
+        base = mul_limbs(&base, &base);
+        e >>= 1;
+    }
+
+    bigint_alloc_with_limbs(result)
 }
 
 /// Multiply two limb arrays (helper for pow)
@@ -824,45 +769,35 @@ pub extern "C" fn js_bigint_shl(
     a: *const BigIntHeader,
     b: *const BigIntHeader,
 ) -> *mut BigIntHeader {
-    let a = clean_bigint_ptr(a);
-    let b = clean_bigint_ptr(b);
-    let ptr = bigint_alloc();
-    unsafe {
-        let shift = if b.is_null() {
-            0usize
-        } else {
-            (*b).limbs[0] as usize
-        };
-        if shift >= BIGINT_BITS {
-            (*ptr).limbs = ZERO_LIMBS;
-            return ptr;
-        }
-        let a_limbs = if a.is_null() { ZERO_LIMBS } else { (*a).limbs };
-        let mut result = ZERO_LIMBS;
-
-        // Calculate full limb shifts and bit shifts within a limb
-        let limb_shift = shift / 64;
-        let bit_shift = (shift % 64) as u32;
-
-        if bit_shift == 0 {
-            // Simple case: only limb-aligned shift
-            for i in limb_shift..BIGINT_LIMBS {
-                result[i] = a_limbs[i - limb_shift];
-            }
-        } else {
-            // General case: shift across limb boundaries
-            for i in limb_shift..BIGINT_LIMBS {
-                let src_idx = i - limb_shift;
-                result[i] = a_limbs[src_idx] << bit_shift;
-                if src_idx > 0 {
-                    result[i] |= a_limbs[src_idx - 1] >> (64 - bit_shift);
-                }
-            }
-        }
-
-        (*ptr).limbs = result;
-        ptr
+    let a_limbs = bigint_limbs_or_zero(a);
+    let b_limbs = bigint_limbs_or_zero(b);
+    let shift = b_limbs[0] as usize;
+    if shift >= BIGINT_BITS {
+        return bigint_alloc_with_limbs(ZERO_LIMBS);
     }
+    let mut result = ZERO_LIMBS;
+
+    // Calculate full limb shifts and bit shifts within a limb
+    let limb_shift = shift / 64;
+    let bit_shift = (shift % 64) as u32;
+
+    if bit_shift == 0 {
+        // Simple case: only limb-aligned shift
+        for i in limb_shift..BIGINT_LIMBS {
+            result[i] = a_limbs[i - limb_shift];
+        }
+    } else {
+        // General case: shift across limb boundaries
+        for i in limb_shift..BIGINT_LIMBS {
+            let src_idx = i - limb_shift;
+            result[i] = a_limbs[src_idx] << bit_shift;
+            if src_idx > 0 {
+                result[i] |= a_limbs[src_idx - 1] >> (64 - bit_shift);
+            }
+        }
+    }
+
+    bigint_alloc_with_limbs(result)
 }
 
 /// Right shift BigInt by b bits (a >> b)
@@ -872,54 +807,44 @@ pub extern "C" fn js_bigint_shr(
     a: *const BigIntHeader,
     b: *const BigIntHeader,
 ) -> *mut BigIntHeader {
-    let a = clean_bigint_ptr(a);
-    let b = clean_bigint_ptr(b);
-    let ptr = bigint_alloc();
-    unsafe {
-        let a_limbs = if a.is_null() { ZERO_LIMBS } else { (*a).limbs };
-        let neg = is_negative(&a_limbs);
-        // Fill value for sign extension: 0xFF..FF for negative, 0x00..00 for positive
-        let fill: u64 = if neg { !0u64 } else { 0u64 };
+    let a_limbs = bigint_limbs_or_zero(a);
+    let b_limbs = bigint_limbs_or_zero(b);
+    let neg = is_negative(&a_limbs);
+    // Fill value for sign extension: 0xFF..FF for negative, 0x00..00 for positive
+    let fill: u64 = if neg { !0u64 } else { 0u64 };
 
-        let shift = if b.is_null() {
-            0usize
-        } else {
-            (*b).limbs[0] as usize
-        };
-        if shift >= BIGINT_BITS {
-            // Arithmetic: negative → all 1s (-1), positive → all 0s (0)
-            (*ptr).limbs = [fill; BIGINT_LIMBS];
-            return ptr;
-        }
-
-        let mut result = [fill; BIGINT_LIMBS];
-
-        // Calculate full limb shifts and bit shifts within a limb
-        let limb_shift = shift / 64;
-        let bit_shift = (shift % 64) as u32;
-
-        if bit_shift == 0 {
-            // Simple case: only limb-aligned shift
-            for i in 0..(BIGINT_LIMBS - limb_shift) {
-                result[i] = a_limbs[i + limb_shift];
-            }
-        } else {
-            // General case: shift across limb boundaries
-            for i in 0..(BIGINT_LIMBS - limb_shift) {
-                let src_idx = i + limb_shift;
-                result[i] = a_limbs[src_idx] >> bit_shift;
-                if src_idx + 1 < BIGINT_LIMBS {
-                    result[i] |= a_limbs[src_idx + 1] << (64 - bit_shift);
-                } else {
-                    // Top limb: sign-extend the vacated bits
-                    result[i] |= fill << (64 - bit_shift);
-                }
-            }
-        }
-
-        (*ptr).limbs = result;
-        ptr
+    let shift = b_limbs[0] as usize;
+    if shift >= BIGINT_BITS {
+        // Arithmetic: negative → all 1s (-1), positive → all 0s (0)
+        return bigint_alloc_with_limbs([fill; BIGINT_LIMBS]);
     }
+
+    let mut result = [fill; BIGINT_LIMBS];
+
+    // Calculate full limb shifts and bit shifts within a limb
+    let limb_shift = shift / 64;
+    let bit_shift = (shift % 64) as u32;
+
+    if bit_shift == 0 {
+        // Simple case: only limb-aligned shift
+        for i in 0..(BIGINT_LIMBS - limb_shift) {
+            result[i] = a_limbs[i + limb_shift];
+        }
+    } else {
+        // General case: shift across limb boundaries
+        for i in 0..(BIGINT_LIMBS - limb_shift) {
+            let src_idx = i + limb_shift;
+            result[i] = a_limbs[src_idx] >> bit_shift;
+            if src_idx + 1 < BIGINT_LIMBS {
+                result[i] |= a_limbs[src_idx + 1] << (64 - bit_shift);
+            } else {
+                // Top limb: sign-extend the vacated bits
+                result[i] |= fill << (64 - bit_shift);
+            }
+        }
+    }
+
+    bigint_alloc_with_limbs(result)
 }
 
 /// Bitwise AND of two BigInts (a & b)
@@ -928,21 +853,15 @@ pub extern "C" fn js_bigint_and(
     a: *const BigIntHeader,
     b: *const BigIntHeader,
 ) -> *mut BigIntHeader {
-    let a = clean_bigint_ptr(a);
-    let b = clean_bigint_ptr(b);
-    let ptr = bigint_alloc();
-    unsafe {
-        let a_limbs = if a.is_null() { ZERO_LIMBS } else { (*a).limbs };
-        let b_limbs = if b.is_null() { ZERO_LIMBS } else { (*b).limbs };
-        let mut result = ZERO_LIMBS;
+    let a_limbs = bigint_limbs_or_zero(a);
+    let b_limbs = bigint_limbs_or_zero(b);
+    let mut result = ZERO_LIMBS;
 
-        for i in 0..BIGINT_LIMBS {
-            result[i] = a_limbs[i] & b_limbs[i];
-        }
-
-        (*ptr).limbs = result;
-        ptr
+    for i in 0..BIGINT_LIMBS {
+        result[i] = a_limbs[i] & b_limbs[i];
     }
+
+    bigint_alloc_with_limbs(result)
 }
 
 /// Bitwise OR of two BigInts (a | b)
@@ -951,19 +870,13 @@ pub extern "C" fn js_bigint_or(
     a: *const BigIntHeader,
     b: *const BigIntHeader,
 ) -> *mut BigIntHeader {
-    let a = clean_bigint_ptr(a);
-    let b = clean_bigint_ptr(b);
-    let ptr = bigint_alloc();
-    unsafe {
-        let a_limbs = if a.is_null() { ZERO_LIMBS } else { (*a).limbs };
-        let b_limbs = if b.is_null() { ZERO_LIMBS } else { (*b).limbs };
-        let mut result = ZERO_LIMBS;
-        for i in 0..BIGINT_LIMBS {
-            result[i] = a_limbs[i] | b_limbs[i];
-        }
-        (*ptr).limbs = result;
-        ptr
+    let a_limbs = bigint_limbs_or_zero(a);
+    let b_limbs = bigint_limbs_or_zero(b);
+    let mut result = ZERO_LIMBS;
+    for i in 0..BIGINT_LIMBS {
+        result[i] = a_limbs[i] | b_limbs[i];
     }
+    bigint_alloc_with_limbs(result)
 }
 
 /// Bitwise XOR of two BigInts (a ^ b)
@@ -972,19 +885,13 @@ pub extern "C" fn js_bigint_xor(
     a: *const BigIntHeader,
     b: *const BigIntHeader,
 ) -> *mut BigIntHeader {
-    let a = clean_bigint_ptr(a);
-    let b = clean_bigint_ptr(b);
-    let ptr = bigint_alloc();
-    unsafe {
-        let a_limbs = if a.is_null() { ZERO_LIMBS } else { (*a).limbs };
-        let b_limbs = if b.is_null() { ZERO_LIMBS } else { (*b).limbs };
-        let mut result = ZERO_LIMBS;
-        for i in 0..BIGINT_LIMBS {
-            result[i] = a_limbs[i] ^ b_limbs[i];
-        }
-        (*ptr).limbs = result;
-        ptr
+    let a_limbs = bigint_limbs_or_zero(a);
+    let b_limbs = bigint_limbs_or_zero(b);
+    let mut result = ZERO_LIMBS;
+    for i in 0..BIGINT_LIMBS {
+        result[i] = a_limbs[i] ^ b_limbs[i];
     }
+    bigint_alloc_with_limbs(result)
 }
 
 /// Compare two BigInts (-1 if a < b, 0 if equal, 1 if a > b)

@@ -93,6 +93,12 @@ pub(super) fn compile_function(
         for p in &f.params {
             let slot = blk.alloca(DOUBLE);
             blk.store(DOUBLE, &format!("%arg{}", p.id), &slot);
+            if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
+                blk.call_void(
+                    "js_shadow_slot_bind",
+                    &[(I32, &slot_idx.to_string()), (PTR, &slot)],
+                );
+            }
             map.insert(p.id, slot);
         }
         map
@@ -152,6 +158,8 @@ pub(super) fn compile_function(
     // Pre-walk: which `let x = new Class(...)` locals never escape?
     let non_escaping_news =
         crate::collectors::collect_non_escaping_news(&f.body, &boxed_vars, module_globals, classes);
+    let non_escaping_new_used_fields =
+        crate::collectors::collect_non_escaping_new_used_fields(&f.body, &non_escaping_news);
     let non_escaping_arrays =
         crate::collectors::collect_non_escaping_arrays(&f.body, &boxed_vars, module_globals);
     let non_escaping_object_literals = crate::collectors::collect_non_escaping_object_literals(
@@ -235,6 +243,7 @@ pub(super) fn compile_function(
         scalar_replaced_arrays: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news,
+        non_escaping_new_used_fields,
         non_escaping_arrays,
         non_escaping_object_literals,
         flat_const_arrays: &cross_module.flat_const_arrays,

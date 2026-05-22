@@ -318,35 +318,9 @@ impl CopyingNurseryPreflight {
     }
 
     pub(super) unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
-        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-        match (*header).obj_type {
-            GC_TYPE_ARRAY | GC_TYPE_OBJECT => self.scan_gc_child_fields(header),
-            GC_TYPE_CLOSURE => self.scan_closure_fields(header, user_ptr),
-            GC_TYPE_PROMISE => self.scan_promise_fields(user_ptr),
-            GC_TYPE_ERROR => self.scan_error_fields(user_ptr),
-            GC_TYPE_MAP => self.scan_map_fields(user_ptr),
-            GC_TYPE_LAZY_ARRAY => self.scan_lazy_array_fields(user_ptr),
-            GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
-            _ => {}
-        }
-    }
-
-    pub(super) unsafe fn scan_gc_child_fields(&mut self, header: *mut GcHeader) {
-        for child_slot in gc_child_slots(header) {
-            if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
-                record_layout_child_slot_read(layout_kind);
-                self.scan_slot(slot as *const u64);
-            }
-        }
-    }
-
-    pub(super) unsafe fn scan_closure_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
-        self.scan_gc_child_fields(header);
-        crate::closure::visit_closure_dynamic_prop_values_mut(user_ptr as usize, |value| {
-            self.check_bits_with_reason(
-                value.to_bits(),
-                CopiedMinorFallbackReason::PinnedYoungTransitive,
-            );
+        visit_gc_rewrite_slots(header, |slot| unsafe {
+            slot.record_layout_read();
+            self.scan_slot(slot.slot as *const u64);
         });
     }
 
@@ -355,74 +329,6 @@ impl CopyingNurseryPreflight {
             return;
         }
         self.check_bits_with_reason(*slot, CopiedMinorFallbackReason::PinnedYoungTransitive);
-    }
-
-    pub(super) unsafe fn scan_promise_fields(&mut self, user_ptr: *mut u8) {
-        let promise = user_ptr as *const crate::promise::Promise;
-        self.scan_slot(&(*promise).value as *const f64 as *const u64);
-        self.scan_slot(&(*promise).reason as *const f64 as *const u64);
-        self.scan_slot(&(*promise).on_fulfilled as *const _ as *const u64);
-        self.scan_slot(&(*promise).on_rejected as *const _ as *const u64);
-        self.scan_slot(&(*promise).next as *const _ as *const u64);
-    }
-
-    pub(super) unsafe fn scan_error_fields(&mut self, user_ptr: *mut u8) {
-        let error = user_ptr as *const crate::error::ErrorHeader;
-        self.scan_slot(&(*error).message as *const _ as *const u64);
-        self.scan_slot(&(*error).name as *const _ as *const u64);
-        self.scan_slot(&(*error).stack as *const _ as *const u64);
-        self.scan_slot(&(*error).cause as *const f64 as *const u64);
-        self.scan_slot(&(*error).errors as *const _ as *const u64);
-    }
-
-    pub(super) unsafe fn scan_map_fields(&mut self, user_ptr: *mut u8) {
-        let map = user_ptr as *const crate::map::MapHeader;
-        let size = (*map).size;
-        let capacity = (*map).capacity;
-        if size > capacity || size > 100_000 || (*map).entries.is_null() {
-            return;
-        }
-        let entries = (*map).entries as *const u64;
-        for i in 0..(size as usize) {
-            self.scan_slot(entries.add(i * 2));
-            self.scan_slot(entries.add(i * 2 + 1));
-        }
-    }
-
-    pub(super) unsafe fn scan_lazy_array_fields(&mut self, user_ptr: *mut u8) {
-        let lazy = user_ptr as *const crate::json_tape::LazyArrayHeader;
-        if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
-            return;
-        }
-        self.scan_slot(&(*lazy).blob_str as *const _ as *const u64);
-        self.scan_slot(&(*lazy).materialized as *const _ as *const u64);
-        self.scan_slot(&(*lazy).materialized_elements as *const _ as *const u64);
-        self.scan_slot(&(*lazy).materialized_bitmap as *const _ as *const u64);
-
-        let cached_length = (*lazy).cached_length as usize;
-        let cache = (*lazy).materialized_elements;
-        let bitmap = (*lazy).materialized_bitmap;
-        if cache.is_null() || bitmap.is_null() || cached_length == 0 {
-            return;
-        }
-        let bitmap_words = cached_length.div_ceil(64);
-        for w in 0..bitmap_words {
-            let word = *bitmap.add(w);
-            if word == 0 {
-                continue;
-            }
-            let base_idx = w * 64;
-            for b in 0..64usize {
-                if word & (1u64 << b) == 0 {
-                    continue;
-                }
-                let i = base_idx + b;
-                if i >= cached_length {
-                    break;
-                }
-                self.scan_slot(cache.add(i) as *const u64);
-            }
-        }
     }
 }
 
@@ -457,6 +363,11 @@ impl StickyRememberedSet {
         for &(header, page) in &self.external_pages {
             mark_dirty_external_slot_page(header, page);
         }
+    }
+
+    pub(super) fn extend(&mut self, other: StickyRememberedSet) {
+        self.old_pages.extend(other.old_pages);
+        self.external_pages.extend(other.external_pages);
     }
 }
 
@@ -623,9 +534,7 @@ impl CopyingNurseryCollector {
 
         set_forwarding_address(header, new_user);
         (*header).gc_flags &= !GC_FLAG_MARKED;
-        if (*header).obj_type == GC_TYPE_CLOSURE {
-            crate::closure::closure_dynamic_props_owner_moved(old_user as usize, new_user as usize);
-        }
+        gc_type_after_payload_move((*header).obj_type, old_user as usize, new_user as usize);
 
         self.worklist.push(new_header);
         self.moved_headers.push(new_header);
@@ -655,10 +564,7 @@ impl CopyingNurseryCollector {
         }
         if !parent_header.is_null() {
             let parent_user = (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize;
-            if matches!(
-                crate::arena::classify_heap_generation(parent_user),
-                crate::arena::HeapGeneration::Old
-            ) {
+            if barrier_parent_needs_remembering(parent_user, external) {
                 if let Some((child_addr, _, _)) = self.ptrs.decode_bits(*slot) {
                     if crate::arena::pointer_in_nursery(child_addr) {
                         self.sticky.remember_slot(parent_header, slot, external);
@@ -681,120 +587,16 @@ impl CopyingNurseryCollector {
     }
 
     pub(super) unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
-        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-        match (*header).obj_type {
-            GC_TYPE_ARRAY | GC_TYPE_OBJECT => self.scan_gc_child_fields(header),
-            GC_TYPE_CLOSURE => self.scan_closure_fields(header, user_ptr),
-            GC_TYPE_PROMISE => self.scan_promise_fields(header, user_ptr),
-            GC_TYPE_ERROR => self.scan_error_fields(header, user_ptr),
-            GC_TYPE_MAP => self.scan_map_fields(header, user_ptr),
-            GC_TYPE_LAZY_ARRAY => self.scan_lazy_array_fields(header, user_ptr),
-            GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
-            _ => {}
-        }
-    }
-
-    pub(super) unsafe fn scan_gc_child_fields(&mut self, header: *mut GcHeader) {
-        for child_slot in gc_child_slots(header) {
-            if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
-                record_layout_child_slot_read(layout_kind);
-                self.visit_slot_with_parent(slot, header, false);
-            }
-        }
-    }
-
-    pub(super) unsafe fn scan_closure_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
-        self.scan_gc_child_fields(header);
-        crate::closure::visit_closure_dynamic_prop_value_slots_mut(user_ptr as usize, |slot| {
-            self.visit_slot_with_parent(slot, header, true);
+        let mut changed = false;
+        visit_gc_rewrite_slots(header, |slot| unsafe {
+            slot.record_layout_read();
+            let before = *slot.slot;
+            self.visit_slot_with_parent(slot.slot, header, slot.external);
+            changed |= *slot.slot != before;
         });
-    }
-
-    pub(super) unsafe fn scan_promise_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
-        let promise = user_ptr as *mut crate::promise::Promise;
-        self.visit_slot_with_parent(&(*promise).value as *const f64 as *mut u64, header, false);
-        self.visit_slot_with_parent(&(*promise).reason as *const f64 as *mut u64, header, false);
-        self.visit_slot_with_parent(
-            &(*promise).on_fulfilled as *const _ as *mut u64,
-            header,
-            false,
-        );
-        self.visit_slot_with_parent(
-            &(*promise).on_rejected as *const _ as *mut u64,
-            header,
-            false,
-        );
-        self.visit_slot_with_parent(&(*promise).next as *const _ as *mut u64, header, false);
-    }
-
-    pub(super) unsafe fn scan_error_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
-        let error = user_ptr as *mut crate::error::ErrorHeader;
-        self.visit_slot_with_parent(&(*error).message as *const _ as *mut u64, header, false);
-        self.visit_slot_with_parent(&(*error).name as *const _ as *mut u64, header, false);
-        self.visit_slot_with_parent(&(*error).stack as *const _ as *mut u64, header, false);
-        self.visit_slot_with_parent(&(*error).cause as *const f64 as *mut u64, header, false);
-        self.visit_slot_with_parent(&(*error).errors as *const _ as *mut u64, header, false);
-    }
-
-    pub(super) unsafe fn scan_map_fields(&mut self, header: *mut GcHeader, user_ptr: *mut u8) {
-        let map = user_ptr as *const crate::map::MapHeader;
-        let size = (*map).size;
-        let capacity = (*map).capacity;
-        if size > capacity || size > 100_000 || (*map).entries.is_null() {
-            return;
-        }
-        let entries = (*map).entries as *mut u64;
-        for i in 0..(size as usize) {
-            self.visit_slot_with_parent(entries.add(i * 2), header, true);
-            self.visit_slot_with_parent(entries.add(i * 2 + 1), header, true);
-        }
-    }
-
-    pub(super) unsafe fn scan_lazy_array_fields(
-        &mut self,
-        header: *mut GcHeader,
-        user_ptr: *mut u8,
-    ) {
-        let lazy = user_ptr as *mut crate::json_tape::LazyArrayHeader;
-        if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
-            return;
-        }
-        self.visit_slot_with_parent(&(*lazy).blob_str as *const _ as *mut u64, header, false);
-        self.visit_slot_with_parent(&(*lazy).materialized as *const _ as *mut u64, header, false);
-        self.visit_slot_with_parent(
-            &(*lazy).materialized_elements as *const _ as *mut u64,
-            header,
-            false,
-        );
-        self.visit_slot_with_parent(
-            &(*lazy).materialized_bitmap as *const _ as *mut u64,
-            header,
-            false,
-        );
-
-        let cached_length = (*lazy).cached_length as usize;
-        let cache = (*lazy).materialized_elements;
-        let bitmap = (*lazy).materialized_bitmap;
-        if cache.is_null() || bitmap.is_null() || cached_length == 0 {
-            return;
-        }
-        let bitmap_words = cached_length.div_ceil(64);
-        for w in 0..bitmap_words {
-            let word = *bitmap.add(w);
-            if word == 0 {
-                continue;
-            }
-            let base_idx = w * 64;
-            for b in 0..64usize {
-                if word & (1u64 << b) == 0 {
-                    continue;
-                }
-                let i = base_idx + b;
-                if i >= cached_length {
-                    break;
-                }
-                self.visit_slot_with_parent(cache.add(i) as *mut u64, header, false);
-            }
+        if changed && gc_type_rewrite_hook_kind((*header).obj_type) == GcRewriteHookKind::SetIndex {
+            let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+            crate::set::rebuild_set_index_for_gc(user_ptr as *mut crate::set::SetHeader);
         }
     }
 
@@ -826,27 +628,37 @@ pub(super) fn scan_remembered_dirty_slots_copying(
         if header.is_null() || !seen_headers.insert(header as usize) {
             return;
         }
-        if !plausible_gc_header(header, true) {
+        let arena_parent = plausible_gc_header(header, true);
+        let malloc_parent = !arena_parent && plausible_gc_header(header, false);
+        if !arena_parent && !malloc_parent {
             return;
         }
         let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-        if !matches!(
-            crate::arena::classify_heap_generation(user),
-            crate::arena::HeapGeneration::Old
-        ) {
+        if arena_parent
+            && !matches!(
+                crate::arena::classify_heap_generation(user),
+                crate::arena::HeapGeneration::Old
+            )
+        {
             return;
         }
         stats.old_objects_considered += 1;
         stats.valid_roots += 1;
         stats.dirty_objects_scanned += 1;
+        let mut changed = false;
         let mut visit_slot = |slot: *mut u64, stats: &mut RememberedSetTraceStats| {
             let external = !matches!(
                 crate::arena::classify_heap_generation(slot as usize),
                 crate::arena::HeapGeneration::Old
             );
+            let before = *slot;
             visit(slot, header, external, stats);
+            changed |= *slot != before;
         };
         scan_dirty_object_slots(header, &snapshot.dirty_pages, stats, &mut visit_slot);
+        if changed && gc_type_rewrite_hook_kind((*header).obj_type) == GcRewriteHookKind::SetIndex {
+            crate::set::rebuild_set_index_for_gc(user as *mut crate::set::SetHeader);
+        }
     };
 
     if !snapshot.dirty_old_pages.is_empty() {
@@ -1078,11 +890,12 @@ impl CopiedMinorEligibility {
         visit_mutable_root_slots(|slot| unsafe {
             checker.check_bits(slot.read());
         });
-        let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let scanners: Vec<MutableRootScannerEntry> =
+            MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
         {
             let mut visitor = RuntimeRootVisitor::for_copying_check(&mut checker);
-            for scanner in scanners {
-                scanner(&mut visitor);
+            for entry in scanners {
+                (entry.scanner)(&mut visitor);
             }
             visit_ffi_mutable_registered_roots(&mut visitor);
         }
@@ -1117,6 +930,10 @@ pub(super) fn gc_collect_minor_copying_fast_path(
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = eligibility.trace_stats();
         trace.legacy_copy_only_scanner_pinned = eligibility.legacy_root_stats;
+        let decision = conservative_stack_scan_decision();
+        trace.root_sources.native_stack_fallback.decision = decision;
+        trace.root_sources.native_stack_fallback.scanned =
+            matches!(decision, ConservativeStackScanDecision::Scan);
     }
     if !eligibility.eligible {
         return None;
@@ -1136,8 +953,11 @@ pub(super) fn gc_collect_minor_copying_fast_path(
 
     visit_mutable_root_slots(|slot| unsafe {
         let bits = slot.read();
-        if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
-            if let Some(trace) = trace.as_mut() {
+        if let Some(trace) = trace.as_mut() {
+            let pointer_root = collector.ptrs.decode_bits(bits).is_some();
+            root_source_for_mutable_slot(&mut trace.root_sources, slot.kind)
+                .record_scan(bits != 0, pointer_root);
+            if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
                 trace.shadow_roots.record_scan(bits);
             }
         }
@@ -1146,21 +966,50 @@ pub(super) fn gc_collect_minor_copying_fast_path(
         }
         if let Some(new_bits) = collector.visit_value_bits(bits) {
             slot.write(new_bits);
-            if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
-                if let Some(trace) = trace.as_mut() {
+            if let Some(trace) = trace.as_mut() {
+                root_source_for_mutable_slot(&mut trace.root_sources, slot.kind).record_rewrite();
+                if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
                     trace.shadow_roots.record_rewrite();
                 }
             }
         }
     });
 
-    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
     {
-        let mut visitor = RuntimeRootVisitor::for_copying_mark(&mut collector);
-        for scanner in scanners {
-            scanner(&mut visitor);
+        let mut root_sources = trace.as_mut().map(|trace| &mut trace.root_sources);
+        if let Some(sources) = &mut root_sources {
+            sources.runtime_handles.record_registered_scanners(
+                scanners
+                    .iter()
+                    .filter(|entry| entry.source == MutableRootScannerSource::RuntimeHandles)
+                    .count(),
+            );
+            sources.runtime_mutable_scanners.record_registered_scanners(
+                scanners
+                    .iter()
+                    .filter(|entry| entry.source == MutableRootScannerSource::RuntimeMutableScanner)
+                    .count(),
+            );
         }
-        visit_ffi_mutable_registered_roots(&mut visitor);
+        let mut visitor = RuntimeRootVisitor::for_copying_mark(&mut collector);
+        for entry in scanners {
+            let stats = match &mut root_sources {
+                Some(sources) => match entry.source {
+                    MutableRootScannerSource::RuntimeHandles => {
+                        Some(&mut sources.runtime_handles as *mut RootSourceSlotTraceStats)
+                    }
+                    MutableRootScannerSource::RuntimeMutableScanner => {
+                        Some(&mut sources.runtime_mutable_scanners as *mut RootSourceSlotTraceStats)
+                    }
+                },
+                None => None,
+            };
+            let previous = visitor.set_root_source_stats(stats);
+            (entry.scanner)(&mut visitor);
+            visitor.set_root_source_stats(previous);
+        }
+        visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
     }
 
     let snapshot = remembered_dirty_snapshot();
@@ -1175,17 +1024,43 @@ pub(super) fn gc_collect_minor_copying_fast_path(
     if let Some(trace) = trace.as_mut() {
         trace.remembered_set = remembered_stats;
     }
+    let promoted_sticky = rebuild_evacuated_old_to_young_remembered_set(&collector.moved_headers);
+    promoted_sticky.restore();
+    collector.sticky.extend(promoted_sticky);
+    if gc_verify_evacuation_enabled() {
+        let phase_start = trace_phase_start(trace);
+        let old_young_edge_verifier = verify_old_to_young_edges_covered();
+        trace_phase_record(trace, "old_young_edge_verify", phase_start);
+        if let Some(trace) = trace.as_mut() {
+            trace.old_young_edge_verifier = old_young_edge_verifier;
+        }
+    }
 
     unsafe {
         collector.drain();
     }
     {
-        let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let scanners: Vec<MutableRootScannerEntry> =
+            MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let mut root_sources = trace.as_mut().map(|trace| &mut trace.root_sources);
         let mut visitor = RuntimeRootVisitor::for_copying_rewrite(&collector);
-        for scanner in scanners {
-            scanner(&mut visitor);
+        for entry in scanners {
+            let stats = match &mut root_sources {
+                Some(sources) => match entry.source {
+                    MutableRootScannerSource::RuntimeHandles => {
+                        Some(&mut sources.runtime_handles as *mut RootSourceSlotTraceStats)
+                    }
+                    MutableRootScannerSource::RuntimeMutableScanner => {
+                        Some(&mut sources.runtime_mutable_scanners as *mut RootSourceSlotTraceStats)
+                    }
+                },
+                None => None,
+            };
+            let previous = visitor.set_root_source_stats(stats);
+            (entry.scanner)(&mut visitor);
+            visitor.set_root_source_stats(previous);
         }
-        visit_ffi_mutable_registered_roots(&mut visitor);
+        visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
     }
     trace_phase_record(trace, "copying_nursery", phase_start);
 
@@ -1196,6 +1071,8 @@ pub(super) fn gc_collect_minor_copying_fast_path(
         trace_phase_record(trace, "evacuation_verify", phase_start);
     }
 
+    crate::promise::cleanup_copied_minor_promise_contexts_for_gc();
+    finalize_dead_copied_minor_from_space_side_allocations();
     let reset = crate::arena::copying_reset_from_spaces_and_flip();
     collector.stats.reset_blocks += reset.reset_blocks;
     if let Some(trace) = trace.as_mut() {
@@ -1241,4 +1118,9 @@ pub(super) fn gc_collect_minor_copying_fast_path(
         freed_bytes,
         malloc_swept: malloc_sweep_due,
     })
+}
+
+fn finalize_dead_copied_minor_from_space_side_allocations() {
+    crate::map::finalize_dead_copied_minor_from_space_maps();
+    crate::set::finalize_dead_copied_minor_from_space_sets();
 }

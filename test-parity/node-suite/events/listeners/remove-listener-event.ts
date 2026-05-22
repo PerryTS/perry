@@ -1,9 +1,10 @@
 import { EventEmitter } from "node:events";
 
-const em = new EventEmitter();
-const seen: string[] = [];
-em.on("removeListener", (name: string) => seen.push(name));
-const h = () => {};
-em.on("hello", h);
-em.removeListener("hello", h);
-console.log("seen:", seen);
+const ee = new EventEmitter();
+const events: string[] = [];
+function fn() {}
+ee.on("removeListener", (name, listener) => events.push(String(name) + ":" + (listener === fn)));
+ee.on("x", fn);
+ee.off("x", fn);
+ee.removeAllListeners("removeListener");
+console.log("events:", events.join(","));

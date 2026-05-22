@@ -2,6 +2,119 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1024 — release sweep: crypto + perf_hooks + ios + wasm timers
+
+Rolls up 26 PRs that merged to `main` post-v0.5.1023 without version
+bumps. Highlights below; full per-PR history is in `git log
+v0.5.1023..HEAD`.
+
+**node:crypto gap-fixes (8 PRs):**
+- **#1352 #1353 #1355 #1361** addressed across **#1386 #1393 #1394 #1402
+  #1405**: `crypto.randomInt`, `crypto.timingSafeEqual`,
+  `crypto.getHashes` / `crypto.getCiphers`, `sha224` / `sha384`, base64
+  digest, Buffer hash input, no-arg `digest()` typed as Buffer,
+  `pbkdf2Sync` honors the digest argument, `crypto.scryptSync`. See
+  project_crypto_1332 (memory) for what's still open under #1332.
+
+**node:perf_hooks (#1321 + coverage):**
+- **#1321** Native `performance` + User Timing API (`mark`/`measure`) +
+  `PerformanceObserver`, plus a granular node-suite covering the surface.
+- **#1328 #1342 (PR-side) + observer-typeof under #1320**: coverage
+  expansions — `timerify`, histogram, `nodeTiming`, `toJSON`,
+  resource-timing, single-type observe, empty-clear, negative duration,
+  multiple observers, `measure(bad-mark)`. See project_perf_hooks_1321.
+
+**Other runtime + codegen:**
+- **#1090** Port GC checkpoint runtime work (#1324).
+- **#1311 / #1316 #1384 #1385** geisterhand on iOS — `--target ios`
+  builds + links the geisterhand inspector + registers SecureField in
+  perry-ui-ios + auto-includes perry-stdlib. See project_geisterhand_ios_1311.
+- **#1312 / #1314** `process.env.X` (unset) is undefined (nullish), so
+  `??` applies as in Node.
+- **#1319** Runtime thread-safety hardening for cross-thread statics.
+- **#1322** Exact-head GC evidence packet (diagnostics tooling).
+- **#1323 / #1329** wasm: dispatch timer builtins through the mem_call
+  bridge. See project_wasm_timers_1323.
+- **#1317 / #1326** Codegen: `node:timers/promises` segfault when a user
+  module shadows global `setTimeout`.
+- **#1330 → #1331** node:process suite (7 of 12 cases).
+- **#1292 / #1307** `bcrypt.hash()` returns a real String (not a
+  string-like object).
+- **#1293 / #1308** fastify: route `(request as any).json()` / `.body`
+  through the external-fastify handle dispatch.
+- **#1296** Performance gaps in common app patterns.
+- **#1297** `diagnostics_channel` parity support.
+- **#1301 / #1313** iOS App Groups capability (best-effort enable +
+  manual-step guidance).
+- **#1318 / #1325** Parity: `os/methods/modern-methods` rewritten on
+  static dispatch.
+- **#1315 #1342** Expanded Node parity test coverage.
+- **#1382** ui-ios: drain stdlib pump so async `fetch` resolves on iOS.
+- **#1392 / #1404** ui-wasm: reactive state + setText on web/wasm target.
+
+## v0.5.1023 — feat(ios) #1301 setup --development + fix(compile) #1304 vendored optional_frameworks
+
+Folds two PRs that merged post-v0.5.1022 without version bumps:
+
+- **#1301 / #1302** `feat(ios): perry setup ios --development + on-device
+  dev-sign path` — adds a `--development` flag to `perry setup ios` and an
+  on-device development-signing path so iOS apps can run on physical
+  devices without going through the App Store Connect provisioning flow.
+- **#1304 / #1305** `fix(compile): link vendored optional_frameworks
+  gated on frameworks_env` — `optional_frameworks` from the native
+  manifest are now only linked when the `PERRY_FRAMEWORKS` env var
+  enables them, matching the gating contract the manifest doc spells out.
+
+## v0.5.1022 — ci(benchmark): refresh binary-size baseline after v0.5.455 → v0.5.1021 release cycle
+
+Regression Check `binary-size` job failed on v0.5.1021 against the old
+v0.5.455 (`7fd1c8b3`) baseline:
+
+  - perry: +22.6% (15,537,232 → 19,054,064 bytes)
+  - libperry_runtime: +34.0% (31,717,320 → 42,489,880 bytes)
+  - libperry_stdlib: +6.5% (within threshold, not flagged)
+
+Same shape as the v0.5.455 refresh: the 15% per-release threshold is for
+incremental drift checking, not multi-release catch-up gates. 566 patch
+versions of runtime + stdlib + CLI work (new GC paths, node:buffer
+parity, AsyncLocalStorage hooks, granular parity suites, …) accumulated
+to ~22% perry / ~34% runtime growth — all of it intentional product
+delta, not unexpected bloat. Production binaries are stripped by the
+linker; the .a / .bin sizes the job checks are unstripped release-build
+artefacts used as a regression-trend signal, not a deployment-size
+measurement.
+
+Refreshes `benchmarks/binary-size-baseline.json` to the v0.5.1021
+measurement (`f7aaed1a` from the Regression Check macos-14 runner) and
+updates the `_note` field with the rebaseline rationale. The 15%
+fail-threshold + 5% warn-threshold both stay — they still catch
+incremental drift in the next release cycle.
+
+## v0.5.1021 — fix(perry-ui-gtk4): #1246 follow-up, restore image.rs resolve_asset_path access
+
+PR #1246 ("Drop all files to <2k LOC + tighten size gate") split
+`crates/perry-ui-gtk4/src/lib.rs` and moved `resolve_asset_path` into
+`ffi::layout`, leaving the function private. `widgets/image.rs:33` still
+called `crate::resolve_asset_path(path)` (root path), so the gtk4 build
+on the `linux-aarch64-gnu` release target broke with:
+
+    error[E0425]: cannot find function `resolve_asset_path` in the crate root
+      --> crates/perry-ui-gtk4/src/widgets/image.rs:33:27
+
+Local macOS workspace builds didn't hit it because perry-ui-gtk4 is
+excluded from the macOS cargo-test set (per CLAUDE.md). v0.5.1020's
+release-packages run (#26249481496) surfaced it on the
+`linux-aarch64-gnu` matrix entry, which then fail-fast-cancelled four
+other matrix builds and skipped every publish job (winget / homebrew /
+npm / apt / apt-repo).
+
+Two-line fix:
+
+- `ffi::layout::resolve_asset_path`: `fn` → `pub(crate) fn` so sibling
+  widget modules can reach it through `crate::ffi::layout::…`.
+- `widgets::image::create_file`: `crate::resolve_asset_path(path)` →
+  `crate::ffi::layout::resolve_asset_path(path)`.
+
 ## v0.5.1020 — release sweep: close v0.5.1019 parity blockers + CI infra
 
 Rolls up the post-v0.5.1019 fixes that landed across 17 PRs on `main`. The

@@ -46,7 +46,7 @@ pub use self::is_array::js_array_is_array;
 pub use self::iter_methods::{
     js_array_at, js_array_every, js_array_filter, js_array_find, js_array_findIndex,
     js_array_find_last, js_array_find_last_index, js_array_flatMap, js_array_forEach,
-    js_array_join, js_array_map, js_array_reduce, js_array_some,
+    js_array_join, js_array_map, js_array_map_discard, js_array_reduce, js_array_some,
 };
 pub use self::iterator::js_iterator_to_array;
 pub use self::jsvalue_api::{
@@ -69,7 +69,7 @@ pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codep
 pub(crate) use self::header::{
     array_byte_size, clean_arr_ptr, clean_arr_ptr_mut, gc_element_slot_range,
     mark_array_layout_unknown, note_array_slot, rebuild_array_layout, rebuild_array_layout_exact,
-    replay_array_growth_write_barriers, MIN_ARRAY_CAPACITY,
+    replay_array_growth_write_barriers, store_array_slot, MIN_ARRAY_CAPACITY,
 };
 
 #[cfg(test)]

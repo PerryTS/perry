@@ -1,6 +1,6 @@
 //! Higher-order array methods.
 use super::*;
-use crate::closure::{js_closure_call2, js_closure_call3, ClosureHeader};
+use crate::closure::{js_closure_call2, js_closure_call3, resolve_call2_direct, ClosureHeader};
 use std::ptr;
 
 /// forEach - call callback(element, index) for each element
@@ -46,20 +46,73 @@ pub extern "C" fn js_array_map(
         let result = js_array_alloc(length);
         let result_elements =
             (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let direct_call = if length >= 8 {
+            resolve_call2_direct(callback)
+        } else {
+            None
+        };
 
         for i in 0..length as usize {
             let element = *elements_ptr.add(i);
             // Pass both element and index — JS .map() callback receives (element, index, array).
             // Using call2 ensures the index parameter is defined instead of garbage from registers,
             // which caused SIGSEGV on x86_64 when callbacks used the index (e.g., (_, i) => obj[i]).
-            let mapped = js_closure_call2(callback, element, i as f64);
+            let mapped = if let Some(func) = direct_call {
+                func(callback, element, i as f64)
+            } else {
+                js_closure_call2(callback, element, i as f64)
+            };
             ptr::write(result_elements.add(i), mapped);
-            note_array_slot(result, i, mapped.to_bits());
+            let mapped_bits = mapped.to_bits();
+            if length <= 64 {
+                // Fast path: skip the generational write barrier.
+                // `result` was just allocated; for length ≤ 64 it stays
+                // in the nursery for the whole loop in practice, so the
+                // young→old barrier is redundant — only the layout slot
+                // metadata is needed for GC tracing. If a future GC
+                // policy starts tenuring nursery objects mid-loop
+                // (e.g. aggressive evacuation under
+                // `PERRY_GC_FORCE_EVACUATE=1` triggered by the callback
+                // allocating), this path needs the full barrier helper
+                // because subsequent stores would miss the remembered
+                // set. The 64-element cap keeps that probability low.
+                crate::gc::layout_note_slot(result as usize, i, mapped_bits);
+            } else {
+                note_array_slot(result, i, mapped_bits);
+            }
             (*result).length = (i + 1) as u32;
         }
         (*result).length = length;
 
         result
+    }
+}
+
+/// map for an unused result: preserve callback evaluation order and side
+/// effects without allocating or filling the result array.
+#[no_mangle]
+pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const ClosureHeader) {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return;
+    }
+    unsafe {
+        let length = (*arr).length;
+        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let direct_call = if length >= 8 {
+            resolve_call2_direct(callback)
+        } else {
+            None
+        };
+
+        for i in 0..length as usize {
+            let element = *elements_ptr.add(i);
+            if let Some(func) = direct_call {
+                let _ = func(callback, element, i as f64);
+            } else {
+                let _ = js_closure_call2(callback, element, i as f64);
+            }
+        }
     }
 }
 
@@ -80,12 +133,21 @@ pub extern "C" fn js_array_filter(
 
         // Allocate result array with same capacity (might be smaller)
         let mut result = js_array_alloc(length);
+        let direct_call = if length >= 8 {
+            resolve_call2_direct(callback)
+        } else {
+            None
+        };
         // #854: `js_array_push_f64` already maintains `(*result).length`, so the
         // separate `result_len` counter that used to live here was dead.
 
         for i in 0..length as usize {
             let element = *elements_ptr.add(i);
-            let keep = js_closure_call2(callback, element, i as f64);
+            let keep = if let Some(func) = direct_call {
+                func(callback, element, i as f64)
+            } else {
+                js_closure_call2(callback, element, i as f64)
+            };
             // Proper truthy check: handles NaN-boxed booleans (TAG_FALSE != 0.0 but is falsy)
             if crate::value::js_is_truthy(keep) != 0 {
                 result = js_array_push_f64(result, element);
@@ -107,10 +169,19 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
     unsafe {
         let length = (*arr).length;
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let direct_call = if length >= 8 {
+            resolve_call2_direct(callback)
+        } else {
+            None
+        };
 
         for i in 0..length as usize {
             let element = *elements_ptr.add(i);
-            let result = js_closure_call2(callback, element, i as f64);
+            let result = if let Some(func) = direct_call {
+                func(callback, element, i as f64)
+            } else {
+                js_closure_call2(callback, element, i as f64)
+            };
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
@@ -136,10 +207,19 @@ pub extern "C" fn js_array_findIndex(
     unsafe {
         let length = (*arr).length;
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let direct_call = if length >= 8 {
+            resolve_call2_direct(callback)
+        } else {
+            None
+        };
 
         for i in 0..length as usize {
             let element = *elements_ptr.add(i);
-            let result = js_closure_call2(callback, element, i as f64);
+            let result = if let Some(func) = direct_call {
+                func(callback, element, i as f64)
+            } else {
+                js_closure_call2(callback, element, i as f64)
+            };
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
@@ -170,9 +250,18 @@ pub extern "C" fn js_array_find_last(
     unsafe {
         let length = (*arr).length as usize;
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let direct_call = if length >= 8 {
+            resolve_call2_direct(callback)
+        } else {
+            None
+        };
         for i in (0..length).rev() {
             let element = *elements_ptr.add(i);
-            let result = js_closure_call2(callback, element, i as f64);
+            let result = if let Some(func) = direct_call {
+                func(callback, element, i as f64)
+            } else {
+                js_closure_call2(callback, element, i as f64)
+            };
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
             }
@@ -201,9 +290,18 @@ pub extern "C" fn js_array_find_last_index(
     unsafe {
         let length = (*arr).length as usize;
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let direct_call = if length >= 8 {
+            resolve_call2_direct(callback)
+        } else {
+            None
+        };
         for i in (0..length).rev() {
             let element = *elements_ptr.add(i);
-            let result = js_closure_call2(callback, element, i as f64);
+            let result = if let Some(func) = direct_call {
+                func(callback, element, i as f64)
+            } else {
+                js_closure_call2(callback, element, i as f64)
+            };
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
             }
@@ -271,10 +369,19 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
     unsafe {
         let length = (*arr).length;
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let direct_call = if length >= 8 {
+            resolve_call2_direct(callback)
+        } else {
+            None
+        };
 
         for i in 0..length as usize {
             let element = *elements_ptr.add(i);
-            let result = js_closure_call2(callback, element, i as f64);
+            let result = if let Some(func) = direct_call {
+                func(callback, element, i as f64)
+            } else {
+                js_closure_call2(callback, element, i as f64)
+            };
             if crate::value::js_is_truthy(result) != 0 {
                 return f64::from_bits(TAG_TRUE);
             }
@@ -297,10 +404,19 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
     unsafe {
         let length = (*arr).length;
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let direct_call = if length >= 8 {
+            resolve_call2_direct(callback)
+        } else {
+            None
+        };
 
         for i in 0..length as usize {
             let element = *elements_ptr.add(i);
-            let result = js_closure_call2(callback, element, i as f64);
+            let result = if let Some(func) = direct_call {
+                func(callback, element, i as f64)
+            } else {
+                js_closure_call2(callback, element, i as f64)
+            };
             if crate::value::js_is_truthy(result) == 0 {
                 return f64::from_bits(TAG_FALSE);
             }
@@ -326,10 +442,19 @@ pub extern "C" fn js_array_flatMap(
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
 
         let mut result = js_array_alloc(length);
+        let direct_call = if length >= 8 {
+            resolve_call2_direct(callback)
+        } else {
+            None
+        };
 
         for i in 0..length as usize {
             let element = *elements_ptr.add(i);
-            let mapped = js_closure_call2(callback, element, i as f64);
+            let mapped = if let Some(func) = direct_call {
+                func(callback, element, i as f64)
+            } else {
+                js_closure_call2(callback, element, i as f64)
+            };
             // Check if the mapped value is an array (pointer-tagged)
             let bits = mapped.to_bits();
             let top16 = bits >> 48;

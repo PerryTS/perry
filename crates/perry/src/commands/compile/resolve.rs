@@ -213,6 +213,27 @@ pub(super) fn parse_native_library_manifest(
                     .collect()
             })
             .unwrap_or_default(),
+        // Issue #1304 — vendored-SDK frameworks gated on an env var.
+        // Accept both camelCase (`optionalFrameworks`/`frameworksEnv`,
+        // matching `libDirs`/`pkgConfig`) and snake_case
+        // (`optional_frameworks`/`frameworks_env`, matching
+        // `swift_sources`/`metal_sources`) so package authors don't get
+        // tripped up by the manifest's mixed casing convention.
+        optional_frameworks: tc
+            .get("optionalFrameworks")
+            .or_else(|| tc.get("optional_frameworks"))
+            .and_then(|f| f.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        frameworks_env: tc
+            .get("frameworksEnv")
+            .or_else(|| tc.get("frameworks_env"))
+            .and_then(|v| v.as_str())
+            .map(String::from),
         libs: tc
             .get("libs")
             .and_then(|l| l.as_array())
@@ -757,6 +778,108 @@ mod manifest_parse_tests {
         let tc = parsed.target_config.expect("target_config");
         let prebuilt = tc.prebuilt.expect("prebuilt path");
         assert_eq!(prebuilt, pkg_dir.join("./vendor/libfoo.a"));
+    }
+
+    /// Issue #1304 — vendored-SDK frameworks parse from the snake_case
+    /// manifest keys (`optional_frameworks` / `frameworks_env`), matching
+    /// the `swift_sources` / `metal_sources` convention. These are the
+    /// shape `@perryts/google-auth` uses for the real GoogleSignIn SDK.
+    #[test]
+    fn optional_frameworks_parse_snake_case() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "ios": {
+                            "crate": "crate-ios",
+                            "lib": "perry_google_auth",
+                            "optional_frameworks": ["GoogleSignIn"],
+                            "frameworks_env": "PERRY_GOOGLE_SIGN_IN_FRAMEWORK_DIR"
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let parsed =
+            parse_native_library_manifest(pkg_dir, "demo", Some("ios")).expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        assert_eq!(tc.optional_frameworks, vec!["GoogleSignIn"]);
+        assert_eq!(
+            tc.frameworks_env.as_deref(),
+            Some("PERRY_GOOGLE_SIGN_IN_FRAMEWORK_DIR")
+        );
+    }
+
+    /// The camelCase spelling (`optionalFrameworks` / `frameworksEnv`,
+    /// matching `libDirs` / `pkgConfig`) is accepted too — the manifest's
+    /// casing convention is mixed, so we don't want a silent no-op when an
+    /// author picks the camelCase form.
+    #[test]
+    fn optional_frameworks_parse_camel_case() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "ios": {
+                            "crate": "crate-ios",
+                            "lib": "demo",
+                            "optionalFrameworks": ["GoogleSignIn", "AppAuth"],
+                            "frameworksEnv": "VENDOR_FW_DIR"
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let parsed =
+            parse_native_library_manifest(pkg_dir, "demo", Some("ios")).expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        assert_eq!(tc.optional_frameworks, vec!["GoogleSignIn", "AppAuth"]);
+        assert_eq!(tc.frameworks_env.as_deref(), Some("VENDOR_FW_DIR"));
+    }
+
+    /// Omitting both fields must default to an empty list / `None`, not
+    /// error — every existing wrapper lacks them.
+    #[test]
+    fn optional_frameworks_default_when_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": { "ios": { "crate": "rust", "lib": "demo" } }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let parsed =
+            parse_native_library_manifest(pkg_dir, "demo", Some("ios")).expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        assert!(tc.optional_frameworks.is_empty());
+        assert!(tc.frameworks_env.is_none());
     }
 }
 

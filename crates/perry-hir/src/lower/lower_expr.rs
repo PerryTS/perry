@@ -20,6 +20,7 @@ use swc_ecma_ast as ast;
 
 use super::*;
 use crate::ir::*;
+use crate::lower_types::extract_ts_type_with_ctx;
 
 pub(crate) fn lower_expr_assignment(
     ctx: &mut LoweringContext,
@@ -1016,7 +1017,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         ast::Expr::TsAs(ts_as) => {
             // TypeScript 'as' type assertion - at runtime, just evaluate the expression
             // The type assertion is compile-time only
-            lower_expr(ctx, &ts_as.expr)
+            lower_expr_with_json_parse_type_hint(ctx, &ts_as.expr, &ts_as.type_ann)
         }
         ast::Expr::TsNonNull(ts_non_null) => {
             // TypeScript non-null assertion (value!) - at runtime, just the expression
@@ -1024,7 +1025,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         }
         ast::Expr::TsTypeAssertion(ts_assertion) => {
             // TypeScript angle-bracket type assertion (<Type>value) - same as 'as', compile-time only
-            lower_expr(ctx, &ts_assertion.expr)
+            lower_expr_with_json_parse_type_hint(ctx, &ts_assertion.expr, &ts_assertion.type_ann)
         }
         ast::Expr::TsConstAssertion(ts_const) => {
             // TypeScript 'as const' assertion - at runtime, just evaluate the expression
@@ -1218,6 +1219,45 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         ast::Expr::JSXFragment(jsx) => lower_jsx_fragment(ctx, jsx),
         _ => Err(anyhow!("Unsupported expression type: {:?}", expr)),
     }
+}
+
+fn lower_expr_with_json_parse_type_hint(
+    ctx: &mut LoweringContext,
+    expr: &ast::Expr,
+    ts_type: &ast::TsType,
+) -> Result<Expr> {
+    let lowered = lower_expr(ctx, expr)?;
+    let Expr::JsonParse(text) = lowered else {
+        return Ok(lowered);
+    };
+
+    // Preserve the common `JSON.parse(blob) as T` type hint in HIR, matching
+    // the existing `JSON.parse<T>(blob)` path. The assertion still erases at
+    // runtime; this only gives codegen the same opportunity to choose a
+    // specialized parse path when the target type is concrete enough.
+    let ty = extract_ts_type_with_ctx(ts_type, Some(ctx));
+    let resolved = resolve_typed_parse_ty(ctx, ty);
+    if matches!(resolved, Type::Any | Type::Unknown) || !typed_parse_codegen_supports(&resolved) {
+        return Ok(Expr::JsonParse(text));
+    }
+
+    Ok(Expr::JsonParseTyped {
+        text,
+        ty: resolved,
+        ordered_keys: extract_typed_parse_source_order(ts_type, ctx),
+    })
+}
+
+fn typed_parse_codegen_supports(ty: &Type) -> bool {
+    let elem = match ty {
+        Type::Array(inner) => inner.as_ref(),
+        Type::Generic { base, type_args } if base == "Array" && type_args.len() == 1 => {
+            &type_args[0]
+        }
+        _ => return false,
+    };
+
+    matches!(elem, Type::Object(obj) if !obj.properties.is_empty())
 }
 
 /// If `call` matches `Text(\`...${state.value}...\`)` with at least one State

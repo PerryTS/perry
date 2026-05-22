@@ -97,6 +97,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         }
                     }
                     let runtime_fn = match property.as_str() {
+                        "info" => "js_console_info_spread",
+                        "debug" => "js_console_debug_spread",
                         "warn" => "js_console_warn_spread",
                         "error" => "js_console_error_spread",
                         _ => "js_console_log_spread",

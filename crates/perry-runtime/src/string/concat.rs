@@ -1,7 +1,7 @@
 //! String concatenation: pairwise, fused with NaN-boxed value, and n-way chain.
 
 use super::intern::{
-    concat_content_matches, fnv1a_concat, INTERN_MAX_BYTE_LEN, INTERN_TABLE, INTERN_TABLE_MASK,
+    concat_content_matches, fnv1a_concat, with_intern_table, INTERN_MAX_BYTE_LEN, INTERN_TABLE_MASK,
 };
 use super::*;
 
@@ -130,15 +130,21 @@ pub extern "C" fn js_string_concat(
         unsafe {
             let hash = fnv1a_concat(a, blen_a, b, blen_b);
             let slot = (hash as usize) & INTERN_TABLE_MASK;
-            let entry = &INTERN_TABLE[slot];
-            if entry.string_ptr != 0 && entry.hash == hash {
-                let existing = entry.string_ptr as *const StringHeader;
-                if is_valid_string_ptr(existing)
-                    && (*existing).byte_len == total_blen
-                    && concat_content_matches(a, blen_a, b, blen_b, existing)
-                {
-                    return existing as *mut StringHeader;
+            let hit = with_intern_table(|table| {
+                let entry = &(*table)[slot];
+                if entry.string_ptr != 0 && entry.hash == hash {
+                    let existing = entry.string_ptr as *const StringHeader;
+                    if is_valid_string_ptr(existing)
+                        && (*existing).byte_len == total_blen
+                        && concat_content_matches(a, blen_a, b, blen_b, existing)
+                    {
+                        return Some(existing);
+                    }
                 }
+                None
+            });
+            if let Some(existing) = hit {
+                return existing as *mut StringHeader;
             }
         }
     }

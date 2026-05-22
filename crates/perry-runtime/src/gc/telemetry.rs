@@ -29,6 +29,36 @@ pub(super) struct RememberedSetTraceStats {
     pub(super) dirty_slots_scanned: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct OldYoungEdgeMissing {
+    pub(super) parent: usize,
+    pub(super) slot: usize,
+    pub(super) child: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct OldYoungEdgeVerifyStats {
+    pub(super) checked_old_objects: usize,
+    pub(super) checked_remembered_pages: usize,
+    pub(super) checked_old_to_young_edges: usize,
+    pub(super) missing_edges: usize,
+    pub(super) first_missing: Option<OldYoungEdgeMissing>,
+}
+
+impl OldYoungEdgeVerifyStats {
+    #[inline]
+    pub(super) fn record_missing(&mut self, parent: usize, slot: usize, child: usize) {
+        self.missing_edges = self.missing_edges.saturating_add(1);
+        if self.first_missing.is_none() {
+            self.first_missing = Some(OldYoungEdgeMissing {
+                parent,
+                slot,
+                child,
+            });
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub(super) struct BlockPersistTraceStats {
     pub(super) iterations: usize,
@@ -155,23 +185,80 @@ impl ShadowRootTraceStats {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+pub(super) struct RootSourceSlotTraceStats {
+    pub(super) registered_scanners: usize,
+    pub(super) slots_scanned: usize,
+    pub(super) nonzero_slots: usize,
+    pub(super) pointer_roots: usize,
+    pub(super) rewritten_slots: usize,
+}
+
+impl RootSourceSlotTraceStats {
+    #[inline]
+    pub(super) fn record_scan(&mut self, nonzero: bool, pointer_root: bool) {
+        self.slots_scanned = self.slots_scanned.saturating_add(1);
+        if nonzero {
+            self.nonzero_slots = self.nonzero_slots.saturating_add(1);
+        }
+        if pointer_root {
+            self.pointer_roots = self.pointer_roots.saturating_add(1);
+        }
+    }
+
+    #[inline]
+    pub(super) fn record_registered_scanners(&mut self, count: usize) {
+        self.registered_scanners = self.registered_scanners.max(count);
+    }
+
+    #[inline]
+    pub(super) fn record_rewrite(&mut self) {
+        self.rewritten_slots = self.rewritten_slots.saturating_add(1);
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct NativeStackFallbackTraceStats {
+    pub(super) decision: ConservativeStackScanDecision,
+    pub(super) scanned: bool,
+    pub(super) roots_found: usize,
+    pub(super) pinned_roots: usize,
+    pub(super) pinned_bytes: usize,
+    pub(super) compiled_frame_pinned_roots: usize,
+    pub(super) compiled_frame_pinned_bytes: usize,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct RootSourcesTraceStats {
+    pub(super) compiled_shadow: RootSourceSlotTraceStats,
+    pub(super) module_globals: RootSourceSlotTraceStats,
+    pub(super) runtime_handles: RootSourceSlotTraceStats,
+    pub(super) runtime_mutable_scanners: RootSourceSlotTraceStats,
+    pub(super) ffi_mutable_scanners: RootSourceSlotTraceStats,
+    pub(super) native_stack_fallback: NativeStackFallbackTraceStats,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct LayoutScanTraceStats {
     pub(super) pointer_slots_read: usize,
+    pub(super) pointer_slot_bytes_read: usize,
     pub(super) masked_pointer_slots_read: usize,
     pub(super) unknown_layout_slots_read: usize,
     pub(super) pointer_free_ranges_skipped: usize,
     pub(super) pointer_free_slots_skipped: usize,
+    pub(super) pointer_free_payload_bytes_skipped: usize,
 }
 
 impl LayoutScanTraceStats {
     pub(super) const fn zero() -> Self {
         Self {
             pointer_slots_read: 0,
+            pointer_slot_bytes_read: 0,
             masked_pointer_slots_read: 0,
             unknown_layout_slots_read: 0,
             pointer_free_ranges_skipped: 0,
             pointer_free_slots_skipped: 0,
+            pointer_free_payload_bytes_skipped: 0,
         }
     }
 }
@@ -223,6 +310,9 @@ pub(super) fn record_layout_child_slot_read(kind: HeapChildSlotReadKind) {
     LAYOUT_SCAN_TRACE_STATS.with(|stats| {
         let mut current = stats.get();
         current.pointer_slots_read = current.pointer_slots_read.saturating_add(1);
+        current.pointer_slot_bytes_read = current
+            .pointer_slot_bytes_read
+            .saturating_add(std::mem::size_of::<u64>());
         match kind {
             HeapChildSlotReadKind::Prefix => {}
             HeapChildSlotReadKind::Masked => {
@@ -249,6 +339,9 @@ pub(super) fn record_layout_pointer_free_range_skipped(slot_count: usize) {
         current.pointer_free_slots_skipped = current
             .pointer_free_slots_skipped
             .saturating_add(slot_count);
+        current.pointer_free_payload_bytes_skipped = current
+            .pointer_free_payload_bytes_skipped
+            .saturating_add(slot_count.saturating_mul(std::mem::size_of::<u64>()));
         stats.set(current);
     });
 }
@@ -260,6 +353,7 @@ pub(super) struct BarrierTraceCounters {
     pub(super) non_pointer_child_skips: u64,
     pub(super) parent_not_old_skips: u64,
     pub(super) child_not_young_skips: u64,
+    pub(super) old_to_young_slow_hits: u64,
     pub(super) remembered_set_insert_attempts: u64,
     pub(super) new_inserts: u64,
     pub(super) dirty_page_mark_attempts: u64,
@@ -275,6 +369,7 @@ impl BarrierTraceCounters {
             non_pointer_child_skips: 0,
             parent_not_old_skips: 0,
             child_not_young_skips: 0,
+            old_to_young_slow_hits: 0,
             remembered_set_insert_attempts: 0,
             new_inserts: 0,
             dirty_page_mark_attempts: 0,
@@ -291,6 +386,7 @@ pub(super) enum BarrierTraceCounter {
     NonPointerChildSkips,
     ParentNotOldSkips,
     ChildNotYoungSkips,
+    OldToYoungSlowHits,
     RememberedSetInsertAttempts,
     NewInserts,
     DirtyPageMarkAttempts,
@@ -308,12 +404,14 @@ pub(super) struct GcCycleTrace {
     pub(super) malloc_before: usize,
     pub(super) remembered_set_before: usize,
     pub(super) remembered_set: RememberedSetTraceStats,
+    pub(super) old_young_edge_verifier: OldYoungEdgeVerifyStats,
     pub(super) old_pages: crate::arena::OldPageSummary,
     pub(super) conservative_root_count: usize,
     pub(super) conservative_pinned: usize,
     pub(super) conservative_pinned_bytes: usize,
     pub(super) legacy_copy_only_scanner_pinned: LegacyRootTraceStats,
     pub(super) shadow_roots: ShadowRootTraceStats,
+    pub(super) root_sources: RootSourcesTraceStats,
     pub(super) layout_scans: LayoutScanTraceStats,
     pub(super) evacuation_policy: EvacuationPolicyDecision,
     pub(super) evacuation: EvacuationTraceStats,
@@ -340,6 +438,7 @@ impl GcCycleTrace {
             "evacuation",
             "copying_nursery",
             "reference_rewrite",
+            "old_young_edge_verify",
             "sweep",
             "remembered_set_clear",
             "conservative_pin_clear",
@@ -357,12 +456,14 @@ impl GcCycleTrace {
             malloc_before: malloc_object_count(),
             remembered_set_before: remembered_set_size(),
             remembered_set: RememberedSetTraceStats::default(),
+            old_young_edge_verifier: OldYoungEdgeVerifyStats::default(),
             old_pages: crate::arena::OldPageSummary::default(),
             conservative_root_count: 0,
             conservative_pinned: 0,
             conservative_pinned_bytes: 0,
             legacy_copy_only_scanner_pinned: LegacyRootTraceStats::default(),
             shadow_roots: ShadowRootTraceStats::default(),
+            root_sources: RootSourcesTraceStats::default(),
             layout_scans: LayoutScanTraceStats::default(),
             evacuation_policy: EvacuationPolicyDecision::default(),
             evacuation: EvacuationTraceStats::default(),
@@ -393,165 +494,201 @@ impl GcCycleTrace {
         let malloc_after = malloc_object_count();
         let remembered_set_after = remembered_set_size();
         let malloc_kinds = take_malloc_kind_telemetry_json();
+        let first_missing_old_young_edge =
+            self.old_young_edge_verifier.first_missing.map(|missing| {
+                serde_json::json!({
+                    "parent": missing.parent,
+                    "slot": missing.slot,
+                    "child": missing.child,
+                })
+            });
+        let old_young_edge_verifier = serde_json::json!({
+            "checked_old_objects": self.old_young_edge_verifier.checked_old_objects,
+            "checked_remembered_pages": self.old_young_edge_verifier.checked_remembered_pages,
+            "checked_old_to_young_edges": self.old_young_edge_verifier.checked_old_to_young_edges,
+            "missing_edges": self.old_young_edge_verifier.missing_edges,
+            "first_missing": first_missing_old_young_edge,
+        });
+        let remembered_set_json = serde_json::json!({
+            "before": self.remembered_set_before,
+            "after": remembered_set_after,
+            "entries_scanned": self.remembered_set.entries_scanned,
+            "valid_roots": self.remembered_set.valid_roots,
+            "newly_marked": self.remembered_set.newly_marked,
+            "dirty_pages_before": self.remembered_set.dirty_pages_before,
+            "dirty_pages_after": remembered_dirty_page_count(),
+            "dirty_pages_scanned": self.remembered_set.dirty_pages_scanned,
+            "old_objects_considered": self.remembered_set.old_objects_considered,
+            "dirty_objects_scanned": self.remembered_set.dirty_objects_scanned,
+            "dirty_slot_pages_considered": self.remembered_set.dirty_slot_pages_considered,
+            "dirty_slot_ranges_scanned": self.remembered_set.dirty_slot_ranges_scanned,
+            "dirty_slots_scanned": self.remembered_set.dirty_slots_scanned,
+        });
+        let old_pages_json = serde_json::json!({
+            "pages": self.old_pages.pages,
+            "allocated_bytes": self.old_pages.allocated_bytes,
+            "live_bytes": self.old_pages.live_bytes,
+            "dead_bytes": self.old_pages.dead_bytes,
+            "reusable_bytes": self.old_pages.reusable_bytes,
+            "returned_bytes": self.old_pages.returned_bytes,
+            "pinned_bytes": self.old_pages.pinned_bytes,
+            "object_count": self.old_pages.object_count,
+            "live_object_count": self.old_pages.live_object_count,
+            "dead_object_count": self.old_pages.dead_object_count,
+            "pinned_object_count": self.old_pages.pinned_object_count,
+            "dirty_pages": self.old_pages.dirty_pages,
+            "dirty_slots": self.old_pages.dirty_slots,
+            "fragmented_pages": self.old_pages.fragmented_pages,
+            "evacuation_eligible_pages": self.old_pages.evacuation_eligible_pages,
+        });
+        let arena_bytes_json = serde_json::json!({
+            "before": arena_snapshot_json(self.arena_before),
+            "after": arena_snapshot_json(arena_after),
+        });
+        let malloc_objects_json = serde_json::json!({
+            "before": self.malloc_before,
+            "after": malloc_after,
+        });
+        let legacy_copy_only_scanner_pinned = serde_json::json!({
+            "registered_rust_scanners": self.legacy_copy_only_scanner_pinned.registered_rust_scanners,
+            "registered_ffi_scanners": self.legacy_copy_only_scanner_pinned.registered_ffi_scanners,
+            "emitted_roots": self.legacy_copy_only_scanner_pinned.emitted_roots,
+            "emitted_young_roots": self.legacy_copy_only_scanner_pinned.emitted_young_roots,
+            "emitted_old_roots": self.legacy_copy_only_scanner_pinned.emitted_old_roots,
+            "emitted_malloc_roots": self.legacy_copy_only_scanner_pinned.emitted_malloc_roots,
+            "malformed_roots": self.legacy_copy_only_scanner_pinned.malformed_roots,
+            "roots": self.legacy_copy_only_scanner_pinned.pinned_roots,
+            "bytes": self.legacy_copy_only_scanner_pinned.pinned_bytes,
+        });
+        let shadow_roots_json = serde_json::json!({
+            "slots_scanned": self.shadow_roots.slots_scanned,
+            "nonzero_slots": self.shadow_roots.nonzero_slots,
+            "pointer_roots": self.shadow_roots.pointer_roots,
+            "rewritten_slots": self.shadow_roots.rewritten_slots,
+        });
+        let root_sources_json = root_sources_json(self.root_sources);
+        let layout_scans_json = serde_json::json!({
+            "pointer_slots_read": self.layout_scans.pointer_slots_read,
+            "pointer_slot_bytes_read": self.layout_scans.pointer_slot_bytes_read,
+            "masked_pointer_slots_read": self.layout_scans.masked_pointer_slots_read,
+            "unknown_layout_slots_read": self.layout_scans.unknown_layout_slots_read,
+            "pointer_free_ranges_skipped": self.layout_scans.pointer_free_ranges_skipped,
+            "pointer_free_slots_skipped": self.layout_scans.pointer_free_slots_skipped,
+            "pointer_free_payload_bytes_skipped": self.layout_scans.pointer_free_payload_bytes_skipped,
+        });
+        let evacuation_json = serde_json::json!({
+            "objects": self.evacuation.objects,
+            "bytes": self.evacuation.bytes,
+            "moved_objects": self.evacuation.moved_objects,
+            "moved_bytes": self.evacuation.moved_bytes,
+            "old_page_moved_objects": self.evacuation.old_page_moved_objects,
+            "old_page_moved_bytes": self.evacuation.old_page_moved_bytes,
+            "released_original_objects": self.evacuation.released_original_objects,
+            "released_original_bytes": self.evacuation.released_original_bytes,
+            "released_original_reusable_bytes": self.evacuation.released_original_reusable_bytes,
+            "released_original_returned_bytes": self.evacuation.released_original_returned_bytes,
+            "retained_forwarded_stub_objects": self.evacuation.retained_forwarded_stub_objects,
+            "retained_forwarded_stub_bytes": self.evacuation.retained_forwarded_stub_bytes,
+        });
+        let copying_nursery_json = serde_json::json!({
+            "eligible": self.copying_nursery.eligible,
+            "copied_objects": self.copying_nursery.copied_objects,
+            "copied_bytes": self.copying_nursery.copied_bytes,
+            "promoted_objects": self.copying_nursery.promoted_objects,
+            "promoted_bytes": self.copying_nursery.promoted_bytes,
+            "large_excluded_objects": self.copying_nursery.large_excluded_objects,
+            "large_excluded_bytes": self.copying_nursery.large_excluded_bytes,
+            "reset_blocks": self.copying_nursery.reset_blocks,
+            "malloc_validation_lookups": self.copying_nursery.malloc_validation_lookups,
+            "malloc_registry_rebuilds": self.copying_nursery.malloc_registry_rebuilds,
+            "malloc_sweep_due": self.copying_nursery.malloc_sweep_due,
+            "fallback_reason": self.copying_nursery.fallback_reason.as_str(),
+        });
+        let evacuation_policy_json = serde_json::json!({
+            "allowed": self.evacuation_policy.allowed,
+            "considered": self.evacuation_policy.considered,
+            "force": self.evacuation_policy.force,
+            "enabled": self.evacuation_policy.enabled,
+            "reason": self.evacuation_policy.reason,
+            "tenured_still_in_nursery_bytes": self.evacuation_policy.snapshot.tenured_still_in_nursery_bytes,
+            "candidate_bytes": self.evacuation_policy.snapshot.candidate_bytes,
+            "candidate_objects": self.evacuation_policy.snapshot.candidate_objects,
+            "candidate_ratio_pct": self.evacuation_policy.snapshot.candidate_ratio_pct(),
+            "reclaimable_candidate_bytes": self.evacuation_policy.snapshot.reclaimable_candidate_bytes,
+            "reclaimable_candidate_objects": self.evacuation_policy.snapshot.reclaimable_candidate_objects,
+            "reclaimable_candidate_ratio_pct": self.evacuation_policy.snapshot.reclaimable_candidate_ratio_pct(),
+            "old_page_candidate_pages": self.evacuation_policy.snapshot.old_page_candidate_pages,
+            "old_page_selected_pages": self.evacuation_policy.snapshot.old_page_selected_pages,
+            "old_page_selected_live_bytes": self.evacuation_policy.snapshot.old_page_selected_live_bytes,
+            "old_page_reclaimable_bytes": self.evacuation_policy.snapshot.old_page_reclaimable_bytes,
+            "old_page_skipped_pinned_pages": self.evacuation_policy.snapshot.old_page_skipped_pinned_pages,
+            "retained_forwarded_stub_bytes": self.evacuation_policy.snapshot.retained_forwarded_stub_bytes,
+            "retained_forwarded_stub_objects": self.evacuation_policy.snapshot.retained_forwarded_stub_objects,
+            "conservative_pinned_bytes": self.evacuation_policy.snapshot.conservative_pinned_bytes,
+            "rss_bytes": self.evacuation_policy.snapshot.rss_bytes,
+            "previous_pause_us": self.evacuation_policy.snapshot.previous_pause_us,
+            "pre_evac_pause_us": self.evacuation_policy.snapshot.pre_evac_pause_us,
+        });
+        let block_persist_json = serde_json::json!({
+            "iterations": self.block_persist.iterations,
+            "candidate_blocks": self.block_persist.candidate_blocks,
+            "live_blocks": self.block_persist.live_blocks,
+            "marked_objects": self.block_persist.marked_objects,
+        });
+        let sweep_json = serde_json::json!({
+            "dead_bytes": self.sweep.dead_bytes,
+            "freed_bytes": self.sweep.freed_bytes,
+            "reusable_bytes": self.sweep.reusable_bytes,
+            "returned_bytes": self.sweep.returned_bytes,
+            "reset_blocks": self.sweep.reset_blocks,
+            "deallocated_blocks": self.sweep.deallocated_blocks,
+            "deallocated_bytes": self.sweep.deallocated_bytes,
+            "retained_forwarded_stub_objects": self.sweep.retained_forwarded_stub_objects,
+            "retained_forwarded_stub_bytes": self.sweep.retained_forwarded_stub_bytes,
+        });
+        let write_barrier_json = serde_json::json!({
+            "calls": self.write_barrier.calls,
+            "non_pointer_parent_skips": self.write_barrier.non_pointer_parent_skips,
+            "non_pointer_child_skips": self.write_barrier.non_pointer_child_skips,
+            "parent_not_old_skips": self.write_barrier.parent_not_old_skips,
+            "child_not_young_skips": self.write_barrier.child_not_young_skips,
+            "old_to_young_slow_hits": self.write_barrier.old_to_young_slow_hits,
+            "remembered_set_insert_attempts": self.write_barrier.remembered_set_insert_attempts,
+            "new_inserts": self.write_barrier.new_inserts,
+            "dirty_page_mark_attempts": self.write_barrier.dirty_page_mark_attempts,
+            "new_dirty_pages": self.write_barrier.new_dirty_pages,
+            "conservative_parent_span_marks": self.write_barrier.conservative_parent_span_marks,
+        });
+        let trigger_json = serde_json::json!({
+            "kind": self.trigger_kind.as_str(),
+        });
+        let steps_value = steps_json(self.steps_before, steps_after);
         serde_json::json!({
             "event": "gc_cycle",
             "collection_kind": self.collection_kind.as_str(),
             "pause_us": self.pause_us,
             "phase_us": self.phase_us,
-            "arena_bytes": {
-                "before": arena_snapshot_json(self.arena_before),
-                "after": arena_snapshot_json(arena_after),
-            },
-            "malloc_objects": {
-                "before": self.malloc_before,
-                "after": malloc_after,
-            },
+            "arena_bytes": arena_bytes_json,
+            "malloc_objects": malloc_objects_json,
             "malloc_kinds": malloc_kinds,
-            "remembered_set": {
-                "before": self.remembered_set_before,
-                "after": remembered_set_after,
-                "entries_scanned": self.remembered_set.entries_scanned,
-                "valid_roots": self.remembered_set.valid_roots,
-                "newly_marked": self.remembered_set.newly_marked,
-                "dirty_pages_before": self.remembered_set.dirty_pages_before,
-                "dirty_pages_after": remembered_dirty_page_count(),
-                "dirty_pages_scanned": self.remembered_set.dirty_pages_scanned,
-                "old_objects_considered": self.remembered_set.old_objects_considered,
-                "dirty_objects_scanned": self.remembered_set.dirty_objects_scanned,
-                "dirty_slot_pages_considered": self.remembered_set.dirty_slot_pages_considered,
-                "dirty_slot_ranges_scanned": self.remembered_set.dirty_slot_ranges_scanned,
-                "dirty_slots_scanned": self.remembered_set.dirty_slots_scanned,
-            },
-            "old_pages": {
-                "pages": self.old_pages.pages,
-                "allocated_bytes": self.old_pages.allocated_bytes,
-                "live_bytes": self.old_pages.live_bytes,
-                "dead_bytes": self.old_pages.dead_bytes,
-                "reusable_bytes": self.old_pages.reusable_bytes,
-                "returned_bytes": self.old_pages.returned_bytes,
-                "pinned_bytes": self.old_pages.pinned_bytes,
-                "object_count": self.old_pages.object_count,
-                "live_object_count": self.old_pages.live_object_count,
-                "dead_object_count": self.old_pages.dead_object_count,
-                "pinned_object_count": self.old_pages.pinned_object_count,
-                "dirty_pages": self.old_pages.dirty_pages,
-                "dirty_slots": self.old_pages.dirty_slots,
-                "fragmented_pages": self.old_pages.fragmented_pages,
-                "evacuation_eligible_pages": self.old_pages.evacuation_eligible_pages,
-            },
+            "remembered_set": remembered_set_json,
+            "old_young_edge_verifier": old_young_edge_verifier,
+            "old_pages": old_pages_json,
             "conservative_root_count": self.conservative_root_count,
             "conservative_pinned": self.conservative_pinned,
             "conservative_pinned_bytes": self.conservative_pinned_bytes,
-            "legacy_copy_only_scanner_pinned": {
-                "registered_rust_scanners": self.legacy_copy_only_scanner_pinned.registered_rust_scanners,
-                "registered_ffi_scanners": self.legacy_copy_only_scanner_pinned.registered_ffi_scanners,
-                "emitted_roots": self.legacy_copy_only_scanner_pinned.emitted_roots,
-                "emitted_young_roots": self.legacy_copy_only_scanner_pinned.emitted_young_roots,
-                "emitted_old_roots": self.legacy_copy_only_scanner_pinned.emitted_old_roots,
-                "emitted_malloc_roots": self.legacy_copy_only_scanner_pinned.emitted_malloc_roots,
-                "malformed_roots": self.legacy_copy_only_scanner_pinned.malformed_roots,
-                "roots": self.legacy_copy_only_scanner_pinned.pinned_roots,
-                "bytes": self.legacy_copy_only_scanner_pinned.pinned_bytes,
-            },
-            "shadow_roots": {
-                "slots_scanned": self.shadow_roots.slots_scanned,
-                "nonzero_slots": self.shadow_roots.nonzero_slots,
-                "pointer_roots": self.shadow_roots.pointer_roots,
-                "rewritten_slots": self.shadow_roots.rewritten_slots,
-            },
-            "layout_scans": {
-                "pointer_slots_read": self.layout_scans.pointer_slots_read,
-                "masked_pointer_slots_read": self.layout_scans.masked_pointer_slots_read,
-                "unknown_layout_slots_read": self.layout_scans.unknown_layout_slots_read,
-                "pointer_free_ranges_skipped": self.layout_scans.pointer_free_ranges_skipped,
-                "pointer_free_slots_skipped": self.layout_scans.pointer_free_slots_skipped,
-            },
-            "evacuation": {
-                "objects": self.evacuation.objects,
-                "bytes": self.evacuation.bytes,
-                "moved_objects": self.evacuation.moved_objects,
-                "moved_bytes": self.evacuation.moved_bytes,
-                "old_page_moved_objects": self.evacuation.old_page_moved_objects,
-                "old_page_moved_bytes": self.evacuation.old_page_moved_bytes,
-                "released_original_objects": self.evacuation.released_original_objects,
-                "released_original_bytes": self.evacuation.released_original_bytes,
-                "released_original_reusable_bytes": self.evacuation.released_original_reusable_bytes,
-                "released_original_returned_bytes": self.evacuation.released_original_returned_bytes,
-                "retained_forwarded_stub_objects": self.evacuation.retained_forwarded_stub_objects,
-                "retained_forwarded_stub_bytes": self.evacuation.retained_forwarded_stub_bytes,
-            },
-            "copying_nursery": {
-                "eligible": self.copying_nursery.eligible,
-                "copied_objects": self.copying_nursery.copied_objects,
-                "copied_bytes": self.copying_nursery.copied_bytes,
-                "promoted_objects": self.copying_nursery.promoted_objects,
-                "promoted_bytes": self.copying_nursery.promoted_bytes,
-                "large_excluded_objects": self.copying_nursery.large_excluded_objects,
-                "large_excluded_bytes": self.copying_nursery.large_excluded_bytes,
-                "reset_blocks": self.copying_nursery.reset_blocks,
-                "malloc_validation_lookups": self.copying_nursery.malloc_validation_lookups,
-                "malloc_registry_rebuilds": self.copying_nursery.malloc_registry_rebuilds,
-                "malloc_sweep_due": self.copying_nursery.malloc_sweep_due,
-                "fallback_reason": self.copying_nursery.fallback_reason.as_str(),
-            },
-            "evacuation_policy": {
-                "allowed": self.evacuation_policy.allowed,
-                "considered": self.evacuation_policy.considered,
-                "force": self.evacuation_policy.force,
-                "enabled": self.evacuation_policy.enabled,
-                "reason": self.evacuation_policy.reason,
-                "tenured_still_in_nursery_bytes": self.evacuation_policy.snapshot.tenured_still_in_nursery_bytes,
-                "candidate_bytes": self.evacuation_policy.snapshot.candidate_bytes,
-                "candidate_objects": self.evacuation_policy.snapshot.candidate_objects,
-                "candidate_ratio_pct": self.evacuation_policy.snapshot.candidate_ratio_pct(),
-                "reclaimable_candidate_bytes": self.evacuation_policy.snapshot.reclaimable_candidate_bytes,
-                "reclaimable_candidate_objects": self.evacuation_policy.snapshot.reclaimable_candidate_objects,
-                "reclaimable_candidate_ratio_pct": self.evacuation_policy.snapshot.reclaimable_candidate_ratio_pct(),
-                "old_page_candidate_pages": self.evacuation_policy.snapshot.old_page_candidate_pages,
-                "old_page_selected_pages": self.evacuation_policy.snapshot.old_page_selected_pages,
-                "old_page_selected_live_bytes": self.evacuation_policy.snapshot.old_page_selected_live_bytes,
-                "old_page_reclaimable_bytes": self.evacuation_policy.snapshot.old_page_reclaimable_bytes,
-                "old_page_skipped_pinned_pages": self.evacuation_policy.snapshot.old_page_skipped_pinned_pages,
-                "retained_forwarded_stub_bytes": self.evacuation_policy.snapshot.retained_forwarded_stub_bytes,
-                "retained_forwarded_stub_objects": self.evacuation_policy.snapshot.retained_forwarded_stub_objects,
-                "conservative_pinned_bytes": self.evacuation_policy.snapshot.conservative_pinned_bytes,
-                "rss_bytes": self.evacuation_policy.snapshot.rss_bytes,
-                "previous_pause_us": self.evacuation_policy.snapshot.previous_pause_us,
-                "pre_evac_pause_us": self.evacuation_policy.snapshot.pre_evac_pause_us,
-            },
-            "block_persist": {
-                "iterations": self.block_persist.iterations,
-                "candidate_blocks": self.block_persist.candidate_blocks,
-                "live_blocks": self.block_persist.live_blocks,
-                "marked_objects": self.block_persist.marked_objects,
-            },
-            "sweep": {
-                "dead_bytes": self.sweep.dead_bytes,
-                "freed_bytes": self.sweep.freed_bytes,
-                "reusable_bytes": self.sweep.reusable_bytes,
-                "returned_bytes": self.sweep.returned_bytes,
-                "reset_blocks": self.sweep.reset_blocks,
-                "deallocated_blocks": self.sweep.deallocated_blocks,
-                "deallocated_bytes": self.sweep.deallocated_bytes,
-                "retained_forwarded_stub_objects": self.sweep.retained_forwarded_stub_objects,
-                "retained_forwarded_stub_bytes": self.sweep.retained_forwarded_stub_bytes,
-            },
-            "write_barrier": {
-                "calls": self.write_barrier.calls,
-                "non_pointer_parent_skips": self.write_barrier.non_pointer_parent_skips,
-                "non_pointer_child_skips": self.write_barrier.non_pointer_child_skips,
-                "parent_not_old_skips": self.write_barrier.parent_not_old_skips,
-                "child_not_young_skips": self.write_barrier.child_not_young_skips,
-                "remembered_set_insert_attempts": self.write_barrier.remembered_set_insert_attempts,
-                "new_inserts": self.write_barrier.new_inserts,
-                "dirty_page_mark_attempts": self.write_barrier.dirty_page_mark_attempts,
-                "new_dirty_pages": self.write_barrier.new_dirty_pages,
-                "conservative_parent_span_marks": self.write_barrier.conservative_parent_span_marks,
-            },
-            "trigger": {
-                "kind": self.trigger_kind.as_str(),
-            },
-            "steps": steps_json(self.steps_before, steps_after),
+            "legacy_copy_only_scanner_pinned": legacy_copy_only_scanner_pinned,
+            "shadow_roots": shadow_roots_json,
+            "root_sources": root_sources_json,
+            "layout_scans": layout_scans_json,
+            "evacuation": evacuation_json,
+            "copying_nursery": copying_nursery_json,
+            "evacuation_policy": evacuation_policy_json,
+            "block_persist": block_persist_json,
+            "sweep": sweep_json,
+            "write_barrier": write_barrier_json,
+            "trigger": trigger_json,
+            "steps": steps_value,
         })
     }
 
@@ -629,6 +766,35 @@ pub(super) fn malloc_kind_telemetry_row(
         "survivor_count": counters.survivor_count,
         "survivor_bytes": counters.survivor_bytes,
         "copied_minor_validation_lookups": counters.copied_minor_validation_lookups,
+    })
+}
+
+pub(super) fn root_source_slot_json(stats: RootSourceSlotTraceStats) -> serde_json::Value {
+    serde_json::json!({
+        "registered_scanners": stats.registered_scanners,
+        "slots_scanned": stats.slots_scanned,
+        "nonzero_slots": stats.nonzero_slots,
+        "pointer_roots": stats.pointer_roots,
+        "rewritten_slots": stats.rewritten_slots,
+    })
+}
+
+pub(super) fn root_sources_json(stats: RootSourcesTraceStats) -> serde_json::Value {
+    serde_json::json!({
+        "compiled_shadow": root_source_slot_json(stats.compiled_shadow),
+        "module_globals": root_source_slot_json(stats.module_globals),
+        "runtime_handles": root_source_slot_json(stats.runtime_handles),
+        "runtime_mutable_scanners": root_source_slot_json(stats.runtime_mutable_scanners),
+        "ffi_mutable_scanners": root_source_slot_json(stats.ffi_mutable_scanners),
+        "native_stack_fallback": {
+            "decision": stats.native_stack_fallback.decision.as_str(),
+            "scanned": stats.native_stack_fallback.scanned,
+            "roots_found": stats.native_stack_fallback.roots_found,
+            "pinned_roots": stats.native_stack_fallback.pinned_roots,
+            "pinned_bytes": stats.native_stack_fallback.pinned_bytes,
+            "compiled_frame_pinned_roots": stats.native_stack_fallback.compiled_frame_pinned_roots,
+            "compiled_frame_pinned_bytes": stats.native_stack_fallback.compiled_frame_pinned_bytes,
+        },
     })
 }
 

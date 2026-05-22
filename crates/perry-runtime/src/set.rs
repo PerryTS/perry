@@ -1,15 +1,37 @@
 //! Set representation for Perry
 //!
-//! Sets are heap-allocated with a stable header pointer.
+//! Sets are arena-allocated GC objects.
 //! The elements array is separately allocated and can be reallocated
-//! without changing the SetHeader address.
+//! without changing the SetHeader address between GC moves.
 
 use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
 use crate::string::StringHeader;
-use std::alloc::{alloc, realloc, Layout};
+use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ptr;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_FORCE_HELPER_GC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_force_next_set_helper_gc() {
+    TEST_FORCE_HELPER_GC.with(|force| force.set(true));
+}
+
+#[cfg(test)]
+fn maybe_force_helper_gc_for_test() {
+    let should_collect = TEST_FORCE_HELPER_GC.with(|force| force.replace(false));
+    if should_collect {
+        let _ = crate::gc::gc_collect_minor();
+    }
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn maybe_force_helper_gc_for_test() {}
 
 thread_local! {
     static SET_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
@@ -24,21 +46,23 @@ impl Hash for JSValueKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let bits = self.0.to_bits();
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        if let Some((data, len)) = string_view_from_bits(bits, &mut scratch) {
-            // String value: hash by content so identical strings with
-            // different representations (heap STRING_TAG / inline SSO /
-            // POINTER_TAG / raw pointer) produce the same hash.
-            unsafe {
-                // Distinct domain tag so string hashes don't collide
-                // with non-string bit patterns.
-                0xFFFF_FFFFu32.hash(state);
-                len.hash(state);
-                let slice = std::slice::from_raw_parts(data, len as usize);
-                slice.hash(state);
+        if is_string_like(bits) {
+            if let Some((data, len)) = string_view_from_bits(bits, &mut scratch) {
+                // String value: hash by content so identical strings with
+                // different representations (heap STRING_TAG / inline SSO /
+                // POINTER_TAG / raw pointer) produce the same hash.
+                unsafe {
+                    // Distinct domain tag so string hashes don't collide
+                    // with non-string bit patterns.
+                    0xFFFF_FFFFu32.hash(state);
+                    len.hash(state);
+                    let slice = std::slice::from_raw_parts(data, len as usize);
+                    slice.hash(state);
+                }
+                return;
             }
-        } else {
-            bits.hash(state);
         }
+        bits.hash(state);
     }
 }
 
@@ -69,10 +93,162 @@ fn register_set(ptr: *mut SetHeader) {
 }
 
 pub fn is_registered_set(addr: usize) -> bool {
+    if addr < 0x1000 + crate::gc::GC_HEADER_SIZE {
+        return false;
+    }
+    unsafe {
+        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*header).obj_type != crate::gc::GC_TYPE_SET {
+            return false;
+        }
+    }
     SET_REGISTRY.with(|r| r.borrow().contains(&addr))
 }
 
-/// Set header - stable address, elements allocated separately
+#[cfg(test)]
+pub(crate) fn test_clear_set_roots() {
+    SET_REGISTRY.with(|r| r.borrow_mut().clear());
+    SET_INDEX.with(|idx| idx.borrow_mut().clear());
+}
+
+pub fn scan_set_roots(_mark: &mut dyn FnMut(f64)) {
+    // Set entries are traced through GC_TYPE_SET. Kept as a no-op
+    // compatibility shim for callers that still link the legacy scanner.
+}
+
+pub fn scan_set_roots_mut(_visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    // Set entries are object-owned external slots, not runtime roots.
+}
+
+fn rebuild_set_index(set: *mut SetHeader) {
+    if set.is_null() {
+        return;
+    }
+    unsafe {
+        let size = (*set).size as usize;
+        let capacity = (*set).capacity as usize;
+        if size > capacity || size > 16_000_000 || (*set).elements.is_null() {
+            return;
+        }
+        let elements = elements_ptr(set);
+        SET_INDEX.with(|idx| {
+            let mut idx = idx.borrow_mut();
+            let map = idx
+                .entry(set as usize)
+                .or_insert_with(crate::fast_hash::new_ptr_hash_map);
+            map.clear();
+            for i in 0..size {
+                map.insert(JSValueKey(ptr::read(elements.add(i))), i as u32);
+            }
+        });
+    }
+}
+
+pub(crate) fn rebuild_set_index_for_gc(set: *mut SetHeader) {
+    rebuild_set_index(set);
+}
+
+pub fn drop_set_index(addr: usize) {
+    SET_INDEX.with(|idx| {
+        idx.borrow_mut().remove(&addr);
+    });
+    SET_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+}
+
+pub(crate) fn set_header_moved_for_gc(old_addr: usize, new_addr: usize) {
+    if old_addr == 0 || new_addr == 0 || old_addr == new_addr {
+        return;
+    }
+    SET_REGISTRY.with(|r| {
+        let mut registry = r.borrow_mut();
+        if registry.remove(&old_addr) {
+            registry.insert(new_addr);
+        }
+    });
+    SET_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        idx.remove(&new_addr);
+        if let Some(slot) = idx.remove(&old_addr) {
+            idx.insert(new_addr, slot);
+        }
+    });
+}
+
+pub(crate) unsafe fn finalize_set_side_allocation_for_gc(set: *mut SetHeader) {
+    if set.is_null() {
+        return;
+    }
+    let addr = set as usize;
+    let was_registered = SET_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
+    SET_INDEX.with(|idx| {
+        idx.borrow_mut().remove(&addr);
+    });
+    if !was_registered {
+        return;
+    }
+
+    let elements = (*set).elements;
+    let capacity = (*set).capacity as usize;
+    if !elements.is_null() && capacity > 0 {
+        dealloc(elements as *mut u8, elements_layout(capacity));
+    }
+    // GC_STORE_AUDIT(POINTER_FREE): finalizer clears external elements side-allocation pointer after deregistration/deallocation.
+    (*set).elements = std::ptr::null_mut();
+    (*set).capacity = 0;
+    (*set).size = 0;
+}
+
+fn is_dead_copied_minor_from_space_set(addr: usize) -> bool {
+    let space = crate::arena::classify_heap_space(addr);
+    if !matches!(space, crate::arena::HeapSpace::NurseryEden)
+        && space != crate::arena::active_survivor_space()
+    {
+        return false;
+    }
+    if addr < crate::gc::GC_HEADER_SIZE {
+        return false;
+    }
+    unsafe {
+        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*header).obj_type != crate::gc::GC_TYPE_SET {
+            return false;
+        }
+        let flags = (*header).gc_flags;
+        flags & crate::gc::GC_FLAG_ARENA != 0
+            && flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_FORWARDED) == 0
+    }
+}
+
+pub(crate) fn finalize_dead_copied_minor_from_space_sets() -> usize {
+    let sets = SET_REGISTRY.with(|r| {
+        r.borrow()
+            .iter()
+            .copied()
+            .filter(|&addr| is_dead_copied_minor_from_space_set(addr))
+            .collect::<Vec<_>>()
+    });
+    let count = sets.len();
+    for addr in sets {
+        unsafe {
+            finalize_set_side_allocation_for_gc(addr as *mut SetHeader);
+        }
+    }
+    count
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_index_contains(set: *const SetHeader, value: f64) -> bool {
+    let value = normalize_zero(value);
+    SET_INDEX.with(|idx| {
+        idx.borrow()
+            .get(&(set as usize))
+            .is_some_and(|slot| slot.contains_key(&JSValueKey(value)))
+    })
+}
+
+/// Set header - GC-movable address, elements allocated separately
 #[repr(C)]
 pub struct SetHeader {
     /// Number of elements in the set
@@ -100,6 +276,23 @@ unsafe fn elements_ptr(set: *const SetHeader) -> *const f64 {
 /// Get mutable pointer to elements array
 unsafe fn elements_ptr_mut(set: *mut SetHeader) -> *mut f64 {
     (*set).elements
+}
+
+pub(crate) unsafe fn gc_element_slot_range(
+    set: *mut SetHeader,
+) -> Option<crate::gc::HeapSlotRange> {
+    if set.is_null() {
+        return None;
+    }
+    let size = (*set).size as usize;
+    let capacity = (*set).capacity as usize;
+    if size > capacity || size > 16_000_000 || (*set).elements.is_null() {
+        return None;
+    }
+    Some(crate::gc::HeapSlotRange::new(
+        (*set).elements as *mut u64,
+        size,
+    ))
 }
 
 /// SameValueZero key normalization: -0 → +0.
@@ -273,12 +466,12 @@ unsafe fn find_value_index(set: *const SetHeader, value: f64) -> i32 {
 }
 
 /// Grow the elements array if needed (header stays at same address)
-unsafe fn ensure_capacity(set: *mut SetHeader) {
+unsafe fn ensure_capacity(set: *mut SetHeader) -> bool {
     let size = (*set).size;
     let capacity = (*set).capacity;
 
     if size < capacity {
-        return;
+        return false;
     }
 
     // Double the capacity
@@ -292,21 +485,23 @@ unsafe fn ensure_capacity(set: *mut SetHeader) {
         panic!("Failed to grow set elements");
     }
 
+    // GC_STORE_AUDIT(INIT): set external buffer pointer moves; live slots are dirtied by caller.
     (*set).elements = new_elements;
     (*set).capacity = new_capacity;
+    true
 }
 
 /// Allocate a new empty set with the given initial capacity
 #[no_mangle]
 pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
     let cap = if capacity == 0 { 4 } else { capacity };
-    let header_layout = Layout::new::<SetHeader>();
     let elem_layout = elements_layout(cap as usize);
     unsafe {
-        let ptr = alloc(header_layout) as *mut SetHeader;
-        if ptr.is_null() {
-            panic!("Failed to allocate set header");
-        }
+        let ptr = crate::arena::arena_alloc_gc(
+            std::mem::size_of::<SetHeader>(),
+            8,
+            crate::gc::GC_TYPE_SET,
+        ) as *mut SetHeader;
         let elements = alloc(elem_layout) as *mut f64;
         if elements.is_null() {
             panic!("Failed to allocate set elements");
@@ -315,6 +510,7 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
         // Initialize header
         (*ptr).size = 0;
         (*ptr).capacity = cap;
+        // GC_STORE_AUDIT(INIT): set elements buffer is external storage; element stores are barriered separately.
         (*ptr).elements = elements;
 
         // Register in set registry for runtime type detection
@@ -370,12 +566,24 @@ pub extern "C" fn js_set_add(set: *mut SetHeader, value: f64) -> *mut SetHeader 
         }
 
         // Value doesn't exist, need to add it
-        ensure_capacity(set);
+        let grew = ensure_capacity(set);
         let size = (*set).size;
         let elements = elements_ptr_mut(set);
+        if grew && size > 0 {
+            crate::gc::runtime_dirty_external_slot_span(
+                set as usize,
+                elements as usize,
+                size as usize,
+            );
+        }
 
         // Write the value
-        ptr::write(elements.add(size as usize), value);
+        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): Set append stores through the shared external-slot helper.
+        crate::gc::runtime_store_external_jsvalue_slot(
+            set as usize,
+            elements.add(size as usize) as usize,
+            value.to_bits(),
+        );
 
         // Update the hash index
         SET_INDEX.with(|idx| {
@@ -438,7 +646,12 @@ pub extern "C" fn js_set_delete(set: *mut SetHeader, value: f64) -> i32 {
         // If not the last element, swap with the last element
         if (idx as u32) < size - 1 {
             let last_value = ptr::read(elements.add((size - 1) as usize));
-            ptr::write(elements.add(idx as usize), last_value);
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): Set swap-remove stores through the shared external-slot helper.
+            crate::gc::runtime_store_external_jsvalue_slot(
+                set as usize,
+                elements.add(idx as usize) as usize,
+                last_value.to_bits(),
+            );
         }
 
         (*set).size = size - 1;
@@ -496,18 +709,26 @@ pub extern "C" fn js_set_to_array(set: *const SetHeader) -> *mut crate::array::A
     if set.is_null() {
         return crate::array::js_array_alloc(0);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let set_handle = scope.root_raw_const_ptr(set);
     unsafe {
+        let set = set_handle.get_raw_const_ptr::<SetHeader>();
         let size = (*set).size as usize;
         let result = crate::array::js_array_alloc(size as u32);
+        let result_handle = scope.root_raw_mut_ptr(result);
+        maybe_force_helper_gc_for_test();
         if size > 0 {
+            let set = set_handle.get_raw_const_ptr::<SetHeader>();
+            let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
             let src = (*set).elements as *const f64;
             let dst = (result as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
                 as *mut f64;
+            // GC_STORE_AUDIT(BARRIERED): Set-to-array bulk copy is followed by exact layout/barrier rebuild.
             ptr::copy_nonoverlapping(src, dst, size);
             (*result).length = size as u32;
             crate::array::rebuild_array_layout_exact(result);
         }
-        result
+        result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>()
     }
 }
 
@@ -515,16 +736,33 @@ pub extern "C" fn js_set_to_array(set: *const SetHeader) -> *mut crate::array::A
 /// Takes an ArrayHeader pointer and adds all elements to a new Set
 #[no_mangle]
 pub extern "C" fn js_set_from_array(arr: *const crate::array::ArrayHeader) -> *mut SetHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = if arr.is_null() {
+        None
+    } else {
+        Some(scope.root_raw_const_ptr(arr))
+    };
     let set = js_set_alloc(4);
+    let set_handle = scope.root_raw_mut_ptr(set);
     if arr.is_null() {
-        return set;
+        return set_handle.get_raw_mut_ptr::<SetHeader>();
     }
+    maybe_force_helper_gc_for_test();
+    let arr = arr_handle
+        .as_ref()
+        .expect("non-null array should have a runtime handle")
+        .get_raw_const_ptr::<crate::array::ArrayHeader>();
     let len = crate::array::js_array_length(arr);
     for i in 0..len {
+        let arr = arr_handle
+            .as_ref()
+            .expect("non-null array should have a runtime handle")
+            .get_raw_const_ptr::<crate::array::ArrayHeader>();
         let element = crate::array::js_array_get_f64(arr, i);
+        let set = set_handle.get_raw_mut_ptr::<SetHeader>();
         js_set_add(set, element);
     }
-    set
+    set_handle.get_raw_mut_ptr::<SetHeader>()
 }
 
 /// Create a Set from any iterable JS value (for `new Set(iter)`).
@@ -546,53 +784,59 @@ pub extern "C" fn js_set_from_array(arr: *const crate::array::ArrayHeader) -> *m
 /// `js_set_from_array` blindly cast the StringHeader to ArrayHeader.
 #[no_mangle]
 pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
-    let bits = value.to_bits();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let bits = value_handle.get_nanbox_u64();
     let top16 = (bits >> 48) as u16;
     // String literals (heap or SSO).
     if top16 == 0x7FFF || top16 == 0x7FF9 {
         let set = js_set_alloc(4);
+        let set_handle = scope.root_raw_mut_ptr(set);
+        maybe_force_helper_gc_for_test();
         // Materialize SSO to a real heap StringHeader; cheap for heap strings.
         let str_ptr = {
-            crate::value::js_get_string_pointer_unified(value) as *const crate::string::StringHeader
+            crate::value::js_get_string_pointer_unified(value_handle.get_nanbox_f64())
+                as *const crate::string::StringHeader
         };
         if str_ptr.is_null() {
-            return set;
+            return set_handle.get_raw_mut_ptr::<SetHeader>();
         }
-        unsafe {
+        let bytes = unsafe {
             let byte_len = (*str_ptr).byte_len as usize;
             let data =
                 (str_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, byte_len);
-            // UTF-8 codepoint iteration. Each codepoint becomes a single-
-            // codepoint string allocated via `js_string_from_bytes`, then
-            // added to the set as the NaN-boxed string handle.
-            let mut i = 0;
-            while i < bytes.len() {
-                let lead = bytes[i];
-                let codepoint_len = if lead < 0x80 {
-                    1
-                } else if lead < 0xC0 {
-                    // Continuation byte mid-sequence — shouldn't happen for
-                    // well-formed UTF-8; skip one byte to avoid infinite loop.
-                    1
-                } else if lead < 0xE0 {
-                    2
-                } else if lead < 0xF0 {
-                    3
-                } else {
-                    4
-                };
-                let end = (i + codepoint_len).min(bytes.len());
-                let cp_bytes = &bytes[i..end];
-                let cp_str =
-                    crate::string::js_string_from_bytes(cp_bytes.as_ptr(), cp_bytes.len() as u32);
-                let cp_value =
-                    f64::from_bits(0x7FFF_0000_0000_0000 | (cp_str as u64 & 0x0000_FFFF_FFFF_FFFF));
-                js_set_add(set, cp_value);
-                i = end;
-            }
+            std::slice::from_raw_parts(data, byte_len).to_vec()
+        };
+        // UTF-8 codepoint iteration. Each codepoint becomes a single-
+        // codepoint string allocated via `js_string_from_bytes`, then
+        // added to the set as the NaN-boxed string handle.
+        let mut i = 0;
+        while i < bytes.len() {
+            let lead = bytes[i];
+            let codepoint_len = if lead < 0x80 {
+                1
+            } else if lead < 0xC0 {
+                // Continuation byte mid-sequence — shouldn't happen for
+                // well-formed UTF-8; skip one byte to avoid infinite loop.
+                1
+            } else if lead < 0xE0 {
+                2
+            } else if lead < 0xF0 {
+                3
+            } else {
+                4
+            };
+            let end = (i + codepoint_len).min(bytes.len());
+            let cp_bytes = &bytes[i..end];
+            let cp_str =
+                crate::string::js_string_from_bytes(cp_bytes.as_ptr(), cp_bytes.len() as u32);
+            let cp_value =
+                f64::from_bits(0x7FFF_0000_0000_0000 | (cp_str as u64 & 0x0000_FFFF_FFFF_FFFF));
+            let set = set_handle.get_raw_mut_ptr::<SetHeader>();
+            js_set_add(set, cp_value);
+            i = end;
         }
-        return set;
+        return set_handle.get_raw_mut_ptr::<SetHeader>();
     }
     // Pointer tag covers arrays + objects; we treat it as array (existing
     // path). Non-array objects produce an empty-ish set since
@@ -613,20 +857,28 @@ pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64) {
     if set.is_null() {
         return;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let set_handle = scope.root_raw_const_ptr(set);
+    let callback_handle = scope.root_nanbox_f64(callback);
     unsafe {
+        let set = set_handle.get_raw_const_ptr::<SetHeader>();
         let size = (*set).size as usize;
         if size == 0 {
             return;
         }
-        let elements = elements_ptr(set);
 
         // Extract the closure pointer from the NaN-boxed callback.
         // Mask off the upper 16 bits (NaN-box tag) to get the real pointer.
-        let closure_ptr =
-            (callback.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader;
 
         for i in 0..size {
+            let set = set_handle.get_raw_const_ptr::<SetHeader>();
+            if i >= (*set).size as usize {
+                break;
+            }
+            let elements = elements_ptr(set);
             let value = ptr::read(elements.add(i));
+            let closure_ptr = (callback_handle.get_nanbox_u64() & 0x0000_FFFF_FFFF_FFFF)
+                as *const crate::closure::ClosureHeader;
             // Call closure with (value, value) - Set.forEach callback gets (value, value) in JS
             crate::closure::js_closure_call2(closure_ptr, value, value);
         }

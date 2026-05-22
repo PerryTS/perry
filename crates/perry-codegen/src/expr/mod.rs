@@ -53,11 +53,11 @@ pub(crate) use channel::{
     variant_name, ChannelReduction,
 };
 pub(crate) use helpers::{
-    array_store_needs_layout_note, buffer_alias_metadata_suffix,
-    expr_has_numeric_pointer_free_array_layout, is_global_this_builtin_function_name,
-    is_global_this_builtin_name, lower_expr_with_expected_type, lower_js_args_array,
-    proxy_build_args_array, type_has_numeric_pointer_free_array_layout, unbox_str_handle,
-    unbox_to_i64,
+    array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
+    expr_has_numeric_pointer_free_array_layout, expr_produces_non_pointer_bits_by_construction,
+    is_global_this_builtin_function_name, is_global_this_builtin_name,
+    lower_expr_with_expected_type, lower_js_args_array, proxy_build_args_array,
+    type_has_numeric_pointer_free_array_layout, unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, is_known_finite, lower_expr_as_i32, try_flat_const_2d_int,
@@ -75,8 +75,8 @@ pub(crate) use v8_interop::{
     emit_v8_export_call, emit_v8_member_method_call, import_origin_suffix, try_static_class_name,
 };
 pub(crate) use write_barrier::{
-    emit_layout_note_slot_on_block, emit_write_barrier, emit_write_barrier_slot_on_block,
-    lower_stream_super_init,
+    emit_jsvalue_slot_store_on_block, emit_layout_note_slot_on_block, emit_write_barrier,
+    emit_write_barrier_slot_on_block, lower_stream_super_init,
 };
 
 /// Per-function codegen context. Held briefly during lowering, never stored.
@@ -601,6 +601,13 @@ pub(crate) struct FnCtx<'a> {
     /// intercepts these to emit scalar-replaced field allocas.
     pub non_escaping_news: std::collections::HashMap<u32, String>,
 
+    /// Fields that are actually observed on each scalar-replaced `new` local.
+    /// For synthetic anonymous-shape classes, `Stmt::Let` can allocate only
+    /// these slots while still evaluating constructor args/stores for side
+    /// effects.
+    pub non_escaping_new_used_fields:
+        std::collections::HashMap<u32, std::collections::HashSet<String>>,
+
     /// Scalar-replaced non-escaping array literals. When `let arr =
     /// [a, b, c]` and `arr` is only read at constant indices (and for
     /// `.length`), each slot becomes a stack alloca. Map: local_id →
@@ -738,6 +745,19 @@ pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
     );
 }
 
+pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32) {
+    let Some(slot_idx) = ctx.shadow_slot_map.get(&local_id).copied() else {
+        return;
+    };
+    let Some(local_slot) = ctx.locals.get(&local_id).cloned() else {
+        return;
+    };
+    ctx.block().call_void(
+        "js_shadow_slot_bind",
+        &[(I32, &slot_idx.to_string()), (PTR, &local_slot)],
+    );
+}
+
 pub(crate) fn emit_shadow_slot_update_for_expr(
     ctx: &mut FnCtx<'_>,
     local_id: u32,
@@ -750,6 +770,7 @@ pub(crate) fn emit_shadow_slot_update_for_expr(
     if expr_is_known_non_pointer_shadow_value(ctx, rhs) {
         emit_shadow_slot_clear(ctx, slot_idx);
     } else {
+        emit_shadow_slot_bind_for_local(ctx, local_id);
         let v_i64 = ctx.block().bitcast_double_to_i64(value_reg);
         ctx.block().call_void(
             "js_shadow_slot_set",
@@ -1046,6 +1067,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::DateGetUtcDay(..)
         | Expr::DateValueOf(..)
         | Expr::ProcessOn { .. }
+        | Expr::ProcessOnce { .. }
         | Expr::ProcessStdinSetRawMode(..)
         | Expr::ProcessStdinOn { .. }
         | Expr::ProcessStdoutOn { .. }

@@ -17,11 +17,25 @@ pub(crate) const INTERN_TABLE_MASK: usize = INTERN_TABLE_SIZE - 1;
 /// Maximum byte length for strings eligible for interning.
 pub(crate) const INTERN_MAX_BYTE_LEN: u32 = 64;
 
-#[no_mangle]
-pub(crate) static mut INTERN_TABLE: [InternEntry; INTERN_TABLE_SIZE] = [InternEntry {
-    hash: 0,
-    string_ptr: 0,
-}; INTERN_TABLE_SIZE];
+/// Per-thread intern table.
+///
+/// Each thread (main + every `perry/thread` worker) has its own arena, so
+/// cached `StringHeader*` pointers MUST be per-thread — a string interned
+/// from worker A's arena is a use-after-free / cross-arena pointer when
+/// read from worker B. The previous design used a single process-wide
+/// `static mut`, which both raced under concurrent allocation and risked
+/// handing back foreign-arena pointers.
+thread_local! {
+    pub(crate) static INTERN_TABLE: std::cell::UnsafeCell<[InternEntry; INTERN_TABLE_SIZE]> =
+        const { std::cell::UnsafeCell::new([InternEntry { hash: 0, string_ptr: 0 }; INTERN_TABLE_SIZE]) };
+}
+
+#[inline]
+pub(crate) fn with_intern_table<R>(
+    f: impl FnOnce(*mut [InternEntry; INTERN_TABLE_SIZE]) -> R,
+) -> R {
+    INTERN_TABLE.with(|c| f(c.get()))
+}
 
 /// Intern a property-name string. Returns the canonical pointer for
 /// the given content. `hash` is the pre-computed FNV-1a hash.
@@ -37,21 +51,30 @@ pub extern "C" fn js_string_intern(key: *const StringHeader, hash: u64) -> *cons
         }
 
         let slot = (hash as usize) & INTERN_TABLE_MASK;
-        let entry = &mut INTERN_TABLE[slot];
-
-        if entry.string_ptr != 0 && entry.hash == hash {
-            let existing = entry.string_ptr as *const StringHeader;
-            if is_valid_string_ptr(existing)
-                && (*existing).byte_len == byte_len
-                && intern_content_equals(key, existing, byte_len)
-            {
-                return existing;
+        let hit = with_intern_table(|table| {
+            let entry = &(*table)[slot];
+            if entry.string_ptr != 0 && entry.hash == hash {
+                let existing = entry.string_ptr as *const StringHeader;
+                if is_valid_string_ptr(existing)
+                    && (*existing).byte_len == byte_len
+                    && intern_content_equals(key, existing, byte_len)
+                {
+                    return Some(existing);
+                }
             }
+            None
+        });
+        if let Some(existing) = hit {
+            return existing;
         }
 
         // Miss or collision — insert (evict on collision)
-        entry.hash = hash;
-        entry.string_ptr = key as usize;
+        with_intern_table(|table| {
+            (*table)[slot] = InternEntry {
+                hash,
+                string_ptr: key as usize,
+            };
+        });
 
         // Mark as interned in GcHeader
         let gc_header =
@@ -138,46 +161,46 @@ pub(crate) unsafe fn concat_content_matches(
 
 /// GC root scanner for the intern table.
 ///
-/// #855: walk via `&raw const` + raw pointer indexing to avoid the
-/// `static_mut_refs` lint (hard error in Rust 2024). The intern table
-/// is thread-local-by-discipline (perry user code is single-threaded),
-/// so the unsafe deref is sound.
+/// The intern table is `thread_local!` (issue: runtime thread-safety
+/// hardening), so this scans the *current* thread's table. Each thread's
+/// GC pass calls this from its own scanner registration, which is the
+/// correct partitioning — a thread's GC only walks its own arena, and
+/// only its own intern entries point into that arena.
 pub fn scan_intern_table_roots(mark: &mut dyn FnMut(f64)) {
     let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
     scan_intern_table_roots_mut(&mut visitor);
 }
 
 pub fn scan_intern_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let base: *mut InternEntry = (&raw mut INTERN_TABLE).cast();
-    unsafe {
+    with_intern_table(|table| unsafe {
         for i in 0..INTERN_TABLE_SIZE {
-            let entry = &mut *base.add(i);
+            let entry = &mut (*table)[i];
             visitor.visit_tagged_usize_slot(&mut entry.string_ptr, crate::value::STRING_TAG);
         }
-    }
+    });
 }
 
 #[cfg(test)]
 pub(crate) fn test_seed_intern_table_root(string_ptr: usize) {
-    unsafe {
-        INTERN_TABLE[0] = InternEntry {
+    with_intern_table(|table| unsafe {
+        (*table)[0] = InternEntry {
             hash: 0xC0DEC0DE,
             string_ptr,
         };
-    }
+    });
 }
 
 #[cfg(test)]
 pub(crate) fn test_intern_table_root() -> usize {
-    unsafe { INTERN_TABLE[0].string_ptr }
+    with_intern_table(|table| unsafe { (*table)[0].string_ptr })
 }
 
 #[cfg(test)]
 pub(crate) fn test_clear_intern_table_root() {
-    unsafe {
-        INTERN_TABLE[0] = InternEntry {
+    with_intern_table(|table| unsafe {
+        (*table)[0] = InternEntry {
             hash: 0,
             string_ptr: 0,
         };
-    }
+    });
 }

@@ -1,0 +1,1287 @@
+use super::super::*;
+use super::support::*;
+
+unsafe fn alloc_old_test_map(
+    capacity: u32,
+) -> (*mut crate::map::MapHeader, *mut u64, std::alloc::Layout) {
+    let map = crate::arena::arena_alloc_gc_old(
+        std::mem::size_of::<crate::map::MapHeader>(),
+        8,
+        GC_TYPE_MAP,
+    ) as *mut crate::map::MapHeader;
+    let layout = std::alloc::Layout::from_size_align((capacity as usize * 16).max(8), 8)
+        .expect("valid map entries layout");
+    let entries = std::alloc::alloc_zeroed(layout) as *mut u64;
+    assert!(!entries.is_null());
+    (*map).size = 0;
+    (*map).capacity = capacity;
+    (*map).entries = entries as *mut f64;
+    (map, entries, layout)
+}
+
+unsafe fn retire_old_test_map(
+    map: *mut crate::map::MapHeader,
+    entries: *mut u64,
+    layout: std::alloc::Layout,
+) {
+    (*map).size = 0;
+    (*map).capacity = 0;
+    (*map).entries = std::ptr::null_mut();
+    std::alloc::dealloc(entries as *mut u8, layout);
+}
+
+unsafe fn field_index_not_on_last_page(fields: *mut u64, field_count: u32) -> usize {
+    assert!(field_count > 1);
+    let last_page =
+        crate::arena::generation_page_for_addr(fields.add(field_count as usize - 1) as usize);
+    for i in 0..field_count as usize {
+        if crate::arena::generation_page_for_addr(fields.add(i) as usize) != last_page {
+            return i;
+        }
+    }
+    panic!("test object did not span multiple field pages");
+}
+
+unsafe fn field_indices_on_distinct_pages(fields: *mut u64, field_count: u32) -> (usize, usize) {
+    assert!(field_count > 1);
+    let first = field_index_not_on_last_page(fields, field_count);
+    let first_page = crate::arena::generation_page_for_addr(fields.add(first) as usize);
+    for i in 0..field_count as usize {
+        if crate::arena::generation_page_for_addr(fields.add(i) as usize) != first_page {
+            return (first, i);
+        }
+    }
+    panic!("test object did not span two field pages");
+}
+
+#[test]
+fn test_write_barrier_old_to_young_records() {
+    reset_remembered_set();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    let parent_nanbox = POINTER_TAG | (old as u64);
+    let child_nanbox = POINTER_TAG | (young as u64);
+    let dirty_page = crate::arena::generation_page_for_addr(old - GC_HEADER_SIZE);
+    assert_eq!(remembered_set_size(), 0);
+    assert!(!old_page_dirty_for(dirty_page));
+    js_write_barrier(parent_nanbox, child_nanbox);
+    assert_eq!(
+        remembered_set_size(),
+        1,
+        "old→young write must dirty the remembered page"
+    );
+    assert!(
+        old_page_dirty_for(dirty_page),
+        "old-page metadata should mirror the remembered dirty page"
+    );
+    // Same write again should NOT double-count (dirty pages dedup).
+    js_write_barrier(parent_nanbox, child_nanbox);
+    assert_eq!(
+        remembered_set_size(),
+        1,
+        "duplicate barrier call must dedup the dirty page"
+    );
+    assert!(old_page_dirty_for(dirty_page));
+}
+
+#[test]
+fn test_write_barrier_slot_marks_dirty_page_and_dedups() {
+    reset_remembered_set();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    unsafe {
+        *fields = POINTER_TAG | young as u64;
+    }
+    let dirty_page = crate::arena::generation_page_for_addr(fields as usize);
+    assert!(!old_page_dirty_for(dirty_page));
+    js_write_barrier_slot(
+        POINTER_TAG | old_obj as u64,
+        fields as u64,
+        POINTER_TAG | young as u64,
+    );
+    assert_eq!(remembered_dirty_page_count(), 1);
+    assert!(
+        old_page_dirty_for(dirty_page),
+        "old-page metadata should mirror the remembered dirty page"
+    );
+    js_write_barrier_slot(
+        POINTER_TAG | old_obj as u64,
+        fields as u64,
+        POINTER_TAG | young as u64,
+    );
+    assert_eq!(
+        remembered_dirty_page_count(),
+        1,
+        "same dirty page should be logged once"
+    );
+    assert!(old_page_dirty_for(dirty_page));
+}
+
+#[test]
+fn test_barriered_slot_store_api_trace_counters() {
+    reset_remembered_set();
+    let tracing = gc_trace_enabled();
+    let _ = take_write_barrier_trace_counters();
+
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(2048) };
+    let child_bits = POINTER_TAG | young as u64;
+    let dirty_page = crate::arena::generation_page_for_addr(fields as usize);
+
+    unsafe {
+        layout_init_pointer_free(old_obj as *mut u8);
+    }
+    runtime_store_jsvalue_slot(old_obj as usize, fields as usize, 0, child_bits);
+
+    unsafe {
+        assert_eq!(*fields, child_bits);
+    }
+    assert_eq!(
+        test_layout_pointer_slot_count(old_obj as usize, 2048),
+        Some(1)
+    );
+    assert_eq!(remembered_dirty_page_count(), 1);
+    assert!(old_page_dirty_for(dirty_page));
+
+    let counters = take_write_barrier_trace_counters();
+    if tracing {
+        assert_eq!(counters.calls, 1);
+        assert_eq!(counters.old_to_young_slow_hits, 1);
+        assert_eq!(counters.remembered_set_insert_attempts, 1);
+        assert_eq!(counters.dirty_page_mark_attempts, 1);
+        assert_eq!(counters.new_dirty_pages, 1);
+    }
+}
+
+#[test]
+fn test_write_barrier_young_to_young_skipped() {
+    reset_remembered_set();
+    let parent = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    js_write_barrier(POINTER_TAG | (parent as u64), POINTER_TAG | (child as u64));
+    assert_eq!(
+        remembered_set_size(),
+        0,
+        "young→young write must not enter remembered set"
+    );
+}
+
+#[test]
+fn test_write_barrier_old_to_old_skipped() {
+    reset_remembered_set();
+    let parent = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    let child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    js_write_barrier(POINTER_TAG | (parent as u64), POINTER_TAG | (child as u64));
+    assert_eq!(
+        remembered_set_size(),
+        0,
+        "old→old write must not enter remembered set (no inter-gen edge)"
+    );
+}
+
+#[test]
+fn test_write_barrier_old_to_young_string_tag() {
+    reset_remembered_set();
+    let young_str = crate::arena::arena_alloc_gc(32, 8, GC_TYPE_STRING) as usize;
+    let old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    // STRING_TAG should also fire the barrier — strings can be young.
+    js_write_barrier(POINTER_TAG | (old as u64), STRING_TAG | (young_str as u64));
+    assert_eq!(remembered_set_size(), 1);
+}
+
+#[test]
+fn test_write_barrier_non_pointer_child_skipped() {
+    reset_remembered_set();
+    let old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    // INT32_TAG in child position.
+    let int32_val = 0x7FFE_0000_0000_002A_u64;
+    js_write_barrier(POINTER_TAG | (old as u64), int32_val);
+    assert_eq!(
+        remembered_set_size(),
+        0,
+        "non-pointer child must not enter remembered set"
+    );
+    // SHORT_STRING_TAG (SSO inline) — also not a heap pointer.
+    let sso = 0x7FF9_0500_0000_0000_u64;
+    js_write_barrier(POINTER_TAG | (old as u64), sso);
+    assert_eq!(
+        remembered_set_size(),
+        0,
+        "SSO child is inline data, not a heap pointer"
+    );
+    // Plain double in child position.
+    js_write_barrier(POINTER_TAG | (old as u64), 3.14_f64.to_bits());
+    assert_eq!(
+        remembered_set_size(),
+        0,
+        "number child must not enter remembered set"
+    );
+}
+
+#[test]
+fn test_write_barrier_non_pointer_parent_skipped() {
+    reset_remembered_set();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    js_write_barrier_slot(0x7FFE_0000_0000_002A_u64, 0, POINTER_TAG | young as u64);
+    assert_eq!(
+        remembered_set_size(),
+        0,
+        "non-pointer parent must not dirty remembered pages"
+    );
+}
+
+#[test]
+fn test_write_barrier_remembered_set_clear() {
+    reset_remembered_set();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    let dirty_page = crate::arena::generation_page_for_addr(old - GC_HEADER_SIZE);
+    js_write_barrier(POINTER_TAG | (old as u64), POINTER_TAG | (young as u64));
+    assert_eq!(remembered_set_size(), 1);
+    assert!(old_page_dirty_for(dirty_page));
+    remembered_set_clear();
+    assert_eq!(remembered_set_size(), 0);
+    assert!(
+        !old_page_dirty_for(dirty_page),
+        "old-page metadata dirty bit should clear with the remembered set"
+    );
+}
+
+#[test]
+fn test_write_barrier_slot_clear() {
+    reset_remembered_set();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    let dirty_page = crate::arena::generation_page_for_addr(fields as usize);
+    js_write_barrier_slot(
+        POINTER_TAG | old_obj as u64,
+        fields as u64,
+        POINTER_TAG | young as u64,
+    );
+    assert_eq!(remembered_dirty_page_count(), 1);
+    assert!(old_page_dirty_for(dirty_page));
+    remembered_set_clear();
+    assert_eq!(remembered_dirty_page_count(), 0);
+    assert_eq!(remembered_set_size(), 0);
+    assert!(
+        !old_page_dirty_for(dirty_page),
+        "old-page metadata dirty bit should clear with the remembered set"
+    );
+}
+
+#[test]
+fn test_gc_collect_minor_restores_live_old_young_rs() {
+    reset_remembered_set();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old, fields) = unsafe { alloc_old_test_object(1) };
+    unsafe {
+        *fields = POINTER_TAG | young as u64;
+    }
+    js_write_barrier_slot(
+        POINTER_TAG | old as u64,
+        fields as u64,
+        POINTER_TAG | young as u64,
+    );
+    assert_eq!(remembered_set_size(), 1);
+    let _freed = gc_collect_minor();
+    assert!(
+        remembered_set_size() > 0,
+        "minor GC should restore remembered metadata for live old-to-young edges"
+    );
+    let stats = verify_old_to_young_edges_covered();
+    assert_eq!(stats.missing_edges, 0);
+}
+
+#[test]
+fn test_dirty_page_scan_marks_young_child() {
+    reset_remembered_set();
+    clear_marks();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    unsafe {
+        *fields = POINTER_TAG | young as u64;
+    }
+    js_write_barrier_slot(
+        POINTER_TAG | old_obj as u64,
+        fields as u64,
+        POINTER_TAG | young as u64,
+    );
+    let valid_ptrs = build_valid_pointer_set();
+    let stats = mark_remembered_set_roots(&valid_ptrs);
+    assert_eq!(stats.dirty_pages_scanned, 1);
+    assert_eq!(stats.old_objects_considered, 1);
+    assert_eq!(stats.dirty_objects_scanned, 1);
+    assert!(
+        stats.dirty_slots_scanned >= 1,
+        "dirty page should scan at least the written field slot"
+    );
+    assert_eq!(stats.newly_marked, 1);
+    unsafe {
+        let child_header = header_from_user_ptr(young as *const u8);
+        assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_old_young_edge_verifier_rejects_unbarriered_old_object_field() {
+    reset_remembered_set();
+    clear_marks();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    let old_header = unsafe { header_from_user_ptr(old_obj as *const u8) };
+    unsafe {
+        *fields = ptr_bits(young);
+        (*old_header).gc_flags |= GC_FLAG_MARKED;
+    }
+
+    let result = std::panic::catch_unwind(verify_old_to_young_edges_covered);
+
+    assert!(
+        result.is_err(),
+        "unbarriered live old-to-young field must fail the verifier"
+    );
+    unsafe {
+        (*old_header).gc_flags &= !GC_FLAG_MARKED;
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_old_young_edge_verifier_accepts_barriered_old_object_field() {
+    reset_remembered_set();
+    clear_marks();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    let old_header = unsafe { header_from_user_ptr(old_obj as *const u8) };
+    unsafe {
+        *fields = ptr_bits(young);
+        (*old_header).gc_flags |= GC_FLAG_MARKED;
+    }
+    js_write_barrier_slot(ptr_bits(old_obj as usize), fields as u64, ptr_bits(young));
+
+    let stats = verify_old_to_young_edges_covered();
+
+    assert_eq!(stats.checked_old_to_young_edges, 1);
+    assert_eq!(stats.missing_edges, 0);
+    unsafe {
+        (*old_header).gc_flags &= !GC_FLAG_MARKED;
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_old_young_edge_verifier_accepts_dirty_old_page_metadata() {
+    reset_remembered_set();
+    clear_marks();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    let old_header = unsafe { header_from_user_ptr(old_obj as *const u8) };
+    unsafe {
+        *fields = ptr_bits(young);
+        (*old_header).gc_flags |= GC_FLAG_MARKED;
+    }
+    mark_dirty_old_page(crate::arena::generation_page_for_addr(fields as usize));
+
+    let stats = verify_old_to_young_edges_covered();
+
+    assert_eq!(stats.checked_old_to_young_edges, 1);
+    assert_eq!(stats.missing_edges, 0);
+    unsafe {
+        (*old_header).gc_flags &= !GC_FLAG_MARKED;
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_old_young_edge_verifier_rejects_object_fallback_only() {
+    reset_remembered_set();
+    clear_marks();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    let old_header = unsafe { header_from_user_ptr(old_obj as *const u8) };
+    unsafe {
+        *fields = ptr_bits(young);
+        (*old_header).gc_flags |= GC_FLAG_MARKED;
+    }
+    REMEMBERED_SET.with(|s| {
+        s.borrow_mut().insert(old_header as usize);
+    });
+
+    let result = std::panic::catch_unwind(verify_old_to_young_edges_covered);
+
+    assert!(
+        result.is_err(),
+        "test-only object fallback must not count as dirty-page coverage"
+    );
+    unsafe {
+        (*old_header).gc_flags &= !GC_FLAG_MARKED;
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_old_young_edge_verifier_accepts_barriered_array_element() {
+    reset_remembered_set();
+    clear_marks();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
+    let old_header = unsafe { header_from_user_ptr(old_arr as *const u8) };
+    unsafe {
+        *elements = ptr_bits(young);
+        (*old_header).gc_flags |= GC_FLAG_MARKED;
+    }
+    js_write_barrier_slot(ptr_bits(old_arr as usize), elements as u64, ptr_bits(young));
+
+    let stats = verify_old_to_young_edges_covered();
+
+    assert_eq!(stats.checked_old_to_young_edges, 1);
+    assert_eq!(stats.missing_edges, 0);
+    unsafe {
+        (*old_header).gc_flags &= !GC_FLAG_MARKED;
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_old_young_edge_verifier_accepts_map_external_slot() {
+    reset_remembered_set();
+    clear_marks();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (map, entries, layout) = unsafe { alloc_old_test_map(4) };
+    let map_header = unsafe { header_from_user_ptr(map as *const u8) };
+    unsafe {
+        (*map).size = 1;
+        *entries = ptr_bits(young);
+        (*map_header).gc_flags |= GC_FLAG_MARKED;
+    }
+    write_barrier_slot_inner(
+        ptr_bits(map as usize),
+        entries as usize,
+        ptr_bits(young),
+        true,
+    );
+
+    let stats = verify_old_to_young_edges_covered();
+
+    assert_eq!(stats.checked_old_to_young_edges, 1);
+    assert_eq!(stats.missing_edges, 0);
+    unsafe {
+        (*map_header).gc_flags &= !GC_FLAG_MARKED;
+        retire_old_test_map(map, entries, layout);
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_old_young_edge_verifier_accepts_set_external_slot() {
+    reset_remembered_set();
+    clear_marks();
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (set, elements, layout) = unsafe { alloc_old_test_set(1) };
+    let set_header = unsafe { header_from_user_ptr(set as *const u8) };
+    unsafe {
+        (*set).size = 1;
+        (*set_header).gc_flags |= GC_FLAG_MARKED;
+    }
+    runtime_store_external_jsvalue_slot(set as usize, elements as usize, ptr_bits(young));
+
+    let stats = verify_old_to_young_edges_covered();
+
+    assert_eq!(stats.checked_old_to_young_edges, 1);
+    assert_eq!(stats.missing_edges, 0);
+    unsafe {
+        (*set_header).gc_flags &= !GC_FLAG_MARKED;
+        retire_old_test_set(set, elements, layout);
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_old_young_edge_verifier_accepts_promise_slot() {
+    reset_remembered_set();
+    clear_marks();
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let promise = unsafe { alloc_old_test_promise() };
+    let promise_header = unsafe { header_from_user_ptr(promise as *const u8) };
+    unsafe {
+        (*promise_header).gc_flags |= GC_FLAG_MARKED;
+    }
+    crate::promise::js_promise_resolve(promise, f64::from_bits(ptr_bits(young)));
+
+    let stats = verify_old_to_young_edges_covered();
+
+    assert_eq!(stats.checked_old_to_young_edges, 1);
+    assert_eq!(stats.missing_edges, 0);
+    unsafe {
+        (*promise_header).gc_flags &= !GC_FLAG_MARKED;
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_old_young_edge_verifier_trace_json_shape() {
+    let mut trace = GcCycleTrace::new(
+        GcCollectionKind::Minor,
+        GcTriggerSnapshot {
+            kind: GcTriggerKind::Direct,
+            steps_before: Some(GcStepSnapshot::current()),
+        },
+    )
+    .expect("test requested GC trace capture");
+    trace.old_young_edge_verifier = OldYoungEdgeVerifyStats {
+        checked_old_objects: 3,
+        checked_remembered_pages: 2,
+        checked_old_to_young_edges: 1,
+        missing_edges: 1,
+        first_missing: Some(OldYoungEdgeMissing {
+            parent: 0x1111,
+            slot: 0x2222,
+            child: 0x3333,
+        }),
+    };
+    trace.record_phase("old_young_edge_verify", std::time::Duration::from_micros(7));
+
+    let event = trace.into_json(GcStepSnapshot::current());
+
+    assert_eq!(event["old_young_edge_verifier"]["checked_old_objects"], 3);
+    assert_eq!(
+        event["old_young_edge_verifier"]["checked_remembered_pages"],
+        2
+    );
+    assert_eq!(
+        event["old_young_edge_verifier"]["checked_old_to_young_edges"],
+        1
+    );
+    assert_eq!(event["old_young_edge_verifier"]["missing_edges"], 1);
+    assert_eq!(
+        event["old_young_edge_verifier"]["first_missing"]["parent"],
+        0x1111
+    );
+    assert_eq!(event["phase_us"]["old_young_edge_verify"], 7);
+}
+
+#[test]
+fn test_dirty_page_scan_skips_pointer_free_old_object_payload_slots() {
+    reset_remembered_set();
+    clear_marks();
+    let (old_obj, fields) = unsafe { alloc_old_test_object(2048) };
+    let dirty_idx = unsafe { field_index_not_on_last_page(fields, 2048) };
+    let dirty_slot = unsafe { fields.add(dirty_idx) };
+    unsafe {
+        layout_init_pointer_free(old_obj as *mut u8);
+        *dirty_slot = 42.0_f64.to_bits();
+        mark_dirty_old_page(crate::arena::generation_page_for_addr(dirty_slot as usize));
+    }
+
+    assert_eq!(
+        test_layout_pointer_slot_count(old_obj as usize, 2048),
+        Some(0)
+    );
+    assert_eq!(test_heap_child_slot_count(old_obj as *mut u8), 0);
+
+    let valid_ptrs = build_valid_pointer_set();
+    let stats = mark_remembered_set_roots(&valid_ptrs);
+    assert_eq!(stats.dirty_pages_scanned, 1);
+    assert_eq!(stats.old_objects_considered, 1);
+    assert_eq!(stats.dirty_objects_scanned, 1);
+    assert_eq!(
+        stats.dirty_slots_scanned, 0,
+        "pointer-free old objects must not read payload slots during dirty-page scans"
+    );
+    assert_eq!(stats.dirty_slot_ranges_scanned, 0);
+
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_dirty_page_array_scan_is_slot_range_bounded() {
+    reset_remembered_set();
+    clear_marks();
+    let dirty_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let clean_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_arr, elements) = unsafe { alloc_old_test_array(2048) };
+    let (dirty_idx, clean_idx) = unsafe { field_indices_on_distinct_pages(elements, 2048) };
+    let dirty_slot = unsafe { elements.add(dirty_idx) };
+    unsafe {
+        *dirty_slot = POINTER_TAG | dirty_child as u64;
+        *elements.add(clean_idx) = POINTER_TAG | clean_child as u64;
+    }
+    js_write_barrier_slot(
+        POINTER_TAG | old_arr as u64,
+        dirty_slot as u64,
+        POINTER_TAG | dirty_child as u64,
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    let stats = mark_remembered_set_roots(&valid_ptrs);
+    assert_eq!(stats.old_objects_considered, 1);
+    assert_eq!(stats.dirty_objects_scanned, 1);
+    assert_eq!(stats.dirty_slot_ranges_scanned, 1);
+    assert!(
+        stats.dirty_slots_scanned <= 512,
+        "one dirty page should scan at most one 4 KiB page of u64 slots"
+    );
+    unsafe {
+        let dirty_header = header_from_user_ptr(dirty_child as *const u8);
+        let clean_header = header_from_user_ptr(clean_child as *const u8);
+        assert_ne!((*dirty_header).gc_flags & GC_FLAG_MARKED, 0);
+        assert_eq!((*clean_header).gc_flags & GC_FLAG_MARKED, 0);
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_dirty_page_scan_ignores_clean_old_pages() {
+    reset_remembered_set();
+    clear_marks();
+    let dirty_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let clean_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (dirty_obj, dirty_fields) = unsafe { alloc_old_test_object(2048) };
+    let dirty_idx = unsafe { field_index_not_on_last_page(dirty_fields, 2048) };
+    let dirty_slot = unsafe { dirty_fields.add(dirty_idx) };
+    unsafe {
+        *dirty_slot = POINTER_TAG | dirty_child as u64;
+    }
+    let (_clean_obj, clean_fields) = unsafe { alloc_old_test_object(2048) };
+    let clean_idx = unsafe { field_index_not_on_last_page(clean_fields, 2048) };
+    unsafe {
+        *clean_fields.add(clean_idx) = POINTER_TAG | clean_child as u64;
+    }
+
+    js_write_barrier_slot(
+        POINTER_TAG | dirty_obj as u64,
+        dirty_slot as u64,
+        POINTER_TAG | dirty_child as u64,
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    let stats = mark_remembered_set_roots(&valid_ptrs);
+    assert_eq!(stats.dirty_pages_scanned, 1);
+    assert_eq!(
+        stats.old_objects_considered, 1,
+        "clean old pages must not feed objects into the dirty scan"
+    );
+    assert_eq!(stats.dirty_objects_scanned, 1);
+    assert_eq!(stats.dirty_slot_ranges_scanned, 1);
+    assert!(
+        stats.dirty_slots_scanned <= 512,
+        "one dirty field page should not scan the whole old object"
+    );
+    unsafe {
+        let dirty_header = header_from_user_ptr(dirty_child as *const u8);
+        let clean_header = header_from_user_ptr(clean_child as *const u8);
+        assert_ne!((*dirty_header).gc_flags & GC_FLAG_MARKED, 0);
+        assert_eq!(
+            (*clean_header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "young child stored only on a clean old page should not be marked"
+        );
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_dirty_page_scan_dedupes_object_spanning_dirty_pages() {
+    reset_remembered_set();
+    clear_marks();
+    let young_a = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let young_b = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(2048) };
+    let (idx_a, idx_b) = unsafe { field_indices_on_distinct_pages(fields, 2048) };
+    let slot_a = unsafe { fields.add(idx_a) };
+    let slot_b = unsafe { fields.add(idx_b) };
+    unsafe {
+        *slot_a = POINTER_TAG | young_a as u64;
+        *slot_b = POINTER_TAG | young_b as u64;
+    }
+
+    js_write_barrier_slot(
+        POINTER_TAG | old_obj as u64,
+        slot_a as u64,
+        POINTER_TAG | young_a as u64,
+    );
+    js_write_barrier_slot(
+        POINTER_TAG | old_obj as u64,
+        slot_b as u64,
+        POINTER_TAG | young_b as u64,
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    let stats = mark_remembered_set_roots(&valid_ptrs);
+    assert_eq!(stats.dirty_pages_scanned, 2);
+    assert_eq!(
+        stats.old_objects_considered, 1,
+        "one object spanning two dirty pages should be considered once"
+    );
+    assert_eq!(stats.dirty_objects_scanned, 1);
+    assert_eq!(stats.dirty_slot_pages_considered, 2);
+    assert!(stats.dirty_slot_ranges_scanned <= 2);
+    assert!(
+        stats.dirty_slots_scanned <= 1024,
+        "two dirty field pages should bound scanning to two pages"
+    );
+    assert_eq!(stats.newly_marked, 2);
+    unsafe {
+        let header_a = header_from_user_ptr(young_a as *const u8);
+        let header_b = header_from_user_ptr(young_b as *const u8);
+        assert_ne!((*header_a).gc_flags & GC_FLAG_MARKED, 0);
+        assert_ne!((*header_b).gc_flags & GC_FLAG_MARKED, 0);
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_dirty_page_map_entry_scan_is_external_range_bounded() {
+    reset_remembered_set();
+    clear_marks();
+    let dirty_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let clean_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (map, entries, layout) = unsafe { alloc_old_test_map(2048) };
+    unsafe {
+        (*map).size = 2048;
+    }
+    let (dirty_idx, clean_idx) = unsafe { field_indices_on_distinct_pages(entries, 4096) };
+    let dirty_slot = unsafe { entries.add(dirty_idx) };
+    unsafe {
+        *dirty_slot = POINTER_TAG | dirty_child as u64;
+        *entries.add(clean_idx) = POINTER_TAG | clean_child as u64;
+    }
+    write_barrier_slot_inner(
+        POINTER_TAG | map as u64,
+        dirty_slot as usize,
+        POINTER_TAG | dirty_child as u64,
+        true,
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    let stats = mark_remembered_set_roots(&valid_ptrs);
+    assert_eq!(stats.dirty_pages_scanned, 1);
+    assert_eq!(stats.old_objects_considered, 1);
+    assert_eq!(stats.dirty_objects_scanned, 1);
+    assert_eq!(stats.dirty_slot_ranges_scanned, 1);
+    assert!(
+        stats.dirty_slots_scanned <= 512,
+        "one dirty map entries page should not scan the whole map"
+    );
+    unsafe {
+        let dirty_header = header_from_user_ptr(dirty_child as *const u8);
+        let clean_header = header_from_user_ptr(clean_child as *const u8);
+        assert_ne!((*dirty_header).gc_flags & GC_FLAG_MARKED, 0);
+        assert_eq!((*clean_header).gc_flags & GC_FLAG_MARKED, 0);
+        retire_old_test_map(map, entries, layout);
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_dirty_lazy_array_external_cache_scan_marks_bitmap_selected_child() {
+    reset_remembered_set();
+    clear_marks();
+
+    let cached_length = 4usize;
+    let lazy = crate::arena::arena_alloc_gc_old(
+        std::mem::size_of::<crate::json_tape::LazyArrayHeader>(),
+        8,
+        GC_TYPE_LAZY_ARRAY,
+    ) as *mut crate::json_tape::LazyArrayHeader;
+    let cache_bytes = cached_length * std::mem::size_of::<crate::value::JSValue>();
+    let cache =
+        crate::arena::arena_alloc_gc(cache_bytes, 8, GC_TYPE_STRING) as *mut crate::value::JSValue;
+    let bitmap =
+        crate::arena::arena_alloc_gc(std::mem::size_of::<u64>(), 8, GC_TYPE_STRING) as *mut u64;
+    let selected_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let unselected_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+
+    unsafe {
+        std::ptr::write_bytes(cache as *mut u8, 0, cache_bytes);
+        *bitmap = 0;
+        (*lazy).cached_length = cached_length as u32;
+        (*lazy).magic = crate::json_tape::LAZY_ARRAY_MAGIC;
+        (*lazy).root_idx = 0;
+        (*lazy).tape_len = 0;
+        (*lazy).blob_str = std::ptr::null();
+        (*lazy).materialized = std::ptr::null_mut();
+        (*lazy).materialized_elements = cache;
+        (*lazy).materialized_bitmap = bitmap;
+        (*lazy).walk_idx = u32::MAX;
+        (*lazy).walk_tape_pos = 0;
+        (*lazy).cumulative_walk_steps = 0;
+
+        *(cache.add(1) as *mut u64) = ptr_bits(selected_child);
+        *(cache.add(2) as *mut u64) = ptr_bits(unselected_child);
+        *bitmap = 1u64 << 1;
+    }
+
+    let lazy_header = unsafe { header_from_user_ptr(lazy as *const u8) };
+    let dirty_cache_page = crate::arena::generation_page_for_addr(unsafe { cache.add(1) } as usize);
+    assert!(mark_dirty_external_slot_page(
+        lazy_header as usize,
+        dirty_cache_page
+    ));
+
+    let valid_ptrs = build_valid_pointer_set();
+    let stats = mark_remembered_set_roots(&valid_ptrs);
+    assert_eq!(stats.old_objects_considered, 1);
+    assert_eq!(stats.dirty_objects_scanned, 1);
+    assert_eq!(
+        stats.newly_marked, 1,
+        "external lazy-array cache page should mark bitmap-selected nursery values"
+    );
+    unsafe {
+        let selected_header = header_from_user_ptr(selected_child as *const u8);
+        let unselected_header = header_from_user_ptr(unselected_child as *const u8);
+        assert_ne!((*selected_header).gc_flags & GC_FLAG_MARKED, 0);
+        assert_eq!(
+            (*unselected_header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "unset cache bitmap entries must not be treated as live slots"
+        );
+    }
+
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_dirty_page_map_external_dedupes_and_clears() {
+    reset_remembered_set();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (map, entries, layout) = unsafe { alloc_old_test_map(16) };
+    unsafe {
+        (*map).size = 16;
+        *entries.add(1) = POINTER_TAG | young as u64;
+    }
+    let slot = unsafe { entries.add(1) };
+    write_barrier_slot_inner(
+        POINTER_TAG | map as u64,
+        slot as usize,
+        POINTER_TAG | young as u64,
+        true,
+    );
+    write_barrier_slot_inner(
+        POINTER_TAG | map as u64,
+        slot as usize,
+        POINTER_TAG | young as u64,
+        true,
+    );
+    assert_eq!(remembered_set_size(), 1);
+    remembered_set_clear();
+    assert_eq!(remembered_set_size(), 0);
+    unsafe {
+        retire_old_test_map(map, entries, layout);
+    }
+}
+
+#[test]
+fn test_dirty_page_map_realloc_span_marks_new_entries_pages() {
+    reset_remembered_set();
+    clear_marks();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (map, entries, layout) = unsafe { alloc_old_test_map(1024) };
+    unsafe {
+        (*map).size = 1024;
+        *entries.add(1023) = POINTER_TAG | young as u64;
+    }
+    let new_layout = std::alloc::Layout::from_size_align(2048 * 16, 8).unwrap();
+    let new_entries = unsafe { std::alloc::alloc_zeroed(new_layout) as *mut u64 };
+    assert!(!new_entries.is_null());
+    unsafe {
+        std::ptr::copy_nonoverlapping(entries, new_entries, 2048);
+        (*map).entries = new_entries as *mut f64;
+        (*map).capacity = 2048;
+    }
+    dirty_external_slot_span(map as usize, new_entries as usize, 2048);
+
+    let valid_ptrs = build_valid_pointer_set();
+    let stats = mark_remembered_set_roots(&valid_ptrs);
+    assert!(stats.dirty_pages_scanned >= 1);
+    assert_eq!(stats.old_objects_considered, 1);
+    assert_eq!(stats.newly_marked, 1);
+    unsafe {
+        let header = header_from_user_ptr(young as *const u8);
+        assert_ne!((*header).gc_flags & GC_FLAG_MARKED, 0);
+        retire_old_test_map(map, new_entries, new_layout);
+        std::alloc::dealloc(entries as *mut u8, layout);
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_dirty_page_set_external_slot_marks_child() {
+    reset_remembered_set();
+    clear_marks();
+
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (set, elements, layout) = unsafe { alloc_old_test_set(1) };
+    unsafe {
+        (*set).size = 1;
+    }
+    runtime_store_external_jsvalue_slot(set as usize, elements as usize, ptr_bits(young));
+
+    assert!(
+        remembered_set_size() > 0,
+        "Set append should dirty the exact external slot page"
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    let stats = mark_remembered_set_roots(&valid_ptrs);
+    assert_eq!(stats.old_objects_considered, 1);
+    assert_eq!(stats.newly_marked, 1);
+    unsafe {
+        let header = header_from_user_ptr(young as *const u8);
+        assert_ne!((*header).gc_flags & GC_FLAG_MARKED, 0);
+    }
+
+    unsafe {
+        retire_old_test_set(set, elements, layout);
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_rewrite_remembered_dirty_range_updates_set_external_entry_span() {
+    reset_remembered_set();
+    clear_marks();
+
+    let dirty_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let clean_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (set, elements, layout) = unsafe { alloc_old_test_set(2048) };
+    unsafe {
+        (*set).size = 2048;
+    }
+    let (dirty_idx, clean_idx) = unsafe { field_indices_on_distinct_pages(elements, 2048) };
+    let dirty_slot = unsafe { elements.add(dirty_idx) };
+    unsafe {
+        *dirty_slot = POINTER_TAG | dirty_child as u64;
+        *elements.add(clean_idx) = POINTER_TAG | clean_child as u64;
+    }
+    write_barrier_slot_inner(
+        POINTER_TAG | set as u64,
+        dirty_slot as usize,
+        POINTER_TAG | dirty_child as u64,
+        true,
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    let new_dirty_child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    let new_clean_child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    unsafe {
+        set_forwarding_address(
+            header_from_user_ptr(dirty_child as *const u8),
+            new_dirty_child as *mut u8,
+        );
+        set_forwarding_address(
+            header_from_user_ptr(clean_child as *const u8),
+            new_clean_child as *mut u8,
+        );
+    }
+
+    rewrite_remembered_dirty_ranges(&valid_ptrs);
+
+    unsafe {
+        assert_eq!(*dirty_slot, POINTER_TAG | new_dirty_child as u64);
+        assert_eq!(
+            *elements.add(clean_idx),
+            POINTER_TAG | clean_child as u64,
+            "Set external dirty rewrite should stay bounded to the logged element page"
+        );
+        retire_old_test_set(set, elements, layout);
+    }
+    remembered_set_clear();
+}
+
+#[test]
+fn test_dirty_page_promise_value_slot_marks_child() {
+    reset_remembered_set();
+    clear_marks();
+
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let promise = unsafe { alloc_old_test_promise() };
+    crate::promise::js_promise_resolve(promise, f64::from_bits(ptr_bits(young)));
+
+    assert!(
+        remembered_set_size() > 0,
+        "Promise value setter should dirty the exact fixed field slot"
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    let stats = mark_remembered_set_roots(&valid_ptrs);
+    assert_eq!(stats.old_objects_considered, 1);
+    assert_eq!(stats.newly_marked, 1);
+    unsafe {
+        let header = header_from_user_ptr(young as *const u8);
+        assert_ne!((*header).gc_flags & GC_FLAG_MARKED, 0);
+    }
+
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_dirty_page_error_cause_slot_marks_child() {
+    reset_remembered_set();
+    clear_marks();
+
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let error = unsafe { alloc_old_test_error() };
+    unsafe {
+        crate::error::error_set_cause(error, f64::from_bits(ptr_bits(young)));
+    }
+
+    assert!(
+        remembered_set_size() > 0,
+        "Error cause setter should dirty the exact fixed field slot"
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    let stats = mark_remembered_set_roots(&valid_ptrs);
+    assert_eq!(stats.old_objects_considered, 1);
+    assert_eq!(stats.newly_marked, 1);
+    unsafe {
+        let header = header_from_user_ptr(young as *const u8);
+        assert_ne!((*header).gc_flags & GC_FLAG_MARKED, 0);
+    }
+
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_rewrite_remembered_dirty_range_updates_unmarked_old_parent_slot() {
+    reset_remembered_set();
+    clear_marks();
+    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    unsafe {
+        *fields = POINTER_TAG | child as u64;
+    }
+    js_write_barrier_slot(
+        POINTER_TAG | old_obj as u64,
+        fields as u64,
+        POINTER_TAG | child as u64,
+    );
+    let valid_ptrs = build_valid_pointer_set();
+    let new_child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    unsafe {
+        set_forwarding_address(
+            header_from_user_ptr(child as *const u8),
+            new_child as *mut u8,
+        );
+        let old_header = header_from_user_ptr(old_obj as *const u8);
+        assert_eq!(
+            (*old_header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "test must prove dirty rewrite does not depend on marked parent walk"
+        );
+    }
+
+    rewrite_remembered_dirty_ranges(&valid_ptrs);
+
+    unsafe {
+        assert_eq!(
+            *fields,
+            POINTER_TAG | new_child as u64,
+            "dirty old parent slot should be rewritten even when parent is unmarked"
+        );
+    }
+    remembered_set_clear();
+}
+
+#[test]
+fn test_rewrite_remembered_dirty_range_updates_map_external_entry_span() {
+    reset_remembered_set();
+    clear_marks();
+    let dirty_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let clean_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (map, entries, layout) = unsafe { alloc_old_test_map(2048) };
+    unsafe {
+        (*map).size = 2048;
+    }
+    let (dirty_idx, clean_idx) = unsafe { field_indices_on_distinct_pages(entries, 4096) };
+    let dirty_slot = unsafe { entries.add(dirty_idx) };
+    unsafe {
+        *dirty_slot = POINTER_TAG | dirty_child as u64;
+        *entries.add(clean_idx) = POINTER_TAG | clean_child as u64;
+    }
+    write_barrier_slot_inner(
+        POINTER_TAG | map as u64,
+        dirty_slot as usize,
+        POINTER_TAG | dirty_child as u64,
+        true,
+    );
+    let valid_ptrs = build_valid_pointer_set();
+    let new_dirty_child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    let new_clean_child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    unsafe {
+        set_forwarding_address(
+            header_from_user_ptr(dirty_child as *const u8),
+            new_dirty_child as *mut u8,
+        );
+        set_forwarding_address(
+            header_from_user_ptr(clean_child as *const u8),
+            new_clean_child as *mut u8,
+        );
+    }
+
+    rewrite_remembered_dirty_ranges(&valid_ptrs);
+
+    unsafe {
+        assert_eq!(*dirty_slot, POINTER_TAG | new_dirty_child as u64);
+        assert_eq!(
+            *entries.add(clean_idx),
+            POINTER_TAG | clean_child as u64,
+            "external dirty rewrite should stay bounded to the logged entry page"
+        );
+        retire_old_test_map(map, entries, layout);
+    }
+    remembered_set_clear();
+}
+
+#[test]
+fn test_rewrite_remembered_fallback_header_updates_fields() {
+    reset_remembered_set();
+    clear_marks();
+    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    unsafe {
+        *fields = POINTER_TAG | child as u64;
+    }
+    REMEMBERED_SET.with(|s| {
+        s.borrow_mut().insert(old_obj as usize - GC_HEADER_SIZE);
+    });
+    let valid_ptrs = build_valid_pointer_set();
+    let new_child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    unsafe {
+        set_forwarding_address(
+            header_from_user_ptr(child as *const u8),
+            new_child as *mut u8,
+        );
+    }
+
+    rewrite_remembered_dirty_ranges(&valid_ptrs);
+
+    unsafe {
+        assert_eq!(*fields, POINTER_TAG | new_child as u64);
+    }
+    remembered_set_clear();
+}
+
+#[test]
+fn test_object_hashset_fallback_still_scans() {
+    reset_remembered_set();
+    clear_marks();
+    let (old_obj, _fields) = unsafe { alloc_old_test_object(1) };
+    let old_header = old_obj as usize - GC_HEADER_SIZE;
+    REMEMBERED_SET.with(|s| {
+        s.borrow_mut().insert(old_header);
+    });
+    let valid_ptrs = build_valid_pointer_set();
+    let stats = mark_remembered_set_roots(&valid_ptrs);
+    assert_eq!(stats.entries_scanned, 1);
+    assert_eq!(stats.valid_roots, 1);
+    assert_eq!(stats.newly_marked, 1);
+    unsafe {
+        let header = header_from_user_ptr(old_obj as *const u8);
+        assert_ne!((*header).gc_flags & GC_FLAG_MARKED, 0);
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_gc_collect_minor_keeps_dirty_page_child_alive() {
+    reset_remembered_set();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    unsafe {
+        *fields = POINTER_TAG | young as u64;
+    }
+    js_write_barrier_slot(
+        POINTER_TAG | old_obj as u64,
+        fields as u64,
+        POINTER_TAG | young as u64,
+    );
+    let _ = gc_collect_minor();
+    unsafe {
+        let child_header = header_from_user_ptr(young as *const u8);
+        assert_ne!(
+            (*child_header).gc_flags & GC_FLAG_HAS_SURVIVED,
+            0,
+            "dirty-page remembered scan should keep the young child alive through minor GC"
+        );
+    }
+    remembered_set_clear();
+}
+
+#[test]
+fn test_minor_gc_promotes_after_two_survivals() {
+    reset_remembered_set();
+    // Allocate an arena object and pin it so it survives every GC.
+    let user_ptr = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    unsafe {
+        let header = header_from_user_ptr(user_ptr);
+        (*header).gc_flags |= GC_FLAG_PINNED;
+        // Initial state: not yet survived, not tenured.
+        assert_eq!((*header).gc_flags & GC_FLAG_HAS_SURVIVED, 0);
+        assert_eq!((*header).gc_flags & GC_FLAG_TENURED, 0);
+    }
+    // First minor GC: object survives, gets HAS_SURVIVED bit.
+    let _ = gc_collect_minor();
+    unsafe {
+        let header = header_from_user_ptr(user_ptr);
+        assert_ne!(
+            (*header).gc_flags & GC_FLAG_HAS_SURVIVED,
+            0,
+            "first survival should set HAS_SURVIVED"
+        );
+        assert_eq!(
+            (*header).gc_flags & GC_FLAG_TENURED,
+            0,
+            "first survival should not yet tenure"
+        );
+    }
+    // Second minor GC: HAS_SURVIVED + survives → TENURED, clear HAS_SURVIVED.
+    let _ = gc_collect_minor();
+    unsafe {
+        let header = header_from_user_ptr(user_ptr);
+        assert_ne!(
+            (*header).gc_flags & GC_FLAG_TENURED,
+            0,
+            "second survival should tenure"
+        );
+        assert_eq!(
+            (*header).gc_flags & GC_FLAG_HAS_SURVIVED,
+            0,
+            "tenuring should clear HAS_SURVIVED"
+        );
+    }
+    // Third minor GC: stays tenured idempotently.
+    let _ = gc_collect_minor();
+    unsafe {
+        let header = header_from_user_ptr(user_ptr);
+        assert_ne!(
+            (*header).gc_flags & GC_FLAG_TENURED,
+            0,
+            "tenured stays tenured across subsequent collections"
+        );
+    }
+}

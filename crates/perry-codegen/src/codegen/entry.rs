@@ -247,6 +247,11 @@ pub(super) fn compile_module_entry(
             module_globals,
             classes,
         );
+        let main_non_escaping_new_used_fields =
+            crate::collectors::collect_non_escaping_new_used_fields(
+                &hir.init,
+                &main_non_escaping_news,
+            );
         let main_non_escaping_arrays = crate::collectors::collect_non_escaping_arrays(
             &hir.init,
             &main_boxed_vars,
@@ -335,6 +340,7 @@ pub(super) fn compile_module_entry(
             scalar_replaced_arrays: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
             non_escaping_news: main_non_escaping_news,
+            non_escaping_new_used_fields: main_non_escaping_new_used_fields,
             non_escaping_arrays: main_non_escaping_arrays,
             non_escaping_object_literals: main_non_escaping_object_literals,
             flat_const_arrays: &cross_module.flat_const_arrays,
@@ -637,6 +643,11 @@ pub(super) fn compile_module_entry(
             module_globals,
             classes,
         );
+        let init_non_escaping_new_used_fields =
+            crate::collectors::collect_non_escaping_new_used_fields(
+                &hir.init,
+                &init_non_escaping_news,
+            );
         let init_non_escaping_arrays = crate::collectors::collect_non_escaping_arrays(
             &hir.init,
             &init_boxed_vars,
@@ -723,6 +734,7 @@ pub(super) fn compile_module_entry(
             scalar_replaced_arrays: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
             non_escaping_news: init_non_escaping_news,
+            non_escaping_new_used_fields: init_non_escaping_new_used_fields,
             non_escaping_arrays: init_non_escaping_arrays,
             non_escaping_object_literals: init_non_escaping_object_literals,
             flat_const_arrays: &cross_module.flat_const_arrays,

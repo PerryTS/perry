@@ -216,9 +216,12 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         };
         let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
         let slot = fields_ptr.add(field_index as usize);
-        ptr::write(slot, value);
-        super::note_object_field_slot(obj, field_index as usize, value.bits());
-        crate::gc::runtime_write_barrier_slot(obj as usize, slot as usize, value.bits());
+        crate::gc::runtime_store_jsvalue_slot(
+            obj as usize,
+            slot as usize,
+            field_index as usize,
+            value.bits(),
+        );
     }
 }
 
@@ -354,9 +357,12 @@ pub extern "C" fn js_object_set_unboxed_f64_field(
         let bits = value.to_bits();
         let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
         let slot = fields_ptr.add(field_index as usize);
-        ptr::write(slot, bits);
-        super::note_object_field_slot(obj, field_index as usize, bits);
-        crate::gc::runtime_write_barrier_slot(obj as usize, slot as usize, bits);
+        crate::gc::runtime_store_jsvalue_slot(
+            obj as usize,
+            slot as usize,
+            field_index as usize,
+            bits,
+        );
     }
 }
 
@@ -932,8 +938,7 @@ pub extern "C" fn js_object_get_field_by_name(
                             return JSValue::from_bits(JSValue::pointer(null_obj_ptr).bits());
                         }
                     }
-                    let dispatch = unsafe { HANDLE_PROPERTY_DISPATCH };
-                    if let Some(dispatch) = dispatch {
+                    if let Some(dispatch) = handle_property_dispatch() {
                         unsafe {
                             let key_ptr =
                                 (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -970,8 +975,7 @@ pub extern "C" fn js_object_get_field_by_name(
                     return JSValue::from_bits(result.to_bits());
                 }
             }
-            let dispatch = unsafe { HANDLE_PROPERTY_DISPATCH };
-            if let Some(dispatch) = dispatch {
+            if let Some(dispatch) = handle_property_dispatch() {
                 unsafe {
                     let key_ptr =
                         (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -1158,6 +1162,25 @@ pub extern "C" fn js_object_get_field_by_name(
                     b"cause" => {
                         let v = crate::error::js_error_get_cause(err_ptr);
                         return JSValue::from_bits(v.to_bits());
+                    }
+                    b"code" => {
+                        // Errors thrown by runtime validation paths (e.g.
+                        // diagnostics_channel argument checks) register
+                        // their `ERR_*` code in a side table keyed on the
+                        // message StringHeader pointer. This avoids the
+                        // earlier substring-match shim that incorrectly
+                        // applied `ERR_INVALID_ARG_TYPE` to any user
+                        // TypeError whose `.message` happened to equal
+                        // the placeholder text.
+                        let msg = crate::error::js_error_get_message(err_ptr);
+                        if let Some(code) = crate::node_submodules::error_code_for_message(msg) {
+                            let s = crate::string::js_string_from_bytes(
+                                code.as_ptr(),
+                                code.len() as u32,
+                            );
+                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                        }
+                        return JSValue::undefined();
                     }
                     b"errors" => {
                         // AggregateError.errors — return the errors array
@@ -1481,8 +1504,12 @@ pub extern "C" fn js_object_get_field_by_name(
         };
         let keys_id = keys as usize;
 
+        let key_count = crate::array::js_array_length(keys) as usize;
+
         // Thread-local inline cache: fixed-size direct-mapped cache (no allocation, no HashMap)
-        // Each entry stores (keys_ptr, key_hash, field_index) for collision-safe validation
+        // Each entry stores (keys_ptr, key_hash, field_index). Copied-minor
+        // nursery reset can reuse a keys-array address, so cache hits still
+        // validate the key slot before returning a field.
         const FIELD_CACHE_SIZE: usize = 1024;
         thread_local! {
             static FIELD_CACHE: std::cell::UnsafeCell<[(usize, u32, u32); FIELD_CACHE_SIZE]> =
@@ -1499,30 +1526,44 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         });
         if let Some(field_idx) = cached {
-            // Accessor short-circuit: if this (obj, key) has a getter installed,
-            // invoke it instead of reading the slot. The `ACCESSORS_IN_USE`
-            // thread-local gate keeps this off the hot path in the common case.
-            if ACCESSORS_IN_USE.with(|c| c.get()) {
-                if let Ok(name) = std::str::from_utf8(key_bytes) {
-                    if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
-                        if acc.get != 0 {
-                            let closure = (acc.get & crate::value::POINTER_MASK)
-                                as *const crate::closure::ClosureHeader;
-                            if !closure.is_null() {
-                                let result_f64 = crate::closure::js_closure_call0(closure);
-                                return JSValue::from_bits(result_f64.to_bits());
+            let idx = field_idx as usize;
+            let cache_hit_valid = if idx < key_count {
+                let key_val = crate::array::js_array_get(keys, field_idx);
+                key_val.is_string()
+                    && crate::string::js_string_equals(key, key_val.as_string_ptr()) != 0
+            } else {
+                false
+            };
+            if !cache_hit_valid {
+                FIELD_CACHE.with(|c| {
+                    let cache = &mut *c.get();
+                    cache[cache_idx] = (0, 0, 0);
+                });
+            } else {
+                // Accessor short-circuit: if this (obj, key) has a getter installed,
+                // invoke it instead of reading the slot. The `ACCESSORS_IN_USE`
+                // thread-local gate keeps this off the hot path in the common case.
+                if ACCESSORS_IN_USE.with(|c| c.get()) {
+                    if let Ok(name) = std::str::from_utf8(key_bytes) {
+                        if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
+                            if acc.get != 0 {
+                                let closure = (acc.get & crate::value::POINTER_MASK)
+                                    as *const crate::closure::ClosureHeader;
+                                if !closure.is_null() {
+                                    let result_f64 = crate::closure::js_closure_call0(closure);
+                                    return JSValue::from_bits(result_f64.to_bits());
+                                }
                             }
+                            // Has accessor but no getter → undefined.
+                            return JSValue::undefined();
                         }
-                        // Has accessor but no getter → undefined.
-                        return JSValue::undefined();
                     }
                 }
+                return js_object_get_field(obj, field_idx);
             }
-            return js_object_get_field(obj, field_idx);
         }
 
         // Slow path: linear scan through keys array
-        let key_count = crate::array::js_array_length(keys) as usize;
         let _field_count = (*obj).field_count as usize;
 
         if key_count > 65536 {
@@ -1776,8 +1817,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
                 return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
             }
         }
-        let dispatch = unsafe { HANDLE_PROPERTY_DISPATCH };
-        if let Some(dispatch) = dispatch {
+        if let Some(dispatch) = handle_property_dispatch() {
             unsafe {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;

@@ -1390,6 +1390,54 @@ pub(super) fn build_and_run_link(
                 cmd.arg("-framework").arg(framework);
             }
 
+            // Issue #1304 — vendored-SDK frameworks (e.g. GoogleSignIn
+            // for `@perryts/google-auth`). These live in a directory the
+            // app dev built/downloaded locally, named by the wrapper's
+            // `frameworks_env` env var. When that var is set and resolves
+            // to an existing directory, add it as a framework search path
+            // (`-F <dir>`) and emit one `-framework <name>` per declared
+            // `optional_frameworks` entry. When it's unset (or points at
+            // something that isn't a directory) we skip silently: the
+            // wrapper's `#if canImport(...)` Swift bridge already compiles
+            // a no-SDK fallback path, so the binary still links and
+            // returns a runtime "framework not linked" result rather than
+            // failing with undefined `GID*` symbols.
+            //
+            // Contract is static frameworks only — `-framework` links the
+            // archive directly with no `.app/Frameworks/` embed + rpath.
+            if let Some(env_name) = target_config.frameworks_env.as_deref() {
+                if !target_config.optional_frameworks.is_empty() {
+                    match std::env::var(env_name) {
+                        Ok(dir) if Path::new(&dir).is_dir() => {
+                            cmd.arg("-F").arg(&dir);
+                            for framework in &target_config.optional_frameworks {
+                                cmd.arg("-framework").arg(framework);
+                            }
+                            if let OutputFormat::Text = format {
+                                println!(
+                                    "Linking {} optional framework(s) for {} from ${} ({})",
+                                    target_config.optional_frameworks.len(),
+                                    native_lib.module,
+                                    env_name,
+                                    dir
+                                );
+                            }
+                        }
+                        Ok(dir) => {
+                            if let OutputFormat::Text = format {
+                                println!(
+                                    "Skipping optional frameworks for {}: ${} = {:?} is not a directory",
+                                    native_lib.module, env_name, dir
+                                );
+                            }
+                        }
+                        Err(_) => {
+                            // env var unset → silent skip (canImport fallback).
+                        }
+                    }
+                }
+            }
+
             // Add library search paths. MSVC link.exe takes `/LIBPATH:`;
             // every other linker we drive (clang/ld on Apple, gcc/ld on
             // Linux/Android/HarmonyOS) understands `-L`. Mirror the

@@ -23,8 +23,6 @@ use super::*;
 /// HIR node, not the SSA value, so they continue to fire even though the
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {
-    use std::sync::atomic::{AtomicI64, Ordering};
-    static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
     let cached = GLOBAL_THIS_PTR.load(Ordering::Acquire);
     let ptr = if cached != 0 {
         cached
@@ -33,6 +31,7 @@ pub extern "C" fn js_get_global_this() -> f64 {
         // initial alloc, the loser's allocation leaks (never freed) but
         // both threads see the winner's pointer afterward via CAS.
         let new_ptr = js_object_alloc(0, 0) as i64;
+        // GC_STORE_AUDIT(ROOT): GLOBAL_THIS_PTR is a mutable root visited by scan_object_cache_roots_mut.
         match GLOBAL_THIS_PTR.compare_exchange(0, new_ptr, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => {
                 // Winner: populate built-in constructor properties on the

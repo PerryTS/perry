@@ -605,6 +605,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.block().store(DOUBLE, &modified_box, &slot);
             } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
                 let g_ref = format!("@{}", global_name);
+                // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
                 ctx.block().store(DOUBLE, &modified_box, &g_ref);
             }
             // Return the deleted array (NaN-boxed) as the splice

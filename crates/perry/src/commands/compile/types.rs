@@ -621,6 +621,31 @@ pub struct TargetNativeConfig {
     /// distribution pattern).
     pub prebuilt: Option<PathBuf>,
     pub frameworks: Vec<String>,
+    /// Vendored Apple frameworks linked *only* when an opt-in env var
+    /// resolves to a directory holding them (issue #1304). Unlike
+    /// `frameworks` (system frameworks, always linked from the SDK's
+    /// `System/Library/Frameworks`), these come from a third-party SDK
+    /// the app dev builds/downloads locally — e.g. GoogleSignIn for
+    /// `@perryts/google-auth`. Each entry is passed as `-framework
+    /// <name>`, gated on `frameworks_env`.
+    ///
+    /// Contract is **static frameworks only**: `-framework` links the
+    /// archive directly with no `.app/Frameworks/` embed or rpath, so
+    /// the vendored `.framework` must contain a static Mach-O. Dynamic
+    /// frameworks (CocoaPods-built GoogleSignIn) would also need
+    /// embedding + an `@executable_path/Frameworks` rpath, which is not
+    /// yet implemented (see #1304's open question).
+    pub optional_frameworks: Vec<String>,
+    /// Name of the environment variable that points at the directory
+    /// holding the `optional_frameworks` (issue #1304). When set and the
+    /// referenced path is an existing directory, the link line gains
+    /// `-F <dir>` plus one `-framework` per `optional_frameworks` entry.
+    /// When unset (or the path is missing), the optional frameworks are
+    /// skipped silently — the wrapper's Swift bridge `#if
+    /// canImport(...)` fallback already compiles a no-SDK code path, so
+    /// the build still links and returns a runtime "framework not
+    /// linked" result instead of failing.
+    pub frameworks_env: Option<String>,
     pub libs: Vec<String>,
     /// Extra `-L`/`/LIBPATH:` search paths to hand the linker before the
     /// `libs` entries are resolved. Anchored to the manifest's

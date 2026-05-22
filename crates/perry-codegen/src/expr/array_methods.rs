@@ -302,10 +302,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let key_box = blk.load(DOUBLE, &key_handle_global);
             let key_handle = unbox_to_i64(blk, &key_box);
-            let result = blk.call(I64, "js_getenv", &[(I64, &key_handle)]);
-            // Returns null pointer if env var doesn't exist; nanbox as
-            // string (or null) and let downstream handle it.
-            Ok(nanbox_string_inline(blk, &result))
+            // js_getenv_value returns `undefined` (nullish) for an unset
+            // var, not a STRING_TAG'd null pointer — so `?? default`
+            // applies and typeof/JSON.stringify agree (#1312).
+            Ok(blk.call(DOUBLE, "js_getenv_value", &[(I64, &key_handle)]))
         }
         Expr::EnvGetDynamic(name_expr) => {
             let key_box = lower_expr(ctx, name_expr)?;
@@ -314,8 +314,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `process.env[shortName]`); `js_getenv` dereferences it as
             // `*StringHeader`. #214 SSO bug class.
             let key_handle = unbox_str_handle(blk, &key_box);
-            let result = blk.call(I64, "js_getenv", &[(I64, &key_handle)]);
-            Ok(nanbox_string_inline(blk, &result))
+            // `undefined` for unset vars — see EnvGet above (#1312).
+            Ok(blk.call(DOUBLE, "js_getenv_value", &[(I64, &key_handle)]))
         }
         Expr::ProcessEnv => {
             // `process.env` (or `globalThis.process.env`) as a value.

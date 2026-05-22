@@ -54,6 +54,17 @@ pub(super) fn try_native_module_methods(
                                 }));
                             }
                         }
+                        "once" => {
+                            if args.len() >= 2 {
+                                let mut iter = args.into_iter();
+                                let event = iter.next().unwrap();
+                                let handler = iter.next().unwrap();
+                                return Ok(Ok(Expr::ProcessOnce {
+                                    event: Box::new(event),
+                                    handler: Box::new(handler),
+                                }));
+                            }
+                        }
                         "chdir" => {
                             if !args.is_empty() {
                                 return Ok(Ok(Expr::ProcessChdir(Box::new(

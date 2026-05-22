@@ -4,7 +4,8 @@
 use anyhow::{anyhow, Result};
 
 use super::{
-    emit_layout_note_slot_on_block, emit_write_barrier_slot_on_block, nanbox_pointer_inline, FnCtx,
+    emit_jsvalue_slot_store_on_block, emit_write_barrier_slot_on_block, nanbox_pointer_inline,
+    FnCtx,
 };
 use crate::block::LlBlock;
 use crate::nanbox::POINTER_MASK_I64;
@@ -128,34 +129,32 @@ pub(crate) fn lower_index_set_fast(
     ctx.block()
         .cond_br(&in_bounds, &inbounds_label, &check_cap_label);
 
-    // Helper: compute element_ptr = arr_ptr + 8 + idx*8 and emit a store.
-    fn store_element(
-        blk: &mut LlBlock,
-        arr_handle: &str,
-        idx_i32: &str,
-        val_double: &str,
-    ) -> String {
+    // Helper: compute element_ptr = arr_ptr + 8 + idx*8.
+    fn element_slot(blk: &mut LlBlock, arr_handle: &str, idx_i32: &str) -> (String, String) {
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3"); // *8
         let with_header = blk.add(I64, &byte_offset, "8"); // +8 for header
         let element_addr = blk.add(I64, arr_handle, &with_header);
         let element_ptr = blk.inttoptr(I64, &element_addr);
-        blk.store(DOUBLE, val_double, &element_ptr);
-        element_addr
+        (element_addr, element_ptr)
     }
 
     // FASTEST: in-bounds path. Store directly, jump to merge.
     ctx.current_block = inbounds_idx;
     {
         let blk = ctx.block();
-        let element_addr = store_element(blk, &arr_handle, &idx_i32, val_double);
-        let val_bits = blk.bitcast_double_to_i64(val_double);
-        if layout_note_needed {
-            emit_layout_note_slot_on_block(blk, &arr_handle, &idx_i32, &val_bits);
-        }
-        if write_barrier_needed {
-            emit_write_barrier_slot_on_block(blk, &arr_handle, &element_addr, &val_bits);
-        }
+        let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
+        emit_jsvalue_slot_store_on_block(
+            blk,
+            &element_ptr,
+            val_double,
+            &arr_handle,
+            &idx_i32,
+            layout_note_needed,
+            &arr_handle,
+            &element_addr,
+            write_barrier_needed,
+        );
         blk.br(&merge_label);
     }
 
@@ -176,18 +175,22 @@ pub(crate) fn lower_index_set_fast(
     ctx.current_block = extend_inline_idx;
     {
         let blk = ctx.block();
-        let element_addr = store_element(blk, &arr_handle, &idx_i32, val_double);
+        let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
+        emit_jsvalue_slot_store_on_block(
+            blk,
+            &element_ptr,
+            val_double,
+            &arr_handle,
+            &idx_i32,
+            layout_note_needed,
+            &arr_handle,
+            &element_addr,
+            write_barrier_needed,
+        );
         // Bump length: store idx+1 to arr_ptr+0.
         let new_len = blk.add(I32, &idx_i32, "1");
         let len_ptr = blk.inttoptr(I64, &arr_handle); // length is at offset 0
         blk.store(I32, &new_len, &len_ptr);
-        let val_bits = blk.bitcast_double_to_i64(val_double);
-        if layout_note_needed {
-            emit_layout_note_slot_on_block(blk, &arr_handle, &idx_i32, &val_bits);
-        }
-        if write_barrier_needed {
-            emit_write_barrier_slot_on_block(blk, &arr_handle, &element_addr, &val_bits);
-        }
         blk.br(&merge_label);
     }
 

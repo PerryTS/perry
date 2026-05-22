@@ -496,6 +496,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
 
+        // -------- process.once(event, handler) — one-shot listener;
+        // the handler is removed after its first invocation (Node parity).
+        Expr::ProcessOnce { event, handler } => {
+            let event_box = lower_expr(ctx, event)?;
+            let handler_box = lower_expr(ctx, handler)?;
+            let blk = ctx.block();
+            let event_handle = unbox_to_i64(blk, &event_box);
+            let handler_handle = unbox_to_i64(blk, &handler_box);
+            blk.call_void(
+                "js_process_once",
+                &[(I64, &event_handle), (I64, &handler_handle)],
+            );
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+        }
+
         // -------- process.stdin.setRawMode(enabled) — toggle raw-mode
         // termios on stdin and flip the readline reader's mode flag
         // (#347 Phase 2).

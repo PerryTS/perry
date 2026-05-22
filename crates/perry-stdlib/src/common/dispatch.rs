@@ -18,17 +18,21 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    let method_name = if method_name_ptr.is_null() || method_name_len == 0 {
-        ""
+    let method_name_owned = if method_name_ptr.is_null() || method_name_len == 0 {
+        String::new()
     } else {
-        std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
-            .unwrap_or("")
+        String::from_utf8_lossy(std::slice::from_raw_parts(method_name_ptr, method_name_len))
+            .into_owned()
     };
-    let args: &[f64] = if args_len > 0 && !args_ptr.is_null() {
-        std::slice::from_raw_parts(args_ptr, args_len)
+    let method_name = method_name_owned.as_str();
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let original_args: Vec<f64> = if args_len > 0 && !args_ptr.is_null() {
+        std::slice::from_raw_parts(args_ptr, args_len).to_vec()
     } else {
-        &[]
+        Vec::new()
     };
+    let arg_handles = scope.root_nanbox_f64_slice(&original_args);
+    let args = perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
     // `_` prefixes silence unused-variable warnings when every dispatch
     // arm below is compiled out (e.g. minimal-stdlib without http-server
     // / database-redis).
@@ -75,7 +79,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "on"
     ) && with_handle::<crate::fastify::FastifyApp, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return dispatch_fastify_app(handle, method_name, args);
+        return dispatch_fastify_app(handle, method_name, &args);
     }
 
     // Fastify request/reply context.
@@ -96,7 +100,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     ) && with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true)
         .unwrap_or(false)
     {
-        return dispatch_fastify_context(handle, method_name, args);
+        return dispatch_fastify_context(handle, method_name, &args);
     }
 
     // ioredis client.
@@ -117,7 +121,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "disconnect"
     ) && with_handle::<crate::ioredis::RedisClient, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return dispatch_ioredis(handle, method_name, args);
+        return dispatch_ioredis(handle, method_name, &args);
     }
 
     // crypto Hash handle: createHash(...).update(...).digest().
@@ -125,10 +129,10 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // keep hash before net to avoid changing the priority of in-registry
     // matches relative to the v0.5.98/#88 ordering.
     #[cfg(feature = "crypto")]
-    if matches!(method_name, "update" | "digest")
+    if matches!(method_name, "update" | "digest" | "copy")
         && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_hash(handle, method_name, args);
+        return crate::crypto::dispatch_hash(handle, method_name, &args);
     }
 
     // crypto Hmac handle: createHmac(alg, key).update(...).digest(). Routes
@@ -138,7 +142,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     if matches!(method_name, "update" | "digest")
         && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_hmac(handle, method_name, args);
+        return crate::crypto::dispatch_hmac(handle, method_name, &args);
     }
 
     // crypto Cipher handle: createCipheriv(...) / createDecipheriv(...)
@@ -152,7 +156,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         "update" | "final" | "getAuthTag" | "setAuthTag" | "setAAD"
     ) && with_handle::<crate::crypto::CipherHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_cipher(handle, method_name, args);
+        return crate::crypto::dispatch_cipher(handle, method_name, &args);
     }
 
     // SQLite Statement handle: stmt.raw() / .all() / .get() / .run() —
@@ -174,7 +178,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // resolved by the linker to a single impl).
     #[cfg(feature = "database-sqlite")]
     if matches!(method_name, "raw" | "all" | "get" | "run") {
-        let result = dispatch_sqlite_stmt(handle, method_name, args);
+        let result = dispatch_sqlite_stmt(handle, method_name, &args);
         if result.to_bits() != perry_runtime::JSValue::undefined().bits() {
             return result;
         }
@@ -197,7 +201,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // by other registries (HashHandle, FastifyApp, etc.).
     #[cfg(feature = "database-sqlite")]
     if matches!(method_name, "prepare" | "exec" | "close") {
-        let result = dispatch_sqlite_db(handle, method_name, args);
+        let result = dispatch_sqlite_db(handle, method_name, &args);
         if result.to_bits() != perry_runtime::JSValue::undefined().bits() {
             return result;
         }
@@ -212,7 +216,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         not(target_os = "android")
     ))]
     if crate::net::is_net_socket_handle(handle) {
-        return dispatch_net_socket(handle, method_name, args);
+        return dispatch_net_socket(handle, method_name, &args);
     }
     // External net path (v0.5.581): perry-ext-net registers itself when
     // the well-known flip strips bundled-net. Same dispatch contract,
@@ -228,7 +232,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             fn js_ext_net_is_socket_handle(handle: i64) -> i32;
         }
         if unsafe { js_ext_net_is_socket_handle(handle) } != 0 {
-            return dispatch_external_net_socket(handle, method_name, args);
+            return dispatch_external_net_socket(handle, method_name, &args);
         }
     }
 
@@ -242,14 +246,15 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // "not us, try the next dispatcher or return undefined".
     #[cfg(feature = "http-client")]
     {
-        if let Some(v) = crate::fetch::dispatch_response_method(handle as usize, method_name, args)
+        if let Some(v) = crate::fetch::dispatch_response_method(handle as usize, method_name, &args)
         {
             return v;
         }
-        if let Some(v) = crate::fetch::dispatch_blob_method(handle as usize, method_name, args) {
+        if let Some(v) = crate::fetch::dispatch_blob_method(handle as usize, method_name, &args) {
             return v;
         }
-        if let Some(v) = crate::fetch::dispatch_headers_method(handle as usize, method_name, args) {
+        if let Some(v) = crate::fetch::dispatch_headers_method(handle as usize, method_name, &args)
+        {
             return v;
         }
     }
@@ -262,41 +267,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     if matches!(method_name, "write" | "end")
         && crate::string_decoder::is_string_decoder_handle(handle)
     {
-        return crate::string_decoder::dispatch_string_decoder(handle, method_name, args);
-    }
-
-    // #1193 — cheerio (bundled): both `CheerioHandle` and
-    // `CheerioSelectionHandle` lose their static type at TS-side
-    // assignment boundaries (`const sel = $.select(".x")`). The static
-    // NATIVE_MODULE_TABLE path catches direct chains like
-    // `cheerio.load(html).select(".x").text()` only when the receiver
-    // type survives lowering; the moment user code lands the
-    // intermediate in a `let`, codegen sees `(number).method` and
-    // routes here. Method-gated to disjoint sets so a colliding handle
-    // id from another registry can't fall through to a cheerio shim.
-    #[cfg(feature = "bundled-cheerio")]
-    if matches!(
-        method_name,
-        "select"
-            | "text"
-            | "html"
-            | "attr"
-            | "length"
-            | "first"
-            | "last"
-            | "eq"
-            | "find"
-            | "children"
-            | "parent"
-            | "hasClass"
-            | "is"
-            | "toArray"
-            | "texts"
-            | "attrs"
-    ) {
-        if let Some(v) = crate::cheerio::dispatch_cheerio(handle, method_name, args) {
-            return v;
-        }
+        return crate::string_decoder::dispatch_string_decoder(handle, method_name, &args);
     }
 
     // Unknown handle type - return undefined
@@ -930,14 +901,23 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 #[cfg(feature = "database-sqlite")]
 unsafe fn dispatch_sqlite_stmt(handle: i64, method: &str, args: &[f64]) -> f64 {
     use perry_runtime::js_nanbox_pointer;
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let arg_handles = scope.root_nanbox_f64_slice(args);
     // Pack args into a fresh JS array. Each `f64` is already a
     // NaN-boxed value as the codegen produces. js_array_push takes a
     // perry_ffi::JsValue (NaN-boxed), but the runtime helpers in
     // perry-stdlib accept JSValue::from_bits — convert via raw bits.
-    let arr_handle = perry_runtime::js_array_alloc(0);
-    for &v in args {
-        perry_runtime::js_array_push(arr_handle, perry_runtime::JSValue::from_bits(v.to_bits()));
+    let arr = perry_runtime::js_array_alloc(0);
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    for handle in &arg_handles {
+        let v = handle.get_nanbox_f64();
+        let arr = perry_runtime::js_array_push(
+            arr_handle.get_raw_mut_ptr(),
+            perry_runtime::JSValue::from_bits(v.to_bits()),
+        );
+        arr_handle.set_raw_mut_ptr(arr);
     }
+    let arr_handle = arr_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>();
 
     // Route through extern "C" so we hit the *linked* impl
     // (perry-stdlib's vs perry-ext-better-sqlite3's — only one wins

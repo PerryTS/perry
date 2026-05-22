@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1067 entries across 79 modules
+// Coverage: 1091 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -325,6 +325,10 @@ declare module "crypto" {
   /** stdlib */
   export function createSecretKey(...args: any[]): any;
   /** stdlib */
+  export function getCiphers(...args: any[]): any;
+  /** stdlib */
+  export function getHashes(...args: any[]): any;
+  /** stdlib */
   export function getRandomValues(...args: any[]): any;
   /** stdlib */
   export function md5(...args: any[]): any;
@@ -337,9 +341,15 @@ declare module "crypto" {
   /** stdlib */
   export function randomFillSync(...args: any[]): any;
   /** stdlib */
+  export function randomInt(...args: any[]): any;
+  /** stdlib */
   export function randomUUID(...args: any[]): any;
   /** stdlib */
+  export function scryptSync(...args: any[]): any;
+  /** stdlib */
   export function sha256(...args: any[]): any;
+  /** stdlib */
+  export function timingSafeEqual(...args: any[]): any;
 }
 
 declare module "date-fns" {
@@ -821,6 +831,41 @@ declare module "path" {
   export function resolve(...args: any[]): any;
   /** stdlib */
   export function toNamespacedPath(...args: any[]): any;
+}
+
+declare module "perf_hooks" {
+  /** stdlib */
+  export class PerformanceEntry { [key: string]: any; }
+  /** stdlib */
+  export class PerformanceMark { [key: string]: any; }
+  /** stdlib */
+  export class PerformanceMeasure { [key: string]: any; }
+  /** stdlib */
+  export class PerformanceObserver { [key: string]: any; }
+  /** stdlib */
+  export const constants: any;
+  /** stdlib */
+  export const performance: any;
+  /** stdlib */
+  export const timeOrigin: any;
+  /** stdlib */
+  export function clearMarks(...args: any[]): any;
+  /** stdlib */
+  export function clearMeasures(...args: any[]): any;
+  /** stdlib */
+  export function eventLoopUtilization(...args: any[]): any;
+  /** stdlib */
+  export function getEntries(...args: any[]): any;
+  /** stdlib */
+  export function getEntriesByName(...args: any[]): any;
+  /** stdlib */
+  export function getEntriesByType(...args: any[]): any;
+  /** stdlib */
+  export function mark(...args: any[]): any;
+  /** stdlib */
+  export function measure(...args: any[]): any;
+  /** stdlib */
+  export function now(...args: any[]): any;
 }
 
 declare module "perry/ads" {

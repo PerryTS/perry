@@ -27,6 +27,23 @@ pub unsafe extern "C" fn js_json_parse_or_null(text_ptr: *const StringHeader) ->
     js_json_parse(text_ptr)
 }
 
+#[cfg(test)]
+pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JSValue {
+    assert!(!text_ptr.is_null());
+    let len = (*text_ptr).byte_len as usize;
+    let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data_ptr, len);
+
+    crate::gc::gc_suppress();
+    let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
+    let mut parser = DirectParser::new(bytes);
+    let result = parser.parse_value();
+    parse_root_push(result);
+    crate::gc::gc_unsuppress();
+    parse_root_restore(text_root);
+    result
+}
+
 /// JSON.parse(text) -> any
 ///
 /// Uses a direct recursive-descent parser that constructs Perry JSValues
@@ -90,7 +107,19 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     let use_tape = match tape_mode {
         TapeMode::ForceOn => true,
         TapeMode::ForceOff => false,
-        TapeMode::Auto => len >= LAZY_MIN_BLOB_BYTES && len <= LAZY_MAX_BLOB_BYTES,
+        TapeMode::Auto => {
+            // Tape laziness currently pays off only for top-level arrays:
+            // object/scalar roots materialize eagerly after building the tape,
+            // so they do two parses' worth of work. Peek the first meaningful
+            // byte and keep object-root API payloads on the direct parser.
+            len >= LAZY_MIN_BLOB_BYTES
+                && len <= LAZY_MAX_BLOB_BYTES
+                && bytes
+                    .iter()
+                    .copied()
+                    .find(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+                    == Some(b'[')
+        }
     };
     if use_tape {
         if let Some(result) = try_parse_via_tape(text_ptr, bytes) {
@@ -151,6 +180,7 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
         if cache.len() > 4096 {
             drop(cache);
             c.borrow_mut().clear();
+            clear_parse_key_ring();
         }
     });
 
@@ -253,6 +283,7 @@ pub(crate) unsafe fn try_parse_via_tape(
             if cache.len() > 4096 {
                 drop(cache);
                 c.borrow_mut().clear();
+                clear_parse_key_ring();
             }
         });
 
@@ -332,6 +363,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
         if cache.len() > 4096 {
             drop(cache);
             c.borrow_mut().clear();
+            clear_parse_key_ring();
         }
     });
 

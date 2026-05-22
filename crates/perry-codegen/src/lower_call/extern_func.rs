@@ -38,6 +38,23 @@ pub fn try_lower_extern_func_call(
     else {
         return Ok(None);
     };
+    // Issue #1317: when `name` is bound to a named import from a Node
+    // submodule Perry recognizes but doesn't yet back with a real impl
+    // (`node:timers/promises`, `node:readline/promises`,
+    // `node:stream/promises`, `node:stream/consumers`, `node:sys`), the
+    // shadowing import collides with global names like `setTimeout`/
+    // `setInterval`/`setImmediate`. Without this guard, e.g.
+    // `import { setTimeout } from "node:timers/promises";
+    //  await setTimeout(1, { a: 1 }, { ref: false })`
+    // would lower to the global `setTimeout(fn, delay, ...args)` fast
+    // path below — handing `1` to `js_set_timeout_callback_args` as if
+    // it were a callback handle and segfaulting on the next dispatch.
+    // Skip the fast-path table so the call falls through to the regular
+    // closure-dispatch lowering, which invokes the named-import
+    // singleton's thunk (raising the "not yet implemented" error).
+    if ctx.import_function_node_submodule.contains_key(name) {
+        return Ok(None);
+    }
     match name.as_str() {
         "setTimeout" if args.len() == 2 => {
             let cb_box = lower_expr(ctx, &args[0])?;
@@ -224,12 +241,9 @@ pub fn try_lower_extern_func_call(
     // tracked separately under #793.
     if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name).cloned()
     {
-        // Lower args for side effects (closure capture collection,
-        // string-literal interning), then discard — the thunk
-        // signature is `(ClosureHeader*, f64) -> f64` and would
-        // ignore them anyway.
+        let mut lowered_args = Vec::with_capacity(args.len());
         for a in args {
-            let _ = crate::expr::lower_expr(ctx, a)?;
+            lowered_args.push(crate::expr::lower_expr(ctx, a)?);
         }
         let submod_label = crate::expr::emit_string_literal_global(ctx, &submod_key);
         let name_label = crate::expr::emit_string_literal_global(ctx, &exported_name);
@@ -251,18 +265,26 @@ pub fn try_lower_extern_func_call(
                 (I32, &name_len.to_string()),
             ],
         );
-        // Drive through the closure-call machinery so the thunk's
-        // `js_throw` actually fires when the user invokes the
-        // value. `js_closure_call0` matches our thunks'
-        // `(ClosureHeader*, f64) -> f64` signature ignoring the
-        // f64 arg (passed as undefined).
+        // Drive through the closure-call machinery and preserve the user's
+        // arguments. The original #841 surface-only fix discarded args because
+        // all known submodule thunks threw/no-op'd. `node:diagnostics_channel`
+        // now implements real `channel(name)`, `subscribe(name, cb)`, etc., so
+        // named imports must receive their actual argument list.
+        let blk = ctx.block();
+        let closure_bits = blk.bitcast_double_to_i64(&closure_value);
+        let closure_handle = blk.and(I64, &closure_bits, POINTER_MASK_I64);
+        let call_name = format!("js_closure_call{}", lowered_args.len().min(16));
+        let mut decl_types = vec![I64];
+        decl_types.extend(std::iter::repeat(DOUBLE).take(lowered_args.len().min(16)));
         ctx.pending_declares
-            .push(("js_closure_call0".to_string(), DOUBLE, vec![DOUBLE]));
-        return Ok(Some(ctx.block().call(
-            DOUBLE,
-            "js_closure_call0",
-            &[(DOUBLE, &closure_value)],
-        )));
+            .push((call_name.clone(), DOUBLE, decl_types));
+        let mut call_args: Vec<(crate::types::LlvmType, String)> = vec![(I64, closure_handle)];
+        for arg in lowered_args.into_iter().take(16) {
+            call_args.push((DOUBLE, arg));
+        }
+        let arg_refs: Vec<(crate::types::LlvmType, &str)> =
+            call_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
+        return Ok(Some(ctx.block().call(DOUBLE, &call_name, &arg_refs)));
     }
     // perry/system dispatch: map JS names (isDarkMode, getDeviceIdiom,
     // keychainSave, etc.) to their perry_system_* / perry_* C symbols.

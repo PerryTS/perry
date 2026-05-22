@@ -10,33 +10,16 @@ thread_local! {
 
 /// Threshold: run GC when total arena bytes exceed this.
 ///
-/// Issue #179 tier 1 follow-up: lowered from 128 MB to 64 MB. The
-/// 128 MB value was tuned so `object_create`'s 96 MB working set would
-/// fit under the threshold and pay zero GC cost. That tuning
-/// assumption was wrong for any workload with sustained allocation
-/// pressure: `bench_json_roundtrip` at 5 MB/iter takes 25 iters to
-/// hit 128 MB, and post-v0.5.193's adaptive step can't recover from
-/// the single-GC regime because high-productivity collections
-/// (>90% freed) double the step back to 256 MB and the bench
-/// completes before a second GC. 64 MB fires the first GC at iter
-/// ~12 which is early enough to catch the workload's natural rhythm
-/// without paying for excess collections.
-///
-/// Tuning sweep on `bench_json_roundtrip` (Node baseline: 372 ms /
-/// 191 MB):
-///
-/// | Initial | Time | RSS |
-/// |---|---:|---:|
-/// | 128 MB | 322 ms | 199 MB (+4% vs Node) |
-/// | 96 MB  | 353 ms | 178 MB (−7%  vs Node) |
-/// | **64 MB** | **364 ms** | **144 MB (−25% vs Node)** |
-/// | 48 MB  | 378 ms | 130 MB (−32% vs Node) |
-///
-/// 64 MB is the sweet spot that wins on both axes vs Node by a
-/// comfortable margin. `object_create` / `binary_trees` unaffected —
-/// their working sets fit in one 1 MB arena block each, well under
-/// the threshold, 0-1 ms as before.
-pub(super) const GC_THRESHOLD_INITIAL_BYTES: usize = 64 * 1024 * 1024; // 64 MB
+/// Current app-pattern tuning: 128 MB. The earlier 64 MB setting reduced
+/// peak RSS on JSON round-trip style workloads, but it also forced a
+/// collection in `buffer_transcode` while the benchmark still held a large
+/// live set of rows/strings/buffers. That collection could not reclaim enough
+/// and pushed the benchmark past the 30s smoke timeout. Returning the initial
+/// trigger to 128 MB keeps allocation-heavy transcode and ECS-style bursts out
+/// of mid-run GC while JSON parse/stringify remain below the 1.5x Bun gap in
+/// the app-pattern matrix. The absolute ceiling below still bounds later
+/// adaptive trigger growth at 128 MB after collections have started.
+pub(super) const GC_THRESHOLD_INITIAL_BYTES: usize = 128 * 1024 * 1024; // 128 MB
 /// Sanity bound on the adaptive step itself. Step growth past 1 GB is
 /// only theoretically possible on multi-day services where GC fires
 /// rarely; we keep the cap loose here since the *real* peak-RSS
@@ -572,6 +555,25 @@ pub(super) fn gc_collect_pending_old_reclaim() -> bool {
     true
 }
 
+pub(super) fn gc_collect_old_reclaim_if_pressure() -> bool {
+    if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0 {
+        return false;
+    }
+    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
+    if !old_reclaim_pressure_due(old_in_use, baseline) {
+        return false;
+    }
+    if defer_gc_request(DeferredGcRequest::FullCollect(GcTriggerKind::OldGenBytes)) {
+        return false;
+    }
+
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::OldGenBytes))
+        .emit_after_current();
+    true
+}
+
 pub(super) fn gc_bump_malloc_trigger_with_snapshot(current: usize, bytes_now: usize) -> bool {
     let step = GC_MALLOC_COUNT_STEP.with(|c| c.get());
     GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(current + step));
@@ -642,6 +644,9 @@ pub fn gc_check_trigger() {
         return;
     }
     if gc_collect_pending_old_reclaim() {
+        return;
+    }
+    if gc_collect_old_reclaim_if_pressure() {
         return;
     }
     use crate::arena::arena_total_bytes;
@@ -743,6 +748,11 @@ pub fn gc_check_trigger() {
             // (i.e. invisible to the bench's wall-time counter).
             // `bench_json_roundtrip` lands at 50-80 % freed and is
             // unchanged — it still halves and stabilizes at the floor.
+            //
+            // With INITIAL == ABSOLUTE_CEILING (128 MB), the post-GC
+            // `next_trigger` cap below supersedes doubling above the
+            // ceiling; the doubling branch is kept for the bisection
+            // escape hatch.
             if !(10..=84).contains(&pct_freed) {
                 step = (step * 2).min(GC_THRESHOLD_MAX_BYTES);
             } else if pct_freed >= 25 {

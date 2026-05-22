@@ -61,6 +61,34 @@ static SYMBOL_REGISTRY: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None)
 // GcHeader byte.
 static SYMBOL_POINTERS: Mutex<Option<HashSet<usize>>> = Mutex::new(None);
 
+/// Process-lifetime descriptions for registered (`Symbol.for`) and well-known
+/// symbols. These symbols are Box-leaked so they outlive every GC cycle, but
+/// the description StringHeader they used to point at was allocated in the
+/// calling thread's arena — which gets freed when a `perry/thread` worker
+/// exits, leaving the symbol with a dangling description pointer. Storing
+/// the description text here (Rust-owned, process-lifetime) lets readers
+/// materialize a fresh StringHeader in the *caller's* arena on demand, which
+/// is the only thread-safe contract: the symbol identity is global, but
+/// every StringHeader belongs to exactly one thread's arena.
+static REGISTERED_SYMBOL_DESCRIPTIONS: Mutex<Option<HashMap<usize, std::sync::Arc<str>>>> =
+    Mutex::new(None);
+
+pub(crate) fn registered_symbol_description(sym_ptr: usize) -> Option<std::sync::Arc<str>> {
+    let guard = REGISTERED_SYMBOL_DESCRIPTIONS.lock().unwrap();
+    guard.as_ref().and_then(|m| m.get(&sym_ptr).cloned())
+}
+
+fn record_registered_symbol_description(sym_ptr: usize, description: &str) {
+    let mut guard = REGISTERED_SYMBOL_DESCRIPTIONS.lock().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard
+        .as_mut()
+        .unwrap()
+        .insert(sym_ptr, std::sync::Arc::from(description));
+}
+
 // Pre-allocated well-known symbols (Symbol.toPrimitive, Symbol.hasInstance,
 // Symbol.toStringTag, Symbol.iterator, Symbol.asyncIterator). Allocated once
 // on first access and cached forever. These are distinct from the
@@ -86,21 +114,30 @@ pub fn well_known_symbol(short_name: &str) -> *mut SymbolHeader {
     if let Some(&ptr_usize) = cache.get(short_name) {
         return ptr_usize as *mut SymbolHeader;
     }
-    // First use: allocate a persistent (leaked) SymbolHeader with the short
-    // name as its description. `registered = 0` so `Symbol.keyFor` returns
-    // undefined.
-    let desc_bytes = short_name.as_bytes();
-    let desc_ptr = js_string_from_bytes(desc_bytes.as_ptr(), desc_bytes.len() as u32);
+    // First use: allocate a persistent (leaked) SymbolHeader. Description is
+    // null-on-the-header — the actual text lives in REGISTERED_SYMBOL_DESCRIPTIONS,
+    // and readers materialize a StringHeader in their own arena on demand. We
+    // can't store a real StringHeader pointer here because this allocation may
+    // be made on a worker thread whose arena will later be torn down, while
+    // the SymbolHeader itself is Box-leaked and outlives that arena.
     let boxed = Box::new(SymbolHeader {
         magic: SYMBOL_MAGIC,
         registered: 0,
-        description: desc_ptr,
+        description: std::ptr::null_mut(),
         id: next_id(),
     });
     let sym_ptr = Box::into_raw(boxed);
+    // Fully initialize the symbol's side tables BEFORE publishing it in
+    // the cache. A concurrent reader that observes the pointer via the
+    // cache must already see a complete view (description present,
+    // is_registered_symbol true) — otherwise `Symbol.description` /
+    // `Symbol.toString()` / `is_symbol` can transiently return wrong
+    // results. Lock order matches `js_symbol_for` below: cache → side
+    // tables, never the reverse.
+    record_registered_symbol_description(sym_ptr as usize, short_name);
+    register_symbol_pointer(sym_ptr as usize);
     cache.insert(short_name.to_string(), sym_ptr as usize);
     drop(guard);
-    register_symbol_pointer(sym_ptr as usize);
     sym_ptr
 }
 
@@ -282,21 +319,31 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
     }
 
     // Not found — allocate a persistent SymbolHeader. We use Box::leak so the
-    // pointer outlives any GC cycle (the registry holds it as a root).
-    // Also leak a persistent StringHeader for the description.
-    let desc_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-
-    // Create a Box-allocated SymbolHeader (not via gc_malloc) so it survives
-    // forever. Registered symbols must be strong roots.
+    // pointer outlives any GC cycle (the registry holds it as a root). The
+    // description text is stored in REGISTERED_SYMBOL_DESCRIPTIONS as a
+    // process-lifetime Arc<str>; the header's `description` pointer stays
+    // null. Readers (`sym.description`, `sym.toString()`, key_for) consult
+    // the side table and materialize a StringHeader in *their own* arena on
+    // demand, so cross-thread reads are safe even when the originating
+    // worker's arena was torn down.
     let boxed = Box::new(SymbolHeader {
         magic: SYMBOL_MAGIC,
         registered: 1,
-        description: desc_ptr,
+        description: std::ptr::null_mut(),
         id: next_id(),
     });
     let sym_ptr = Box::into_raw(boxed);
-    registry.insert(key, sym_ptr as usize);
+    // Fully initialize the side tables BEFORE publishing the pointer in
+    // the registry. Otherwise a concurrent `Symbol.for("same_key")` on
+    // another thread can see the pointer via the registry but get None
+    // from registered_symbol_description, returning a transiently bogus
+    // sym.description / sym.toString() / Symbol.keyFor(). Lock order is
+    // SYMBOL_REGISTRY → SYMBOL_POINTERS → REGISTERED_SYMBOL_DESCRIPTIONS;
+    // no reader takes them in the reverse order.
+    record_registered_symbol_description(sym_ptr as usize, &key);
     register_symbol_pointer(sym_ptr as usize);
+    registry.insert(key.clone(), sym_ptr as usize);
+    drop(guard);
     f64::from_bits(POINTER_TAG | (sym_ptr as u64 & POINTER_MASK))
 }
 
@@ -324,6 +371,12 @@ pub unsafe extern "C" fn js_symbol_key_for(sym_f64: f64) -> f64 {
     if (*sym_ptr).registered == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    // Registered symbols carry the description as Arc<str> in the side
+    // table; materialize a fresh StringHeader in this thread's arena.
+    if let Some(s) = registered_symbol_description(sym_ptr as usize) {
+        let header = js_string_from_bytes(s.as_bytes().as_ptr(), s.as_bytes().len() as u32);
+        return f64::from_bits(STRING_TAG | (header as u64 & POINTER_MASK));
+    }
     let desc = (*sym_ptr).description;
     if desc.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -347,6 +400,10 @@ pub unsafe extern "C" fn js_symbol_description(sym_f64: f64) -> f64 {
     if (*sym_ptr).magic != SYMBOL_MAGIC {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    if let Some(s) = registered_symbol_description(sym_ptr as usize) {
+        let header = js_string_from_bytes(s.as_bytes().as_ptr(), s.as_bytes().len() as u32);
+        return f64::from_bits(STRING_TAG | (header as u64 & POINTER_MASK));
+    }
     let desc = (*sym_ptr).description;
     if desc.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -369,7 +426,11 @@ pub unsafe extern "C" fn js_symbol_to_string(sym_f64: f64) -> i64 {
         let s = b"Symbol()";
         return js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64;
     }
-    let desc_str = str_from_header((*sym_ptr).description).unwrap_or_default();
+    let desc_str = if let Some(s) = registered_symbol_description(sym_ptr as usize) {
+        s.as_ref().to_string()
+    } else {
+        str_from_header((*sym_ptr).description).unwrap_or_default()
+    };
     let rendered = format!("Symbol({})", desc_str);
     js_string_from_bytes(rendered.as_ptr(), rendered.len() as u32) as i64
 }
@@ -481,7 +542,11 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
                 let func_ptr = (*closure_ptr).func_ptr;
                 if !func_ptr.is_null() {
                     let sym_ptr = sym_key as *const SymbolHeader;
-                    let desc = str_from_header((*sym_ptr).description).unwrap_or_default();
+                    let desc = registered_symbol_description(sym_ptr as usize)
+                        .map(|s| s.as_ref().to_string())
+                        .unwrap_or_else(|| {
+                            str_from_header((*sym_ptr).description).unwrap_or_default()
+                        });
                     let inferred = format!("[{}]", desc);
                     crate::builtins::register_function_name_if_absent(func_ptr as usize, &inferred);
                 }
@@ -736,6 +801,9 @@ pub unsafe extern "C" fn js_object_set_method_by_name(
 /// lower_string_coerce_concat path.
 #[no_mangle]
 pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let value = value_handle.get_nanbox_f64();
     let bits = value.to_bits();
     let tag = bits & 0xFFFF_0000_0000_0000;
     if tag != POINTER_TAG {
@@ -752,24 +820,26 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     // Look up obj[Symbol.toPrimitive].
     let wk_ptr = well_known_symbol("toPrimitive");
     let sym_f64 = f64::from_bits(POINTER_TAG | (wk_ptr as u64 & POINTER_MASK));
-    let method = js_object_get_symbol_property(value, sym_f64);
+    let current_value = value_handle.get_nanbox_f64();
+    let method = js_object_get_symbol_property(current_value, sym_f64);
     if method.to_bits() == TAG_UNDEFINED {
-        return value;
+        return current_value;
     }
     // Method must be a closure pointer.
     let method_bits = method.to_bits();
     let method_tag = method_bits & 0xFFFF_0000_0000_0000;
     if method_tag != POINTER_TAG {
-        return value;
+        return value_handle.get_nanbox_f64();
     }
+    let method_handle = scope.root_nanbox_f64(method);
     let closure_ptr = (method_bits & POINTER_MASK) as *const crate::closure::ClosureHeader;
     if closure_ptr.is_null() || (closure_ptr as usize) < 0x1000 {
-        return value;
+        return value_handle.get_nanbox_f64();
     }
     // Validate CLOSURE_MAGIC before calling.
     let type_tag = std::ptr::read_volatile((closure_ptr as *const u8).add(12) as *const u32);
     if type_tag != crate::closure::CLOSURE_MAGIC {
-        return value;
+        return value_handle.get_nanbox_f64();
     }
     let hint_str: &[u8] = match hint {
         1 => b"number",
@@ -777,7 +847,12 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
         _ => b"default",
     };
     let hint_ptr = js_string_from_bytes(hint_str.as_ptr(), hint_str.len() as u32);
-    let hint_f64 = f64::from_bits(STRING_TAG | (hint_ptr as u64 & POINTER_MASK));
+    let hint_handle = scope.root_string_ptr(hint_ptr);
+    let hint_f64 = f64::from_bits(
+        STRING_TAG | (hint_handle.get_raw_const_ptr::<StringHeader>() as u64 & POINTER_MASK),
+    );
+    let method_bits = method_handle.get_nanbox_f64().to_bits();
+    let closure_ptr = (method_bits & POINTER_MASK) as *const crate::closure::ClosureHeader;
 
     // Spec says the return value must be a primitive; if it's still an
     // object pointer, that's a TypeError in JS, but we just return it

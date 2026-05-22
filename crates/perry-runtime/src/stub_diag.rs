@@ -78,6 +78,51 @@ pub fn perry_stub_warn(name: &'static str, reason: &'static str, issue: Option<&
     }
 }
 
+/// C-ABI shim around [`perry_stub_warn`] for FFI crates that link
+/// perry-runtime as a Cargo dependency but must reach it through a
+/// stable, feature-set-independent symbol rather than the hash-mangled
+/// Rust path `perry_runtime::stub_diag::perry_stub_warn`.
+///
+/// `perry-ui-ios` is the motivating caller (#1311): under the
+/// `geisterhand` feature its UI staticlib is built against a
+/// perry-runtime whose Cargo feature set can differ from the runtime
+/// actually linked into the app, so the Rust-mangled symbol carries a
+/// different `-Cmetadata` hash on each side and the link fails with
+/// "Undefined symbols". A `#[no_mangle]` symbol has a fixed name on
+/// both sides and resolves regardless of feature set — the same
+/// discipline `perry_app_group_suite_name` already uses for the App
+/// Group accessor (perry-ui-macos avoids the issue entirely by not
+/// depending on perry-runtime).
+///
+/// `name`, `reason`, and (optional) `issue` are NUL-terminated C
+/// strings that MUST point into static storage (string literals): the
+/// dedup set keys on `name` as a `&'static str`.
+///
+/// # Safety
+/// `name` and `reason` are non-null pointers to NUL-terminated UTF-8
+/// living for the process lifetime; `issue` is either null or the same.
+#[no_mangle]
+pub unsafe extern "C" fn perry_stub_warn_ffi(
+    name: *const std::os::raw::c_char,
+    reason: *const std::os::raw::c_char,
+    issue: *const std::os::raw::c_char,
+) {
+    if name.is_null() || reason.is_null() {
+        return;
+    }
+    // SAFETY: callers pass `'static` C-string literals, so reborrowing
+    // the slices for `'static` is sound.
+    let as_static = |p: *const std::os::raw::c_char| -> &'static str {
+        std::ffi::CStr::from_ptr(p).to_str().unwrap_or("")
+    };
+    let issue = if issue.is_null() {
+        None
+    } else {
+        Some(as_static(issue))
+    };
+    perry_stub_warn(as_static(name), as_static(reason), issue);
+}
+
 /// One row of the auto-generated stub manifest.
 ///
 /// Populated by `build.rs` from `perry-dispatch`'s tables plus the

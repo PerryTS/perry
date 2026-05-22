@@ -93,111 +93,6 @@ pub(super) unsafe fn verify_slot(slot: *const u64, valid_ptrs: &ValidPointerSet,
     }
 }
 
-pub(super) unsafe fn rewrite_gc_child_slots(header: *mut GcHeader, valid_ptrs: &ValidPointerSet) {
-    for child_slot in gc_child_slots(header) {
-        if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
-            record_layout_child_slot_read(layout_kind);
-            rewrite_slot(slot, valid_ptrs);
-        }
-    }
-}
-
-pub(super) unsafe fn rewrite_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
-    let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
-    rewrite_gc_child_slots(header, valid_ptrs);
-}
-
-pub(super) unsafe fn rewrite_object_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
-    let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
-    rewrite_gc_child_slots(header, valid_ptrs);
-}
-
-pub(super) unsafe fn rewrite_map_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
-    let map = user_ptr as *const crate::map::MapHeader;
-    let size = (*map).size;
-    let capacity = (*map).capacity;
-    if size > capacity || size > 100_000 {
-        return;
-    }
-    let entries = (*map).entries as *mut u64;
-    if entries.is_null() {
-        return;
-    }
-    for i in 0..(size as usize) {
-        rewrite_slot(entries.add(i * 2), valid_ptrs);
-        rewrite_slot(entries.add(i * 2 + 1), valid_ptrs);
-    }
-}
-
-pub(super) unsafe fn rewrite_closure_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
-    let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
-    rewrite_gc_child_slots(header, valid_ptrs);
-    crate::closure::visit_closure_dynamic_prop_value_slots_mut(user_ptr as usize, |slot| {
-        rewrite_slot(slot, valid_ptrs);
-    });
-}
-
-pub(super) unsafe fn rewrite_promise_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
-    let promise = user_ptr as *mut crate::promise::Promise;
-    rewrite_slot(&(*promise).value as *const f64 as *mut u64, valid_ptrs);
-    rewrite_slot(&(*promise).reason as *const f64 as *mut u64, valid_ptrs);
-    rewrite_slot(&(*promise).on_fulfilled as *const _ as *mut u64, valid_ptrs);
-    rewrite_slot(&(*promise).on_rejected as *const _ as *mut u64, valid_ptrs);
-    rewrite_slot(&(*promise).next as *const _ as *mut u64, valid_ptrs);
-}
-
-pub(super) unsafe fn rewrite_error_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
-    let error = user_ptr as *mut crate::error::ErrorHeader;
-    rewrite_slot(&(*error).message as *const _ as *mut u64, valid_ptrs);
-    rewrite_slot(&(*error).name as *const _ as *mut u64, valid_ptrs);
-    rewrite_slot(&(*error).stack as *const _ as *mut u64, valid_ptrs);
-    rewrite_slot(&(*error).cause as *const f64 as *mut u64, valid_ptrs);
-    rewrite_slot(&(*error).errors as *const _ as *mut u64, valid_ptrs);
-}
-
-pub(super) unsafe fn rewrite_lazy_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
-    let lazy = user_ptr as *mut crate::json_tape::LazyArrayHeader;
-    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
-        return;
-    }
-    rewrite_slot(&(*lazy).blob_str as *const _ as *mut u64, valid_ptrs);
-    rewrite_slot(&(*lazy).materialized as *const _ as *mut u64, valid_ptrs);
-    rewrite_slot(
-        &(*lazy).materialized_elements as *const _ as *mut u64,
-        valid_ptrs,
-    );
-    rewrite_slot(
-        &(*lazy).materialized_bitmap as *const _ as *mut u64,
-        valid_ptrs,
-    );
-    // Walk cached materialized JSValues — each holds a NaN-boxed
-    // pointer to a backing object that may itself be forwarded.
-    let cached_length = (*lazy).cached_length as usize;
-    let cache = (*lazy).materialized_elements;
-    let bitmap = (*lazy).materialized_bitmap;
-    if !cache.is_null() && !bitmap.is_null() && cached_length > 0 {
-        let bitmap_words = cached_length.div_ceil(64);
-        for w in 0..bitmap_words {
-            let word = *bitmap.add(w);
-            if word == 0 {
-                continue;
-            }
-            let base_idx = w * 64;
-            for b in 0..64usize {
-                if word & (1u64 << b) == 0 {
-                    continue;
-                }
-                let i = base_idx + b;
-                if i >= cached_length {
-                    break;
-                }
-                let slot = cache.add(i) as *mut u64;
-                rewrite_slot(slot, valid_ptrs);
-            }
-        }
-    }
-}
-
 pub(super) unsafe fn rewrite_heap_object_fields(
     header: *mut GcHeader,
     valid_ptrs: &ValidPointerSet,
@@ -206,17 +101,16 @@ pub(super) unsafe fn rewrite_heap_object_fields(
     if flags & GC_FLAG_FORWARDED != 0 {
         return;
     }
-    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-    match (*header).obj_type {
-        GC_TYPE_ARRAY => rewrite_array_fields(user_ptr, valid_ptrs),
-        GC_TYPE_OBJECT => rewrite_object_fields(user_ptr, valid_ptrs),
-        GC_TYPE_CLOSURE => rewrite_closure_fields(user_ptr, valid_ptrs),
-        GC_TYPE_PROMISE => rewrite_promise_fields(user_ptr, valid_ptrs),
-        GC_TYPE_ERROR => rewrite_error_fields(user_ptr, valid_ptrs),
-        GC_TYPE_MAP => rewrite_map_fields(user_ptr, valid_ptrs),
-        GC_TYPE_LAZY_ARRAY => rewrite_lazy_array_fields(user_ptr, valid_ptrs),
-        GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
-        _ => {}
+    let mut changed = false;
+    visit_gc_rewrite_slots(header, |slot| unsafe {
+        slot.record_layout_read();
+        let before = *slot.slot;
+        rewrite_slot(slot.slot, valid_ptrs);
+        changed |= *slot.slot != before;
+    });
+    if changed && gc_type_rewrite_hook_kind((*header).obj_type) == GcRewriteHookKind::SetIndex {
+        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+        crate::set::rebuild_set_index_for_gc(user_ptr as *mut crate::set::SetHeader);
     }
 }
 
@@ -244,154 +138,6 @@ pub(super) unsafe fn remember_evacuated_old_to_young_slot(
     sticky.remember_slot(parent_header, slot, external);
 }
 
-pub(super) unsafe fn remember_evacuated_gc_child_slots(
-    sticky: &mut StickyRememberedSet,
-    header: *mut GcHeader,
-) {
-    for child_slot in gc_child_slots(header) {
-        if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
-            record_layout_child_slot_read(layout_kind);
-            remember_evacuated_old_to_young_slot(sticky, header, slot);
-        }
-    }
-}
-
-pub(super) unsafe fn remember_evacuated_array_young_slots(
-    sticky: &mut StickyRememberedSet,
-    header: *mut GcHeader,
-    _user_ptr: *mut u8,
-) {
-    remember_evacuated_gc_child_slots(sticky, header);
-}
-
-pub(super) unsafe fn remember_evacuated_object_young_slots(
-    sticky: &mut StickyRememberedSet,
-    header: *mut GcHeader,
-    _user_ptr: *mut u8,
-) {
-    remember_evacuated_gc_child_slots(sticky, header);
-}
-
-pub(super) unsafe fn remember_evacuated_closure_young_slots(
-    sticky: &mut StickyRememberedSet,
-    header: *mut GcHeader,
-    _user_ptr: *mut u8,
-) {
-    remember_evacuated_gc_child_slots(sticky, header);
-}
-
-pub(super) unsafe fn remember_evacuated_promise_young_slots(
-    sticky: &mut StickyRememberedSet,
-    header: *mut GcHeader,
-    user_ptr: *mut u8,
-) {
-    let promise = user_ptr as *mut crate::promise::Promise;
-    remember_evacuated_old_to_young_slot(
-        sticky,
-        header,
-        &(*promise).value as *const f64 as *mut u64,
-    );
-    remember_evacuated_old_to_young_slot(
-        sticky,
-        header,
-        &(*promise).reason as *const f64 as *mut u64,
-    );
-    remember_evacuated_old_to_young_slot(
-        sticky,
-        header,
-        &(*promise).on_fulfilled as *const _ as *mut u64,
-    );
-    remember_evacuated_old_to_young_slot(
-        sticky,
-        header,
-        &(*promise).on_rejected as *const _ as *mut u64,
-    );
-    remember_evacuated_old_to_young_slot(sticky, header, &(*promise).next as *const _ as *mut u64);
-}
-
-pub(super) unsafe fn remember_evacuated_error_young_slots(
-    sticky: &mut StickyRememberedSet,
-    header: *mut GcHeader,
-    user_ptr: *mut u8,
-) {
-    let error = user_ptr as *mut crate::error::ErrorHeader;
-    remember_evacuated_old_to_young_slot(sticky, header, &(*error).message as *const _ as *mut u64);
-    remember_evacuated_old_to_young_slot(sticky, header, &(*error).name as *const _ as *mut u64);
-    remember_evacuated_old_to_young_slot(sticky, header, &(*error).stack as *const _ as *mut u64);
-    remember_evacuated_old_to_young_slot(sticky, header, &(*error).cause as *const f64 as *mut u64);
-    remember_evacuated_old_to_young_slot(sticky, header, &(*error).errors as *const _ as *mut u64);
-}
-
-pub(super) unsafe fn remember_evacuated_map_young_slots(
-    sticky: &mut StickyRememberedSet,
-    header: *mut GcHeader,
-    user_ptr: *mut u8,
-) {
-    let map = user_ptr as *const crate::map::MapHeader;
-    let size = (*map).size;
-    let capacity = (*map).capacity;
-    if size > capacity || size > 100_000 || (*map).entries.is_null() {
-        return;
-    }
-    let entries = (*map).entries as *mut u64;
-    for i in 0..(size as usize) {
-        remember_evacuated_old_to_young_slot(sticky, header, entries.add(i * 2));
-        remember_evacuated_old_to_young_slot(sticky, header, entries.add(i * 2 + 1));
-    }
-}
-
-pub(super) unsafe fn remember_evacuated_lazy_array_young_slots(
-    sticky: &mut StickyRememberedSet,
-    header: *mut GcHeader,
-    user_ptr: *mut u8,
-) {
-    let lazy = user_ptr as *mut crate::json_tape::LazyArrayHeader;
-    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
-        return;
-    }
-    remember_evacuated_old_to_young_slot(sticky, header, &(*lazy).blob_str as *const _ as *mut u64);
-    remember_evacuated_old_to_young_slot(
-        sticky,
-        header,
-        &(*lazy).materialized as *const _ as *mut u64,
-    );
-    remember_evacuated_old_to_young_slot(
-        sticky,
-        header,
-        &(*lazy).materialized_elements as *const _ as *mut u64,
-    );
-    remember_evacuated_old_to_young_slot(
-        sticky,
-        header,
-        &(*lazy).materialized_bitmap as *const _ as *mut u64,
-    );
-
-    let cached_length = (*lazy).cached_length as usize;
-    let cache = (*lazy).materialized_elements;
-    let bitmap = (*lazy).materialized_bitmap;
-    if cache.is_null() || bitmap.is_null() || cached_length == 0 {
-        return;
-    }
-    let bitmap_words = cached_length.div_ceil(64);
-    for w in 0..bitmap_words {
-        let word = *bitmap.add(w);
-        if word == 0 {
-            continue;
-        }
-        let base_idx = w * 64;
-        for b in 0..64usize {
-            if word & (1u64 << b) == 0 {
-                continue;
-            }
-            let i = base_idx + b;
-            if i >= cached_length {
-                break;
-            }
-            remember_evacuated_old_to_young_slot(sticky, header, cache.add(i) as *mut u64);
-        }
-    }
-}
-
 pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
     sticky: &mut StickyRememberedSet,
     header: *mut GcHeader,
@@ -407,17 +153,10 @@ pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
     if !crate::arena::pointer_in_old_gen(user_ptr as usize) {
         return;
     }
-    match (*header).obj_type {
-        GC_TYPE_ARRAY => remember_evacuated_array_young_slots(sticky, header, user_ptr),
-        GC_TYPE_OBJECT => remember_evacuated_object_young_slots(sticky, header, user_ptr),
-        GC_TYPE_CLOSURE => remember_evacuated_closure_young_slots(sticky, header, user_ptr),
-        GC_TYPE_PROMISE => remember_evacuated_promise_young_slots(sticky, header, user_ptr),
-        GC_TYPE_ERROR => remember_evacuated_error_young_slots(sticky, header, user_ptr),
-        GC_TYPE_MAP => remember_evacuated_map_young_slots(sticky, header, user_ptr),
-        GC_TYPE_LAZY_ARRAY => remember_evacuated_lazy_array_young_slots(sticky, header, user_ptr),
-        GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
-        _ => {}
-    }
+    visit_gc_rewrite_slots(header, |slot| unsafe {
+        slot.record_layout_read();
+        remember_evacuated_old_to_young_slot(sticky, header, slot.slot);
+    });
 }
 
 pub(super) fn rebuild_evacuated_old_to_young_remembered_set(
@@ -432,186 +171,177 @@ pub(super) fn rebuild_evacuated_old_to_young_remembered_set(
     sticky
 }
 
-pub(super) unsafe fn verify_gc_child_slots(
+pub(super) unsafe fn remember_live_old_to_young_slots(
+    sticky: &mut StickyRememberedSet,
     header: *mut GcHeader,
-    valid_ptrs: &ValidPointerSet,
-    surface: &str,
 ) {
-    for child_slot in gc_child_slots(header) {
-        if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
-            record_layout_child_slot_read(layout_kind);
-            verify_slot(slot, valid_ptrs, surface);
-        }
-    }
-}
-
-pub(super) unsafe fn verify_array_fields(
-    user_ptr: *mut u8,
-    valid_ptrs: &ValidPointerSet,
-    surface: &str,
-) {
-    let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
-    verify_gc_child_slots(header, valid_ptrs, surface);
-}
-
-pub(super) unsafe fn verify_object_fields(
-    user_ptr: *mut u8,
-    valid_ptrs: &ValidPointerSet,
-    surface: &str,
-) {
-    let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
-    verify_gc_child_slots(header, valid_ptrs, surface);
-}
-
-pub(super) unsafe fn verify_map_fields(
-    user_ptr: *mut u8,
-    valid_ptrs: &ValidPointerSet,
-    surface: &str,
-) {
-    let map = user_ptr as *const crate::map::MapHeader;
-    let size = (*map).size;
-    let capacity = (*map).capacity;
-    if size > capacity || size > 100_000 || (*map).entries.is_null() {
+    if header.is_null() || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
         return;
     }
-    let entries = (*map).entries as *const u64;
-    for i in 0..(size as usize) {
-        verify_slot(entries.add(i * 2), valid_ptrs, surface);
-        verify_slot(entries.add(i * 2 + 1), valid_ptrs, surface);
+    if (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+        return;
     }
-}
-
-pub(super) unsafe fn verify_closure_fields(
-    user_ptr: *mut u8,
-    valid_ptrs: &ValidPointerSet,
-    surface: &str,
-) {
-    let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
-    verify_gc_child_slots(header, valid_ptrs, surface);
-    crate::closure::visit_closure_dynamic_prop_value_slots_mut(user_ptr as usize, |slot| {
-        verify_slot(slot as *const u64, valid_ptrs, surface);
+    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+    if !barrier_parent_needs_remembering(user_ptr as usize, true) {
+        return;
+    }
+    visit_gc_rewrite_slots(header, |slot| unsafe {
+        slot.record_layout_read();
+        remember_evacuated_old_to_young_slot(sticky, header, slot.slot);
     });
 }
 
-pub(super) unsafe fn verify_promise_fields(
-    user_ptr: *mut u8,
-    valid_ptrs: &ValidPointerSet,
-    surface: &str,
-) {
-    let promise = user_ptr as *const crate::promise::Promise;
-    verify_slot(
-        &(*promise).value as *const f64 as *const u64,
-        valid_ptrs,
-        surface,
-    );
-    verify_slot(
-        &(*promise).reason as *const f64 as *const u64,
-        valid_ptrs,
-        surface,
-    );
-    verify_slot(
-        &(*promise).on_fulfilled as *const _ as *const u64,
-        valid_ptrs,
-        surface,
-    );
-    verify_slot(
-        &(*promise).on_rejected as *const _ as *const u64,
-        valid_ptrs,
-        surface,
-    );
-    verify_slot(
-        &(*promise).next as *const _ as *const u64,
-        valid_ptrs,
-        surface,
-    );
-}
-
-pub(super) unsafe fn verify_error_fields(
-    user_ptr: *mut u8,
-    valid_ptrs: &ValidPointerSet,
-    surface: &str,
-) {
-    let error = user_ptr as *const crate::error::ErrorHeader;
-    verify_slot(
-        &(*error).message as *const _ as *const u64,
-        valid_ptrs,
-        surface,
-    );
-    verify_slot(
-        &(*error).name as *const _ as *const u64,
-        valid_ptrs,
-        surface,
-    );
-    verify_slot(
-        &(*error).stack as *const _ as *const u64,
-        valid_ptrs,
-        surface,
-    );
-    verify_slot(
-        &(*error).cause as *const f64 as *const u64,
-        valid_ptrs,
-        surface,
-    );
-    verify_slot(
-        &(*error).errors as *const _ as *const u64,
-        valid_ptrs,
-        surface,
-    );
-}
-
-pub(super) unsafe fn verify_lazy_array_fields(
-    user_ptr: *mut u8,
-    valid_ptrs: &ValidPointerSet,
-    surface: &str,
-) {
-    let lazy = user_ptr as *const crate::json_tape::LazyArrayHeader;
-    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
-        return;
-    }
-    verify_slot(
-        &(*lazy).blob_str as *const _ as *const u64,
-        valid_ptrs,
-        surface,
-    );
-    verify_slot(
-        &(*lazy).materialized as *const _ as *const u64,
-        valid_ptrs,
-        surface,
-    );
-    verify_slot(
-        &(*lazy).materialized_elements as *const _ as *const u64,
-        valid_ptrs,
-        surface,
-    );
-    verify_slot(
-        &(*lazy).materialized_bitmap as *const _ as *const u64,
-        valid_ptrs,
-        surface,
-    );
-
-    let cached_length = (*lazy).cached_length as usize;
-    let cache = (*lazy).materialized_elements;
-    let bitmap = (*lazy).materialized_bitmap;
-    if !cache.is_null() && !bitmap.is_null() && cached_length > 0 {
-        let bitmap_words = cached_length.div_ceil(64);
-        for w in 0..bitmap_words {
-            let word = *bitmap.add(w);
-            if word == 0 {
-                continue;
-            }
-            let base_idx = w * 64;
-            for b in 0..64usize {
-                if word & (1u64 << b) == 0 {
-                    continue;
-                }
-                let i = base_idx + b;
-                if i >= cached_length {
-                    break;
-                }
-                verify_slot(cache.add(i) as *const u64, valid_ptrs, surface);
+pub(super) fn rebuild_live_old_to_young_remembered_set() -> StickyRememberedSet {
+    let mut sticky = StickyRememberedSet::default();
+    crate::arena::old_arena_walk_objects(|hp| unsafe {
+        remember_live_old_to_young_slots(&mut sticky, hp as *mut GcHeader);
+    });
+    MALLOC_STATE.with(|s| {
+        let s = s.borrow();
+        for &header in s.objects.iter() {
+            unsafe {
+                remember_live_old_to_young_slots(&mut sticky, header);
             }
         }
+    });
+    sticky
+}
+
+#[inline]
+pub(super) fn old_young_external_slot_covered(
+    snapshot: &RememberedDirtySnapshot,
+    parent_header: usize,
+    slot: *mut u64,
+) -> bool {
+    let page = crate::arena::generation_page_for_addr(slot as usize);
+    snapshot
+        .external_dirty_entries
+        .iter()
+        .any(|&(entry_page, entry_header)| entry_page == page && entry_header == parent_header)
+}
+
+#[inline]
+pub(super) fn old_young_slot_covered(
+    snapshot: &RememberedDirtySnapshot,
+    parent_header: usize,
+    slot: *mut u64,
+) -> bool {
+    let page = crate::arena::generation_page_for_addr(slot as usize);
+    if matches!(
+        crate::arena::classify_heap_generation(slot as usize),
+        crate::arena::HeapGeneration::Old
+    ) {
+        snapshot.dirty_old_pages.contains(&page)
+    } else {
+        old_young_external_slot_covered(snapshot, parent_header, slot)
     }
+}
+
+#[inline]
+pub(super) unsafe fn old_parent_has_remembered_metadata(
+    snapshot: &RememberedDirtySnapshot,
+    header: *mut GcHeader,
+) -> bool {
+    let header_addr = header as usize;
+    let total_size = (*header).size as usize;
+    if total_size != 0
+        && crate::arena::old_object_page_overlaps(header_addr, total_size)
+            .iter()
+            .any(|(page, _)| snapshot.dirty_old_pages.contains(page))
+    {
+        return true;
+    }
+    snapshot
+        .external_dirty_entries
+        .iter()
+        .any(|&(_, entry_header)| entry_header == header_addr)
+}
+
+#[inline]
+pub(super) unsafe fn old_young_parent_should_be_checked(
+    snapshot: &RememberedDirtySnapshot,
+    header: *mut GcHeader,
+) -> bool {
+    if header.is_null() || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+        return false;
+    }
+    if (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0 {
+        return true;
+    }
+    old_parent_has_remembered_metadata(snapshot, header)
+}
+
+pub(super) unsafe fn verify_old_young_slot_covered(
+    snapshot: &RememberedDirtySnapshot,
+    stats: &mut OldYoungEdgeVerifyStats,
+    parent_header: *mut GcHeader,
+    slot: *mut u64,
+) {
+    if slot.is_null() {
+        return;
+    }
+    let child_addr = decode_heap_addr(*slot);
+    if child_addr == 0 || !crate::arena::pointer_in_nursery(child_addr) {
+        return;
+    }
+    stats.checked_old_to_young_edges = stats.checked_old_to_young_edges.saturating_add(1);
+    let parent_addr = parent_header as usize;
+    if !old_young_slot_covered(snapshot, parent_addr, slot) {
+        stats.record_missing(parent_addr, slot as usize, child_addr);
+    }
+}
+
+pub(super) unsafe fn verify_old_young_parent_slots_covered(
+    snapshot: &RememberedDirtySnapshot,
+    stats: &mut OldYoungEdgeVerifyStats,
+    header: *mut GcHeader,
+) {
+    if !old_young_parent_should_be_checked(snapshot, header) {
+        return;
+    }
+    stats.checked_old_objects = stats.checked_old_objects.saturating_add(1);
+    visit_gc_rewrite_slots(header, |slot| unsafe {
+        slot.record_layout_read();
+        verify_old_young_slot_covered(snapshot, stats, header, slot.slot);
+    });
+}
+
+#[cold]
+pub(super) fn panic_old_young_edge_verifier_failed(stats: OldYoungEdgeVerifyStats) -> ! {
+    let missing = stats.first_missing.unwrap_or_default();
+    panic!(
+        "old-young-edge-verifier failed: checked_old_objects={} checked_remembered_pages={} checked_old_to_young_edges={} missing_edges={} first_missing_parent=0x{:x} first_missing_slot=0x{:x} first_missing_child=0x{:x}",
+        stats.checked_old_objects,
+        stats.checked_remembered_pages,
+        stats.checked_old_to_young_edges,
+        stats.missing_edges,
+        missing.parent,
+        missing.slot,
+        missing.child
+    );
+}
+
+pub(super) fn verify_old_to_young_edges_covered() -> OldYoungEdgeVerifyStats {
+    let snapshot = remembered_dirty_snapshot();
+    let mut stats = OldYoungEdgeVerifyStats {
+        checked_remembered_pages: snapshot.dirty_pages.len(),
+        ..OldYoungEdgeVerifyStats::default()
+    };
+    crate::arena::old_arena_walk_objects(|hp| unsafe {
+        verify_old_young_parent_slots_covered(&snapshot, &mut stats, hp as *mut GcHeader);
+    });
+    MALLOC_STATE.with(|s| {
+        let s = s.borrow();
+        for &header in s.objects.iter() {
+            unsafe {
+                verify_old_young_parent_slots_covered(&snapshot, &mut stats, header);
+            }
+        }
+    });
+    if stats.missing_edges != 0 {
+        panic_old_young_edge_verifier_failed(stats);
+    }
+    stats
 }
 
 pub(super) unsafe fn verify_heap_object_fields(
@@ -623,18 +353,10 @@ pub(super) unsafe fn verify_heap_object_fields(
     if flags & GC_FLAG_FORWARDED != 0 {
         return;
     }
-    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-    match (*header).obj_type {
-        GC_TYPE_ARRAY => verify_array_fields(user_ptr, valid_ptrs, surface),
-        GC_TYPE_OBJECT => verify_object_fields(user_ptr, valid_ptrs, surface),
-        GC_TYPE_CLOSURE => verify_closure_fields(user_ptr, valid_ptrs, surface),
-        GC_TYPE_PROMISE => verify_promise_fields(user_ptr, valid_ptrs, surface),
-        GC_TYPE_ERROR => verify_error_fields(user_ptr, valid_ptrs, surface),
-        GC_TYPE_MAP => verify_map_fields(user_ptr, valid_ptrs, surface),
-        GC_TYPE_LAZY_ARRAY => verify_lazy_array_fields(user_ptr, valid_ptrs, surface),
-        GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
-        _ => {}
-    }
+    visit_gc_rewrite_slots(header, |slot| unsafe {
+        slot.record_layout_read();
+        verify_slot(slot.slot as *const u64, valid_ptrs, surface);
+    });
 }
 
 /// Walk every live (MARKED, non-FORWARDED) object on the heap and
@@ -691,15 +413,25 @@ pub(super) fn rewrite_remembered_dirty_ranges(valid_ptrs: &ValidPointerSet) {
 /// raw object-start pointers. `try_rewrite_value` handles both forms.
 pub(super) fn rewrite_mutable_root_slots(
     valid_ptrs: &ValidPointerSet,
+    shadow_stats: Option<&mut ShadowRootTraceStats>,
+) {
+    rewrite_mutable_root_slots_with_sources(valid_ptrs, shadow_stats, None);
+}
+
+pub(super) fn rewrite_mutable_root_slots_with_sources(
+    valid_ptrs: &ValidPointerSet,
     mut shadow_stats: Option<&mut ShadowRootTraceStats>,
+    mut root_sources: Option<&mut RootSourcesTraceStats>,
 ) {
     visit_mutable_root_slots(|slot| unsafe {
         let bits = slot.read();
+        record_mutable_slot_scan_source(slot, bits, valid_ptrs, &mut root_sources);
         if bits == 0 {
             return;
         }
         if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
             slot.write(new_bits);
+            record_mutable_slot_rewrite_source(slot, &mut root_sources);
             if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
                 if let Some(stats) = shadow_stats.as_mut() {
                     stats.record_rewrite();
@@ -710,12 +442,32 @@ pub(super) fn rewrite_mutable_root_slots(
 }
 
 pub(super) fn rewrite_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
-    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    rewrite_mutable_registered_roots_with_sources(valid_ptrs, None);
+}
+
+pub(super) fn rewrite_mutable_registered_roots_with_sources(
+    valid_ptrs: &ValidPointerSet,
+    mut root_sources: Option<&mut RootSourcesTraceStats>,
+) {
+    let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
     let mut visitor = RuntimeRootVisitor::for_rewrite(valid_ptrs);
-    for scanner in scanners {
-        scanner(&mut visitor);
+    for entry in scanners {
+        let stats = match &mut root_sources {
+            Some(sources) => match entry.source {
+                MutableRootScannerSource::RuntimeHandles => {
+                    Some(&mut sources.runtime_handles as *mut RootSourceSlotTraceStats)
+                }
+                MutableRootScannerSource::RuntimeMutableScanner => {
+                    Some(&mut sources.runtime_mutable_scanners as *mut RootSourceSlotTraceStats)
+                }
+            },
+            None => None,
+        };
+        let previous = visitor.set_root_source_stats(stats);
+        (entry.scanner)(&mut visitor);
+        visitor.set_root_source_stats(previous);
     }
-    visit_ffi_mutable_registered_roots(&mut visitor);
+    visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
 }
 
 pub(super) fn verify_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
@@ -735,10 +487,10 @@ pub(super) fn verify_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
 }
 
 pub(super) fn verify_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
-    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
     let mut visitor = RuntimeRootVisitor::for_verify(valid_ptrs, "runtime mutable root scanner");
-    for scanner in scanners {
-        scanner(&mut visitor);
+    for entry in scanners {
+        (entry.scanner)(&mut visitor);
     }
     visit_ffi_mutable_registered_roots(&mut visitor);
 }
@@ -847,9 +599,18 @@ pub(super) fn verify_evacuated_no_stale_forwarded_refs(valid_ptrs: &ValidPointer
 pub(super) fn rewrite_forwarded_references(
     valid_ptrs: &ValidPointerSet,
     shadow_stats: Option<&mut ShadowRootTraceStats>,
+    root_sources: Option<&mut RootSourcesTraceStats>,
 ) {
-    rewrite_mutable_root_slots(valid_ptrs, shadow_stats);
-    rewrite_mutable_registered_roots(valid_ptrs);
+    match root_sources {
+        Some(sources) => {
+            rewrite_mutable_root_slots_with_sources(valid_ptrs, shadow_stats, Some(&mut *sources));
+            rewrite_mutable_registered_roots_with_sources(valid_ptrs, Some(&mut *sources));
+        }
+        None => {
+            rewrite_mutable_root_slots(valid_ptrs, shadow_stats);
+            rewrite_mutable_registered_roots(valid_ptrs);
+        }
+    }
     rewrite_remembered_dirty_ranges(valid_ptrs);
     rewrite_heap_objects(valid_ptrs);
 }

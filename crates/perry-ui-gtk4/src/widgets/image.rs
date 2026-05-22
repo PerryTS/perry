@@ -30,7 +30,7 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
     let raw = str_from_header(path_ptr);
     let path = raw.split('\0').next().unwrap_or(raw);
     // Resolve path relative to executable directory (handles bundled assets)
-    let resolved = crate::resolve_asset_path(path);
+    let resolved = crate::ffi::layout::resolve_asset_path(path);
     let picture = gtk4::Picture::for_filename(&resolved);
     picture.set_can_shrink(true);
     let handle = super::register_widget(picture.clone().upcast());

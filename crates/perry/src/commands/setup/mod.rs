@@ -25,7 +25,7 @@ mod windows;
 // Per-platform wizards — used by `run` below.
 pub(crate) use android::android_wizard;
 pub(crate) use harmonyos::{harmonyos_wizard, prompt_password};
-pub(crate) use ios::ios_wizard;
+pub(crate) use ios::{ios_development_setup, ios_wizard};
 pub(crate) use macos::macos_wizard;
 pub(crate) use tvos::tvos_wizard;
 pub(crate) use visionos::visionos_wizard;
@@ -63,6 +63,14 @@ pub struct SetupArgs {
     /// answering "yes" at the interactive prompt; enables non-interactive / CI use.
     #[arg(long)]
     pub accept_license: bool,
+
+    /// (ios only) Provision the currently-connected device for on-device
+    /// *development* instead of App Store distribution: register the device's
+    /// UDID and mint an "iOS App Development" provisioning profile via the App
+    /// Store Connect API (saved to ~/.perry/<bundle>_dev.mobileprovision).
+    /// Requires a prior `perry setup ios` to store API credentials.
+    #[arg(long)]
+    pub development: bool,
 }
 
 pub fn run(args: SetupArgs) -> Result<()> {
@@ -97,11 +105,21 @@ pub fn run(args: SetupArgs) -> Result<()> {
         }
     };
 
+    if args.development && platform != "ios" {
+        anyhow::bail!("--development is only supported for `perry setup ios`");
+    }
+
     let mut saved = load_config();
 
     match platform.as_str() {
         "windows" => windows_wizard(args.accept_license)?,
         "android" => android_wizard(&mut saved)?,
+        "ios" if args.development => {
+            // Development-provisioning path: no global-config mutation, so
+            // return before the save_config below.
+            ios_development_setup(&saved)?;
+            return Ok(());
+        }
         "ios" => ios_wizard(&mut saved)?,
         "macos" => macos_wizard(&mut saved)?,
         "visionos" => visionos_wizard(&mut saved)?,

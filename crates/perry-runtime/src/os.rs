@@ -557,19 +557,80 @@ pub extern "C" fn js_process_hrtime_bigint() -> f64 {
     js_nanbox_bigint(bi as i64)
 }
 
-// Storage for process.on('exit', handler) callbacks.
-// We just store the handler pointers; they don't actually fire on real exit.
+// process.on/once handlers, partitioned by event name. Today only
+// 'uncaughtException' actually fires from the runtime (during the diag
+// uncaught-drain hook); 'exit' and any other event names are stored so
+// the closure stays rooted but never invoked.
+//
+// Each entry tracks whether it was registered via `once` so that a
+// one-shot handler is drained from the list after its first invocation.
+#[derive(Clone, Copy)]
+struct ProcessHandler {
+    closure: *const crate::closure::ClosureHeader,
+    once: bool,
+}
+
 thread_local! {
-    static EXIT_HANDLERS: std::cell::RefCell<Vec<*const crate::closure::ClosureHeader>> = const { std::cell::RefCell::new(Vec::new()) };
+    static UNCAUGHT_HANDLERS: std::cell::RefCell<Vec<ProcessHandler>> = const { std::cell::RefCell::new(Vec::new()) };
+    static EXIT_HANDLERS: std::cell::RefCell<Vec<ProcessHandler>> = const { std::cell::RefCell::new(Vec::new()) };
+    static OTHER_PROCESS_HANDLERS: std::cell::RefCell<Vec<ProcessHandler>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn read_event_name(event_ptr: *const StringHeader) -> Option<String> {
+    if event_ptr.is_null() {
+        return None;
+    }
+    unsafe {
+        let len = (*event_ptr).byte_len as usize;
+        let data = (event_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let bytes = std::slice::from_raw_parts(data, len);
+        std::str::from_utf8(bytes).ok().map(|s| s.to_string())
+    }
+}
+
+fn register_process_handler(
+    event_ptr: *const StringHeader,
+    handler: *const crate::closure::ClosureHeader,
+    once: bool,
+) {
+    let entry = ProcessHandler {
+        closure: handler,
+        once,
+    };
+    match read_event_name(event_ptr).as_deref() {
+        Some("uncaughtException") => UNCAUGHT_HANDLERS.with(|h| h.borrow_mut().push(entry)),
+        Some("exit") => EXIT_HANDLERS.with(|h| h.borrow_mut().push(entry)),
+        _ => OTHER_PROCESS_HANDLERS.with(|h| h.borrow_mut().push(entry)),
+    }
 }
 
 /// process.on(event, handler) — register an event listener.
 #[no_mangle]
 pub extern "C" fn js_process_on(
-    _event_ptr: *const StringHeader,
+    event_ptr: *const StringHeader,
     handler: *const crate::closure::ClosureHeader,
 ) {
-    EXIT_HANDLERS.with(|h| h.borrow_mut().push(handler));
+    register_process_handler(event_ptr, handler, false);
+}
+
+/// process.once(event, handler) — one-shot listener (Node parity).
+#[no_mangle]
+pub extern "C" fn js_process_once(
+    event_ptr: *const StringHeader,
+    handler: *const crate::closure::ClosureHeader,
+) {
+    register_process_handler(event_ptr, handler, true);
+}
+
+pub fn emit_process_uncaught_exception(error: f64) {
+    // Snapshot, fire, then drain the one-shot entries. Iteration over a
+    // clone is required because handlers may register/unregister further
+    // listeners while running.
+    let handlers = UNCAUGHT_HANDLERS.with(|h| h.borrow().clone());
+    for handler in &handlers {
+        crate::closure::js_closure_call1(handler.closure, error);
+    }
+    UNCAUGHT_HANDLERS.with(|h| h.borrow_mut().retain(|entry| !entry.once));
 }
 
 /// process.nextTick(callback) — schedule callback as a microtask.

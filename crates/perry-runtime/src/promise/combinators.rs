@@ -4,6 +4,75 @@
 
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) struct PromiseAllState {
+    pub result_promise: *mut Promise,
+    pub results_arr: *mut crate::array::ArrayHeader,
+    pub state_arr: *mut crate::array::ArrayHeader,
+    pub index: u32,
+}
+
+thread_local! {
+    pub(super) static PROMISE_ALL_STATES: RefCell<Vec<(usize, PromiseAllState)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Drain ALL `PromiseAllState` entries associated with `promise`.
+///
+/// A pending promise can be reused as an input to multiple
+/// `Promise.all([...])` calls — e.g.:
+///
+/// ```js
+/// const p = somePending();
+/// Promise.all([p, x]);
+/// Promise.all([p, y]);
+/// ```
+///
+/// Each `Promise.all` call registers its own `PromiseAllState` keyed by
+/// `p as usize`. When `p` settles we must complete every registered
+/// state, not just the first one.
+#[inline]
+pub(super) fn promise_all_take_all_handlers(promise: *mut Promise) -> Vec<PromiseAllState> {
+    if promise.is_null() {
+        return Vec::new();
+    }
+    PROMISE_ALL_STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        let key = promise as usize;
+        let mut drained = Vec::new();
+        let mut i = 0;
+        while i < states.len() {
+            if states[i].0 == key {
+                drained.push(states.swap_remove(i).1);
+            } else {
+                i += 1;
+            }
+        }
+        drained
+    })
+}
+
+#[inline]
+pub(super) fn promise_all_settle(state: PromiseAllState, value: f64, is_fulfilled: bool) {
+    if is_fulfilled {
+        promise_all_fulfill_direct(state, value);
+    } else {
+        promise_all_reject_direct(state.result_promise, state.state_arr, value);
+    }
+}
+
+pub(super) fn scan_promise_all_states_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    PROMISE_ALL_STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        for (key, state) in states.iter_mut() {
+            visitor.visit_metadata_usize_slot(key);
+            visitor.visit_raw_mut_ptr_slot(&mut state.result_promise);
+            visitor.visit_raw_mut_ptr_slot(&mut state.results_arr);
+            visitor.visit_raw_mut_ptr_slot(&mut state.state_arr);
+        }
+    });
+}
+
 /// Create a rejected promise with the given reason
 #[no_mangle]
 pub extern "C" fn js_promise_rejected(reason: f64) -> *mut Promise {
@@ -155,16 +224,11 @@ extern "C" fn promise_reject_fn(closure: *const crate::closure::ClosureHeader, r
 #[no_mangle]
 pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader) -> *mut Promise {
     use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_set_f64};
-    use crate::closure::{
-        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    };
     use crate::value::js_nanbox_get_pointer;
 
-    // Create the result promise
     let result_promise = js_promise_new();
 
     if promises_arr.is_null() {
-        // Promise.all([]) resolves immediately with empty array
         let empty_arr = js_array_alloc(0);
         unsafe {
             (*empty_arr).length = 0;
@@ -177,7 +241,6 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
     let count = js_array_length(promises_arr);
 
     if count == 0 {
-        // Promise.all([]) resolves immediately with empty array
         let empty_arr = js_array_alloc(0);
         unsafe {
             (*empty_arr).length = 0;
@@ -187,46 +250,27 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
         return result_promise;
     }
 
-    // Allocate result array to hold resolved values
     let results_arr = js_array_alloc(count);
     unsafe {
         (*results_arr).length = count;
     }
 
-    // Initialize all elements to undefined
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     for i in 0..count {
         js_array_set_f64(results_arr, i, f64::from_bits(TAG_UNDEFINED));
     }
 
-    // Allocate state: [remaining_count, rejected_flag]
-    // We use an array to hold mutable shared state across closures
     let state_arr = js_array_alloc(2);
     unsafe {
         (*state_arr).length = 2;
     }
-    js_array_set_f64(state_arr, 0, count as f64); // remaining count
-    js_array_set_f64(state_arr, 1, 0.0); // rejected flag (0 = not rejected)
+    js_array_set_f64(state_arr, 0, count as f64);
+    js_array_set_f64(state_arr, 1, 0.0);
 
-    // Reject closure is identical for every input (captures only
-    // `[result_promise, state_arr]`, no per-index payload). Allocate it
-    // ONCE per Promise.all call and share across all inputs. Saves
-    // (N-1) closure allocations per call — on the 50-input × 1000-batch
-    // bench that's ~50k fewer closures (~2-3 ms on a hot run).
-    let shared_reject_closure = js_closure_alloc(promise_all_reject_handler as *const u8, 2);
-    js_closure_set_capture_ptr(shared_reject_closure, 0, result_promise as i64);
-    js_closure_set_capture_ptr(shared_reject_closure, 1, state_arr as i64);
-
-    // For each promise in the array, attach a .then handler
     for i in 0..count {
         let promise_f64 = adapt_foreign_promise_value(js_array_get_f64(promises_arr, i));
 
-        // Discriminate via the GC-header obj_type, not via raw pointer
-        // extraction: string/bigint NaN-boxed values produce non-null
-        // pointers from js_nanbox_get_pointer and would be passed to
-        // js_promise_then as if they were Promises.
         if js_value_is_promise(promise_f64) == 0 {
-            // Not a promise — treat as already resolved value
             js_array_set_f64(results_arr, i, promise_f64);
             let remaining = js_array_get_f64(state_arr, 0) - 1.0;
             js_array_set_f64(state_arr, 0, remaining);
@@ -234,23 +278,45 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
         }
 
         let promise_ptr = js_nanbox_get_pointer(promise_f64) as *mut Promise;
+        let state = PromiseAllState {
+            result_promise,
+            results_arr,
+            state_arr,
+            index: i,
+        };
 
-        // Create fulfill closure for this promise
-        // Captures: [result_promise, results_arr, state_arr, index]
-        let fulfill_closure = js_closure_alloc(promise_all_fulfill_handler as *const u8, 4);
-        js_closure_set_capture_ptr(fulfill_closure, 0, result_promise as i64);
-        js_closure_set_capture_ptr(fulfill_closure, 1, results_arr as i64);
-        js_closure_set_capture_ptr(fulfill_closure, 2, state_arr as i64);
-        js_closure_set_capture_f64(fulfill_closure, 3, i as f64);
-
-        // Attach handlers to the promise WITHOUT allocating a `next`
-        // Promise — the return of `then` is unused here. Saves one
-        // promise alloc per input on Promise.all (50k for the
-        // 1000-batch × 50-input bench).
-        js_promise_attach_handlers(promise_ptr, fulfill_closure, shared_reject_closure);
+        unsafe {
+            match (*promise_ptr).state {
+                PromiseState::Fulfilled => {
+                    TASK_QUEUE.with(|q| {
+                        q.borrow_mut().push_back(Task::PromiseAll(
+                            state,
+                            (*promise_ptr).value,
+                            true,
+                            context_for_promise(promise_ptr),
+                        ));
+                    });
+                }
+                PromiseState::Rejected => {
+                    TASK_QUEUE.with(|q| {
+                        q.borrow_mut().push_back(Task::PromiseAll(
+                            state,
+                            (*promise_ptr).reason,
+                            false,
+                            context_for_promise(promise_ptr),
+                        ));
+                    });
+                }
+                PromiseState::Pending => {
+                    PROMISE_ALL_STATES.with(|states| {
+                        states.borrow_mut().push((promise_ptr as usize, state));
+                    });
+                    set_promise_callback_context(promise_ptr);
+                }
+            }
+        }
     }
 
-    // Check if all were non-promises (already resolved)
     let remaining = js_array_get_f64(state_arr, 0);
     if remaining == 0.0 {
         let arr_f64 = crate::value::js_nanbox_pointer(results_arr as i64);
@@ -260,71 +326,48 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
     result_promise
 }
 
-/// Internal handler called when a promise in Promise.all fulfills
-extern "C" fn promise_all_fulfill_handler(
-    closure: *const crate::closure::ClosureHeader,
-    value: f64,
-) -> f64 {
-    use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
-    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
+#[inline]
+fn promise_all_fulfill_direct(state: PromiseAllState, value: f64) {
+    use crate::array::{js_array_get_f64, js_array_set_f64};
 
-    let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let results_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
-    let state_arr = js_closure_get_capture_ptr(closure, 2) as *mut ArrayHeader;
-    if result_promise.is_null() || results_arr.is_null() || state_arr.is_null() {
-        return 0.0;
+    if state.result_promise.is_null() || state.results_arr.is_null() || state.state_arr.is_null() {
+        return;
     }
-    let index = js_closure_get_capture_f64(closure, 3) as u32;
 
-    // Check if already rejected
-    let rejected = js_array_get_f64(state_arr, 1);
+    let rejected = js_array_get_f64(state.state_arr, 1);
     if rejected != 0.0 {
-        return 0.0;
+        return;
     }
 
-    // Store the resolved value
-    js_array_set_f64(results_arr, index, value);
+    js_array_set_f64(state.results_arr, state.index, value);
+    let remaining = js_array_get_f64(state.state_arr, 0) - 1.0;
+    js_array_set_f64(state.state_arr, 0, remaining);
 
-    // Decrement remaining count
-    let remaining = js_array_get_f64(state_arr, 0) - 1.0;
-    js_array_set_f64(state_arr, 0, remaining);
-
-    // If all promises have resolved, resolve the result promise with the array
     if remaining == 0.0 {
-        let arr_f64 = crate::value::js_nanbox_pointer(results_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        let arr_f64 = crate::value::js_nanbox_pointer(state.results_arr as i64);
+        js_promise_resolve(state.result_promise, arr_f64);
     }
-
-    0.0
 }
 
-/// Internal handler called when a promise in Promise.all rejects
-extern "C" fn promise_all_reject_handler(
-    closure: *const crate::closure::ClosureHeader,
+#[inline]
+fn promise_all_reject_direct(
+    result_promise: *mut Promise,
+    state_arr: *mut crate::array::ArrayHeader,
     reason: f64,
-) -> f64 {
-    use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
-    use crate::closure::js_closure_get_capture_ptr;
+) {
+    use crate::array::{js_array_get_f64, js_array_set_f64};
 
-    let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let state_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
     if result_promise.is_null() || state_arr.is_null() {
-        return 0.0;
+        return;
     }
 
-    // Check if already rejected (only reject once)
     let rejected = js_array_get_f64(state_arr, 1);
     if rejected != 0.0 {
-        return 0.0;
+        return;
     }
 
-    // Mark as rejected
     js_array_set_f64(state_arr, 1, 1.0);
-
-    // Reject the result promise with the reason
     js_promise_reject(result_promise, reason);
-
-    0.0
 }
 
 /// Promise.race - takes an array of promises and returns a promise that resolves
@@ -885,4 +928,77 @@ extern "C" fn promise_any_reject_handler(
         js_promise_reject(result_promise, err_f64);
     }
     0.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::array::{js_array_alloc, js_array_set_f64};
+    use crate::value::js_nanbox_pointer;
+
+    /// Regression: a pending promise reused as input to two `Promise.all`
+    /// calls must settle BOTH all-promises when it resolves. Pre-fix,
+    /// `promise_all_take_handler` only popped the first matching state
+    /// (via `swap_remove`), so the second `Promise.all` hung forever.
+    #[test]
+    fn promise_all_with_shared_pending_input_resolves_both() {
+        unsafe {
+            // Pending promise that will be shared across two Promise.all calls.
+            let shared = js_promise_new();
+
+            // Second input for each all() — a pre-resolved promise so the
+            // remaining counter only needs `shared` to settle.
+            let other_a = js_promise_new();
+            js_promise_resolve(other_a, 100.0);
+            let other_b = js_promise_new();
+            js_promise_resolve(other_b, 200.0);
+
+            // Build [shared, other_a]
+            let arr_a = js_array_alloc(2);
+            (*arr_a).length = 2;
+            js_array_set_f64(arr_a, 0, js_nanbox_pointer(shared as i64));
+            js_array_set_f64(arr_a, 1, js_nanbox_pointer(other_a as i64));
+            let all_a = js_promise_all(arr_a);
+
+            // Build [shared, other_b]
+            let arr_b = js_array_alloc(2);
+            (*arr_b).length = 2;
+            js_array_set_f64(arr_b, 0, js_nanbox_pointer(shared as i64));
+            js_array_set_f64(arr_b, 1, js_nanbox_pointer(other_b as i64));
+            let all_b = js_promise_all(arr_b);
+
+            // Both all() results should still be pending.
+            assert_eq!((*all_a).state, PromiseState::Pending);
+            assert_eq!((*all_b).state, PromiseState::Pending);
+
+            // PROMISE_ALL_STATES must hold TWO entries keyed on `shared`.
+            let registered = PROMISE_ALL_STATES.with(|s| {
+                s.borrow()
+                    .iter()
+                    .filter(|(k, _)| *k == shared as usize)
+                    .count()
+            });
+            assert_eq!(
+                registered, 2,
+                "expected two Promise.all states keyed on the shared pending promise"
+            );
+
+            // Settle the shared promise; drain microtasks so PromiseAll tasks
+            // run and update both result arrays.
+            js_promise_resolve(shared, 42.0);
+            crate::promise::js_promise_run_microtasks();
+
+            // Both Promise.all results must now be Fulfilled.
+            assert_eq!(
+                (*all_a).state,
+                PromiseState::Fulfilled,
+                "first Promise.all should have settled"
+            );
+            assert_eq!(
+                (*all_b).state,
+                PromiseState::Fulfilled,
+                "second Promise.all should have settled (was hanging pre-fix)"
+            );
+        }
+    }
 }
