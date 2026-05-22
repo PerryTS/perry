@@ -56,12 +56,6 @@
     "category": "bug-open",
     "reason": "node:perf_hooks: measure detail is not structured-cloned (same root as mark — #1340 covers both). Flips to PASS when #1340 lands."
   },
-  "node-suite/perf_hooks/observer/supported-entry-types": {
-    "issue": "1341",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: PerformanceObserver.supportedEntryTypes.includes('mark'/'measure') is not usable (static array membership). Flips to PASS when #1341 lands."
-  },
   "node-suite/perf_hooks/entry/to-json": {
     "issue": "1387",
     "added": "2026-05-22",
