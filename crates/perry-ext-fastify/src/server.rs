@@ -28,8 +28,9 @@ use perry_ffi::{
     JsClosure, JsValue, RawClosureHeader, StringHeader,
 };
 
-use crate::app::{ClosurePtr, FastifyApp, Route};
+use crate::app::{ClosurePtr, FastifyApp};
 use crate::context::{extract_buffer_bytes, jsvalue_to_response_body, BodyKind, FastifyContext};
+use crate::router::RoutePattern;
 
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -47,6 +48,21 @@ enum HookOutcome {
     Continue,
     Sent,
     Error(f64),
+}
+
+#[derive(Clone)]
+struct RouteMatcher {
+    method: String,
+    pattern: RoutePattern,
+}
+
+impl RouteMatcher {
+    fn from_route(route: &crate::app::Route) -> Self {
+        Self {
+            method: route.method.clone(),
+            pattern: route.pattern.clone(),
+        }
+    }
 }
 
 // Runtime symbols not yet wrapped by perry-ffi — we declare them
@@ -222,12 +238,17 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
     let request_tx = Arc::new(request_tx);
     let upgrade_tx = Arc::new(upgrade_tx);
 
-    // Snapshot the current routes for the server task — routes added
-    // after `listen()` returns are not picked up by this snapshot
-    // (matches perry-stdlib's existing semantics).
+    // Snapshot only route-matching metadata for the server task. Handler
+    // closure pointers stay in the FastifyApp handle and are read by the
+    // main-thread pump during dispatch.
     let routes_arc = Arc::new(
         get_handle::<FastifyApp>(app_handle)
-            .map(|app| app.routes.clone())
+            .map(|app| {
+                app.routes
+                    .iter()
+                    .map(RouteMatcher::from_route)
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default(),
     );
 
@@ -512,7 +533,7 @@ async fn handle_request(
     req: Request<Incoming>,
     request_tx: Arc<mpsc::Sender<FastifyPendingRequest>>,
     upgrade_tx: Arc<mpsc::Sender<FastifyPendingUpgrade>>,
-    routes: Arc<Vec<Route>>,
+    routes: Arc<Vec<RouteMatcher>>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().to_string();
     let uri = req.uri();
