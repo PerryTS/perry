@@ -156,6 +156,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // `new (PerformanceObserver as any)(cb?)` — the `as any` cast
+            // (used because no-arg construction is a TS type error) strips the
+            // bare identifier, so the constructor arrives as
+            // `NewDynamic { callee: PropertyGet { NativeModuleRef("perf_hooks"),
+            // "PerformanceObserver" } }` instead of the special-cased `New`
+            // handled in lower_call/builtin.rs. Route to the same runtime
+            // registrar so the no-callback TypeError (and normal construction)
+            // fire. Refs #1388.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if property == "PerformanceObserver" {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "perf_hooks" {
+                            let cb = if args.is_empty() {
+                                crate::nanbox::double_literal(f64::from_bits(
+                                    crate::nanbox::TAG_UNDEFINED,
+                                ))
+                            } else {
+                                lower_expr(ctx, &args[0])?
+                            };
+                            return Ok(ctx.block().call(
+                                DOUBLE,
+                                "js_perf_observer_new",
+                                &[(DOUBLE, &cb)],
+                            ));
+                        }
+                    }
+                }
+            }
+
             // Refs #740: `new O.Inner(args)` where `O` is an object
             // literal whose `Inner` field was initialized from a class
             // expression. The Stmt::Let lowering populates

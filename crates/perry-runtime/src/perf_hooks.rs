@@ -554,11 +554,23 @@ unsafe fn make_observer_object(id: usize) -> f64 {
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
+/// True if `v` is callable (matches `typeof v === "function"`) — covers
+/// closures, V8 handles, and class refs uniformly.
+unsafe fn is_function_value(v: f64) -> bool {
+    let p = crate::builtins::js_value_typeof(v) as *const StringHeader;
+    header_to_string(p) == "function"
+}
+
 /// `new PerformanceObserver(callback)` — register the observer and return its
-/// namespace object.
+/// namespace object. Throws a TypeError when `callback` is not a function
+/// (Node: ERR_INVALID_ARG_TYPE), including the no-argument
+/// `new PerformanceObserver()` form.
 #[no_mangle]
 pub extern "C" fn js_perf_observer_new(cb: f64) -> f64 {
     unsafe {
+        if !is_function_value(cb) {
+            throw_type_error("The \"callback\" argument must be of type function");
+        }
         let id = OBSERVERS.with(|o| {
             let mut o = o.borrow_mut();
             o.push(Observer {
