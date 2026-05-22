@@ -1,5 +1,8 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
-use perry_hir::{Expr, Function, Interface, InterfaceProperty, Module, ModuleInitKind, Stmt};
+use perry_hir::{
+    BinaryOp, CompareOp, Expr, Function, Interface, InterfaceProperty, Module, ModuleInitKind,
+    Stmt, UpdateOp,
+};
 use perry_types::{ObjectType, PropertyInfo, Type};
 
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -139,8 +142,296 @@ fn ir_for(module: Module) -> String {
     String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap()
 }
 
+fn block_between<'a>(ir: &'a str, start: &str, end: &str) -> &'a str {
+    let start_pos = ir
+        .find(start)
+        .unwrap_or_else(|| panic!("IR should contain block marker {start}"));
+    let block_ir = &ir[start_pos + 1..];
+    let end_pos = block_ir
+        .find(end)
+        .unwrap_or_else(|| panic!("IR block starting at {start} should precede {end}"));
+    &block_ir[..end_pos]
+}
+
 fn point_module(name: &str, body: Vec<Stmt>) -> Module {
     base_module(name, body, Vec::new())
+}
+
+#[test]
+fn numeric_array_literal_avoids_layout_note_calls() {
+    let module = base_module(
+        "numeric_array_literal.ts",
+        vec![Stmt::Return(Some(Expr::Array(vec![
+            Expr::Number(1.0),
+            Expr::Number(2.0),
+            Expr::Number(3.0),
+        ])))],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        !ir.contains("call void @js_gc_note_slot_layout"),
+        "all-numeric array literals should keep the initial pointer-free layout without slot notes"
+    );
+}
+
+#[test]
+fn mixed_array_literal_emits_layout_note_calls() {
+    let module = base_module(
+        "mixed_array_literal.ts",
+        vec![Stmt::Return(Some(Expr::Array(vec![
+            Expr::Number(1.0),
+            Expr::String("heap".to_string()),
+        ])))],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        ir.contains("call void @js_gc_note_slot_layout"),
+        "mixed array literals should note pointer-bearing slots"
+    );
+}
+
+#[test]
+fn number_typed_local_array_literal_keeps_runtime_layout_note() {
+    let module = base_module(
+        "number_typed_local_array_literal.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "v".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::String("heap".to_string())),
+            },
+            Stmt::Return(Some(Expr::Array(vec![Expr::LocalGet(1)]))),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        ir.contains("call void @js_gc_note_slot_layout"),
+        "a number-typed local is not runtime proof that the value is pointer-free"
+    );
+}
+
+#[test]
+fn number_typed_local_array_push_keeps_layout_note_and_barrier() {
+    let module = base_module(
+        "number_typed_local_array_push.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "v".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::String("heap".to_string())),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "arr".to_string(),
+                ty: Type::Array(Box::new(Type::Number)),
+                mutable: true,
+                init: Some(Expr::Array(Vec::new())),
+            },
+            Stmt::Expr(Expr::ArrayPush {
+                array_id: 2,
+                value: Box::new(Expr::LocalGet(1)),
+            }),
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    let inbounds_pos = ir
+        .find("\napush.inbounds.")
+        .expect("local array push should emit an optimized in-bounds block");
+    let push_ir = &ir[inbounds_pos + 1..];
+    let inbounds_end = push_ir
+        .find("\napush.realloc.")
+        .expect("in-bounds push block should precede the realloc block");
+    let inbounds_ir = &push_ir[..inbounds_end];
+
+    assert!(
+        inbounds_ir.contains("call void @js_gc_note_slot_layout"),
+        "number-typed LocalGet stores must keep runtime layout notes"
+    );
+    assert!(
+        inbounds_ir.contains("call void @js_write_barrier_slot"),
+        "number-typed LocalGet stores must keep write barriers"
+    );
+}
+
+#[test]
+fn bounded_integer_array_store_omits_layout_note_and_barrier() {
+    let module = base_module(
+        "bounded_integer_array_store.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "arr".to_string(),
+                ty: Type::Array(Box::new(Type::Number)),
+                mutable: true,
+                init: Some(Expr::Array(vec![
+                    Expr::Number(0.0),
+                    Expr::Number(0.0),
+                    Expr::Number(0.0),
+                ])),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 2,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(2)),
+                    right: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(1)),
+                        property: "length".to_string(),
+                    }),
+                }),
+                update: Some(Expr::Update {
+                    id: 2,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::IndexSet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::LocalGet(2)),
+                    value: Box::new(Expr::LocalGet(2)),
+                })],
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    let body_ir = block_between(&ir, "\nfor.body.", "\nfor.update.");
+
+    assert!(
+        body_ir.contains("store double"),
+        "bounded array store should emit a direct element store"
+    );
+    assert!(
+        !body_ir.contains("call void @js_gc_note_slot_layout"),
+        "integer LocalGet store into a numeric array should not update slot layout"
+    );
+    assert!(
+        !body_ir.contains("call void @js_write_barrier_slot"),
+        "integer LocalGet store into a numeric array should not emit a slot barrier"
+    );
+}
+
+#[test]
+fn integer_arithmetic_array_push_omits_inbounds_layout_note_and_barrier() {
+    let module = base_module(
+        "integer_arithmetic_array_push.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "arr".to_string(),
+                ty: Type::Array(Box::new(Type::Number)),
+                mutable: true,
+                init: Some(Expr::Array(Vec::new())),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 2,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(2)),
+                    right: Box::new(Expr::Integer(8)),
+                }),
+                update: Some(Expr::Update {
+                    id: 2,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::ArrayPush {
+                    array_id: 1,
+                    value: Box::new(Expr::Binary {
+                        op: BinaryOp::Mul,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(Expr::Number(1.5)),
+                    }),
+                })],
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    let inbounds_ir = block_between(&ir, "\napush.inbounds.", "\napush.realloc.");
+
+    assert!(
+        inbounds_ir.contains("store double"),
+        "optimized push should emit a direct in-bounds store"
+    );
+    assert!(
+        !inbounds_ir.contains("call void @js_gc_note_slot_layout"),
+        "integer arithmetic push value should not update slot layout"
+    );
+    assert!(
+        !inbounds_ir.contains("call void @js_write_barrier_slot"),
+        "integer arithmetic push value should not emit a slot barrier"
+    );
+}
+
+#[test]
+fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
+    let module = base_module(
+        "pointer_store_into_numeric_array.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "child".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Object(Vec::new())),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "arr".to_string(),
+                ty: Type::Array(Box::new(Type::Number)),
+                mutable: true,
+                init: Some(Expr::Array(vec![Expr::Number(0.0)])),
+            },
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(2)),
+                index: Box::new(Expr::Integer(0)),
+                value: Box::new(Expr::LocalGet(1)),
+            }),
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    let inbounds_ir = block_between(&ir, "\nidxset.inbounds.", "\nidxset.check_cap.");
+
+    assert!(
+        inbounds_ir.contains("call void @js_gc_note_slot_layout"),
+        "pointer stores into statically numeric arrays must update slot layout"
+    );
+    assert!(
+        inbounds_ir.contains("call void @js_write_barrier_slot"),
+        "pointer stores into statically numeric arrays must emit slot barriers"
+    );
 }
 
 #[test]

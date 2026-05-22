@@ -61,6 +61,7 @@ pub extern "C" fn js_object_alloc_with_parent(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         (*ptr).field_count = field_count;
+        // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
         (*ptr).keys_array = ptr::null_mut();
 
         // Initialize ALL allocated field slots to undefined (not just field_count)
@@ -68,6 +69,7 @@ pub extern "C" fn js_object_alloc_with_parent(
         // stale data from previously freed GC objects from bleeding through.
         let fields_ptr = (ptr as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
         for i in 0..alloc_field_count {
+            // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
@@ -94,6 +96,7 @@ pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut 
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = 0;
         (*ptr).field_count = field_count;
+        // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
         (*ptr).keys_array = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
@@ -125,6 +128,7 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         (*ptr).field_count = field_count;
+        // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
         (*ptr).keys_array = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
@@ -168,7 +172,7 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         (*ptr).field_count = field_count;
-        (*ptr).keys_array = keys_array;
+        set_object_keys_array(ptr, keys_array);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
     ptr
@@ -219,6 +223,7 @@ pub extern "C" fn js_build_class_keys_array(
             crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
         );
         unsafe {
+            // GC_STORE_AUDIT(BARRIERED): cached method-name array records layout immediately after.
             *elements_ptr.add(i) = nanboxed;
             crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
         }
@@ -296,7 +301,9 @@ pub extern "C" fn js_object_alloc_class_with_keys(
                 crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
             );
             unsafe {
+                // GC_STORE_AUDIT(BARRIERED): cached keys array slot is reflected into layout metadata.
                 *elements_ptr.add(i) = nanboxed;
+                crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
             }
         }
         shape_cache_insert(shape_id, arr);
@@ -304,7 +311,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     };
 
     unsafe {
-        (*ptr).keys_array = keys_arr;
+        set_object_keys_array(ptr, keys_arr);
     }
     ptr
 }
@@ -338,6 +345,7 @@ pub extern "C" fn js_object_alloc_with_shape(
         // Initialize all allocated field slots to undefined (including extra padding)
         let fields_ptr = (obj_ptr as *mut u8).add(header_size) as *mut JSValue;
         for i in 0..alloc_field_count {
+            // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
         crate::gc::layout_init_pointer_free(obj_ptr as *mut u8);
@@ -366,7 +374,9 @@ pub extern "C" fn js_object_alloc_with_shape(
                 crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
             );
             unsafe {
+                // GC_STORE_AUDIT(BARRIERED): cached keys array slot is reflected into layout metadata.
                 *elements_ptr.add(i) = nanboxed;
+                crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
             }
         }
         shape_cache_insert(shape_id, arr);
@@ -374,7 +384,7 @@ pub extern "C" fn js_object_alloc_with_shape(
     };
 
     unsafe {
-        (*obj_ptr).keys_array = keys_arr;
+        set_object_keys_array(obj_ptr, keys_arr);
     }
 
     obj_ptr
@@ -429,6 +439,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         (*new_ptr).field_count = 0;
         let fields_ptr = (new_ptr as *mut u8).add(header_size) as *mut u64;
         for i in 0..phys_slots as usize {
+            // GC_STORE_AUDIT(INIT): freshly allocated clone field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), crate::value::TAG_UNDEFINED);
         }
         crate::gc::layout_init_pointer_free(new_ptr as *mut u8);
@@ -469,10 +480,12 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         } else {
             field_val
         };
+        // GC_STORE_AUDIT(INIT): cloned object is unpublished; layout is rebuilt after field copy.
         ptr::write(dst_fields.add(i), cleaned);
     }
     // Initialize scratch slots to undefined
     for i in src_field_count as usize..phys_slots as usize {
+        // GC_STORE_AUDIT(INIT): cloned object scratch field slot is initialized pointer-free.
         ptr::write(dst_fields.add(i), crate::value::TAG_UNDEFINED);
     }
     rebuild_object_field_layout(new_ptr, src_field_count as usize);
@@ -489,6 +502,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         let src_key_elements = (src_keys_arr as *const u8).add(8) as *const f64;
         let copy_count = src_key_len.min(src_field_count as usize);
         for i in 0..copy_count {
+            // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
             *new_keys_elements.add(i) = *src_key_elements.add(i);
         }
         (*new_keys_arr).length = copy_count as u32;

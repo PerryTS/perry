@@ -710,6 +710,17 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                                 Type::Named("Uint8Array".to_string())
                             }
                             "randomUUID" => Type::String,
+                            // `crypto.randomInt(...)` is an integer; typing it
+                            // as Number lets arithmetic / comparisons take the
+                            // numeric fast path.
+                            "randomInt" => Type::Number,
+                            // `crypto.getHashes()` / `getCiphers()` return
+                            // `string[]`. Typing the result as an array routes
+                            // `.includes` / `.indexOf` through the content-
+                            // comparison path (otherwise an `any`-typed result
+                            // uses pointer-identity comparison and never
+                            // matches a freshly-allocated needle string).
+                            "getHashes" | "getCiphers" => Type::Array(Box::new(Type::String)),
                             _ => Type::Any,
                         };
                     }

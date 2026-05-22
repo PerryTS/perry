@@ -1286,9 +1286,7 @@ fn create_sub_namespace(name: &str) -> f64 {
 /// it survives every GC sweep — the cached pointer is shared across
 /// every `http.METHODS` / `https.METHODS` / `http2.METHODS` read.
 unsafe fn http_methods_array() -> f64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static CACHED: AtomicU64 = AtomicU64::new(0);
-    let cached = CACHED.load(Ordering::Relaxed);
+    let cached = HTTP_METHODS_CACHE.load(Ordering::Relaxed);
     if cached != 0 {
         return f64::from_bits(cached);
     }
@@ -1343,15 +1341,14 @@ unsafe fn http_methods_array() -> f64 {
         crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
     }
     let value = crate::value::js_nanbox_pointer(arr as i64);
-    CACHED.store(value.to_bits(), Ordering::Relaxed);
+    // GC_STORE_AUDIT(ROOT): HTTP_METHODS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
+    HTTP_METHODS_CACHE.store(value.to_bits(), Ordering::Relaxed);
     value
 }
 
 /// Create (and cache) the fs.constants object with POSIX file system constants.
 unsafe fn create_fs_constants_object() -> f64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static CACHED: AtomicU64 = AtomicU64::new(0);
-    let cached = CACHED.load(Ordering::Relaxed);
+    let cached = FS_CONSTANTS_CACHE.load(Ordering::Relaxed);
     if cached != 0 {
         return f64::from_bits(cached);
     }
@@ -1403,6 +1400,7 @@ unsafe fn create_fs_constants_object() -> f64 {
     }
 
     let result = crate::value::js_nanbox_pointer(obj as i64);
-    CACHED.store(result.to_bits(), Ordering::Relaxed);
+    // GC_STORE_AUDIT(ROOT): FS_CONSTANTS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
+    FS_CONSTANTS_CACHE.store(result.to_bits(), Ordering::Relaxed);
     result
 }

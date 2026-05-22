@@ -379,6 +379,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.block().store(DOUBLE, &v_dbl, &slot);
                     } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                         let g_ref = format!("@{}", global_name);
+                        // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
                         ctx.block().store(DOUBLE, &v_dbl, &g_ref);
                     }
                     if let Some(slot_idx) = ctx.shadow_slot_map.get(id).copied() {
@@ -453,6 +454,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                 let g_ref = format!("@{}", global_name);
+                // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
                 ctx.block().store(DOUBLE, &v, &g_ref);
             }
             // Soft fallback: drop the store on the floor for missing
@@ -535,6 +537,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 UpdateOp::Increment => blk.fadd(&old, "1.0"),
                 UpdateOp::Decrement => blk.fsub(&old, "1.0"),
             };
+            // GC_STORE_AUDIT(STACK): update writes a local alloca or registered module-global root slot.
             blk.store(DOUBLE, &new, &storage);
             // Keep the parallel i32 counter slot in sync (if active).
             // This costs one `add i32, 1` per iteration but saves a

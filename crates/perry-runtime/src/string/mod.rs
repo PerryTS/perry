@@ -59,6 +59,7 @@ pub use concat::{
 pub(crate) use format::fix_exponent_format;
 pub use format::{
     js_number_to_exponential, js_number_to_fixed, js_number_to_precision, js_number_to_string,
+    scan_small_int_cache_roots, scan_small_int_cache_roots_mut,
 };
 pub use intern::{js_string_intern, scan_intern_table_roots, scan_intern_table_roots_mut};
 pub use io::{js_string_error, js_string_print, js_string_warn};
@@ -73,6 +74,11 @@ pub use split::{js_string_split, js_string_split_n};
 #[cfg(test)]
 pub(crate) use intern::{
     test_clear_intern_table_root, test_intern_table_root, test_seed_intern_table_root,
+};
+
+#[cfg(test)]
+pub(crate) use format::{
+    test_clear_small_int_cache_root, test_seed_small_int_cache_root, test_small_int_cache_root,
 };
 
 /// Flag: string bytes contain WTF-8 lone-surrogate sequences (U+D800..U+DFFF).

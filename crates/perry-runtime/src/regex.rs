@@ -349,39 +349,42 @@ pub extern "C" fn js_string_match(
                     return ptr::null_mut();
                 }
                 let arr = crate::array::js_array_alloc(matches.len() as u32);
-                (*arr).length = matches.len() as u32;
-                let elements_ptr =
-                    (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let arr_handle = scope.root_raw_mut_ptr(arr);
+                (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = matches.len() as u32;
                 for (i, m) in matches.iter().enumerate() {
                     let str_ptr = js_string_from_str(m);
                     let nanboxed = js_nanbox_string(str_ptr as i64);
-                    std::ptr::write(elements_ptr.add(i), nanboxed);
-                    crate::array::note_array_slot(arr, i, nanboxed.to_bits());
+                    let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                    // GC_STORE_AUDIT(BARRIERED): regex match array slot uses the shared array slot-store helper.
+                    crate::array::store_array_slot(arr, i, nanboxed.to_bits());
                 }
-                return arr;
+                return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
             } else {
                 // Non-global: first match + capture groups (parallels the
                 // standard-regex non-global branch below).
                 match fre.captures(str_data) {
                     Ok(Some(caps)) => {
                         let arr = crate::array::js_array_alloc(caps.len() as u32);
-                        (*arr).length = caps.len() as u32;
-                        let elements_ptr =
-                            (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                        let scope = crate::gc::RuntimeHandleScope::new();
+                        let arr_handle = scope.root_raw_mut_ptr(arr);
+                        (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
                         for i in 0..caps.len() {
                             if let Some(m) = caps.get(i) {
                                 let str_ptr = js_string_from_str(m.as_str());
                                 let nanboxed = js_nanbox_string(str_ptr as i64);
-                                std::ptr::write(elements_ptr.add(i), nanboxed);
-                                crate::array::note_array_slot(arr, i, nanboxed.to_bits());
+                                let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                                // GC_STORE_AUDIT(BARRIERED): regex capture array slot uses the shared array slot-store helper.
+                                crate::array::store_array_slot(arr, i, nanboxed.to_bits());
                             } else {
                                 let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
-                                std::ptr::write(elements_ptr.add(i), undefined);
-                                crate::array::note_array_slot(arr, i, undefined.to_bits());
+                                let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                                // GC_STORE_AUDIT(BARRIERED): regex unmatched capture slot uses the shared array slot-store helper.
+                                crate::array::store_array_slot(arr, i, undefined.to_bits());
                             }
                         }
                         LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-                        return arr;
+                        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
                     }
                     _ => {
                         LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
@@ -401,38 +404,42 @@ pub extern "C" fn js_string_match(
 
             // Create array of string pointers
             let arr = crate::array::js_array_alloc(matches.len() as u32);
-            (*arr).length = matches.len() as u32;
-            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let arr_handle = scope.root_raw_mut_ptr(arr);
+            (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = matches.len() as u32;
 
             for (i, m) in matches.iter().enumerate() {
                 let str_ptr = js_string_from_str(m);
                 let nanboxed = js_nanbox_string(str_ptr as i64);
-                std::ptr::write(elements_ptr.add(i), nanboxed);
-                crate::array::note_array_slot(arr, i, nanboxed.to_bits());
+                let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                // GC_STORE_AUDIT(BARRIERED): regex global match array slot uses the shared array slot-store helper.
+                crate::array::store_array_slot(arr, i, nanboxed.to_bits());
             }
 
-            arr
+            arr_handle.get_raw_mut_ptr::<ArrayHeader>()
         } else {
             // Non-global: return first match only (or with capture groups)
             match regex.captures(str_data) {
                 Some(caps) => {
                     // Return array with full match and capture groups
                     let arr = crate::array::js_array_alloc(caps.len() as u32);
-                    (*arr).length = caps.len() as u32;
-                    let elements_ptr =
-                        (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let arr_handle = scope.root_raw_mut_ptr(arr);
+                    (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
 
                     for (i, cap) in caps.iter().enumerate() {
                         if let Some(m) = cap {
                             let str_ptr = js_string_from_str(m.as_str());
                             let nanboxed = js_nanbox_string(str_ptr as i64);
-                            std::ptr::write(elements_ptr.add(i), nanboxed);
-                            crate::array::note_array_slot(arr, i, nanboxed.to_bits());
+                            let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                            // GC_STORE_AUDIT(BARRIERED): regex capture array slot uses the shared array slot-store helper.
+                            crate::array::store_array_slot(arr, i, nanboxed.to_bits());
                         } else {
                             // Undefined capture group - store as undefined (TAG_UNDEFINED = 0x7FFC_0000_0000_0001)
                             let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
-                            std::ptr::write(elements_ptr.add(i), undefined);
-                            crate::array::note_array_slot(arr, i, undefined.to_bits());
+                            let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                            // GC_STORE_AUDIT(BARRIERED): regex unmatched capture slot uses the shared array slot-store helper.
+                            crate::array::store_array_slot(arr, i, undefined.to_bits());
                         }
                     }
 
@@ -463,6 +470,7 @@ pub extern "C" fn js_string_match(
                         // `.match(/(?<id>...)/)` made the second result expose
                         // `.year` instead of `.id`).
                         let groups_obj = crate::object::js_object_alloc(0, 0);
+                        let groups_handle = scope.root_raw_mut_ptr(groups_obj);
                         for (name, m) in &group_names {
                             let val = if let Some(m) = m {
                                 let str_ptr = js_string_from_str(m.as_str());
@@ -474,14 +482,19 @@ pub extern "C" fn js_string_match(
                                 name.as_ptr(),
                                 name.len() as u32,
                             );
+                            let groups_obj =
+                                groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
                             crate::object::js_object_set_field_by_name(groups_obj, key_ptr, val);
                         }
-                        LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = groups_obj);
+                        LAST_EXEC_GROUPS.with(|g| {
+                            *g.borrow_mut() =
+                                groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()
+                        });
                     } else {
                         LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
                     }
 
-                    arr
+                    arr_handle.get_raw_mut_ptr::<ArrayHeader>()
                 }
                 None => {
                     LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
@@ -518,27 +531,30 @@ pub extern "C" fn js_string_match_all(
 
         // Create outer array (one entry per match)
         let outer = crate::array::js_array_alloc(all_caps.len() as u32);
-        (*outer).length = all_caps.len() as u32;
-        let outer_elements = (outer as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let outer_handle = scope.root_raw_mut_ptr(outer);
+        (*outer_handle.get_raw_mut_ptr::<ArrayHeader>()).length = all_caps.len() as u32;
 
         for (i, caps) in all_caps.iter().enumerate() {
             // Create inner array for this match (full match + capture groups)
             let inner = crate::array::js_array_alloc(caps.len() as u32);
-            (*inner).length = caps.len() as u32;
-            let inner_elements =
-                (inner as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            let inner_scope = crate::gc::RuntimeHandleScope::new();
+            let inner_handle = inner_scope.root_raw_mut_ptr(inner);
+            (*inner_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
 
             for (j, cap) in caps.iter().enumerate() {
                 if let Some(m) = cap {
                     let str_ptr = js_string_from_str(m.as_str());
                     let nanboxed = js_nanbox_string(str_ptr as i64);
-                    std::ptr::write(inner_elements.add(j), nanboxed);
-                    crate::array::note_array_slot(inner, j, nanboxed.to_bits());
+                    let inner = inner_handle.get_raw_mut_ptr::<ArrayHeader>();
+                    // GC_STORE_AUDIT(BARRIERED): regex nested capture slot uses the shared array slot-store helper.
+                    crate::array::store_array_slot(inner, j, nanboxed.to_bits());
                 } else {
                     // Undefined capture group
                     let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
-                    std::ptr::write(inner_elements.add(j), undefined);
-                    crate::array::note_array_slot(inner, j, undefined.to_bits());
+                    let inner = inner_handle.get_raw_mut_ptr::<ArrayHeader>();
+                    // GC_STORE_AUDIT(BARRIERED): regex unmatched nested capture slot uses the shared array slot-store helper.
+                    crate::array::store_array_slot(inner, j, undefined.to_bits());
                 }
             }
 
@@ -547,12 +563,14 @@ pub extern "C" fn js_string_match_all(
             // double whose bits happen to alias the heap pointer; the codegen
             // IndexGet path then reads `arr[i]` as a plain number and crashes
             // when iterating with `for (const m of arr) m[1]`.
+            let inner = inner_handle.get_raw_mut_ptr::<ArrayHeader>();
             let inner_boxed = crate::value::js_nanbox_pointer(inner as i64);
-            std::ptr::write(outer_elements.add(i), inner_boxed);
-            crate::array::note_array_slot(outer, i, inner_boxed.to_bits());
+            let outer = outer_handle.get_raw_mut_ptr::<ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): regex nested result slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(outer, i, inner_boxed.to_bits());
         }
 
-        outer
+        outer_handle.get_raw_mut_ptr::<ArrayHeader>()
     }
 }
 
@@ -680,40 +698,44 @@ pub extern "C" fn js_string_split_regex_n(
     if limit == 0 {
         return crate::array::js_array_alloc(0);
     }
-    let str_data = string_as_str(s);
+    let str_data = string_as_str(s).to_owned();
 
     if !is_valid_regex_ptr(re) {
         // No regex: return array with the whole string as a single element
         let arr = crate::array::js_array_alloc(1);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        let str_ptr = js_string_from_str(&str_data) as u64;
+        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         unsafe {
             (*arr).length = 1;
-            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-            let str_ptr = js_string_from_str(str_data) as u64;
             let nanboxed = STRING_TAG | (str_ptr & POINTER_MASK);
-            std::ptr::write(elements_ptr, f64::from_bits(nanboxed));
-            crate::array::note_array_slot(arr, 0, nanboxed);
+            // GC_STORE_AUDIT(BARRIERED): regex split fallback slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(arr, 0, nanboxed);
         }
-        return arr;
+        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     }
 
     unsafe {
         let regex = &*(*re).regex_ptr;
-        let mut parts: Vec<&str> = regex.split(str_data).collect();
+        let mut parts: Vec<&str> = regex.split(&str_data).collect();
         if limit > 0 && (parts.len() as i64) > (limit as i64) {
             parts.truncate(limit as usize);
         }
 
         let arr = crate::array::js_array_alloc(parts.len() as u32);
-        (*arr).length = parts.len() as u32;
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = parts.len() as u32;
 
         for (i, part) in parts.iter().enumerate() {
             let str_ptr = js_string_from_str(part) as u64;
+            let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
             let nanboxed = STRING_TAG | (str_ptr & POINTER_MASK);
-            std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
-            crate::array::note_array_slot(arr, i, nanboxed);
+            // GC_STORE_AUDIT(BARRIERED): regex split result slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(arr, i, nanboxed);
         }
-        arr
+        arr_handle.get_raw_mut_ptr::<ArrayHeader>()
     }
 }
 
@@ -810,25 +832,23 @@ pub extern "C" fn js_regexp_exec(
                     let match_byte_offset = full.start() + search_start_byte;
                     let match_char_offset = str_data[..match_byte_offset].chars().count();
                     let match_str = full.as_str();
+                    let arr = crate::array::js_array_alloc_with_length(1);
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let arr_handle = scope.root_raw_mut_ptr(arr);
                     let match_ptr = crate::string::js_string_from_bytes(
                         match_str.as_ptr(),
                         match_str.len() as u32,
                     );
-                    let arr = crate::array::js_array_alloc_with_length(1);
-                    let elements = (arr as *mut u8).add(8) as *mut f64;
-                    *elements = f64::from_bits(
-                        crate::value::STRING_TAG | (match_ptr as u64 & crate::value::POINTER_MASK),
-                    );
-                    crate::array::note_array_slot(
-                        arr,
-                        0,
-                        crate::value::STRING_TAG | (match_ptr as u64 & crate::value::POINTER_MASK),
-                    );
+                    let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                    let match_bits =
+                        crate::value::STRING_TAG | (match_ptr as u64 & crate::value::POINTER_MASK);
+                    // GC_STORE_AUDIT(BARRIERED): regex exec fancy match slot uses the shared array slot-store helper.
+                    crate::array::store_array_slot(arr, 0, match_bits);
                     if global {
                         (*re).last_index = (match_char_offset + match_str.chars().count()) as u32;
                     }
                     LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = match_char_offset as f64);
-                    return Some(arr);
+                    return Some(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
                 }
                 return Some(ptr::null_mut()); // fancy-regex tried but no match
             }
@@ -859,21 +879,22 @@ pub extern "C" fn js_regexp_exec(
 
                 // Create match array: [fullMatch, group1, group2, ...]
                 let arr = crate::array::js_array_alloc(caps.len() as u32);
-                (*arr).length = caps.len() as u32;
-                let elements_ptr = (arr as *mut u8)
-                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                    as *mut f64;
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let arr_handle = scope.root_raw_mut_ptr(arr);
+                (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
 
                 for (i, cap) in caps.iter().enumerate() {
                     if let Some(m) = cap {
                         let str_ptr = js_string_from_str(m.as_str());
                         let nanboxed = js_nanbox_string(str_ptr as i64);
-                        std::ptr::write(elements_ptr.add(i), nanboxed);
-                        crate::array::note_array_slot(arr, i, nanboxed.to_bits());
+                        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                        // GC_STORE_AUDIT(BARRIERED): regex exec capture slot uses the shared array slot-store helper.
+                        crate::array::store_array_slot(arr, i, nanboxed.to_bits());
                     } else {
                         let undefined = f64::from_bits(TAG_UNDEFINED);
-                        std::ptr::write(elements_ptr.add(i), undefined);
-                        crate::array::note_array_slot(arr, i, TAG_UNDEFINED);
+                        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                        // GC_STORE_AUDIT(BARRIERED): regex exec unmatched capture slot uses the shared array slot-store helper.
+                        crate::array::store_array_slot(arr, i, undefined.to_bits());
                     }
                 }
 
@@ -899,6 +920,7 @@ pub extern "C" fn js_regexp_exec(
                         packed_keys.as_ptr(),
                         packed_keys.len() as u32,
                     );
+                    let groups_handle = scope.root_raw_mut_ptr(groups_obj);
                     for (idx, (_, m)) in group_names.iter().enumerate() {
                         let val = if let Some(m) = m {
                             let str_ptr = js_string_from_str(m.as_str());
@@ -907,14 +929,19 @@ pub extern "C" fn js_regexp_exec(
                         } else {
                             crate::value::JSValue::undefined()
                         };
+                        let groups_obj =
+                            groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
                         crate::object::js_object_set_field(groups_obj, idx as u32, val);
                     }
-                    LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = groups_obj);
+                    LAST_EXEC_GROUPS.with(|g| {
+                        *g.borrow_mut() =
+                            groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()
+                    });
                 } else {
                     LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
                 }
 
-                arr
+                arr_handle.get_raw_mut_ptr::<ArrayHeader>()
             }
             None => {
                 if global {

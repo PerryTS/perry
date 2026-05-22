@@ -1197,7 +1197,17 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
         .arg("--features")
         .arg(format!("{}/geisterhand", ui_crate))
         .arg("-p")
-        .arg("perry-ui-geisterhand");
+        .arg("perry-ui-geisterhand")
+        // Build perry-stdlib in the same invocation so the geisterhand lib
+        // set is complete and its shared `perry-runtime` is hash-consistent
+        // with the runtime/ui libs above (a separate `cargo build -p
+        // perry-stdlib` would resolve `perry-runtime` without the geisterhand
+        // feature → a second runtime variant → undefined-symbol link errors).
+        // Without stdlib here, apps that pull native-FFI packages depending on
+        // perry-stdlib's async surface (`perry_ffi_promise_*`) had no
+        // consistent stdlib to link against under --enable-geisterhand (#1383).
+        .arg("-p")
+        .arg("perry-stdlib");
 
     // Add cross-compilation target if needed
     if let Some(triple) = rust_target_triple(target) {

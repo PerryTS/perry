@@ -19,16 +19,51 @@ unsafe fn coerce_to_bigint_ptr(val: f64) -> *mut crate::bigint::BigIntHeader {
     }
 }
 
+type BigIntBinaryOp = extern "C" fn(
+    *const crate::bigint::BigIntHeader,
+    *const crate::bigint::BigIntHeader,
+) -> *mut crate::bigint::BigIntHeader;
+
+#[inline]
+unsafe fn coerce_to_bigint_handle<'scope>(
+    scope: &'scope crate::gc::RuntimeHandleScope,
+    value: &crate::gc::RuntimeHandle<'scope>,
+) -> crate::gc::RuntimeHandle<'scope> {
+    let ptr = coerce_to_bigint_ptr(value.get_nanbox_f64());
+    scope.root_bigint_ptr(ptr as *const crate::bigint::BigIntHeader)
+}
+
+#[inline]
+unsafe fn dynamic_bigint_binary_op(a: f64, b: f64, op: BigIntBinaryOp) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a_handle = scope.root_nanbox_f64(a);
+    let b_handle = scope.root_nanbox_f64(b);
+    dynamic_bigint_binary_op_from_handles(&scope, &a_handle, &b_handle, op)
+}
+
+#[inline]
+unsafe fn dynamic_bigint_binary_op_from_handles<'scope>(
+    scope: &'scope crate::gc::RuntimeHandleScope,
+    a: &crate::gc::RuntimeHandle<'scope>,
+    b: &crate::gc::RuntimeHandle<'scope>,
+    op: BigIntBinaryOp,
+) -> f64 {
+    let a_bigint = coerce_to_bigint_handle(scope, a);
+    let b_bigint = coerce_to_bigint_handle(scope, b);
+    let result = op(
+        a_bigint.get_raw_const_ptr::<crate::bigint::BigIntHeader>(),
+        b_bigint.get_raw_const_ptr::<crate::bigint::BigIntHeader>(),
+    );
+    js_nanbox_bigint(result as i64)
+}
+
 /// Dynamic multiply: BigInt * BigInt if either operand is BigInt, else f64 * f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_mul(a: f64, b: f64) -> f64 {
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
-        let a_ptr = coerce_to_bigint_ptr(a) as *const _;
-        let b_ptr = coerce_to_bigint_ptr(b) as *const _;
-        let result = crate::bigint::js_bigint_mul(a_ptr, b_ptr);
-        return js_nanbox_bigint(result as i64);
+        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_mul);
     }
     a * b
 }
@@ -39,11 +74,7 @@ pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
-        let result = crate::bigint::js_bigint_add(
-            coerce_to_bigint_ptr(a) as *const _,
-            coerce_to_bigint_ptr(b) as *const _,
-        );
-        return js_nanbox_bigint(result as i64);
+        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_add);
     }
     a + b
 }
@@ -60,8 +91,11 @@ pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
 /// the results — turning `"c" + ""` into `NaN + 0 = NaN`).
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 {
-    let a_val = JSValue::from_bits(a.to_bits());
-    let b_val = JSValue::from_bits(b.to_bits());
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a_handle = scope.root_nanbox_f64(a);
+    let b_handle = scope.root_nanbox_f64(b);
+    let a_val = JSValue::from_bits(a_handle.get_nanbox_f64().to_bits());
+    let b_val = JSValue::from_bits(b_handle.get_nanbox_f64().to_bits());
 
     // String concat takes priority: either operand being a string forces
     // ToPrimitive on the other side via the spec's "if either is a string,
@@ -71,40 +105,48 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     // other operand to string via js_jsvalue_to_string when it ISN'T a
     // string.
     if a_val.is_any_string() || b_val.is_any_string() {
-        let a_str = if a_val.is_any_string() {
-            js_get_string_pointer_unified(a) as *mut crate::string::StringHeader
+        let a_str = if JSValue::from_bits(a_handle.get_nanbox_f64().to_bits()).is_any_string() {
+            js_get_string_pointer_unified(a_handle.get_nanbox_f64())
+                as *const crate::string::StringHeader
         } else {
-            js_jsvalue_to_string(a)
+            js_jsvalue_to_string(a_handle.get_nanbox_f64()) as *const crate::string::StringHeader
         };
-        let b_str = if b_val.is_any_string() {
-            js_get_string_pointer_unified(b) as *mut crate::string::StringHeader
+        let a_str_handle = scope.root_string_ptr(a_str);
+        let b_str = if JSValue::from_bits(b_handle.get_nanbox_f64().to_bits()).is_any_string() {
+            js_get_string_pointer_unified(b_handle.get_nanbox_f64())
+                as *const crate::string::StringHeader
         } else {
-            js_jsvalue_to_string(b)
+            js_jsvalue_to_string(b_handle.get_nanbox_f64()) as *const crate::string::StringHeader
         };
-        let result = crate::string::js_string_concat(a_str, b_str);
+        let b_str_handle = scope.root_string_ptr(b_str);
+        let result = crate::string::js_string_concat(
+            a_str_handle.get_raw_const_ptr(),
+            b_str_handle.get_raw_const_ptr(),
+        );
         return f64::from_bits(JSValue::string_ptr(result).bits());
     }
 
     // BigInt: same as js_dynamic_add.
     if a_val.is_bigint() || b_val.is_bigint() {
-        let result = crate::bigint::js_bigint_add(
-            coerce_to_bigint_ptr(a) as *const _,
-            coerce_to_bigint_ptr(b) as *const _,
+        return dynamic_bigint_binary_op_from_handles(
+            &scope,
+            &a_handle,
+            &b_handle,
+            crate::bigint::js_bigint_add,
         );
-        return js_nanbox_bigint(result as i64);
     }
 
     // Both numeric — coerce non-numbers (booleans, null, undefined) the
     // same way the static fallback path did.
     let a_num = if a_val.is_number() || a_val.is_int32() {
-        a
+        a_handle.get_nanbox_f64()
     } else {
-        crate::builtins::js_number_coerce(a)
+        crate::builtins::js_number_coerce(a_handle.get_nanbox_f64())
     };
     let b_num = if b_val.is_number() || b_val.is_int32() {
-        b
+        b_handle.get_nanbox_f64()
     } else {
-        crate::builtins::js_number_coerce(b)
+        crate::builtins::js_number_coerce(b_handle.get_nanbox_f64())
     };
     a_num + b_num
 }
@@ -115,11 +157,7 @@ pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
-        let result = crate::bigint::js_bigint_sub(
-            coerce_to_bigint_ptr(a) as *const _,
-            coerce_to_bigint_ptr(b) as *const _,
-        );
-        return js_nanbox_bigint(result as i64);
+        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_sub);
     }
     a - b
 }
@@ -130,11 +168,7 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
-        let result = crate::bigint::js_bigint_div(
-            coerce_to_bigint_ptr(a) as *const _,
-            coerce_to_bigint_ptr(b) as *const _,
-        );
-        return js_nanbox_bigint(result as i64);
+        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_div);
     }
     a / b
 }
@@ -145,11 +179,7 @@ pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
-        let result = crate::bigint::js_bigint_mod(
-            coerce_to_bigint_ptr(a) as *const _,
-            coerce_to_bigint_ptr(b) as *const _,
-        );
-        return js_nanbox_bigint(result as i64);
+        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_mod);
     }
     // Float modulo: a - trunc(a / b) * b
     a - (a / b).trunc() * b
@@ -160,7 +190,11 @@ pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
 pub unsafe extern "C" fn js_dynamic_neg(a: f64) -> f64 {
     let a_val = JSValue::from_bits(a.to_bits());
     if a_val.is_bigint() {
-        let result = crate::bigint::js_bigint_neg(a_val.as_bigint_ptr());
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let a_handle = scope.root_bigint_ptr(a_val.as_bigint_ptr());
+        let result = crate::bigint::js_bigint_neg(
+            a_handle.get_raw_const_ptr::<crate::bigint::BigIntHeader>(),
+        );
         return js_nanbox_bigint(result as i64);
     }
     -a
@@ -172,11 +206,7 @@ pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
-        let result = crate::bigint::js_bigint_shr(
-            coerce_to_bigint_ptr(a) as *const _,
-            coerce_to_bigint_ptr(b) as *const _,
-        );
-        return js_nanbox_bigint(result as i64);
+        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_shr);
     }
     // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
     // Rust `f64 as i32` saturates at i32::MAX for values >= 2^31, but JS wraps.
@@ -191,11 +221,7 @@ pub unsafe extern "C" fn js_dynamic_shl(a: f64, b: f64) -> f64 {
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
-        let result = crate::bigint::js_bigint_shl(
-            coerce_to_bigint_ptr(a) as *const _,
-            coerce_to_bigint_ptr(b) as *const _,
-        );
-        return js_nanbox_bigint(result as i64);
+        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_shl);
     }
     // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
     let ai = (a as i64) as i32;
@@ -209,11 +235,7 @@ pub unsafe extern "C" fn js_dynamic_bitand(a: f64, b: f64) -> f64 {
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
-        let result = crate::bigint::js_bigint_and(
-            coerce_to_bigint_ptr(a) as *const _,
-            coerce_to_bigint_ptr(b) as *const _,
-        );
-        return js_nanbox_bigint(result as i64);
+        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_and);
     }
     // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
     (((a as i64) as i32) & ((b as i64) as i32)) as f64
@@ -225,11 +247,7 @@ pub unsafe extern "C" fn js_dynamic_bitor(a: f64, b: f64) -> f64 {
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
-        let result = crate::bigint::js_bigint_or(
-            coerce_to_bigint_ptr(a) as *const _,
-            coerce_to_bigint_ptr(b) as *const _,
-        );
-        return js_nanbox_bigint(result as i64);
+        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_or);
     }
     // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
     (((a as i64) as i32) | ((b as i64) as i32)) as f64
@@ -241,11 +259,7 @@ pub unsafe extern "C" fn js_dynamic_bitxor(a: f64, b: f64) -> f64 {
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
-        let result = crate::bigint::js_bigint_xor(
-            coerce_to_bigint_ptr(a) as *const _,
-            coerce_to_bigint_ptr(b) as *const _,
-        );
-        return js_nanbox_bigint(result as i64);
+        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_xor);
     }
     // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
     (((a as i64) as i32) ^ ((b as i64) as i32)) as f64

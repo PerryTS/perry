@@ -518,28 +518,7 @@ pub(super) fn sweep_malloc_objects() -> u64 {
                     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                     freed_bytes += total_size as u64;
                     layout_clear_for_ptr(user_ptr as usize);
-
-                    // For Maps, also free the separately-allocated entries array
-                    // and drop the lookup side-table entry so the next allocation
-                    // at this GC slot doesn't inherit stale key→index pairs.
-                    if (*header).obj_type == GC_TYPE_MAP {
-                        let map = user_ptr as *const crate::map::MapHeader;
-                        let entries = (*map).entries;
-                        if !entries.is_null() {
-                            let cap = (*map).capacity as usize;
-                            if cap > 0 {
-                                let ent_size = (cap * 16).max(8); // ENTRY_SIZE = 16
-                                let ent_layout = Layout::from_size_align(ent_size, 8).unwrap();
-                                dealloc(entries as *mut u8, ent_layout);
-                            }
-                        }
-                        crate::map::drop_map_index(user_ptr as usize);
-                    }
-                    if (*header).obj_type == GC_TYPE_PROMISE {
-                        let promise = user_ptr as *mut crate::promise::Promise;
-                        crate::async_hooks::enqueue_gc_destroy((*promise).async_id);
-                        crate::promise::clear_promise_context_for_gc(promise);
-                    }
+                    gc_type_finalize_unmarked_payload(obj_type, user_ptr);
 
                     let layout = Layout::from_size_align(total_size, 8).unwrap();
                     dealloc(header as *mut u8, layout);
@@ -576,7 +555,19 @@ pub(super) fn sweep_malloc_objects() -> u64 {
 /// in the original standalone age-bump pass (which used `pointer_in_old_gen`
 /// for the same gate).
 pub(super) fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
-    sweep_with_age_bump_and_old_reclaim(do_age_bump, false)
+    sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, false, None)
+}
+
+unsafe fn finalize_dead_arena_payload(
+    header: *mut GcHeader,
+    user_ptr: *mut u8,
+    overflow_active: bool,
+) {
+    layout_clear_for_ptr(user_ptr as usize);
+    if overflow_active {
+        gc_type_clear_dead_payload_side_tables((*header).obj_type, user_ptr as usize);
+    }
+    gc_type_finalize_unmarked_payload((*header).obj_type, user_ptr);
 }
 
 pub(super) unsafe fn invalidate_dead_old_arena_header(header: *mut GcHeader, total_size: usize) {
@@ -589,6 +580,21 @@ pub(super) unsafe fn invalidate_dead_old_arena_header(header: *mut GcHeader, tot
 pub(super) fn sweep_with_age_bump_and_old_reclaim(
     do_age_bump: bool,
     reclaim_dead_old_blocks: bool,
+) -> SweepTraceStats {
+    sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, reclaim_dead_old_blocks, None)
+}
+
+pub(super) fn sweep_with_age_bump_and_targeted_old_reclaim(
+    do_age_bump: bool,
+    selected_old_blocks: &crate::fast_hash::PtrHashSet<usize>,
+) -> SweepTraceStats {
+    sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, false, Some(selected_old_blocks))
+}
+
+fn sweep_with_age_bump_and_old_reclaim_targets(
+    do_age_bump: bool,
+    reclaim_dead_old_blocks: bool,
+    targeted_old_blocks: Option<&crate::fast_hash::PtrHashSet<usize>>,
 ) -> SweepTraceStats {
     let mut freed_bytes = sweep_malloc_objects();
     let mut retained_forwarded_stub_objects: usize = 0;
@@ -687,10 +693,7 @@ pub(super) fn sweep_with_age_bump_and_old_reclaim(
                 }
                 let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
-                layout_clear_for_ptr(user_ptr as usize);
-                if overflow_active && (*header).obj_type == GC_TYPE_OBJECT {
-                    crate::object::clear_overflow_for_ptr(user_ptr as usize);
-                }
+                finalize_dead_arena_payload(header, user_ptr, overflow_active);
                 if reclaim_dead_old_blocks && dead_old {
                     invalidate_dead_old_arena_header(header, total_size);
                 }
@@ -761,8 +764,11 @@ pub(super) fn sweep_with_age_bump_and_old_reclaim(
                     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                     freed_bytes += total_size as u64;
                     layout_clear_for_ptr(user_ptr as usize);
-                    if overflow_active && (*header).obj_type == GC_TYPE_OBJECT {
-                        crate::object::clear_overflow_for_ptr(user_ptr as usize);
+                    if overflow_active {
+                        gc_type_clear_dead_payload_side_tables(
+                            (*header).obj_type,
+                            user_ptr as usize,
+                        );
                     }
                     if reclaim_dead_old_blocks && dead_old {
                         invalidate_dead_old_arena_header(header, total_size);
@@ -785,11 +791,7 @@ pub(super) fn sweep_with_age_bump_and_old_reclaim(
                 }
                 let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
-                layout_clear_for_ptr(user_ptr as usize);
-
-                if overflow_active && (*header).obj_type == GC_TYPE_OBJECT {
-                    crate::object::clear_overflow_for_ptr(user_ptr as usize);
-                }
+                finalize_dead_arena_payload(header, user_ptr, overflow_active);
 
                 // Note: We deliberately do NOT zero the dead object's
                 // payload here. trace_object/trace_array/trace_closure
@@ -859,6 +861,8 @@ pub(super) fn sweep_with_age_bump_and_old_reclaim(
     };
     let old_reset = if reclaim_dead_old_blocks {
         crate::arena::old_arena_reclaim_dead_blocks(&block_has_live)
+    } else if let Some(selected_old_blocks) = targeted_old_blocks {
+        crate::arena::old_arena_reclaim_selected_dead_blocks(&block_has_live, selected_old_blocks)
     } else {
         crate::arena::ArenaResetStats::default()
     };
@@ -1011,12 +1015,7 @@ pub(super) fn evacuate_tenured_nursery_objects_collecting(
             (*new_header)._reserved = (*header)._reserved;
             layout_transfer(user_ptr, new_user);
             (*new_header).gc_flags |= GC_FLAG_MARKED;
-            if (*header).obj_type == GC_TYPE_CLOSURE {
-                crate::closure::closure_dynamic_props_owner_moved(
-                    user_ptr as usize,
-                    new_user as usize,
-                );
-            }
+            gc_type_after_payload_move((*header).obj_type, user_ptr as usize, new_user as usize);
             // Carry TENURED forward — the new copy is logically
             // the same object, just relocated. Without this the
             // age-bump pass on the next cycle would treat it as
@@ -1065,6 +1064,13 @@ pub(super) fn evacuate_selected_old_pages_collecting(
         return evacuated;
     }
 
+    let source_blocks = crate::arena::old_arena_source_blocks_for_pages(selected_pages);
+    let excluded_pages = if source_blocks.pages.is_empty() {
+        selected_pages
+    } else {
+        &source_blocks.pages
+    };
+
     crate::arena::old_arena_walk_objects_on_pages(selected_pages, |header_ptr| {
         let header = header_ptr as *mut GcHeader;
         unsafe {
@@ -1099,7 +1105,7 @@ pub(super) fn evacuate_selected_old_pages_collecting(
                 payload,
                 8,
                 (*header).obj_type,
-                selected_pages,
+                excluded_pages,
             );
             std::ptr::copy_nonoverlapping(user_ptr, new_user, payload);
             set_forwarding_address(header, new_user);
@@ -1107,20 +1113,15 @@ pub(super) fn evacuate_selected_old_pages_collecting(
 
             let new_header = (new_user as *mut u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
             debug_assert!(
-                old_object_pages_disjoint_from_selected(new_header, total, selected_pages),
-                "old-page evacuation copy landed in a selected source page"
+                old_object_pages_disjoint_from_selected(new_header, total, excluded_pages),
+                "old-page evacuation copy landed in a selected source block"
             );
             (*new_header)._reserved = (*header)._reserved;
             layout_transfer(user_ptr, new_user);
             (*new_header).gc_flags |= GC_FLAG_MARKED
                 | GC_FLAG_TENURED
                 | (flags & (GC_FLAG_SHAPE_SHARED | GC_FLAG_INTERNED));
-            if (*header).obj_type == GC_TYPE_CLOSURE {
-                crate::closure::closure_dynamic_props_owner_moved(
-                    user_ptr as usize,
-                    new_user as usize,
-                );
-            }
+            gc_type_after_payload_move((*header).obj_type, user_ptr as usize, new_user as usize);
 
             evacuated_original_headers.push(header);
             evacuated_new_headers.push(new_header);

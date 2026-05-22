@@ -237,7 +237,7 @@ fn with_state_values<F, R>(f: F) -> R
 where
     F: FnOnce(&mut std::collections::HashMap<String, f64>) -> R,
 {
-    let mut guard = STATE_VALUES.lock().expect("STATE_VALUES poisoned");
+    let mut guard = crate::gc::lock_gc_root_registry(&STATE_VALUES);
     let map = guard.get_or_insert_with(std::collections::HashMap::new);
     f(map)
 }
@@ -449,6 +449,34 @@ struct ForEachBinding {
 static FOREACH_REGISTRY: Mutex<Option<std::collections::HashMap<String, Vec<ForEachBinding>>>> =
     Mutex::new(None);
 
+/// GC root scanner for cross-platform UI state values and `ForEach` render
+/// callbacks held in Rust registries outside the managed heap.
+pub fn scan_ui_text_registry_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_ui_text_registry_roots_mut(&mut visitor);
+}
+
+pub fn scan_ui_text_registry_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    {
+        let mut guard = crate::gc::lock_gc_root_registry(&STATE_VALUES);
+        if let Some(values) = guard.as_mut() {
+            for value in values.values_mut() {
+                visitor.visit_nanbox_f64_slot(value);
+            }
+        }
+    }
+    {
+        let mut guard = crate::gc::lock_gc_root_registry(&FOREACH_REGISTRY);
+        if let Some(bindings_by_state) = guard.as_mut() {
+            for bindings in bindings_by_state.values_mut() {
+                for binding in bindings.iter_mut() {
+                    visitor.visit_nanbox_f64_slot(&mut binding.render_closure);
+                }
+            }
+        }
+    }
+}
+
 /// Render-handler signature. UI crates implement this on the main thread:
 /// clears the host's existing children, calls `render_closure(i)` for each
 /// `i in [0..count)`, and inserts each returned widget. `count` is the
@@ -516,10 +544,7 @@ pub extern "C" fn js_foreach_register(
 #[cfg(not(feature = "ohos-napi"))]
 fn foreach_dispatch_state_change(synth_id: &str, new_value: f64) {
     let bindings: Vec<ForEachBinding> = {
-        let guard = match FOREACH_REGISTRY.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
+        let guard = crate::gc::lock_gc_root_registry(&FOREACH_REGISTRY);
         match guard.as_ref().and_then(|m| m.get(synth_id)) {
             Some(v) => v.clone(),
             None => return,
@@ -578,4 +603,49 @@ pub extern "C" fn perry_arkts_register_text_id(widget_handle: i64, id_handle: f6
             func(widget_handle, id_bytes.as_ptr(), id_bytes.len());
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_ui_text_registry_roots() {
+    *crate::gc::lock_gc_root_registry(&STATE_VALUES) = None;
+    *crate::gc::lock_gc_root_registry(&FOREACH_REGISTRY) = None;
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_ui_text_registry_roots(state_value: f64, render_closure: f64) {
+    {
+        let mut values = crate::gc::lock_gc_root_registry(&STATE_VALUES);
+        let map = values.get_or_insert_with(std::collections::HashMap::new);
+        map.clear();
+        map.insert("state".to_string(), state_value);
+    }
+    {
+        let mut registry = crate::gc::lock_gc_root_registry(&FOREACH_REGISTRY);
+        let map = registry.get_or_insert_with(std::collections::HashMap::new);
+        map.clear();
+        map.insert(
+            "state".to_string(),
+            vec![ForEachBinding {
+                container_handle: 1,
+                render_closure,
+            }],
+        );
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_ui_text_registry_roots_snapshot() -> (u64, u64) {
+    let state = crate::gc::lock_gc_root_registry(&STATE_VALUES)
+        .as_ref()
+        .and_then(|values| values.get("state"))
+        .copied()
+        .map(f64::to_bits)
+        .unwrap_or(0);
+    let render = crate::gc::lock_gc_root_registry(&FOREACH_REGISTRY)
+        .as_ref()
+        .and_then(|bindings_by_state| bindings_by_state.get("state"))
+        .and_then(|bindings| bindings.first())
+        .map(|binding| binding.render_closure.to_bits())
+        .unwrap_or(0);
+    (state, render)
 }

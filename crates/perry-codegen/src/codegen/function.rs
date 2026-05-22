@@ -93,6 +93,12 @@ pub(super) fn compile_function(
         for p in &f.params {
             let slot = blk.alloca(DOUBLE);
             blk.store(DOUBLE, &format!("%arg{}", p.id), &slot);
+            if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
+                blk.call_void(
+                    "js_shadow_slot_bind",
+                    &[(I32, &slot_idx.to_string()), (PTR, &slot)],
+                );
+            }
             map.insert(p.id, slot);
         }
         map

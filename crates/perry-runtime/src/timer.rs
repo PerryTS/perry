@@ -107,7 +107,13 @@ pub extern "C" fn js_timer_tick() -> i32 {
 
     // Resolve the expired timers' promises
     for timer in expired {
-        js_promise_resolve(timer.promise, timer.value);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let promise_handle = scope.root_raw_mut_ptr(timer.promise);
+        let value_handle = scope.root_nanbox_f64(timer.value);
+        js_promise_resolve(
+            promise_handle.get_raw_mut_ptr::<Promise>(),
+            value_handle.get_nanbox_f64(),
+        );
         fired += 1;
     }
 
@@ -296,6 +302,10 @@ pub extern "C" fn js_set_immediate_callback(callback: i64) -> i64 {
 fn schedule_callback_timer(callback: i64, delay_ms: f64, args: Vec<f64>, type_name: &str) -> i64 {
     ensure_initialized();
 
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback_handle =
+        scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
+    let arg_handles = scope.root_nanbox_f64_slice(&args);
     let delay_ms = delay_ms.max(0.0) as u64;
     let deadline = Instant::now() + Duration::from_millis(delay_ms);
 
@@ -311,8 +321,8 @@ fn schedule_callback_timer(callback: i64, delay_ms: f64, args: Vec<f64>, type_na
         id,
         deadline,
         delay_ms,
-        callback,
-        args,
+        callback: callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
+        args: crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles),
         context: crate::async_context::capture_context(),
         async_id: ids.async_id,
         trigger_async_id: ids.trigger_async_id,
@@ -395,49 +405,54 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
     // `setTimeout(fn, delay, ...args)` time. Refs #665.
     for timer in expired {
         if !timer.cleared {
-            let cb = timer.callback as *const crate::closure::ClosureHeader;
-            let a = &timer.args;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let cb_handle =
+                scope.root_raw_const_ptr(timer.callback as *const crate::closure::ClosureHeader);
+            let arg_handles = scope.root_nanbox_f64_slice(&timer.args);
             let previous = crate::async_context::enter_context(&timer.context);
+            let mut previous = previous;
+            let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
             crate::async_hooks::before(timer.async_id, timer.trigger_async_id);
-            unsafe {
-                match a.len() {
-                    0 => {
-                        js_closure_call0(cb);
-                    }
-                    1 => {
-                        js_closure_call1(cb, a[0]);
-                    }
-                    2 => {
-                        js_closure_call2(cb, a[0], a[1]);
-                    }
-                    3 => {
-                        js_closure_call3(cb, a[0], a[1], a[2]);
-                    }
-                    4 => {
-                        js_closure_call4(cb, a[0], a[1], a[2], a[3]);
-                    }
-                    5 => {
-                        js_closure_call5(cb, a[0], a[1], a[2], a[3], a[4]);
-                    }
-                    6 => {
-                        js_closure_call6(cb, a[0], a[1], a[2], a[3], a[4], a[5]);
-                    }
-                    7 => {
-                        js_closure_call7(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
-                    }
-                    8 => {
-                        js_closure_call8(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
-                    }
-                    _ => {
-                        // >= 9 args: clamp to 9. Real-world setTimeout
-                        // rarely exceeds 1-2 trailing args; this is a
-                        // conservative safety net rather than spec coverage.
-                        js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
-                    }
+            let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+            let cb = cb_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
+            match a.len() {
+                0 => {
+                    js_closure_call0(cb);
+                }
+                1 => {
+                    js_closure_call1(cb, a[0]);
+                }
+                2 => {
+                    js_closure_call2(cb, a[0], a[1]);
+                }
+                3 => {
+                    js_closure_call3(cb, a[0], a[1], a[2]);
+                }
+                4 => {
+                    js_closure_call4(cb, a[0], a[1], a[2], a[3]);
+                }
+                5 => {
+                    js_closure_call5(cb, a[0], a[1], a[2], a[3], a[4]);
+                }
+                6 => {
+                    js_closure_call6(cb, a[0], a[1], a[2], a[3], a[4], a[5]);
+                }
+                7 => {
+                    js_closure_call7(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+                }
+                8 => {
+                    js_closure_call8(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+                }
+                _ => {
+                    // >= 9 args: clamp to 9. Real-world setTimeout
+                    // rarely exceeds 1-2 trailing args; this is a
+                    // conservative safety net rather than spec coverage.
+                    js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
                 }
             }
             crate::async_hooks::after(timer.async_id);
             crate::async_hooks::destroy(timer.async_id);
+            crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
             crate::async_context::restore_context(previous);
             fired += 1;
         }
@@ -614,10 +629,14 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
     let mut fired = 0;
     // Call the callbacks outside of the lock
     for (callback, context) in callbacks_to_call {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let callback_handle =
+            scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
         let previous = crate::async_context::enter_context(&context);
-        unsafe {
-            js_closure_call0(callback as *const crate::closure::ClosureHeader);
-        }
+        let mut previous = previous;
+        let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
+        js_closure_call0(callback_handle.get_raw_const_ptr());
+        crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
         crate::async_context::restore_context(previous);
         fired += 1;
     }
@@ -793,6 +812,21 @@ pub(crate) fn test_timer_scanner_snapshot() -> TestTimerScannerSnapshot {
                 .unwrap_or(0);
     }
     snapshot
+}
+
+#[cfg(test)]
+pub(crate) fn test_callback_timer_snapshot(timer_id: i64) -> Option<(usize, u64)> {
+    CALLBACK_TIMERS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|timer| timer.id == timer_id)
+        .map(|timer| {
+            (
+                timer.callback as usize,
+                timer.args.first().copied().map(f64::to_bits).unwrap_or(0),
+            )
+        })
 }
 
 #[cfg(test)]

@@ -297,9 +297,12 @@ pub extern "C" fn js_object_set_field_by_name(
                     let fields_ptr =
                         (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
                     let slot = fields_ptr.add(slot_idx as usize);
-                    ptr::write(slot, JSValue::from_bits(vbits));
-                    super::note_object_field_slot(obj, slot_idx as usize, vbits);
-                    crate::gc::runtime_write_barrier_slot(obj as usize, slot as usize, vbits);
+                    crate::gc::runtime_store_jsvalue_slot(
+                        obj as usize,
+                        slot as usize,
+                        slot_idx as usize,
+                        vbits,
+                    );
                     // Bump field_count only for inline slots — leaving
                     // it at the physical capacity is what steers
                     // `js_object_get_field_by_name`'s reads to the
@@ -441,6 +444,7 @@ pub extern "C" fn js_object_set_field_by_name(
                 let src_data = (keys as *const u8).add(8) as *const f64;
                 let dst_data = (cloned as *mut u8).add(8) as *mut f64;
                 for i in 0..key_count {
+                    // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
                     *dst_data.add(i) = *src_data.add(i);
                 }
                 (*cloned).length = key_count as u32;
@@ -615,6 +619,7 @@ pub extern "C" fn js_object_set_field_by_name(
             let src_data = (keys as *const u8).add(8) as *const f64;
             let dst_data = (cloned as *mut u8).add(8) as *mut f64;
             for i in 0..key_count {
+                // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
                 *dst_data.add(i) = *src_data.add(i);
             }
             (*cloned).length = key_count as u32;

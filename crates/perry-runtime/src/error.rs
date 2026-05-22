@@ -66,37 +66,65 @@ unsafe fn alloc_error(
     name_bytes: &[u8],
     message: *mut StringHeader,
 ) -> *mut ErrorHeader {
-    let raw = crate::gc::gc_malloc(std::mem::size_of::<ErrorHeader>(), crate::gc::GC_TYPE_ERROR);
-    let ptr = raw as *mut ErrorHeader;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let message_ptr = if message.is_null() {
+        js_string_from_bytes(b"".as_ptr(), 0)
+    } else {
+        message
+    };
+    let message_handle = scope.root_string_ptr(message_ptr);
 
     let error_name = js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
+    let error_name_handle = scope.root_string_ptr(error_name);
 
-    let msg_str = if message.is_null() {
-        ""
-    } else {
-        let len = (*message).byte_len as usize;
-        let data = (message as *const u8).add(std::mem::size_of::<StringHeader>());
+    let message_ptr = message_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
+    let msg_str = {
+        let len = (*message_ptr).byte_len as usize;
+        let data = (message_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let bytes = std::slice::from_raw_parts(data, len);
         std::str::from_utf8(bytes).unwrap_or("")
     };
     let name_str = std::str::from_utf8(name_bytes).unwrap_or("Error");
     let stack = make_stack(name_str, msg_str);
+    let stack_handle = scope.root_string_ptr(stack);
+
+    let raw = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<ErrorHeader>(),
+        std::mem::align_of::<ErrorHeader>(),
+        crate::gc::GC_TYPE_ERROR,
+    );
+    let ptr = raw as *mut ErrorHeader;
 
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
     (*ptr).object_type = OBJECT_TYPE_ERROR;
     (*ptr).error_kind = kind;
-    (*ptr).message = if message.is_null() {
-        js_string_from_bytes(b"".as_ptr(), 0)
-    } else {
-        message
-    };
-    (*ptr).name = error_name;
-    (*ptr).stack = stack;
+    (*ptr).message = message_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
+    (*ptr).name = error_name_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
+    (*ptr).stack = stack_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
     (*ptr).cause = f64::from_bits(TAG_UNDEFINED);
     (*ptr).errors = std::ptr::null_mut();
 
     ptr
+}
+
+pub(crate) unsafe fn error_set_cause(error: *mut ErrorHeader, cause: f64) {
+    crate::gc::runtime_store_gc_jsvalue_slot(
+        error as usize,
+        &(*error).cause as *const f64 as usize,
+        cause.to_bits(),
+    );
+}
+
+pub(crate) unsafe fn error_set_errors(
+    error: *mut ErrorHeader,
+    errors: *mut crate::array::ArrayHeader,
+) {
+    crate::gc::runtime_store_gc_heap_word_slot(
+        error as usize,
+        &(*error).errors as *const _ as usize,
+        errors as u64,
+    );
 }
 
 /// Create a new Error with no message
@@ -119,7 +147,7 @@ pub extern "C" fn js_error_new_with_cause(
 ) -> *mut ErrorHeader {
     unsafe {
         let ptr = alloc_error(ERROR_KIND_ERROR, b"Error", message);
-        (*ptr).cause = cause;
+        error_set_cause(ptr, cause);
         ptr
     }
 }
@@ -156,7 +184,7 @@ pub extern "C" fn js_aggregateerror_new(
 ) -> *mut ErrorHeader {
     unsafe {
         let ptr = alloc_error(ERROR_KIND_AGGREGATE_ERROR, b"AggregateError", message);
-        (*ptr).errors = errors;
+        error_set_errors(ptr, errors);
         ptr
     }
 }

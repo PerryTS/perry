@@ -3,6 +3,26 @@
 //! and Promise state types.
 
 use super::*;
+
+thread_local! {
+    /// Promise currently being dispatched by the microtask runner after its
+    /// task has been popped from TASK_QUEUE. While user callbacks run this is
+    /// the mutable root that lets copied-minor rewrite the promise pointer
+    /// before the runner reads `.next` for settlement or exception routing.
+    pub(super) static CURRENT_MICROTASK_PROMISE: std::cell::Cell<*mut Promise>
+        = const { std::cell::Cell::new(std::ptr::null_mut()) };
+
+    /// Active callback/value/next tuple for a popped microtask. Task queue
+    /// entries stop being roots as soon as they are popped, but callback
+    /// dispatch can run arbitrary JS and GC before the runner settles `next`.
+    pub(super) static CURRENT_MICROTASK_CALLBACK: std::cell::Cell<ClosurePtr>
+        = const { std::cell::Cell::new(std::ptr::null()) };
+    pub(super) static CURRENT_MICROTASK_VALUE: std::cell::Cell<f64>
+        = const { std::cell::Cell::new(0.0) };
+    pub(super) static CURRENT_MICROTASK_NEXT: std::cell::Cell<*mut Promise>
+        = const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
 #[no_mangle]
 pub extern "C" fn js_promise_run_microtasks() -> i32 {
     mt_profile_register();
@@ -67,19 +87,6 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
     // to plain `setjmp(3)` which already skips the signal-mask save.
     use crate::ffi::setjmp::setjmp;
 
-    // Install the trap. We set up CURRENT_MICROTASK_PROMISE (or
-    // INLINE_TRAP_NEXT for inline-callback tasks) before the callback
-    // so the rejection path knows which `next` to reject.
-    //
-    // INLINE_TRAP_NEXT lives at module scope (below) so that
-    // `js_async_step_chain` can read it during step execution to
-    // reuse the in-flight `next` Promise instead of allocating a fresh
-    // one per await — see the perf comment on INLINE_TRAP_NEXT.
-    thread_local! {
-        static CURRENT_MICROTASK_PROMISE: std::cell::Cell<*mut Promise>
-            = const { std::cell::Cell::new(std::ptr::null_mut()) };
-    }
-
     let trap_buf = crate::exception::js_try_push();
     // SAFETY: The setjmp call must remain in this stack frame; we
     // longjmp to it from `js_throw` only while this frame is still
@@ -100,6 +107,9 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
         let exc = crate::exception::js_get_exception();
         crate::exception::js_clear_exception();
         let cur = CURRENT_MICROTASK_PROMISE.with(|c| c.replace(std::ptr::null_mut()));
+        CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
+        CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
+        CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
         if !cur.is_null() {
             unsafe {
                 if !(*cur).next.is_null() {
@@ -151,6 +161,9 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     // No callback registered → propagate the value/reason
                     // to the next promise without invoking anything.
                     if callback.is_null() {
+                        CURRENT_MICROTASK_PROMISE.with(|c| c.set(promise));
+                        CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
+                        CURRENT_MICROTASK_NEXT.with(|c| c.set((*promise).next));
                         if !(*promise).next.is_null() {
                             if is_fulfilled {
                                 js_promise_resolve((*promise).next, value);
@@ -158,6 +171,10 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                                 js_promise_reject((*promise).next, value);
                             }
                         }
+                        let promise =
+                            CURRENT_MICROTASK_PROMISE.with(|c| c.replace(std::ptr::null_mut()));
+                        CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
+                        CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
                         clear_promise_context(promise);
                         restore_microtask_context();
                         ran += 1;
@@ -167,6 +184,9 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     // Record the running promise so the trap (above)
                     // can reject its `next` if the callback throws.
                     CURRENT_MICROTASK_PROMISE.with(|c| c.set(promise));
+                    CURRENT_MICROTASK_CALLBACK.with(|c| c.set(callback));
+                    CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
+                    CURRENT_MICROTASK_NEXT.with(|c| c.set((*promise).next));
 
                     let t1 = if prof {
                         Some(std::time::Instant::now())
@@ -175,6 +195,8 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     };
                     crate::async_hooks::before((*promise).async_id, (*promise).trigger_async_id);
                     let result = crate::closure::js_closure_call1(callback, value);
+                    CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
+                    let promise = CURRENT_MICROTASK_PROMISE.with(|c| c.get());
                     crate::async_hooks::after((*promise).async_id);
                     if let Some(t) = t1 {
                         MT_TIME_NS_CALLBACK
@@ -185,14 +207,19 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     // marker so a stray longjmp from a later (nested)
                     // microtask doesn't misattribute its rejection.
                     CURRENT_MICROTASK_PROMISE.with(|c| c.set(std::ptr::null_mut()));
+                    CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
 
                     let t2 = if prof {
                         Some(std::time::Instant::now())
                     } else {
                         None
                     };
-                    if !(*promise).next.is_null() {
-                        propagate_callback_result(result, (*promise).next);
+                    let next = CURRENT_MICROTASK_NEXT.with(|c| c.replace(std::ptr::null_mut()));
+                    if !next.is_null() {
+                        let result = CURRENT_MICROTASK_VALUE.with(|c| c.replace(0.0));
+                        propagate_callback_result(result, next);
+                    } else {
+                        CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
                     }
                     clear_promise_context(promise);
                     if let Some(t) = t2 {
@@ -245,6 +272,14 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                 // when the runner is invoked re-entrantly from inside
                 // a non-transformed async closure's busy-wait.
                 let prev_trap = INLINE_TRAP.with(|c| c.get());
+                let trap_scope = crate::gc::RuntimeHandleScope::new();
+                let prev_trap_next_handle = trap_scope.root_raw_mut_ptr(prev_trap.trap_next);
+                let prev_trap_step_handle = trap_scope.root_raw_const_ptr(
+                    prev_trap.current_step as *const crate::closure::ClosureHeader,
+                );
+                CURRENT_MICROTASK_CALLBACK.with(|c| c.set(callback));
+                CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
+                CURRENT_MICROTASK_NEXT.with(|c| c.set(next));
                 INLINE_TRAP.with(|c| {
                     c.set(InlineTrap {
                         trap_next: next,
@@ -258,19 +293,32 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     None
                 };
                 let result = crate::closure::js_closure_call1(callback, value);
+                CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                 if let Some(t) = t1 {
                     MT_TIME_NS_CALLBACK.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 }
 
-                INLINE_TRAP.with(|c| c.set(prev_trap));
+                INLINE_TRAP.with(|c| {
+                    c.set(InlineTrap {
+                        trap_next: prev_trap_next_handle.get_raw_mut_ptr::<Promise>(),
+                        current_step: prev_trap_step_handle
+                            .get_raw_const_ptr::<crate::closure::ClosureHeader>()
+                            as usize,
+                    })
+                });
+                CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
 
                 let t2 = if prof {
                     Some(std::time::Instant::now())
                 } else {
                     None
                 };
+                let next = CURRENT_MICROTASK_NEXT.with(|c| c.replace(std::ptr::null_mut()));
                 if !next.is_null() {
+                    let result = CURRENT_MICROTASK_VALUE.with(|c| c.replace(0.0));
                     propagate_callback_result(result, next);
+                } else {
+                    CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
                 }
                 if let Some(t) = t2 {
                     MT_TIME_NS_RESOLVE.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -300,6 +348,9 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     ran += 1;
                     continue;
                 }
+                CURRENT_MICROTASK_CALLBACK.with(|c| c.set(step_closure));
+                CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
+                CURRENT_MICROTASK_NEXT.with(|c| c.set(next));
                 // Issue #712 + #921 + #922 defensive guard. Track
                 // consecutive is_error=true dispatches; reject the
                 // chain if it crosses ASYNC_STEP_REENTRY_BOUND.
@@ -336,8 +387,13 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                                 crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
                             let err = crate::error::js_typeerror_new(msg_str);
                             let err_val = crate::value::js_nanbox_pointer(err as i64);
+                            let next =
+                                CURRENT_MICROTASK_NEXT.with(|c| c.replace(std::ptr::null_mut()));
                             js_promise_reject(next, err_val);
                         }
+                        CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
+                        CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
+                        CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
                         restore_microtask_context();
                         ran += 1;
                         continue;
@@ -394,6 +450,11 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                 // settles with the awaited value rather than the
                 // explicit return expression.
                 let prev_trap = INLINE_TRAP.with(|c| c.get());
+                let trap_scope = crate::gc::RuntimeHandleScope::new();
+                let prev_trap_next_handle = trap_scope.root_raw_mut_ptr(prev_trap.trap_next);
+                let prev_trap_step_handle = trap_scope.root_raw_const_ptr(
+                    prev_trap.current_step as *const crate::closure::ClosureHeader,
+                );
                 INLINE_TRAP.with(|c| {
                     c.set(InlineTrap {
                         trap_next: next,
@@ -412,11 +473,20 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     f64::from_bits(0x7FFC_0000_0000_0003) // TAG_FALSE
                 };
                 let result = call_async_step_direct(step_closure, value, is_error_bits);
+                CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                 if let Some(t) = t1 {
                     MT_TIME_NS_CALLBACK.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 }
 
-                INLINE_TRAP.with(|c| c.set(prev_trap));
+                INLINE_TRAP.with(|c| {
+                    c.set(InlineTrap {
+                        trap_next: prev_trap_next_handle.get_raw_mut_ptr::<Promise>(),
+                        current_step: prev_trap_step_handle
+                            .get_raw_const_ptr::<crate::closure::ClosureHeader>()
+                            as usize,
+                    })
+                });
+                CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
 
                 let t2 = if prof {
                     Some(std::time::Instant::now())
@@ -429,7 +499,9 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                 // next iteration's `Task::AsyncStep` is already on the
                 // queue carrying the same `next`; nothing to propagate
                 // here.
+                let next = CURRENT_MICROTASK_NEXT.with(|c| c.replace(std::ptr::null_mut()));
                 if !next.is_null() {
+                    let result = CURRENT_MICROTASK_VALUE.with(|c| c.replace(0.0));
                     let result_is_self_chain = if js_value_is_promise(result) != 0 {
                         crate::value::js_nanbox_get_pointer(result) as *mut Promise == next
                     } else {
@@ -438,6 +510,8 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     if !result_is_self_chain {
                         propagate_callback_result(result, next);
                     }
+                } else {
+                    CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
                 }
                 if let Some(t) = t2 {
                     MT_TIME_NS_RESOLVE.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);

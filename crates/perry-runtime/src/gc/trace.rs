@@ -497,17 +497,7 @@ pub(super) fn drain_trace_worklist_inner(
                     continue;
                 }
             }
-            match (*header).obj_type {
-                GC_TYPE_ARRAY => trace_array(user_ptr, valid_ptrs, worklist),
-                GC_TYPE_OBJECT => trace_object(user_ptr, valid_ptrs, worklist),
-                GC_TYPE_CLOSURE => trace_closure(user_ptr, valid_ptrs, worklist),
-                GC_TYPE_PROMISE => trace_promise(user_ptr, valid_ptrs, worklist),
-                GC_TYPE_ERROR => trace_error(user_ptr, valid_ptrs, worklist),
-                GC_TYPE_MAP => trace_map(user_ptr, valid_ptrs, worklist),
-                GC_TYPE_LAZY_ARRAY => trace_lazy_array(user_ptr, valid_ptrs, worklist),
-                GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
-                _ => {}
-            }
+            trace_heap_rewrite_slots(header, valid_ptrs, worklist);
         }
     }
 }
@@ -666,74 +656,18 @@ pub(super) fn mark_block_persisting_arena_objects(
     stats
 }
 
-/// Trace Map entries — scan all key-value pairs in the Map's entries array.
-/// Maps store NaN-boxed JSValues (strings, arrays, objects) as keys and values.
-/// Values may also be raw I64 pointers (for typed arrays/maps stored in maps).
-pub(super) unsafe fn trace_map(
-    user_ptr: *mut u8,
-    valid_ptrs: &ValidPointerSet,
-    worklist: &mut Vec<*mut GcHeader>,
-) {
-    let map = user_ptr as *const crate::map::MapHeader;
-    let size = (*map).size;
-    let capacity = (*map).capacity;
-
-    // Sanity check
-    if size > capacity || size > 100_000 {
-        return;
-    }
-
-    let entries = (*map).entries as *const u64;
-    if entries.is_null() {
-        return;
-    }
-
-    // Each entry is 2 x f64 (key + value). Specialized field walker
-    // for both — see `mark_field_into_worklist`.
-    for i in 0..(size as usize) {
-        let key_bits = *entries.add(i * 2);
-        let val_bits = *entries.add(i * 2 + 1);
-        mark_field_into_worklist(key_bits, valid_ptrs, worklist);
-        mark_field_into_worklist(val_bits, valid_ptrs, worklist);
-    }
-}
-
-/// Extract a raw pointer value from NaN-boxed or raw bits.
-///
-/// Previously called from `trace_map`; now subsumed by
-/// `mark_field_into_worklist` which folds the extraction and the
-/// mark-and-enqueue dance into one inlined step. Kept for any
-/// external callers / future use.
-#[allow(dead_code)]
-pub(super) fn extract_ptr_from_bits(bits: u64) -> usize {
-    let tag = bits & TAG_MASK;
-    match tag {
-        t if t == POINTER_TAG || t == STRING_TAG || t == BIGINT_TAG => {
-            (bits & POINTER_MASK) as usize
-        }
-        _ => {
-            // Raw pointer (no NaN-boxing tag)
-            if (0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits) {
-                bits as usize
-            } else {
-                0
-            }
-        }
-    }
-}
-
-pub(super) unsafe fn trace_gc_child_slots(
+pub(super) unsafe fn trace_heap_rewrite_slots(
     header: *mut GcHeader,
     valid_ptrs: &ValidPointerSet,
     worklist: &mut Vec<*mut GcHeader>,
 ) {
-    for child_slot in gc_child_slots(header) {
-        if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
-            record_layout_child_slot_read(layout_kind);
+    visit_gc_rewrite_slots(header, |slot| unsafe {
+        slot.record_layout_read();
+        if slot.layout_kind.is_some() {
             record_trace_slot_read();
-            mark_field_into_worklist(*slot, valid_ptrs, worklist);
         }
-    }
+        mark_field_into_worklist(*slot.slot, valid_ptrs, worklist);
+    });
 }
 
 /// Trace array elements.
@@ -760,7 +694,7 @@ pub(super) unsafe fn trace_array(
         return;
     }
 
-    trace_gc_child_slots(header as *mut GcHeader, valid_ptrs, worklist);
+    trace_heap_rewrite_slots(header as *mut GcHeader, valid_ptrs, worklist);
 }
 
 /// Trace object fields and keys array.
@@ -772,109 +706,7 @@ pub(super) unsafe fn trace_object(
     worklist: &mut Vec<*mut GcHeader>,
 ) {
     let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
-    trace_gc_child_slots(header, valid_ptrs, worklist);
-}
-
-/// Trace a lazy array (Issue #179 Phase 2). The tape bytes live
-/// inline in the same arena allocation, so they're reclaimed with
-/// the header. We only need to keep two satellite references alive:
-///
-/// 1. `blob_str` — the input `StringHeader`. Without this the blob
-///    data pointer the tape references would dangle after the first
-///    post-parse GC cycle. The intern table / other caches may or
-///    may not keep it alive; tracing is authoritative.
-/// 2. `materialized` — the `ArrayHeader`-backed tree once forced.
-///    Null until first non-`.length` access.
-pub(super) unsafe fn trace_lazy_array(
-    user_ptr: *mut u8,
-    valid_ptrs: &ValidPointerSet,
-    worklist: &mut Vec<*mut GcHeader>,
-) {
-    let lazy = user_ptr as *const crate::json_tape::LazyArrayHeader;
-    // Defensive magic check — if somehow mis-tagged, bail.
-    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
-        return;
-    }
-
-    let blob_ptr = (*lazy).blob_str as usize;
-    if blob_ptr != 0 && valid_ptrs.contains(&blob_ptr) {
-        let hdr = header_from_user_ptr(blob_ptr as *const u8);
-        if (*hdr).gc_flags & GC_FLAG_MARKED == 0 {
-            (*hdr).gc_flags |= GC_FLAG_MARKED;
-            worklist.push(hdr);
-        }
-    }
-
-    let mat_ptr = (*lazy).materialized as usize;
-    if mat_ptr != 0 && valid_ptrs.contains(&mat_ptr) {
-        let hdr = header_from_user_ptr(mat_ptr as *const u8);
-        if (*hdr).gc_flags & GC_FLAG_MARKED == 0 {
-            (*hdr).gc_flags |= GC_FLAG_MARKED;
-            worklist.push(hdr);
-        }
-    }
-
-    // Phase 5: sparse per-element cache. Both the cache buffer and
-    // the bitmap are separate arena allocations that must be marked
-    // to survive sweep. The cache's live JSValues (only those with
-    // their bitmap bit set) must in turn be traced — their pointees
-    // are the real backing objects for `parsed[i]` and must stay
-    // alive across GC so identity holds.
-    let cache_ptr = (*lazy).materialized_elements as usize;
-    if cache_ptr != 0 && valid_ptrs.contains(&cache_ptr) {
-        let hdr = header_from_user_ptr(cache_ptr as *const u8);
-        if (*hdr).gc_flags & GC_FLAG_MARKED == 0 {
-            (*hdr).gc_flags |= GC_FLAG_MARKED;
-            // No need to push onto worklist — GC_TYPE_STRING is a
-            // leaf, no children to trace through the buffer itself.
-        }
-    }
-    let bitmap_ptr = (*lazy).materialized_bitmap as usize;
-    if bitmap_ptr != 0 && valid_ptrs.contains(&bitmap_ptr) {
-        let hdr = header_from_user_ptr(bitmap_ptr as *const u8);
-        if (*hdr).gc_flags & GC_FLAG_MARKED == 0 {
-            (*hdr).gc_flags |= GC_FLAG_MARKED;
-        }
-    }
-    // Walk the cache and trace each set slot's JSValue. Unset slots
-    // hold zero bits (positive zero number) which try_mark_value
-    // correctly ignores as a non-pointer; safe to walk either way,
-    // but checking the bitmap first avoids redundant work.
-    let cached_length = (*lazy).cached_length as usize;
-    if cache_ptr != 0 && bitmap_ptr != 0 && cached_length > 0 {
-        let cache = (*lazy).materialized_elements;
-        let bitmap = (*lazy).materialized_bitmap;
-        let bitmap_words = cached_length.div_ceil(64);
-        for w in 0..bitmap_words {
-            let word = *bitmap.add(w);
-            if word == 0 {
-                continue;
-            }
-            let base_idx = w * 64;
-            for b in 0..64usize {
-                if word & (1u64 << b) == 0 {
-                    continue;
-                }
-                let i = base_idx + b;
-                if i >= cached_length {
-                    break;
-                }
-                let val_bits = (*cache.add(i)).bits();
-                if try_mark_value(val_bits, valid_ptrs) {
-                    let tag = val_bits & TAG_MASK;
-                    let ptr_val = if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-                        (val_bits & POINTER_MASK) as usize
-                    } else {
-                        val_bits as usize
-                    };
-                    if ptr_val != 0 && valid_ptrs.contains(&ptr_val) {
-                        let header = header_from_user_ptr(ptr_val as *const u8);
-                        worklist.push(header);
-                    }
-                }
-            }
-        }
-    }
+    trace_heap_rewrite_slots(header, valid_ptrs, worklist);
 }
 
 /// Trace closure captures
@@ -886,116 +718,7 @@ pub(super) unsafe fn trace_closure(
     worklist: &mut Vec<*mut GcHeader>,
 ) {
     let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
-    trace_gc_child_slots(header, valid_ptrs, worklist);
-    crate::closure::visit_closure_dynamic_prop_values_mut(user_ptr as usize, |value| {
-        mark_field_into_worklist(value.to_bits(), valid_ptrs, worklist);
-    });
-}
-
-/// Trace promise fields
-pub(super) unsafe fn trace_promise(
-    user_ptr: *mut u8,
-    valid_ptrs: &ValidPointerSet,
-    worklist: &mut Vec<*mut GcHeader>,
-) {
-    let promise = user_ptr as *const crate::promise::Promise;
-
-    // Trace value and reason — may be NaN-boxed JSValues or raw I64 pointers.
-    // Specialized field walker — see `mark_field_into_worklist`.
-    for &val_bits in &[(*promise).value.to_bits(), (*promise).reason.to_bits()] {
-        mark_field_into_worklist(val_bits, valid_ptrs, worklist);
-    }
-
-    // Trace on_fulfilled and on_rejected (closure pointers)
-    let on_fulfilled = (*promise).on_fulfilled;
-    if !on_fulfilled.is_null() {
-        let ptr_usize = on_fulfilled as usize;
-        if valid_ptrs.contains(&ptr_usize) {
-            let header = header_from_user_ptr(on_fulfilled as *const u8);
-            if (*header).gc_flags & GC_FLAG_MARKED == 0 {
-                (*header).gc_flags |= GC_FLAG_MARKED;
-                worklist.push(header);
-            }
-        }
-    }
-
-    let on_rejected = (*promise).on_rejected;
-    if !on_rejected.is_null() {
-        let ptr_usize = on_rejected as usize;
-        if valid_ptrs.contains(&ptr_usize) {
-            let header = header_from_user_ptr(on_rejected as *const u8);
-            if (*header).gc_flags & GC_FLAG_MARKED == 0 {
-                (*header).gc_flags |= GC_FLAG_MARKED;
-                worklist.push(header);
-            }
-        }
-    }
-
-    // Trace next promise in chain
-    let next = (*promise).next;
-    if !next.is_null() {
-        let next_usize = next as usize;
-        if valid_ptrs.contains(&next_usize) {
-            let header = header_from_user_ptr(next as *const u8);
-            if (*header).gc_flags & GC_FLAG_MARKED == 0 {
-                (*header).gc_flags |= GC_FLAG_MARKED;
-                worklist.push(header);
-            }
-        }
-    }
-}
-
-/// Trace error fields (message, name, stack are StringHeader pointers; cause is f64; errors is array)
-pub(super) unsafe fn trace_error(
-    user_ptr: *mut u8,
-    valid_ptrs: &ValidPointerSet,
-    worklist: &mut Vec<*mut GcHeader>,
-) {
-    let error = user_ptr as *const crate::error::ErrorHeader;
-
-    for &str_ptr in &[(*error).message, (*error).name, (*error).stack] {
-        if !str_ptr.is_null() {
-            let ptr_usize = str_ptr as usize;
-            if valid_ptrs.contains(&ptr_usize) {
-                let header = header_from_user_ptr(str_ptr as *const u8);
-                if (*header).gc_flags & GC_FLAG_MARKED == 0 {
-                    (*header).gc_flags |= GC_FLAG_MARKED;
-                    worklist.push(header);
-                }
-            }
-        }
-    }
-
-    // Trace `cause` if it's a NaN-boxed pointer-like value
-    let cause_bits = (*error).cause.to_bits();
-    let top16 = (cause_bits >> 48) as u16;
-    // POINTER_TAG=0x7FFD, STRING_TAG=0x7FFF, BIGINT_TAG=0x7FFA
-    if top16 == 0x7FFD || top16 == 0x7FFF || top16 == 0x7FFA {
-        let cause_ptr = (cause_bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
-        if !cause_ptr.is_null() {
-            let ptr_usize = cause_ptr as usize;
-            if valid_ptrs.contains(&ptr_usize) {
-                let header = header_from_user_ptr(cause_ptr);
-                if (*header).gc_flags & GC_FLAG_MARKED == 0 {
-                    (*header).gc_flags |= GC_FLAG_MARKED;
-                    worklist.push(header);
-                }
-            }
-        }
-    }
-
-    // Trace `errors` array
-    let errors_ptr = (*error).errors;
-    if !errors_ptr.is_null() {
-        let ptr_usize = errors_ptr as usize;
-        if valid_ptrs.contains(&ptr_usize) {
-            let header = header_from_user_ptr(errors_ptr as *const u8);
-            if (*header).gc_flags & GC_FLAG_MARKED == 0 {
-                (*header).gc_flags |= GC_FLAG_MARKED;
-                worklist.push(header);
-            }
-        }
-    }
+    trace_heap_rewrite_slots(header, valid_ptrs, worklist);
 }
 
 /// Sweep: free unmarked malloc objects; add unmarked arena objects to free list.

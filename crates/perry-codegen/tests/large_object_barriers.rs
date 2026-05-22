@@ -47,6 +47,34 @@ fn empty_opts() -> CompileOptions {
     }
 }
 
+fn compile_ir(module: &Module, opts: CompileOptions) -> String {
+    String::from_utf8(compile_module(module, opts).unwrap()).expect("LLVM IR should be UTF-8")
+}
+
+fn entry_opts() -> CompileOptions {
+    CompileOptions {
+        is_entry_module: true,
+        ..empty_opts()
+    }
+}
+
+fn assert_default_barrier_env_not_disabled() {
+    assert!(
+        !matches!(
+            std::env::var("PERRY_WRITE_BARRIERS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        "default barrier emission tests require PERRY_WRITE_BARRIERS unset or enabled"
+    );
+}
+
+fn assert_runtime_barrier_metadata_emitted(ir: &str) {
+    assert!(
+        ir.contains("call void @js_gc_write_barriers_emitted(i32 1)"),
+        "barrier-enabled modules must notify the runtime that generated store barriers exist"
+    );
+}
+
 fn module_with_large_pointer_array_literal(element_count: usize) -> Module {
     Module {
         name: "large_object_barriers.ts".to_string(),
@@ -161,15 +189,13 @@ fn module_with_large_local_array_push(element_count: usize) -> Module {
 #[test]
 fn large_array_literal_direct_stores_emit_precise_slot_barriers() {
     const LARGE_LITERAL_ELEMENTS: usize = 2050;
+    assert_default_barrier_env_not_disabled();
 
-    let ir = String::from_utf8(
-        compile_module(
-            &module_with_large_pointer_array_literal(LARGE_LITERAL_ELEMENTS),
-            empty_opts(),
-        )
-        .unwrap(),
-    )
-    .expect("LLVM IR should be UTF-8");
+    let ir = compile_ir(
+        &module_with_large_pointer_array_literal(LARGE_LITERAL_ELEMENTS),
+        empty_opts(),
+    );
+    assert_runtime_barrier_metadata_emitted(&ir);
 
     let alloc_marker = format!(
         "call i64 @js_array_alloc_literal(i32 {})",
@@ -203,15 +229,13 @@ fn large_array_literal_direct_stores_emit_precise_slot_barriers() {
 #[test]
 fn large_local_array_push_inbounds_store_emits_precise_slot_barrier() {
     const LARGE_LITERAL_ELEMENTS: usize = 2050;
+    assert_default_barrier_env_not_disabled();
 
-    let ir = String::from_utf8(
-        compile_module(
-            &module_with_large_local_array_push(LARGE_LITERAL_ELEMENTS),
-            empty_opts(),
-        )
-        .unwrap(),
-    )
-    .expect("LLVM IR should be UTF-8");
+    let ir = compile_ir(
+        &module_with_large_local_array_push(LARGE_LITERAL_ELEMENTS),
+        empty_opts(),
+    );
+    assert_runtime_barrier_metadata_emitted(&ir);
 
     let alloc_marker = format!(
         "call i64 @js_array_alloc_literal(i32 {})",
@@ -242,4 +266,16 @@ fn large_local_array_push_inbounds_store_emits_precise_slot_barrier() {
 
     assert!(store_pos < layout_pos);
     assert!(layout_pos < barrier_pos);
+}
+
+#[test]
+fn default_write_barriers_emit_runtime_metadata_for_entry_and_module_init() {
+    assert_default_barrier_env_not_disabled();
+
+    let module = module_with_large_pointer_array_literal(1);
+    let module_init_ir = compile_ir(&module, empty_opts());
+    assert_runtime_barrier_metadata_emitted(&module_init_ir);
+
+    let entry_ir = compile_ir(&module, entry_opts());
+    assert_runtime_barrier_metadata_emitted(&entry_ir);
 }

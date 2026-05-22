@@ -104,6 +104,8 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     } else {
         OldPageDefragSelection::default()
     };
+    let old_page_source_blocks =
+        crate::arena::old_arena_source_blocks_for_pages(&old_page_selection.pages);
     // MARK_SEEDS persists across GC cycles. Clear before any try_mark
     // call so trace sees only this cycle's freshly-marked headers.
     clear_mark_seeds();
@@ -191,17 +193,34 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     } else {
         ConservativePinTraceStats::default()
     };
-    mark_mutable_root_slots(
-        &valid_ptrs,
-        trace.as_mut().map(|trace| &mut trace.shadow_roots),
-    );
-    mark_mutable_registered_roots(&valid_ptrs);
+    match trace.as_mut() {
+        Some(trace) => mark_mutable_root_slots(
+            &valid_ptrs,
+            Some(&mut trace.shadow_roots),
+            Some(&mut trace.root_sources),
+        ),
+        None => mark_mutable_root_slots(&valid_ptrs, None, None),
+    }
+    match trace.as_mut() {
+        Some(trace) => {
+            mark_mutable_registered_roots_with_sources(&valid_ptrs, Some(&mut trace.root_sources))
+        }
+        None => mark_mutable_registered_roots(&valid_ptrs),
+    }
     let legacy_root_stats = mark_registered_roots(&valid_ptrs, consider_evacuation);
     if let Some(trace) = trace.as_mut() {
         trace.conservative_root_count = conservative_root_stats.root_count;
         trace.conservative_pinned = conservative_pin_stats.pinned_roots;
         trace.conservative_pinned_bytes = conservative_pin_stats.pinned_bytes;
         trace.legacy_copy_only_scanner_pinned = legacy_root_stats;
+        trace.root_sources.native_stack_fallback.decision = conservative_scan_decision;
+        trace.root_sources.native_stack_fallback.scanned = matches!(
+            conservative_scan_decision,
+            ConservativeStackScanDecision::Scan
+        );
+        trace.root_sources.native_stack_fallback.roots_found = conservative_root_stats.root_count;
+        trace.root_sources.native_stack_fallback.pinned_roots = conservative_pin_stats.pinned_roots;
+        trace.root_sources.native_stack_fallback.pinned_bytes = conservative_pin_stats.pinned_bytes;
     }
     trace_phase_record(&mut trace, "root_marking", phase_start);
     let phase_start = trace_phase_start(&trace);
@@ -218,6 +237,14 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     trace_phase_record(&mut trace, "block_persistence", phase_start);
     if let Some(trace) = trace.as_mut() {
         trace.block_persist = block_persist;
+    }
+    if gc_verify_evacuation_enabled() {
+        let phase_start = trace_phase_start(&trace);
+        let old_young_edge_verifier = verify_old_to_young_edges_covered();
+        trace_phase_record(&mut trace, "old_young_edge_verify", phase_start);
+        if let Some(trace) = trace.as_mut() {
+            trace.old_young_edge_verifier = old_young_edge_verifier;
+        }
     }
     // Phase C4b-γ-2 makes evacuation correctness-safe: the
     // post-evac `rewrite_forwarded_references` walk visits every
@@ -301,10 +328,14 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         trace_phase_record(&mut trace, "evacuation", phase_start);
         if evacuation.objects > 0 {
             let phase_start = trace_phase_start(&trace);
-            rewrite_forwarded_references(
-                &valid_ptrs,
-                trace.as_mut().map(|trace| &mut trace.shadow_roots),
-            );
+            match trace.as_mut() {
+                Some(trace) => rewrite_forwarded_references(
+                    &valid_ptrs,
+                    Some(&mut trace.shadow_roots),
+                    Some(&mut trace.root_sources),
+                ),
+                None => rewrite_forwarded_references(&valid_ptrs, None, None),
+            }
             evacuation_sticky =
                 rebuild_evacuated_old_to_young_remembered_set(&evacuated_new_headers);
             trace_phase_record(&mut trace, "reference_rewrite", phase_start);
@@ -320,13 +351,18 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
             evacuation.released_original_returned_bytes = released.released_original_returned_bytes;
         }
     }
+    let live_old_to_young_sticky = rebuild_live_old_to_young_remembered_set();
 
     // === SWEEP PHASE ===
     // `do_age_bump = true` folds the per-object HAS_SURVIVED / TENURED
     // update into this same walk (see comment block above the removed
     // dedicated age-bump pass).
     let phase_start = trace_phase_start(&trace);
-    let sweep = sweep_with_age_bump(true);
+    let sweep = if evacuation.old_page_moved_bytes > 0 {
+        sweep_with_age_bump_and_targeted_old_reclaim(true, &old_page_source_blocks.block_indices)
+    } else {
+        sweep_with_age_bump(true)
+    };
     trace_phase_record(&mut trace, "sweep", phase_start);
     let freed_bytes = sweep.freed_bytes;
     evacuation.retained_forwarded_stub_objects = sweep.retained_forwarded_stub_objects;
@@ -342,6 +378,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     let phase_start = trace_phase_start(&trace);
     remembered_set_clear();
     evacuation_sticky.restore();
+    live_old_to_young_sticky.restore();
     trace_phase_record(&mut trace, "remembered_set_clear", phase_start);
     // Conservative-pinning is per-cycle; clear so next cycle
     // re-discovers fresh.
@@ -473,20 +510,37 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     // this while a precise shadow-stack frame is active; the fallback
     // remains available with `PERRY_CONSERVATIVE_STACK_SCAN=full`.
     let phase_start = trace_phase_start(&trace);
-    let conservative_root_stats = mark_stack_roots(&valid_ptrs);
+    let conservative_scan_decision = conservative_stack_scan_decision();
+    let conservative_root_stats =
+        mark_stack_roots_for_decision(&valid_ptrs, conservative_scan_decision);
 
     // 2. Scan mutable roots (shadow stack + registered globals)
-    mark_mutable_root_slots(
-        &valid_ptrs,
-        trace.as_mut().map(|trace| &mut trace.shadow_roots),
-    );
+    match trace.as_mut() {
+        Some(trace) => mark_mutable_root_slots(
+            &valid_ptrs,
+            Some(&mut trace.shadow_roots),
+            Some(&mut trace.root_sources),
+        ),
+        None => mark_mutable_root_slots(&valid_ptrs, None, None),
+    }
 
     // 3. Run runtime-owned mutable scanners, then legacy copy-only scanners.
-    mark_mutable_registered_roots(&valid_ptrs);
+    match trace.as_mut() {
+        Some(trace) => {
+            mark_mutable_registered_roots_with_sources(&valid_ptrs, Some(&mut trace.root_sources))
+        }
+        None => mark_mutable_registered_roots(&valid_ptrs),
+    }
     let legacy_root_stats = mark_registered_roots(&valid_ptrs, false);
     if let Some(trace) = trace.as_mut() {
         trace.conservative_root_count = conservative_root_stats.root_count;
         trace.legacy_copy_only_scanner_pinned = legacy_root_stats;
+        trace.root_sources.native_stack_fallback.decision = conservative_scan_decision;
+        trace.root_sources.native_stack_fallback.scanned = matches!(
+            conservative_scan_decision,
+            ConservativeStackScanDecision::Scan
+        );
+        trace.root_sources.native_stack_fallback.roots_found = conservative_root_stats.root_count;
     }
     trace_phase_record(&mut trace, "root_marking", phase_start);
 
@@ -520,6 +574,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     if let Some(trace) = trace.as_mut() {
         trace.block_persist = block_persist;
     }
+    let live_old_to_young_sticky = rebuild_live_old_to_young_remembered_set();
 
     // === SWEEP PHASE ===
     // The sweep walk clears mark bits on surviving objects inline,
@@ -543,6 +598,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     // will repopulate it as needed.
     let phase_start = trace_phase_start(&trace);
     remembered_set_clear();
+    live_old_to_young_sticky.restore();
     trace_phase_record(&mut trace, "remembered_set_clear", phase_start);
 
     // Return released glibc heap pages to the kernel. Without this, glibc
@@ -608,7 +664,10 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
 /// validations per GC barely move the total.
 
 pub fn gc_init() {
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    gc_register_mutable_root_scanner_with_source(
+        scan_runtime_handle_roots_mut,
+        MutableRootScannerSource::RuntimeHandles,
+    );
     gc_register_mutable_root_scanner(promise_mutable_root_scanner);
     gc_register_mutable_root_scanner(timer_mutable_root_scanner);
     gc_register_mutable_root_scanner(exception_mutable_root_scanner);
@@ -619,9 +678,10 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
     gc_register_mutable_root_scanner(crate::perf_hooks::scan_perf_entries_roots_mut);
     gc_register_mutable_root_scanner(transition_cache_mutable_root_scanner);
-    gc_register_mutable_root_scanner(overflow_fields_mutable_root_scanner);
+    gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     gc_register_mutable_root_scanner(intern_table_mutable_root_scanner);
+    gc_register_mutable_root_scanner(small_int_cache_mutable_root_scanner);
     gc_register_mutable_root_scanner(crate::builtins::scan_console_log_singleton_roots_mut);
     // Issue #841: GC roots for the per-(submodule, export) function
     // singletons + per-submodule namespace stub objects allocated by
@@ -652,6 +712,10 @@ pub fn gc_init() {
     // them if a copying collection moves their backing allocations.
     gc_register_mutable_root_scanner(crate::object::scan_native_callable_export_roots_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_stream_singleton_roots_mut);
+    #[cfg(feature = "full")]
+    gc_register_mutable_root_scanner(crate::plugin::scan_plugin_roots_mut);
+    gc_register_mutable_root_scanner(crate::geisterhand_registry::scan_geisterhand_roots_mut);
+    gc_register_mutable_root_scanner(crate::ui_text_registry::scan_ui_text_registry_roots_mut);
     // perry/tui hook + state slot pools — they store raw NaN-boxed
     // value bits but the GC has no other way to know which slots hold
     // heap pointers (arrays/objects/strings stashed via setState /

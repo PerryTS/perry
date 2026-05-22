@@ -160,6 +160,41 @@ lazy_static! {
     static ref REGISTRY: Mutex<PluginRegistry> = Mutex::new(PluginRegistry::new());
 }
 
+/// GC root scanner for closures and JS values held by the process-wide
+/// plugin registry. These slots live outside the managed heap, so copied-minor
+/// GC must see and rewrite them explicitly.
+pub fn scan_plugin_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_plugin_roots_mut(&mut visitor);
+}
+
+pub fn scan_plugin_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut reg = crate::gc::lock_gc_root_registry(&*REGISTRY);
+    for hooks in reg.hooks.values_mut() {
+        for hook in hooks.iter_mut() {
+            visitor.visit_nanbox_u64_slot(&mut hook.handler_closure);
+        }
+    }
+    for tool in reg.tools.iter_mut() {
+        visitor.visit_nanbox_u64_slot(&mut tool.handler_closure);
+    }
+    for service in reg.services.iter_mut() {
+        visitor.visit_nanbox_u64_slot(&mut service.start_fn);
+        visitor.visit_nanbox_u64_slot(&mut service.stop_fn);
+    }
+    for route in reg.routes.iter_mut() {
+        visitor.visit_nanbox_u64_slot(&mut route.handler_closure);
+    }
+    for handlers in reg.events.values_mut() {
+        for handler in handlers.iter_mut() {
+            visitor.visit_nanbox_u64_slot(&mut handler.handler_closure);
+        }
+    }
+    for value in reg.config.values_mut() {
+        visitor.visit_nanbox_u64_slot(value);
+    }
+}
+
 // ============================================================================
 // Helper: extract a Rust string from a NaN-boxed f64 string value
 // ============================================================================
@@ -180,6 +215,72 @@ unsafe fn extract_string(nanboxed: f64) -> String {
 unsafe fn make_nanboxed_string(s: &str) -> f64 {
     let header = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
     f64::from_bits(JSValue::string_ptr(header).bits())
+}
+
+#[inline]
+unsafe fn store_plugin_key_slot(
+    keys_handle: &crate::gc::RuntimeHandle<'_>,
+    index: usize,
+    key: &[u8],
+) {
+    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let keys_arr = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+    crate::array::store_array_slot(keys_arr, index, JSValue::string_ptr(key_ptr).bits());
+    (*keys_arr).length = (index + 1) as u32;
+}
+
+#[inline]
+unsafe fn push_rooted_array_value(arr_handle: &crate::gc::RuntimeHandle<'_>, value: f64) {
+    let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+    let pushed = crate::array::js_array_push_f64(arr, value);
+    arr_handle.set_raw_mut_ptr(pushed);
+}
+
+#[inline]
+unsafe fn store_plugin_metadata_fields(
+    obj: *mut crate::object::ObjectHeader,
+    id_value: f64,
+    name_value: f64,
+    version_value: f64,
+    description_value: f64,
+) {
+    crate::object::store_object_field_slot(obj, 0, id_value.to_bits());
+    crate::object::store_object_field_slot(obj, 1, name_value.to_bits());
+    crate::object::store_object_field_slot(obj, 2, version_value.to_bits());
+    crate::object::store_object_field_slot(obj, 3, description_value.to_bits());
+}
+
+#[inline]
+unsafe fn store_tool_metadata_fields(
+    obj: *mut crate::object::ObjectHeader,
+    name_value: f64,
+    description_value: f64,
+    plugin_id_value: f64,
+) {
+    crate::object::store_object_field_slot(obj, 0, name_value.to_bits());
+    crate::object::store_object_field_slot(obj, 1, description_value.to_bits());
+    crate::object::store_object_field_slot(obj, 2, plugin_id_value.to_bits());
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_store_plugin_metadata_fields(
+    obj: *mut crate::object::ObjectHeader,
+    id_value: f64,
+    name_value: f64,
+    version_value: f64,
+    description_value: f64,
+) {
+    store_plugin_metadata_fields(obj, id_value, name_value, version_value, description_value);
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_store_tool_metadata_fields(
+    obj: *mut crate::object::ObjectHeader,
+    name_value: f64,
+    description_value: f64,
+    plugin_id_value: f64,
+) {
+    store_tool_metadata_fields(obj, name_value, description_value, plugin_id_value);
 }
 
 /// Call a closure pointer with one f64 argument
@@ -627,6 +728,8 @@ pub extern "C" fn perry_plugin_discover(dir_path: f64) -> f64 {
     };
 
     let arr = crate::array::js_array_alloc(8);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -639,125 +742,165 @@ pub extern "C" fn perry_plugin_discover(dir_path: f64) -> f64 {
                 let s =
                     crate::string::js_string_from_bytes(path_str.as_ptr(), path_str.len() as u32);
                 let nanboxed = JSValue::string_ptr(s);
-                crate::array::js_array_push_f64(arr, f64::from_bits(nanboxed.bits()));
+                unsafe {
+                    push_rooted_array_value(&arr_handle, f64::from_bits(nanboxed.bits()));
+                }
             }
         }
     }
 
+    let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     f64::from_bits(JSValue::pointer(arr as *const u8).bits())
 }
 
 /// List loaded plugins — returns array of objects with {id, name, version, description}
 #[no_mangle]
 pub extern "C" fn perry_plugin_list_plugins() -> f64 {
-    let reg = REGISTRY.lock().unwrap();
-    let arr = crate::array::js_array_alloc(reg.plugins.len() as u32);
+    let plugins: Vec<(u64, String, String, String)> = {
+        let reg = crate::gc::lock_gc_root_registry(&*REGISTRY);
+        reg.plugins
+            .iter()
+            .map(|plugin| {
+                let name = plugin
+                    .metadata
+                    .as_ref()
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| plugin.path_name.clone());
+                let version = plugin
+                    .metadata
+                    .as_ref()
+                    .map(|m| m.version.clone())
+                    .unwrap_or_else(|| "0.0.0".to_string());
+                let description = plugin
+                    .metadata
+                    .as_ref()
+                    .map(|m| m.description.clone())
+                    .unwrap_or_default();
+                (plugin.id, name, version, description)
+            })
+            .collect()
+    };
+    let arr = crate::array::js_array_alloc(plugins.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
 
-    for plugin in &reg.plugins {
+    for (index, (plugin_id, name, version, desc)) in plugins.into_iter().enumerate() {
+        let item_scope = crate::gc::RuntimeHandleScope::new();
         unsafe {
             // Create object with 4 fields: id, name, version, description
             let obj = crate::object::js_object_alloc(0, 4);
+            let obj_handle = item_scope.root_raw_mut_ptr(obj);
             let keys_arr = crate::array::js_array_alloc(4);
+            let keys_handle = item_scope.root_raw_mut_ptr(keys_arr);
 
-            // id
-            let id_key = crate::string::js_string_from_bytes("id\0".as_ptr(), 2);
-            crate::array::js_array_push(keys_arr, JSValue::string_ptr(id_key));
-            let fields = (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
-                as *mut f64;
-            *fields = plugin.id as f64;
+            store_plugin_key_slot(&keys_handle, 0, b"id");
+            store_plugin_key_slot(&keys_handle, 1, b"name");
+            store_plugin_key_slot(&keys_handle, 2, b"version");
+            store_plugin_key_slot(&keys_handle, 3, b"description");
 
-            // name
-            let name_key = crate::string::js_string_from_bytes("name\0".as_ptr(), 4);
-            crate::array::js_array_push(keys_arr, JSValue::string_ptr(name_key));
-            let name_str = plugin
-                .metadata
-                .as_ref()
-                .map(|m| m.name.as_str())
-                .unwrap_or(&plugin.path_name);
-            *fields.add(1) = make_nanboxed_string(name_str);
+            let id_value = plugin_id as f64;
+            let name_value = make_nanboxed_string(&name);
+            let name_handle = item_scope.root_nanbox_f64(name_value);
+            let version_value = make_nanboxed_string(&version);
+            let version_handle = item_scope.root_nanbox_f64(version_value);
+            let desc_value = make_nanboxed_string(&desc);
+            let desc_handle = item_scope.root_nanbox_f64(desc_value);
 
-            // version
-            let ver_key = crate::string::js_string_from_bytes("version\0".as_ptr(), 7);
-            crate::array::js_array_push(keys_arr, JSValue::string_ptr(ver_key));
-            let version = plugin
-                .metadata
-                .as_ref()
-                .map(|m| m.version.as_str())
-                .unwrap_or("0.0.0");
-            *fields.add(2) = make_nanboxed_string(version);
-
-            // description
-            let desc_key = crate::string::js_string_from_bytes("description\0".as_ptr(), 11);
-            crate::array::js_array_push(keys_arr, JSValue::string_ptr(desc_key));
-            let desc = plugin
-                .metadata
-                .as_ref()
-                .map(|m| m.description.as_str())
-                .unwrap_or("");
-            *fields.add(3) = make_nanboxed_string(desc);
-
-            (*obj).keys_array = keys_arr;
-
-            crate::array::js_array_push_f64(
-                arr,
-                f64::from_bits(JSValue::pointer(obj as *const u8).bits()),
+            let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+            store_plugin_metadata_fields(
+                obj,
+                id_value,
+                name_handle.get_nanbox_f64(),
+                version_handle.get_nanbox_f64(),
+                desc_handle.get_nanbox_f64(),
             );
+
+            let keys_arr = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            crate::object::js_object_set_keys(obj, keys_arr);
+
+            let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            crate::array::store_array_slot(arr, index, JSValue::pointer(obj as *const u8).bits());
+            (*arr).length = (index + 1) as u32;
         }
     }
 
+    let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     f64::from_bits(JSValue::pointer(arr as *const u8).bits())
 }
 
 /// List registered hook names — returns array of strings
 #[no_mangle]
 pub extern "C" fn perry_plugin_list_hooks() -> f64 {
-    let reg = REGISTRY.lock().unwrap();
-    let arr = crate::array::js_array_alloc(reg.hooks.len() as u32);
+    let hook_names: Vec<String> = {
+        let reg = crate::gc::lock_gc_root_registry(&*REGISTRY);
+        reg.hooks.keys().cloned().collect()
+    };
+    let arr = crate::array::js_array_alloc(hook_names.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
 
-    for hook_name in reg.hooks.keys() {
+    for (index, hook_name) in hook_names.into_iter().enumerate() {
         unsafe {
-            let s = make_nanboxed_string(hook_name);
-            crate::array::js_array_push_f64(arr, s);
+            let s = make_nanboxed_string(&hook_name);
+            let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            crate::array::store_array_slot(arr, index, s.to_bits());
+            (*arr).length = (index + 1) as u32;
         }
     }
 
+    let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     f64::from_bits(JSValue::pointer(arr as *const u8).bits())
 }
 
 /// List registered tools — returns array of objects with {name, description, pluginId}
 #[no_mangle]
 pub extern "C" fn perry_plugin_list_tools() -> f64 {
-    let reg = REGISTRY.lock().unwrap();
-    let arr = crate::array::js_array_alloc(reg.tools.len() as u32);
+    let tools: Vec<(String, String, u64)> = {
+        let reg = crate::gc::lock_gc_root_registry(&*REGISTRY);
+        reg.tools
+            .iter()
+            .map(|tool| (tool.name.clone(), tool.description.clone(), tool.plugin_id))
+            .collect()
+    };
+    let arr = crate::array::js_array_alloc(tools.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
 
-    for tool in &reg.tools {
+    for (index, (tool_name, tool_desc, plugin_id)) in tools.into_iter().enumerate() {
+        let item_scope = crate::gc::RuntimeHandleScope::new();
         unsafe {
             let obj = crate::object::js_object_alloc(0, 3);
+            let obj_handle = item_scope.root_raw_mut_ptr(obj);
             let keys_arr = crate::array::js_array_alloc(3);
+            let keys_handle = item_scope.root_raw_mut_ptr(keys_arr);
 
-            let name_key = crate::string::js_string_from_bytes("name\0".as_ptr(), 4);
-            crate::array::js_array_push(keys_arr, JSValue::string_ptr(name_key));
-            let fields = (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
-                as *mut f64;
-            *fields = make_nanboxed_string(&tool.name);
+            store_plugin_key_slot(&keys_handle, 0, b"name");
+            store_plugin_key_slot(&keys_handle, 1, b"description");
+            store_plugin_key_slot(&keys_handle, 2, b"pluginId");
 
-            let desc_key = crate::string::js_string_from_bytes("description\0".as_ptr(), 11);
-            crate::array::js_array_push(keys_arr, JSValue::string_ptr(desc_key));
-            *fields.add(1) = make_nanboxed_string(&tool.description);
-
-            let pid_key = crate::string::js_string_from_bytes("pluginId\0".as_ptr(), 8);
-            crate::array::js_array_push(keys_arr, JSValue::string_ptr(pid_key));
-            *fields.add(2) = tool.plugin_id as f64;
-
-            (*obj).keys_array = keys_arr;
-
-            crate::array::js_array_push_f64(
-                arr,
-                f64::from_bits(JSValue::pointer(obj as *const u8).bits()),
+            let name_value = make_nanboxed_string(&tool_name);
+            let name_handle = item_scope.root_nanbox_f64(name_value);
+            let desc_value = make_nanboxed_string(&tool_desc);
+            let desc_handle = item_scope.root_nanbox_f64(desc_value);
+            let plugin_id_value = plugin_id as f64;
+            let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+            store_tool_metadata_fields(
+                obj,
+                name_handle.get_nanbox_f64(),
+                desc_handle.get_nanbox_f64(),
+                plugin_id_value,
             );
+
+            let keys_arr = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            crate::object::js_object_set_keys(obj, keys_arr);
+
+            let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            crate::array::store_array_slot(arr, index, JSValue::pointer(obj as *const u8).bits());
+            (*arr).length = (index + 1) as u32;
         }
     }
 
+    let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     f64::from_bits(JSValue::pointer(arr as *const u8).bits())
 }
 
@@ -772,4 +915,83 @@ pub extern "C" fn perry_plugin_count() -> i64 {
 #[no_mangle]
 pub extern "C" fn perry_plugin_init() {
     let _reg = REGISTRY.lock().unwrap();
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_plugin_roots() {
+    *crate::gc::lock_gc_root_registry(&*REGISTRY) = PluginRegistry::new();
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_plugin_roots(bits: u64) {
+    let mut reg = crate::gc::lock_gc_root_registry(&*REGISTRY);
+    *reg = PluginRegistry::new();
+    reg.hooks.insert(
+        "hook".to_string(),
+        vec![HookRegistration {
+            plugin_id: 1,
+            handler_closure: bits,
+            priority: DEFAULT_PRIORITY,
+            mode: HOOK_MODE_FILTER,
+        }],
+    );
+    reg.tools.push(ToolRegistration {
+        plugin_id: 1,
+        name: "tool".to_string(),
+        description: "tool".to_string(),
+        handler_closure: bits,
+    });
+    reg.services.push(ServiceRegistration {
+        plugin_id: 1,
+        name: "service".to_string(),
+        start_fn: bits,
+        stop_fn: bits,
+    });
+    reg.routes.push(RouteRegistration {
+        plugin_id: 1,
+        path: "/route".to_string(),
+        handler_closure: bits,
+    });
+    reg.events.insert(
+        "event".to_string(),
+        vec![EventRegistration {
+            plugin_id: 1,
+            handler_closure: bits,
+        }],
+    );
+    reg.config.insert("config".to_string(), bits);
+}
+
+#[cfg(test)]
+pub(crate) fn test_plugin_roots_snapshot() -> (u64, u64, u64, u64, u64, u64, u64) {
+    let reg = crate::gc::lock_gc_root_registry(&*REGISTRY);
+    (
+        reg.hooks
+            .get("hook")
+            .and_then(|hooks| hooks.first())
+            .map(|hook| hook.handler_closure)
+            .unwrap_or(0),
+        reg.tools
+            .first()
+            .map(|tool| tool.handler_closure)
+            .unwrap_or(0),
+        reg.services
+            .first()
+            .map(|service| service.start_fn)
+            .unwrap_or(0),
+        reg.services
+            .first()
+            .map(|service| service.stop_fn)
+            .unwrap_or(0),
+        reg.routes
+            .first()
+            .map(|route| route.handler_closure)
+            .unwrap_or(0),
+        reg.events
+            .get("event")
+            .and_then(|events| events.first())
+            .map(|event| event.handler_closure)
+            .unwrap_or(0),
+        reg.config.get("config").copied().unwrap_or(0),
+    )
 }

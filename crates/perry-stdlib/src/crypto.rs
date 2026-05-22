@@ -15,7 +15,7 @@ use md5::{Digest as Md5Digest, Md5};
 use perry_runtime::{js_string_from_bytes, StringHeader};
 use rand::RngCore;
 use sha1::Sha1;
-use sha2::{Digest as Sha256Digest, Sha256, Sha512};
+use sha2::{Digest as Sha256Digest, Sha224, Sha256, Sha384, Sha512};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
@@ -352,6 +352,100 @@ fn resolve_range(total: usize, offset: Option<usize>, size: Option<usize>) -> (u
     (start, end)
 }
 
+/// Decode a NaN-boxed numeric `f64` to a plain `f64`. Number literals
+/// reach the FFI as raw doubles, but a value that flowed through an
+/// integer-typed path may arrive INT32-tagged (`0x7FFE` top16). Handle
+/// both so `randomInt` works regardless of which representation codegen
+/// picked for `min` / `max`.
+fn nanboxed_to_f64_num(bits: f64) -> f64 {
+    let raw = bits.to_bits();
+    let top16 = (raw >> 48) as u16;
+    if top16 == 0x7FFE {
+        return ((raw & 0xFFFF_FFFF) as u32 as i32) as f64;
+    }
+    bits
+}
+
+/// `crypto.randomInt([min, ]max)` — uniform random integer in `[min, max)`.
+/// Codegen passes `min = 0` for the single-argument form. Uses rejection
+/// sampling so the distribution is unbiased (matching Node's guarantee).
+/// Returns the integer as a plain `f64`. A degenerate range (`max <= min`)
+/// returns `min` rather than crashing.
+#[no_mangle]
+pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
+    let min = nanboxed_to_f64_num(min_bits) as i64;
+    let max = nanboxed_to_f64_num(max_bits) as i64;
+    if max <= min {
+        return min as f64;
+    }
+    let range = (max - min) as u64;
+    // Rejection sampling: discard values in the unfair tail so every
+    // outcome in `[0, range)` is equally likely.
+    let limit = u64::MAX - (u64::MAX % range);
+    let mut rng = rand::thread_rng();
+    let mut r = rng.next_u64();
+    while r >= limit {
+        r = rng.next_u64();
+    }
+    (min + (r % range) as i64) as f64
+}
+
+/// `crypto.timingSafeEqual(a, b)` — constant-time comparison of two
+/// equal-length byte sequences (Buffer / TypedArray / string). Returns a
+/// NaN-boxed boolean. Node throws `RangeError` when the lengths differ; the
+/// no-exception FFI path returns `false` instead so a length mismatch
+/// degrades gracefully rather than crashing.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_timing_safe_equal(a_ptr: i64, b_ptr: i64) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    let a = bytes_from_ptr(a_ptr);
+    let b = bytes_from_ptr(b_ptr);
+    if a.len() != b.len() {
+        return f64::from_bits(TAG_FALSE);
+    }
+    let mut diff: u8 = 0;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    f64::from_bits(if diff == 0 { TAG_TRUE } else { TAG_FALSE })
+}
+
+/// `crypto.getHashes()` — the digest algorithms Perry can construct via
+/// `createHash` / `createHmac`. Returns a JS `string[]`.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_get_hashes() -> *mut perry_runtime::ArrayHeader {
+    use perry_runtime::{js_array_alloc, js_array_push, JSValue};
+    const NAMES: [&str; 6] = ["md5", "sha1", "sha224", "sha256", "sha384", "sha512"];
+    let arr = js_array_alloc(0);
+    for n in NAMES {
+        let ptr = js_string_from_bytes(n.as_ptr(), n.len() as u32);
+        js_array_push(arr, JSValue::string_ptr(ptr));
+    }
+    arr
+}
+
+/// `crypto.getCiphers()` — the symmetric ciphers Perry supports
+/// (`createCipheriv` / WebCrypto AES-GCM). Returns a JS `string[]`.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_get_ciphers() -> *mut perry_runtime::ArrayHeader {
+    use perry_runtime::{js_array_alloc, js_array_push, JSValue};
+    const NAMES: [&str; 6] = [
+        "aes-128-cbc",
+        "aes-192-cbc",
+        "aes-256-cbc",
+        "aes-128-gcm",
+        "aes-192-gcm",
+        "aes-256-gcm",
+    ];
+    let arr = js_array_alloc(0);
+    for n in NAMES {
+        let ptr = js_string_from_bytes(n.as_ptr(), n.len() as u32);
+        js_array_push(arr, JSValue::string_ptr(ptr));
+    }
+    arr
+}
+
 /// Create HMAC-SHA256
 /// crypto.createHmac('sha256', key).update(data).digest('hex') -> string
 #[no_mangle]
@@ -407,23 +501,47 @@ pub unsafe extern "C" fn js_crypto_hmac_sha256_bytes(
     alloc_buffer_from_slice(&digest)
 }
 
-/// PBKDF2-HMAC-SHA-256 returning a Buffer. Counterpart of
-/// `crypto.pbkdf2Sync(password, salt, iterations, keylen, 'sha256')`.
+/// PBKDF2-HMAC returning a Buffer. Counterpart of
+/// `crypto.pbkdf2Sync(password, salt, iterations, keylen, digest)`.
 /// Accepts string or Buffer for both password and salt.
+///
+/// `digest_ptr` is the NaN-unboxed pointer to the digest-algorithm string
+/// (`'sha256'`, `'sha512'`, …). A null/empty/unknown digest defaults to
+/// SHA-256 — the algorithm SCRAM and the previous callers relied on. The
+/// digest was silently ignored before, so `pbkdf2Sync(..., 'sha512')`
+/// produced a SHA-256 key (#1355).
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_pbkdf2_bytes(
     password_ptr: i64,
     salt_ptr: i64,
     iterations: f64,
     keylen: f64,
+    digest_ptr: i64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
     use pbkdf2::pbkdf2_hmac;
+    use sha2::{Sha224, Sha384};
     let password = bytes_from_ptr(password_ptr);
     let salt = bytes_from_ptr(salt_ptr);
     let iter = iterations as u32;
     let klen = keylen as usize;
     let mut out = vec![0u8; klen];
-    pbkdf2_hmac::<Sha256>(&password, &salt, iter, &mut out);
+    // Resolve the digest algorithm. `digest_ptr` may be a null/sentinel
+    // pointer (no arg passed) — fall back to SHA-256 in that case.
+    let digest = if (digest_ptr as usize) < 0x1000 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&bytes_from_ptr(digest_ptr))
+            .to_ascii_lowercase()
+            .replace('-', "")
+    };
+    match digest.as_str() {
+        "sha1" => pbkdf2_hmac::<Sha1>(&password, &salt, iter, &mut out),
+        "sha224" => pbkdf2_hmac::<Sha224>(&password, &salt, iter, &mut out),
+        "sha384" => pbkdf2_hmac::<Sha384>(&password, &salt, iter, &mut out),
+        "sha512" => pbkdf2_hmac::<Sha512>(&password, &salt, iter, &mut out),
+        // "sha256" and the empty/unknown default.
+        _ => pbkdf2_hmac::<Sha256>(&password, &salt, iter, &mut out),
+    }
     alloc_buffer_from_slice(&out)
 }
 
@@ -674,6 +792,76 @@ pub unsafe extern "C" fn js_crypto_scrypt_custom(
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }
 
+/// `crypto.scryptSync(password, salt, keylen[, options])` → Buffer.
+///
+/// Unlike `js_crypto_scrypt` (which returns a hex string), this returns a
+/// Buffer to match Node's `scryptSync`, and reads password/salt via
+/// `bytes_from_ptr` so Buffer inputs hash correctly. Optional cost
+/// parameters are read from `options_ptr` (a NaN-unboxed object pointer, or
+/// a null/sentinel for none): `N`/`cost`, `r`/`blockSize`, `p`/
+/// `parallelization`. Defaults match Node: N=16384, r=8, p=1.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_scrypt_bytes(
+    password_ptr: i64,
+    salt_ptr: i64,
+    key_length: f64,
+    options_ptr: i64,
+) -> *mut perry_runtime::buffer::BufferHeader {
+    use perry_runtime::{js_object_get_field_by_name, ObjectHeader};
+    let password = bytes_from_ptr(password_ptr);
+    let salt = bytes_from_ptr(salt_ptr);
+    let klen = key_length as usize;
+    if klen == 0 || klen > 1024 {
+        return alloc_buffer_from_slice(&[]);
+    }
+    // Node defaults: N=16384 (cost), r=8 (blockSize), p=1 (parallelization).
+    let (mut n, mut r, mut p) = (16384u64, 8u32, 1u32);
+    if (options_ptr as usize) >= 0x1000 {
+        let obj = options_ptr as *const ObjectHeader;
+        // Read a numeric option by primary or alias name; None if absent.
+        let mut read = |primary: &str, alias: &str| -> Option<f64> {
+            let pk = js_string_from_bytes(primary.as_ptr(), primary.len() as u32);
+            let v = js_object_get_field_by_name(obj, pk);
+            if !v.is_undefined() {
+                return Some(v.to_number());
+            }
+            let ak = js_string_from_bytes(alias.as_ptr(), alias.len() as u32);
+            let v = js_object_get_field_by_name(obj, ak);
+            if v.is_undefined() {
+                None
+            } else {
+                Some(v.to_number())
+            }
+        };
+        if let Some(x) = read("N", "cost") {
+            if x >= 1.0 {
+                n = x as u64;
+            }
+        }
+        if let Some(x) = read("r", "blockSize") {
+            if x >= 1.0 {
+                r = x as u32;
+            }
+        }
+        if let Some(x) = read("p", "parallelization") {
+            if x >= 1.0 {
+                p = x as u32;
+            }
+        }
+    }
+    // `scrypt::Params` takes log2(N); Node requires N to be a power of two,
+    // so trailing_zeros gives the exact exponent. A non-power-of-two or an
+    // otherwise-invalid combo falls back to the Node defaults.
+    let log_n = n.trailing_zeros() as u8;
+    let params = scrypt::Params::new(log_n, r, p, klen)
+        .unwrap_or_else(|_| scrypt::Params::new(14, 8, 1, klen).unwrap());
+    let mut out = vec![0u8; klen];
+    if scrypt::scrypt(&password, &salt, &params, &mut out).is_err() {
+        return alloc_buffer_from_slice(&[]);
+    }
+    alloc_buffer_from_slice(&out)
+}
+
 // ---------------------------------------------------------------------------
 // Hash handle — powers `const h = crypto.createHash('sha1'); h.update(x);
 // h.digest()` (issue #86). The runtime-resident chain-collapse in
@@ -688,7 +876,9 @@ pub unsafe extern "C" fn js_crypto_scrypt_custom(
 
 pub enum HashState {
     Sha1(Sha1),
+    Sha224(Sha224),
     Sha256(Sha256),
+    Sha384(Sha384),
     Sha512(Sha512),
     Md5(Md5),
 }
@@ -713,7 +903,9 @@ pub unsafe extern "C" fn js_crypto_create_hash(alg_ptr: i64) -> f64 {
         .to_ascii_lowercase();
     let state = match alg.as_str() {
         "sha1" | "sha-1" => HashState::Sha1(Sha1::new()),
+        "sha224" | "sha-224" => HashState::Sha224(Sha224::new()),
         "sha256" | "sha-256" => HashState::Sha256(Sha256::new()),
+        "sha384" | "sha-384" => HashState::Sha384(Sha384::new()),
         "sha512" | "sha-512" => HashState::Sha512(Sha512::new()),
         "md5" => HashState::Md5(Md5::new()),
         _ => return f64::from_bits(0x7FFC_0000_0000_0001),
@@ -739,7 +931,9 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
             if let Some(state) = guard.as_mut() {
                 match state {
                     HashState::Sha1(x) => Sha256Digest::update(x, &bytes),
+                    HashState::Sha224(x) => Sha256Digest::update(x, &bytes),
                     HashState::Sha256(x) => Sha256Digest::update(x, &bytes),
+                    HashState::Sha384(x) => Sha256Digest::update(x, &bytes),
                     HashState::Sha512(x) => Sha256Digest::update(x, &bytes),
                     HashState::Md5(x) => Md5Digest::update(x, &bytes),
                 }
@@ -753,7 +947,9 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
             };
             let digest: Vec<u8> = match state {
                 Some(HashState::Sha1(x)) => x.finalize().to_vec(),
+                Some(HashState::Sha224(x)) => x.finalize().to_vec(),
                 Some(HashState::Sha256(x)) => x.finalize().to_vec(),
+                Some(HashState::Sha384(x)) => x.finalize().to_vec(),
                 Some(HashState::Sha512(x)) => x.finalize().to_vec(),
                 Some(HashState::Md5(x)) => x.finalize().to_vec(),
                 None => return f64::from_bits(0x7FFC_0000_0000_0001),

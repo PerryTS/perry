@@ -27,6 +27,23 @@ pub unsafe extern "C" fn js_json_parse_or_null(text_ptr: *const StringHeader) ->
     js_json_parse(text_ptr)
 }
 
+#[cfg(test)]
+pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JSValue {
+    assert!(!text_ptr.is_null());
+    let len = (*text_ptr).byte_len as usize;
+    let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data_ptr, len);
+
+    crate::gc::gc_suppress();
+    let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
+    let mut parser = DirectParser::new(bytes);
+    let result = parser.parse_value();
+    parse_root_push(result);
+    crate::gc::gc_unsuppress();
+    parse_root_restore(text_root);
+    result
+}
+
 /// JSON.parse(text) -> any
 ///
 /// Uses a direct recursive-descent parser that constructs Perry JSValues

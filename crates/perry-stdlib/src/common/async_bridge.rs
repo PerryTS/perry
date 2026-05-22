@@ -346,17 +346,30 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     };
 
     for resolution in simple_resolutions {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let promise_ptr_usize = resolution.promise_ptr;
-        let promise_ptr = promise_ptr_usize as *mut perry_runtime::Promise;
+        let promise_handle =
+            scope.root_raw_mut_ptr(promise_ptr_usize as *mut perry_runtime::Promise);
+        let result_handle = scope.root_nanbox_u64(resolution.result_bits);
         // Issue #859: unpin BEFORE resolve so the just-settled promise
         // can be reclaimed by the next GC. Resolve doesn't trigger GC
         // mid-call, so ordering here is purely about leaving a clean
         // GC state after the loop.
-        unsafe { unpin_promise_after_native_resolution(promise_ptr_usize) };
+        unsafe {
+            unpin_promise_after_native_resolution(
+                promise_handle.get_raw_mut_ptr::<perry_runtime::Promise>() as usize,
+            )
+        };
         if resolution.is_success {
-            perry_runtime::js_promise_resolve(promise_ptr, f64::from_bits(resolution.result_bits));
+            perry_runtime::js_promise_resolve(
+                promise_handle.get_raw_mut_ptr(),
+                f64::from_bits(result_handle.get_nanbox_u64()),
+            );
         } else {
-            perry_runtime::js_promise_reject(promise_ptr, f64::from_bits(resolution.result_bits));
+            perry_runtime::js_promise_reject(
+                promise_handle.get_raw_mut_ptr(),
+                f64::from_bits(result_handle.get_nanbox_u64()),
+            );
         }
     }
 
@@ -369,20 +382,33 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     };
 
     for resolution in deferred_resolutions {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let promise_ptr_usize = resolution.promise_ptr;
-        let promise_ptr = promise_ptr_usize as *mut perry_runtime::Promise;
+        let promise_handle =
+            scope.root_raw_mut_ptr(promise_ptr_usize as *mut perry_runtime::Promise);
         // Run the converter on the main thread to create JSValues safely
         let result_bits = (resolution.converter)();
+        let result_handle = scope.root_nanbox_u64(result_bits);
 
         // Issue #859: unpin BEFORE resolve. The converter ran first
         // and may itself have allocated (creating the result string,
         // etc.), but the promise stayed pinned across that work — so
         // even if the converter triggered GC, the promise survived.
-        unsafe { unpin_promise_after_native_resolution(promise_ptr_usize) };
+        unsafe {
+            unpin_promise_after_native_resolution(
+                promise_handle.get_raw_mut_ptr::<perry_runtime::Promise>() as usize,
+            )
+        };
         if resolution.is_success {
-            perry_runtime::js_promise_resolve(promise_ptr, f64::from_bits(result_bits));
+            perry_runtime::js_promise_resolve(
+                promise_handle.get_raw_mut_ptr(),
+                f64::from_bits(result_handle.get_nanbox_u64()),
+            );
         } else {
-            perry_runtime::js_promise_reject(promise_ptr, f64::from_bits(result_bits));
+            perry_runtime::js_promise_reject(
+                promise_handle.get_raw_mut_ptr(),
+                f64::from_bits(result_handle.get_nanbox_u64()),
+            );
         }
     }
 

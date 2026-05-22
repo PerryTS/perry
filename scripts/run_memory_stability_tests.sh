@@ -524,6 +524,7 @@ for idx, cycle in enumerate(cycles):
     reason = nested(cycle, "copying_nursery", "fallback_reason")
     eligible = nested(cycle, "copying_nursery", "eligible")
     shadow_roots = cycle.get("shadow_roots")
+    root_sources = cycle.get("root_sources")
     layout_scans = cycle.get("layout_scans")
     if reason not in allowed_fallback_reasons:
         errors.append(f"cycle {idx}: unexpected fallback_reason={reason!r}")
@@ -550,6 +551,79 @@ for idx, cycle in enumerate(cycles):
             errors.append(f"cycle {idx}: shadow_roots.pointer_roots={pointers} > nonzero_slots={nonzero}")
         if isinstance(pointers, int) and isinstance(rewritten, int) and rewritten > pointers:
             errors.append(f"cycle {idx}: shadow_roots.rewritten_slots={rewritten} > pointer_roots={pointers}")
+    if not isinstance(root_sources, dict):
+        errors.append(f"cycle {idx}: root_sources missing or not an object")
+    else:
+        for source in (
+            "compiled_shadow",
+            "module_globals",
+            "runtime_handles",
+            "runtime_mutable_scanners",
+            "ffi_mutable_scanners",
+        ):
+            stats = root_sources.get(source)
+            if not isinstance(stats, dict):
+                errors.append(f"cycle {idx}: root_sources.{source} missing or not an object")
+                continue
+            for field in (
+                "registered_scanners",
+                "slots_scanned",
+                "nonzero_slots",
+                "pointer_roots",
+                "rewritten_slots",
+            ):
+                value = stats.get(field)
+                if not isinstance(value, int) or value < 0:
+                    errors.append(
+                        f"cycle {idx}: root_sources.{source}.{field}={value!r}, "
+                        "want non-negative int"
+                    )
+            slots = stats.get("slots_scanned", -1)
+            nonzero = stats.get("nonzero_slots", -1)
+            pointers = stats.get("pointer_roots", -1)
+            rewritten = stats.get("rewritten_slots", -1)
+            if isinstance(slots, int) and isinstance(nonzero, int) and nonzero > slots:
+                errors.append(
+                    f"cycle {idx}: root_sources.{source}.nonzero_slots={nonzero} "
+                    f"> slots_scanned={slots}"
+                )
+            if isinstance(nonzero, int) and isinstance(pointers, int) and pointers > nonzero:
+                errors.append(
+                    f"cycle {idx}: root_sources.{source}.pointer_roots={pointers} "
+                    f"> nonzero_slots={nonzero}"
+                )
+            if isinstance(pointers, int) and isinstance(rewritten, int) and rewritten > pointers:
+                errors.append(
+                    f"cycle {idx}: root_sources.{source}.rewritten_slots={rewritten} "
+                    f"> pointer_roots={pointers}"
+                )
+        native = root_sources.get("native_stack_fallback")
+        if not isinstance(native, dict):
+            errors.append(f"cycle {idx}: root_sources.native_stack_fallback missing or not an object")
+        else:
+            decision = native.get("decision")
+            if decision not in ("scan", "skip_disabled", "skip_shadow_stack_active"):
+                errors.append(
+                    f"cycle {idx}: root_sources.native_stack_fallback.decision={decision!r}"
+                )
+            if not isinstance(native.get("scanned"), bool):
+                errors.append(
+                    f"cycle {idx}: root_sources.native_stack_fallback.scanned="
+                    f"{native.get('scanned')!r}, want bool"
+                )
+            for field in (
+                "roots_found",
+                "pinned_roots",
+                "pinned_bytes",
+                "compiled_frame_pinned_roots",
+                "compiled_frame_pinned_bytes",
+            ):
+                value = native.get(field)
+                if not isinstance(value, int) or value < 0:
+                    errors.append(
+                        f"cycle {idx}: root_sources.native_stack_fallback.{field}="
+                        f"{value!r}, want non-negative int"
+                    )
     if not isinstance(layout_scans, dict):
         errors.append(f"cycle {idx}: layout_scans missing or not an object")
     else:
@@ -597,6 +671,16 @@ if mode in ("copied_minor_precise", "copied_minor_default"):
         legacy_pinned_bytes = nested(
             cycle, "legacy_copy_only_scanner_pinned", "bytes", default=-1
         )
+        native_pinned_bytes = nested(
+            cycle, "root_sources", "native_stack_fallback", "pinned_bytes", default=-1
+        )
+        compiled_frame_pinned_bytes = nested(
+            cycle,
+            "root_sources",
+            "native_stack_fallback",
+            "compiled_frame_pinned_bytes",
+            default=-1,
+        )
         if reason != "none":
             errors.append(f"cycle {idx}: fallback_reason={reason!r}, want 'none'")
         if eligible is not True:
@@ -610,6 +694,16 @@ if mode in ("copied_minor_precise", "copied_minor_default"):
         if legacy_pinned_bytes != 0:
             errors.append(
                 f"cycle {idx}: legacy_copy_only_scanner_pinned.bytes={legacy_pinned_bytes}, want 0"
+            )
+        if native_pinned_bytes != 0:
+            errors.append(
+                f"cycle {idx}: root_sources.native_stack_fallback.pinned_bytes="
+                f"{native_pinned_bytes}, want 0"
+            )
+        if compiled_frame_pinned_bytes != 0:
+            errors.append(
+                f"cycle {idx}: root_sources.native_stack_fallback."
+                f"compiled_frame_pinned_bytes={compiled_frame_pinned_bytes}, want 0"
             )
     copied_productive = [
         cycle
@@ -630,6 +724,22 @@ if mode in ("copied_minor_precise", "copied_minor_default"):
             "shadow_roots.nonzero_slots grew across copied-minor probe: "
             f"{nonzero_shadow_roots}"
         )
+    mutable_source_evidence = [
+        sum(
+            nested(cycle, "root_sources", source, "pointer_roots", default=0)
+            + nested(cycle, "root_sources", source, "rewritten_slots", default=0)
+            for source in (
+                "compiled_shadow",
+                "module_globals",
+                "runtime_handles",
+                "runtime_mutable_scanners",
+                "ffi_mutable_scanners",
+            )
+        )
+        for cycle in cycles
+    ]
+    if not mutable_source_evidence or max(mutable_source_evidence) == 0:
+        errors.append("copied-minor trace did not report mutable root source evidence")
 elif mode == "evacuation_productive":
     productive = [
         cycle
@@ -963,6 +1073,71 @@ for (let batch = 0; batch < 8; batch++) {
 
 console.log("mixed_request_shaping:" + checksum);
 EOF
+
+    cat >"$out_dir/map_set_churn.ts" <<'EOF'
+declare function gc(): void;
+
+let checksum = 0;
+for (let batch = 0; batch < 8; batch++) {
+  const retained = new Map<number, Set<any>>();
+  for (let i = 0; i < 160; i++) {
+    const map = new Map<any, any>();
+    const set = new Set<any>();
+    for (let j = 0; j < 12; j++) {
+      const key = "key_" + batch + "_" + i + "_" + j;
+      map.set(j, key);
+      map.set(key, i + j);
+      set.add(j);
+      set.add(key);
+    }
+    const gotText: any = map.get(3);
+    const gotNumber: any = map.get("key_" + batch + "_" + i + "_7");
+    checksum += gotText.length;
+    checksum += gotNumber;
+    checksum += set.has("key_" + batch + "_" + i + "_5") ? 17 : 0;
+    checksum += set.size;
+    if ((i % 40) === 0) {
+      retained.set(i, set);
+    }
+  }
+  checksum += retained.size;
+  gc();
+}
+
+console.log("map_set_churn:" + checksum);
+EOF
+
+    cat >"$out_dir/promise_churn.ts" <<'EOF'
+declare function gc(): void;
+
+let checksum = 0;
+let rootedPromiseValues: number[] | null = null;
+
+async function churn(batch: number): Promise<void> {
+  const tasks: Promise<number>[] = [];
+  for (let i = 0; i < 160; i++) {
+    const base = batch * 1000 + i;
+    tasks.push(Promise.resolve(base)
+      .then((v: number): number => v + 1)
+      .then((v: number): number => v * 2));
+  }
+  await Promise.all(tasks).then((values: number[]): void => {
+    rootedPromiseValues = values;
+    gc();
+    values = rootedPromiseValues as number[];
+    for (let i = 0; i < values.length; i++) {
+      checksum += values[i] + (i % 7);
+    }
+    rootedPromiseValues = null;
+  });
+}
+
+for (let batch = 0; batch < 8; batch++) {
+  await churn(batch);
+}
+
+console.log("promise_churn:" + checksum);
+EOF
 }
 
 run_copied_minor_fallback_workload() {
@@ -1010,6 +1185,8 @@ run_copied_minor_fallback_report() {
         "string_churn:$workloads_dir/string_churn.ts"
         "object_property_churn:$workloads_dir/object_property_churn.ts"
         "mixed_request_shaping:$workloads_dir/mixed_request_shaping.ts"
+        "map_set_churn:$workloads_dir/map_set_churn.ts"
+        "promise_churn:$workloads_dir/promise_churn.ts"
     )
 
     local report_args=()
@@ -1159,10 +1336,12 @@ EOF
     cat >"$out_dir/async_promise_closures.ts" <<'EOF'
 declare function gc(): void;
 
+let rootedWorkers: (() => Promise<number>)[] | null = null;
+
 async function main(): Promise<number> {
   let total = 0;
   for (let batch = 0; batch < 4; batch++) {
-    const workers: (() => Promise<number>)[] = [];
+    let workers: (() => Promise<number>)[] = [];
     for (let i = 0; i < 30; i++) {
       const captured = batch * 20 + i;
       const worker = async (): Promise<number> => {
@@ -1172,11 +1351,14 @@ async function main(): Promise<number> {
       };
       workers.push(worker);
     }
+    rootedWorkers = workers;
     gc();
+    workers = rootedWorkers as (() => Promise<number>)[];
     const tasks: Promise<number>[] = [];
     for (let i = 0; i < workers.length; i++) {
       tasks.push(workers[i]());
     }
+    rootedWorkers = null;
     const results = await Promise.all(tasks);
     for (let i = 0; i < results.length; i++) {
       total += results[i] + i;
@@ -1550,15 +1732,14 @@ echo "=== Memory-leak regression tests (RSS plateau under sustained alloc) ==="
 # Limits ~50-70% above measured baseline on macOS arm64. CI runners
 # may differ slightly; loosen a limit here rather than in the .ts.
 run_test test-files/test_memory_long_lived_loop.ts 100 "done, lastId=199999"
-# JSON churn — temporarily widened to 290 MB / 315 MB for the GC rework
-# tracked under #1090 (`GC roadmap: make minor GC structurally cheap`).
-# Observed v0.5.1019 Ubuntu CI: default 268 MB, gen-gc 268 MB, mark-sweep
-# 114 MB, force-evac+verify 290 MB — consistently ~28 MB above macOS arm64
-# baselines (default 241 MB / mark-sweep 91 MB / force-evac 263 MB measured
-# 2026-05-21 on M-series). The Linux glibc allocator + page-size accounting
-# explain most of that gap; the rest is GC-rework working-set drift that
-# will be reclaimed once #1090 lands. Revisit + tighten when #1090 closes.
-run_test test-files/test_memory_json_churn.ts      290 "done, checksum=637747500" 315
+# JSON churn stays at 250 MB for default/mark-sweep/gen-gc. On macOS
+# arm64, force-evac+verify has a stable tape+verifier high-water after
+# tape scratch/key-cache cleanup: default/gen-gc 240 MB, mark-sweep 90 MB,
+# force-evac+verify 262 MB, verifier direct parse (PERRY_JSON_TAPE=0)
+# 189 MB, forced tape 261 MB. Trace stayed in copied-minor mode with
+# fallback_reason=none, conservative pins=0, copy-only roots/bytes=0, and
+# old-page allocated/live/reusable/returned bytes=0.
+run_test test-files/test_memory_json_churn.ts      250 "done, checksum=637747500" 275
 run_test test-files/test_memory_string_churn.ts    100 "done, total=9577780"
 run_test test-files/test_memory_closure_churn.ts    50 "done, sum=15004649874"
 

@@ -303,6 +303,12 @@ pub(crate) unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_
 }
 
 #[inline]
+pub(crate) unsafe fn store_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
+    let slot = array_elements_ptr(arr).add(index) as usize;
+    crate::gc::runtime_store_jsvalue_slot(arr as usize, slot, index, value_bits);
+}
+
+#[inline]
 pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
     if arr.is_null() {
         return;
