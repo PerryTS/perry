@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1095 entries across 80 modules
+// Coverage: 1096 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -874,6 +874,8 @@ declare module "perf_hooks" {
   export function measure(...args: any[]): any;
   /** stdlib */
   export function now(...args: any[]): any;
+  /** stdlib */
+  export function toJSON(...args: any[]): any;
 }
 
 declare module "perry/ads" {

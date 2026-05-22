@@ -338,6 +338,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("perf_hooks", "clearMarks")
             | ("perf_hooks", "clearMeasures")
             | ("perf_hooks", "eventLoopUtilization")
+            | ("perf_hooks", "toJSON")
             | ("perf_hooks", "PerformanceObserver")
             | ("perf_hooks", "PerformanceEntry")
             | ("perf_hooks", "PerformanceMark")

@@ -36,6 +36,10 @@ const PERF_ENTRY_KEYS: &[u8] = b"name\0entryType\0startTime\0duration\0detail\0"
 const ELU_SHAPE: u32 = 0x7FFF_FF41;
 const ELU_KEYS: &[u8] = b"idle\0active\0utilization\0";
 
+/// Shape id for the `{ timeOrigin }` snapshot returned by `performance.toJSON()`.
+const TOJSON_SHAPE: u32 = 0x7FFF_FF42;
+const TOJSON_KEYS: &[u8] = b"timeOrigin\0";
+
 #[derive(Clone)]
 struct PerfEntry {
     name: String,
@@ -471,6 +475,25 @@ pub extern "C" fn js_perf_event_loop_utilization(prev: f64) -> f64 {
             }
         }
         make_elu_object(idle, active)
+    }
+}
+
+// ── performance.toJSON() ─────────────────────────────────────────────────────
+/// A JSON snapshot of the performance object. Node returns
+/// `{ nodeTiming, timeOrigin, ... }`; Perry currently surfaces `timeOrigin`
+/// (a positive ms value), which is the field user code reads when serializing
+/// `performance`. Forward-compatible with adding `nodeTiming` later (#1337).
+#[no_mangle]
+pub extern "C" fn js_perf_to_json() -> f64 {
+    unsafe {
+        let obj = js_object_alloc_with_shape(
+            TOJSON_SHAPE,
+            1,
+            TOJSON_KEYS.as_ptr(),
+            TOJSON_KEYS.len() as u32,
+        );
+        js_object_set_field(obj, 0, JSValue::number(time_origin_ms()));
+        crate::value::js_nanbox_pointer(obj as i64)
     }
 }
 

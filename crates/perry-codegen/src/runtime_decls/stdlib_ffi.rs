@@ -1079,6 +1079,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_perf_clear_marks", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_clear_measures", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_event_loop_utilization", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perf_to_json", DOUBLE, &[]);
     module.declare_function("js_perf_observer_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_observer_observe", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_disconnect", DOUBLE, &[DOUBLE]);

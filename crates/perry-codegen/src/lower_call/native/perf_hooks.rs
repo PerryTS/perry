@@ -115,6 +115,7 @@ pub(super) fn lower_perf_hooks_method(
                 ctx.block()
                     .call(DOUBLE, "js_perf_event_loop_utilization", &[(DOUBLE, &a0)])
             }
+            "toJSON" => ctx.block().call(DOUBLE, "js_perf_to_json", &[]),
             _ => return Ok(None),
         };
         return Ok(Some(v));

@@ -2154,6 +2154,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perf_hooks", "clearMarks", false, None),
     method("perf_hooks", "clearMeasures", false, None),
     method("perf_hooks", "eventLoopUtilization", false, None),
+    method("perf_hooks", "toJSON", false, None),
     property("perf_hooks", "timeOrigin"),
     property("perf_hooks", "performance"),
     property("perf_hooks", "constants"),

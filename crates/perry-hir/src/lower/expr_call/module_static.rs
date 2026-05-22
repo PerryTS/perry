@@ -383,6 +383,7 @@ pub(super) fn try_module_static_methods(
                             | "clearMarks"
                             | "clearMeasures"
                             | "eventLoopUtilization"
+                            | "toJSON"
                     ) {
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: "perf_hooks".to_string(),
