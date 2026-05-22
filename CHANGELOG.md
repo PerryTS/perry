@@ -2,6 +2,31 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1022 — ci(benchmark): refresh binary-size baseline after v0.5.455 → v0.5.1021 release cycle
+
+Regression Check `binary-size` job failed on v0.5.1021 against the old
+v0.5.455 (`7fd1c8b3`) baseline:
+
+  - perry: +22.6% (15,537,232 → 19,054,064 bytes)
+  - libperry_runtime: +34.0% (31,717,320 → 42,489,880 bytes)
+  - libperry_stdlib: +6.5% (within threshold, not flagged)
+
+Same shape as the v0.5.455 refresh: the 15% per-release threshold is for
+incremental drift checking, not multi-release catch-up gates. 566 patch
+versions of runtime + stdlib + CLI work (new GC paths, node:buffer
+parity, AsyncLocalStorage hooks, granular parity suites, …) accumulated
+to ~22% perry / ~34% runtime growth — all of it intentional product
+delta, not unexpected bloat. Production binaries are stripped by the
+linker; the .a / .bin sizes the job checks are unstripped release-build
+artefacts used as a regression-trend signal, not a deployment-size
+measurement.
+
+Refreshes `benchmarks/binary-size-baseline.json` to the v0.5.1021
+measurement (`f7aaed1a` from the Regression Check macos-14 runner) and
+updates the `_note` field with the rebaseline rationale. The 15%
+fail-threshold + 5% warn-threshold both stay — they still catch
+incremental drift in the next release cycle.
+
 ## v0.5.1021 — fix(perry-ui-gtk4): #1246 follow-up, restore image.rs resolve_asset_path access
 
 PR #1246 ("Drop all files to <2k LOC + tighten size gate") split
