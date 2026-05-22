@@ -494,28 +494,54 @@ mod tests {
 
     /// Spec: wait does eventually return even with no notify (idle cap).
     /// Smoke-only — full IDLE_CAP_MS would be too slow for unit tests.
+    ///
+    /// `js_wait_for_event`'s budget is derived from the **process-global**
+    /// timer queue, and it returns early when the **process-global**
+    /// `NOTIFIED` flag is set. The `SERIAL` lock only serializes the other
+    /// event_pump tests — it does not stop a parallel (non-event_pump) test
+    /// from calling `js_notify_main_thread` or scheduling a sooner timer
+    /// mid-wait, either of which wakes our wait before the 50ms budget and
+    /// made this assertion flaky under load. So we don't assert a single
+    /// timed wait blocks ~50ms; instead we re-arm and re-measure until we
+    /// observe one clean, uninterrupted window (the common case is the first
+    /// attempt). Each attempt clears the stale notify, drains any past-due
+    /// timers polluting the budget, and reaps its own timer afterward.
     #[test]
     fn wait_returns_when_timer_due() {
         let _g = SERIAL.lock().unwrap();
-        // Schedule a timer 50ms out so wait_for_event uses 50ms as budget.
-        crate::timer::js_set_timeout(50.0);
-        let start = Instant::now();
-        js_wait_for_event();
-        let elapsed = start.elapsed();
+        let mut last_elapsed = Duration::ZERO;
+        let mut blocked_for_timer = false;
+        for _ in 0..40 {
+            // Drain any already-expired timer (left by a parallel test or a
+            // prior attempt) so it can't pin the budget at 0, and consume any
+            // stale notify so the wait blocks on our timer rather than a
+            // leftover flag.
+            crate::timer::js_timer_tick();
+            NOTIFIED.store(false, Ordering::Release);
+            // Schedule a timer 50ms out so wait_for_event uses 50ms as budget.
+            crate::timer::js_set_timeout(50.0);
+            // js_set_timeout / the drain above can flip NOTIFIED via promise
+            // resolution; clear it once more immediately before the wait.
+            NOTIFIED.store(false, Ordering::Release);
+            let start = Instant::now();
+            js_wait_for_event();
+            last_elapsed = start.elapsed();
+            // Reap our 50ms timer so it can't leak a due deadline into the
+            // next attempt or a later serialized test.
+            std::thread::sleep(Duration::from_millis(60));
+            crate::timer::js_timer_tick();
+            if (Duration::from_millis(40)..Duration::from_millis(500)).contains(&last_elapsed) {
+                blocked_for_timer = true;
+                break;
+            }
+            // Woken early (concurrent notify / sooner parallel timer) or too
+            // late (scheduler hiccup) — retry for a clean window.
+        }
         assert!(
-            elapsed >= Duration::from_millis(40),
-            "wait returned too early: {:?}",
-            elapsed
+            blocked_for_timer,
+            "wait never blocked for the ~50ms timer budget across retries; last: {:?}",
+            last_elapsed
         );
-        assert!(
-            elapsed < Duration::from_millis(500),
-            "wait blocked past timer deadline: {:?}",
-            elapsed
-        );
-        // Reap the 50ms timer so it can't leak a due deadline into a
-        // later serialized test.
-        std::thread::sleep(Duration::from_millis(60));
-        crate::timer::js_timer_tick();
     }
 
     /// #1114 spec: a *transient* budget-0 return stays zero-latency, but

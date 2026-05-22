@@ -372,6 +372,9 @@ pub(super) fn try_module_static_methods(
                             | "clearMarks"
                             | "clearMeasures"
                             | "eventLoopUtilization"
+                            | "toJSON"
+                            | "clearResourceTimings"
+                            | "setResourceTimingBufferSize"
                     ) {
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: "perf_hooks".to_string(),

@@ -553,7 +553,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // .final() / .getAuthTag() / .setAuthTag().
     module.declare_function("js_crypto_create_cipheriv", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_crypto_create_decipheriv", DOUBLE, &[I64, I64, I64]);
+    // crypto.createSign(alg) / createVerify(alg) -> SignHandle (NaN-boxed).
+    module.declare_function("js_crypto_create_sign", DOUBLE, &[I64]);
+    module.declare_function("js_crypto_create_verify", DOUBLE, &[I64]);
     module.declare_function("js_crypto_hkdf_sha256", I64, &[I64, I64, I64, DOUBLE]);
+    // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
+    module.declare_function("js_crypto_hkdf_sync", I64, &[I64, I64, I64, I64, DOUBLE]);
     module.declare_function("js_crypto_pbkdf2", I64, &[I64, I64, DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_bytes_hex", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_nonce", I64, &[]);
@@ -561,6 +566,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // crypto.scryptSync(password, salt, keylen, options?) -> Buffer. The 4th
     // arg is the NaN-unboxed options-object pointer (0 = none).
     module.declare_function("js_crypto_scrypt_bytes", I64, &[I64, I64, DOUBLE, I64]);
+    // crypto.generateKeyPairSync(type, options) -> { publicKey, privateKey }.
+    module.declare_function("js_crypto_generate_key_pair_sync", DOUBLE, &[I64, I64]);
     module.declare_function(
         "js_crypto_scrypt_custom",
         I64,
@@ -1072,6 +1079,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_perf_clear_marks", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_clear_measures", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_event_loop_utilization", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perf_to_json", DOUBLE, &[]);
+    module.declare_function("js_perf_clear_resource_timings", DOUBLE, &[]);
+    module.declare_function("js_perf_set_resource_timing_buffer_size", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_observer_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_observer_observe", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_disconnect", DOUBLE, &[DOUBLE]);

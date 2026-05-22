@@ -483,6 +483,42 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
 
+        // `crypto.createSign(alg)` / `crypto.createVerify(alg)` (#1364) —
+        // registers a SignHandle and returns a small-integer handle NaN-boxed
+        // as POINTER_TAG. HANDLE_METHOD_DISPATCH then routes `.update(d)` /
+        // `.sign(key, enc?)` / `.verify(key, sig, enc?)` through
+        // `dispatch_sign`. RSA PKCS#1 v1.5 over sha1/224/256/384/512.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property }
+                    if (property == "createSign" || property == "createVerify")
+                        && matches!(
+                            object.as_ref(),
+                            Expr::NativeModuleRef(n) if n == "crypto"
+                        )
+            ) =>
+        {
+            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                property.as_str()
+            } else {
+                unreachable!()
+            };
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let fname = if property == "createSign" {
+                "js_crypto_create_sign"
+            } else {
+                "js_crypto_create_verify"
+            };
+            // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
+            Ok(blk.call(DOUBLE, fname, &[(I64, &alg_handle)]))
+        }
+
         // Phase H crypto: `crypto.randomBytes(n)` as a Buffer.
         Expr::Call { callee, args, .. }
             if matches!(
@@ -720,6 +756,81 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ],
             );
             Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
+        // The runtime returns an array-buffer-marked Buffer; callers wrap it
+        // with `Buffer.from(...)` / `new Uint8Array(...)`.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "hkdfSync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 5 {
+                return Ok(double_literal(0.0));
+            }
+            let digest_box = lower_expr(ctx, &args[0])?;
+            let ikm_box = lower_expr(ctx, &args[1])?;
+            let salt_box = lower_expr(ctx, &args[2])?;
+            let info_box = lower_expr(ctx, &args[3])?;
+            let keylen_box = lower_expr(ctx, &args[4])?;
+            let blk = ctx.block();
+            let digest_handle = unbox_to_i64(blk, &digest_box);
+            let ikm_handle = unbox_to_i64(blk, &ikm_box);
+            let salt_handle = unbox_to_i64(blk, &salt_box);
+            let info_handle = unbox_to_i64(blk, &info_box);
+            let buf_handle = blk.call(
+                I64,
+                "js_crypto_hkdf_sync",
+                &[
+                    (I64, &digest_handle),
+                    (I64, &ikm_handle),
+                    (I64, &salt_handle),
+                    (I64, &info_handle),
+                    (DOUBLE, &keylen_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // crypto.generateKeyPairSync(type, options) -> { publicKey, privateKey }.
+        // The runtime builds the object (PEM strings) and returns it already
+        // NaN-boxed; `.publicKey` / `.privateKey` reads go through the generic
+        // object property dispatch (the object carries a keys array).
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "generateKeyPairSync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let type_box = lower_expr(ctx, &args[0])?;
+            let opts_box = if args.len() >= 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
+            let blk = ctx.block();
+            let type_handle = unbox_to_i64(blk, &type_box);
+            let opts_handle = match &opts_box {
+                Some(b) => unbox_to_i64(blk, b),
+                None => "0".to_string(),
+            };
+            // Returns an already-NaN-boxed object (POINTER_TAG).
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_generate_key_pair_sync",
+                &[(I64, &type_handle), (I64, &opts_handle)],
+            ))
         }
 
         // Phase H fs: `fs.promises.METHOD(args...)` — HIR shape is a

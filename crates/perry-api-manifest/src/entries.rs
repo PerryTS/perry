@@ -1777,6 +1777,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // (no NATIVE_MODULE_TABLE entry — direct dispatch like createHash).
     method("crypto", "createCipheriv", false, None),
     method("crypto", "createDecipheriv", false, None),
+    // `crypto.createSign(alg)` / `createVerify(alg)` — RSA PKCS#1 v1.5 sign /
+    // verify over the SHA family (#1364). SignHandle dispatched like createHash
+    // (no NATIVE_MODULE_TABLE entry — direct codegen dispatch in expr/calls.rs).
+    method("crypto", "createSign", false, None),
+    method("crypto", "createVerify", false, None),
     // `crypto.createSecretKey(key, encoding?)` — required by jose for the
     // JWT signing path; returns a Uint8Array-marked Buffer of the key
     // bytes that `instanceof Uint8Array` accepts on both sides of the
@@ -1788,6 +1793,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // crypto.scryptSync(password, salt, keylen, options?) -> Buffer. Wired in
     // codegen `expr/calls.rs`; HIR types the result as Uint8Array.
     method("crypto", "scryptSync", false, None),
+    // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
+    method("crypto", "hkdfSync", false, None),
+    // crypto.generateKeyPairSync(type, options) -> { publicKey, privateKey }
+    // PEM strings (RSA / EC P-256). Wired in codegen `expr/calls.rs`.
+    method("crypto", "generateKeyPairSync", false, None),
     // crypto.randomInt([min,] max) — uniform integer in [min, max).
     // crypto.timingSafeEqual(a, b) — constant-time byte comparison.
     // crypto.getHashes() / getCiphers() — supported-algorithm name lists.
@@ -2204,6 +2214,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perf_hooks", "clearMarks", false, None),
     method("perf_hooks", "clearMeasures", false, None),
     method("perf_hooks", "eventLoopUtilization", false, None),
+    method("perf_hooks", "toJSON", false, None),
+    method("perf_hooks", "clearResourceTimings", false, None),
+    method("perf_hooks", "setResourceTimingBufferSize", false, None),
     property("perf_hooks", "timeOrigin"),
     property("perf_hooks", "performance"),
     property("perf_hooks", "constants"),

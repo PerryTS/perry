@@ -159,6 +159,17 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return crate::crypto::dispatch_cipher(handle, method_name, &args);
     }
 
+    // crypto Sign/Verify handle: createSign(alg)/createVerify(alg) followed by
+    // .update(...).sign(key) / .verify(key, sig) — issue #1364. Method-gated
+    // like the Hash/Cipher handles. `sign`/`verify` are distinctive enough to
+    // disambiguate from other registries sharing a handle id.
+    #[cfg(feature = "crypto")]
+    if matches!(method_name, "update" | "sign" | "verify")
+        && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_sign(handle, method_name, &args);
+    }
+
     // SQLite Statement handle: stmt.raw() / .all() / .get() / .run() —
     // routes the dynamic-receiver path used by drizzle's
     // `this.stmt.raw().all(...params)` chain (where `this.stmt` is
