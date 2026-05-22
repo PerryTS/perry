@@ -44,6 +44,7 @@ pub(super) use super::{
 
 mod box_style;
 mod jsonwebtoken;
+mod perf_hooks;
 
 use box_style::apply_box_style;
 use jsonwebtoken::{lower_jsonwebtoken_sign, lower_jsonwebtoken_verify};
@@ -112,6 +113,11 @@ pub(crate) fn lower_native_method_call(
     }
     if module == "jsonwebtoken" && method == "verify" && object.is_none() {
         return lower_jsonwebtoken_verify(ctx, args);
+    }
+
+    // node:perf_hooks → native/perf_hooks.rs (performance.* + PerformanceObserver).
+    if let Some(v) = perf_hooks::lower_perf_hooks_method(ctx, module, method, object, args)? {
+        return Ok(v);
     }
 
     // `perry/ui.App({ title, width, height, body, icon? })` — minimum-viable

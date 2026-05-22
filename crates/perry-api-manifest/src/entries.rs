@@ -91,6 +91,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "querystring",
     "cluster",
     "tty",
+    "perf_hooks",
     "process",
     "perry/tui",
     "perry/ui",
@@ -145,6 +146,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "perry/tui",
     "perry/background",
     "tty",
+    "perf_hooks",
 ];
 
 const fn method(
@@ -2121,6 +2123,36 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("tty", "isatty", false, None),
     class("tty", "ReadStream"),
     class("tty", "WriteStream"),
+    // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
+    method("perf_hooks", "now", false, None),
+    method("perf_hooks", "mark", false, None),
+    method("perf_hooks", "measure", false, None),
+    method("perf_hooks", "getEntries", false, None),
+    method("perf_hooks", "getEntriesByName", false, None),
+    method("perf_hooks", "getEntriesByType", false, None),
+    method("perf_hooks", "clearMarks", false, None),
+    method("perf_hooks", "clearMeasures", false, None),
+    method("perf_hooks", "eventLoopUtilization", false, None),
+    property("perf_hooks", "timeOrigin"),
+    property("perf_hooks", "performance"),
+    property("perf_hooks", "constants"),
+    class("perf_hooks", "PerformanceObserver"),
+    class("perf_hooks", "PerformanceEntry"),
+    class("perf_hooks", "PerformanceMark"),
+    class("perf_hooks", "PerformanceMeasure"),
+    method("perf_hooks", "observe", true, Some("PerformanceObserver")),
+    method(
+        "perf_hooks",
+        "disconnect",
+        true,
+        Some("PerformanceObserver"),
+    ),
+    method(
+        "perf_hooks",
+        "takeRecords",
+        true,
+        Some("PerformanceObserver"),
+    ),
     // --- buffer (module-level helpers in addition to the Buffer class
     //     already registered above) ---
     method("buffer", "alloc", false, None),

@@ -1,0 +1,124 @@
+//! node:perf_hooks codegen lowering — `performance.*` User Timing + ELU and
+//! PerformanceObserver instance methods, dispatched to the `js_perf_*` runtime
+//! helpers. Extracted from `native/mod.rs` to keep that file under the
+//! 2k-LOC gate (`scripts/check_file_size.sh`).
+
+use anyhow::Result;
+use perry_hir::Expr;
+
+use crate::expr::{lower_expr, FnCtx};
+use crate::nanbox::double_literal;
+use crate::types::DOUBLE;
+
+/// Lower a `module == "perf_hooks"` NativeMethodCall. Returns `Ok(Some(value))`
+/// when the (method, receiver) shape is handled, or `Ok(None)` to fall through
+/// to the caller's remaining dispatch.
+pub(super) fn lower_perf_hooks_method(
+    ctx: &mut FnCtx<'_>,
+    module: &str,
+    method: &str,
+    object: Option<&Expr>,
+    args: &[Expr],
+) -> Result<Option<String>> {
+    if module != "perf_hooks" {
+        return Ok(None);
+    }
+
+    // PerformanceObserver instance methods. `obs.observe()` / `.disconnect()` /
+    // `.takeRecords()` lower with `object = Some(obs)` (obs is typed as the
+    // imported class); pass the observer object value through — the runtime
+    // re-derives the registry index from it.
+    if object.is_some() && matches!(method, "observe" | "disconnect" | "takeRecords") {
+        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let obs_val = lower_expr(ctx, object.unwrap())?;
+        let v = match method {
+            "observe" => {
+                let opts = match args.first() {
+                    Some(e) => lower_expr(ctx, e)?,
+                    None => undef,
+                };
+                ctx.block().call(
+                    DOUBLE,
+                    "js_perf_observer_observe",
+                    &[(DOUBLE, &obs_val), (DOUBLE, &opts)],
+                )
+            }
+            "disconnect" => {
+                ctx.block()
+                    .call(DOUBLE, "js_perf_observer_disconnect", &[(DOUBLE, &obs_val)])
+            }
+            _ => ctx.block().call(
+                DOUBLE,
+                "js_perf_observer_take_records",
+                &[(DOUBLE, &obs_val)],
+            ),
+        };
+        return Ok(Some(v));
+    }
+
+    // `performance.*` User Timing + ELU. Statically lowered (HIR
+    // module_static.rs emits the receiver-less NativeMethodCall). All args are
+    // NaN-boxed f64; absent trailing args pass `undefined`.
+    if object.is_none() {
+        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let lower_or_undef = |ctx: &mut FnCtx<'_>, n: usize| -> Result<String> {
+            match args.get(n) {
+                Some(e) => lower_expr(ctx, e),
+                None => Ok(undef.clone()),
+            }
+        };
+        let v = match method {
+            "now" => ctx.block().call(DOUBLE, "js_performance_now", &[]),
+            "getEntries" => ctx.block().call(DOUBLE, "js_perf_get_entries", &[]),
+            "mark" => {
+                let name = lower_or_undef(ctx, 0)?;
+                let opts = lower_or_undef(ctx, 1)?;
+                ctx.block()
+                    .call(DOUBLE, "js_perf_mark", &[(DOUBLE, &name), (DOUBLE, &opts)])
+            }
+            "measure" => {
+                let a0 = lower_or_undef(ctx, 0)?;
+                let a1 = lower_or_undef(ctx, 1)?;
+                let a2 = lower_or_undef(ctx, 2)?;
+                ctx.block().call(
+                    DOUBLE,
+                    "js_perf_measure",
+                    &[(DOUBLE, &a0), (DOUBLE, &a1), (DOUBLE, &a2)],
+                )
+            }
+            "getEntriesByType" => {
+                let a0 = lower_or_undef(ctx, 0)?;
+                ctx.block()
+                    .call(DOUBLE, "js_perf_get_entries_by_type", &[(DOUBLE, &a0)])
+            }
+            "getEntriesByName" => {
+                let a0 = lower_or_undef(ctx, 0)?;
+                let a1 = lower_or_undef(ctx, 1)?;
+                ctx.block().call(
+                    DOUBLE,
+                    "js_perf_get_entries_by_name",
+                    &[(DOUBLE, &a0), (DOUBLE, &a1)],
+                )
+            }
+            "clearMarks" => {
+                let a0 = lower_or_undef(ctx, 0)?;
+                ctx.block()
+                    .call(DOUBLE, "js_perf_clear_marks", &[(DOUBLE, &a0)])
+            }
+            "clearMeasures" => {
+                let a0 = lower_or_undef(ctx, 0)?;
+                ctx.block()
+                    .call(DOUBLE, "js_perf_clear_measures", &[(DOUBLE, &a0)])
+            }
+            "eventLoopUtilization" => {
+                let a0 = lower_or_undef(ctx, 0)?;
+                ctx.block()
+                    .call(DOUBLE, "js_perf_event_loop_utilization", &[(DOUBLE, &a0)])
+            }
+            _ => return Ok(None),
+        };
+        return Ok(Some(v));
+    }
+
+    Ok(None)
+}

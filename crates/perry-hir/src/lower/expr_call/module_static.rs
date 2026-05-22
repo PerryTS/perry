@@ -360,11 +360,37 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for performance.now()
+            // Check for performance.now() and the W3C User Timing methods.
+            // `now()` keeps its dedicated Expr; the rest lower to a
+            // receiver-less NativeMethodCall on the perf_hooks module, which
+            // the codegen dispatches to the `js_perf_*` runtime helpers. This
+            // is purely syntactic (matches the identifier `performance`), so
+            // it fires whether `performance` is the global or the named
+            // import from node:perf_hooks.
             if obj_ident.sym.as_ref() == "performance" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    if method_ident.sym.as_ref() == "now" {
+                    let m = method_ident.sym.as_ref();
+                    if m == "now" {
                         return Ok(Ok(Expr::PerformanceNow));
+                    }
+                    if matches!(
+                        m,
+                        "mark"
+                            | "measure"
+                            | "getEntries"
+                            | "getEntriesByName"
+                            | "getEntriesByType"
+                            | "clearMarks"
+                            | "clearMeasures"
+                            | "eventLoopUtilization"
+                    ) {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "perf_hooks".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: m.to_string(),
+                            args,
+                        }));
                     }
                 }
             }

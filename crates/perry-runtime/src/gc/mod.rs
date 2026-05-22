@@ -617,6 +617,7 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(shape_cache_mutable_root_scanner);
     gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
     gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
+    gc_register_mutable_root_scanner(crate::perf_hooks::scan_perf_entries_roots_mut);
     gc_register_mutable_root_scanner(transition_cache_mutable_root_scanner);
     gc_register_mutable_root_scanner(overflow_fields_mutable_root_scanner);
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);

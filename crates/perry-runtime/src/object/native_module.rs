@@ -94,6 +94,17 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         property_name_len,
     ))
     .unwrap_or("");
+    // node:perf_hooks — `performance` and `constants` are object-valued
+    // exports. Resolve them to a `perf_hooks`-tagged namespace object so
+    // `typeof performance === "object"`, `performance.timeOrigin` (a
+    // constant), `performance.now` (a callable export), and
+    // `constants.NODE_PERFORMANCE_GC_*` (constants) all dispatch coherently.
+    if module_name == "perf_hooks"
+        && (property_name == "performance" || property_name == "constants")
+    {
+        return js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
+    }
+
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
         return val;
     }
@@ -126,6 +137,19 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
     if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
+    }
+
+    // `PerformanceObserver.supportedEntryTypes` is a static array on the
+    // constructor. `PerformanceObserver` is a function value (a bound-method
+    // closure), so hang the array off it as a dynamic property — keeps
+    // `typeof PerformanceObserver === "function"` while the static read works.
+    if module_name == "perf_hooks" && property_name == "PerformanceObserver" {
+        let arr = crate::perf_hooks::js_perf_supported_entry_types();
+        crate::closure::closure_set_dynamic_prop(
+            (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
+            "supportedEntryTypes",
+            arr,
+        );
     }
 
     NATIVE_CALLABLE_EXPORTS.with(|c| {
@@ -299,6 +323,31 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("os", "loadavg")
             | ("os", "machine")
             | ("os", "version")
+            // node:perf_hooks — the `performance` object's methods, read as
+            // values (`typeof performance.mark === "function"`, `const m =
+            // performance.mark`). The call form is statically lowered in
+            // module_static.rs; this keeps the property-read form coherent.
+            // Also the perf_hooks class exports so `typeof PerformanceObserver
+            // === "function"` etc. hold.
+            | ("perf_hooks", "now")
+            | ("perf_hooks", "mark")
+            | ("perf_hooks", "measure")
+            | ("perf_hooks", "getEntries")
+            | ("perf_hooks", "getEntriesByName")
+            | ("perf_hooks", "getEntriesByType")
+            | ("perf_hooks", "clearMarks")
+            | ("perf_hooks", "clearMeasures")
+            | ("perf_hooks", "eventLoopUtilization")
+            | ("perf_hooks", "PerformanceObserver")
+            | ("perf_hooks", "PerformanceEntry")
+            | ("perf_hooks", "PerformanceMark")
+            | ("perf_hooks", "PerformanceMeasure")
+            | ("perf_observer", "observe")
+            | ("perf_observer", "disconnect")
+            | ("perf_observer", "takeRecords")
+            | ("perf_observer_list", "getEntries")
+            | ("perf_observer_list", "getEntriesByType")
+            | ("perf_observer_list", "getEntriesByName")
             // node:cluster — namespace property reads of these callables
             // need to satisfy `typeof cluster.fork === "function"` etc.
             // The fixtures only probe types, but compiled npm code that
@@ -1040,6 +1089,25 @@ pub(crate) unsafe fn get_native_module_constant(
     };
 
     match module_name {
+        // node:perf_hooks — `performance.timeOrigin` (ms since epoch at start)
+        // and the `constants.NODE_PERFORMANCE_GC_*` numeric table. Both the
+        // `performance` and `constants` objects are tagged "perf_hooks", so
+        // they share this arm (distinct property names, no collision).
+        "perf_hooks" => match property {
+            "timeOrigin" => Some(crate::perf_hooks::time_origin_ms()),
+            "NODE_PERFORMANCE_GC_MAJOR" => Some(4.0),
+            "NODE_PERFORMANCE_GC_MINOR" => Some(1.0),
+            "NODE_PERFORMANCE_GC_INCREMENTAL" => Some(8.0),
+            "NODE_PERFORMANCE_GC_WEAKCB" => Some(16.0),
+            "NODE_PERFORMANCE_GC_FLAGS_NO" => Some(0.0),
+            "NODE_PERFORMANCE_GC_FLAGS_CONSTRUCT_RETAINED" => Some(2.0),
+            "NODE_PERFORMANCE_GC_FLAGS_FORCED" => Some(4.0),
+            "NODE_PERFORMANCE_GC_FLAGS_SYNCHRONOUS_PHANTOM_PROCESSING" => Some(8.0),
+            "NODE_PERFORMANCE_GC_FLAGS_ALL_AVAILABLE_GARBAGE" => Some(16.0),
+            "NODE_PERFORMANCE_GC_FLAGS_ALL_EXTERNAL_MEMORY" => Some(32.0),
+            "NODE_PERFORMANCE_GC_FLAGS_SCHEDULE_IDLE" => Some(64.0),
+            _ => None,
+        },
         "path" => match property {
             "sep" => {
                 if cfg!(windows) {

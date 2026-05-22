@@ -112,6 +112,50 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // ── tty module ──
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
 
+        // ── perf_hooks module (performance.*) ──
+        // Statically lowered at call sites (module_static.rs); these arms
+        // also serve the generic namespace-object method-dispatch path.
+        ("perf_hooks", "now") => crate::date::js_performance_now(),
+        ("perf_hooks", "mark") => crate::perf_hooks::js_perf_mark(arg(0), arg(1)),
+        ("perf_hooks", "measure") => crate::perf_hooks::js_perf_measure(arg(0), arg(1), arg(2)),
+        ("perf_hooks", "getEntries") => crate::perf_hooks::js_perf_get_entries(),
+        ("perf_hooks", "getEntriesByType") => {
+            crate::perf_hooks::js_perf_get_entries_by_type(arg(0))
+        }
+        ("perf_hooks", "getEntriesByName") => {
+            crate::perf_hooks::js_perf_get_entries_by_name(arg(0), arg(1))
+        }
+        ("perf_hooks", "clearMarks") => crate::perf_hooks::js_perf_clear_marks(arg(0)),
+        ("perf_hooks", "clearMeasures") => crate::perf_hooks::js_perf_clear_measures(arg(0)),
+        ("perf_hooks", "eventLoopUtilization") => {
+            crate::perf_hooks::js_perf_event_loop_utilization(arg(0))
+        }
+
+        // ── PerformanceObserver instance (perf_observer) ──
+        // The registry index lives in field[1] of the namespace object; the
+        // runtime fns re-derive it from the object value.
+        ("perf_observer", "observe") => {
+            let obs_val = crate::value::js_nanbox_pointer(obj as i64);
+            crate::perf_hooks::js_perf_observer_observe(obs_val, arg(0))
+        }
+        ("perf_observer", "disconnect") => {
+            let obs_val = crate::value::js_nanbox_pointer(obj as i64);
+            crate::perf_hooks::js_perf_observer_disconnect(obs_val)
+        }
+        ("perf_observer", "takeRecords") => {
+            let obs_val = crate::value::js_nanbox_pointer(obj as i64);
+            crate::perf_hooks::js_perf_observer_take_records(obs_val)
+        }
+
+        // ── PerformanceObserverEntryList (the callback `list` arg) ──
+        ("perf_observer_list", "getEntries") => crate::perf_hooks::current_list_get_entries(),
+        ("perf_observer_list", "getEntriesByType") => {
+            crate::perf_hooks::current_list_get_by_type(arg(0))
+        }
+        ("perf_observer_list", "getEntriesByName") => {
+            crate::perf_hooks::current_list_get_by_name(arg(0))
+        }
+
         // ── timers module ──
         ("timers", "setTimeout") if args_len >= 2 => {
             let cb = arg(0);
