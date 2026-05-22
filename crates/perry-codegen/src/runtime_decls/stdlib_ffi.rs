@@ -553,6 +553,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // .final() / .getAuthTag() / .setAuthTag().
     module.declare_function("js_crypto_create_cipheriv", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_crypto_create_decipheriv", DOUBLE, &[I64, I64, I64]);
+    // crypto.createSign(alg) / createVerify(alg) -> SignHandle (NaN-boxed).
+    module.declare_function("js_crypto_create_sign", DOUBLE, &[I64]);
+    module.declare_function("js_crypto_create_verify", DOUBLE, &[I64]);
     module.declare_function("js_crypto_hkdf_sha256", I64, &[I64, I64, I64, DOUBLE]);
     module.declare_function("js_crypto_pbkdf2", I64, &[I64, I64, DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_bytes_hex", I64, &[DOUBLE]);

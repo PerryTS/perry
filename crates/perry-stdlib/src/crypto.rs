@@ -4,7 +4,7 @@
 //! Provides hashing (sha256, md5), random byte generation, AES encryption,
 //! and key derivation (pbkdf2, scrypt).
 
-use crate::common::handle::{get_handle_mut, register_handle, Handle};
+use crate::common::handle::{get_handle, get_handle_mut, register_handle, Handle};
 use aes::{Aes128, Aes256};
 use base64::Engine as _;
 use cbc::{
@@ -1231,6 +1231,248 @@ fn nanbox_pointer_f64(ptr: usize) -> f64 {
 #[inline]
 fn nanbox_undefined() -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+// ---------------------------------------------------------------------------
+// Sign / Verify handle (#1364) — `crypto.createSign(alg).update(d).sign(key)`
+// and `crypto.createVerify(alg).update(d).verify(key, sig)`. Mirrors the
+// Hash/Cipher small-integer handle pattern (POINTER_TAG box, dispatched via
+// HANDLE_METHOD_DISPATCH → `dispatch_sign`). RSA PKCS#1 v1.5 over
+// sha1/sha224/sha256/sha384/sha512: `update` accumulates the message, then
+// `sign`/`verify` hash it and RSA-sign / RSA-verify. The key argument is a
+// PEM string (PKCS#8 or PKCS#1); `verify` also accepts the matching private
+// key (it derives the public key), matching Node's leniency.
+// ---------------------------------------------------------------------------
+
+pub struct SignHandle {
+    /// Lowercased hash algorithm (`sha256`, …).
+    alg: String,
+    /// Accumulated message bytes (interior mutability — the handle is shared).
+    buffer: std::sync::Mutex<Vec<u8>>,
+}
+
+unsafe fn create_sign_handle(alg_ptr: i64) -> f64 {
+    let alg = String::from_utf8_lossy(&bytes_from_ptr(alg_ptr))
+        .to_ascii_lowercase()
+        .replace("rsa-", "") // accept Node's `RSA-SHA256` spelling
+        .replace('-', ""); // and `sha-256`
+    if !matches!(
+        alg.as_str(),
+        "sha1" | "sha224" | "sha256" | "sha384" | "sha512"
+    ) {
+        return nanbox_undefined();
+    }
+    let handle: Handle = register_handle(SignHandle {
+        alg,
+        buffer: std::sync::Mutex::new(Vec::new()),
+    });
+    nanbox_pointer_f64(handle as usize)
+}
+
+/// `crypto.createSign(algorithm)` — allocate a Sign handle.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_create_sign(alg_ptr: i64) -> f64 {
+    create_sign_handle(alg_ptr)
+}
+
+/// `crypto.createVerify(algorithm)` — allocate a Verify handle (same shape).
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_create_verify(alg_ptr: i64) -> f64 {
+    create_sign_handle(alg_ptr)
+}
+
+/// Build the PKCS#1 v1.5 DigestInfo (`SEQUENCE { AlgorithmIdentifier, OCTET
+/// STRING hash }`) for `alg` over `data`. The fixed ASN.1 prefixes are the
+/// standard ones from RFC 8017 §9.2 (Note 1). We assemble DigestInfo by hand
+/// and feed it to `Pkcs1v15Sign::new_unprefixed()` so that signing/verifying
+/// does not require the `rsa` crate's `digest`-0.10 `AssociatedOid` bound —
+/// the workspace's `sha1`/`sha2` are a newer `digest` version, which would
+/// otherwise fail to satisfy `Pkcs1v15Sign::new::<D>()`.
+fn rsa_digest_info(alg: &str, data: &[u8]) -> Option<Vec<u8>> {
+    let (prefix, hash): (&[u8], Vec<u8>) = match alg {
+        "sha1" => (
+            &[
+                0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04,
+                0x14,
+            ],
+            Sha1::digest(data).to_vec(),
+        ),
+        "sha224" => (
+            &[
+                0x30, 0x2d, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x04, 0x05, 0x00, 0x04, 0x1c,
+            ],
+            Sha224::digest(data).to_vec(),
+        ),
+        "sha256" => (
+            &[
+                0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x01, 0x05, 0x00, 0x04, 0x20,
+            ],
+            Sha256::digest(data).to_vec(),
+        ),
+        "sha384" => (
+            &[
+                0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x02, 0x05, 0x00, 0x04, 0x30,
+            ],
+            Sha384::digest(data).to_vec(),
+        ),
+        "sha512" => (
+            &[
+                0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x03, 0x05, 0x00, 0x04, 0x40,
+            ],
+            Sha512::digest(data).to_vec(),
+        ),
+        _ => return None,
+    };
+    let mut di = prefix.to_vec();
+    di.extend_from_slice(&hash);
+    Some(di)
+}
+
+/// Hash `data` with `alg` and RSA-PKCS#1-v1.5-sign it with the PEM private key.
+fn rsa_pkcs1v15_sign(alg: &str, key_pem: &str, data: &[u8]) -> Option<Vec<u8>> {
+    use rsa::pkcs1::DecodeRsaPrivateKey;
+    use rsa::pkcs8::DecodePrivateKey;
+    let priv_key = rsa::RsaPrivateKey::from_pkcs8_pem(key_pem)
+        .or_else(|_| rsa::RsaPrivateKey::from_pkcs1_pem(key_pem))
+        .ok()?;
+    let di = rsa_digest_info(alg, data)?;
+    priv_key.sign(rsa::Pkcs1v15Sign::new_unprefixed(), &di).ok()
+}
+
+/// Verify an RSA-PKCS#1-v1.5 signature over `data` with the PEM key (public,
+/// or a private key from which the public is derived).
+fn rsa_pkcs1v15_verify(alg: &str, key_pem: &str, data: &[u8], sig: &[u8]) -> bool {
+    use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey};
+    use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
+    let pub_key = rsa::RsaPublicKey::from_public_key_pem(key_pem)
+        .ok()
+        .or_else(|| rsa::RsaPublicKey::from_pkcs1_pem(key_pem).ok())
+        .or_else(|| {
+            rsa::RsaPrivateKey::from_pkcs8_pem(key_pem)
+                .or_else(|_| rsa::RsaPrivateKey::from_pkcs1_pem(key_pem))
+                .ok()
+                .map(|pk| pk.to_public_key())
+        });
+    let pub_key = match pub_key {
+        Some(k) => k,
+        None => return false,
+    };
+    let di = match rsa_digest_info(alg, data) {
+        Some(d) => d,
+        None => return false,
+    };
+    pub_key
+        .verify(rsa::Pkcs1v15Sign::new_unprefixed(), &di, sig)
+        .is_ok()
+}
+
+/// Encode signature `bytes` per a digest-style encoding argument: a `'hex'`/
+/// `'base64'`/`'base64url'` string yields a NaN-boxed string; absent/undefined
+/// yields a Buffer (matching Node's `sign()` with vs without an encoding).
+unsafe fn encode_sig_output(bytes: &[u8], enc_arg: Option<&f64>) -> f64 {
+    match enc_arg {
+        None => {
+            let buf = alloc_buffer_from_slice(bytes);
+            nanbox_pointer_f64(buf as usize)
+        }
+        Some(a) if is_undefined_f64(*a) => {
+            let buf = alloc_buffer_from_slice(bytes);
+            nanbox_pointer_f64(buf as usize)
+        }
+        Some(a) => {
+            let enc_ptr = (a.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+            let enc = String::from_utf8_lossy(&bytes_from_ptr(enc_ptr)).to_ascii_lowercase();
+            let encoded = match enc.as_str() {
+                "base64" => base64::engine::general_purpose::STANDARD.encode(bytes),
+                "base64url" => base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+                "binary" | "latin1" => String::from_utf8_lossy(bytes).into_owned(),
+                _ => hex::encode(bytes),
+            };
+            let s = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
+            f64::from_bits(0x7FFF_0000_0000_0000u64 | ((s as u64) & 0x0000_FFFF_FFFF_FFFF))
+        }
+    }
+}
+
+/// Dispatch `update` / `sign` / `verify` on a SignHandle. Called from
+/// `common/dispatch.rs::js_handle_method_dispatch`.
+pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
+    let h = match get_handle::<SignHandle>(handle) {
+        Some(h) => h,
+        None => return nanbox_undefined(),
+    };
+    match method {
+        "update" => {
+            if let Some(a) = args.first() {
+                let ptr = (a.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                let bytes = bytes_from_ptr(ptr);
+                h.buffer.lock().unwrap().extend_from_slice(&bytes);
+            }
+            nanbox_pointer_f64(handle as usize)
+        }
+        // `.sign(privateKeyPem, encoding?)` → signature (Buffer or encoded
+        // string). args[0] = key, args[1] = output encoding.
+        "sign" => {
+            let key_ptr = match args.first() {
+                Some(a) => (a.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64,
+                None => return nanbox_undefined(),
+            };
+            let key_pem = String::from_utf8_lossy(&bytes_from_ptr(key_ptr)).into_owned();
+            let data = h.buffer.lock().unwrap().clone();
+            match rsa_pkcs1v15_sign(&h.alg, &key_pem, &data) {
+                Some(sig) => encode_sig_output(&sig, args.get(1)),
+                None => nanbox_undefined(),
+            }
+        }
+        // `.verify(publicKeyPem, signature, sigEncoding?)` → boolean.
+        // args[0] = key, args[1] = signature, args[2] = signature encoding.
+        "verify" => {
+            let key_ptr = match args.first() {
+                Some(a) => (a.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64,
+                None => return f64::from_bits(0x7FFC_0000_0000_0003), // false
+            };
+            let key_pem = String::from_utf8_lossy(&bytes_from_ptr(key_ptr)).into_owned();
+            // Resolve the signature bytes: if a sig-encoding string is given,
+            // the signature arg is a string in that encoding; otherwise it's a
+            // Buffer/Uint8Array.
+            let sig_ptr = match args.get(1) {
+                Some(a) => (a.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64,
+                None => return f64::from_bits(0x7FFC_0000_0000_0003),
+            };
+            let sig_raw = bytes_from_ptr(sig_ptr);
+            let sig = match args.get(2) {
+                Some(a) if !is_undefined_f64(*a) => {
+                    let enc_ptr = (a.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                    let enc =
+                        String::from_utf8_lossy(&bytes_from_ptr(enc_ptr)).to_ascii_lowercase();
+                    let sig_str = String::from_utf8_lossy(&sig_raw);
+                    match enc.as_str() {
+                        "hex" => hex::decode(sig_str.trim()).unwrap_or_default(),
+                        "base64" => base64::engine::general_purpose::STANDARD
+                            .decode(sig_str.trim())
+                            .unwrap_or_default(),
+                        "base64url" => base64::engine::general_purpose::URL_SAFE_NO_PAD
+                            .decode(sig_str.trim())
+                            .unwrap_or_default(),
+                        _ => sig_raw.clone(),
+                    }
+                }
+                _ => sig_raw.clone(),
+            };
+            let data = h.buffer.lock().unwrap().clone();
+            let ok = rsa_pkcs1v15_verify(&h.alg, &key_pem, &data, &sig);
+            f64::from_bits(if ok {
+                0x7FFC_0000_0000_0004 // true
+            } else {
+                0x7FFC_0000_0000_0003 // false
+            })
+        }
+        _ => nanbox_undefined(),
+    }
 }
 
 unsafe fn create_cipher_handle(alg_ptr: i64, key_ptr: i64, iv_ptr: i64, encrypt: bool) -> f64 {

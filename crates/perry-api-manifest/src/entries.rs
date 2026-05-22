@@ -1777,6 +1777,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // (no NATIVE_MODULE_TABLE entry — direct dispatch like createHash).
     method("crypto", "createCipheriv", false, None),
     method("crypto", "createDecipheriv", false, None),
+    // `crypto.createSign(alg)` / `createVerify(alg)` — RSA PKCS#1 v1.5 sign /
+    // verify over the SHA family (#1364). SignHandle dispatched like createHash
+    // (no NATIVE_MODULE_TABLE entry — direct codegen dispatch in expr/calls.rs).
+    method("crypto", "createSign", false, None),
+    method("crypto", "createVerify", false, None),
     // `crypto.createSecretKey(key, encoding?)` — required by jose for the
     // JWT signing path; returns a Uint8Array-marked Buffer of the key
     // bytes that `instanceof Uint8Array` accepts on both sides of the

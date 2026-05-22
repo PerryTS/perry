@@ -483,6 +483,42 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
 
+        // `crypto.createSign(alg)` / `crypto.createVerify(alg)` (#1364) —
+        // registers a SignHandle and returns a small-integer handle NaN-boxed
+        // as POINTER_TAG. HANDLE_METHOD_DISPATCH then routes `.update(d)` /
+        // `.sign(key, enc?)` / `.verify(key, sig, enc?)` through
+        // `dispatch_sign`. RSA PKCS#1 v1.5 over sha1/224/256/384/512.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property }
+                    if (property == "createSign" || property == "createVerify")
+                        && matches!(
+                            object.as_ref(),
+                            Expr::NativeModuleRef(n) if n == "crypto"
+                        )
+            ) =>
+        {
+            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                property.as_str()
+            } else {
+                unreachable!()
+            };
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let fname = if property == "createSign" {
+                "js_crypto_create_sign"
+            } else {
+                "js_crypto_create_verify"
+            };
+            // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
+            Ok(blk.call(DOUBLE, fname, &[(I64, &alg_handle)]))
+        }
+
         // Phase H crypto: `crypto.randomBytes(n)` as a Buffer.
         Expr::Call { callee, args, .. }
             if matches!(
