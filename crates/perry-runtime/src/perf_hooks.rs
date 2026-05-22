@@ -95,6 +95,15 @@ fn num_of(v: JSValue) -> Option<f64> {
     }
 }
 
+/// Throw a `TypeError` with `msg` (catchable by user `try/catch` as a
+/// TypeError, matching Node's input-validation errors). Never returns.
+fn throw_type_error(msg: &str) -> ! {
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_typeerror_new(msg_str);
+    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value))
+}
+
 /// Build a NaN-boxed string value from a Rust `&str`.
 fn str_value(s: &str) -> JSValue {
     let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -204,12 +213,21 @@ fn as_object_ptr(v: f64) -> Option<*const crate::object::ObjectHeader> {
 #[no_mangle]
 pub extern "C" fn js_perf_mark(name_val: f64, options_val: f64) -> f64 {
     unsafe {
+        // A Symbol name cannot be coerced to a string (Node throws TypeError).
+        if crate::symbol::js_is_symbol(name_val) != 0 {
+            throw_type_error("Cannot convert a Symbol value to a string");
+        }
         let name = coerce_to_string(name_val);
         let mut start_time = perf_now();
         let mut detail_bits = JSValue::null().bits();
         if let Some(opts) = as_object_ptr(options_val) {
-            if let Some(st) = option_number(opts, "startTime") {
-                start_time = st;
+            // startTime, when present, must be a finite number (Node:
+            // ERR_INVALID_ARG_TYPE → a TypeError).
+            if option_present(opts, "startTime") {
+                match option_number(opts, "startTime") {
+                    Some(st) => start_time = st,
+                    None => throw_type_error("The \"startTime\" option must be of type number"),
+                }
             }
             detail_bits = option_detail_bits(opts);
         }
@@ -305,8 +323,18 @@ unsafe fn finish_measure(name: String, start_time: f64, duration: f64, detail_bi
 }
 
 // ── getEntries / getEntriesByType / getEntriesByName ─────────────────────────
+/// Order entries by startTime ascending, stable on ties (matches the order
+/// Node returns from `getEntries*` and observer lists).
+fn sort_entries_by_start_time(entries: &mut [PerfEntry]) {
+    entries.sort_by(|a, b| {
+        a.start_time
+            .partial_cmp(&b.start_time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
 unsafe fn entries_to_array(filter: impl Fn(&PerfEntry) -> bool) -> f64 {
-    let snapshot: Vec<PerfEntry> = PERF_ENTRIES.with(|store| {
+    let mut snapshot: Vec<PerfEntry> = PERF_ENTRIES.with(|store| {
         store
             .borrow()
             .iter()
@@ -314,6 +342,8 @@ unsafe fn entries_to_array(filter: impl Fn(&PerfEntry) -> bool) -> f64 {
             .cloned()
             .collect()
     });
+    // Node returns timeline entries ordered by startTime (stable on ties).
+    sort_entries_by_start_time(&mut snapshot);
     let mut arr = crate::array::js_array_alloc(snapshot.len() as u32);
     for e in &snapshot {
         let obj = entry_to_object(e);
@@ -368,6 +398,10 @@ pub extern "C" fn js_perf_get_entries_by_name(name_val: f64, type_val: f64) -> f
 // `clearMarks()` / `clearMarks(undefined)` clear all marks; `clearMarks(name)`
 // clears only same-named marks (Node parity). Return `undefined`.
 unsafe fn clear_entries(entry_type: u8, name_val: f64) -> f64 {
+    // A Symbol name cannot be coerced to a string (Node throws TypeError).
+    if crate::symbol::js_is_symbol(name_val) != 0 {
+        throw_type_error("Cannot convert a Symbol value to a string");
+    }
     let name = if JSValue::from_bits(name_val.to_bits()).is_undefined() {
         None
     } else {
@@ -666,8 +700,9 @@ pub extern "C" fn js_perf_observer_flush_all(
 /// Build an array from the in-flight observer `list` entries (for the
 /// `perf_observer_list` namespace methods).
 pub unsafe fn current_list_to_array(filter: impl Fn(&PerfEntry) -> bool) -> f64 {
-    let snapshot: Vec<PerfEntry> =
+    let mut snapshot: Vec<PerfEntry> =
         CURRENT_LIST.with(|c| c.borrow().iter().filter(|e| filter(e)).cloned().collect());
+    sort_entries_by_start_time(&mut snapshot);
     let mut arr = crate::array::js_array_alloc(snapshot.len() as u32);
     for e in &snapshot {
         let obj = entry_to_object(e);

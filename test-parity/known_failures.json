@@ -14,6 +14,12 @@
     "category": "bug-open",
     "reason": "node:perf_hooks granular parity: typeof obs.observe/disconnect/takeRecords reports the wrong type because member reads on a native-class instance lower as a method call (not a PropertyGet). The call forms work (observe-marks PASSES). Flips to PASS when #1320 lands."
   },
+  "node-suite/perf_hooks/global/performance-identity": {
+    "issue": "1327",
+    "added": "2026-05-22",
+    "category": "bug-open",
+    "reason": "node:perf_hooks granular parity: globalThis.performance !== the node:perf_hooks named import. The import resolves to a fresh namespace object per read and the global is a separate path; neither is a cached singleton. Flips to PASS when #1327 lands."
+  },
   "node-suite/console/dir/depth-options": {
     "issue": "1199",
     "added": "2026-05-20",
