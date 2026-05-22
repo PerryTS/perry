@@ -38,6 +38,51 @@ pub fn try_lower_namespace_member_call(
     if !ctx.namespace_imports.contains(ns_name) {
         return Ok(None);
     }
+    if ctx
+        .namespace_node_submodules
+        .get(ns_name)
+        .is_some_and(|submod| submod == "fs/promises")
+    {
+        match property.as_str() {
+            "writeFile" if args.len() >= 2 => {
+                let path = lower_expr(ctx, &args[0])?;
+                let content = lower_expr(ctx, &args[1])?;
+                let options = if args.len() >= 3 {
+                    lower_expr(ctx, &args[2])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let _ = ctx.block().call(
+                    I32,
+                    "js_fs_write_file_sync_options",
+                    &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
+                );
+                let blk = ctx.block();
+                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
+                return Ok(Some(nanbox_pointer_inline(blk, &promise_handle)));
+            }
+            "appendFile" if args.len() >= 2 => {
+                let path = lower_expr(ctx, &args[0])?;
+                let content = lower_expr(ctx, &args[1])?;
+                let options = if args.len() >= 3 {
+                    lower_expr(ctx, &args[2])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let _ = ctx.block().call(
+                    I32,
+                    "js_fs_append_file_sync_options",
+                    &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
+                );
+                let blk = ctx.block();
+                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
+                return Ok(Some(nanbox_pointer_inline(blk, &promise_handle)));
+            }
+            _ => {}
+        }
+    }
     // Issue #678 followup (namespace branch): wildcard-namespace
     // import to a V8 module — `import * as R from "ramda";
     // R.sum([1,2,3])`. The V8 module has no static export list

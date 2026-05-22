@@ -34,8 +34,11 @@ use crate::value::JSValue;
 /// One entry per named export of one submodule.
 struct ExportSpec {
     name: &'static str,
-    thunk: extern "C" fn(*const ClosureHeader, f64) -> f64,
+    thunk: *const u8,
+    arity: u32,
 }
+
+unsafe impl Sync for ExportSpec {}
 
 /// One entry per submodule. `exports` lists every named export the
 /// codegen / parity tests reach for; the codegen's lookup is keyed by
@@ -87,6 +90,265 @@ thunk!(
     thunk_timers_scheduler,
     "node:timers/promises.scheduler is not yet implemented in Perry (tracked by issue #793)."
 );
+
+fn promise_value(value: f64) -> f64 {
+    let promise = crate::promise::js_promise_resolved(value);
+    f64::from_bits(JSValue::pointer(promise as *const u8).bits())
+}
+
+fn promise_undefined() -> f64 {
+    promise_value(f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+extern "C" fn thunk_fs_promises_readFile(
+    _closure: *const ClosureHeader,
+    path: f64,
+    encoding: f64,
+) -> f64 {
+    promise_value(crate::fs::js_fs_read_file_dispatch(path, encoding))
+}
+
+extern "C" fn thunk_fs_promises_open(
+    _closure: *const ClosureHeader,
+    path: f64,
+    flags: f64,
+    _mode: f64,
+) -> f64 {
+    promise_value(crate::fs::js_fs_filehandle_open(path, flags))
+}
+
+extern "C" fn thunk_fs_promises_writeFile(
+    _closure: *const ClosureHeader,
+    path: f64,
+    data: f64,
+    options: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_write_file_sync_options(path, data, options);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_appendFile(
+    _closure: *const ClosureHeader,
+    path: f64,
+    data: f64,
+    options: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_append_file_sync_options(path, data, options);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_chmod(_closure: *const ClosureHeader, path: f64, mode: f64) -> f64 {
+    let _ = crate::fs::js_fs_chmod_sync(path, mode);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_chown(
+    _closure: *const ClosureHeader,
+    path: f64,
+    uid: f64,
+    gid: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_chown_sync(path, uid, gid);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_lchown(
+    _closure: *const ClosureHeader,
+    path: f64,
+    uid: f64,
+    gid: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_lchown_sync(path, uid, gid);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_mkdir(
+    _closure: *const ClosureHeader,
+    path: f64,
+    options: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_mkdir_sync_options(path, options);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_readdir(
+    _closure: *const ClosureHeader,
+    path: f64,
+    options: f64,
+) -> f64 {
+    let raw = crate::fs::js_fs_readdir_sync(path, options);
+    promise_value(f64::from_bits(
+        JSValue::pointer(raw.to_bits() as *const u8).bits(),
+    ))
+}
+
+extern "C" fn thunk_fs_promises_stat(
+    _closure: *const ClosureHeader,
+    path: f64,
+    options: f64,
+) -> f64 {
+    promise_value(crate::fs::js_fs_stat_sync_options(path, options))
+}
+
+extern "C" fn thunk_fs_promises_statfs(
+    _closure: *const ClosureHeader,
+    path: f64,
+    options: f64,
+) -> f64 {
+    promise_value(crate::fs::js_fs_statfs_sync_options(path, options))
+}
+
+extern "C" fn thunk_fs_promises_lstat(
+    _closure: *const ClosureHeader,
+    path: f64,
+    options: f64,
+) -> f64 {
+    promise_value(crate::fs::js_fs_lstat_sync_options(path, options))
+}
+
+extern "C" fn thunk_fs_promises_rm(_closure: *const ClosureHeader, path: f64, options: f64) -> f64 {
+    let _ = crate::fs::js_fs_rm_recursive_options(path, options);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_rmdir(
+    _closure: *const ClosureHeader,
+    path: f64,
+    options: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_rmdir_sync_options(path, options);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_unlink(_closure: *const ClosureHeader, path: f64) -> f64 {
+    let _ = crate::fs::js_fs_unlink_sync(path);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_rename(_closure: *const ClosureHeader, from: f64, to: f64) -> f64 {
+    let _ = crate::fs::js_fs_rename_sync(from, to);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_copyFile(
+    _closure: *const ClosureHeader,
+    from: f64,
+    to: f64,
+    flags: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_copy_file_sync_flags(from, to, flags);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_cp(
+    _closure: *const ClosureHeader,
+    from: f64,
+    to: f64,
+    options: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_cp_sync_options(from, to, options);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_truncate(
+    _closure: *const ClosureHeader,
+    path: f64,
+    len: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_truncate_sync(path, len);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_utimes(
+    _closure: *const ClosureHeader,
+    path: f64,
+    atime: f64,
+    mtime: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_utimes_sync(path, atime, mtime);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_lutimes(
+    _closure: *const ClosureHeader,
+    path: f64,
+    atime: f64,
+    mtime: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_lutimes_sync(path, atime, mtime);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_link(_closure: *const ClosureHeader, from: f64, to: f64) -> f64 {
+    let _ = crate::fs::js_fs_link_sync(from, to);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_symlink(
+    _closure: *const ClosureHeader,
+    target: f64,
+    path: f64,
+    _type: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_symlink_sync(target, path);
+    promise_undefined()
+}
+
+extern "C" fn thunk_fs_promises_readlink(
+    _closure: *const ClosureHeader,
+    path: f64,
+    options: f64,
+) -> f64 {
+    promise_value(crate::fs::js_fs_readlink_dispatch(path, options))
+}
+
+extern "C" fn thunk_fs_promises_realpath(
+    _closure: *const ClosureHeader,
+    path: f64,
+    options: f64,
+) -> f64 {
+    promise_value(crate::fs::js_fs_realpath_dispatch(path, options))
+}
+
+extern "C" fn thunk_fs_promises_mkdtemp(
+    _closure: *const ClosureHeader,
+    prefix: f64,
+    options: f64,
+) -> f64 {
+    promise_value(crate::fs::js_fs_mkdtemp_dispatch(prefix, options))
+}
+
+extern "C" fn thunk_fs_promises_opendir(_closure: *const ClosureHeader, path: f64) -> f64 {
+    promise_value(crate::fs::js_fs_opendir_sync(path))
+}
+
+extern "C" fn thunk_fs_promises_glob(
+    _closure: *const ClosureHeader,
+    pattern: f64,
+    options: f64,
+) -> f64 {
+    let raw = crate::fs::js_fs_glob_sync_options(pattern, options);
+    promise_value(f64::from_bits(
+        JSValue::pointer(raw.to_bits() as *const u8).bits(),
+    ))
+}
+
+extern "C" fn thunk_fs_promises_watch(
+    _closure: *const ClosureHeader,
+    path: f64,
+    options: f64,
+) -> f64 {
+    crate::fs::js_fs_watch(path, options, f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+extern "C" fn thunk_fs_promises_access(
+    _closure: *const ClosureHeader,
+    path: f64,
+    mode: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_access_sync_mode(path, mode);
+    promise_undefined()
+}
 
 thunk!(thunk_readline_createInterface, "node:readline/promises.createInterface is not yet implemented in Perry (tracked by issue #793).");
 thunk!(
@@ -272,19 +534,178 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "setTimeout",
-                thunk: thunk_timers_setTimeout,
+                thunk: thunk_timers_setTimeout as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "setImmediate",
-                thunk: thunk_timers_setImmediate,
+                thunk: thunk_timers_setImmediate as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "setInterval",
-                thunk: thunk_timers_setInterval,
+                thunk: thunk_timers_setInterval as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "scheduler",
-                thunk: thunk_timers_scheduler,
+                thunk: thunk_timers_scheduler as *const u8,
+                arity: 1,
+            },
+        ],
+    },
+    SubmoduleSpec {
+        key: "fs_promises",
+        exports: &[
+            ExportSpec {
+                name: "readFile",
+                thunk: thunk_fs_promises_readFile as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "open",
+                thunk: thunk_fs_promises_open as *const u8,
+                arity: 3,
+            },
+            ExportSpec {
+                name: "writeFile",
+                thunk: thunk_fs_promises_writeFile as *const u8,
+                arity: 3,
+            },
+            ExportSpec {
+                name: "appendFile",
+                thunk: thunk_fs_promises_appendFile as *const u8,
+                arity: 3,
+            },
+            ExportSpec {
+                name: "chmod",
+                thunk: thunk_fs_promises_chmod as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "chown",
+                thunk: thunk_fs_promises_chown as *const u8,
+                arity: 3,
+            },
+            ExportSpec {
+                name: "lchown",
+                thunk: thunk_fs_promises_lchown as *const u8,
+                arity: 3,
+            },
+            ExportSpec {
+                name: "mkdir",
+                thunk: thunk_fs_promises_mkdir as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "readdir",
+                thunk: thunk_fs_promises_readdir as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "stat",
+                thunk: thunk_fs_promises_stat as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "statfs",
+                thunk: thunk_fs_promises_statfs as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "lstat",
+                thunk: thunk_fs_promises_lstat as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "rm",
+                thunk: thunk_fs_promises_rm as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "rmdir",
+                thunk: thunk_fs_promises_rmdir as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "unlink",
+                thunk: thunk_fs_promises_unlink as *const u8,
+                arity: 1,
+            },
+            ExportSpec {
+                name: "rename",
+                thunk: thunk_fs_promises_rename as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "copyFile",
+                thunk: thunk_fs_promises_copyFile as *const u8,
+                arity: 3,
+            },
+            ExportSpec {
+                name: "cp",
+                thunk: thunk_fs_promises_cp as *const u8,
+                arity: 3,
+            },
+            ExportSpec {
+                name: "truncate",
+                thunk: thunk_fs_promises_truncate as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "utimes",
+                thunk: thunk_fs_promises_utimes as *const u8,
+                arity: 3,
+            },
+            ExportSpec {
+                name: "lutimes",
+                thunk: thunk_fs_promises_lutimes as *const u8,
+                arity: 3,
+            },
+            ExportSpec {
+                name: "link",
+                thunk: thunk_fs_promises_link as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "symlink",
+                thunk: thunk_fs_promises_symlink as *const u8,
+                arity: 3,
+            },
+            ExportSpec {
+                name: "readlink",
+                thunk: thunk_fs_promises_readlink as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "realpath",
+                thunk: thunk_fs_promises_realpath as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "mkdtemp",
+                thunk: thunk_fs_promises_mkdtemp as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "opendir",
+                thunk: thunk_fs_promises_opendir as *const u8,
+                arity: 1,
+            },
+            ExportSpec {
+                name: "glob",
+                thunk: thunk_fs_promises_glob as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "watch",
+                thunk: thunk_fs_promises_watch as *const u8,
+                arity: 2,
+            },
+            ExportSpec {
+                name: "access",
+                thunk: thunk_fs_promises_access as *const u8,
+                arity: 2,
             },
         ],
     },
@@ -293,15 +714,18 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "createInterface",
-                thunk: thunk_readline_createInterface,
+                thunk: thunk_readline_createInterface as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "Interface",
-                thunk: thunk_readline_Interface,
+                thunk: thunk_readline_Interface as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "Readline",
-                thunk: thunk_readline_Readline,
+                thunk: thunk_readline_Readline as *const u8,
+                arity: 1,
             },
         ],
     },
@@ -310,11 +734,13 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "pipeline",
-                thunk: thunk_streamP_pipeline,
+                thunk: thunk_streamP_pipeline as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "finished",
-                thunk: thunk_streamP_finished,
+                thunk: thunk_streamP_finished as *const u8,
+                arity: 1,
             },
         ],
     },
@@ -323,27 +749,33 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "text",
-                thunk: thunk_consumers_text,
+                thunk: thunk_consumers_text as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "json",
-                thunk: thunk_consumers_json,
+                thunk: thunk_consumers_json as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "buffer",
-                thunk: thunk_consumers_buffer,
+                thunk: thunk_consumers_buffer as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "arrayBuffer",
-                thunk: thunk_consumers_arrayBuffer,
+                thunk: thunk_consumers_arrayBuffer as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "bytes",
-                thunk: thunk_consumers_bytes,
+                thunk: thunk_consumers_bytes as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "blob",
-                thunk: thunk_consumers_blob,
+                thunk: thunk_consumers_blob as *const u8,
+                arity: 1,
             },
         ],
     },
@@ -352,31 +784,38 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "format",
-                thunk: thunk_sys_format,
+                thunk: thunk_sys_format as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "inspect",
-                thunk: thunk_sys_inspect,
+                thunk: thunk_sys_inspect as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "debuglog",
-                thunk: thunk_sys_debuglog,
+                thunk: thunk_sys_debuglog as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "deprecate",
-                thunk: thunk_sys_deprecate,
+                thunk: thunk_sys_deprecate as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "promisify",
-                thunk: thunk_sys_promisify,
+                thunk: thunk_sys_promisify as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "callbackify",
-                thunk: thunk_sys_callbackify,
+                thunk: thunk_sys_callbackify as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "isArray",
-                thunk: thunk_sys_isArray,
+                thunk: thunk_sys_isArray as *const u8,
+                arity: 1,
             },
         ],
     },
@@ -390,27 +829,33 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "tracingChannel",
-                thunk: thunk_diag_tracing_channel,
+                thunk: thunk_diag_tracing_channel as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "channel",
-                thunk: thunk_diag_channel,
+                thunk: thunk_diag_channel as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "subscribe",
-                thunk: thunk_diag_noop,
+                thunk: thunk_diag_noop as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "unsubscribe",
-                thunk: thunk_diag_noop,
+                thunk: thunk_diag_noop as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "publish",
-                thunk: thunk_diag_noop,
+                thunk: thunk_diag_noop as *const u8,
+                arity: 1,
             },
             ExportSpec {
                 name: "hasSubscribers",
-                thunk: thunk_diag_has_subscribers,
+                thunk: thunk_diag_has_subscribers as *const u8,
+                arity: 1,
             },
         ],
     },
@@ -458,7 +903,9 @@ fn ensure_export_singleton(
     if let Some(cached) = EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
         return cached;
     }
-    let allocated = js_closure_alloc(export.thunk as *const u8, 0);
+    let thunk = export.thunk;
+    let allocated = js_closure_alloc(thunk, 0);
+    crate::closure::js_register_closure_arity(thunk, export.arity);
     EXPORT_SINGLETONS.with(|m| {
         m.borrow_mut().insert(key, allocated);
     });

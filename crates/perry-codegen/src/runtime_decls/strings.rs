@@ -294,13 +294,25 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_map_from_array", I64, &[I64]);
     module.declare_function("js_object_has_property", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_write_file_sync", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_fs_write_file_sync_options",
+        I32,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     // fs.appendFileSync(path, content) — returns i32 status. Issue #226.
     module.declare_function("js_fs_append_file_sync", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_fs_append_file_sync_options",
+        I32,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_fs_exists_sync", I32, &[DOUBLE]);
     // fs.readFileSync(path, encoding) — returns a raw *mut StringHeader i64.
     module.declare_function("js_fs_read_file_sync", I64, &[DOUBLE]);
+    module.declare_function("js_fs_read_file_dispatch", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.mkdirSync(path) — returns i32 status (1=success).
     module.declare_function("js_fs_mkdir_sync", I32, &[DOUBLE]);
+    module.declare_function("js_fs_mkdir_sync_options", I32, &[DOUBLE, DOUBLE]);
     // fs.unlinkSync(path) — returns i32 status.
     module.declare_function("js_fs_unlink_sync", I32, &[DOUBLE]);
     // fs.readdirSync(path, options) — returns NaN-boxed array of
@@ -309,29 +321,91 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_readdir_sync", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.statSync(path) — returns a NaN-boxed object with isFile/isDirectory/size fields.
     module.declare_function("js_fs_stat_sync", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_stat_sync_options", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_lstat_sync", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_lstat_sync_options", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.renameSync(from, to) — returns i32 status.
     module.declare_function("js_fs_rename_sync", I32, &[DOUBLE, DOUBLE]);
     // fs.copyFileSync(from, to) — returns i32 status.
     module.declare_function("js_fs_copy_file_sync", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_copy_file_sync_flags", I32, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_cp_sync", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_cp_sync_options", I32, &[DOUBLE, DOUBLE, DOUBLE]);
     // fs.chmodSync(path, mode) — returns i32 status.
     module.declare_function("js_fs_chmod_sync", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_chown_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_lchown_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_truncate_sync", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_ftruncate_sync", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_fsync_sync", I32, &[DOUBLE]);
+    module.declare_function("js_fs_fdatasync_sync", I32, &[DOUBLE]);
+    module.declare_function("js_fs_fchmod_sync", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_fchown_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_fstat_sync", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_fstat_sync_options", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utimes_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_lutimes_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_futimes_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_readv_sync", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_writev_sync", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_statfs_sync", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_statfs_sync_options", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_opendir_sync", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_glob_sync", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_glob_sync_options", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_link_sync", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_symlink_sync", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_readlink_sync", I64, &[DOUBLE]);
+    module.declare_function("js_fs_readlink_sync_options", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_readlink_dispatch", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_open_sync", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_close_sync", I32, &[DOUBLE]);
+    module.declare_function(
+        "js_fs_read_sync",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_fs_read_sync_options", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_write_sync", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_fs_write_string_sync_options",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_fs_write_buffer_sync",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_fs_write_sync_options_dispatch",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     // fs.accessSync(path) — returns i32 status (1=ok, 0=error).
     module.declare_function("js_fs_access_sync", I32, &[DOUBLE]);
+    module.declare_function("js_fs_access_sync_mode", I32, &[DOUBLE, DOUBLE]);
     // fs.accessSync(path) — Node-compatible variant that throws on
     // failure (via js_throw → setjmp longjmp). Returns NaN-boxed undefined.
     module.declare_function("js_fs_access_sync_throw", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_access_sync_throw_mode", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.realpathSync(path) — returns raw *mut StringHeader i64.
     module.declare_function("js_fs_realpath_sync", I64, &[DOUBLE]);
+    module.declare_function("js_fs_realpath_dispatch", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.mkdtempSync(prefix) — returns raw *mut StringHeader i64.
     module.declare_function("js_fs_mkdtemp_sync", I64, &[DOUBLE]);
+    module.declare_function("js_fs_mkdtemp_sync_options", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_mkdtemp_dispatch", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.rmdirSync(path) — returns i32 status.
     module.declare_function("js_fs_rmdir_sync", I32, &[DOUBLE]);
+    module.declare_function("js_fs_rmdir_sync_options", I32, &[DOUBLE, DOUBLE]);
     // fs.rmRecursive(path) — recursive remove; returns i32 (1=ok, 0=fail).
     module.declare_function("js_fs_rm_recursive", I32, &[DOUBLE]);
+    module.declare_function("js_fs_rm_recursive_options", I32, &[DOUBLE, DOUBLE]);
     // fs.createWriteStream(path) — returns NaN-boxed stream object.
-    module.declare_function("js_fs_create_write_stream", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_create_write_stream", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.createReadStream(path[, options]) — returns NaN-boxed stream object.
-    module.declare_function("js_fs_create_read_stream", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_create_read_stream", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.readFile(path, encoding, callback) — Node-compatible callback variant.
     module.declare_function(
         "js_fs_read_file_callback",

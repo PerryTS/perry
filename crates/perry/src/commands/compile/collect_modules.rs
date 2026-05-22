@@ -132,6 +132,7 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
     let normalized = source.strip_prefix("node:").unwrap_or(source);
     match normalized {
         "timers/promises" => Some("timers_promises"),
+        "fs/promises" => Some("fs_promises"),
         "readline/promises" => Some("readline_promises"),
         "stream/promises" => Some("stream_promises"),
         "stream/consumers" => Some("stream_consumers"),

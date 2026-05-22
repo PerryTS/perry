@@ -34,12 +34,7 @@ pub(super) fn try_module_static_methods(
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
                         "readFileSync" => {
-                            if args.len() >= 2 {
-                                // readFileSync(path, encoding) — returns string
-                                return Ok(Ok(Expr::FsReadFileSync(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            } else if args.len() == 1 {
+                            if args.len() == 1 {
                                 // readFileSync(path) without encoding — returns Buffer (Node parity)
                                 return Ok(Ok(Expr::FsReadFileBinary(Box::new(
                                     args.into_iter().next().unwrap(),
@@ -47,7 +42,7 @@ pub(super) fn try_module_static_methods(
                             }
                         }
                         "writeFileSync" => {
-                            if args.len() >= 2 {
+                            if args.len() == 2 {
                                 let mut iter = args.into_iter();
                                 let path = iter.next().unwrap();
                                 let content = iter.next().unwrap();
@@ -58,7 +53,7 @@ pub(super) fn try_module_static_methods(
                             }
                         }
                         "appendFileSync" => {
-                            if args.len() >= 2 {
+                            if args.len() == 2 {
                                 let mut iter = args.into_iter();
                                 let path = iter.next().unwrap();
                                 let content = iter.next().unwrap();
@@ -76,7 +71,7 @@ pub(super) fn try_module_static_methods(
                             }
                         }
                         "mkdirSync" => {
-                            if !args.is_empty() {
+                            if args.len() == 1 {
                                 return Ok(Ok(Expr::FsMkdirSync(Box::new(
                                     args.into_iter().next().unwrap(),
                                 ))));
@@ -111,13 +106,7 @@ pub(super) fn try_module_static_methods(
                         // `{recursive,force,maxRetries,retryDelay}` opts arg is
                         // ignored — `js_fs_rm_recursive` already does recursive
                         // removal unconditionally.
-                        "rmSync" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::FsRmRecursive(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
-                        }
+                        "rmSync" => {}
                         _ => {} // Fall through to generic handling
                     }
                 }
