@@ -222,6 +222,18 @@ struct DiagTracingState {
     events: [i64; 5],
 }
 
+// Known follow-ups for the thread-local state below:
+//
+// * #1309 — channels are pinned for the process lifetime. Entries are
+//   never removed from `DIAG_CHANNEL_BY_KEY`/`DIAG_CHANNELS`, so a
+//   long-running service that mints per-request channel names leaks
+//   memory unboundedly. Node holds channels weakly; mirroring that
+//   needs either a GC post-sweep hook or a weak-ref primitive.
+//
+// * #1310 — these maps are `thread_local!`, so `parallelMap`/`spawn`
+//   workers see an empty world. A `publish` from a worker thread
+//   silently no-ops against subscribers registered on the main
+//   thread, diverging from Node's process-global model.
 thread_local! {
     static DIAG_CHANNEL_BY_KEY: RefCell<HashMap<DiagChannelKey, i64>> = RefCell::new(HashMap::new());
     static DIAG_CHANNELS: RefCell<HashMap<i64, DiagChannelState>> = RefCell::new(HashMap::new());
