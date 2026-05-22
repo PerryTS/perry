@@ -1210,6 +1210,9 @@ unsafe fn build_stats_object(
     meta_extra: Option<&fs::Metadata>,
 ) -> f64 {
     let (dev, rdev, blksize, ino, blocks) = metadata_node_extra_fields(meta_extra);
+    // Real nanosecond timestamps when we have a Metadata in hand; otherwise
+    // fall back to the millisecond × 1e6 approximation below.
+    let times_ns = meta_extra.map(metadata_times_ns);
 
     let (obj, count) = if bigint {
         let o = crate::object::js_object_alloc_class_with_keys(
@@ -1238,15 +1241,21 @@ unsafe fn build_stats_object(
     set(1, make_stats_predicate(is_dir));
     set(2, make_stats_predicate(is_symlink));
     if bigint {
+        let (a_ns, m_ns, c_ns, b_ns) = times_ns.unwrap_or((
+            (atime_ms as i64).saturating_mul(1_000_000),
+            (mtime_ms as i64).saturating_mul(1_000_000),
+            (ctime_ms as i64).saturating_mul(1_000_000),
+            (birthtime_ms as i64).saturating_mul(1_000_000),
+        ));
         set(3, bigint_u64_value(size));
         set(4, bigint_i64_value(atime_ms as i64));
         set(5, bigint_i64_value(mtime_ms as i64));
         set(6, bigint_i64_value(ctime_ms as i64));
         set(7, bigint_i64_value(birthtime_ms as i64));
-        set(8, bigint_i64_value((atime_ms as i64) * 1_000_000));
-        set(9, bigint_i64_value((mtime_ms as i64) * 1_000_000));
-        set(10, bigint_i64_value((ctime_ms as i64) * 1_000_000));
-        set(11, bigint_i64_value((birthtime_ms as i64) * 1_000_000));
+        set(8, bigint_i64_value(a_ns));
+        set(9, bigint_i64_value(m_ns));
+        set(10, bigint_i64_value(c_ns));
+        set(11, bigint_i64_value(b_ns));
         set(12, bigint_u64_value(mode as u64));
         set(13, bigint_i64_value(uid as i64));
         set(14, bigint_i64_value(gid as i64));
@@ -1287,9 +1296,52 @@ fn metadata_times_ms(meta: &fs::Metadata) -> (f64, f64, f64, f64) {
     let atime = system_time_ms(meta.accessed());
     let mtime = system_time_ms(meta.modified());
     let birth = system_time_ms(meta.created());
-    // Rust std does not expose ctime portably; using mtime as a stable
-    // deterministic approximation keeps the field numeric for parity tests.
-    (atime, mtime, mtime, birth)
+    let ctime = unix_ctime_ms(meta).unwrap_or(mtime);
+    (atime, mtime, ctime, birth)
+}
+
+#[cfg(unix)]
+fn unix_ctime_ms(meta: &fs::Metadata) -> Option<f64> {
+    // `MetadataExt::ctime` is seconds since epoch; combine with the
+    // nanosecond fraction so we don't drop sub-second precision in the
+    // ms conversion. Matches Node's stat.ctimeMs on POSIX.
+    let secs = meta.ctime();
+    let nsecs = meta.ctime_nsec().max(0) as f64;
+    Some(secs as f64 * 1000.0 + nsecs / 1_000_000.0)
+}
+
+#[cfg(not(unix))]
+fn unix_ctime_ms(_meta: &fs::Metadata) -> Option<f64> {
+    None
+}
+
+/// Nanosecond timestamps for `bigint: true` Stats. On Unix we read the
+/// real `*time_nsec` fields directly; elsewhere we fall back to the
+/// millisecond × 1_000_000 approximation.
+#[cfg(unix)]
+fn metadata_times_ns(meta: &fs::Metadata) -> (i64, i64, i64, i64) {
+    let to_ns = |secs: i64, nsecs: i64| -> i64 {
+        secs.saturating_mul(1_000_000_000).saturating_add(nsecs.max(0))
+    };
+    let a = to_ns(meta.atime(), meta.atime_nsec());
+    let m = to_ns(meta.mtime(), meta.mtime_nsec());
+    let c = to_ns(meta.ctime(), meta.ctime_nsec());
+    // birthtime is not always available via MetadataExt across Unixen;
+    // when unset fall back to a derived value from `created()`.
+    let birth = meta
+        .created()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(m);
+    (a, m, c, birth)
+}
+
+#[cfg(not(unix))]
+fn metadata_times_ns(_meta: &fs::Metadata) -> (i64, i64, i64, i64) {
+    // Sentinel; the bigint stats path multiplies ms × 1e6 when this
+    // fallback is hit so we keep behavior backward-compatible on Windows.
+    (0, 0, 0, 0)
 }
 
 fn metadata_owner_ids(meta: &fs::Metadata) -> (f64, f64) {
@@ -1501,7 +1553,16 @@ pub extern "C" fn js_fs_copy_file_sync_flags(
         };
         let excl = flags_value.is_finite() && (flags_value as i64 & 1) == 1;
         if excl && Path::new(&to).exists() {
-            return 0;
+            // Node throws `EEXIST: file already exists, copyfile '<src>' -> '<dst>'`.
+            // Surface the same via `js_throw` so user `try/catch` fires; the
+            // existing code path silently returned 0 which left callers
+            // believing the copy was a no-op.
+            let err = std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "destination already exists",
+            );
+            let err_val = build_fs_error_value(&err, "copyfile", &to);
+            crate::exception::js_throw(err_val);
         }
         match fs::copy(from, to) {
             Ok(_) => 1,
@@ -4217,23 +4278,23 @@ fn io_error_code(err: &std::io::Error) -> &'static str {
     }
 }
 
-unsafe fn build_fs_error_value(err: &std::io::Error, syscall: &str, path: &str) -> f64 {
-    // The Node-style code is encoded into the message text so user code that
-    // checks `err.message.includes("ENOENT")` works today. Adding accessible
-    // `code`/`syscall`/`path` fields on the Error requires extending
-    // `js_object_set_field_by_name` to route writes to a side-table for
-    // `OBJECT_TYPE_ERROR` (mirrors the `closure_set_dynamic_prop` path).
-    // Tracked under STATUS.md item 12.
+unsafe fn build_fs_error_value(err: &std::io::Error, syscall: &'static str, path: &str) -> f64 {
     let code = io_error_code(err);
     let msg = format!("{}: {}, {} '{}'", code, err, syscall, path);
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
+    // Register code/syscall/path in the per-message side tables so the
+    // `.code`, `.syscall`, `.path` property getters in `field_get_set`
+    // surface Node-compatible values on caught errors.
+    crate::node_submodules::register_error_code_pub(msg_ptr, code);
+    crate::node_submodules::register_error_syscall(msg_ptr, syscall);
+    crate::node_submodules::register_error_path(msg_ptr, path.to_string());
     crate::value::js_nanbox_pointer(err_ptr as i64)
 }
 
 /// Probe a path for read access and produce a NaN-boxed Error if the
 /// underlying syscall would fail. Returns `None` on success.
-unsafe fn fs_callback_read_error(path_value: f64, syscall: &str) -> Option<f64> {
+unsafe fn fs_callback_read_error(path_value: f64, syscall: &'static str) -> Option<f64> {
     let path = decode_path_value(path_value)?;
     match fs::metadata(&path) {
         Ok(_) => None,
@@ -4242,7 +4303,7 @@ unsafe fn fs_callback_read_error(path_value: f64, syscall: &str) -> Option<f64> 
 }
 
 /// Probe a path for lstat-style read access (does not follow symlinks).
-unsafe fn fs_callback_lstat_error(path_value: f64, syscall: &str) -> Option<f64> {
+unsafe fn fs_callback_lstat_error(path_value: f64, syscall: &'static str) -> Option<f64> {
     let path = decode_path_value(path_value)?;
     match fs::symlink_metadata(&path) {
         Ok(_) => None,
@@ -4252,7 +4313,7 @@ unsafe fn fs_callback_lstat_error(path_value: f64, syscall: &str) -> Option<f64>
 
 /// Probe the parent of a path for write access. Used by write-style ops
 /// where the target file is allowed to not exist yet.
-unsafe fn fs_callback_write_parent_error(path_value: f64, syscall: &str) -> Option<f64> {
+unsafe fn fs_callback_write_parent_error(path_value: f64, syscall: &'static str) -> Option<f64> {
     let path = decode_path_value(path_value)?;
     let parent = std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new("."));
     match fs::metadata(parent) {

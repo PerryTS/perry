@@ -564,6 +564,13 @@ thread_local! {
 }
 
 fn register_error_code(message_ptr: *const StringHeader, code: &'static str) {
+    register_error_code_pub(message_ptr, code);
+}
+
+/// `register_error_code` for crate-external callers (e.g. `fs.rs` decorates
+/// io::Error values with their POSIX `ERR_*` code so `err.code === "ENOENT"`
+/// works on caught errors).
+pub fn register_error_code_pub(message_ptr: *const StringHeader, code: &'static str) {
     if message_ptr.is_null() {
         return;
     }
@@ -579,6 +586,50 @@ pub fn error_code_for_message(message_ptr: *const StringHeader) -> Option<&'stat
         return None;
     }
     ERROR_MESSAGE_CODES.with(|m| m.borrow().get(&(message_ptr as usize)).copied())
+}
+
+thread_local! {
+    static ERROR_MESSAGE_SYSCALLS: RefCell<HashMap<usize, &'static str>> =
+        RefCell::new(HashMap::new());
+    static ERROR_MESSAGE_PATHS: RefCell<HashMap<usize, String>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Attach a Node-style `syscall` string to an Error keyed by its message
+/// StringHeader, mirroring [`register_error_code_pub`]. Read back from the
+/// `.syscall` getter in `field_get_set`.
+pub fn register_error_syscall(message_ptr: *const StringHeader, syscall: &'static str) {
+    if message_ptr.is_null() {
+        return;
+    }
+    ERROR_MESSAGE_SYSCALLS.with(|m| {
+        m.borrow_mut().insert(message_ptr as usize, syscall);
+    });
+}
+
+pub fn error_syscall_for_message(message_ptr: *const StringHeader) -> Option<&'static str> {
+    if message_ptr.is_null() {
+        return None;
+    }
+    ERROR_MESSAGE_SYSCALLS.with(|m| m.borrow().get(&(message_ptr as usize)).copied())
+}
+
+/// Attach a Node-style `path` string to an Error keyed by its message
+/// StringHeader. The value is owned (paths are runtime data, not static).
+pub fn register_error_path(message_ptr: *const StringHeader, path: String) {
+    if message_ptr.is_null() {
+        return;
+    }
+    ERROR_MESSAGE_PATHS.with(|m| {
+        m.borrow_mut().insert(message_ptr as usize, path);
+    });
+}
+
+pub fn error_path_for_message(message_ptr: *const StringHeader) -> Option<String> {
+    if message_ptr.is_null() {
+        return None;
+    }
+    ERROR_MESSAGE_PATHS.with(|m| m.borrow().get(&(message_ptr as usize)).cloned())
 }
 
 fn throw_invalid_arg() -> ! {
