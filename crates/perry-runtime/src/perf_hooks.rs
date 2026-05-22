@@ -644,6 +644,7 @@ pub extern "C" fn js_perf_observer_observe(obs_val: f64, opts: f64) -> f64 {
     unsafe {
         let id = observer_id_from_value(obs_val);
         let mut types: Vec<u8> = Vec::new();
+        let mut buffered = false;
         if let Some(opts_obj) = as_object_ptr(opts) {
             // entryTypes: string[]
             let key = b"entryTypes";
@@ -670,13 +671,40 @@ pub extern "C" fn js_perf_observer_observe(obs_val: f64, opts: f64) -> f64 {
                     types.push(code);
                 }
             }
+            // buffered: boolean — also deliver entries already on the timeline.
+            let bkey = b"buffered";
+            let bkp = crate::string::js_string_from_bytes(bkey.as_ptr(), bkey.len() as u32);
+            let b_v = js_object_get_field_by_name(opts_obj, bkp);
+            buffered = crate::value::js_is_truthy(f64::from_bits(b_v.bits())) != 0;
         }
+        let observed = types.clone();
         OBSERVERS.with(|o| {
             if let Some(obs) = o.borrow_mut().get_mut(id) {
                 obs.entry_types = types;
                 obs.active = true;
             }
         });
+        // `buffered: true` delivers entries created before observe() was
+        // called. Queue the matching timeline entries and arm the async flush
+        // so the callback fires on a later turn (Node's buffered semantics).
+        if buffered {
+            let pre: Vec<PerfEntry> = PERF_ENTRIES.with(|store| {
+                store
+                    .borrow()
+                    .iter()
+                    .filter(|e| observed.contains(&e.entry_type))
+                    .cloned()
+                    .collect()
+            });
+            if !pre.is_empty() {
+                OBSERVERS.with(|o| {
+                    if let Some(obs) = o.borrow_mut().get_mut(id) {
+                        obs.pending.extend(pre);
+                    }
+                });
+                schedule_flush();
+            }
+        }
         f64::from_bits(JSValue::undefined().bits())
     }
 }
