@@ -68,12 +68,6 @@
     "category": "bug-open",
     "reason": "node:perf_hooks: PerformanceEntry#toJSON() is not a function. Flips to PASS when #1387 lands."
   },
-  "node-suite/perf_hooks/observer/callback-observer-arg": {
-    "issue": "1389",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: the observer callback's 2nd argument should === the observer; Perry passes the wrong/no second arg. Flips to PASS when #1389 lands."
-  },
   "node-suite/perf_hooks/observer/buffered": {
     "issue": "1390",
     "added": "2026-05-22",

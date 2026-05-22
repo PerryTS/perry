@@ -544,6 +544,11 @@ pub extern "C" fn js_perf_set_resource_timing_buffer_size(_n: f64) -> f64 {
 
 struct Observer {
     cb_bits: u64,
+    /// NaN-boxed value of the observer's own JS object (what `new
+    /// PerformanceObserver` returned). Passed as the callback's 2nd argument
+    /// so `(list, observer)` satisfies `observer === obs`. The GC root scanner
+    /// keeps it alive and forwards it, so identity survives evacuation.
+    obj_bits: u64,
     entry_types: Vec<u8>,
     pending: Vec<PerfEntry>,
     active: bool,
@@ -593,13 +598,18 @@ pub extern "C" fn js_perf_observer_new(cb: f64) -> f64 {
             let mut o = o.borrow_mut();
             o.push(Observer {
                 cb_bits: cb.to_bits(),
+                obj_bits: JSValue::undefined().bits(),
                 entry_types: Vec::new(),
                 pending: Vec::new(),
                 active: false,
             });
             o.len() - 1
         });
-        make_observer_object(id)
+        // Remember the returned object so the flush can hand the *same* object
+        // back as the callback's 2nd arg (identity: `observer === obs`).
+        let obj = make_observer_object(id);
+        OBSERVERS.with(|o| o.borrow_mut()[id].obj_bits = obj.to_bits());
+        obj
     }
 }
 
@@ -741,14 +751,14 @@ pub extern "C" fn js_perf_observer_flush_all(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
     FLUSH_SCHEDULED.with(|f| f.set(false));
-    let work: Vec<(u64, Vec<PerfEntry>)> = OBSERVERS.with(|o| {
+    let work: Vec<(u64, u64, Vec<PerfEntry>)> = OBSERVERS.with(|o| {
         o.borrow_mut()
             .iter_mut()
             .filter(|obs| obs.active && !obs.pending.is_empty())
-            .map(|obs| (obs.cb_bits, std::mem::take(&mut obs.pending)))
+            .map(|obs| (obs.cb_bits, obs.obj_bits, std::mem::take(&mut obs.pending)))
             .collect()
     });
-    for (cb_bits, entries) in work {
+    for (cb_bits, obj_bits, entries) in work {
         unsafe {
             CURRENT_LIST.with(|c| *c.borrow_mut() = entries);
             let module = b"perf_observer_list";
@@ -757,7 +767,8 @@ pub extern "C" fn js_perf_observer_flush_all(
             let cb_jv = JSValue::from_bits(cb_bits);
             if cb_jv.is_pointer() {
                 let cb_closure = cb_jv.as_pointer::<crate::closure::ClosureHeader>();
-                crate::closure::js_closure_call1(cb_closure, list);
+                // Node invokes the callback as `(list, observer)`.
+                crate::closure::js_closure_call2(cb_closure, list, f64::from_bits(obj_bits));
             }
             CURRENT_LIST.with(|c| c.borrow_mut().clear());
         }
@@ -820,6 +831,7 @@ pub fn scan_perf_entries_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     OBSERVERS.with(|o| {
         for obs in o.borrow_mut().iter_mut() {
             visitor.visit_nanbox_u64_slot(&mut obs.cb_bits);
+            visitor.visit_nanbox_u64_slot(&mut obs.obj_bits);
             for e in obs.pending.iter_mut() {
                 visitor.visit_nanbox_u64_slot(&mut e.detail_bits);
             }
