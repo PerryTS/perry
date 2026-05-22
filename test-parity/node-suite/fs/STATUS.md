@@ -30,6 +30,11 @@ These areas are intentionally left as follow-up work because they require larger
 8. Stream edge cases: backpressure, `autoClose`, `emitClose`, destroy/error ordering, and fd lifecycle parity.
 9. URL/path edge cases, especially full compatibility with `pathToFileURL()`-generated objects.
 10. Additional platform- and permission-sensitive behavior once the parity runner can model those deterministically.
+11. Real streaming for `createReadStream`/`createWriteStream`. The current implementation eagerly loads the source file into memory and emits one `data` chunk; arbitrary `highWaterMark`, mid-stream `pause`/`resume`, and backpressure-driven `drain` events are not yet modeled.
+12. Callback-style fs APIs now invoke `cb(err, …)` with a real `Error` whose message embeds the Node-style code (`"ENOENT: …, syscall 'open' '/path'"`) for the common missing-source / missing-parent cases — pre-flight `metadata` probes detect these before the syscall. Reading `err.code` / `err.syscall` / `err.path` as separate properties still returns `undefined` because `js_object_set_field_by_name` no-ops on `OBJECT_TYPE_ERROR`; user code can branch on `err.message.includes("ENOENT")` today, and routing Error writes to a dynamic-prop side-table (mirroring `closure_set_dynamic_prop`) is the follow-up. Errors raised inside the syscall after the probe succeeds still surface as sentinel values. `fs/promises.open` likewise rejects on a missing read-only path; create-mode flags (`"w"`, `"a"`, numeric `O_CREAT|…`) still defer to the underlying syscall and may resolve with `fd === -1` on failure.
+13. `FileHandle` and the numeric-fd registry are `thread_local` — handles cannot be shared across threads spawned with `perry/thread` or `parallelMap`. The same fd in another thread is treated as missing.
+14. `ctime` is currently aliased to `mtime` on POSIX because Rust std doesn't expose change-time; `atimeNs`/`mtimeNs` are derived from millisecond clocks and lose sub-ms precision relative to Node.
+15. `mkdtemp` returns an empty path on exhaustion (after 64 collision retries) instead of throwing — once typed error propagation lands, promote this to a real ENOSPC/EACCES rejection.
 
 ## Validation snapshot
 

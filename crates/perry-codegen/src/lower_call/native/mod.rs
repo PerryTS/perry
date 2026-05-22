@@ -1526,16 +1526,24 @@ pub(crate) fn lower_native_method_call(
                     .call_void("js_fs_chmod_sync", &[(DOUBLE, &p), (DOUBLE, &m)]);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
-            "truncateSync" if args.len() >= 2 => {
+            "truncateSync" if !args.is_empty() => {
                 let p = lower_expr(ctx, &args[0])?;
-                let len = lower_expr(ctx, &args[1])?;
+                let len = if args.len() >= 2 {
+                    lower_expr(ctx, &args[1])?
+                } else {
+                    double_literal(0.0)
+                };
                 ctx.block()
                     .call_void("js_fs_truncate_sync", &[(DOUBLE, &p), (DOUBLE, &len)]);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
-            "ftruncateSync" if args.len() >= 2 => {
+            "ftruncateSync" if !args.is_empty() => {
                 let fd = lower_expr(ctx, &args[0])?;
-                let len = lower_expr(ctx, &args[1])?;
+                let len = if args.len() >= 2 {
+                    lower_expr(ctx, &args[1])?
+                } else {
+                    double_literal(0.0)
+                };
                 ctx.block()
                     .call_void("js_fs_ftruncate_sync", &[(DOUBLE, &fd), (DOUBLE, &len)]);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));

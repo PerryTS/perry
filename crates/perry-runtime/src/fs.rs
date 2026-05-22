@@ -86,7 +86,7 @@ pub extern "C" fn js_fs_read_file_sync_options(
     options_value: f64,
 ) -> *mut StringHeader {
     unsafe {
-        let path_str_for_log = decode_path_value(path_value).unwrap_or("");
+        let path_str_for_log = decode_path_value(path_value).unwrap_or_default();
 
         // Debug: log path on Android
         #[cfg(target_os = "android")]
@@ -264,7 +264,7 @@ fn read_file_bytes_with_options(path_value: f64, options_value: f64) -> Option<V
         }
         let path_str = decode_path_value(path_value)?;
         let flag = read_file_flag(options_value);
-        let mut file = open_file_for_read_flag(path_str, &flag).ok()?;
+        let mut file = open_file_for_read_flag(&path_str, &flag).ok()?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).ok()?;
         Some(bytes)
@@ -301,7 +301,7 @@ pub extern "C" fn js_fs_write_file_sync_options(
         let content_bytes = bytes_from_value(content_value);
 
         let flag = file_options_flag(options_value, "w");
-        match open_file_for_write_flag(path_str, &flag) {
+        match open_file_for_write_flag(&path_str, &flag) {
             Ok(mut file) => {
                 if file.write_all(&content_bytes).is_ok() {
                     1
@@ -357,7 +357,7 @@ pub extern "C" fn js_fs_append_file_sync_options(
         let content_bytes = bytes_from_value(content_value);
 
         let flag = file_options_flag(options_value, "a");
-        match open_file_for_write_flag(path_str, &flag) {
+        match open_file_for_write_flag(&path_str, &flag) {
             Ok(mut file) => match file.write_all(&content_bytes) {
                 Ok(_) => 1,
                 Err(_) => 0,
@@ -378,7 +378,7 @@ pub extern "C" fn js_fs_exists_sync(path_value: f64) -> i32 {
             None => return 0,
         };
 
-        if Path::new(path_str).exists() {
+        if Path::new(&path_str).exists() {
             1
         } else {
             0
@@ -453,13 +453,13 @@ pub extern "C" fn js_fs_mkdir_sync_options(path_value: f64, options_value: f64) 
         let recursive = options_bool_field(options_value, b"recursive");
         let mode = mkdir_mode_from_options(options_value);
         let result = if recursive {
-            fs::create_dir_all(path_str)
+            fs::create_dir_all(&path_str)
         } else {
-            fs::create_dir(path_str)
+            fs::create_dir(&path_str)
         };
         match result {
             Ok(_) => {
-                apply_dir_mode(path_str, mode);
+                apply_dir_mode(&path_str, mode);
                 1
             }
             Err(_) => 0,
@@ -671,18 +671,26 @@ fn collect_readdir_recursive_strings(root: &Path, current: &Path, out: &mut Vec<
     let Ok(entries) = fs::read_dir(current) else {
         return;
     };
-    let mut paths: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
-    paths.sort();
-    for path in &paths {
+    // Capture (path, is_dir) from the DirEntry itself — calling `Path::is_dir`
+    // later would issue a second stat syscall per entry.
+    let mut items: Vec<(std::path::PathBuf, bool)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let is_dir = e.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+            Some((e.path(), is_dir))
+        })
+        .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    for (path, _) in &items {
         let rel = path
             .strip_prefix(root)
-            .unwrap_or(&path)
+            .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
         out.push(rel);
     }
-    for path in paths {
-        if path.is_dir() {
+    for (path, is_dir) in items {
+        if is_dir {
             collect_readdir_recursive_strings(root, &path, out);
         }
     }
@@ -750,13 +758,13 @@ pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64
         let recursive = options_bool_field(options_value, b"recursive");
         let encoding_buffer = readdir_encoding_buffer(options_value);
 
-        match fs::read_dir(path_str) {
+        match fs::read_dir(&path_str) {
             Ok(entries) => {
                 if recursive && !with_file_types {
                     let mut names = Vec::new();
                     collect_readdir_recursive_strings(
-                        Path::new(path_str),
-                        Path::new(path_str),
+                        Path::new(&path_str),
+                        Path::new(&path_str),
                         &mut names,
                     );
                     let mut arr = js_array_alloc(names.len() as u32);
@@ -770,7 +778,7 @@ pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64
                 if with_file_types {
                     if recursive {
                         let mut items = Vec::new();
-                        collect_readdir_recursive_dirents(Path::new(path_str), &mut items);
+                        collect_readdir_recursive_dirents(Path::new(&path_str), &mut items);
                         let mut arr = js_array_alloc(items.len() as u32);
                         for (name, parent, is_file, is_dir, is_symlink) in &items {
                             let dirent =
@@ -795,7 +803,7 @@ pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64
                     for (name, ft) in &items {
                         let dirent = build_dirent_object(
                             name,
-                            path_str,
+                            &path_str,
                             ft.is_file(),
                             ft.is_dir(),
                             ft.is_symlink(),
@@ -840,7 +848,7 @@ pub extern "C" fn js_fs_is_directory(path_value: f64) -> i32 {
             None => return 0,
         };
 
-        if Path::new(path_str).is_dir() {
+        if Path::new(&path_str).is_dir() {
             1
         } else {
             0
@@ -941,7 +949,7 @@ pub extern "C" fn js_fs_rm_recursive_options(path_value: f64, options_value: f64
             None => return 0,
         };
 
-        let p = Path::new(path_str);
+        let p = Path::new(&path_str);
         let meta = match fs::symlink_metadata(p) {
             Ok(meta) => meta,
             Err(_) => {
@@ -1021,8 +1029,15 @@ fn chown_path_value(path_value: f64, uid_value: f64, gid_value: f64, follow: boo
     }
 }
 
-/// Helper: decode a NaN-boxed string path into a Rust &str slice.
-unsafe fn decode_path_value<'a>(path_value: f64) -> Option<&'a str> {
+/// Helper: decode a NaN-boxed PathLike (string / Buffer / file: URL) into an
+/// owned `String`. Returns `None` if the value is not a recognized path form
+/// or the bytes are not valid UTF-8.
+///
+/// Always owns — previous revisions returned `&str` and used `Box::leak` for
+/// the Buffer/URL paths, which leaked memory on every fs call with those
+/// argument shapes. The extra allocation is negligible next to the syscall
+/// cost that follows.
+unsafe fn decode_path_value(path_value: f64) -> Option<String> {
     let jsval = crate::value::JSValue::from_bits(path_value.to_bits());
     if jsval.is_string() {
         let path_ptr = jsval.as_string_ptr();
@@ -1032,7 +1047,7 @@ unsafe fn decode_path_value<'a>(path_value: f64) -> Option<&'a str> {
         let len = (*path_ptr).byte_len as usize;
         let data_ptr = (path_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let path_bytes = std::slice::from_raw_parts(data_ptr, len);
-        return std::str::from_utf8(path_bytes).ok();
+        return std::str::from_utf8(path_bytes).ok().map(|s| s.to_string());
     }
     if crate::buffer::js_buffer_is_buffer(path_value.to_bits() as i64) == 1 {
         let buf = buffer_ptr_from_value(path_value);
@@ -1041,8 +1056,7 @@ unsafe fn decode_path_value<'a>(path_value: f64) -> Option<&'a str> {
         }
         let bytes =
             std::slice::from_raw_parts(crate::buffer::buffer_data(buf), (*buf).length as usize);
-        let path = std::str::from_utf8(bytes).ok()?.to_string();
-        return Some(Box::leak(path.into_boxed_str()));
+        return std::str::from_utf8(bytes).ok().map(|s| s.to_string());
     }
     if jsval.is_pointer() {
         let obj = jsval.as_pointer::<crate::object::ObjectHeader>();
@@ -1063,8 +1077,7 @@ unsafe fn decode_path_value<'a>(path_value: f64) -> Option<&'a str> {
         if pathname.is_empty() {
             return None;
         }
-        let decoded = crate::url::search_params::url_decode(&pathname);
-        return Some(Box::leak(decoded.into_boxed_str()));
+        return Some(crate::url::search_params::url_decode(&pathname));
     }
     None
 }
@@ -1163,6 +1176,23 @@ fn bigint_i64_value(value: i64) -> f64 {
     crate::value::js_nanbox_bigint(ptr as i64)
 }
 
+// Pre-packed Stats key lists. Null-separated bytes are the format
+// `js_object_alloc_class_with_keys` expects; the shape cache builds the
+// JS keys array once and reuses it across every `statSync` invocation.
+//
+// Class IDs are reserved for Perry's runtime-internal Stats shapes:
+//   - 0xFE5C: regular Stats (numeric fields)
+//   - 0xFE5D: bigint Stats (adds *Ns fields)
+//
+// Field order MUST match the order writes are emitted below.
+const STATS_KEYS_REGULAR: &[u8] = b"isFile\0isDirectory\0isSymbolicLink\0size\0atimeMs\0mtimeMs\0ctimeMs\0birthtimeMs\0mode\0uid\0gid\0nlink\0dev\0rdev\0blksize\0ino\0blocks\0";
+const STATS_REGULAR_COUNT: u32 = 17;
+const STATS_REGULAR_CLASS_ID: u32 = 0xFFFF_0070;
+
+const STATS_KEYS_BIGINT: &[u8] = b"isFile\0isDirectory\0isSymbolicLink\0size\0atimeMs\0mtimeMs\0ctimeMs\0birthtimeMs\0atimeNs\0mtimeNs\0ctimeNs\0birthtimeNs\0mode\0uid\0gid\0nlink\0dev\0rdev\0blksize\0ino\0blocks\0";
+const STATS_BIGINT_COUNT: u32 = 21;
+const STATS_BIGINT_CLASS_ID: u32 = 0xFFFF_0071;
+
 unsafe fn build_stats_object(
     is_file: bool,
     is_dir: bool,
@@ -1179,56 +1209,68 @@ unsafe fn build_stats_object(
     bigint: bool,
     meta_extra: Option<&fs::Metadata>,
 ) -> f64 {
-    // Common Node Stats fields used across Node/Deno/Bun fs suites.
-    let obj = crate::object::js_object_alloc(0, 20);
     let (dev, rdev, blksize, ino, blocks) = metadata_node_extra_fields(meta_extra);
 
-    // Set fields via the by-name setter which builds up the key array.
-    let set = |name: &str, v: f64| {
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        crate::object::js_object_set_field_by_name(obj, key, v);
-    };
-    set("isFile", make_stats_predicate(is_file));
-    set("isDirectory", make_stats_predicate(is_dir));
-    set("isSymbolicLink", make_stats_predicate(is_symlink));
-    // size stored as a raw f64 number.
-    if bigint {
-        set("size", bigint_u64_value(size));
-        set("atimeMs", bigint_i64_value(atime_ms as i64));
-        set("mtimeMs", bigint_i64_value(mtime_ms as i64));
-        set("ctimeMs", bigint_i64_value(ctime_ms as i64));
-        set("birthtimeMs", bigint_i64_value(birthtime_ms as i64));
-        set("atimeNs", bigint_i64_value((atime_ms as i64) * 1_000_000));
-        set("mtimeNs", bigint_i64_value((mtime_ms as i64) * 1_000_000));
-        set("ctimeNs", bigint_i64_value((ctime_ms as i64) * 1_000_000));
-        set(
-            "birthtimeNs",
-            bigint_i64_value((birthtime_ms as i64) * 1_000_000),
+    let (obj, count) = if bigint {
+        let o = crate::object::js_object_alloc_class_with_keys(
+            STATS_BIGINT_CLASS_ID,
+            0,
+            STATS_BIGINT_COUNT,
+            STATS_KEYS_BIGINT.as_ptr(),
+            (STATS_KEYS_BIGINT.len() - 1) as u32,
         );
-        set("mode", bigint_u64_value(mode as u64));
-        set("uid", bigint_i64_value(uid as i64));
-        set("gid", bigint_i64_value(gid as i64));
-        set("nlink", bigint_i64_value(nlink as i64));
-        set("dev", bigint_u64_value(dev));
-        set("rdev", bigint_u64_value(rdev));
-        set("blksize", bigint_u64_value(blksize));
-        set("ino", bigint_u64_value(ino));
-        set("blocks", bigint_u64_value(blocks));
+        (o, STATS_BIGINT_COUNT)
     } else {
-        set("size", size as f64);
-        set("atimeMs", atime_ms);
-        set("mtimeMs", mtime_ms);
-        set("ctimeMs", ctime_ms);
-        set("birthtimeMs", birthtime_ms);
-        set("mode", mode as f64);
-        set("uid", uid);
-        set("gid", gid);
-        set("nlink", nlink);
-        set("dev", dev as f64);
-        set("rdev", rdev as f64);
-        set("blksize", blksize as f64);
-        set("ino", ino as f64);
-        set("blocks", blocks as f64);
+        let o = crate::object::js_object_alloc_class_with_keys(
+            STATS_REGULAR_CLASS_ID,
+            0,
+            STATS_REGULAR_COUNT,
+            STATS_KEYS_REGULAR.as_ptr(),
+            (STATS_KEYS_REGULAR.len() - 1) as u32,
+        );
+        (o, STATS_REGULAR_COUNT)
+    };
+    let _ = count;
+    let set = |idx: u32, v: f64| {
+        crate::object::js_object_set_field_f64(obj, idx, v);
+    };
+    set(0, make_stats_predicate(is_file));
+    set(1, make_stats_predicate(is_dir));
+    set(2, make_stats_predicate(is_symlink));
+    if bigint {
+        set(3, bigint_u64_value(size));
+        set(4, bigint_i64_value(atime_ms as i64));
+        set(5, bigint_i64_value(mtime_ms as i64));
+        set(6, bigint_i64_value(ctime_ms as i64));
+        set(7, bigint_i64_value(birthtime_ms as i64));
+        set(8, bigint_i64_value((atime_ms as i64) * 1_000_000));
+        set(9, bigint_i64_value((mtime_ms as i64) * 1_000_000));
+        set(10, bigint_i64_value((ctime_ms as i64) * 1_000_000));
+        set(11, bigint_i64_value((birthtime_ms as i64) * 1_000_000));
+        set(12, bigint_u64_value(mode as u64));
+        set(13, bigint_i64_value(uid as i64));
+        set(14, bigint_i64_value(gid as i64));
+        set(15, bigint_i64_value(nlink as i64));
+        set(16, bigint_u64_value(dev));
+        set(17, bigint_u64_value(rdev));
+        set(18, bigint_u64_value(blksize));
+        set(19, bigint_u64_value(ino));
+        set(20, bigint_u64_value(blocks));
+    } else {
+        set(3, size as f64);
+        set(4, atime_ms);
+        set(5, mtime_ms);
+        set(6, ctime_ms);
+        set(7, birthtime_ms);
+        set(8, mode as f64);
+        set(9, uid);
+        set(10, gid);
+        set(11, nlink);
+        set(12, dev as f64);
+        set(13, rdev as f64);
+        set(14, blksize as f64);
+        set(15, ino as f64);
+        set(16, blocks as f64);
     }
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     f64::from_bits(POINTER_TAG | (obj as u64 & 0x0000_FFFF_FFFF_FFFF))
@@ -1458,7 +1500,7 @@ pub extern "C" fn js_fs_copy_file_sync_flags(
             None => return 0,
         };
         let excl = flags_value.is_finite() && (flags_value as i64 & 1) == 1;
-        if excl && Path::new(to).exists() {
+        if excl && Path::new(&to).exists() {
             return 0;
         }
         match fs::copy(from, to) {
@@ -1475,6 +1517,7 @@ struct FsCopyOptions {
     preserve_timestamps: bool,
     dereference: bool,
     verbatim_symlinks: bool,
+    recursive: bool,
     filter: f64,
 }
 
@@ -1490,6 +1533,7 @@ unsafe fn fs_copy_options_from_value(options_value: f64) -> FsCopyOptions {
         preserve_timestamps: options_bool_field(options_value, b"preserveTimestamps"),
         dereference: options_bool_field(options_value, b"dereference"),
         verbatim_symlinks: options_bool_field(options_value, b"verbatimSymlinks"),
+        recursive: options_bool_field(options_value, b"recursive"),
         filter: options_field_value(options_value, b"filter")
             .map(|v| f64::from_bits(v.bits()))
             .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
@@ -1612,6 +1656,26 @@ fn copy_symlink_with_options(src: &Path, dst: &Path, opts: FsCopyOptions) -> std
 }
 
 fn copy_dir_recursive(from: &Path, to: &Path, opts: FsCopyOptions) -> std::io::Result<()> {
+    copy_dir_recursive_depth(from, to, opts, 0)
+}
+
+// Guard against symlink cycles under `dereference: true`. Node's cp gives up
+// with ELOOP via the OS; we bound depth defensively so a malicious tree can't
+// stack-overflow Perry's process.
+const COPY_DIR_MAX_DEPTH: u32 = 256;
+
+fn copy_dir_recursive_depth(
+    from: &Path,
+    to: &Path,
+    opts: FsCopyOptions,
+    depth: u32,
+) -> std::io::Result<()> {
+    if depth >= COPY_DIR_MAX_DEPTH {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "cpSync: directory nesting exceeds limit (possible symlink cycle)",
+        ));
+    }
     if !copy_filter_allows(from, to, opts) {
         return Ok(());
     }
@@ -1622,7 +1686,7 @@ fn copy_dir_recursive(from: &Path, to: &Path, opts: FsCopyOptions) -> std::io::R
         let dst = to.join(entry.file_name());
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            copy_dir_recursive(&src, &dst, opts)?;
+            copy_dir_recursive_depth(&src, &dst, opts, depth + 1)?;
         } else if file_type.is_file() {
             copy_file_with_options(&src, &dst, opts)?;
         } else if file_type.is_symlink() {
@@ -1658,14 +1722,32 @@ pub extern "C" fn js_fs_cp_sync_options(from_value: f64, to_value: f64, options_
             Some(s) => s,
             None => return 0,
         };
-        let src = Path::new(from);
-        let dst = Path::new(to);
+        let src = Path::new(&from);
+        let dst = Path::new(&to);
         let opts = fs_copy_options_from_value(options_value);
+        // Node throws ERR_FS_CP_EINVAL if `src == dest`. We don't propagate
+        // typed errors yet, so return 0 (failure) to keep `cpSync` from
+        // silently no-op'ing into itself.
+        if let (Ok(canon_src), Ok(canon_dst)) = (fs::canonicalize(src), fs::canonicalize(dst)) {
+            if canon_src == canon_dst {
+                return 0;
+            }
+        }
         let meta = if opts.dereference {
             fs::metadata(src)
         } else {
             fs::symlink_metadata(src)
         };
+        // Node requires `{ recursive: true }` to copy directories; otherwise
+        // it throws ERR_FS_EISDIR. Surface the same gate via `js_throw` so
+        // `try/catch` around `cpSync` actually fires.
+        if matches!(meta, Ok(ref m) if m.is_dir()) && !opts.recursive {
+            let bytes = b"ERR_FS_EISDIR: cpSync: src is a directory (use { recursive: true })";
+            let msg = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            let err = crate::error::js_error_new_with_message(msg);
+            let err_val = crate::value::js_nanbox_pointer(err as i64);
+            crate::exception::js_throw(err_val);
+        }
         let result = match meta {
             Ok(meta) if meta.is_dir() => copy_dir_recursive(src, dst, opts),
             Ok(meta) if meta.file_type().is_symlink() => copy_symlink_with_options(src, dst, opts),
@@ -1695,7 +1777,7 @@ pub extern "C" fn js_fs_access_sync_mode(path_value: f64, mode_value: f64) -> i3
             Some(s) => s,
             None => return 0,
         };
-        if !Path::new(path_str).exists() {
+        if !Path::new(&path_str).exists() {
             return 0;
         }
         let mode = if mode_value.is_finite() {
@@ -1751,7 +1833,7 @@ fn realpath_bytes(path_value: f64) -> Vec<u8> {
             Some(s) => s,
             None => return Vec::new(),
         };
-        match fs::canonicalize(path_str) {
+        match fs::canonicalize(&path_str) {
             Ok(p) => p.to_string_lossy().as_bytes().to_vec(),
             Err(_) => path_str.as_bytes().to_vec(),
         }
@@ -1801,17 +1883,25 @@ fn mkdtemp_bytes(prefix_value: f64) -> Vec<u8> {
 
     unsafe {
         let prefix_str = match decode_path_value(prefix_value) {
-            Some(s) => s.to_string(),
+            Some(s) => s,
             None => return Vec::new(),
         };
-        // Try a handful of candidate suffixes until one succeeds.
-        for _ in 0..16 {
+        // Try a handful of candidate suffixes until one succeeds. We mix a
+        // nanosecond clock, a per-process pid component, and a monotonic
+        // counter so simultaneous calls don't collide. NOTE: we still
+        // return an empty `Vec` on exhaustion; callers convert that to an
+        // empty string which is observably wrong (the caller will then
+        // misuse it as a path). Node throws ENOSPC/EACCES here instead.
+        // Once Perry's fs surface can propagate typed errors through LLVM
+        // (#793 follow-up), promote this to a real error path.
+        let pid = std::process::id() as u64;
+        for attempt in 0..64u64 {
             let n = COUNTER.fetch_add(1, Ordering::Relaxed);
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
-            let candidate = format!("{}{:x}{:x}", prefix_str, ts, n);
+            let candidate = format!("{}{:x}{:x}{:x}{:x}", prefix_str, ts, pid, n, attempt);
             match fs::create_dir(&candidate) {
                 Ok(_) => return candidate.into_bytes(),
                 Err(_) => continue,
@@ -2140,7 +2230,7 @@ pub extern "C" fn js_fs_utimes_sync(path_value: f64, atime_value: f64, mtime_val
         };
         #[cfg(unix)]
         {
-            set_path_times(path, atime_value, mtime_value, false)
+            set_path_times(&path, atime_value, mtime_value, false)
         }
         #[cfg(not(unix))]
         {
@@ -2160,7 +2250,7 @@ pub extern "C" fn js_fs_lutimes_sync(path_value: f64, atime_value: f64, mtime_va
         };
         #[cfg(unix)]
         {
-            set_path_times(path, atime_value, mtime_value, true)
+            set_path_times(&path, atime_value, mtime_value, true)
         }
         #[cfg(not(unix))]
         {
@@ -2385,7 +2475,7 @@ pub extern "C" fn js_fs_open_sync(path_value: f64, flags_value: f64) -> f64 {
                 }
             }
         }
-        match opts.open(path_str) {
+        match opts.open(&path_str) {
             Ok(file) => {
                 let fd = NEXT_FD.with(|n| {
                     let mut n = n.borrow_mut();
@@ -2649,11 +2739,34 @@ pub extern "C" fn js_fs_readv_sync(fd_value: f64, buffers_value: f64, position_v
                     continue;
                 }
                 let cap = (*buf).length as usize;
+                if cap == 0 {
+                    continue;
+                }
                 let data = crate::buffer::buffer_data_mut(buf);
-                match file.read(std::slice::from_raw_parts_mut(data, cap)) {
-                    Ok(0) => break,
-                    Ok(n) => total += n,
-                    Err(_) => break,
+                // Node's readv fills each iovec completely (short read only
+                // at EOF). Use `read` in a loop so we don't return partially
+                // filled buffers when the kernel splits the read.
+                let mut filled = 0usize;
+                let mut eof = false;
+                while filled < cap {
+                    let slice =
+                        std::slice::from_raw_parts_mut(data.add(filled), cap - filled);
+                    match file.read(slice) {
+                        Ok(0) => {
+                            eof = true;
+                            break;
+                        }
+                        Ok(n) => filled += n,
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => {
+                            eof = true;
+                            break;
+                        }
+                    }
+                }
+                total += filled;
+                if eof {
+                    break;
                 }
             }
         }
@@ -2696,11 +2809,17 @@ pub extern "C" fn js_fs_writev_sync(fd_value: f64, buffers_value: f64, position_
                     continue;
                 }
                 let cap = (*buf).length as usize;
-                let data = crate::buffer::buffer_data(buf);
-                match file.write(std::slice::from_raw_parts(data, cap)) {
-                    Ok(n) => total += n,
-                    Err(_) => break,
+                if cap == 0 {
+                    continue;
                 }
+                let data = crate::buffer::buffer_data(buf);
+                // Node guarantees each iovec is fully written before the
+                // next; use `write_all` semantics to match.
+                let slice = std::slice::from_raw_parts(data, cap);
+                if file.write_all(slice).is_err() {
+                    break;
+                }
+                total += cap;
             }
         }
         if let Some(pos) = restore_pos {
@@ -2893,7 +3012,7 @@ pub extern "C" fn js_fs_opendir_sync(path_value: f64) -> f64 {
             None => return build_dir_object(alloc_dir_state(Vec::new()), ""),
         };
         let mut entries = Vec::new();
-        if let Ok(read_dir) = fs::read_dir(path) {
+        if let Ok(read_dir) = fs::read_dir(&path) {
             let mut items: Vec<(String, std::fs::FileType)> = Vec::new();
             for entry in read_dir.flatten() {
                 if let (Some(name), Ok(ft)) = (entry.file_name().to_str(), entry.file_type()) {
@@ -2904,14 +3023,14 @@ pub extern "C" fn js_fs_opendir_sync(path_value: f64) -> f64 {
             for (name, ft) in items {
                 entries.push(build_dirent_object(
                     &name,
-                    path,
+                    &path,
                     ft.is_file(),
                     ft.is_dir(),
                     ft.is_symlink(),
                 ));
             }
         }
-        build_dir_object(alloc_dir_state(entries), path)
+        build_dir_object(alloc_dir_state(entries), &path)
     }
 }
 
@@ -3002,7 +3121,7 @@ pub extern "C" fn js_fs_glob_sync_options(pattern_value: f64, options_value: f64
         };
         let cwd = glob_cwd_from_options(options_value);
         let pattern_for_match = if let Some(cwd) = &cwd {
-            if Path::new(pattern).is_absolute() {
+            if Path::new(&pattern).is_absolute() {
                 pattern.to_string()
             } else {
                 format!("{}/{}", cwd.trim_end_matches('/'), pattern)
@@ -3202,6 +3321,11 @@ extern "C" fn filehandle_write_file_impl(closure: *const ClosureHeader, data: f6
             if append {
                 let _ = file.seek(SeekFrom::End(0));
             }
+            // Note: Node does NOT rewind/truncate on FileHandle#writeFile —
+            // empirically the file pointer advances naturally so successive
+            // writeFile calls concatenate (see parity test
+            // `fs-promises/basic/write-append-flush-options`). When the
+            // caller wants replace-semantics they should reopen the handle.
             let _ = file.write_all(&bytes);
         }
     });
@@ -3574,7 +3698,7 @@ fn alloc_stream(state: StreamState) -> usize {
 /// Extract a UTF-8 path from a NaN-boxed string value. Returns
 /// empty string if the value isn't a string.
 fn path_from_value(v: f64) -> String {
-    unsafe { decode_path_value(v).unwrap_or("").to_string() }
+    unsafe { decode_path_value(v).unwrap_or_default() }
 }
 
 /// Extract raw UTF-8 bytes from a NaN-boxed string value.
@@ -4059,6 +4183,88 @@ pub extern "C" fn js_fs_create_read_stream(path_value: f64, options_value: f64) 
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
 
+// ============================================================
+// Callback-style fs APIs — error propagation
+//
+// Node's callback-style fs APIs invoke `cb(err, value)`; the legacy Perry
+// implementations always passed `err = null` because the sync variants
+// return sentinel values (0, undefined, empty string) on failure. These
+// helpers probe the filesystem first and build a Node-shaped Error so
+// `cb(err, ...)` can fire with a real first argument when the operation
+// can't proceed.
+//
+// Coverage is intentionally pragmatic — we detect the common ENOENT /
+// EACCES / EEXIST / ENOTDIR cases via `std::fs::metadata` (or a syscall
+// probe for write ops) and skip the actual call when the probe fails.
+// More exotic kernel errors still surface as `cb(null, sentinel)`; this
+// is the same divergence STATUS.md documents for the sync APIs.
+// ============================================================
+
+fn io_error_code(err: &std::io::Error) -> &'static str {
+    use std::io::ErrorKind;
+    match err.kind() {
+        ErrorKind::NotFound => "ENOENT",
+        ErrorKind::PermissionDenied => "EACCES",
+        ErrorKind::AlreadyExists => "EEXIST",
+        ErrorKind::InvalidInput => "EINVAL",
+        ErrorKind::InvalidData => "EINVAL",
+        ErrorKind::Interrupted => "EINTR",
+        ErrorKind::WriteZero => "ENOSPC",
+        ErrorKind::TimedOut => "ETIMEDOUT",
+        ErrorKind::WouldBlock => "EAGAIN",
+        ErrorKind::UnexpectedEof => "EOF",
+        _ => "EIO",
+    }
+}
+
+unsafe fn build_fs_error_value(err: &std::io::Error, syscall: &str, path: &str) -> f64 {
+    // The Node-style code is encoded into the message text so user code that
+    // checks `err.message.includes("ENOENT")` works today. Adding accessible
+    // `code`/`syscall`/`path` fields on the Error requires extending
+    // `js_object_set_field_by_name` to route writes to a side-table for
+    // `OBJECT_TYPE_ERROR` (mirrors the `closure_set_dynamic_prop` path).
+    // Tracked under STATUS.md item 12.
+    let code = io_error_code(err);
+    let msg = format!("{}: {}, {} '{}'", code, err, syscall, path);
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
+    crate::value::js_nanbox_pointer(err_ptr as i64)
+}
+
+/// Probe a path for read access and produce a NaN-boxed Error if the
+/// underlying syscall would fail. Returns `None` on success.
+unsafe fn fs_callback_read_error(path_value: f64, syscall: &str) -> Option<f64> {
+    let path = decode_path_value(path_value)?;
+    match fs::metadata(&path) {
+        Ok(_) => None,
+        Err(err) => Some(build_fs_error_value(&err, syscall, &path)),
+    }
+}
+
+/// Probe a path for lstat-style read access (does not follow symlinks).
+unsafe fn fs_callback_lstat_error(path_value: f64, syscall: &str) -> Option<f64> {
+    let path = decode_path_value(path_value)?;
+    match fs::symlink_metadata(&path) {
+        Ok(_) => None,
+        Err(err) => Some(build_fs_error_value(&err, syscall, &path)),
+    }
+}
+
+/// Probe the parent of a path for write access. Used by write-style ops
+/// where the target file is allowed to not exist yet.
+unsafe fn fs_callback_write_parent_error(path_value: f64, syscall: &str) -> Option<f64> {
+    let path = decode_path_value(path_value)?;
+    let parent = std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new("."));
+    match fs::metadata(parent) {
+        Ok(meta) if meta.is_dir() => None,
+        Ok(_) => {
+            let err = std::io::Error::new(std::io::ErrorKind::NotFound, "parent is not a directory");
+            Some(build_fs_error_value(&err, syscall, &path))
+        }
+        Err(err) => Some(build_fs_error_value(&err, syscall, &path)),
+    }
+}
+
 /// `fs.readFile(path, encoding?, callback)` — sync read + immediate
 /// callback invocation. Stub that just reads the file synchronously
 /// and invokes the callback with `(null, contents)`.
@@ -4069,6 +4275,14 @@ pub extern "C" fn js_fs_read_file_callback(path_value: f64, encoding: f64, callb
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
     let cb_ptr = last_callback(&[encoding, callback]);
+    unsafe {
+        if let Some(err_val) = fs_callback_read_error(path_value, "open") {
+            if !cb_ptr.is_null() {
+                js_closure_call2(cb_ptr, err_val, f64::from_bits(TAG_UNDEFINED));
+            }
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let encoding_is_callback = !extract_closure_ptr(encoding).is_null();
     let want_buffer = encoding_is_callback || read_file_encoding(encoding).is_none();
     let data_val = if want_buffer {
@@ -4109,6 +4323,23 @@ fn call_cb0(callback: *const ClosureHeader) {
     }
 }
 
+/// Invoke a 2-arg callback with (err, undefined). Used by read-style ops
+/// when the pre-flight probe detected an io::Error.
+unsafe fn call_cb_err2(callback: *const ClosureHeader, err_val: f64) {
+    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    if !callback.is_null() {
+        crate::closure::js_closure_call2(callback, err_val, f64::from_bits(TAG_UNDEFINED));
+    }
+}
+
+/// Invoke a 1-arg callback with (err). Used by void ops (mkdir/unlink/rm/…)
+/// when the pre-flight probe detected an io::Error.
+unsafe fn call_cb_err1(callback: *const ClosureHeader, err_val: f64) {
+    if !callback.is_null() {
+        crate::closure::js_closure_call1(callback, err_val);
+    }
+}
+
 /// `fs.writeFile(path, data, callback)` — sync write + immediate callback.
 #[no_mangle]
 pub extern "C" fn js_fs_write_file_callback(
@@ -4123,8 +4354,15 @@ pub extern "C" fn js_fs_write_file_callback(
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
+    let cb = last_callback(&[arg2, arg3]);
+    unsafe {
+        if let Some(err_val) = fs_callback_write_parent_error(path_value, "open") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_write_file_sync_options(path_value, content_value, options);
-    call_cb0(last_callback(&[arg2, arg3]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -4142,8 +4380,15 @@ pub extern "C" fn js_fs_append_file_callback(
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
+    let cb = last_callback(&[arg2, arg3]);
+    unsafe {
+        if let Some(err_val) = fs_callback_write_parent_error(path_value, "open") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_append_file_sync_options(path_value, content_value, options);
-    call_cb0(last_callback(&[arg2, arg3]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -4165,8 +4410,15 @@ pub extern "C" fn js_fs_mkdir_callback(path_value: f64, arg1: f64, arg2: f64) ->
 #[no_mangle]
 pub extern "C" fn js_fs_unlink_callback(path_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let cb = last_callback(&[callback]);
+    unsafe {
+        if let Some(err_val) = fs_callback_lstat_error(path_value, "unlink") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_unlink_sync(path_value);
-    call_cb0(last_callback(&[callback]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -4193,8 +4445,15 @@ pub extern "C" fn js_fs_access_callback(path_value: f64, arg1: f64, arg2: f64) -
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
+    let cb = last_callback(&[arg1, arg2]);
+    unsafe {
+        if let Some(err_val) = fs_callback_read_error(path_value, "access") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_access_sync_mode(path_value, mode);
-    call_cb0(last_callback(&[arg1, arg2]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -4219,10 +4478,16 @@ pub extern "C" fn js_fs_exists_callback(path_value: f64, callback: f64) -> f64 {
 pub extern "C" fn js_fs_readdir_callback(path_value: f64, arg1: f64, arg2: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    let cb = last_callback(&[arg1, arg2]);
+    unsafe {
+        if let Some(err_val) = fs_callback_read_error(path_value, "scandir") {
+            call_cb_err2(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let entries = js_fs_readdir_sync(path_value, arg1);
     let entries =
         f64::from_bits(crate::value::JSValue::pointer(entries.to_bits() as *const u8).bits());
-    let cb = last_callback(&[arg1, arg2]);
     if !cb.is_null() {
         crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), entries);
     }
@@ -4239,8 +4504,14 @@ pub extern "C" fn js_fs_stat_callback(path_value: f64, arg1: f64, arg2: f64) -> 
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
-    let stats = js_fs_stat_sync_options(path_value, options);
     let cb = last_callback(&[arg1, arg2]);
+    unsafe {
+        if let Some(err_val) = fs_callback_read_error(path_value, "stat") {
+            call_cb_err2(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
+    let stats = js_fs_stat_sync_options(path_value, options);
     if !cb.is_null() {
         crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), stats);
     }
@@ -4257,8 +4528,14 @@ pub extern "C" fn js_fs_lstat_callback(path_value: f64, arg1: f64, arg2: f64) ->
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
-    let stats = js_fs_lstat_sync_options(path_value, options);
     let cb = last_callback(&[arg1, arg2]);
+    unsafe {
+        if let Some(err_val) = fs_callback_lstat_error(path_value, "lstat") {
+            call_cb_err2(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
+    let stats = js_fs_lstat_sync_options(path_value, options);
     if !cb.is_null() {
         crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), stats);
     }
@@ -4275,8 +4552,14 @@ pub extern "C" fn js_fs_statfs_callback(path_value: f64, arg1: f64, arg2: f64) -
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
-    let stats = js_fs_statfs_sync_options(path_value, options);
     let cb = last_callback(&[arg1, arg2]);
+    unsafe {
+        if let Some(err_val) = fs_callback_read_error(path_value, "statfs") {
+            call_cb_err2(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
+    let stats = js_fs_statfs_sync_options(path_value, options);
     if !cb.is_null() {
         crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), stats);
     }
@@ -4288,8 +4571,14 @@ pub extern "C" fn js_fs_statfs_callback(path_value: f64, arg1: f64, arg2: f64) -
 pub extern "C" fn js_fs_opendir_callback(path_value: f64, arg1: f64, arg2: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-    let dir = js_fs_opendir_sync(path_value);
     let cb = last_callback(&[arg1, arg2]);
+    unsafe {
+        if let Some(err_val) = fs_callback_read_error(path_value, "opendir") {
+            call_cb_err2(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
+    let dir = js_fs_opendir_sync(path_value);
     if !cb.is_null() {
         crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), dir);
     }
@@ -4337,8 +4626,15 @@ pub extern "C" fn js_fs_fstat_callback(fd_value: f64, arg1: f64, arg2: f64) -> f
 #[no_mangle]
 pub extern "C" fn js_fs_chmod_callback(path_value: f64, mode_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let cb = last_callback(&[callback]);
+    unsafe {
+        if let Some(err_val) = fs_callback_read_error(path_value, "chmod") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_chmod_sync(path_value, mode_value);
-    call_cb0(last_callback(&[callback]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -4351,8 +4647,15 @@ pub extern "C" fn js_fs_chown_callback(
     callback: f64,
 ) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let cb = last_callback(&[callback]);
+    unsafe {
+        if let Some(err_val) = fs_callback_read_error(path_value, "chown") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_chown_sync(path_value, uid_value, gid_value);
-    call_cb0(last_callback(&[callback]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -4365,8 +4668,15 @@ pub extern "C" fn js_fs_lchown_callback(
     callback: f64,
 ) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let cb = last_callback(&[callback]);
+    unsafe {
+        if let Some(err_val) = fs_callback_lstat_error(path_value, "lchown") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_lchown_sync(path_value, uid_value, gid_value);
-    call_cb0(last_callback(&[callback]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -4379,8 +4689,15 @@ pub extern "C" fn js_fs_truncate_callback(path_value: f64, len_value: f64, callb
     } else {
         0.0
     };
+    let cb = last_callback(&[len_value, callback]);
+    unsafe {
+        if let Some(err_val) = fs_callback_read_error(path_value, "open") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_truncate_sync(path_value, len);
-    call_cb0(last_callback(&[len_value, callback]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -4388,8 +4705,15 @@ pub extern "C" fn js_fs_truncate_callback(path_value: f64, len_value: f64, callb
 #[no_mangle]
 pub extern "C" fn js_fs_link_callback(from_value: f64, to_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let cb = last_callback(&[callback]);
+    unsafe {
+        if let Some(err_val) = fs_callback_lstat_error(from_value, "link") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_link_sync(from_value, to_value);
-    call_cb0(last_callback(&[callback]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -4417,8 +4741,14 @@ pub extern "C" fn js_fs_readlink_callback(path_value: f64, arg1: f64, arg2: f64)
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
-    let value = js_fs_readlink_dispatch(path_value, options);
     let cb = last_callback(&[arg1, arg2]);
+    unsafe {
+        if let Some(err_val) = fs_callback_lstat_error(path_value, "readlink") {
+            call_cb_err2(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
+    let value = js_fs_readlink_dispatch(path_value, options);
     if !cb.is_null() {
         crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), value);
     }
@@ -4435,8 +4765,14 @@ pub extern "C" fn js_fs_realpath_callback(path_value: f64, arg1: f64, arg2: f64)
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
-    let value = js_fs_realpath_dispatch(path_value, options);
     let cb = last_callback(&[arg1, arg2]);
+    unsafe {
+        if let Some(err_val) = fs_callback_read_error(path_value, "realpath") {
+            call_cb_err2(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
+    let value = js_fs_realpath_dispatch(path_value, options);
     if !cb.is_null() {
         crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), value);
     }
@@ -4472,11 +4808,74 @@ pub extern "C" fn js_fs_open_callback(path_value: f64, arg1: f64, arg2: f64, arg
     } else {
         arg1
     };
+    // Probe only the clear read-only cases (`"r"`, `"r+"`, or undefined ⇒
+    // Node defaults to `"r"`). Anything else — `"w"`, `"a"`, numeric flag
+    // bitsets like `O_CREAT|O_WRONLY` — may create the file, so we defer
+    // to the underlying open instead of pre-rejecting on a missing path.
+    let read_only = unsafe { open_flag_is_read_only(flags) };
+    if read_only {
+        unsafe {
+            if let Some(err_val) = fs_callback_read_error(path_value, "open") {
+                call_cb_err2(cb, err_val);
+                return f64::from_bits(TAG_UNDEFINED);
+            }
+        }
+    }
     let fd = js_fs_open_sync(path_value, flags);
     if !cb.is_null() {
         crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), fd);
     }
     f64::from_bits(TAG_UNDEFINED)
+}
+
+/// Probe used by `fs/promises.open` to decide whether to resolve with a
+/// FileHandle or reject. Returns `Some(err_val)` when the underlying open
+/// would fail with ENOENT/EACCES/EEXIST/etc., else `None`.
+///
+/// Exposed at `pub(crate)` so `node_submodules::thunk_fs_promises_open` can
+/// turn the io::Error into a rejected Promise instead of resolving with a
+/// FileHandle whose `fd === -1`.
+pub(crate) unsafe fn fs_promises_open_probe_error(path_value: f64, flags_value: f64) -> Option<f64> {
+    // Only probe for read-only flags; anything that may create the file —
+    // including numeric `O_CREAT|…` bitsets — is left to the underlying
+    // open so it can succeed when the file doesn't exist yet.
+    if open_flag_is_read_only(flags_value) {
+        fs_callback_read_error(path_value, "open")
+    } else {
+        None
+    }
+}
+
+/// Returns true when an `open` flags value is unambiguously read-only.
+/// Treats `undefined` (Node's default) as read-only, the string flags
+/// `"r"` and `"r+"` as read-only, and everything else — including any
+/// numeric/integer flag — as potentially creating, so the caller skips
+/// the missing-path probe and defers to the syscall.
+unsafe fn open_flag_is_read_only(flags_value: f64) -> bool {
+    let jsval = crate::value::JSValue::from_bits(flags_value.to_bits());
+    if jsval.is_undefined() {
+        return true;
+    }
+    match decode_flags_string(flags_value).as_deref() {
+        Some("r") | Some("r+") => true,
+        _ => false,
+    }
+}
+
+unsafe fn decode_flags_string(value: f64) -> Option<String> {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if !jsval.is_string() {
+        return None;
+    }
+    let ptr = jsval.as_string_ptr();
+    if ptr.is_null() {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    std::str::from_utf8(std::slice::from_raw_parts(data, len))
+        .ok()
+        .map(|s| s.to_string())
 }
 
 /// `fs.close(fd, callback)`.
@@ -4497,8 +4896,15 @@ pub extern "C" fn js_fs_cp_callback(from_value: f64, to_value: f64, arg2: f64, a
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
+    let cb = last_callback(&[arg2, arg3]);
+    unsafe {
+        if let Some(err_val) = fs_callback_lstat_error(from_value, "cp") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_cp_sync_options(from_value, to_value, options);
-    call_cb0(last_callback(&[arg2, arg3]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -4511,8 +4917,15 @@ pub extern "C" fn js_fs_rmdir_callback(path_value: f64, arg1: f64, arg2: f64) ->
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
+    let cb = last_callback(&[arg1, arg2]);
+    unsafe {
+        if let Some(err_val) = fs_callback_read_error(path_value, "rmdir") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_rmdir_sync_options(path_value, options);
-    call_cb0(last_callback(&[arg1, arg2]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -4761,8 +5174,15 @@ pub extern "C" fn js_fs_writev_callback(
 #[no_mangle]
 pub extern "C" fn js_fs_rename_callback(from_value: f64, to_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let cb = last_callback(&[callback]);
+    unsafe {
+        if let Some(err_val) = fs_callback_lstat_error(from_value, "rename") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_rename_sync(from_value, to_value);
-    call_cb0(last_callback(&[callback]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -4780,7 +5200,14 @@ pub extern "C" fn js_fs_copy_file_callback(
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
+    let cb = last_callback(&[arg2, arg3]);
+    unsafe {
+        if let Some(err_val) = fs_callback_read_error(from_value, "copyfile") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     let _ = js_fs_copy_file_sync_flags(from_value, to_value, flags);
-    call_cb0(last_callback(&[arg2, arg3]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
