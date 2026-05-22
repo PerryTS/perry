@@ -99,9 +99,12 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     // `typeof performance === "object"`, `performance.timeOrigin` (a
     // constant), `performance.now` (a callable export), and
     // `constants.NODE_PERFORMANCE_GC_*` (constants) all dispatch coherently.
-    if module_name == "perf_hooks"
-        && (property_name == "performance" || property_name == "constants")
-    {
+    if module_name == "perf_hooks" && property_name == "performance" {
+        // Singleton so `require("perf_hooks").performance` and the global
+        // `performance` are the same object (Node identity guarantee, #1327).
+        return crate::perf_hooks::performance_namespace();
+    }
+    if module_name == "perf_hooks" && property_name == "constants" {
         return js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
     }
 

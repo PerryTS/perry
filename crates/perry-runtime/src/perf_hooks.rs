@@ -56,6 +56,26 @@ struct PerfEntry {
 
 thread_local! {
     static PERF_ENTRIES: RefCell<Vec<PerfEntry>> = const { RefCell::new(Vec::new()) };
+    /// Cached `performance` namespace object (NaN-boxed bits, 0 = uninit).
+    /// Singleton so the named import and `globalThis.performance` are the same
+    /// object (Node identity). GC-rooted in `scan_perf_entries_roots_mut`.
+    static PERFORMANCE_NS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// The per-thread singleton `performance` namespace object (perf_hooks-tagged).
+/// Both the `node:perf_hooks` named import and `globalThis.performance` resolve
+/// through here so `globalThis.performance === require("perf_hooks").performance`
+/// holds, matching Node.
+pub fn performance_namespace() -> f64 {
+    let cached = PERFORMANCE_NS.with(|c| c.get());
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
+    let module = b"perf_hooks";
+    let ns =
+        unsafe { crate::object::js_create_native_module_namespace(module.as_ptr(), module.len()) };
+    PERFORMANCE_NS.with(|c| c.set(ns.to_bits()));
+    ns
 }
 
 /// `performance.timeOrigin` — ms since the Unix epoch captured at first read.
@@ -909,6 +929,15 @@ pub fn scan_perf_entries_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     CURRENT_LIST.with(|c| {
         for e in c.borrow_mut().iter_mut() {
             visitor.visit_nanbox_u64_slot(&mut e.detail_bits);
+        }
+    });
+    // Keep the cached `performance` namespace alive + forwarded so the
+    // singleton identity (named import === globalThis.performance) survives GC.
+    PERFORMANCE_NS.with(|c| {
+        let mut bits = c.get();
+        if bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut bits);
+            c.set(bits);
         }
     });
 }
