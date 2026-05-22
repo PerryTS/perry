@@ -127,10 +127,17 @@ pub fn well_known_symbol(short_name: &str) -> *mut SymbolHeader {
         id: next_id(),
     });
     let sym_ptr = Box::into_raw(boxed);
-    cache.insert(short_name.to_string(), sym_ptr as usize);
-    drop(guard);
+    // Fully initialize the symbol's side tables BEFORE publishing it in
+    // the cache. A concurrent reader that observes the pointer via the
+    // cache must already see a complete view (description present,
+    // is_registered_symbol true) — otherwise `Symbol.description` /
+    // `Symbol.toString()` / `is_symbol` can transiently return wrong
+    // results. Lock order matches `js_symbol_for` below: cache → side
+    // tables, never the reverse.
     record_registered_symbol_description(sym_ptr as usize, short_name);
     register_symbol_pointer(sym_ptr as usize);
+    cache.insert(short_name.to_string(), sym_ptr as usize);
+    drop(guard);
     sym_ptr
 }
 
@@ -326,10 +333,17 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
         id: next_id(),
     });
     let sym_ptr = Box::into_raw(boxed);
-    registry.insert(key.clone(), sym_ptr as usize);
-    drop(guard);
+    // Fully initialize the side tables BEFORE publishing the pointer in
+    // the registry. Otherwise a concurrent `Symbol.for("same_key")` on
+    // another thread can see the pointer via the registry but get None
+    // from registered_symbol_description, returning a transiently bogus
+    // sym.description / sym.toString() / Symbol.keyFor(). Lock order is
+    // SYMBOL_REGISTRY → SYMBOL_POINTERS → REGISTERED_SYMBOL_DESCRIPTIONS;
+    // no reader takes them in the reverse order.
     record_registered_symbol_description(sym_ptr as usize, &key);
     register_symbol_pointer(sym_ptr as usize);
+    registry.insert(key.clone(), sym_ptr as usize);
+    drop(guard);
     f64::from_bits(POINTER_TAG | (sym_ptr as u64 & POINTER_MASK))
 }
 
