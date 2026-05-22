@@ -67,6 +67,11 @@ pub(crate) fn is_websocket_upgrade(req: &hyper::Request<hyper::body::Incoming>) 
 /// lowercased name → value. Returns the NaN-boxed (POINTER_TAG) bits
 /// as f64, or `undefined` on allocation failure.
 ///
+/// This must run from the main thread. The hyper worker queues the raw
+/// method/url/headers in `FastifyPendingUpgrade`; allocating the JS object
+/// here avoids holding unscannable JS heap pointers across the worker-to-main
+/// handoff.
+///
 /// Fastify's per-handler request is backed by a `FastifyContext`
 /// handle dispatched via the `request.*` codegen arm — that path is
 /// tightly coupled to the route dispatcher and oneshot response

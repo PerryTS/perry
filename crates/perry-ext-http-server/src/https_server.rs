@@ -73,8 +73,8 @@ unsafe fn parse_https_opts(opts_f64: f64) -> (String, String, bool) {
     (key_pem, cert_pem, enable_h2)
 }
 use crate::types::{
-    extract_host, extract_port, js_gc_enter_unsafe_zone, js_promise_run_microtasks,
-    read_string_header, POINTER_TAG, PTR_MASK,
+    extract_host, extract_port, js_promise_run_microtasks, read_string_header, POINTER_TAG,
+    PTR_MASK,
 };
 
 /// `https.createServer(opts, handler)` — opts carries `{ key, cert }`
@@ -180,7 +180,8 @@ pub unsafe extern "C" fn js_node_https_server_listen(
         }
     };
 
-    js_gc_enter_unsafe_zone();
+    // TLS accept workers queue Rust request handles; JS callbacks run from
+    // the main-thread HTTP pump, so listener lifetime is GC-safe.
 
     let request_tx = Arc::new(request_tx);
     let request_tx_for_spawn = request_tx.clone();
@@ -418,8 +419,6 @@ pub unsafe extern "C" fn js_node_https_server_close(handle: i64, callback: i64) 
             let _ = closure.call0();
         }
     }
-    // Closes #604 — match `js_gc_enter_unsafe_zone` from listen().
-    crate::types::js_gc_exit_unsafe_zone();
 }
 
 /// `httpsServer.on(event, cb)`.

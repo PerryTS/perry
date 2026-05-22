@@ -70,8 +70,8 @@ unsafe fn parse_h2_opts(opts_f64: f64) -> (String, String) {
     (key_pem, cert_pem)
 }
 use crate::types::{
-    extract_host, extract_port, js_gc_enter_unsafe_zone, js_promise_run_microtasks,
-    read_string_header, POINTER_TAG, PTR_MASK,
+    extract_host, extract_port, js_promise_run_microtasks, read_string_header, POINTER_TAG,
+    PTR_MASK,
 };
 
 /// Backing struct for `http2.Http2SecureServer` JS-side handle.
@@ -155,7 +155,8 @@ pub unsafe extern "C" fn js_node_http2_server_listen(
         }
     };
 
-    js_gc_enter_unsafe_zone();
+    // HTTP/2 accept workers queue Rust request handles; JS callbacks run from
+    // the main-thread HTTP pump, so listener lifetime is GC-safe.
 
     let request_tx = Arc::new(request_tx);
     let request_tx_for_spawn = request_tx.clone();
@@ -408,8 +409,6 @@ pub unsafe extern "C" fn js_node_http2_server_close(handle: i64, callback: i64) 
             let _ = closure.call0();
         }
     }
-    // Closes #604 — match `js_gc_enter_unsafe_zone` from listen().
-    crate::types::js_gc_exit_unsafe_zone();
 }
 
 /// `http2SecureServer.on(event, cb)`.

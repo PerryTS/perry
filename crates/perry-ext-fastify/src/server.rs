@@ -85,12 +85,6 @@ extern "C" {
     /// returns when no explicit response body was set.
     fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
 
-    /// Toggle the GC's "unsafe zone" — stops gc() calls from worker
-    /// threads from collecting objects that may be referenced from
-    /// tokio worker stacks. Same call perry-stdlib's fastify makes
-    /// to dodge issue #31.
-    fn js_gc_enter_unsafe_zone();
-
     /// Condvar-based wait for the next event (timer fire, notify from a
     /// tokio worker, or 1 s idle cap). Used by `wait_for_promise` so the
     /// handler dispatcher blocks on real events instead of burning the
@@ -177,9 +171,9 @@ pub struct FastifyServerHandle {
 /// Mirror of perry-ext-http-server's `HttpPendingUpgrade`.
 pub struct FastifyPendingUpgrade {
     pub app_handle: Handle,
-    /// NaN-boxed (POINTER_TAG) bits of the minimal request object
-    /// built on the accept task before the upgrade resolves.
-    pub req_handle: i64,
+    pub method: String,
+    pub path: String,
+    pub headers: HashMap<String, String>,
     pub ws_id: i64,
 }
 
@@ -237,11 +231,9 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
             .unwrap_or_default(),
     );
 
-    // Mark GC-unsafe — request callbacks dispatch on tokio worker
-    // threads whose stacks the main-thread GC can't scan. Without
-    // this, a user-level `gc()` mid-request could collect objects
-    // still referenced from worker stacks (issue #31).
-    js_gc_enter_unsafe_zone();
+    // Tokio workers only match routes and queue raw request/upgrade data.
+    // User JS dispatch runs from `js_fastify_process_pending` on the main
+    // thread, so a server lifetime must not suppress GC.
 
     let request_tx_for_spawn = request_tx.clone();
     let upgrade_tx_for_spawn = upgrade_tx.clone();
@@ -428,9 +420,12 @@ pub extern "C" fn js_fastify_process_pending() -> i32 {
         // stream can't starve them (mirror of perry-ext-http-server's
         // `js_node_http_server_process_pending`).
         while let Some(up) = try_recv_fastify_upgrade(h) {
+            let req_bits =
+                unsafe { crate::upgrade::build_request_object(&up.method, &up.path, &up.headers) }
+                    .to_bits() as i64;
             crate::upgrade::fire_fastify_upgrade_listeners(
                 up.app_handle,
-                up.req_handle,
+                req_bits,
                 up.ws_id,
                 Vec::new(),
             );
@@ -696,12 +691,6 @@ async fn handle_fastify_websocket_upgrade(
         .map(|k| tokio_tungstenite::tungstenite::handshake::derive_accept_key(k.as_bytes()))
         .unwrap_or_default();
 
-    // Build the minimal request object NOW (on the accept task,
-    // before the upgrade resolves) so it carries method/url/headers.
-    // It is a real pointer-tagged object so `typeof req === "object"`.
-    let req_bits =
-        unsafe { crate::upgrade::build_request_object(&method, &path, &headers) }.to_bits() as i64;
-
     // Spawn a task that waits for hyper to perform the protocol
     // switch, completes the tungstenite handshake, and hands the
     // resulting stream to perry-ext-ws.
@@ -720,7 +709,9 @@ async fn handle_fastify_websocket_upgrade(
         let ws_id = perry_ext_ws::register_external_ws_stream(ws);
         let pending = FastifyPendingUpgrade {
             app_handle,
-            req_handle: req_bits,
+            method,
+            path,
+            headers,
             ws_id,
         };
         let _ = upgrade_tx.send(pending).await;

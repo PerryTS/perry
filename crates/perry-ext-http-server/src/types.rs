@@ -15,8 +15,6 @@ extern "C" {
     pub fn js_promise_state(ptr: *mut Promise) -> i32;
     pub fn js_promise_reason(ptr: *mut Promise) -> f64;
     pub fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
-    pub fn js_gc_enter_unsafe_zone();
-    pub fn js_gc_exit_unsafe_zone();
     /// Issue #1124 — returns 1 if `ptr` is a registered Buffer / Uint8Array
     /// in the runtime's BUFFER_REGISTRY (which is the only safe way to tell
     /// a `BufferHeader` apart from a `StringHeader` after both have been

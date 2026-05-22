@@ -1570,6 +1570,27 @@ fn lock_safe_runtime_scanners_deferred_manual_gc_respects_unsafe_zone_at_flush()
 }
 
 #[test]
+fn gc_check_trigger_respects_unsafe_zone() {
+    let _test_lock = lock_safe_runtime_scanner_test_guard();
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _unsafe_zone = GcUnsafeZoneResetGuard::enter();
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let live_young = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(live_young));
+    trigger_guard.make_arena_trigger_due();
+
+    let before = gc_collection_count();
+    gc_check_trigger();
+
+    assert_eq!(
+        gc_collection_count(),
+        before,
+        "automatic threshold GC must not collect while worker-stack roots are unsafe"
+    );
+}
+
+#[test]
 fn lock_safe_runtime_scanners_tui_hooks_defers_direct_full_gc() {
     let _test_lock = lock_safe_runtime_scanner_test_guard();
     let _reset = ShadowAndGlobalRootResetGuard;
