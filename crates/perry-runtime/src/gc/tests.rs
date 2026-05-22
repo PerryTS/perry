@@ -1215,14 +1215,22 @@ fn ensure_lock_safe_runtime_scanners_registered() {
         if registered.get() {
             return;
         }
-        gc_register_mutable_root_scanner(crate::tui::hooks::scan_hook_slot_roots_mut);
-        gc_register_mutable_root_scanner(crate::tui::state::scan_state_slot_roots_mut);
+        gc_register_mutable_root_scanner_named(
+            "test:tui_hook_slots",
+            crate::tui::hooks::scan_hook_slot_roots_mut,
+        );
+        gc_register_mutable_root_scanner_named(
+            "test:tui_state_slots",
+            crate::tui::state::scan_state_slot_roots_mut,
+        );
         #[cfg(feature = "ohos-napi")]
         {
-            gc_register_mutable_root_scanner(
+            gc_register_mutable_root_scanner_named(
+                "test:arkts_callbacks",
                 crate::arkts_callbacks::arkts_callbacks_root_scanner_mut,
             );
-            gc_register_mutable_root_scanner(
+            gc_register_mutable_root_scanner_named(
+                "test:media_callbacks",
                 crate::media_playback::media_callbacks_root_scanner_mut,
             );
         }
@@ -1682,7 +1690,7 @@ fn test_conservative_stack_scan_auto_policy_skips_active_shadow_frame() {
     );
     assert_eq!(
         conservative_stack_scan_decision_for(ConservativeStackScanMode::Auto, false),
-        ConservativeStackScanDecision::Scan
+        ConservativeStackScanDecision::Scan(ConservativeRootSource::RuntimeStack)
     );
 
     let h = js_shadow_frame_push(1);
@@ -1720,11 +1728,11 @@ fn test_conservative_stack_scan_full_preserves_legacy_fallback_decision() {
         assert_eq!(mode, ConservativeStackScanMode::Full);
         assert_eq!(
             conservative_stack_scan_decision_for(mode, false),
-            ConservativeStackScanDecision::Scan
+            ConservativeStackScanDecision::Scan(ConservativeRootSource::RuntimeStack)
         );
         assert_eq!(
             conservative_stack_scan_decision_for(mode, true),
-            ConservativeStackScanDecision::Scan
+            ConservativeStackScanDecision::Scan(ConservativeRootSource::CompiledFrame)
         );
     }
 }
@@ -2209,6 +2217,15 @@ fn collect_minor_trace(trigger_kind: GcTriggerKind) -> GcCycleTrace {
     .expect("test requested GC trace capture")
 }
 
+fn collect_full_trace(trigger_kind: GcTriggerKind) -> GcCycleTrace {
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
+        kind: trigger_kind,
+        steps_before: Some(GcStepSnapshot::current()),
+    })
+    .trace
+    .expect("test requested GC trace capture")
+}
+
 fn assert_copied_minor_trace(
     trace: &GcCycleTrace,
     eligible: bool,
@@ -2339,7 +2356,11 @@ impl TemporaryCopyOnlyRootScanner {
             let mut scanners = scanners.borrow_mut();
             let previous_rust_len = scanners.len();
             if matches!(kind, TemporaryCopyOnlyRootScannerKind::Rust) {
-                scanners.push(test_copy_only_root_scanner);
+                scanners.push(RootScannerRegistration::new(
+                    "test_copy_only",
+                    test_copy_only_root_scanner,
+                    RootScannerKind::CopyOnly,
+                ));
             }
             previous_rust_len
         });
@@ -2347,7 +2368,11 @@ impl TemporaryCopyOnlyRootScanner {
             let mut scanners = scanners.borrow_mut();
             let previous_ffi_len = scanners.len();
             if matches!(kind, TemporaryCopyOnlyRootScannerKind::Ffi) {
-                scanners.push(test_ffi_copy_only_root_scanner);
+                scanners.push(RootScannerRegistration::new(
+                    "ffi:test_copy_only",
+                    test_ffi_copy_only_root_scanner,
+                    RootScannerKind::CopyOnly,
+                ));
             }
             previous_ffi_len
         });
@@ -2385,6 +2410,7 @@ struct TestFfiMutableRootSlots {
 thread_local! {
     static TEST_FFI_MUTABLE_ROOTS: RefCell<TestFfiMutableRootSlots> =
         RefCell::new(TestFfiMutableRootSlots::default());
+    static TEST_NAMED_FFI_MUTABLE_SCANNER_ID: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 extern "C" fn test_ffi_mutable_root_scanner(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void) {
@@ -2428,6 +2454,15 @@ extern "C" fn test_ffi_mutable_root_scanner(visit: PerryFfiMutableRootVisitor, c
     });
 }
 
+extern "C" fn test_named_ffi_mutable_root_scanner(
+    scanner_id: usize,
+    visit: PerryFfiMutableRootVisitor,
+    ctx: *mut c_void,
+) {
+    TEST_NAMED_FFI_MUTABLE_SCANNER_ID.with(|last| last.set(Some(scanner_id)));
+    test_ffi_mutable_root_scanner(visit, ctx);
+}
+
 struct TemporaryFfiMutableRootScanner {
     previous_len: usize,
     previous_roots: TestFfiMutableRootSlots,
@@ -2439,13 +2474,52 @@ impl TemporaryFfiMutableRootScanner {
         let previous_len = FFI_MUTABLE_ROOT_SCANNERS.with(|scanners| {
             let mut scanners = scanners.borrow_mut();
             let previous_len = scanners.len();
-            scanners.push(test_ffi_mutable_root_scanner);
+            scanners.push(RootScannerRegistration::new(
+                "ffi:test_mutable",
+                test_ffi_mutable_root_scanner,
+                RootScannerKind::Mutable,
+            ));
             previous_len
         });
         Self {
             previous_len,
             previous_roots,
         }
+    }
+}
+
+struct TemporaryNamedFfiMutableRootScanner {
+    previous_len: usize,
+    previous_roots: TestFfiMutableRootSlots,
+}
+
+impl TemporaryNamedFfiMutableRootScanner {
+    fn new(source: &'static str, scanner_id: usize, slots: TestFfiMutableRootSlots) -> Self {
+        let previous_roots = TEST_FFI_MUTABLE_ROOTS.with(|roots| roots.replace(slots));
+        TEST_NAMED_FFI_MUTABLE_SCANNER_ID.with(|last| last.set(None));
+        let previous_len = FFI_NAMED_MUTABLE_ROOT_SCANNERS.with(|scanners| scanners.borrow().len());
+        perry_ffi_gc_register_mutable_root_scanner_named(
+            source.as_ptr(),
+            source.len(),
+            scanner_id,
+            test_named_ffi_mutable_root_scanner,
+        );
+        Self {
+            previous_len,
+            previous_roots,
+        }
+    }
+}
+
+impl Drop for TemporaryNamedFfiMutableRootScanner {
+    fn drop(&mut self) {
+        FFI_NAMED_MUTABLE_ROOT_SCANNERS.with(|scanners| {
+            scanners.borrow_mut().truncate(self.previous_len);
+        });
+        TEST_FFI_MUTABLE_ROOTS.with(|roots| {
+            roots.replace(std::mem::take(&mut self.previous_roots));
+        });
+        TEST_NAMED_FFI_MUTABLE_SCANNER_ID.with(|last| last.set(None));
     }
 }
 
@@ -4379,6 +4453,264 @@ fn test_copied_minor_eligibility_falls_back_for_malloc_copy_only_root() {
 }
 
 #[test]
+fn gc_mutable_root_contract_compiled_frames_report_zero_pins() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let child = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(child));
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_eq!(trace.conservative_root_count, 0);
+    assert_eq!(trace.conservative_pinned, 0);
+    assert_eq!(trace.conservative_pinned_bytes, 0);
+    assert_eq!(trace.compiled_frame_conservative_pinned_bytes, 0);
+    assert_eq!(trace.runtime_conservative_pinned_bytes, 0);
+    assert!(!trace.conservative_sources.contains_key("compiled_frame"));
+}
+
+#[test]
+fn gc_mutable_root_contract_conservative_sources_are_attributed_and_bounded() {
+    let _isolation = copying_nursery_isolation_lock();
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
+    let _limit_guard = EnvVarGuard::set("PERRY_CONSERVATIVE_STACK_MAX_BYTES", "67108864");
+    reset_shadow_stack();
+    reset_global_roots();
+    reset_remembered_set();
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+    assert_copied_minor_trace(
+        &trace,
+        false,
+        CopiedMinorFallbackReason::ConservativeStack,
+        false,
+    );
+    assert_eq!(trace.conservative_stack_scan_limit_bytes, 67_108_864);
+    assert!(!trace.conservative_stack_truncated);
+    assert!(!trace.conservative_stack_unbounded);
+    assert!(
+        trace.conservative_stack_scan_bytes > 0,
+        "bounded conservative scan should report scanned bytes"
+    );
+    assert!(
+        trace.conservative_sources.contains_key("register_buffer"),
+        "register capture source must be named"
+    );
+    let runtime_stack = trace
+        .conservative_sources
+        .get("runtime_stack")
+        .expect("runtime stack source must be named");
+    assert!(runtime_stack.scan_bytes > 0);
+    assert_eq!(runtime_stack.scan_limit_bytes, 67_108_864);
+    assert!(!runtime_stack.truncated);
+    assert!(!runtime_stack.unbounded);
+}
+
+#[test]
+fn gc_mutable_root_contract_copy_only_young_roots_report_source_and_disable_copied_minor() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let child = young_leaf();
+    let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[ptr_bits(child)]);
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+    assert_copied_minor_trace(
+        &trace,
+        false,
+        CopiedMinorFallbackReason::CopyOnlyRoots,
+        false,
+    );
+    let source = trace
+        .legacy_copy_only_scanner_pinned
+        .sources
+        .get("test_copy_only")
+        .expect("copy-only source should be attributed");
+    assert_eq!(source.emitted_roots, 1);
+    assert_eq!(source.emitted_young_roots, 1);
+    assert_eq!(source.emitted_old_roots, 0);
+    assert_eq!(source.emitted_malloc_roots, 0);
+}
+
+#[test]
+fn gc_mutable_root_contract_rewrites_shadow_global_runtime_handle_mutable_ffi_roots() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    gc_register_mutable_root_scanner_named(
+        "test:runtime_handles_contract",
+        scan_runtime_handle_roots_mut,
+    );
+
+    let shadow_child = young_leaf();
+    let global_child = young_leaf();
+    let handle_child = young_leaf();
+    let ffi_child = young_leaf();
+    let mut global_slot = ptr_bits(global_child);
+    js_shadow_slot_set(0, ptr_bits(shadow_child));
+    js_gc_register_global_root(&mut global_slot as *mut u64 as i64);
+
+    let scope = RuntimeHandleScope::new();
+    let handle = scope.root_nanbox_u64(ptr_bits(handle_child));
+    let _mutable_root_guard = TemporaryFfiMutableRootScanner::new(TestFfiMutableRootSlots {
+        usize_slots: vec![ffi_child],
+        ..TestFfiMutableRootSlots::default()
+    });
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    let shadow_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let global_after = (global_slot & POINTER_MASK) as usize;
+    let handle_after = (handle.get_nanbox_u64() & POINTER_MASK) as usize;
+    let ffi_after = TEST_FFI_MUTABLE_ROOTS.with(|roots| roots.borrow().usize_slots[0]);
+
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    for (before, after) in [
+        (shadow_child, shadow_after),
+        (global_child, global_after),
+        (handle_child, handle_after),
+        (ffi_child, ffi_after),
+    ] {
+        assert_ne!(after, before);
+        assert!(crate::arena::pointer_in_nursery(after));
+    }
+    assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 0);
+}
+
+#[test]
+fn gc_mutable_root_contract_named_ffi_roots_keep_source_and_rewrite_by_id() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let ffi_child = young_leaf();
+    let _mutable_root_guard = TemporaryNamedFfiMutableRootScanner::new(
+        "perry-ext-test",
+        42,
+        TestFfiMutableRootSlots {
+            usize_slots: vec![ffi_child],
+            ..TestFfiMutableRootSlots::default()
+        },
+    );
+
+    FFI_NAMED_MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        let scanners = scanners.borrow();
+        let registration = scanners
+            .last()
+            .expect("named ffi mutable root scanner should be registered");
+        assert_eq!(registration.source, "perry-ext-test");
+    });
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    let ffi_after = TEST_FFI_MUTABLE_ROOTS.with(|roots| roots.borrow().usize_slots[0]);
+    let last_scanner_id = TEST_NAMED_FFI_MUTABLE_SCANNER_ID.with(|last| last.get());
+
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_eq!(last_scanner_id, Some(42));
+    assert_ne!(ffi_after, ffi_child);
+    assert!(crate::arena::pointer_in_nursery(ffi_after));
+}
+
+#[test]
+fn gc_mutable_root_contract_feedback_caches_survive_minor_and_major_gc() {
+    struct SingletonClosureCacheGuard;
+
+    impl Drop for SingletonClosureCacheGuard {
+        fn drop(&mut self) {
+            crate::closure::test_clear_singleton_closure_caches();
+        }
+    }
+
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _cache_guard = SingletonClosureCacheGuard;
+    crate::closure::test_clear_singleton_closure_caches();
+    gc_register_mutable_root_scanner_named(
+        "test:closure_singleton_cache_contract",
+        crate::closure::scan_singleton_closure_roots_mut,
+    );
+
+    let no_capture_func = test_no_capture_singleton_func as *const u8;
+    let captured_func = test_captured_singleton_func as *const u8;
+    let no_capture = crate::closure::js_closure_alloc_singleton(no_capture_func);
+    let captured_value = young_leaf();
+    let capture_bits = ptr_bits(captured_value);
+    js_shadow_slot_set(0, capture_bits);
+    let captured = crate::closure::js_closure_alloc_with_captures_singleton(
+        captured_func,
+        1,
+        [capture_bits].as_ptr(),
+    );
+    js_shadow_slot_set(0, 0);
+
+    let minor_trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&minor_trace, true, CopiedMinorFallbackReason::None, false);
+
+    let no_capture_after = crate::closure::test_singleton_closure_cache_entry(no_capture_func)
+        .expect("no-capture cache should remain populated after minor GC");
+    let captured_after_entries =
+        crate::closure::test_captured_singleton_closure_cache_entries(captured_func);
+    assert_eq!(captured_after_entries.len(), 1);
+    let captured_after = captured_after_entries[0].1;
+    let capture_after_bits = captured_after_entries[0].0[0];
+    assert_ne!(no_capture_after, no_capture);
+    assert_ne!(captured_after, captured);
+    assert_ne!((capture_after_bits & POINTER_MASK) as usize, captured_value);
+    assert_eq!(
+        crate::closure::js_closure_alloc_singleton(no_capture_func),
+        no_capture_after
+    );
+    assert_eq!(
+        crate::closure::js_closure_alloc_with_captures_singleton(
+            captured_func,
+            1,
+            [capture_after_bits].as_ptr(),
+        ),
+        captured_after
+    );
+
+    let full_trace = collect_full_trace(GcTriggerKind::Direct);
+    assert_eq!(full_trace.compiled_frame_conservative_pinned_bytes, 0);
+    assert_eq!(
+        crate::closure::js_closure_alloc_singleton(no_capture_func),
+        no_capture_after
+    );
+    assert_eq!(
+        crate::closure::js_closure_alloc_with_captures_singleton(
+            captured_func,
+            1,
+            [capture_after_bits].as_ptr(),
+        ),
+        captured_after
+    );
+}
+
+#[test]
+fn gc_mutable_root_contract_verifier_rejects_stale_feedback_cache_roots() {
+    struct SingletonClosureCacheGuard;
+
+    impl Drop for SingletonClosureCacheGuard {
+        fn drop(&mut self) {
+            crate::closure::test_clear_singleton_closure_caches();
+        }
+    }
+
+    let _cache_guard = SingletonClosureCacheGuard;
+    let fixture = ForwardedRootFixture::new();
+    crate::closure::test_clear_singleton_closure_caches();
+    crate::closure::test_seed_captured_singleton_closure_cache(
+        test_captured_singleton_func as *const u8,
+        vec![fixture.nursery_bits],
+        fixture.nursery_user as *mut crate::closure::ClosureHeader,
+    );
+
+    assert_panics_with("closure_singleton_cache", || {
+        let mut visitor =
+            RuntimeRootVisitor::for_verify(&fixture.valid_ptrs, "closure_singleton_cache");
+        crate::closure::scan_singleton_closure_roots_mut(&mut visitor);
+    });
+}
+
+#[test]
 fn test_copying_minor_rewrites_shadow_and_global_roots() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let shadow_child = young_leaf();
@@ -4746,7 +5078,10 @@ fn test_copying_minor_rewrites_singleton_closure_caches() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _cache_guard = SingletonClosureCacheGuard;
     crate::closure::test_clear_singleton_closure_caches();
-    gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
+    gc_register_mutable_root_scanner_named(
+        "test:closure_singleton_cache",
+        crate::closure::scan_singleton_closure_roots_mut,
+    );
 
     let no_capture_func = test_no_capture_singleton_func as *const u8;
     let no_capture = crate::closure::js_closure_alloc_singleton(no_capture_func);
@@ -4863,7 +5198,10 @@ fn test_copying_minor_rewrites_overflow_owner_metadata_key() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _overflow_guard = OverflowFieldsRootGuard;
     crate::object::test_clear_overflow_fields_root();
-    gc_register_mutable_root_scanner(overflow_fields_mutable_root_scanner);
+    gc_register_mutable_root_scanner_named(
+        "test:overflow_fields",
+        overflow_fields_mutable_root_scanner,
+    );
 
     let owner = crate::object::js_object_alloc(0, 0) as usize;
     let overflow_value = young_leaf();
@@ -6699,7 +7037,7 @@ fn test_transient_runtime_handle_scope_drop_removes_roots() {
 fn test_transient_runtime_handle_string_concat_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    gc_register_mutable_root_scanner_named("test:runtime_handles", scan_runtime_handle_roots_mut);
 
     let left_bytes = vec![b'a'; 600_000];
     let right_bytes = vec![b'b'; 600_000];
@@ -6728,7 +7066,7 @@ fn test_transient_runtime_handle_string_concat_gc() {
 fn test_transient_runtime_handle_array_push_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    gc_register_mutable_root_scanner_named("test:runtime_handles", scan_runtime_handle_roots_mut);
 
     let arr = crate::array::js_array_alloc_with_length(200_000);
     let value = crate::string::js_string_from_bytes(b"array-payload".as_ptr(), 13);
@@ -6758,7 +7096,7 @@ fn test_transient_runtime_handle_array_push_gc() {
 fn test_transient_runtime_handle_object_set_gc() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    gc_register_mutable_root_scanner_named("test:runtime_handles", scan_runtime_handle_roots_mut);
 
     let obj = crate::object::js_object_alloc(0, 1);
     js_shadow_slot_set(0, ptr_bits(obj as usize));
@@ -6803,7 +7141,7 @@ fn test_transient_runtime_handle_closure_captures_gc() {
 
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    gc_register_mutable_root_scanner_named("test:runtime_handles", scan_runtime_handle_roots_mut);
     crate::closure::test_clear_singleton_closure_caches();
 
     let captured = crate::string::js_string_from_bytes(b"closure-payload".as_ptr(), 15);
@@ -7300,6 +7638,7 @@ fn test_pin_currently_marked_captures_marked_objects() {
     unsafe {
         (*header).gc_flags |= GC_FLAG_MARKED;
     }
+    record_conservative_root_source_for_header(header, ConservativeRootSource::RuntimeStack);
     let stats = pin_currently_marked_as_conservative();
     assert!(
         is_conservatively_pinned(header),
@@ -7344,6 +7683,10 @@ fn test_conservative_pin_stats_exclude_legacy_copy_only_scanner_pins() {
     unsafe {
         (*conservative_header).gc_flags |= GC_FLAG_MARKED;
     }
+    record_conservative_root_source_for_header(
+        conservative_header,
+        ConservativeRootSource::RuntimeStack,
+    );
 
     let stats = pin_currently_marked_as_conservative();
     let conservative_bytes = unsafe { (*conservative_header).size as usize };

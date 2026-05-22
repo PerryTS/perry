@@ -32,7 +32,13 @@ def copied_workload(
     *,
     fallback_reason="none",
     conservative_pinned_bytes=0,
+    compiled_frame_conservative_pinned_bytes=0,
+    conservative_stack_truncated_cycles=0,
+    conservative_stack_unbounded_cycles=0,
     copy_only_pinned_bytes=0,
+    copy_only_young_roots=0,
+    copy_only_malloc_roots=0,
+    unattributed_roots=0,
     malloc_registry_rebuilds=0,
 ):
     counts = {reason: 0 for reason in REPORT.FALLBACK_REASONS}
@@ -40,7 +46,21 @@ def copied_workload(
     return {
         "fallback_reason_counts": counts,
         "conservative_pinned_bytes": conservative_pinned_bytes,
-        "legacy_copy_only_scanner_pinned": {"bytes": copy_only_pinned_bytes},
+        "compiled_frame_conservative_pinned_bytes": (
+            compiled_frame_conservative_pinned_bytes
+        ),
+        "conservative_stack": {
+            "truncated_cycles": conservative_stack_truncated_cycles,
+            "unbounded_cycles": conservative_stack_unbounded_cycles,
+        },
+        "legacy_copy_only_scanner_pinned": {
+            "bytes": copy_only_pinned_bytes,
+            "emitted_young_roots": copy_only_young_roots,
+            "emitted_malloc_roots": copy_only_malloc_roots,
+            "sources": {
+                "unattributed": {"emitted_roots": unattributed_roots}
+            },
+        },
         "copying_nursery": {
             "copied_objects": 1,
             "copied_bytes": 16,
@@ -62,7 +82,17 @@ def copied_report(**overrides):
             "cycles": len(workloads),
             "fallback_reason_counts": {"none": len(workloads)},
             "conservative_pinned_bytes": 0,
-            "legacy_copy_only_scanner_pinned": {"bytes": 0},
+            "compiled_frame_conservative_pinned_bytes": 0,
+            "conservative_stack": {
+                "truncated_cycles": 0,
+                "unbounded_cycles": 0,
+            },
+            "legacy_copy_only_scanner_pinned": {
+                "bytes": 0,
+                "emitted_young_roots": 0,
+                "emitted_malloc_roots": 0,
+                "sources": {"unattributed": {"emitted_roots": 0}},
+            },
             "copying_nursery": {
                 "copied_objects": len(workloads),
                 "copied_bytes": len(workloads) * 16,
@@ -243,6 +273,51 @@ class Gc1090EvidenceReportTests(unittest.TestCase):
         self.assertEqual(packet["status"], "fail")
         self.assertTrue(
             any("conservative_pinned_bytes=8" in error for error in packet["errors"])
+        )
+
+    def test_fails_compiled_frame_pinned_bytes(self):
+        packet = self.collect(
+            head_copied=copied_report(
+                json_roundtrip=copied_workload(
+                    compiled_frame_conservative_pinned_bytes=8
+                )
+            )
+        )
+        self.assertEqual(packet["status"], "fail")
+        self.assertTrue(
+            any(
+                "compiled_frame_conservative_pinned_bytes=8" in error
+                for error in packet["errors"]
+            )
+        )
+
+    def test_fails_truncated_unbounded_or_unattributed_roots(self):
+        packet = self.collect(
+            head_copied=copied_report(
+                json_roundtrip=copied_workload(
+                    conservative_stack_truncated_cycles=1,
+                    conservative_stack_unbounded_cycles=1,
+                    unattributed_roots=1,
+                    copy_only_young_roots=1,
+                    copy_only_malloc_roots=1,
+                )
+            )
+        )
+        self.assertEqual(packet["status"], "fail")
+        self.assertTrue(
+            any("conservative_stack_truncated cycles=1" in error for error in packet["errors"])
+        )
+        self.assertTrue(
+            any("conservative_stack_unbounded cycles=1" in error for error in packet["errors"])
+        )
+        self.assertTrue(
+            any("unattributed root scanner emitted roots=1" in error for error in packet["errors"])
+        )
+        self.assertTrue(
+            any("emitted_young_roots=1" in error for error in packet["errors"])
+        )
+        self.assertTrue(
+            any("emitted_malloc_roots=1" in error for error in packet["errors"])
         )
 
     def test_fails_benchmark_correctness(self):

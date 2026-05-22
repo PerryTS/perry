@@ -896,28 +896,20 @@ pub(super) fn sweep_with_age_bump_and_old_reclaim(
 
 pub(super) fn pin_currently_marked_as_conservative() -> ConservativePinTraceStats {
     let mut stats = ConservativePinTraceStats::default();
+    let sources = conservative_root_sources_snapshot();
     CONS_PINNED.with(|s| {
         let mut pinned = s.borrow_mut();
-        crate::arena::arena_walk_objects(|header_ptr| {
-            let header = header_ptr as *mut GcHeader;
+        for (header_addr, source) in sources {
+            let header = header_addr as *mut GcHeader;
             unsafe {
-                if (*header).gc_flags & GC_FLAG_MARKED != 0 && pinned.insert(header as usize) {
-                    stats.pinned_roots += 1;
-                    stats.pinned_bytes += (*header).size as usize;
+                if header.is_null() || (*header).gc_flags & GC_FLAG_MARKED == 0 {
+                    continue;
+                }
+                if pinned.insert(header as usize) {
+                    stats.record_pin(source, (*header).size as usize);
                 }
             }
-        });
-        MALLOC_STATE.with(|m| {
-            let m = m.borrow();
-            for &header in m.objects.iter() {
-                unsafe {
-                    if (*header).gc_flags & GC_FLAG_MARKED != 0 && pinned.insert(header as usize) {
-                        stats.pinned_roots += 1;
-                        stats.pinned_bytes += (*header).size as usize;
-                    }
-                }
-            }
-        });
+        }
     });
     stats
 }

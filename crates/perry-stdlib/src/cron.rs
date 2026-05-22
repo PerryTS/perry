@@ -25,7 +25,7 @@
 use crate::common::{get_handle, register_handle, Handle, RUNTIME};
 use cron::Schedule;
 use perry_runtime::closure::{js_closure_call0, ClosureHeader};
-use perry_runtime::gc::{gc_register_mutable_root_scanner, RuntimeRootVisitor};
+use perry_runtime::gc::{gc_register_mutable_root_scanner_named, RuntimeRootVisitor};
 use perry_runtime::{js_string_from_bytes, StringHeader};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -108,7 +108,7 @@ fn next_cron_instant(schedule: &Schedule) -> Option<Instant> {
 /// `js_cron_*` entry point on the main thread.
 fn ensure_gc_scanner_registered() {
     CRON_GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner(scan_cron_roots_mut);
+        gc_register_mutable_root_scanner_named("stdlib:cron", scan_cron_roots_mut);
     });
 }
 

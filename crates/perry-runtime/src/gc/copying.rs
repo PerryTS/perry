@@ -869,6 +869,7 @@ pub(super) struct CopyOnlyRootPreflight<'a> {
     pub(super) ptrs: &'a CopyingPointerSet,
     pub(super) fallback_reason: Option<CopiedMinorFallbackReason>,
     pub(super) stats: LegacyRootTraceStats,
+    pub(super) current_ffi_source: Option<String>,
 }
 
 impl<'a> CopyOnlyRootPreflight<'a> {
@@ -885,11 +886,16 @@ impl<'a> CopyOnlyRootPreflight<'a> {
                 registered_ffi_scanners,
                 ..LegacyRootTraceStats::default()
             },
+            current_ffi_source: None,
         }
     }
 
-    pub(super) fn check_bits(&mut self, bits: u64) {
+    pub(super) fn check_bits(&mut self, source: &str, bits: u64) {
         self.stats.emitted_roots += 1;
+        self.stats.source_mut(source).emitted_roots += 1;
+        if source == UNATTRIBUTED_ROOT_SOURCE {
+            self.fallback_reason = Some(CopiedMinorFallbackReason::UnattributedRootSource);
+        }
         let Some(addr) = self.decode_copy_only_addr(bits) else {
             return;
         };
@@ -897,9 +903,11 @@ impl<'a> CopyOnlyRootPreflight<'a> {
             self.ptrs.ensure_malloc_registry_for_copy_only_preflight();
             if self.ptrs.classify_malloc(addr).is_some() {
                 self.stats.emitted_malloc_roots += 1;
+                self.stats.source_mut(source).emitted_malloc_roots += 1;
                 self.fallback_reason = Some(CopiedMinorFallbackReason::CopyOnlyRoots);
             } else {
                 self.stats.malformed_roots += 1;
+                self.stats.source_mut(source).malformed_roots += 1;
             }
             return;
         };
@@ -909,10 +917,12 @@ impl<'a> CopyOnlyRootPreflight<'a> {
             | CopyingPointerKind::FromSurvivor
             | CopyingPointerKind::ToSurvivor => {
                 self.stats.emitted_young_roots += 1;
+                self.stats.source_mut(source).emitted_young_roots += 1;
                 self.fallback_reason = Some(CopiedMinorFallbackReason::CopyOnlyRoots);
             }
             CopyingPointerKind::Longlived | CopyingPointerKind::Old => {
                 self.stats.emitted_old_roots += 1;
+                self.stats.source_mut(source).emitted_old_roots += 1;
             }
             CopyingPointerKind::Malloc => unreachable!("malloc roots are classified separately"),
         }
@@ -939,7 +949,12 @@ pub(super) extern "C" fn perry_ffi_copy_only_preflight_root(value: f64, ctx: *mu
         return;
     }
     unsafe {
-        (*(ctx as *mut CopyOnlyRootPreflight<'_>)).check_bits(value.to_bits());
+        let preflight = &mut *(ctx as *mut CopyOnlyRootPreflight<'_>);
+        let source = preflight
+            .current_ffi_source
+            .clone()
+            .unwrap_or_else(|| UNATTRIBUTED_ROOT_SOURCE.to_string());
+        preflight.check_bits(&source, value.to_bits());
     }
 }
 
@@ -964,12 +979,16 @@ impl CopiedMinorEligibility {
         }
         if matches!(
             conservative_stack_scan_decision(),
-            ConservativeStackScanDecision::Scan
+            ConservativeStackScanDecision::Scan(_)
         ) {
-            return Self::fallback(
-                CopiedMinorFallbackReason::ConservativeStack,
-                malloc_sweep_due,
-            );
+            let reason = if conservative_stack_scan_limit().unbounded {
+                CopiedMinorFallbackReason::ConservativeStackUnbounded
+            } else if conservative_stack_scan_would_truncate() {
+                CopiedMinorFallbackReason::ConservativeStackTruncated
+            } else {
+                CopiedMinorFallbackReason::ConservativeStack
+            };
+            return Self::fallback(reason, malloc_sweep_due);
         }
         let ptrs = CopyingPointerSet::new();
         let (copy_only_reason, legacy_root_stats) = Self::copy_only_root_preflight_reason(&ptrs);
@@ -1052,19 +1071,23 @@ impl CopiedMinorEligibility {
     pub(super) fn copy_only_root_preflight_reason(
         ptrs: &CopyingPointerSet,
     ) -> (Option<CopiedMinorFallbackReason>, LegacyRootTraceStats) {
-        let scanners: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
-        let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let scanners: Vec<CopyOnlyRootScannerRegistration> =
+            ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let ffi_scanners: Vec<FfiCopyOnlyRootScannerRegistration> =
+            FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
         let mut preflight = CopyOnlyRootPreflight::new(ptrs, scanners.len(), ffi_scanners.len());
 
-        for scanner in scanners {
-            scanner(&mut |value: f64| {
-                preflight.check_bits(value.to_bits());
+        for registration in scanners {
+            (registration.scanner)(&mut |value: f64| {
+                preflight.check_bits(&registration.source, value.to_bits());
             });
         }
 
         let ctx = &mut preflight as *mut CopyOnlyRootPreflight<'_> as *mut c_void;
-        for scanner in ffi_scanners {
-            scanner(perry_ffi_copy_only_preflight_root, ctx);
+        for registration in ffi_scanners {
+            preflight.current_ffi_source = Some(registration.source.clone());
+            (registration.scanner)(perry_ffi_copy_only_preflight_root, ctx);
+            preflight.current_ffi_source = None;
         }
 
         (preflight.fallback_reason, preflight.stats)
@@ -1078,11 +1101,12 @@ impl CopiedMinorEligibility {
         visit_mutable_root_slots(|slot| unsafe {
             checker.check_bits(slot.read());
         });
-        let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let scanners: Vec<MutableRootScannerRegistration> =
+            MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
         {
             let mut visitor = RuntimeRootVisitor::for_copying_check(&mut checker);
-            for scanner in scanners {
-                scanner(&mut visitor);
+            for registration in scanners {
+                (registration.scanner)(&mut visitor);
             }
             visit_ffi_mutable_registered_roots(&mut visitor);
         }
@@ -1116,7 +1140,7 @@ pub(super) fn gc_collect_minor_copying_fast_path(
     let eligibility = CopiedMinorEligibility::evaluate(trigger_kind);
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = eligibility.trace_stats();
-        trace.legacy_copy_only_scanner_pinned = eligibility.legacy_root_stats;
+        trace.legacy_copy_only_scanner_pinned = eligibility.legacy_root_stats.clone();
     }
     if !eligibility.eligible {
         return None;
@@ -1154,11 +1178,12 @@ pub(super) fn gc_collect_minor_copying_fast_path(
         }
     });
 
-    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let scanners: Vec<MutableRootScannerRegistration> =
+        MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
     {
         let mut visitor = RuntimeRootVisitor::for_copying_mark(&mut collector);
-        for scanner in scanners {
-            scanner(&mut visitor);
+        for registration in scanners {
+            (registration.scanner)(&mut visitor);
         }
         visit_ffi_mutable_registered_roots(&mut visitor);
     }
@@ -1180,10 +1205,11 @@ pub(super) fn gc_collect_minor_copying_fast_path(
         collector.drain();
     }
     {
-        let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let scanners: Vec<MutableRootScannerRegistration> =
+            MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
         let mut visitor = RuntimeRootVisitor::for_copying_rewrite(&collector);
-        for scanner in scanners {
-            scanner(&mut visitor);
+        for registration in scanners {
+            (registration.scanner)(&mut visitor);
         }
         visit_ffi_mutable_registered_roots(&mut visitor);
     }
@@ -1216,6 +1242,7 @@ pub(super) fn gc_collect_minor_copying_fast_path(
     }
 
     CONS_PINNED.with(|s| s.borrow_mut().clear());
+    clear_conservative_root_sources();
     let nursery_freed_bytes = from_space_bytes.saturating_sub(collector.live_from_bytes) as u64;
     let freed_bytes = nursery_freed_bytes.saturating_add(malloc_freed_bytes);
     collector.stats.malloc_validation_lookups = collector.ptrs.malloc_validation_lookups();

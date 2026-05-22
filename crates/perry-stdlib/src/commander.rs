@@ -89,7 +89,10 @@ static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 fn ensure_gc_scanner_registered() {
     GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_mutable_root_scanner(scan_commander_roots_mut);
+        perry_runtime::gc::gc_register_mutable_root_scanner_named(
+            "stdlib:commander",
+            scan_commander_roots_mut,
+        );
     });
 }
 

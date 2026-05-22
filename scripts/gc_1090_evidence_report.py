@@ -34,6 +34,9 @@ FALLBACK_REASONS = (
     "copy_only_roots",
     "barriers_inactive",
     "conservative_stack",
+    "conservative_stack_truncated",
+    "conservative_stack_unbounded",
+    "unattributed_root_source",
     "malloc_registry_unavailable",
     "pinned_young_root",
     "pinned_young_dirty_slot",
@@ -231,6 +234,11 @@ def copied_report_summary(root: Path, label: str) -> dict[str, Any]:
     report = load_json(label_paths(root, label)["copied_minor"], {})
     summary = report.get("summary", {}) if isinstance(report, dict) else {}
     workloads = report.get("workloads", {}) if isinstance(report, dict) else {}
+    legacy_summary = (
+        summary.get("legacy_copy_only_scanner_pinned", {})
+        if isinstance(summary, dict)
+        else {}
+    )
     return {
         "present": bool(report),
         "path": str(label_paths(root, label)["copied_minor"]),
@@ -242,8 +250,44 @@ def copied_report_summary(root: Path, label: str) -> dict[str, Any]:
             "conservative_pinned_bytes": int_value(
                 summary.get("conservative_pinned_bytes") if isinstance(summary, dict) else 0
             ),
+            "compiled_frame_conservative_pinned_bytes": int_value(
+                summary.get("compiled_frame_conservative_pinned_bytes")
+                if isinstance(summary, dict)
+                else 0
+            ),
             "legacy_copy_only_scanner_pinned_bytes": int_value(
                 nested(summary, "legacy_copy_only_scanner_pinned", "bytes", default=0)
+            ),
+            "legacy_copy_only_scanner_emitted_young_roots": int_value(
+                nested(
+                    summary,
+                    "legacy_copy_only_scanner_pinned",
+                    "emitted_young_roots",
+                    default=0,
+                )
+            ),
+            "legacy_copy_only_scanner_emitted_malloc_roots": int_value(
+                nested(
+                    summary,
+                    "legacy_copy_only_scanner_pinned",
+                    "emitted_malloc_roots",
+                    default=0,
+                )
+            ),
+            "legacy_copy_only_scanner_unattributed_roots": int_value(
+                nested(
+                    legacy_summary,
+                    "sources",
+                    "unattributed",
+                    "emitted_roots",
+                    default=0,
+                )
+            ),
+            "conservative_stack_truncated_cycles": int_value(
+                nested(summary, "conservative_stack", "truncated_cycles", default=0)
+            ),
+            "conservative_stack_unbounded_cycles": int_value(
+                nested(summary, "conservative_stack", "unbounded_cycles", default=0)
             ),
             "copied_objects": int_value(nested(summary, "copying_nursery", "copied_objects", default=0)),
             "copied_bytes": int_value(nested(summary, "copying_nursery", "copied_bytes", default=0)),
@@ -286,8 +330,43 @@ def workload_counts(workload: dict[str, Any]) -> dict[str, Any]:
             workload.get("fallback_reason_counts", {})
         ),
         "conservative_pinned_bytes": int_value(workload.get("conservative_pinned_bytes")),
+        "compiled_frame_conservative_pinned_bytes": int_value(
+            workload.get("compiled_frame_conservative_pinned_bytes")
+        ),
         "legacy_copy_only_scanner_pinned_bytes": int_value(
             nested(workload, "legacy_copy_only_scanner_pinned", "bytes", default=0)
+        ),
+        "legacy_copy_only_scanner_emitted_young_roots": int_value(
+            nested(
+                workload,
+                "legacy_copy_only_scanner_pinned",
+                "emitted_young_roots",
+                default=0,
+            )
+        ),
+        "legacy_copy_only_scanner_emitted_malloc_roots": int_value(
+            nested(
+                workload,
+                "legacy_copy_only_scanner_pinned",
+                "emitted_malloc_roots",
+                default=0,
+            )
+        ),
+        "legacy_copy_only_scanner_unattributed_roots": int_value(
+            nested(
+                workload,
+                "legacy_copy_only_scanner_pinned",
+                "sources",
+                "unattributed",
+                "emitted_roots",
+                default=0,
+            )
+        ),
+        "conservative_stack_truncated_cycles": int_value(
+            nested(workload, "conservative_stack", "truncated_cycles", default=0)
+        ),
+        "conservative_stack_unbounded_cycles": int_value(
+            nested(workload, "conservative_stack", "unbounded_cycles", default=0)
         ),
         "malloc_registry_rebuilds": int_value(
             nested(workload, "copying_nursery", "malloc_registry_rebuilds", default=0)
@@ -331,10 +410,40 @@ def gate_copied_minor(
                 f"head:{name}: conservative_pinned_bytes="
                 f"{counts['conservative_pinned_bytes']}, want 0"
             )
+        if counts["compiled_frame_conservative_pinned_bytes"] != 0:
+            errors.append(
+                f"head:{name}: compiled_frame_conservative_pinned_bytes="
+                f"{counts['compiled_frame_conservative_pinned_bytes']}, want 0"
+            )
+        if counts["conservative_stack_truncated_cycles"] != 0:
+            errors.append(
+                f"head:{name}: conservative_stack_truncated cycles="
+                f"{counts['conservative_stack_truncated_cycles']}, want 0"
+            )
+        if counts["conservative_stack_unbounded_cycles"] != 0:
+            errors.append(
+                f"head:{name}: conservative_stack_unbounded cycles="
+                f"{counts['conservative_stack_unbounded_cycles']}, want 0"
+            )
         if counts["legacy_copy_only_scanner_pinned_bytes"] != 0:
             errors.append(
                 f"head:{name}: legacy_copy_only_scanner_pinned.bytes="
                 f"{counts['legacy_copy_only_scanner_pinned_bytes']}, want 0"
+            )
+        if counts["legacy_copy_only_scanner_emitted_young_roots"] != 0:
+            errors.append(
+                f"head:{name}: legacy_copy_only_scanner_pinned.emitted_young_roots="
+                f"{counts['legacy_copy_only_scanner_emitted_young_roots']}, want 0"
+            )
+        if counts["legacy_copy_only_scanner_emitted_malloc_roots"] != 0:
+            errors.append(
+                f"head:{name}: legacy_copy_only_scanner_pinned.emitted_malloc_roots="
+                f"{counts['legacy_copy_only_scanner_emitted_malloc_roots']}, want 0"
+            )
+        if counts["legacy_copy_only_scanner_unattributed_roots"] != 0:
+            errors.append(
+                f"head:{name}: unattributed root scanner emitted roots="
+                f"{counts['legacy_copy_only_scanner_unattributed_roots']}, want 0"
             )
         if counts["malloc_registry_rebuilds"] != 0:
             errors.append(
@@ -553,8 +662,8 @@ def render_markdown(packet: dict[str, Any]) -> str:
             "",
             "## Copied-Minor Evidence",
             "",
-            "| Ref | Fallback Reasons | Conservative Pinned Bytes | Copy-Only Pinned Bytes | Copied/Promoted Objects | Copied/Promoted Bytes | Malloc Registry Rebuilds |",
-            "|---|---|---:|---:|---:|---:|---:|",
+            "| Ref | Fallback Reasons | Conservative Pinned Bytes | Compiled-Frame Pinned Bytes | Copy-Only Pinned Bytes | Copied/Promoted Objects | Copied/Promoted Bytes | Malloc Registry Rebuilds |",
+            "|---|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for label, report in packet["copied_minor"].items():
@@ -564,6 +673,7 @@ def render_markdown(packet: dict[str, Any]) -> str:
         lines.append(
             f"| `{label}` | {reason_summary(summary['fallback_reason_counts'])} "
             f"| {summary['conservative_pinned_bytes']} "
+            f"| {summary['compiled_frame_conservative_pinned_bytes']} "
             f"| {summary['legacy_copy_only_scanner_pinned_bytes']} "
             f"| {copied_promoted} "
             f"| {copied_promoted_bytes} "

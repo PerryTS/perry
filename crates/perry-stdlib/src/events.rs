@@ -84,7 +84,10 @@ static EVENTS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 /// closure — same root cause as issue #35 for net.Socket listeners.
 fn ensure_gc_scanner_registered() {
     EVENTS_GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_mutable_root_scanner(scan_events_roots_mut);
+        perry_runtime::gc::gc_register_mutable_root_scanner_named(
+            "stdlib:events",
+            scan_events_roots_mut,
+        );
     });
 }
 

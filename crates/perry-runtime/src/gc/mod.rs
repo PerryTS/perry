@@ -185,7 +185,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     let conservative_pin_stats = if consider_evacuation
         && matches!(
             conservative_scan_decision,
-            ConservativeStackScanDecision::Scan
+            ConservativeStackScanDecision::Scan(_)
         ) {
         pin_currently_marked_as_conservative()
     } else {
@@ -198,9 +198,8 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     mark_mutable_registered_roots(&valid_ptrs);
     let legacy_root_stats = mark_registered_roots(&valid_ptrs, consider_evacuation);
     if let Some(trace) = trace.as_mut() {
-        trace.conservative_root_count = conservative_root_stats.root_count;
-        trace.conservative_pinned = conservative_pin_stats.pinned_roots;
-        trace.conservative_pinned_bytes = conservative_pin_stats.pinned_bytes;
+        trace.record_conservative_root_stats(conservative_root_stats);
+        trace.record_conservative_pin_stats(conservative_pin_stats);
         trace.legacy_copy_only_scanner_pinned = legacy_root_stats;
     }
     trace_phase_record(&mut trace, "root_marking", phase_start);
@@ -347,6 +346,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     // re-discovers fresh.
     let phase_start = trace_phase_start(&trace);
     CONS_PINNED.with(|s| s.borrow_mut().clear());
+    clear_conservative_root_sources();
     trace_phase_record(&mut trace, "conservative_pin_clear", phase_start);
 
     #[cfg(target_env = "gnu")]
@@ -485,7 +485,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     mark_mutable_registered_roots(&valid_ptrs);
     let legacy_root_stats = mark_registered_roots(&valid_ptrs, false);
     if let Some(trace) = trace.as_mut() {
-        trace.conservative_root_count = conservative_root_stats.root_count;
+        trace.record_conservative_root_stats(conservative_root_stats);
         trace.legacy_copy_only_scanner_pinned = legacy_root_stats;
     }
     trace_phase_record(&mut trace, "root_marking", phase_start);
@@ -544,6 +544,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     let phase_start = trace_phase_start(&trace);
     remembered_set_clear();
     trace_phase_record(&mut trace, "remembered_set_clear", phase_start);
+    clear_conservative_root_sources();
 
     // Return released glibc heap pages to the kernel. Without this, glibc
     // keeps freed memory in its arena for reuse but never shrinks RSS, so
@@ -608,49 +609,80 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
 /// validations per GC barely move the total.
 
 pub fn gc_init() {
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
-    gc_register_mutable_root_scanner(promise_mutable_root_scanner);
-    gc_register_mutable_root_scanner(timer_mutable_root_scanner);
-    gc_register_mutable_root_scanner(exception_mutable_root_scanner);
-    gc_register_mutable_root_scanner(async_context_mutable_root_scanner);
-    gc_register_mutable_root_scanner(async_hooks_mutable_root_scanner);
-    gc_register_mutable_root_scanner(shape_cache_mutable_root_scanner);
-    gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
-    gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
-    gc_register_mutable_root_scanner(transition_cache_mutable_root_scanner);
-    gc_register_mutable_root_scanner(overflow_fields_mutable_root_scanner);
-    gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
-    gc_register_mutable_root_scanner(intern_table_mutable_root_scanner);
-    gc_register_mutable_root_scanner(crate::builtins::scan_console_log_singleton_roots_mut);
+    gc_register_mutable_root_scanner_named("runtime_handles", scan_runtime_handle_roots_mut);
+    gc_register_mutable_root_scanner_named("promise", promise_mutable_root_scanner);
+    gc_register_mutable_root_scanner_named("timer", timer_mutable_root_scanner);
+    gc_register_mutable_root_scanner_named("exception", exception_mutable_root_scanner);
+    gc_register_mutable_root_scanner_named("async_context", async_context_mutable_root_scanner);
+    gc_register_mutable_root_scanner_named("async_hooks", async_hooks_mutable_root_scanner);
+    gc_register_mutable_root_scanner_named("shape_cache", shape_cache_mutable_root_scanner);
+    gc_register_mutable_root_scanner_named(
+        "regex_last_exec_groups",
+        crate::regex::scan_last_exec_groups_root_mut,
+    );
+    gc_register_mutable_root_scanner_named(
+        "template_raw_cache",
+        crate::array::scan_template_raw_roots_mut,
+    );
+    gc_register_mutable_root_scanner_named(
+        "transition_cache",
+        transition_cache_mutable_root_scanner,
+    );
+    gc_register_mutable_root_scanner_named("overflow_fields", overflow_fields_mutable_root_scanner);
+    gc_register_mutable_root_scanner_named("json_parse", json_parse_mutable_root_scanner);
+    gc_register_mutable_root_scanner_named("intern_table", intern_table_mutable_root_scanner);
+    gc_register_mutable_root_scanner_named(
+        "console_log_singleton",
+        crate::builtins::scan_console_log_singleton_roots_mut,
+    );
     // Issue #841: GC roots for the per-(submodule, export) function
     // singletons + per-submodule namespace stub objects allocated by
     // `node_submodules.rs`. Without this scanner the next GC cycle
     // after first import-binding use would reclaim the singletons
     // (nothing else holds them — they live for the program's lifetime
     // via codegen `getter` calls, not via a user-visible JSValue root).
-    gc_register_mutable_root_scanner(
+    gc_register_mutable_root_scanner_named(
+        "node_submodule_singleton_cache",
         crate::node_submodules::scan_node_submodule_singleton_roots_mut,
     );
     // Box-capture root scanner (mutable closure captures, esp. the
     // generator state-machine's `__iter` and `__step` boxes that hold
     // the iter object + step closure across awaits).
-    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
+    gc_register_mutable_root_scanner_named("box_roots", crate::r#box::scan_box_roots_mut);
     // Iter-result scratch slot — the async-step fast path stows the
     // generator's most recent yield value here; it stays live until
     // the step driver reads it back.
-    gc_register_mutable_root_scanner(crate::promise::scan_iter_result_root_mut);
+    gc_register_mutable_root_scanner_named(
+        "promise_iter_result",
+        crate::promise::scan_iter_result_root_mut,
+    );
     // Async-step thunk single-slot cache (build_async_step_thunks).
-    gc_register_mutable_root_scanner(crate::promise::scan_async_step_thunk_cache_mut);
+    gc_register_mutable_root_scanner_named(
+        "async_step_thunk_cache",
+        crate::promise::scan_async_step_thunk_cache_mut,
+    );
     // Closure singleton caches. Captured-closure cache keys mirror closure
     // capture heap words, so copied-minor must rewrite them after moving
     // captured young values or future cache hits miss on stale addresses.
-    gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
-    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
+    gc_register_mutable_root_scanner_named(
+        "closure_singleton_cache",
+        crate::closure::scan_singleton_closure_roots_mut,
+    );
+    gc_register_mutable_root_scanner_named(
+        "closure_dynamic_props",
+        crate::closure::scan_closure_dynamic_props_roots_mut,
+    );
     // Native-module callable export singletons and process stdio stream
     // singletons store heap pointers in TLS caches; keep them live and rewrite
     // them if a copying collection moves their backing allocations.
-    gc_register_mutable_root_scanner(crate::object::scan_native_callable_export_roots_mut);
-    gc_register_mutable_root_scanner(crate::os::scan_process_stream_singleton_roots_mut);
+    gc_register_mutable_root_scanner_named(
+        "native_callable_export_cache",
+        crate::object::scan_native_callable_export_roots_mut,
+    );
+    gc_register_mutable_root_scanner_named(
+        "process_stream_singleton_cache",
+        crate::os::scan_process_stream_singleton_roots_mut,
+    );
     // perry/tui hook + state slot pools — they store raw NaN-boxed
     // value bits but the GC has no other way to know which slots hold
     // heap pointers (arrays/objects/strings stashed via setState /
@@ -659,10 +691,19 @@ pub fn gc_init() {
     // the next allocation triggered minor GC, and the array was
     // reclaimed because nothing else held it — `messages.map(…)` on
     // the stale pointer produced an empty render.
-    gc_register_mutable_root_scanner(crate::tui::hooks::scan_hook_slot_roots_mut);
-    gc_register_mutable_root_scanner(crate::tui::state::scan_state_slot_roots_mut);
+    gc_register_mutable_root_scanner_named(
+        "tui_hook_slots",
+        crate::tui::hooks::scan_hook_slot_roots_mut,
+    );
+    gc_register_mutable_root_scanner_named(
+        "tui_state_slots",
+        crate::tui::state::scan_state_slot_roots_mut,
+    );
     #[cfg(feature = "ohos-napi")]
-    gc_register_mutable_root_scanner(crate::arkts_callbacks::arkts_callbacks_root_scanner_mut);
+    gc_register_mutable_root_scanner_named(
+        "arkts_callbacks",
+        crate::arkts_callbacks::arkts_callbacks_root_scanner_mut,
+    );
 }
 
 #[no_mangle]

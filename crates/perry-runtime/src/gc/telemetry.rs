@@ -1,5 +1,8 @@
 use super::*;
 
+pub(super) const UNATTRIBUTED_ROOT_SOURCE: &str = "unattributed";
+pub(super) const DEFAULT_CONSERVATIVE_STACK_MAX_BYTES: usize = 8 * 1024 * 1024;
+
 pub struct GcStats {
     pub collection_count: u64,
     pub total_freed_bytes: u64,
@@ -60,7 +63,10 @@ pub(super) enum CopiedMinorFallbackReason {
     NotAttempted,
     BarriersInactive,
     ConservativeStack,
+    ConservativeStackTruncated,
+    ConservativeStackUnbounded,
     CopyOnlyRoots,
+    UnattributedRootSource,
     MallocRegistryUnavailable,
     PinnedYoungRoot,
     PinnedYoungDirtySlot,
@@ -75,7 +81,10 @@ impl CopiedMinorFallbackReason {
             Self::NotAttempted => "not_attempted",
             Self::BarriersInactive => "barriers_inactive",
             Self::ConservativeStack => "conservative_stack",
+            Self::ConservativeStackTruncated => "conservative_stack_truncated",
+            Self::ConservativeStackUnbounded => "conservative_stack_unbounded",
             Self::CopyOnlyRoots => "copy_only_roots",
+            Self::UnattributedRootSource => "unattributed_root_source",
             Self::MallocRegistryUnavailable => "malloc_registry_unavailable",
             Self::PinnedYoungRoot => "pinned_young_root",
             Self::PinnedYoungDirtySlot => "pinned_young_dirty_slot",
@@ -107,6 +116,17 @@ pub(super) struct CopyingNurseryTraceStats {
 }
 
 #[derive(Clone, Copy, Default)]
+pub(super) struct LegacyRootSourceTraceStats {
+    pub(super) emitted_roots: usize,
+    pub(super) emitted_young_roots: usize,
+    pub(super) emitted_old_roots: usize,
+    pub(super) emitted_malloc_roots: usize,
+    pub(super) malformed_roots: usize,
+    pub(super) pinned_roots: usize,
+    pub(super) pinned_bytes: usize,
+}
+
+#[derive(Clone, Default)]
 pub(super) struct LegacyRootTraceStats {
     pub(super) registered_rust_scanners: usize,
     pub(super) registered_ffi_scanners: usize,
@@ -117,17 +137,126 @@ pub(super) struct LegacyRootTraceStats {
     pub(super) malformed_roots: usize,
     pub(super) pinned_roots: usize,
     pub(super) pinned_bytes: usize,
+    pub(super) sources: BTreeMap<String, LegacyRootSourceTraceStats>,
+}
+
+impl LegacyRootTraceStats {
+    pub(super) fn source_mut(&mut self, source: &str) -> &mut LegacyRootSourceTraceStats {
+        self.sources.entry(source.to_string()).or_default()
+    }
+
+    pub(super) fn unattributed_emitted_roots(&self) -> usize {
+        self.sources
+            .get(UNATTRIBUTED_ROOT_SOURCE)
+            .map_or(0, |stats| stats.emitted_roots)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ConservativeRootSource {
+    RegisterBuffer,
+    FpRegisterBuffer,
+    RuntimeStack,
+    CompiledFrame,
+}
+
+impl ConservativeRootSource {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::RegisterBuffer => "register_buffer",
+            Self::FpRegisterBuffer => "fp_register_buffer",
+            Self::RuntimeStack => "runtime_stack",
+            Self::CompiledFrame => "compiled_frame",
+        }
+    }
+
+    pub(super) const fn is_compiled_frame(self) -> bool {
+        matches!(self, Self::CompiledFrame)
+    }
 }
 
 #[derive(Clone, Copy, Default)]
+pub(super) struct ConservativeSourceTraceStats {
+    pub(super) root_count: usize,
+    pub(super) pinned_roots: usize,
+    pub(super) pinned_bytes: usize,
+    pub(super) scan_bytes: usize,
+    pub(super) scan_limit_bytes: usize,
+    pub(super) truncated: bool,
+    pub(super) unbounded: bool,
+}
+
+#[derive(Clone, Default)]
 pub(super) struct ConservativeRootTraceStats {
     pub(super) root_count: usize,
+    pub(super) scan_bytes: usize,
+    pub(super) stack_scan_limit_bytes: usize,
+    pub(super) stack_truncated: bool,
+    pub(super) stack_unbounded: bool,
+    pub(super) sources: BTreeMap<&'static str, ConservativeSourceTraceStats>,
 }
 
-#[derive(Clone, Copy, Default)]
+impl ConservativeRootTraceStats {
+    pub(super) fn source_mut(
+        &mut self,
+        source: ConservativeRootSource,
+    ) -> &mut ConservativeSourceTraceStats {
+        self.sources.entry(source.as_str()).or_default()
+    }
+
+    pub(super) fn record_scan(
+        &mut self,
+        source: ConservativeRootSource,
+        bytes: usize,
+        limit_bytes: usize,
+        truncated: bool,
+        unbounded: bool,
+    ) {
+        self.scan_bytes = self.scan_bytes.saturating_add(bytes);
+        if source == ConservativeRootSource::RuntimeStack
+            || source == ConservativeRootSource::CompiledFrame
+        {
+            self.stack_scan_limit_bytes = limit_bytes;
+            self.stack_truncated |= truncated;
+            self.stack_unbounded |= unbounded;
+        }
+        let stats = self.source_mut(source);
+        stats.scan_bytes = stats.scan_bytes.saturating_add(bytes);
+        stats.scan_limit_bytes = limit_bytes;
+        stats.truncated |= truncated;
+        stats.unbounded |= unbounded;
+    }
+
+    pub(super) fn record_root(&mut self, source: ConservativeRootSource) {
+        self.root_count = self.root_count.saturating_add(1);
+        let stats = self.source_mut(source);
+        stats.root_count = stats.root_count.saturating_add(1);
+    }
+}
+
+#[derive(Clone, Default)]
 pub(super) struct ConservativePinTraceStats {
     pub(super) pinned_roots: usize,
     pub(super) pinned_bytes: usize,
+    pub(super) compiled_frame_pinned_bytes: usize,
+    pub(super) runtime_pinned_bytes: usize,
+    pub(super) sources: BTreeMap<&'static str, ConservativeSourceTraceStats>,
+}
+
+impl ConservativePinTraceStats {
+    pub(super) fn record_pin(&mut self, source: ConservativeRootSource, bytes: usize) {
+        self.pinned_roots = self.pinned_roots.saturating_add(1);
+        self.pinned_bytes = self.pinned_bytes.saturating_add(bytes);
+        if source.is_compiled_frame() {
+            self.compiled_frame_pinned_bytes =
+                self.compiled_frame_pinned_bytes.saturating_add(bytes);
+        } else {
+            self.runtime_pinned_bytes = self.runtime_pinned_bytes.saturating_add(bytes);
+        }
+        let source_stats = self.sources.entry(source.as_str()).or_default();
+        source_stats.pinned_roots = source_stats.pinned_roots.saturating_add(1);
+        source_stats.pinned_bytes = source_stats.pinned_bytes.saturating_add(bytes);
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -312,6 +441,13 @@ pub(super) struct GcCycleTrace {
     pub(super) conservative_root_count: usize,
     pub(super) conservative_pinned: usize,
     pub(super) conservative_pinned_bytes: usize,
+    pub(super) compiled_frame_conservative_pinned_bytes: usize,
+    pub(super) runtime_conservative_pinned_bytes: usize,
+    pub(super) conservative_stack_scan_bytes: usize,
+    pub(super) conservative_stack_scan_limit_bytes: usize,
+    pub(super) conservative_stack_truncated: bool,
+    pub(super) conservative_stack_unbounded: bool,
+    pub(super) conservative_sources: BTreeMap<&'static str, ConservativeSourceTraceStats>,
     pub(super) legacy_copy_only_scanner_pinned: LegacyRootTraceStats,
     pub(super) shadow_roots: ShadowRootTraceStats,
     pub(super) layout_scans: LayoutScanTraceStats,
@@ -361,6 +497,13 @@ impl GcCycleTrace {
             conservative_root_count: 0,
             conservative_pinned: 0,
             conservative_pinned_bytes: 0,
+            compiled_frame_conservative_pinned_bytes: 0,
+            runtime_conservative_pinned_bytes: 0,
+            conservative_stack_scan_bytes: 0,
+            conservative_stack_scan_limit_bytes: DEFAULT_CONSERVATIVE_STACK_MAX_BYTES,
+            conservative_stack_truncated: false,
+            conservative_stack_unbounded: false,
+            conservative_sources: BTreeMap::new(),
             legacy_copy_only_scanner_pinned: LegacyRootTraceStats::default(),
             shadow_roots: ShadowRootTraceStats::default(),
             layout_scans: LayoutScanTraceStats::default(),
@@ -387,12 +530,46 @@ impl GcCycleTrace {
         }
     }
 
+    pub(super) fn record_conservative_root_stats(&mut self, stats: ConservativeRootTraceStats) {
+        self.conservative_root_count = stats.root_count;
+        self.conservative_stack_scan_bytes = stats.scan_bytes;
+        self.conservative_stack_scan_limit_bytes = stats.stack_scan_limit_bytes;
+        self.conservative_stack_truncated = stats.stack_truncated;
+        self.conservative_stack_unbounded = stats.stack_unbounded;
+        self.conservative_sources = stats.sources;
+    }
+
+    pub(super) fn record_conservative_pin_stats(&mut self, stats: ConservativePinTraceStats) {
+        self.conservative_pinned = stats.pinned_roots;
+        self.conservative_pinned_bytes = stats.pinned_bytes;
+        self.compiled_frame_conservative_pinned_bytes = stats.compiled_frame_pinned_bytes;
+        self.runtime_conservative_pinned_bytes = stats.runtime_pinned_bytes;
+        for (source, pinned_stats) in stats.sources {
+            let target = self.conservative_sources.entry(source).or_default();
+            target.pinned_roots = pinned_stats.pinned_roots;
+            target.pinned_bytes = pinned_stats.pinned_bytes;
+        }
+    }
+
     pub(super) fn into_json(mut self, steps_after: GcStepSnapshot) -> serde_json::Value {
         self.capture_layout_scans();
         let arena_after = crate::arena::arena_telemetry_snapshot();
         let malloc_after = malloc_object_count();
         let remembered_set_after = remembered_set_size();
         let malloc_kinds = take_malloc_kind_telemetry_json();
+        let conservative_sources = conservative_sources_json(&self.conservative_sources);
+        let legacy_copy_only_scanner_pinned = serde_json::json!({
+            "registered_rust_scanners": self.legacy_copy_only_scanner_pinned.registered_rust_scanners,
+            "registered_ffi_scanners": self.legacy_copy_only_scanner_pinned.registered_ffi_scanners,
+            "emitted_roots": self.legacy_copy_only_scanner_pinned.emitted_roots,
+            "emitted_young_roots": self.legacy_copy_only_scanner_pinned.emitted_young_roots,
+            "emitted_old_roots": self.legacy_copy_only_scanner_pinned.emitted_old_roots,
+            "emitted_malloc_roots": self.legacy_copy_only_scanner_pinned.emitted_malloc_roots,
+            "malformed_roots": self.legacy_copy_only_scanner_pinned.malformed_roots,
+            "roots": self.legacy_copy_only_scanner_pinned.pinned_roots,
+            "bytes": self.legacy_copy_only_scanner_pinned.pinned_bytes,
+            "sources": legacy_root_sources_json(&self.legacy_copy_only_scanner_pinned.sources),
+        });
         serde_json::json!({
             "event": "gc_cycle",
             "collection_kind": self.collection_kind.as_str(),
@@ -442,17 +619,14 @@ impl GcCycleTrace {
             "conservative_root_count": self.conservative_root_count,
             "conservative_pinned": self.conservative_pinned,
             "conservative_pinned_bytes": self.conservative_pinned_bytes,
-            "legacy_copy_only_scanner_pinned": {
-                "registered_rust_scanners": self.legacy_copy_only_scanner_pinned.registered_rust_scanners,
-                "registered_ffi_scanners": self.legacy_copy_only_scanner_pinned.registered_ffi_scanners,
-                "emitted_roots": self.legacy_copy_only_scanner_pinned.emitted_roots,
-                "emitted_young_roots": self.legacy_copy_only_scanner_pinned.emitted_young_roots,
-                "emitted_old_roots": self.legacy_copy_only_scanner_pinned.emitted_old_roots,
-                "emitted_malloc_roots": self.legacy_copy_only_scanner_pinned.emitted_malloc_roots,
-                "malformed_roots": self.legacy_copy_only_scanner_pinned.malformed_roots,
-                "roots": self.legacy_copy_only_scanner_pinned.pinned_roots,
-                "bytes": self.legacy_copy_only_scanner_pinned.pinned_bytes,
-            },
+            "compiled_frame_conservative_pinned_bytes": self.compiled_frame_conservative_pinned_bytes,
+            "runtime_conservative_pinned_bytes": self.runtime_conservative_pinned_bytes,
+            "conservative_stack_scan_bytes": self.conservative_stack_scan_bytes,
+            "conservative_stack_scan_limit_bytes": self.conservative_stack_scan_limit_bytes,
+            "conservative_stack_truncated": self.conservative_stack_truncated,
+            "conservative_stack_unbounded": self.conservative_stack_unbounded,
+            "conservative_sources": conservative_sources,
+            "legacy_copy_only_scanner_pinned": legacy_copy_only_scanner_pinned,
             "shadow_roots": {
                 "slots_scanned": self.shadow_roots.slots_scanned,
                 "nonzero_slots": self.shadow_roots.nonzero_slots,
@@ -630,6 +804,48 @@ pub(super) fn malloc_kind_telemetry_row(
         "survivor_bytes": counters.survivor_bytes,
         "copied_minor_validation_lookups": counters.copied_minor_validation_lookups,
     })
+}
+
+pub(super) fn legacy_root_sources_json(
+    sources: &BTreeMap<String, LegacyRootSourceTraceStats>,
+) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    for (source, stats) in sources {
+        map.insert(
+            source.clone(),
+            serde_json::json!({
+                "emitted_roots": stats.emitted_roots,
+                "emitted_young_roots": stats.emitted_young_roots,
+                "emitted_old_roots": stats.emitted_old_roots,
+                "emitted_malloc_roots": stats.emitted_malloc_roots,
+                "malformed_roots": stats.malformed_roots,
+                "roots": stats.pinned_roots,
+                "bytes": stats.pinned_bytes,
+            }),
+        );
+    }
+    serde_json::Value::Object(map)
+}
+
+pub(super) fn conservative_sources_json(
+    sources: &BTreeMap<&'static str, ConservativeSourceTraceStats>,
+) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    for (source, stats) in sources {
+        map.insert(
+            (*source).to_string(),
+            serde_json::json!({
+                "roots": stats.root_count,
+                "pinned_roots": stats.pinned_roots,
+                "pinned_bytes": stats.pinned_bytes,
+                "scan_bytes": stats.scan_bytes,
+                "scan_limit_bytes": stats.scan_limit_bytes,
+                "truncated": stats.truncated,
+                "unbounded": stats.unbounded,
+            }),
+        );
+    }
+    serde_json::Value::Object(map)
 }
 
 pub(super) fn malloc_kind_telemetry_json_from_snapshot(

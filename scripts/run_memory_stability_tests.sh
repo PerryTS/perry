@@ -177,6 +177,9 @@ known_fallback_reasons = (
     "copy_only_roots",
     "barriers_inactive",
     "conservative_stack",
+    "conservative_stack_truncated",
+    "conservative_stack_unbounded",
+    "unattributed_root_source",
     "malloc_registry_unavailable",
     "pinned_young_root",
     "pinned_young_dirty_slot",
@@ -486,6 +489,9 @@ allowed_fallback_reasons = {
     "copy_only_roots",
     "barriers_inactive",
     "conservative_stack",
+    "conservative_stack_truncated",
+    "conservative_stack_unbounded",
+    "unattributed_root_source",
     "malloc_registry_unavailable",
     "pinned_young_root",
     "pinned_young_dirty_slot",
@@ -594,8 +600,33 @@ if mode in ("copied_minor_precise", "copied_minor_default"):
         eligible = nested(cycle, "copying_nursery", "eligible")
         rebuilds = nested(cycle, "copying_nursery", "malloc_registry_rebuilds", default=-1)
         conservative_pinned_bytes = cycle.get("conservative_pinned_bytes", -1)
+        compiled_frame_pinned_bytes = cycle.get(
+            "compiled_frame_conservative_pinned_bytes", -1
+        )
+        stack_truncated = cycle.get("conservative_stack_truncated")
+        stack_unbounded = cycle.get("conservative_stack_unbounded")
         legacy_pinned_bytes = nested(
             cycle, "legacy_copy_only_scanner_pinned", "bytes", default=-1
+        )
+        legacy_young_roots = nested(
+            cycle,
+            "legacy_copy_only_scanner_pinned",
+            "emitted_young_roots",
+            default=-1,
+        )
+        legacy_malloc_roots = nested(
+            cycle,
+            "legacy_copy_only_scanner_pinned",
+            "emitted_malloc_roots",
+            default=-1,
+        )
+        unattributed_roots = nested(
+            cycle,
+            "legacy_copy_only_scanner_pinned",
+            "sources",
+            "unattributed",
+            "emitted_roots",
+            default=0,
         )
         if reason != "none":
             errors.append(f"cycle {idx}: fallback_reason={reason!r}, want 'none'")
@@ -607,9 +638,37 @@ if mode in ("copied_minor_precise", "copied_minor_default"):
             errors.append(
                 f"cycle {idx}: conservative_pinned_bytes={conservative_pinned_bytes}, want 0"
             )
+        if compiled_frame_pinned_bytes != 0:
+            errors.append(
+                f"cycle {idx}: compiled_frame_conservative_pinned_bytes="
+                f"{compiled_frame_pinned_bytes}, want 0"
+            )
+        if stack_truncated is not False:
+            errors.append(
+                f"cycle {idx}: conservative_stack_truncated={stack_truncated!r}, want false"
+            )
+        if stack_unbounded is not False:
+            errors.append(
+                f"cycle {idx}: conservative_stack_unbounded={stack_unbounded!r}, want false"
+            )
         if legacy_pinned_bytes != 0:
             errors.append(
                 f"cycle {idx}: legacy_copy_only_scanner_pinned.bytes={legacy_pinned_bytes}, want 0"
+            )
+        if legacy_young_roots != 0:
+            errors.append(
+                f"cycle {idx}: legacy_copy_only_scanner_pinned.emitted_young_roots="
+                f"{legacy_young_roots}, want 0"
+            )
+        if legacy_malloc_roots != 0:
+            errors.append(
+                f"cycle {idx}: legacy_copy_only_scanner_pinned.emitted_malloc_roots="
+                f"{legacy_malloc_roots}, want 0"
+            )
+        if unattributed_roots != 0:
+            errors.append(
+                f"cycle {idx}: unattributed root scanner emitted roots="
+                f"{unattributed_roots}, want 0"
             )
     copied_productive = [
         cycle

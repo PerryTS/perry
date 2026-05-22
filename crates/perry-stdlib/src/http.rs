@@ -39,7 +39,10 @@ static HTTP_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 /// issue #35 pattern, same root cause as net.Socket listeners.
 fn ensure_gc_scanner_registered() {
     HTTP_GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_mutable_root_scanner(scan_http_roots_mut);
+        perry_runtime::gc::gc_register_mutable_root_scanner_named(
+            "stdlib:http",
+            scan_http_roots_mut,
+        );
     });
 }
 

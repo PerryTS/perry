@@ -28,7 +28,7 @@
 use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
 use perry_ffi::{
-    alloc_string, gc_register_mutable_root_scanner, get_handle_mut, iter_handles_of_mut,
+    alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
     notify_main_thread, register_handle, spawn_blocking_with_reactor as spawn_blocking,
     take_handle, GcRootVisitor, Handle, JsClosure, JsString, JsValue, ObjectHeader,
     RawClosureHeader, StringHeader,
@@ -105,7 +105,7 @@ static WS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 fn ensure_gc_scanner_registered() {
     WS_GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner(scan_ws_roots);
+        gc_register_mutable_root_scanner_named("perry-ext-ws", scan_ws_roots);
     });
 }
 
@@ -1261,7 +1261,7 @@ mod tests {
     #[test]
     fn gc_mutable_scanner_rewrites_client_and_server_listener_roots() {
         let _guard = GcTestGuard::new();
-        perry_ffi::gc_register_mutable_root_scanner(scan_ws_roots);
+        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-ws", scan_ws_roots);
 
         let client_id = usize::MAX - 9_001;
         let client_callback = young_gc_root();

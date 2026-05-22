@@ -108,7 +108,7 @@ static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 /// `cron.rs::ensure_gc_scanner_registered`.
 fn ensure_gc_scanner_registered() {
     NET_GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_mutable_root_scanner(scan_net_roots_mut);
+        perry_runtime::gc::gc_register_mutable_root_scanner_named("stdlib:net", scan_net_roots_mut);
     });
 }
 

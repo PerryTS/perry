@@ -56,7 +56,10 @@ thread_local! {
 fn ensure_gc_scanner_registered() {
     GC_SCANNER_REGISTERED.with(|flag| {
         if !flag.get() {
-            crate::gc::gc_register_mutable_root_scanner(media_callbacks_root_scanner_mut);
+            crate::gc::gc_register_mutable_root_scanner_named(
+                "media_callbacks",
+                media_callbacks_root_scanner_mut,
+            );
             flag.set(true);
         }
     });

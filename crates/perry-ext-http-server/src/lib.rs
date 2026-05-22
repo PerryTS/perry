@@ -50,7 +50,7 @@
 
 use std::sync::Once;
 
-use perry_ffi::{gc_register_mutable_root_scanner, iter_handles_of_mut, GcRootVisitor};
+use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
 
 mod http2_server;
 mod https_server;
@@ -82,7 +82,7 @@ static GC_REGISTERED: Once = Once::new();
 /// same root cause as issue #35 for net.Socket listeners.
 pub(crate) fn ensure_gc_scanner_registered() {
     GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner(scan_http_server_roots);
+        gc_register_mutable_root_scanner_named("perry-ext-http-server", scan_http_server_roots);
     });
 }
 
@@ -185,7 +185,10 @@ mod tests {
     #[test]
     fn gc_mutable_scanner_rewrites_server_wrapper_and_request_response_roots() {
         let _guard = GcTestGuard::new();
-        perry_ffi::gc_register_mutable_root_scanner(scan_http_server_roots);
+        perry_ffi::gc_register_mutable_root_scanner_named(
+            "perry-ext-http-server",
+            scan_http_server_roots,
+        );
 
         let http_handler = young_gc_root();
         let http_listener = young_gc_root();

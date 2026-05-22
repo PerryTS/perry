@@ -22,7 +22,7 @@
 use chrono::Utc;
 use cron::Schedule;
 use perry_ffi::{
-    alloc_string, gc_register_mutable_root_scanner, get_handle, iter_handles_of_mut,
+    alloc_string, gc_register_mutable_root_scanner_named, get_handle, iter_handles_of_mut,
     js_array_alloc, js_array_push, register_handle, GcRootVisitor, Handle, JsClosure, JsString,
     JsValue, RawClosureHeader, StringHeader,
 };
@@ -70,7 +70,7 @@ fn next_cron_instant(schedule: &Schedule) -> Option<Instant> {
 
 fn ensure_gc_scanner_registered() {
     CRON_GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner(scan_cron_roots);
+        gc_register_mutable_root_scanner_named("perry-ext-cron", scan_cron_roots);
     });
 }
 
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn gc_mutable_scanner_rewrites_timer_and_stopped_job_roots() {
         let _guard = GcTestGuard::new();
-        perry_ffi::gc_register_mutable_root_scanner(scan_cron_roots);
+        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-cron", scan_cron_roots);
 
         let schedule = Schedule::from_str("0 0 * * * *").expect("valid schedule");
         let running = Arc::new(AtomicBool::new(true));

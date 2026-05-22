@@ -212,6 +212,21 @@ def summarize_gc_trace(
         roots["conservative_root_count"] += as_int(event.get("conservative_root_count"))
         roots["conservative_pinned"] += as_int(event.get("conservative_pinned"))
         roots["conservative_pinned_bytes"] += as_int(event.get("conservative_pinned_bytes"))
+        roots["compiled_frame_conservative_pinned_bytes"] += as_int(
+            event.get("compiled_frame_conservative_pinned_bytes")
+        )
+        roots["runtime_conservative_pinned_bytes"] += as_int(
+            event.get("runtime_conservative_pinned_bytes")
+        )
+        roots["conservative_stack_scan_bytes"] += as_int(
+            event.get("conservative_stack_scan_bytes")
+        )
+        roots["conservative_stack_truncated"] += (
+            1 if event.get("conservative_stack_truncated") is True else 0
+        )
+        roots["conservative_stack_unbounded"] += (
+            1 if event.get("conservative_stack_unbounded") is True else 0
+        )
         add_counter_fields(roots, event.get("legacy_copy_only_scanner_pinned"), "legacy")
         add_counter_fields(roots, event.get("shadow_roots"), "shadow")
 

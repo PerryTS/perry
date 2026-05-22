@@ -3,6 +3,37 @@ use super::*;
 pub type MutableRootScanner = for<'a> fn(&mut RuntimeRootVisitor<'a>);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RootScannerKind {
+    Mutable,
+    CopyOnly,
+}
+
+#[derive(Clone)]
+pub(super) struct RootScannerRegistration<T: Copy> {
+    pub(super) source: String,
+    pub(super) scanner: T,
+    pub(super) kind: RootScannerKind,
+}
+
+impl<T: Copy> RootScannerRegistration<T> {
+    pub(super) fn new(source: impl Into<String>, scanner: T, kind: RootScannerKind) -> Self {
+        Self {
+            source: source.into(),
+            scanner,
+            kind,
+        }
+    }
+}
+
+pub(super) type CopyOnlyRootScannerRegistration = RootScannerRegistration<fn(&mut dyn FnMut(f64))>;
+pub(super) type MutableRootScannerRegistration = RootScannerRegistration<MutableRootScanner>;
+pub(super) type FfiCopyOnlyRootScannerRegistration = RootScannerRegistration<PerryFfiRootScanner>;
+pub(super) type FfiMutableRootScannerRegistration =
+    RootScannerRegistration<PerryFfiMutableRootScanner>;
+pub(super) type FfiNamedMutableRootScannerRegistration =
+    RootScannerRegistration<(PerryFfiNamedMutableRootScanner, usize)>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RuntimeHandleSlot {
     Nanbox(u64),
     RawTagged { addr: usize, tag: u64 },
@@ -10,13 +41,16 @@ pub(super) enum RuntimeHandleSlot {
 }
 
 thread_local! {
-    pub(super) static ROOT_SCANNERS: RefCell<Vec<fn(&mut dyn FnMut(f64))>> = RefCell::new(Vec::new());
-    pub(super) static MUTABLE_ROOT_SCANNERS: RefCell<Vec<MutableRootScanner>> = RefCell::new(Vec::new());
-    pub(super) static FFI_ROOT_SCANNERS: RefCell<Vec<PerryFfiRootScanner>> = RefCell::new(Vec::new());
-    pub(super) static FFI_MUTABLE_ROOT_SCANNERS: RefCell<Vec<PerryFfiMutableRootScanner>> = RefCell::new(Vec::new());
+    pub(super) static ROOT_SCANNERS: RefCell<Vec<CopyOnlyRootScannerRegistration>> = RefCell::new(Vec::new());
+    pub(super) static MUTABLE_ROOT_SCANNERS: RefCell<Vec<MutableRootScannerRegistration>> = RefCell::new(Vec::new());
+    pub(super) static FFI_ROOT_SCANNERS: RefCell<Vec<FfiCopyOnlyRootScannerRegistration>> = RefCell::new(Vec::new());
+    pub(super) static FFI_MUTABLE_ROOT_SCANNERS: RefCell<Vec<FfiMutableRootScannerRegistration>> = RefCell::new(Vec::new());
+    pub(super) static FFI_NAMED_MUTABLE_ROOT_SCANNERS: RefCell<Vec<FfiNamedMutableRootScannerRegistration>> = RefCell::new(Vec::new());
     pub(super) static GLOBAL_ROOTS: RefCell<Vec<*mut u64>> = const { RefCell::new(Vec::new()) };
     pub(super) static RUNTIME_HANDLE_STACK: RefCell<Vec<RuntimeHandleSlot>> = const { RefCell::new(Vec::new()) };
     pub(super) static GC_ROOT_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
+    pub(super) static CONSERVATIVE_ROOT_SOURCES: RefCell<BTreeMap<usize, ConservativeRootSource>> =
+        RefCell::new(BTreeMap::new());
 }
 
 /// Guard returned by `lock_gc_root_registry`.
@@ -251,7 +285,7 @@ pub(super) enum ConservativeStackScanMode {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConservativeStackScanDecision {
-    Scan,
+    Scan(ConservativeRootSource),
     SkipDisabled,
     SkipShadowStackActive,
 }
@@ -289,11 +323,18 @@ pub(super) fn conservative_stack_scan_decision_for(
 ) -> ConservativeStackScanDecision {
     match mode {
         ConservativeStackScanMode::Disabled => ConservativeStackScanDecision::SkipDisabled,
-        ConservativeStackScanMode::Full => ConservativeStackScanDecision::Scan,
+        ConservativeStackScanMode::Full if shadow_frame_active => {
+            ConservativeStackScanDecision::Scan(ConservativeRootSource::CompiledFrame)
+        }
+        ConservativeStackScanMode::Full => {
+            ConservativeStackScanDecision::Scan(ConservativeRootSource::RuntimeStack)
+        }
         ConservativeStackScanMode::Auto if shadow_frame_active => {
             ConservativeStackScanDecision::SkipShadowStackActive
         }
-        ConservativeStackScanMode::Auto => ConservativeStackScanDecision::Scan,
+        ConservativeStackScanMode::Auto => {
+            ConservativeStackScanDecision::Scan(ConservativeRootSource::RuntimeStack)
+        }
     }
 }
 
@@ -310,8 +351,21 @@ pub(super) fn conservative_stack_scan_decision() -> ConservativeStackScanDecisio
 /// enabled, every discovered target is treated as pinned because the GC
 /// has no mutable slot it can rewrite after forwarding.
 pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
+    gc_register_root_scanner_named(UNATTRIBUTED_ROOT_SOURCE, scanner);
+}
+
+/// Register a named copy-only root scanner.
+///
+/// New in-repo scanners should prefer a mutable scanner. This API exists
+/// for bounded compatibility roots where copied values are intentional and
+/// the source name needs to appear in GC traces.
+pub fn gc_register_root_scanner_named(source: &'static str, scanner: fn(&mut dyn FnMut(f64))) {
     ROOT_SCANNERS.with(|scanners| {
-        scanners.borrow_mut().push(scanner);
+        scanners.borrow_mut().push(RootScannerRegistration::new(
+            source,
+            scanner,
+            RootScannerKind::CopyOnly,
+        ));
     });
 }
 
@@ -319,8 +373,17 @@ pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
 /// These scanners are marked like ordinary roots, but their storage is
 /// revisited after evacuation so forwarded references can be rewritten.
 pub fn gc_register_mutable_root_scanner(scanner: MutableRootScanner) {
+    gc_register_mutable_root_scanner_named(UNATTRIBUTED_ROOT_SOURCE, scanner);
+}
+
+/// Register a named runtime-owned mutable root scanner.
+pub fn gc_register_mutable_root_scanner_named(source: &'static str, scanner: MutableRootScanner) {
     MUTABLE_ROOT_SCANNERS.with(|scanners| {
-        scanners.borrow_mut().push(scanner);
+        scanners.borrow_mut().push(RootScannerRegistration::new(
+            source,
+            scanner,
+            RootScannerKind::Mutable,
+        ));
     });
 }
 
@@ -330,12 +393,15 @@ pub(super) type PerryFfiMutableRootVisitor =
     extern "C" fn(kind: u32, slot: *mut c_void, ctx: *mut c_void) -> bool;
 pub(super) type PerryFfiMutableRootScanner =
     extern "C" fn(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void);
+pub(super) type PerryFfiNamedMutableRootScanner =
+    extern "C" fn(scanner_id: usize, visit: PerryFfiMutableRootVisitor, ctx: *mut c_void);
 
 pub(super) const PERRY_FFI_ROOT_SLOT_I64: u32 = 1;
 pub(super) const PERRY_FFI_ROOT_SLOT_USIZE: u32 = 2;
 pub(super) const PERRY_FFI_ROOT_SLOT_RAW_MUT_PTR: u32 = 3;
 pub(super) const PERRY_FFI_ROOT_SLOT_NANBOX_F64: u32 = 4;
 pub(super) const PERRY_FFI_ROOT_SLOT_NANBOX_U64: u32 = 5;
+const MAX_FFI_SCANNER_SOURCE_LEN: usize = 128;
 
 /// Register a native-package root scanner through a stable C ABI.
 ///
@@ -347,7 +413,11 @@ pub(super) const PERRY_FFI_ROOT_SLOT_NANBOX_U64: u32 = 5;
 #[no_mangle]
 pub extern "C" fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanner) {
     FFI_ROOT_SCANNERS.with(|scanners| {
-        scanners.borrow_mut().push(scanner);
+        scanners.borrow_mut().push(RootScannerRegistration::new(
+            ffi_scanner_source(scanner as *const () as *const c_void),
+            scanner,
+            RootScannerKind::CopyOnly,
+        ));
     });
 }
 
@@ -361,8 +431,60 @@ pub extern "C" fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanne
 #[no_mangle]
 pub extern "C" fn perry_ffi_gc_register_mutable_root_scanner(scanner: PerryFfiMutableRootScanner) {
     FFI_MUTABLE_ROOT_SCANNERS.with(|scanners| {
-        scanners.borrow_mut().push(scanner);
+        scanners.borrow_mut().push(RootScannerRegistration::new(
+            ffi_scanner_source(scanner as *const () as *const c_void),
+            scanner,
+            RootScannerKind::Mutable,
+        ));
     });
+}
+
+/// Register a named native-package mutable root scanner through the stable C
+/// ABI.
+///
+/// This is the source-attributed form used by `perry-ffi` for in-tree and
+/// third-party native packages. The scanner id is an opaque `perry-ffi`
+/// registry index; the runtime stores it only so the shared dispatcher can
+/// call the one wrapper scanner associated with this source instead of
+/// collapsing all wrappers behind one anonymous trampoline.
+#[no_mangle]
+pub extern "C" fn perry_ffi_gc_register_mutable_root_scanner_named(
+    source_ptr: *const u8,
+    source_len: usize,
+    scanner_id: usize,
+    scanner: PerryFfiNamedMutableRootScanner,
+) {
+    FFI_NAMED_MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners.borrow_mut().push(RootScannerRegistration::new(
+            ffi_scanner_source_from_parts(
+                source_ptr,
+                source_len,
+                scanner as *const () as *const c_void,
+            ),
+            (scanner, scanner_id),
+            RootScannerKind::Mutable,
+        ));
+    });
+}
+
+fn ffi_scanner_source(ptr: *const c_void) -> String {
+    format!("ffi:{ptr:p}")
+}
+
+fn ffi_scanner_source_from_parts(
+    source_ptr: *const u8,
+    source_len: usize,
+    fallback_ptr: *const c_void,
+) -> String {
+    if source_ptr.is_null() || source_len == 0 || source_len > MAX_FFI_SCANNER_SOURCE_LEN {
+        return ffi_scanner_source(fallback_ptr);
+    }
+
+    let source_bytes = unsafe { std::slice::from_raw_parts(source_ptr, source_len) };
+    match std::str::from_utf8(source_bytes) {
+        Ok(source) if source.chars().all(|c| !c.is_control()) => source.to_string(),
+        _ => ffi_scanner_source(fallback_ptr),
+    }
 }
 
 /// Register a global variable address as a GC root.
@@ -384,13 +506,120 @@ pub(super) fn mark_stack_roots_for_decision(
     valid_ptrs: &ValidPointerSet,
     decision: ConservativeStackScanDecision,
 ) -> ConservativeRootTraceStats {
+    clear_conservative_root_sources();
     match decision {
-        ConservativeStackScanDecision::Scan => mark_stack_roots_unchecked(valid_ptrs),
+        ConservativeStackScanDecision::Scan(source) => {
+            mark_stack_roots_unchecked(valid_ptrs, source)
+        }
         ConservativeStackScanDecision::SkipDisabled
         | ConservativeStackScanDecision::SkipShadowStackActive => {
             ConservativeRootTraceStats::default()
         }
     }
+}
+
+pub(super) fn clear_conservative_root_sources() {
+    CONSERVATIVE_ROOT_SOURCES.with(|sources| sources.borrow_mut().clear());
+}
+
+pub(super) fn record_conservative_root_source_for_header(
+    header: *mut GcHeader,
+    source: ConservativeRootSource,
+) {
+    if header.is_null() {
+        return;
+    }
+    CONSERVATIVE_ROOT_SOURCES.with(|sources| {
+        sources
+            .borrow_mut()
+            .entry(header as usize)
+            .or_insert(source);
+    });
+}
+
+pub(super) fn conservative_root_sources_snapshot() -> BTreeMap<usize, ConservativeRootSource> {
+    CONSERVATIVE_ROOT_SOURCES.with(|sources| sources.borrow().clone())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ConservativeStackScanLimit {
+    pub(super) bytes: usize,
+    pub(super) unbounded: bool,
+}
+
+pub(super) fn conservative_stack_scan_limit() -> ConservativeStackScanLimit {
+    match std::env::var("PERRY_CONSERVATIVE_STACK_MAX_BYTES") {
+        Ok(value) => {
+            let value = value.trim();
+            if matches!(
+                value.to_ascii_lowercase().as_str(),
+                "0" | "none" | "off" | "false" | "unbounded" | "unlimited"
+            ) {
+                return ConservativeStackScanLimit {
+                    bytes: 0,
+                    unbounded: true,
+                };
+            }
+            match value.parse::<usize>() {
+                Ok(bytes) if bytes > 0 => ConservativeStackScanLimit {
+                    bytes,
+                    unbounded: false,
+                },
+                _ => ConservativeStackScanLimit {
+                    bytes: DEFAULT_CONSERVATIVE_STACK_MAX_BYTES,
+                    unbounded: false,
+                },
+            }
+        }
+        Err(_) => ConservativeStackScanLimit {
+            bytes: DEFAULT_CONSERVATIVE_STACK_MAX_BYTES,
+            unbounded: false,
+        },
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ConservativeStackBounds {
+    pub(super) top: usize,
+    pub(super) bottom: usize,
+}
+
+pub(super) fn current_stack_top() -> Option<usize> {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        let sp: u64;
+        std::arch::asm!("mov {}, sp", out(reg) sp);
+        Some(sp as usize)
+    }
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        let sp: u64;
+        std::arch::asm!("mov {}, rsp", out(reg) sp);
+        Some(sp as usize)
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    {
+        None
+    }
+}
+
+pub(super) fn conservative_stack_bounds() -> Option<ConservativeStackBounds> {
+    let top = current_stack_top()?;
+    let bottom = get_stack_bottom();
+    if bottom == 0 || top >= bottom {
+        return None;
+    }
+    Some(ConservativeStackBounds { top, bottom })
+}
+
+pub(super) fn conservative_stack_scan_would_truncate() -> bool {
+    let limit = conservative_stack_scan_limit();
+    if limit.unbounded {
+        return false;
+    }
+    conservative_stack_bounds()
+        .map(|bounds| bounds.bottom.saturating_sub(bounds.top) > limit.bytes)
+        .unwrap_or(false)
 }
 
 /// Conservative stack scan: scan the current thread's stack for heap pointers.
@@ -399,8 +628,14 @@ pub(super) fn mark_stack_roots_for_decision(
 /// variables — codegen stores these as raw I64 words (not NaN-boxed) in registers and on stack.
 pub(super) fn mark_stack_roots_unchecked(
     valid_ptrs: &ValidPointerSet,
+    attribution: ConservativeRootSource,
 ) -> ConservativeRootTraceStats {
     let mut stats = ConservativeRootTraceStats::default();
+    let register_source = if attribution.is_compiled_frame() {
+        ConservativeRootSource::CompiledFrame
+    } else {
+        ConservativeRootSource::RegisterBuffer
+    };
     // Capture callee-saved registers into a buffer via setjmp.
     //
     // On Apple platforms the C `setjmp(3)` saves the signal mask via a
@@ -427,9 +662,16 @@ pub(super) fn mark_stack_roots_unchecked(
     }
 
     // Scan the register buffer (covers callee-saved regs: x19-x28 on AArch64, rbx/rbp/r12-r15 on x86_64)
+    stats.record_scan(
+        register_source,
+        std::mem::size_of_val(&jmp_buf),
+        std::mem::size_of_val(&jmp_buf),
+        false,
+        false,
+    );
     for &word in &jmp_buf {
-        if try_mark_value_or_raw(word, valid_ptrs) {
-            stats.root_count += 1;
+        if try_mark_conservative_value_or_raw(word, valid_ptrs, register_source) {
+            stats.record_root(register_source);
         }
     }
 
@@ -481,45 +723,57 @@ pub(super) fn mark_stack_roots_unchecked(
             buf = in(reg) fp_regs.as_mut_ptr(),
             options(nostack, preserves_flags),
         );
+        let fp_source = if attribution.is_compiled_frame() {
+            ConservativeRootSource::CompiledFrame
+        } else {
+            ConservativeRootSource::FpRegisterBuffer
+        };
+        stats.record_scan(
+            fp_source,
+            std::mem::size_of_val(&fp_regs),
+            std::mem::size_of_val(&fp_regs),
+            false,
+            false,
+        );
         for &word in &fp_regs {
-            if try_mark_value_or_raw(word, valid_ptrs) {
-                stats.root_count += 1;
+            if try_mark_conservative_value_or_raw(word, valid_ptrs, fp_source) {
+                stats.record_root(fp_source);
             }
         }
     }
 
-    // Get stack bounds
-    let stack_top: usize;
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        let sp: u64;
-        std::arch::asm!("mov {}, sp", out(reg) sp);
-        stack_top = sp as usize;
-    }
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        let sp: u64;
-        std::arch::asm!("mov {}, rsp", out(reg) sp);
-        stack_top = sp as usize;
-    }
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-    {
-        // Fallback: skip stack scan on unsupported architectures
+    let Some(bounds) = conservative_stack_bounds() else {
         return stats;
-    }
-
-    let stack_bottom = get_stack_bottom();
-    if stack_bottom == 0 {
-        return stats; // Can't determine stack bounds
-    }
+    };
+    let limit = conservative_stack_scan_limit();
+    let full_stack_bytes = bounds.bottom.saturating_sub(bounds.top);
+    let scan_bytes = if limit.unbounded {
+        full_stack_bytes
+    } else {
+        full_stack_bytes.min(limit.bytes)
+    };
+    let truncated = !limit.unbounded && full_stack_bytes > limit.bytes;
+    let stack_source = if attribution.is_compiled_frame() {
+        ConservativeRootSource::CompiledFrame
+    } else {
+        ConservativeRootSource::RuntimeStack
+    };
+    stats.record_scan(
+        stack_source,
+        scan_bytes,
+        limit.bytes,
+        truncated,
+        limit.unbounded,
+    );
 
     // Walk the stack from current SP to stack bottom.
     // Each 8-byte word may be: NaN-boxed pointer, raw I64 heap pointer, return addr, or plain value.
-    let mut addr = stack_top;
-    while addr < stack_bottom {
+    let mut addr = bounds.top;
+    let stack_scan_end = bounds.top.saturating_add(scan_bytes);
+    while addr < stack_scan_end {
         let word = unsafe { *(addr as *const u64) };
-        if try_mark_value_or_raw(word, valid_ptrs) {
-            stats.root_count += 1;
+        if try_mark_conservative_value_or_raw(word, valid_ptrs, stack_source) {
+            stats.record_root(stack_source);
         }
         addr += 8;
     }
@@ -530,6 +784,53 @@ pub(super) fn mark_stack_roots_unchecked(
 /// Returns true if newly marked.
 /// This is used for conservative scanning where Perry stores raw I64 pointers (for is_string/
 /// is_array/is_pointer/is_closure vars) alongside NaN-boxed F64 values.
+#[inline]
+pub(super) fn try_mark_conservative_value_or_raw(
+    word: u64,
+    valid_ptrs: &ValidPointerSet,
+    source: ConservativeRootSource,
+) -> bool {
+    let tag = word & TAG_MASK;
+    let target = if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
+        let ptr_val = (word & POINTER_MASK) as usize;
+        if ptr_val == 0 || !valid_ptrs.maybe_contains(ptr_val) || !valid_ptrs.contains(&ptr_val) {
+            return false;
+        }
+        ptr_val
+    } else {
+        if tag >= 0x7FF8_0000_0000_0000 || !(0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&word) {
+            return false;
+        }
+        let raw_ptr = word as usize;
+        if !valid_ptrs.maybe_contains(raw_ptr)
+            && raw_ptr.saturating_sub(0x10_0000) > valid_ptrs.range_max
+        {
+            return false;
+        }
+        if valid_ptrs.contains(&raw_ptr) {
+            raw_ptr
+        } else {
+            match valid_ptrs.enclosing_object(raw_ptr) {
+                Some(start) => start,
+                None => return false,
+            }
+        }
+    };
+    unsafe {
+        let header = header_from_user_ptr(target as *const u8);
+        if (*header).gc_flags & GC_FLAG_MARKED != 0 {
+            return false;
+        }
+        if (*header).gc_flags & GC_FLAG_PINNED != 0 {
+            return false;
+        }
+        (*header).gc_flags |= GC_FLAG_MARKED;
+        push_mark_seed(header);
+        record_conservative_root_source_for_header(header, source);
+    }
+    true
+}
+
 #[inline]
 pub(super) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> bool {
     // First try NaN-boxed interpretation (POINTER_TAG / STRING_TAG / BIGINT_TAG)
@@ -748,7 +1049,7 @@ pub(super) enum RuntimeRootVisitMode<'a> {
     },
     Verify {
         valid_ptrs: &'a ValidPointerSet,
-        surface: &'static str,
+        surface: String,
     },
     Copy {
         mark: &'a mut dyn FnMut(f64),
@@ -797,11 +1098,11 @@ impl<'a> RuntimeRootVisitor<'a> {
         }
     }
 
-    pub(super) fn for_verify(valid_ptrs: &'a ValidPointerSet, surface: &'static str) -> Self {
+    pub(super) fn for_verify(valid_ptrs: &'a ValidPointerSet, surface: impl Into<String>) -> Self {
         Self {
             mode: RuntimeRootVisitMode::Verify {
                 valid_ptrs,
-                surface,
+                surface: surface.into(),
             },
         }
     }
@@ -847,7 +1148,7 @@ impl<'a> RuntimeRootVisitor<'a> {
                 surface,
             } => {
                 if let Some(new_bits) = try_rewrite_nanboxed_value(bits, valid_ptrs) {
-                    panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+                    panic_stale_forwarded_reference(surface.as_str(), 0, bits, new_bits);
                 }
                 None
             }
@@ -879,7 +1180,7 @@ impl<'a> RuntimeRootVisitor<'a> {
                 surface,
             } => {
                 if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
-                    panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+                    panic_stale_forwarded_reference(surface.as_str(), 0, bits, new_bits);
                 }
                 None
             }
@@ -920,7 +1221,7 @@ impl<'a> RuntimeRootVisitor<'a> {
             } => {
                 if let Some(new_addr) = try_rewrite_raw_addr(addr, valid_ptrs) {
                     panic_stale_forwarded_reference(
-                        surface,
+                        surface.as_str(),
                         0,
                         copy_tag | (addr as u64 & POINTER_MASK),
                         copy_tag | (new_addr as u64 & POINTER_MASK),
@@ -950,11 +1251,39 @@ impl<'a> RuntimeRootVisitor<'a> {
                 surface,
             } => {
                 if let Some(new_addr) = try_rewrite_raw_addr(addr, valid_ptrs) {
-                    panic_stale_forwarded_reference(surface, 0, addr as u64, new_addr as u64);
+                    panic_stale_forwarded_reference(
+                        surface.as_str(),
+                        0,
+                        addr as u64,
+                        new_addr as u64,
+                    );
                 }
                 None
             }
             RuntimeRootVisitMode::Mark { .. } | RuntimeRootVisitMode::Copy { .. } => None,
+        }
+    }
+
+    #[inline]
+    pub(super) fn visit_metadata_heap_word_bits(&mut self, bits: u64) -> Option<u64> {
+        match &mut self.mode {
+            RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_value(bits, valid_ptrs),
+            RuntimeRootVisitMode::CopyingRewrite { collector } => {
+                collector.rewrite_value_bits(bits)
+            }
+            RuntimeRootVisitMode::Verify {
+                valid_ptrs,
+                surface,
+            } => {
+                if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
+                    panic_stale_forwarded_reference(surface.as_str(), 0, bits, new_bits);
+                }
+                None
+            }
+            RuntimeRootVisitMode::Mark { .. }
+            | RuntimeRootVisitMode::CopyingCheck { .. }
+            | RuntimeRootVisitMode::CopyingMark { .. }
+            | RuntimeRootVisitMode::Copy { .. } => None,
         }
     }
 
@@ -988,6 +1317,17 @@ impl<'a> RuntimeRootVisitor<'a> {
     /// whose keys are bit copies of closure captures or object fields.
     pub fn visit_heap_word_u64_slot(&mut self, slot: &mut u64) -> bool {
         if let Some(new_bits) = self.visit_heap_word_bits(*slot) {
+            *slot = new_bits;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a metadata-only heap word. The word may be NaN-boxed or raw,
+    /// and is rewritten after movement without being marked as a root.
+    pub fn visit_metadata_heap_word_u64_slot(&mut self, slot: &mut u64) -> bool {
+        if let Some(new_bits) = self.visit_metadata_heap_word_bits(*slot) {
             *slot = new_bits;
             true
         } else {
@@ -1580,22 +1920,28 @@ pub(super) fn mark_copy_only_scanner_bits(
 
 #[inline]
 pub(super) fn record_copy_only_scanner_mark_emission(
+    source: &str,
     bits: u64,
     valid_ptrs: &ValidPointerSet,
     legacy_stats: &mut LegacyRootTraceStats,
 ) {
     legacy_stats.emitted_roots += 1;
+    legacy_stats.source_mut(source).emitted_roots += 1;
     let Some(header) = nanboxed_root_header(bits, valid_ptrs) else {
         legacy_stats.malformed_roots += 1;
+        legacy_stats.source_mut(source).malformed_roots += 1;
         return;
     };
     let user = unsafe { (header as *mut u8).add(GC_HEADER_SIZE) as usize };
     if crate::arena::pointer_in_nursery(user) {
         legacy_stats.emitted_young_roots += 1;
+        legacy_stats.source_mut(source).emitted_young_roots += 1;
     } else if MALLOC_STATE.with(|s| s.borrow().objects.iter().any(|&tracked| tracked == header)) {
         legacy_stats.emitted_malloc_roots += 1;
+        legacy_stats.source_mut(source).emitted_malloc_roots += 1;
     } else {
         legacy_stats.emitted_old_roots += 1;
+        legacy_stats.source_mut(source).emitted_old_roots += 1;
     }
 }
 
@@ -1603,6 +1949,7 @@ pub(super) struct RegisteredRootMarkContext {
     pub(super) valid_ptrs: *const ValidPointerSet,
     pub(super) pin_discoveries: bool,
     pub(super) legacy_stats: *mut LegacyRootTraceStats,
+    pub(super) source: String,
 }
 
 pub(super) extern "C" fn perry_ffi_visit_mutable_root_slot(
@@ -1633,20 +1980,27 @@ pub(super) extern "C" fn perry_ffi_visit_mutable_root_slot(
 }
 
 pub(super) fn visit_ffi_mutable_registered_roots(visitor: &mut RuntimeRootVisitor<'_>) {
-    let scanners: Vec<PerryFfiMutableRootScanner> =
+    let scanners: Vec<FfiMutableRootScannerRegistration> =
         FFI_MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let named_scanners: Vec<FfiNamedMutableRootScannerRegistration> =
+        FFI_NAMED_MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
     let ctx = visitor as *mut RuntimeRootVisitor<'_> as *mut c_void;
-    for scanner in scanners {
-        scanner(perry_ffi_visit_mutable_root_slot, ctx);
+    for registration in scanners {
+        (registration.scanner)(perry_ffi_visit_mutable_root_slot, ctx);
+    }
+    for registration in named_scanners {
+        let (scanner, scanner_id) = registration.scanner;
+        scanner(scanner_id, perry_ffi_visit_mutable_root_slot, ctx);
     }
 }
 
 /// Run registered runtime-owned scanners that expose mutable slots.
 pub(super) fn mark_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
-    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let scanners: Vec<MutableRootScannerRegistration> =
+        MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
     let mut visitor = RuntimeRootVisitor::for_mark(valid_ptrs);
-    for scanner in scanners {
-        scanner(&mut visitor);
+    for registration in scanners {
+        (registration.scanner)(&mut visitor);
     }
     visit_ffi_mutable_registered_roots(&mut visitor);
 }
@@ -1660,19 +2014,28 @@ pub(super) fn mark_registered_roots(
 ) -> LegacyRootTraceStats {
     let mut legacy_stats = LegacyRootTraceStats::default();
     // Collect scanners first to avoid borrow conflicts
-    let scanners: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
-    let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let scanners: Vec<CopyOnlyRootScannerRegistration> = ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let ffi_scanners: Vec<FfiCopyOnlyRootScannerRegistration> =
+        FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
     legacy_stats.registered_rust_scanners = scanners.len();
     legacy_stats.registered_ffi_scanners = ffi_scanners.len();
 
-    for scanner in scanners {
-        scanner(&mut |value: f64| {
-            record_copy_only_scanner_mark_emission(value.to_bits(), valid_ptrs, &mut legacy_stats);
+    for registration in scanners {
+        (registration.scanner)(&mut |value: f64| {
+            record_copy_only_scanner_mark_emission(
+                &registration.source,
+                value.to_bits(),
+                valid_ptrs,
+                &mut legacy_stats,
+            );
             if let Some(bytes) =
                 mark_copy_only_scanner_bits(value.to_bits(), valid_ptrs, pin_discoveries)
             {
                 legacy_stats.pinned_roots += 1;
                 legacy_stats.pinned_bytes += bytes;
+                let source_stats = legacy_stats.source_mut(&registration.source);
+                source_stats.pinned_roots += 1;
+                source_stats.pinned_bytes += bytes;
             }
         });
     }
@@ -1681,10 +2044,12 @@ pub(super) fn mark_registered_roots(
         valid_ptrs: valid_ptrs as *const ValidPointerSet,
         pin_discoveries,
         legacy_stats: &mut legacy_stats as *mut LegacyRootTraceStats,
+        source: UNATTRIBUTED_ROOT_SOURCE.to_string(),
     };
-    let ctx = &mut ctx as *mut RegisteredRootMarkContext as *mut c_void;
-    for scanner in ffi_scanners {
-        scanner(perry_ffi_mark_root, ctx);
+    for registration in ffi_scanners {
+        ctx.source = registration.source.clone();
+        let ctx_ptr = &mut ctx as *mut RegisteredRootMarkContext as *mut c_void;
+        (registration.scanner)(perry_ffi_mark_root, ctx_ptr);
     }
     legacy_stats
 }
@@ -1701,6 +2066,7 @@ pub(super) extern "C" fn perry_ffi_mark_root(value: f64, ctx: *mut c_void) {
     if !ctx.legacy_stats.is_null() {
         unsafe {
             record_copy_only_scanner_mark_emission(
+                &ctx.source,
                 value.to_bits(),
                 valid_ptrs,
                 &mut *ctx.legacy_stats,
@@ -1714,6 +2080,9 @@ pub(super) extern "C" fn perry_ffi_mark_root(value: f64, ctx: *mut c_void) {
             unsafe {
                 (*ctx.legacy_stats).pinned_roots += 1;
                 (*ctx.legacy_stats).pinned_bytes += bytes;
+                let source_stats = (*ctx.legacy_stats).source_mut(&ctx.source);
+                source_stats.pinned_roots += 1;
+                source_stats.pinned_bytes += bytes;
             }
         }
     }

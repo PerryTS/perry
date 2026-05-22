@@ -141,7 +141,10 @@ static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 /// shape as `ws.rs::ensure_gc_scanner_registered`.
 fn ensure_gc_registered() {
     GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_mutable_root_scanner(scan_stream_roots_mut);
+        perry_runtime::gc::gc_register_mutable_root_scanner_named(
+            "stdlib:streams",
+            scan_stream_roots_mut,
+        );
     });
 }
 

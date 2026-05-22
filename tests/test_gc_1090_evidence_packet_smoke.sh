@@ -42,4 +42,6 @@ for name in ("bench_json_roundtrip", "bench_gc_pressure", "07_object_create", "1
 head = packet["copied_minor"]["head"]["summary"]
 assert "fallback_reason_counts" in head
 assert "conservative_pinned_bytes" in head
+assert "compiled_frame_conservative_pinned_bytes" in head
+assert "conservative_stack_truncated_cycles" in head
 PY

@@ -72,7 +72,7 @@ static WS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 #[cfg(not(target_os = "ios"))]
 fn ensure_gc_scanner_registered() {
     WS_GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_mutable_root_scanner(scan_ws_roots_mut);
+        perry_runtime::gc::gc_register_mutable_root_scanner_named("stdlib:ws", scan_ws_roots_mut);
     });
 }
 

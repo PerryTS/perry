@@ -710,10 +710,11 @@ pub(super) fn rewrite_mutable_root_slots(
 }
 
 pub(super) fn rewrite_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
-    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let scanners: Vec<MutableRootScannerRegistration> =
+        MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
     let mut visitor = RuntimeRootVisitor::for_rewrite(valid_ptrs);
-    for scanner in scanners {
-        scanner(&mut visitor);
+    for registration in scanners {
+        (registration.scanner)(&mut visitor);
     }
     visit_ffi_mutable_registered_roots(&mut visitor);
 }
@@ -735,12 +736,36 @@ pub(super) fn verify_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
 }
 
 pub(super) fn verify_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
-    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
-    let mut visitor = RuntimeRootVisitor::for_verify(valid_ptrs, "runtime mutable root scanner");
-    for scanner in scanners {
-        scanner(&mut visitor);
+    let scanners: Vec<MutableRootScannerRegistration> =
+        MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for registration in scanners {
+        let mut visitor = RuntimeRootVisitor::for_verify(
+            valid_ptrs,
+            format!("runtime mutable root scanner:{}", registration.source),
+        );
+        (registration.scanner)(&mut visitor);
     }
-    visit_ffi_mutable_registered_roots(&mut visitor);
+    let ffi_scanners: Vec<FfiMutableRootScannerRegistration> =
+        FFI_MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for registration in ffi_scanners {
+        let mut visitor = RuntimeRootVisitor::for_verify(
+            valid_ptrs,
+            format!("runtime mutable root scanner:{}", registration.source),
+        );
+        let ctx = &mut visitor as *mut RuntimeRootVisitor<'_> as *mut c_void;
+        (registration.scanner)(perry_ffi_visit_mutable_root_slot, ctx);
+    }
+    let named_ffi_scanners: Vec<FfiNamedMutableRootScannerRegistration> =
+        FFI_NAMED_MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for registration in named_ffi_scanners {
+        let mut visitor = RuntimeRootVisitor::for_verify(
+            valid_ptrs,
+            format!("runtime mutable root scanner:{}", registration.source),
+        );
+        let ctx = &mut visitor as *mut RuntimeRootVisitor<'_> as *mut c_void;
+        let (scanner, scanner_id) = registration.scanner;
+        scanner(scanner_id, perry_ffi_visit_mutable_root_slot, ctx);
+    }
 }
 
 pub(super) fn verify_copy_only_scanner_bits(
@@ -770,20 +795,21 @@ pub(super) extern "C" fn perry_ffi_verify_root(value: f64, ctx: *mut c_void) {
 }
 
 pub(super) fn verify_copy_only_registered_roots(valid_ptrs: &ValidPointerSet) {
-    let scanners: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
-    for scanner in scanners {
-        scanner(&mut |value: f64| {
+    let scanners: Vec<CopyOnlyRootScannerRegistration> = ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for registration in scanners {
+        (registration.scanner)(&mut |value: f64| {
             verify_copy_only_scanner_bits(value.to_bits(), valid_ptrs, "copy-only root scanner");
         });
     }
 
-    let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let ffi_scanners: Vec<FfiCopyOnlyRootScannerRegistration> =
+        FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
     let mut ctx = RegisteredRootVerifyContext {
         valid_ptrs: valid_ptrs as *const ValidPointerSet,
     };
     let ctx = &mut ctx as *mut RegisteredRootVerifyContext as *mut c_void;
-    for scanner in ffi_scanners {
-        scanner(perry_ffi_verify_root, ctx);
+    for registration in ffi_scanners {
+        (registration.scanner)(perry_ffi_verify_root, ctx);
     }
 }
 
