@@ -5,7 +5,7 @@
 
 use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 
-use crate::common::async_bridge::{queue_promise_resolution, spawn};
+use crate::common::async_bridge::{queue_deferred_resolution, queue_promise_resolution, spawn};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -33,7 +33,7 @@ pub unsafe extern "C" fn js_bcrypt_hash(
         None => {
             let err_msg = "Password is null or invalid UTF-8";
             let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-            let err_bits = JSValue::pointer(err_str as *const u8).bits();
+            let err_bits = JSValue::string_ptr(err_str).bits();
             queue_promise_resolution(promise_ptr, false, err_bits);
             return promise;
         }
@@ -47,21 +47,34 @@ pub unsafe extern "C" fn js_bcrypt_hash(
 
         match result {
             Ok(Ok(hash)) => {
-                let hash_str = js_string_from_bytes(hash.as_ptr(), hash.len() as u32);
-                let result_bits = JSValue::pointer(hash_str as *const u8).bits();
-                queue_promise_resolution(promise_ptr, true, result_bits);
+                // #1292: build the JS string on the MAIN thread (deferred)
+                // and tag it STRING_TAG via `string_ptr`. The old path used
+                // `JSValue::pointer` (POINTER_TAG) and allocated on the tokio
+                // worker arena, so the awaited result was a string-like
+                // *object*: `typeof === "object"`, `+`/`String()` coerced to
+                // "[object Object]", and mysql2 prepared-binding serialized
+                // the object representation (>255 bytes) instead of the
+                // 60-char hash. `queue_deferred_resolution` runs the closure
+                // on the main thread so the StringHeader lands in the main
+                // arena. See common::async_bridge for the arena rationale.
+                queue_deferred_resolution(promise_ptr, true, move || {
+                    let hash_str = js_string_from_bytes(hash.as_ptr(), hash.len() as u32);
+                    JSValue::string_ptr(hash_str).bits()
+                });
             }
             Ok(Err(e)) => {
                 let err_msg = format!("Bcrypt error: {}", e);
-                let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-                let err_bits = JSValue::pointer(err_str as *const u8).bits();
-                queue_promise_resolution(promise_ptr, false, err_bits);
+                queue_deferred_resolution(promise_ptr, false, move || {
+                    let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                    JSValue::string_ptr(err_str).bits()
+                });
             }
             Err(e) => {
                 let err_msg = format!("Task error: {}", e);
-                let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-                let err_bits = JSValue::pointer(err_str as *const u8).bits();
-                queue_promise_resolution(promise_ptr, false, err_bits);
+                queue_deferred_resolution(promise_ptr, false, move || {
+                    let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                    JSValue::string_ptr(err_str).bits()
+                });
             }
         }
     });
@@ -84,7 +97,7 @@ pub unsafe extern "C" fn js_bcrypt_compare(
         None => {
             let err_msg = "Password is null or invalid UTF-8";
             let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-            let err_bits = JSValue::pointer(err_str as *const u8).bits();
+            let err_bits = JSValue::string_ptr(err_str).bits();
             queue_promise_resolution(promise_ptr, false, err_bits);
             return promise;
         }
@@ -95,7 +108,7 @@ pub unsafe extern "C" fn js_bcrypt_compare(
         None => {
             let err_msg = "Hash is null or invalid UTF-8";
             let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-            let err_bits = JSValue::pointer(err_str as *const u8).bits();
+            let err_bits = JSValue::string_ptr(err_str).bits();
             queue_promise_resolution(promise_ptr, false, err_bits);
             return promise;
         }
@@ -117,15 +130,17 @@ pub unsafe extern "C" fn js_bcrypt_compare(
             }
             Ok(Err(e)) => {
                 let err_msg = format!("Bcrypt verify error: {}", e);
-                let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-                let err_bits = JSValue::pointer(err_str as *const u8).bits();
-                queue_promise_resolution(promise_ptr, false, err_bits);
+                queue_deferred_resolution(promise_ptr, false, move || {
+                    let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                    JSValue::string_ptr(err_str).bits()
+                });
             }
             Err(e) => {
                 let err_msg = format!("Task error: {}", e);
-                let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-                let err_bits = JSValue::pointer(err_str as *const u8).bits();
-                queue_promise_resolution(promise_ptr, false, err_bits);
+                queue_deferred_resolution(promise_ptr, false, move || {
+                    let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                    JSValue::string_ptr(err_str).bits()
+                });
             }
         }
     });
@@ -165,20 +180,26 @@ pub unsafe extern "C" fn js_bcrypt_gen_salt(rounds: f64) -> *mut perry_runtime::
 
         match result {
             Ok(Ok(salt)) => {
-                let salt_str = js_string_from_bytes(salt.as_ptr(), salt.len() as u32);
-                let result_bits = JSValue::pointer(salt_str as *const u8).bits();
-                queue_promise_resolution(promise_ptr, true, result_bits);
+                // #1292: same as `js_bcrypt_hash` — defer string creation to
+                // the main thread and tag STRING_TAG so the salt awaits as a
+                // real JS string, not a string-like object.
+                queue_deferred_resolution(promise_ptr, true, move || {
+                    let salt_str = js_string_from_bytes(salt.as_ptr(), salt.len() as u32);
+                    JSValue::string_ptr(salt_str).bits()
+                });
             }
             Ok(Err(e)) => {
-                let err_str = js_string_from_bytes(e.as_ptr(), e.len() as u32);
-                let err_bits = JSValue::pointer(err_str as *const u8).bits();
-                queue_promise_resolution(promise_ptr, false, err_bits);
+                queue_deferred_resolution(promise_ptr, false, move || {
+                    let err_str = js_string_from_bytes(e.as_ptr(), e.len() as u32);
+                    JSValue::string_ptr(err_str).bits()
+                });
             }
             Err(e) => {
                 let err_msg = format!("Task error: {}", e);
-                let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-                let err_bits = JSValue::pointer(err_str as *const u8).bits();
-                queue_promise_resolution(promise_ptr, false, err_bits);
+                queue_deferred_resolution(promise_ptr, false, move || {
+                    let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                    JSValue::string_ptr(err_str).bits()
+                });
             }
         }
     });
