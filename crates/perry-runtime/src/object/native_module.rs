@@ -1098,6 +1098,7 @@ pub(crate) unsafe fn get_native_module_constant(
         // they share this arm (distinct property names, no collision).
         "perf_hooks" => match property {
             "timeOrigin" => Some(crate::perf_hooks::time_origin_ms()),
+            "nodeTiming" => Some(crate::perf_hooks::js_perf_node_timing()),
             "NODE_PERFORMANCE_GC_MAJOR" => Some(4.0),
             "NODE_PERFORMANCE_GC_MINOR" => Some(1.0),
             "NODE_PERFORMANCE_GC_INCREMENTAL" => Some(8.0),

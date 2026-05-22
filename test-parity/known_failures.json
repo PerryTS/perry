@@ -38,12 +38,6 @@
     "category": "bug-open",
     "reason": "node:perf_hooks: createHistogram() unimplemented (not a function). Flips to PASS when #1336 lands."
   },
-  "node-suite/perf_hooks/node-timing/node-timing": {
-    "issue": "1337",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: performance.nodeTiming (PerformanceNodeTiming) unimplemented (not an object). Flips to PASS when #1337 lands."
-  },
   "node-suite/perf_hooks/entry/to-json": {
     "issue": "1387",
     "added": "2026-05-22",

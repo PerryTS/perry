@@ -40,6 +40,10 @@ const ELU_KEYS: &[u8] = b"idle\0active\0utilization\0";
 const TOJSON_SHAPE: u32 = 0x7FFF_FF42;
 const TOJSON_KEYS: &[u8] = b"timeOrigin\0";
 
+/// Shape id + keys for `performance.nodeTiming` (PerformanceNodeTiming entry).
+const NODE_TIMING_SHAPE: u32 = 0x7FFF_FF43;
+const NODE_TIMING_KEYS: &[u8] = b"name\0entryType\0startTime\0duration\0nodeStart\0v8Start\0bootstrapComplete\0environment\0loopStart\0loopExit\0idleTime\0";
+
 #[derive(Clone)]
 struct PerfEntry {
     name: String,
@@ -514,6 +518,40 @@ pub extern "C" fn js_perf_to_json() -> f64 {
             TOJSON_KEYS.len() as u32,
         );
         js_object_set_field(obj, 0, JSValue::number(time_origin_ms()));
+        crate::value::js_nanbox_pointer(obj as i64)
+    }
+}
+
+// ── performance.nodeTiming (PerformanceNodeTiming) ───────────────────────────
+/// A PerformanceNodeTiming entry (entryType "node") exposing the Node bootstrap
+/// milestones. Perry has no libuv bootstrap to instrument, so the milestones
+/// are 0 relative to timeOrigin (loopStart reflects time since origin, loopExit
+/// is -1 while the loop is running); every field is numeric, matching Node's
+/// shape.
+#[no_mangle]
+pub extern "C" fn js_perf_node_timing() -> f64 {
+    unsafe {
+        let obj = js_object_alloc_with_shape(
+            NODE_TIMING_SHAPE,
+            11,
+            NODE_TIMING_KEYS.as_ptr(),
+            NODE_TIMING_KEYS.len() as u32,
+        );
+        js_object_set_field(obj, 0, str_value("node")); // name
+        js_object_set_field(obj, 1, str_value("node")); // entryType
+        js_object_set_field(obj, 2, JSValue::number(0.0)); // startTime
+        js_object_set_field(obj, 3, JSValue::number(0.0)); // duration
+        js_object_set_field(obj, 4, JSValue::number(0.0)); // nodeStart
+        js_object_set_field(obj, 5, JSValue::number(0.0)); // v8Start
+        js_object_set_field(obj, 6, JSValue::number(0.0)); // bootstrapComplete
+        js_object_set_field(obj, 7, JSValue::number(0.0)); // environment
+        js_object_set_field(
+            obj,
+            8,
+            JSValue::number((perf_now() - time_origin_ms()).max(0.0)),
+        ); // loopStart
+        js_object_set_field(obj, 9, JSValue::number(-1.0)); // loopExit (loop running)
+        js_object_set_field(obj, 10, JSValue::number(0.0)); // idleTime
         crate::value::js_nanbox_pointer(obj as i64)
     }
 }
