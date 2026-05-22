@@ -38,6 +38,23 @@ pub fn try_lower_extern_func_call(
     else {
         return Ok(None);
     };
+    // Issue #1317: when `name` is bound to a named import from a Node
+    // submodule Perry recognizes but doesn't yet back with a real impl
+    // (`node:timers/promises`, `node:readline/promises`,
+    // `node:stream/promises`, `node:stream/consumers`, `node:sys`), the
+    // shadowing import collides with global names like `setTimeout`/
+    // `setInterval`/`setImmediate`. Without this guard, e.g.
+    // `import { setTimeout } from "node:timers/promises";
+    //  await setTimeout(1, { a: 1 }, { ref: false })`
+    // would lower to the global `setTimeout(fn, delay, ...args)` fast
+    // path below — handing `1` to `js_set_timeout_callback_args` as if
+    // it were a callback handle and segfaulting on the next dispatch.
+    // Skip the fast-path table so the call falls through to the regular
+    // closure-dispatch lowering, which invokes the named-import
+    // singleton's thunk (raising the "not yet implemented" error).
+    if ctx.import_function_node_submodule.contains_key(name) {
+        return Ok(None);
+    }
     match name.as_str() {
         "setTimeout" if args.len() == 2 => {
             let cb_box = lower_expr(ctx, &args[0])?;
