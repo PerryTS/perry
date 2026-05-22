@@ -731,9 +731,39 @@ pub(super) fn build_ios_app_bundle(
                 );
             }
             println!();
-            println!("To run on iOS Simulator:");
-            println!("  xcrun simctl install booted {}", app_dir.display());
-            println!("  xcrun simctl launch booted {}", bundle_id);
+            if matches!(target, Some("ios")) {
+                // Physical-device target: dev-sign the bundle when a development
+                // profile + matching identity are already provisioned locally
+                // (via `perry setup ios --development`), then print the on-device
+                // install/launch path. A plain compile without those materials
+                // leaves the bundle unsigned and just prints instructions.
+                let config = crate::commands::publish::load_config();
+                let signed =
+                    crate::commands::run::try_sign_existing_dev_profile(&app_dir, &config, format)
+                        .unwrap_or(false);
+                if !signed {
+                    println!(
+                        "Bundle is unsigned — `perry run --target ios` dev-signs it automatically."
+                    );
+                    println!("First-time device provisioning: perry setup ios --development");
+                    println!();
+                }
+                println!("To install + launch on a connected device:");
+                println!("  perry run --target ios");
+                println!("Or manually (find <UDID> with `xcrun devicectl list devices`):");
+                println!(
+                    "  xcrun devicectl device install app --device <UDID> {}",
+                    app_dir.display()
+                );
+                println!(
+                    "  xcrun devicectl device process launch --device <UDID> {}",
+                    bundle_id
+                );
+            } else {
+                println!("To run on iOS Simulator:");
+                println!("  xcrun simctl install booted {}", app_dir.display());
+                println!("  xcrun simctl launch booted {}", bundle_id);
+            }
         }
         OutputFormat::Json => {
             let result = serde_json::json!({

@@ -799,3 +799,125 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
 
     Ok(())
 }
+
+/// `perry setup ios --development` — provision the connected device for
+/// on-device development (issue #1301).
+///
+/// Reuses the App Store Connect credentials stored by a prior `perry setup ios`
+/// to register the connected device's UDID and mint an "iOS App Development"
+/// provisioning profile for the project's bundle ID, saved next to the
+/// distribution profile at `~/.perry/<bundle>_dev.mobileprovision`. The existing
+/// `perry run --target ios` / `perry compile --target ios` paths auto-discover
+/// that profile and dev-sign the bundle, so no perry.toml distribution fields
+/// are clobbered here.
+pub fn ios_development_setup(saved: &PerryConfig) -> Result<()> {
+    println!("  {}", style("iOS Development Provisioning").bold());
+    println!("  Registers your connected device and creates an iOS App Development profile");
+    println!("  via App Store Connect (reuses the credentials from `perry setup ios`).");
+    println!();
+
+    // --- Require stored App Store Connect credentials ---
+    let apple = saved.apple.as_ref().ok_or_else(|| {
+        anyhow!(
+            "No Apple credentials found in ~/.perry/config.toml.\n\
+             Run `perry setup ios` first to store your App Store Connect API key."
+        )
+    })?;
+    let team_id = apple
+        .team_id
+        .clone()
+        .ok_or_else(|| anyhow!("Missing apple.team_id — run `perry setup ios` first."))?;
+    if apple.key_id.is_none() || apple.issuer_id.is_none() || apple.p8_key_path.is_none() {
+        bail!(
+            "Incomplete App Store Connect credentials in ~/.perry/config.toml.\n\
+             Run `perry setup ios` to (re)configure key_id, issuer_id, and the .p8 key."
+        );
+    }
+
+    // --- Resolve the project bundle ID from perry.toml ---
+    let perry_toml_path = std::env::current_dir()?.join("perry.toml");
+    let toml_bundle_id = if perry_toml_path.exists() {
+        let content = std::fs::read_to_string(&perry_toml_path)?;
+        toml::from_str::<toml::Value>(&content)
+            .ok()
+            .and_then(|parsed| {
+                parsed
+                    .get("ios")
+                    .and_then(|i| i.get("bundle_id"))
+                    .or_else(|| parsed.get("app").and_then(|a| a.get("bundle_id")))
+                    .or_else(|| parsed.get("project").and_then(|p| p.get("bundle_id")))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+    } else {
+        None
+    };
+
+    let bundle_id = match toml_bundle_id {
+        Some(bid) => {
+            println!("  Bundle ID: {}", style(&bid).bold());
+            bid
+        }
+        None if is_interactive() => Input::<String>::new()
+            .with_prompt("  Bundle ID (e.g. com.company.app)")
+            .interact_text()?,
+        None => bail!(
+            "No bundle ID found in perry.toml ([ios]/[app]/[project].bundle_id).\n\
+             Add one or run this command interactively."
+        ),
+    };
+    println!();
+
+    // --- Detect / pick the connected device ---
+    let devices = crate::commands::run::detect_ios_devices()?;
+    if devices.is_empty() {
+        bail!(
+            "No connected iOS device found.\n\
+             Connect your iPhone/iPad via USB (and trust this computer), then retry.\n\
+             Verify with: xcrun devicectl list devices"
+        );
+    }
+    let udid = if devices.len() == 1 {
+        println!(
+            "  Device: {} ({})",
+            style(&devices[0].name).bold(),
+            style(&devices[0].udid).dim()
+        );
+        devices[0].udid.clone()
+    } else {
+        crate::commands::run::pick_device(&devices, "device to provision")?
+    };
+    println!();
+
+    // --- Register the device + mint the development profile via the ASC API ---
+    let rt = tokio::runtime::Runtime::new()?;
+    let profile_data = rt.block_on(crate::commands::run::create_dev_profile_via_api(
+        saved,
+        &bundle_id,
+        &team_id,
+        &udid,
+        crate::OutputFormat::Text,
+    ))?;
+
+    let save_path = dirs::home_dir().map(|h| {
+        h.join(".perry").join(format!(
+            "{}_dev.mobileprovision",
+            bundle_id.replace('.', "_")
+        ))
+    });
+
+    println!();
+    println!(
+        "  {} Development profile ready ({} bytes).",
+        style("✓").green().bold(),
+        profile_data.len()
+    );
+    if let Some(p) = &save_path {
+        println!("  Saved to {}", style(p.display()).dim());
+    }
+    println!();
+    println!("  Build, sign, install, and launch on your device with:");
+    println!("    {}", style("perry run --target ios").bold());
+
+    Ok(())
+}

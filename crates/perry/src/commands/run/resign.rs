@@ -16,9 +16,62 @@ pub async fn resign_for_development(
     // Read bundle ID from Info.plist
     let bundle_id = read_bundle_id_from_app(app_dir).unwrap_or_else(|| "com.perry.app".to_string());
 
-    // Find all development signing identities (we'll pick the right one after
-    // determining the provisioning profile, since the profile must contain the
-    // certificate matching the signing identity)
+    // Use team ID from saved config (NOT from the identity name — the parenthesized
+    // part in "Apple Development: Name (XXXXX)" is a personal cert ID, not the team ID)
+    let team_id = config
+        .apple
+        .as_ref()
+        .and_then(|a| a.team_id.clone())
+        .ok_or_else(|| {
+            anyhow!("No Apple team ID in ~/.perry/config.toml — run `perry setup ios` first")
+        })?;
+
+    // Pick the Apple Development identity that belongs to our team. The cert ID
+    // in the name (e.g. RY57F22743) is NOT the team ID, so this verifies the
+    // TeamIdentifier each candidate hash produces via a test codesign.
+    let (identity_hash, identity) = find_dev_identity_for_team(&team_id)?;
+
+    if let OutputFormat::Text = format {
+        println!(
+            "Re-signing for development (team {}, {})...",
+            style(&team_id).dim(),
+            style(&identity).dim()
+        );
+    }
+
+    // Step 1: Find or create a development provisioning profile
+    let profile_data = if let Some(path) = find_system_dev_profile(&bundle_id, &team_id) {
+        if let OutputFormat::Text = format {
+            println!(
+                "  Using existing dev profile: {}",
+                style(path.display()).dim()
+            );
+        }
+        std::fs::read(&path)?
+    } else {
+        // Create via App Store Connect API
+        if let OutputFormat::Text = format {
+            println!("  Creating development provisioning profile via App Store Connect...");
+        }
+        create_dev_profile_via_api(config, &bundle_id, &team_id, device_udid, format)
+            .await
+            .context(
+                "Could not create development provisioning profile.\n\
+                 Ensure your App Store Connect API key has the right permissions,\n\
+                 or use a simulator instead: perry run ios --simulator <UDID>",
+            )?
+    };
+
+    // Step 2: Embed the profile and code-sign for development.
+    embed_profile_and_sign(app_dir, &team_id, &bundle_id, &identity_hash, &profile_data)?;
+
+    Ok(())
+}
+
+/// Locate the Apple Development signing identity (hash + display name) in the
+/// Keychain that belongs to `team_id`. Returns distinct errors for "no dev
+/// identity at all" vs. "none matching this team" so callers can guide the user.
+pub fn find_dev_identity_for_team(team_id: &str) -> Result<(String, String)> {
     let output = Command::new("security")
         .args(["find-identity", "-v", "-p", "codesigning"])
         .output()
@@ -55,102 +108,79 @@ pub async fn resign_for_development(
         );
     }
 
-    // Use team ID from saved config (NOT from the identity name — the parenthesized
-    // part in "Apple Development: Name (XXXXX)" is a personal cert ID, not the team ID)
-    let team_id = config
-        .apple
-        .as_ref()
-        .and_then(|a| a.team_id.clone())
-        .ok_or_else(|| {
-            anyhow!("No Apple team ID in ~/.perry/config.toml — run `perry setup ios` first")
-        })?;
-
-    // Pick the identity that belongs to our team by checking TeamIdentifier
-    // via a test codesign. The cert ID in the name (e.g. RY57F22743) is NOT
-    // the team ID — we must verify which hash produces the right TeamIdentifier.
-    let identity_hash = find_identity_for_team(&dev_identities, &team_id).ok_or_else(|| {
+    let identity_hash = find_identity_for_team(&dev_identities, team_id).ok_or_else(|| {
         anyhow!(
             "No Apple Development certificate for team {team_id} found in Keychain.\n\
              Use Xcode to set up development signing for this team."
         )
     })?;
-    let identity = dev_identities
+    let name = dev_identities
         .iter()
         .find(|(h, _)| h == &identity_hash)
         .map(|(_, n)| n.clone())
         .unwrap_or_else(|| identity_hash.clone());
+    Ok((identity_hash, name))
+}
 
-    if let OutputFormat::Text = format {
-        println!(
-            "Re-signing for development (team {}, {})...",
-            style(&team_id).dim(),
-            style(&identity).dim()
-        );
+/// Build the entitlements plist used when code-signing a development build.
+///
+/// Reuses the compile-emitted `app.entitlements` (App Groups / associated-domains
+/// from #1178) when present — splicing the development keys
+/// (`application-identifier`, team identifier, `get-task-allow`,
+/// keychain-access-groups) in before `</dict>` — so on-device entitlements
+/// survive re-signing instead of being clobbered. When no `app.entitlements`
+/// exists, emits a standalone development plist (the prior behaviour).
+fn build_dev_entitlements_xml(app_dir: &Path, team_id: &str, bundle_id: &str) -> String {
+    let app_identifier = format!("{team_id}.{bundle_id}");
+    let dev_keys = format!(
+        "    <key>application-identifier</key>\n    <string>{app_identifier}</string>\n    \
+         <key>com.apple.developer.team-identifier</key>\n    <string>{team_id}</string>\n    \
+         <key>get-task-allow</key>\n    <true/>\n    \
+         <key>keychain-access-groups</key>\n    <array>\n        <string>{app_identifier}</string>\n    </array>\n"
+    );
+
+    match std::fs::read_to_string(app_dir.join("app.entitlements")) {
+        Ok(existing)
+            if existing.contains("</dict>") && !existing.contains("application-identifier") =>
+        {
+            existing.replacen("</dict>", &format!("{dev_keys}</dict>"), 1)
+        }
+        _ => format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+             <plist version=\"1.0\">\n<dict>\n{dev_keys}</dict>\n</plist>\n"
+        ),
     }
+}
 
-    // Step 1: Find or create a development provisioning profile
-    let profile_data = if let Some(path) = find_system_dev_profile(&bundle_id, &team_id) {
-        if let OutputFormat::Text = format {
-            println!(
-                "  Using existing dev profile: {}",
-                style(path.display()).dim()
-            );
-        }
-        std::fs::read(&path)?
-    } else {
-        // Create via App Store Connect API
-        if let OutputFormat::Text = format {
-            println!("  Creating development provisioning profile via App Store Connect...");
-        }
-        create_dev_profile_via_api(config, &bundle_id, &team_id, device_udid, format)
-            .await
-            .context(
-                "Could not create development provisioning profile.\n\
-                 Ensure your App Store Connect API key has the right permissions,\n\
-                 or use a simulator instead: perry run ios --simulator <UDID>",
-            )?
-    };
+/// Embed `profile_data` as `embedded.mobileprovision` and code-sign `app_dir`
+/// with the given development identity. The entitlements are produced by
+/// [`build_dev_entitlements_xml`], preserving any compile-emitted App Group /
+/// associated-domains entitlements.
+pub fn embed_profile_and_sign(
+    app_dir: &Path,
+    team_id: &str,
+    bundle_id: &str,
+    identity_hash: &str,
+    profile_data: &[u8],
+) -> Result<()> {
+    std::fs::write(app_dir.join("embedded.mobileprovision"), profile_data)?;
 
-    // Embed the dev profile
-    std::fs::write(app_dir.join("embedded.mobileprovision"), &profile_data)?;
-
-    // identity was already selected by team ID matching above
-
-    // Step 2: Build entitlements
     let tmp_dir = std::env::temp_dir().join("perry_run_resign");
     let _ = std::fs::remove_dir_all(&tmp_dir);
     std::fs::create_dir_all(&tmp_dir)?;
 
-    let app_identifier = format!("{team_id}.{bundle_id}");
     let entitlements = tmp_dir.join("entitlements.plist");
     std::fs::write(
         &entitlements,
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>application-identifier</key>
-    <string>{app_identifier}</string>
-    <key>com.apple.developer.team-identifier</key>
-    <string>{team_id}</string>
-    <key>get-task-allow</key>
-    <true/>
-    <key>keychain-access-groups</key>
-    <array>
-        <string>{app_identifier}</string>
-    </array>
-</dict>
-</plist>
-"#,
-        ),
+        build_dev_entitlements_xml(app_dir, team_id, bundle_id),
     )?;
 
-    // Step 3: Remove old signature and re-sign
+    // Remove old signature and re-sign.
     let _ = std::fs::remove_dir_all(app_dir.join("_CodeSignature"));
 
     let status = Command::new("codesign")
-        .args(["--force", "--sign", &identity_hash, "--entitlements"])
+        .args(["--force", "--sign", identity_hash, "--entitlements"])
         .arg(&entitlements)
         .arg("--generate-entitlement-der")
         .arg(app_dir)
@@ -164,6 +194,44 @@ pub async fn resign_for_development(
     }
 
     Ok(())
+}
+
+/// Best-effort development signing for `perry compile --target ios`.
+///
+/// If a development provisioning profile (e.g. from `perry setup ios
+/// --development`) and a matching Apple Development identity are already
+/// available locally, embed + sign the bundle and return `true`. Returns
+/// `false` (without error) when the materials are missing, so a plain compile
+/// on a machine that hasn't provisioned a device still produces an unsigned
+/// bundle with install instructions instead of failing.
+pub fn try_sign_existing_dev_profile(
+    app_dir: &Path,
+    config: &super::super::publish::PerryConfig,
+    format: OutputFormat,
+) -> Result<bool> {
+    let team_id = match config.apple.as_ref().and_then(|a| a.team_id.clone()) {
+        Some(t) => t,
+        None => return Ok(false),
+    };
+    let bundle_id = read_bundle_id_from_app(app_dir).unwrap_or_else(|| "com.perry.app".to_string());
+    let profile_path = match find_system_dev_profile(&bundle_id, &team_id) {
+        Some(p) => p,
+        None => return Ok(false),
+    };
+    let (identity_hash, identity) = match find_dev_identity_for_team(&team_id) {
+        Ok(v) => v,
+        Err(_) => return Ok(false),
+    };
+    let profile_data = std::fs::read(&profile_path)?;
+    embed_profile_and_sign(app_dir, &team_id, &bundle_id, &identity_hash, &profile_data)?;
+    if let OutputFormat::Text = format {
+        println!(
+            "Signed for development (team {}, {}).",
+            style(&team_id).dim(),
+            style(&identity).dim()
+        );
+    }
+    Ok(true)
 }
 
 /// Find the signing identity hash that belongs to the given team ID.
@@ -511,5 +579,61 @@ pub fn read_bundle_id_from_app(app_dir: &Path) -> Option<String> {
         Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1301: re-signing must not drop the App Group entitlement that
+    /// `perry compile --target ios` writes to `app.entitlements` (#1178).
+    /// The development keys are layered on top of the existing file.
+    #[test]
+    fn dev_entitlements_preserve_compile_emitted_app_group() {
+        let dir = std::env::temp_dir().join(format!("perry_resign_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("app.entitlements"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <plist version=\"1.0\">\n<dict>\n    \
+             <key>com.apple.security.application-groups</key>\n    <array>\n        \
+             <string>group.com.example.shared</string>\n    </array>\n</dict>\n</plist>\n",
+        )
+        .unwrap();
+
+        let xml = build_dev_entitlements_xml(&dir, "ABCDE12345", "com.example.app");
+
+        // App Group survives.
+        assert!(xml.contains("com.apple.security.application-groups"));
+        assert!(xml.contains("group.com.example.shared"));
+        // Development keys are layered in.
+        assert!(xml.contains("<key>application-identifier</key>"));
+        assert!(xml.contains("ABCDE12345.com.example.app"));
+        assert!(xml.contains("<key>get-task-allow</key>"));
+        // Exactly one closing dict/plist (no double-wrapping).
+        assert_eq!(xml.matches("</dict>").count(), 1);
+        assert_eq!(xml.matches("</plist>").count(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With no compile-emitted entitlements, a standalone development plist
+    /// is produced (the prior behaviour, kept for the no-app-group case).
+    #[test]
+    fn dev_entitlements_standalone_without_app_entitlements() {
+        let dir = std::env::temp_dir().join(format!("perry_resign_test2_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let xml = build_dev_entitlements_xml(&dir, "ABCDE12345", "com.example.app");
+
+        assert!(xml.starts_with("<?xml"));
+        assert!(xml.contains("<key>application-identifier</key>"));
+        assert!(xml.contains("ABCDE12345.com.example.app"));
+        assert!(!xml.contains("com.apple.security.application-groups"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -42,8 +42,9 @@ pub use remote::{
     find_icon_source, remote_build_and_launch,
 };
 pub use resign::{
-    create_dev_profile_via_api, find_identity_for_team, find_system_dev_profile, generate_asc_jwt,
-    read_bundle_id_from_app, resign_for_development,
+    create_dev_profile_via_api, embed_profile_and_sign, find_dev_identity_for_team,
+    find_identity_for_team, find_system_dev_profile, generate_asc_jwt, read_bundle_id_from_app,
+    resign_for_development, try_sign_existing_dev_profile,
 };
 
 #[derive(Args, Debug)]
