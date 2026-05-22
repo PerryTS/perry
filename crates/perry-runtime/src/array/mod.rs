@@ -69,7 +69,7 @@ pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codep
 pub(crate) use self::header::{
     array_byte_size, clean_arr_ptr, clean_arr_ptr_mut, gc_element_slot_range,
     mark_array_layout_unknown, note_array_slot, rebuild_array_layout, rebuild_array_layout_exact,
-    replay_array_growth_write_barriers, MIN_ARRAY_CAPACITY,
+    replay_array_growth_write_barriers, store_array_slot, MIN_ARRAY_CAPACITY,
 };
 
 #[cfg(test)]

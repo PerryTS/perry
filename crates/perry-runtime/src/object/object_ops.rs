@@ -158,6 +158,7 @@ pub extern "C" fn js_object_group_by(
             (*arr).length = items_for_key.len() as u32;
             let arr_data = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             for (i, v) in items_for_key.iter().enumerate() {
+                // GC_STORE_AUDIT(INIT): groupBy result array is unpublished; layout is rebuilt before publication.
                 std::ptr::write(arr_data.add(i), *v);
             }
             super::rebuild_array_layout_from_slots(arr);
@@ -341,6 +342,7 @@ pub extern "C" fn js_object_define_property(
         if key_str.is_null() {
             return obj_value;
         }
+        super::mark_object_dynamic_shape_unknown(obj);
         // Extract the key as a Rust string for the descriptor side-table lookup.
         let key_rust: Option<String> = {
             let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -507,6 +509,7 @@ unsafe fn ensure_key_in_keys_array(obj: *mut ObjectHeader, key: *const crate::St
         let src_data = (keys as *const u8).add(8) as *const f64;
         let dst_data = (cloned as *mut u8).add(8) as *mut f64;
         for i in 0..key_count {
+            // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
             *dst_data.add(i) = *src_data.add(i);
         }
         (*cloned).length = key_count as u32;
@@ -555,6 +558,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     );
                     let header_size = std::mem::size_of::<ObjectHeader>();
                     let fields = (desc as *mut u8).add(header_size) as *mut f64;
+                    // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
                     *fields = value;
                     *fields.add(1) = f64::from_bits(TAG_TRUE);
                     *fields.add(2) = f64::from_bits(TAG_FALSE);
@@ -608,6 +612,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 js_object_alloc_with_shape(0x0D_E5_C1, 4, packed.as_ptr(), packed.len() as u32);
             let header_size = std::mem::size_of::<ObjectHeader>();
             let fields = (desc as *mut u8).add(header_size) as *mut f64;
+            // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
             *fields = if acc.get != 0 {
                 f64::from_bits(acc.get)
             } else {
@@ -618,6 +623,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             } else {
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
+            // GC_STORE_AUDIT(INIT): descriptor boolean fields are pointer-free and layout is rebuilt below.
             *fields.add(2) = bool_to_f64(attrs.enumerable());
             *fields.add(3) = bool_to_f64(attrs.configurable());
             super::rebuild_object_field_layout(desc, 4);
@@ -635,6 +641,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         );
         let header_size = std::mem::size_of::<ObjectHeader>();
         let fields = (desc as *mut u8).add(header_size) as *mut f64;
+        // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
         *fields = f64::from_bits(value.bits()); // value
         *fields.add(1) = bool_to_f64(attrs.writable()); // writable
         *fields.add(2) = bool_to_f64(attrs.enumerable()); // enumerable

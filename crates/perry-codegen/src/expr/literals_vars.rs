@@ -143,6 +143,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             n if is_global_this_builtin_function_name(n) => Some("function"),
                             _ => None,
                         }
+                    } else if let Expr::NativeModuleRef(module) = object.as_ref() {
+                        // #1343: `typeof <nativeModule>.<member>` (e.g.
+                        // `typeof crypto.randomBytes`, `typeof process.cwd`).
+                        // A method is only addressable through the call-
+                        // dispatch arms, so reading it as a plain value yields
+                        // the module's `0.0` stub and `js_value_typeof` reports
+                        // "undefined"/"number". Short-circuit only methods and
+                        // exported classes to "function". Properties fall
+                        // through (`None`): their value is materialized for
+                        // real, so the generic typeof already reports the right
+                        // primitive/object kind (`process.pid` → "number",
+                        // `os.EOL` → "string", `crypto.constants` → "object").
+                        match perry_api_manifest::module_has_symbol(module, property) {
+                            Some(e)
+                                if matches!(
+                                    e.kind,
+                                    perry_api_manifest::ApiKind::Method { .. }
+                                        | perry_api_manifest::ApiKind::Class
+                                ) =>
+                            {
+                                Some("function")
+                            }
+                            _ => None,
+                        }
                     } else {
                         // Refs #915 (gap 2 from #899): `typeof C.staticMethod`
                         // where `C` is `Expr::ClassRef` or a `LocalGet`
@@ -379,6 +403,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.block().store(DOUBLE, &v_dbl, &slot);
                     } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                         let g_ref = format!("@{}", global_name);
+                        // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
                         ctx.block().store(DOUBLE, &v_dbl, &g_ref);
                     }
                     if let Some(slot_idx) = ctx.shadow_slot_map.get(id).copied() {
@@ -453,6 +478,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                 let g_ref = format!("@{}", global_name);
+                // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
                 ctx.block().store(DOUBLE, &v, &g_ref);
             }
             // Soft fallback: drop the store on the floor for missing
@@ -535,6 +561,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 UpdateOp::Increment => blk.fadd(&old, "1.0"),
                 UpdateOp::Decrement => blk.fsub(&old, "1.0"),
             };
+            // GC_STORE_AUDIT(STACK): update writes a local alloca or registered module-global root slot.
             blk.store(DOUBLE, &new, &storage);
             // Keep the parallel i32 counter slot in sync (if active).
             // This costs one `add i32, 1` per iteration but saves a

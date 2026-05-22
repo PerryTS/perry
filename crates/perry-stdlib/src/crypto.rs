@@ -4,7 +4,7 @@
 //! Provides hashing (sha256, md5), random byte generation, AES encryption,
 //! and key derivation (pbkdf2, scrypt).
 
-use crate::common::handle::{get_handle_mut, register_handle, Handle};
+use crate::common::handle::{get_handle, get_handle_mut, register_handle, Handle};
 use aes::{Aes128, Aes256};
 use base64::Engine as _;
 use cbc::{
@@ -15,7 +15,7 @@ use md5::{Digest as Md5Digest, Md5};
 use perry_runtime::{js_string_from_bytes, StringHeader};
 use rand::RngCore;
 use sha1::Sha1;
-use sha2::{Digest as Sha256Digest, Sha256, Sha512};
+use sha2::{Digest as Sha256Digest, Sha224, Sha256, Sha384, Sha512};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
@@ -352,6 +352,100 @@ fn resolve_range(total: usize, offset: Option<usize>, size: Option<usize>) -> (u
     (start, end)
 }
 
+/// Decode a NaN-boxed numeric `f64` to a plain `f64`. Number literals
+/// reach the FFI as raw doubles, but a value that flowed through an
+/// integer-typed path may arrive INT32-tagged (`0x7FFE` top16). Handle
+/// both so `randomInt` works regardless of which representation codegen
+/// picked for `min` / `max`.
+fn nanboxed_to_f64_num(bits: f64) -> f64 {
+    let raw = bits.to_bits();
+    let top16 = (raw >> 48) as u16;
+    if top16 == 0x7FFE {
+        return ((raw & 0xFFFF_FFFF) as u32 as i32) as f64;
+    }
+    bits
+}
+
+/// `crypto.randomInt([min, ]max)` — uniform random integer in `[min, max)`.
+/// Codegen passes `min = 0` for the single-argument form. Uses rejection
+/// sampling so the distribution is unbiased (matching Node's guarantee).
+/// Returns the integer as a plain `f64`. A degenerate range (`max <= min`)
+/// returns `min` rather than crashing.
+#[no_mangle]
+pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
+    let min = nanboxed_to_f64_num(min_bits) as i64;
+    let max = nanboxed_to_f64_num(max_bits) as i64;
+    if max <= min {
+        return min as f64;
+    }
+    let range = (max - min) as u64;
+    // Rejection sampling: discard values in the unfair tail so every
+    // outcome in `[0, range)` is equally likely.
+    let limit = u64::MAX - (u64::MAX % range);
+    let mut rng = rand::thread_rng();
+    let mut r = rng.next_u64();
+    while r >= limit {
+        r = rng.next_u64();
+    }
+    (min + (r % range) as i64) as f64
+}
+
+/// `crypto.timingSafeEqual(a, b)` — constant-time comparison of two
+/// equal-length byte sequences (Buffer / TypedArray / string). Returns a
+/// NaN-boxed boolean. Node throws `RangeError` when the lengths differ; the
+/// no-exception FFI path returns `false` instead so a length mismatch
+/// degrades gracefully rather than crashing.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_timing_safe_equal(a_ptr: i64, b_ptr: i64) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    let a = bytes_from_ptr(a_ptr);
+    let b = bytes_from_ptr(b_ptr);
+    if a.len() != b.len() {
+        return f64::from_bits(TAG_FALSE);
+    }
+    let mut diff: u8 = 0;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    f64::from_bits(if diff == 0 { TAG_TRUE } else { TAG_FALSE })
+}
+
+/// `crypto.getHashes()` — the digest algorithms Perry can construct via
+/// `createHash` / `createHmac`. Returns a JS `string[]`.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_get_hashes() -> *mut perry_runtime::ArrayHeader {
+    use perry_runtime::{js_array_alloc, js_array_push, JSValue};
+    const NAMES: [&str; 6] = ["md5", "sha1", "sha224", "sha256", "sha384", "sha512"];
+    let arr = js_array_alloc(0);
+    for n in NAMES {
+        let ptr = js_string_from_bytes(n.as_ptr(), n.len() as u32);
+        js_array_push(arr, JSValue::string_ptr(ptr));
+    }
+    arr
+}
+
+/// `crypto.getCiphers()` — the symmetric ciphers Perry supports
+/// (`createCipheriv` / WebCrypto AES-GCM). Returns a JS `string[]`.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_get_ciphers() -> *mut perry_runtime::ArrayHeader {
+    use perry_runtime::{js_array_alloc, js_array_push, JSValue};
+    const NAMES: [&str; 6] = [
+        "aes-128-cbc",
+        "aes-192-cbc",
+        "aes-256-cbc",
+        "aes-128-gcm",
+        "aes-192-gcm",
+        "aes-256-gcm",
+    ];
+    let arr = js_array_alloc(0);
+    for n in NAMES {
+        let ptr = js_string_from_bytes(n.as_ptr(), n.len() as u32);
+        js_array_push(arr, JSValue::string_ptr(ptr));
+    }
+    arr
+}
+
 /// Create HMAC-SHA256
 /// crypto.createHmac('sha256', key).update(data).digest('hex') -> string
 #[no_mangle]
@@ -407,23 +501,47 @@ pub unsafe extern "C" fn js_crypto_hmac_sha256_bytes(
     alloc_buffer_from_slice(&digest)
 }
 
-/// PBKDF2-HMAC-SHA-256 returning a Buffer. Counterpart of
-/// `crypto.pbkdf2Sync(password, salt, iterations, keylen, 'sha256')`.
+/// PBKDF2-HMAC returning a Buffer. Counterpart of
+/// `crypto.pbkdf2Sync(password, salt, iterations, keylen, digest)`.
 /// Accepts string or Buffer for both password and salt.
+///
+/// `digest_ptr` is the NaN-unboxed pointer to the digest-algorithm string
+/// (`'sha256'`, `'sha512'`, …). A null/empty/unknown digest defaults to
+/// SHA-256 — the algorithm SCRAM and the previous callers relied on. The
+/// digest was silently ignored before, so `pbkdf2Sync(..., 'sha512')`
+/// produced a SHA-256 key (#1355).
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_pbkdf2_bytes(
     password_ptr: i64,
     salt_ptr: i64,
     iterations: f64,
     keylen: f64,
+    digest_ptr: i64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
     use pbkdf2::pbkdf2_hmac;
+    use sha2::{Sha224, Sha384};
     let password = bytes_from_ptr(password_ptr);
     let salt = bytes_from_ptr(salt_ptr);
     let iter = iterations as u32;
     let klen = keylen as usize;
     let mut out = vec![0u8; klen];
-    pbkdf2_hmac::<Sha256>(&password, &salt, iter, &mut out);
+    // Resolve the digest algorithm. `digest_ptr` may be a null/sentinel
+    // pointer (no arg passed) — fall back to SHA-256 in that case.
+    let digest = if (digest_ptr as usize) < 0x1000 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&bytes_from_ptr(digest_ptr))
+            .to_ascii_lowercase()
+            .replace('-', "")
+    };
+    match digest.as_str() {
+        "sha1" => pbkdf2_hmac::<Sha1>(&password, &salt, iter, &mut out),
+        "sha224" => pbkdf2_hmac::<Sha224>(&password, &salt, iter, &mut out),
+        "sha384" => pbkdf2_hmac::<Sha384>(&password, &salt, iter, &mut out),
+        "sha512" => pbkdf2_hmac::<Sha512>(&password, &salt, iter, &mut out),
+        // "sha256" and the empty/unknown default.
+        _ => pbkdf2_hmac::<Sha256>(&password, &salt, iter, &mut out),
+    }
     alloc_buffer_from_slice(&out)
 }
 
@@ -674,6 +792,224 @@ pub unsafe extern "C" fn js_crypto_scrypt_custom(
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }
 
+/// `crypto.scryptSync(password, salt, keylen[, options])` → Buffer.
+///
+/// Unlike `js_crypto_scrypt` (which returns a hex string), this returns a
+/// Buffer to match Node's `scryptSync`, and reads password/salt via
+/// `bytes_from_ptr` so Buffer inputs hash correctly. Optional cost
+/// parameters are read from `options_ptr` (a NaN-unboxed object pointer, or
+/// a null/sentinel for none): `N`/`cost`, `r`/`blockSize`, `p`/
+/// `parallelization`. Defaults match Node: N=16384, r=8, p=1.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_scrypt_bytes(
+    password_ptr: i64,
+    salt_ptr: i64,
+    key_length: f64,
+    options_ptr: i64,
+) -> *mut perry_runtime::buffer::BufferHeader {
+    use perry_runtime::{js_object_get_field_by_name, ObjectHeader};
+    let password = bytes_from_ptr(password_ptr);
+    let salt = bytes_from_ptr(salt_ptr);
+    let klen = key_length as usize;
+    if klen == 0 || klen > 1024 {
+        return alloc_buffer_from_slice(&[]);
+    }
+    // Node defaults: N=16384 (cost), r=8 (blockSize), p=1 (parallelization).
+    let (mut n, mut r, mut p) = (16384u64, 8u32, 1u32);
+    if (options_ptr as usize) >= 0x1000 {
+        let obj = options_ptr as *const ObjectHeader;
+        // Read a numeric option by primary or alias name; None if absent.
+        let mut read = |primary: &str, alias: &str| -> Option<f64> {
+            let pk = js_string_from_bytes(primary.as_ptr(), primary.len() as u32);
+            let v = js_object_get_field_by_name(obj, pk);
+            if !v.is_undefined() {
+                return Some(v.to_number());
+            }
+            let ak = js_string_from_bytes(alias.as_ptr(), alias.len() as u32);
+            let v = js_object_get_field_by_name(obj, ak);
+            if v.is_undefined() {
+                None
+            } else {
+                Some(v.to_number())
+            }
+        };
+        if let Some(x) = read("N", "cost") {
+            if x >= 1.0 {
+                n = x as u64;
+            }
+        }
+        if let Some(x) = read("r", "blockSize") {
+            if x >= 1.0 {
+                r = x as u32;
+            }
+        }
+        if let Some(x) = read("p", "parallelization") {
+            if x >= 1.0 {
+                p = x as u32;
+            }
+        }
+    }
+    // `scrypt::Params` takes log2(N); Node requires N to be a power of two,
+    // so trailing_zeros gives the exact exponent. A non-power-of-two or an
+    // otherwise-invalid combo falls back to the Node defaults.
+    let log_n = n.trailing_zeros() as u8;
+    let params = scrypt::Params::new(log_n, r, p, klen)
+        .unwrap_or_else(|_| scrypt::Params::new(14, 8, 1, klen).unwrap());
+    let mut out = vec![0u8; klen];
+    if scrypt::scrypt(&password, &salt, &params, &mut out).is_err() {
+        return alloc_buffer_from_slice(&[]);
+    }
+    alloc_buffer_from_slice(&out)
+}
+
+/// `crypto.hkdfSync(digest, ikm, salt, info, keylen)` → ArrayBuffer.
+///
+/// HKDF (RFC 5869) extract-and-expand. `ikm`/`salt`/`info` are read as raw
+/// bytes (string or Buffer); `digest` selects the HMAC hash (sha256 default,
+/// plus sha1/sha224/sha384/sha512). Returns the derived key in a real
+/// ArrayBuffer to match Node, so `Buffer.from(result)` / `new
+/// Uint8Array(result)` work. An empty salt means "no salt" per the spec.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_hkdf_sync(
+    digest_ptr: i64,
+    ikm_ptr: i64,
+    salt_ptr: i64,
+    info_ptr: i64,
+    keylen: f64,
+) -> *mut perry_runtime::buffer::BufferHeader {
+    use hkdf::Hkdf;
+    let digest = String::from_utf8_lossy(&bytes_from_ptr(digest_ptr))
+        .to_ascii_lowercase()
+        .replace('-', "");
+    let ikm = bytes_from_ptr(ikm_ptr);
+    let salt = bytes_from_ptr(salt_ptr);
+    let info = bytes_from_ptr(info_ptr);
+    let out_len = keylen as usize;
+    // Cap at the largest HKDF output across supported digests (255*64 for
+    // sha512); per-digest over-length is rejected by `expand` below.
+    let make = |bytes: &[u8]| -> *mut perry_runtime::buffer::BufferHeader {
+        let buf = alloc_buffer_from_slice(bytes);
+        if !buf.is_null() {
+            perry_runtime::buffer::mark_as_array_buffer(buf as usize);
+        }
+        buf
+    };
+    if out_len == 0 || out_len > 255 * 64 {
+        return make(&[]);
+    }
+    let salt_ref: Option<&[u8]> = if salt.is_empty() { None } else { Some(&salt) };
+    let mut okm = vec![0u8; out_len];
+    let ok = match digest.as_str() {
+        "sha1" => Hkdf::<Sha1>::new(salt_ref, &ikm)
+            .expand(&info, &mut okm)
+            .is_ok(),
+        "sha224" => Hkdf::<Sha224>::new(salt_ref, &ikm)
+            .expand(&info, &mut okm)
+            .is_ok(),
+        "sha384" => Hkdf::<Sha384>::new(salt_ref, &ikm)
+            .expand(&info, &mut okm)
+            .is_ok(),
+        "sha512" => Hkdf::<Sha512>::new(salt_ref, &ikm)
+            .expand(&info, &mut okm)
+            .is_ok(),
+        // "sha256" and the empty/unknown default.
+        _ => Hkdf::<Sha256>::new(salt_ref, &ikm)
+            .expand(&info, &mut okm)
+            .is_ok(),
+    };
+    if !ok {
+        return make(&[]);
+    }
+    make(&okm)
+}
+
+/// `crypto.generateKeyPairSync(type, options)` → `{ publicKey, privateKey }`
+/// as PEM strings (#1365). Supports `'rsa'` (modulusLength from options,
+/// default 2048) and `'ec'` (NIST P-256 / `prime256v1`). The public key is
+/// SPKI PEM, the private key PKCS#8 PEM — the format the overwhelming
+/// majority of callers request via `publicKeyEncoding`/`privateKeyEncoding:
+/// { type, format: 'pem' }`. The encoding-options object is accepted but only
+/// the PEM string form is produced (KeyObjects and DER are not modeled).
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_generate_key_pair_sync(type_ptr: i64, options_ptr: i64) -> f64 {
+    let ktype = String::from_utf8_lossy(&bytes_from_ptr(type_ptr)).to_ascii_lowercase();
+
+    // RSA modulus length from `options.modulusLength` (default 2048).
+    let modulus_bits = read_options_number(options_ptr, "modulusLength").unwrap_or(2048.0) as usize;
+
+    let pems: Option<(String, String)> = match ktype.as_str() {
+        "rsa" => {
+            use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+            let mut rng = rand::thread_rng();
+            // Clamp to a sane range; Node's default is 2048.
+            let bits = modulus_bits.clamp(512, 8192);
+            rsa::RsaPrivateKey::new(&mut rng, bits).ok().and_then(|sk| {
+                let pk = sk.to_public_key();
+                let priv_pem = sk.to_pkcs8_pem(LineEnding::LF).ok()?.to_string();
+                let pub_pem = pk.to_public_key_pem(LineEnding::LF).ok()?;
+                Some((pub_pem, priv_pem))
+            })
+        }
+        // 'ec' (default/prime256v1) and the explicit 'prime256v1'/'p-256'.
+        "ec" | "prime256v1" | "p-256" | "p256" => {
+            use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+            let secret = p256::SecretKey::random(&mut rand::thread_rng());
+            let priv_pem = secret
+                .to_pkcs8_pem(LineEnding::LF)
+                .ok()
+                .map(|p| p.to_string());
+            let pub_pem = secret.public_key().to_public_key_pem(LineEnding::LF).ok();
+            match (pub_pem, priv_pem) {
+                (Some(pb), Some(pv)) => Some((pb, pv)),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+
+    match pems {
+        Some((pub_pem, priv_pem)) => build_key_pair_object(&pub_pem, &priv_pem),
+        None => nanbox_undefined(),
+    }
+}
+
+/// Read a numeric field from a NaN-unboxed options object pointer (0/null →
+/// `None`). Shared by `generateKeyPairSync`.
+unsafe fn read_options_number(options_ptr: i64, name: &str) -> Option<f64> {
+    if (options_ptr as usize) < 0x1000 {
+        return None;
+    }
+    let obj = options_ptr as *const perry_runtime::ObjectHeader;
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let v = perry_runtime::js_object_get_field_by_name(obj, key);
+    if v.is_undefined() {
+        None
+    } else {
+        Some(v.to_number())
+    }
+}
+
+/// Build a `{ publicKey, privateKey }` JS object holding the two PEM strings,
+/// returned NaN-boxed as POINTER_TAG.
+unsafe fn build_key_pair_object(pub_pem: &str, priv_pem: &str) -> f64 {
+    use perry_runtime::{
+        js_array_alloc, js_array_push, js_object_alloc, js_object_set_field, js_object_set_keys,
+        JSValue,
+    };
+    let obj = js_object_alloc(0, 2);
+    let keys = js_array_alloc(2);
+    let pub_key_name = js_string_from_bytes("publicKey".as_ptr(), 9);
+    js_array_push(keys, JSValue::string_ptr(pub_key_name));
+    let priv_key_name = js_string_from_bytes("privateKey".as_ptr(), 10);
+    js_array_push(keys, JSValue::string_ptr(priv_key_name));
+    let pub_s = js_string_from_bytes(pub_pem.as_ptr(), pub_pem.len() as u32);
+    let priv_s = js_string_from_bytes(priv_pem.as_ptr(), priv_pem.len() as u32);
+    js_object_set_field(obj, 0, JSValue::string_ptr(pub_s));
+    js_object_set_field(obj, 1, JSValue::string_ptr(priv_s));
+    js_object_set_keys(obj, keys);
+    nanbox_pointer_f64(obj as usize)
+}
+
 // ---------------------------------------------------------------------------
 // Hash handle — powers `const h = crypto.createHash('sha1'); h.update(x);
 // h.digest()` (issue #86). The runtime-resident chain-collapse in
@@ -688,7 +1024,9 @@ pub unsafe extern "C" fn js_crypto_scrypt_custom(
 
 pub enum HashState {
     Sha1(Sha1),
+    Sha224(Sha224),
     Sha256(Sha256),
+    Sha384(Sha384),
     Sha512(Sha512),
     Md5(Md5),
 }
@@ -713,7 +1051,9 @@ pub unsafe extern "C" fn js_crypto_create_hash(alg_ptr: i64) -> f64 {
         .to_ascii_lowercase();
     let state = match alg.as_str() {
         "sha1" | "sha-1" => HashState::Sha1(Sha1::new()),
+        "sha224" | "sha-224" => HashState::Sha224(Sha224::new()),
         "sha256" | "sha-256" => HashState::Sha256(Sha256::new()),
+        "sha384" | "sha-384" => HashState::Sha384(Sha384::new()),
         "sha512" | "sha-512" => HashState::Sha512(Sha512::new()),
         "md5" => HashState::Md5(Md5::new()),
         _ => return f64::from_bits(0x7FFC_0000_0000_0001),
@@ -739,7 +1079,9 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
             if let Some(state) = guard.as_mut() {
                 match state {
                     HashState::Sha1(x) => Sha256Digest::update(x, &bytes),
+                    HashState::Sha224(x) => Sha256Digest::update(x, &bytes),
                     HashState::Sha256(x) => Sha256Digest::update(x, &bytes),
+                    HashState::Sha384(x) => Sha256Digest::update(x, &bytes),
                     HashState::Sha512(x) => Sha256Digest::update(x, &bytes),
                     HashState::Md5(x) => Md5Digest::update(x, &bytes),
                 }
@@ -753,7 +1095,9 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
             };
             let digest: Vec<u8> = match state {
                 Some(HashState::Sha1(x)) => x.finalize().to_vec(),
+                Some(HashState::Sha224(x)) => x.finalize().to_vec(),
                 Some(HashState::Sha256(x)) => x.finalize().to_vec(),
+                Some(HashState::Sha384(x)) => x.finalize().to_vec(),
                 Some(HashState::Sha512(x)) => x.finalize().to_vec(),
                 Some(HashState::Md5(x)) => x.finalize().to_vec(),
                 None => return f64::from_bits(0x7FFC_0000_0000_0001),
@@ -776,6 +1120,38 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
                 };
                 let s = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
                 f64::from_bits(0x7FFF_0000_0000_0000u64 | ((s as u64) & 0x0000_FFFF_FFFF_FFFF))
+            }
+        }
+        // `hash.copy()` (#1369) — return an independent Hash whose internal
+        // state is a snapshot of this one, so the two can be `.update()`d and
+        // `.digest()`ed separately. The RustCrypto hashers are `Clone`. An
+        // already-digested hash (state taken) yields undefined, mirroring the
+        // error a caller would hit using a finalized hash. The optional
+        // `outputLength` arg only applies to XOF hashes (shake*), which Perry
+        // doesn't expose, so it is ignored.
+        "copy" => {
+            let cloned = {
+                let guard = h.state.lock().unwrap();
+                match guard.as_ref() {
+                    Some(HashState::Sha1(x)) => Some(HashState::Sha1(x.clone())),
+                    Some(HashState::Sha224(x)) => Some(HashState::Sha224(x.clone())),
+                    Some(HashState::Sha256(x)) => Some(HashState::Sha256(x.clone())),
+                    Some(HashState::Sha384(x)) => Some(HashState::Sha384(x.clone())),
+                    Some(HashState::Sha512(x)) => Some(HashState::Sha512(x.clone())),
+                    Some(HashState::Md5(x)) => Some(HashState::Md5(x.clone())),
+                    None => None,
+                }
+            };
+            match cloned {
+                Some(state) => {
+                    let new_handle: Handle = register_handle(HashHandle {
+                        state: std::sync::Mutex::new(Some(state)),
+                    });
+                    f64::from_bits(
+                        0x7FFD_0000_0000_0000u64 | ((new_handle as u64) & 0x0000_FFFF_FFFF_FFFF),
+                    )
+                }
+                None => f64::from_bits(0x7FFC_0000_0000_0001),
             }
         }
         _ => f64::from_bits(0x7FFC_0000_0000_0001),
@@ -1003,6 +1379,248 @@ fn nanbox_pointer_f64(ptr: usize) -> f64 {
 #[inline]
 fn nanbox_undefined() -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+// ---------------------------------------------------------------------------
+// Sign / Verify handle (#1364) — `crypto.createSign(alg).update(d).sign(key)`
+// and `crypto.createVerify(alg).update(d).verify(key, sig)`. Mirrors the
+// Hash/Cipher small-integer handle pattern (POINTER_TAG box, dispatched via
+// HANDLE_METHOD_DISPATCH → `dispatch_sign`). RSA PKCS#1 v1.5 over
+// sha1/sha224/sha256/sha384/sha512: `update` accumulates the message, then
+// `sign`/`verify` hash it and RSA-sign / RSA-verify. The key argument is a
+// PEM string (PKCS#8 or PKCS#1); `verify` also accepts the matching private
+// key (it derives the public key), matching Node's leniency.
+// ---------------------------------------------------------------------------
+
+pub struct SignHandle {
+    /// Lowercased hash algorithm (`sha256`, …).
+    alg: String,
+    /// Accumulated message bytes (interior mutability — the handle is shared).
+    buffer: std::sync::Mutex<Vec<u8>>,
+}
+
+unsafe fn create_sign_handle(alg_ptr: i64) -> f64 {
+    let alg = String::from_utf8_lossy(&bytes_from_ptr(alg_ptr))
+        .to_ascii_lowercase()
+        .replace("rsa-", "") // accept Node's `RSA-SHA256` spelling
+        .replace('-', ""); // and `sha-256`
+    if !matches!(
+        alg.as_str(),
+        "sha1" | "sha224" | "sha256" | "sha384" | "sha512"
+    ) {
+        return nanbox_undefined();
+    }
+    let handle: Handle = register_handle(SignHandle {
+        alg,
+        buffer: std::sync::Mutex::new(Vec::new()),
+    });
+    nanbox_pointer_f64(handle as usize)
+}
+
+/// `crypto.createSign(algorithm)` — allocate a Sign handle.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_create_sign(alg_ptr: i64) -> f64 {
+    create_sign_handle(alg_ptr)
+}
+
+/// `crypto.createVerify(algorithm)` — allocate a Verify handle (same shape).
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_create_verify(alg_ptr: i64) -> f64 {
+    create_sign_handle(alg_ptr)
+}
+
+/// Build the PKCS#1 v1.5 DigestInfo (`SEQUENCE { AlgorithmIdentifier, OCTET
+/// STRING hash }`) for `alg` over `data`. The fixed ASN.1 prefixes are the
+/// standard ones from RFC 8017 §9.2 (Note 1). We assemble DigestInfo by hand
+/// and feed it to `Pkcs1v15Sign::new_unprefixed()` so that signing/verifying
+/// does not require the `rsa` crate's `digest`-0.10 `AssociatedOid` bound —
+/// the workspace's `sha1`/`sha2` are a newer `digest` version, which would
+/// otherwise fail to satisfy `Pkcs1v15Sign::new::<D>()`.
+fn rsa_digest_info(alg: &str, data: &[u8]) -> Option<Vec<u8>> {
+    let (prefix, hash): (&[u8], Vec<u8>) = match alg {
+        "sha1" => (
+            &[
+                0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04,
+                0x14,
+            ],
+            Sha1::digest(data).to_vec(),
+        ),
+        "sha224" => (
+            &[
+                0x30, 0x2d, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x04, 0x05, 0x00, 0x04, 0x1c,
+            ],
+            Sha224::digest(data).to_vec(),
+        ),
+        "sha256" => (
+            &[
+                0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x01, 0x05, 0x00, 0x04, 0x20,
+            ],
+            Sha256::digest(data).to_vec(),
+        ),
+        "sha384" => (
+            &[
+                0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x02, 0x05, 0x00, 0x04, 0x30,
+            ],
+            Sha384::digest(data).to_vec(),
+        ),
+        "sha512" => (
+            &[
+                0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x03, 0x05, 0x00, 0x04, 0x40,
+            ],
+            Sha512::digest(data).to_vec(),
+        ),
+        _ => return None,
+    };
+    let mut di = prefix.to_vec();
+    di.extend_from_slice(&hash);
+    Some(di)
+}
+
+/// Hash `data` with `alg` and RSA-PKCS#1-v1.5-sign it with the PEM private key.
+fn rsa_pkcs1v15_sign(alg: &str, key_pem: &str, data: &[u8]) -> Option<Vec<u8>> {
+    use rsa::pkcs1::DecodeRsaPrivateKey;
+    use rsa::pkcs8::DecodePrivateKey;
+    let priv_key = rsa::RsaPrivateKey::from_pkcs8_pem(key_pem)
+        .or_else(|_| rsa::RsaPrivateKey::from_pkcs1_pem(key_pem))
+        .ok()?;
+    let di = rsa_digest_info(alg, data)?;
+    priv_key.sign(rsa::Pkcs1v15Sign::new_unprefixed(), &di).ok()
+}
+
+/// Verify an RSA-PKCS#1-v1.5 signature over `data` with the PEM key (public,
+/// or a private key from which the public is derived).
+fn rsa_pkcs1v15_verify(alg: &str, key_pem: &str, data: &[u8], sig: &[u8]) -> bool {
+    use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey};
+    use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
+    let pub_key = rsa::RsaPublicKey::from_public_key_pem(key_pem)
+        .ok()
+        .or_else(|| rsa::RsaPublicKey::from_pkcs1_pem(key_pem).ok())
+        .or_else(|| {
+            rsa::RsaPrivateKey::from_pkcs8_pem(key_pem)
+                .or_else(|_| rsa::RsaPrivateKey::from_pkcs1_pem(key_pem))
+                .ok()
+                .map(|pk| pk.to_public_key())
+        });
+    let pub_key = match pub_key {
+        Some(k) => k,
+        None => return false,
+    };
+    let di = match rsa_digest_info(alg, data) {
+        Some(d) => d,
+        None => return false,
+    };
+    pub_key
+        .verify(rsa::Pkcs1v15Sign::new_unprefixed(), &di, sig)
+        .is_ok()
+}
+
+/// Encode signature `bytes` per a digest-style encoding argument: a `'hex'`/
+/// `'base64'`/`'base64url'` string yields a NaN-boxed string; absent/undefined
+/// yields a Buffer (matching Node's `sign()` with vs without an encoding).
+unsafe fn encode_sig_output(bytes: &[u8], enc_arg: Option<&f64>) -> f64 {
+    match enc_arg {
+        None => {
+            let buf = alloc_buffer_from_slice(bytes);
+            nanbox_pointer_f64(buf as usize)
+        }
+        Some(a) if is_undefined_f64(*a) => {
+            let buf = alloc_buffer_from_slice(bytes);
+            nanbox_pointer_f64(buf as usize)
+        }
+        Some(a) => {
+            let enc_ptr = (a.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+            let enc = String::from_utf8_lossy(&bytes_from_ptr(enc_ptr)).to_ascii_lowercase();
+            let encoded = match enc.as_str() {
+                "base64" => base64::engine::general_purpose::STANDARD.encode(bytes),
+                "base64url" => base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+                "binary" | "latin1" => String::from_utf8_lossy(bytes).into_owned(),
+                _ => hex::encode(bytes),
+            };
+            let s = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
+            f64::from_bits(0x7FFF_0000_0000_0000u64 | ((s as u64) & 0x0000_FFFF_FFFF_FFFF))
+        }
+    }
+}
+
+/// Dispatch `update` / `sign` / `verify` on a SignHandle. Called from
+/// `common/dispatch.rs::js_handle_method_dispatch`.
+pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
+    let h = match get_handle::<SignHandle>(handle) {
+        Some(h) => h,
+        None => return nanbox_undefined(),
+    };
+    match method {
+        "update" => {
+            if let Some(a) = args.first() {
+                let ptr = (a.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                let bytes = bytes_from_ptr(ptr);
+                h.buffer.lock().unwrap().extend_from_slice(&bytes);
+            }
+            nanbox_pointer_f64(handle as usize)
+        }
+        // `.sign(privateKeyPem, encoding?)` → signature (Buffer or encoded
+        // string). args[0] = key, args[1] = output encoding.
+        "sign" => {
+            let key_ptr = match args.first() {
+                Some(a) => (a.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64,
+                None => return nanbox_undefined(),
+            };
+            let key_pem = String::from_utf8_lossy(&bytes_from_ptr(key_ptr)).into_owned();
+            let data = h.buffer.lock().unwrap().clone();
+            match rsa_pkcs1v15_sign(&h.alg, &key_pem, &data) {
+                Some(sig) => encode_sig_output(&sig, args.get(1)),
+                None => nanbox_undefined(),
+            }
+        }
+        // `.verify(publicKeyPem, signature, sigEncoding?)` → boolean.
+        // args[0] = key, args[1] = signature, args[2] = signature encoding.
+        "verify" => {
+            let key_ptr = match args.first() {
+                Some(a) => (a.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64,
+                None => return f64::from_bits(0x7FFC_0000_0000_0003), // false
+            };
+            let key_pem = String::from_utf8_lossy(&bytes_from_ptr(key_ptr)).into_owned();
+            // Resolve the signature bytes: if a sig-encoding string is given,
+            // the signature arg is a string in that encoding; otherwise it's a
+            // Buffer/Uint8Array.
+            let sig_ptr = match args.get(1) {
+                Some(a) => (a.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64,
+                None => return f64::from_bits(0x7FFC_0000_0000_0003),
+            };
+            let sig_raw = bytes_from_ptr(sig_ptr);
+            let sig = match args.get(2) {
+                Some(a) if !is_undefined_f64(*a) => {
+                    let enc_ptr = (a.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                    let enc =
+                        String::from_utf8_lossy(&bytes_from_ptr(enc_ptr)).to_ascii_lowercase();
+                    let sig_str = String::from_utf8_lossy(&sig_raw);
+                    match enc.as_str() {
+                        "hex" => hex::decode(sig_str.trim()).unwrap_or_default(),
+                        "base64" => base64::engine::general_purpose::STANDARD
+                            .decode(sig_str.trim())
+                            .unwrap_or_default(),
+                        "base64url" => base64::engine::general_purpose::URL_SAFE_NO_PAD
+                            .decode(sig_str.trim())
+                            .unwrap_or_default(),
+                        _ => sig_raw.clone(),
+                    }
+                }
+                _ => sig_raw.clone(),
+            };
+            let data = h.buffer.lock().unwrap().clone();
+            let ok = rsa_pkcs1v15_verify(&h.alg, &key_pem, &data, &sig);
+            f64::from_bits(if ok {
+                0x7FFC_0000_0000_0004 // true
+            } else {
+                0x7FFC_0000_0000_0003 // false
+            })
+        }
+        _ => nanbox_undefined(),
+    }
 }
 
 unsafe fn create_cipher_handle(alg_ptr: i64, key_ptr: i64, iv_ptr: i64, encrypt: bool) -> f64 {

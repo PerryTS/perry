@@ -31,10 +31,11 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
-    array_store_needs_layout_note, buffer_alias_metadata_suffix, can_lower_expr_as_i32,
-    emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
-    emit_string_literal_global, emit_v8_export_call, emit_v8_member_method_call,
-    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
+    can_lower_expr_as_i32, emit_jsvalue_slot_store_on_block, emit_layout_note_slot_on_block,
+    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
+    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
+    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
@@ -55,7 +56,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // go to whichever storage we read from.
             let array_expr = Expr::LocalGet(*array_id);
             let layout_note_needed = array_store_needs_layout_note(ctx, &array_expr, value);
-            let write_barrier_needed = !is_numeric_expr(ctx, value);
+            let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
             let v = lower_expr(ctx, value)?;
             let arr_box = lower_expr(ctx, &array_expr)?;
 
@@ -157,22 +158,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let with_header = blk.add(I64, &byte_offset, "8");
                     let element_addr = blk.add(I64, &arr_handle, &with_header);
                     let element_ptr = blk.inttoptr(I64, &element_addr);
-                    blk.store(DOUBLE, &v, &element_ptr);
+                    emit_jsvalue_slot_store_on_block(
+                        blk,
+                        &element_ptr,
+                        &v,
+                        &arr_handle,
+                        &length,
+                        layout_note_needed,
+                        &arr_handle,
+                        &element_addr,
+                        write_barrier_needed,
+                    );
                     let new_length = blk.add(I32, &length, "1");
                     let arr_ptr = blk.inttoptr(I64, &arr_handle);
+                    // GC_STORE_AUDIT(POINTER_FREE): array length header update has no child pointer.
                     blk.store(I32, &new_length, &arr_ptr);
-                    let value_bits = blk.bitcast_double_to_i64(&v);
-                    if layout_note_needed {
-                        emit_layout_note_slot_on_block(blk, &arr_handle, &length, &value_bits);
-                    }
-                    if write_barrier_needed {
-                        emit_write_barrier_slot_on_block(
-                            blk,
-                            &arr_handle,
-                            &element_addr,
-                            &value_bits,
-                        );
-                    }
                     blk.br(&merge_label);
                 }
 
@@ -251,6 +251,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.block().store(DOUBLE, &new_box, &slot);
             } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
                 let g_ref = format!("@{}", global_name);
+                // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
                 ctx.block().store(DOUBLE, &new_box, &g_ref);
             } else {
                 return Err(anyhow!("ArrayPush({}): local not in scope", array_id));
@@ -314,6 +315,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.block().store(DOUBLE, &new_box, &slot);
             } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
                 let g_ref = format!("@{}", global_name);
+                // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
                 ctx.block().store(DOUBLE, &new_box, &g_ref);
             } else {
                 return Err(anyhow!("ArrayPushSpread({}): local not in scope", array_id));

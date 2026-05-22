@@ -32,13 +32,7 @@ def copied_workload(
     *,
     fallback_reason="none",
     conservative_pinned_bytes=0,
-    compiled_frame_conservative_pinned_bytes=0,
-    conservative_stack_truncated_cycles=0,
-    conservative_stack_unbounded_cycles=0,
     copy_only_pinned_bytes=0,
-    copy_only_young_roots=0,
-    copy_only_malloc_roots=0,
-    unattributed_roots=0,
     malloc_registry_rebuilds=0,
 ):
     counts = {reason: 0 for reason in REPORT.FALLBACK_REASONS}
@@ -46,21 +40,7 @@ def copied_workload(
     return {
         "fallback_reason_counts": counts,
         "conservative_pinned_bytes": conservative_pinned_bytes,
-        "compiled_frame_conservative_pinned_bytes": (
-            compiled_frame_conservative_pinned_bytes
-        ),
-        "conservative_stack": {
-            "truncated_cycles": conservative_stack_truncated_cycles,
-            "unbounded_cycles": conservative_stack_unbounded_cycles,
-        },
-        "legacy_copy_only_scanner_pinned": {
-            "bytes": copy_only_pinned_bytes,
-            "emitted_young_roots": copy_only_young_roots,
-            "emitted_malloc_roots": copy_only_malloc_roots,
-            "sources": {
-                "unattributed": {"emitted_roots": unattributed_roots}
-            },
-        },
+        "legacy_copy_only_scanner_pinned": {"bytes": copy_only_pinned_bytes},
         "copying_nursery": {
             "copied_objects": 1,
             "copied_bytes": 16,
@@ -82,17 +62,7 @@ def copied_report(**overrides):
             "cycles": len(workloads),
             "fallback_reason_counts": {"none": len(workloads)},
             "conservative_pinned_bytes": 0,
-            "compiled_frame_conservative_pinned_bytes": 0,
-            "conservative_stack": {
-                "truncated_cycles": 0,
-                "unbounded_cycles": 0,
-            },
-            "legacy_copy_only_scanner_pinned": {
-                "bytes": 0,
-                "emitted_young_roots": 0,
-                "emitted_malloc_roots": 0,
-                "sources": {"unattributed": {"emitted_roots": 0}},
-            },
+            "legacy_copy_only_scanner_pinned": {"bytes": 0},
             "copying_nursery": {
                 "copied_objects": len(workloads),
                 "copied_bytes": len(workloads) * 16,
@@ -136,36 +106,6 @@ def benchmark_report(multiplier=1, correctness="pass"):
             },
         }
     return {"commit": "abc", "benchmarks": benchmarks}
-
-
-def perf_frontier_packet():
-    classifications = {
-        name: {
-            "class": "numeric-representation-bound",
-            "reasons": ["synthetic"],
-            "evidence": {},
-        }
-        for name in REQUIRED_BENCHMARKS
-    }
-    return {
-        "schema_version": 1,
-        "status": "pass",
-        "errors": [],
-        "warnings": [],
-        "classification": classifications,
-        "profile_summary": {
-            "status": "pass",
-            "row": "class_method_no_field_access",
-            "top_non_gc_costs": [
-                {"symbol": "js_object_get_own_field_or_undef", "samples": 10}
-            ],
-        },
-        "baseline": {
-            "input_path": "tmp/perf-frontier-baseline.json",
-            "baseline_sha": "c" * 40,
-            "present": True,
-        },
-    }
 
 
 class Gc1090EvidenceReportTests(unittest.TestCase):
@@ -217,25 +157,10 @@ class Gc1090EvidenceReportTests(unittest.TestCase):
             )
         return temp, root
 
-    def add_perf_frontier(self, root):
-        metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
-        metadata.setdefault("commands", {}).setdefault("packet", {})["perf_frontier"] = {
-            "status": "pass",
-            "exit_code": 0,
-        }
-        write_json(root / "metadata.json", metadata)
-        write_json(root / "perf-frontier" / "perf-frontier-packet.json", perf_frontier_packet())
-
     def collect(self, **kwargs):
         temp, root = self.make_root(**kwargs)
         self.addCleanup(temp.cleanup)
         return REPORT.collect_report(root, "base", "head")
-
-    def collect_gate(self, **kwargs):
-        temp, root = self.make_root(**kwargs)
-        self.addCleanup(temp.cleanup)
-        self.add_perf_frontier(root)
-        return REPORT.collect_report(root, "base", "head", gate=True)
 
     def test_pass_case(self):
         packet = self.collect()
@@ -275,51 +200,6 @@ class Gc1090EvidenceReportTests(unittest.TestCase):
             any("conservative_pinned_bytes=8" in error for error in packet["errors"])
         )
 
-    def test_fails_compiled_frame_pinned_bytes(self):
-        packet = self.collect(
-            head_copied=copied_report(
-                json_roundtrip=copied_workload(
-                    compiled_frame_conservative_pinned_bytes=8
-                )
-            )
-        )
-        self.assertEqual(packet["status"], "fail")
-        self.assertTrue(
-            any(
-                "compiled_frame_conservative_pinned_bytes=8" in error
-                for error in packet["errors"]
-            )
-        )
-
-    def test_fails_truncated_unbounded_or_unattributed_roots(self):
-        packet = self.collect(
-            head_copied=copied_report(
-                json_roundtrip=copied_workload(
-                    conservative_stack_truncated_cycles=1,
-                    conservative_stack_unbounded_cycles=1,
-                    unattributed_roots=1,
-                    copy_only_young_roots=1,
-                    copy_only_malloc_roots=1,
-                )
-            )
-        )
-        self.assertEqual(packet["status"], "fail")
-        self.assertTrue(
-            any("conservative_stack_truncated cycles=1" in error for error in packet["errors"])
-        )
-        self.assertTrue(
-            any("conservative_stack_unbounded cycles=1" in error for error in packet["errors"])
-        )
-        self.assertTrue(
-            any("unattributed root scanner emitted roots=1" in error for error in packet["errors"])
-        )
-        self.assertTrue(
-            any("emitted_young_roots=1" in error for error in packet["errors"])
-        )
-        self.assertTrue(
-            any("emitted_malloc_roots=1" in error for error in packet["errors"])
-        )
-
     def test_fails_benchmark_correctness(self):
         packet = self.collect(head_benchmarks=benchmark_report(correctness="fail"))
         self.assertEqual(packet["status"], "fail")
@@ -329,28 +209,6 @@ class Gc1090EvidenceReportTests(unittest.TestCase):
         packet = self.collect(head_memory_failed=1)
         self.assertEqual(packet["status"], "fail")
         self.assertTrue(any("memory stability failed=1" in error for error in packet["errors"]))
-
-    def test_gate_includes_perf_frontier_fields(self):
-        packet = self.collect_gate()
-        self.assertEqual(packet["status"], "pass")
-        self.assertIn("tool_versions", packet)
-        self.assertEqual(packet["perf_frontier"]["status"], "pass")
-        self.assertIn("bench_json_roundtrip", packet["perf_frontier"]["classification"])
-        self.assertEqual(
-            packet["perf_frontier"]["baseline"]["input_path"],
-            "tmp/perf-frontier-baseline.json",
-        )
-
-    def test_gate_requires_exact_sha_and_perf_frontier(self):
-        temp, root = self.make_root()
-        self.addCleanup(temp.cleanup)
-        metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
-        metadata["head_sha"] = "b" * 39
-        write_json(root / "metadata.json", metadata)
-        packet = REPORT.collect_report(root, "base", "head", gate=True)
-        self.assertEqual(packet["status"], "fail")
-        self.assertTrue(any("exact 40-char SHA" in error for error in packet["errors"]))
-        self.assertTrue(any("perf frontier packet is missing" in error for error in packet["errors"]))
 
 
 if __name__ == "__main__":

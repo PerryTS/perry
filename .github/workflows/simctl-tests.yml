@@ -35,7 +35,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install iOS simulator Rust target
-        run: rustup target add aarch64-apple-ios-sim
+        run: rustup target add aarch64-apple-ios-sim aarch64-apple-ios
 
       - name: Cache cargo
         uses: actions/cache@v5
@@ -51,6 +51,21 @@ jobs:
         run: |
           cargo build --release -p perry -p perry-runtime -p perry-stdlib
           cargo build --release -p perry-ui-ios --target aarch64-apple-ios-sim
+
+      # Regression guard for #1311 — the geisterhand glue (perry-ui-ios's
+      # geisterhand_style.rs + ffi/system.rs) must compile against the iOS UI
+      # crate AND link without a runtime symbol-hash mismatch. Compile-only the
+      # device-target libs (catches the E0425 "cannot find ... in the crate
+      # root" class), then do a full `perry compile --enable-geisterhand` for
+      # the simulator (the successful link catches the app_group/stub_diag
+      # symbol-resolution class end-to-end).
+      - name: Geisterhand iOS compile smoke (#1311)
+        run: |
+          cargo build --release -p perry-ui-ios --features geisterhand --target aarch64-apple-ios
+          cargo build --release -p perry-ui-geisterhand
+          ./target/release/perry compile docs/examples/ui/testing/geisterhand_demo.ts \
+            --target ios-simulator --enable-geisterhand \
+            -o "$RUNNER_TEMP/geisterhand_demo_ios"
 
       - name: Run simctl doc-example verification
         run: ./scripts/run_simctl_tests.sh

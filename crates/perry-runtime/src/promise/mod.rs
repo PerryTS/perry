@@ -49,8 +49,10 @@ pub use then::{
 
 #[cfg(test)]
 pub(crate) use scanners::{
-    test_async_step_thunk_cache, test_clear_promise_scanner_roots, test_promise_scanner_snapshot,
-    test_seed_async_step_thunk_cache, test_seed_promise_scanner_roots, TestPromiseScannerSnapshot,
+    test_async_step_thunk_cache, test_clear_promise_scanner_roots, test_current_microtask_value,
+    test_promise_context_keys, test_promise_scanner_snapshot, test_seed_async_step_thunk_cache,
+    test_seed_promise_context, test_seed_promise_scanner_roots,
+    test_store_with_resolvers_result_fields, TestPromiseScannerSnapshot,
 };
 
 // Cached `PERRY_MT_PROFILE` flag, populated once at process start.
@@ -490,6 +492,43 @@ pub(crate) fn clear_promise_context(promise: *mut Promise) {
 
 pub(crate) fn clear_promise_context_for_gc(promise: *mut Promise) {
     clear_promise_context(promise);
+}
+
+pub(crate) fn cleanup_copied_minor_promise_contexts_for_gc() {
+    PROMISE_CONTEXTS.with(|contexts| {
+        let mut contexts = contexts.borrow_mut();
+        let mut moved = Vec::new();
+        contexts.retain(|&key, _| {
+            let space = crate::arena::classify_heap_space(key);
+            let in_from_space = matches!(space, crate::arena::HeapSpace::NurseryEden)
+                || space == crate::arena::active_survivor_space();
+            if !in_from_space || key < crate::gc::GC_HEADER_SIZE {
+                return true;
+            }
+            unsafe {
+                let header =
+                    (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*header).obj_type != crate::gc::GC_TYPE_PROMISE
+                    || (*header).gc_flags & crate::gc::GC_FLAG_ARENA == 0
+                {
+                    return true;
+                }
+                if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+                    let new_key = crate::gc::forwarding_address(header) as usize;
+                    if new_key != key {
+                        moved.push((key, new_key));
+                    }
+                    return true;
+                }
+            }
+            false
+        });
+        for (old_key, new_key) in moved {
+            if let Some(context) = contexts.remove(&old_key) {
+                contexts.insert(new_key, context);
+            }
+        }
+    });
 }
 
 pub(crate) fn enter_microtask_context(snapshot: &AsyncContextSnapshot) {

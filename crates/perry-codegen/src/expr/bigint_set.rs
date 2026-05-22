@@ -255,6 +255,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.block().store(DOUBLE, &new_box, &slot);
             } else if let Some(global_name) = ctx.module_globals.get(set_id).cloned() {
                 let g_ref = format!("@{}", global_name);
+                // GC_STORE_AUDIT(ROOT): module global Set slot is a registered mutable GC root.
                 ctx.block().store(DOUBLE, &new_box, &g_ref);
             }
             Ok(new_box)

@@ -1,18 +1,48 @@
 //! Map representation for Perry
 //!
-//! Maps are heap-allocated with a stable header pointer.
+//! Maps are arena-allocated GC objects.
 //! The entries array is separately allocated and can be reallocated
-//! without changing the MapHeader address.
+//! without changing the MapHeader address between GC moves.
 
 use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
 use crate::string::StringHeader;
-use std::alloc::{alloc, realloc, Layout};
+use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ptr;
 
 /// Must match value.rs TAG_UNDEFINED
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_FORCE_HELPER_GC: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_force_next_map_helper_gc() {
+    TEST_FORCE_HELPER_GC.with(|force| force.set(force.get().saturating_add(1)));
+}
+
+#[cfg(test)]
+fn maybe_force_helper_gc_for_test() {
+    let should_collect = TEST_FORCE_HELPER_GC.with(|force| {
+        let remaining = force.get();
+        if remaining > 0 {
+            force.set(remaining - 1);
+            true
+        } else {
+            false
+        }
+    });
+    if should_collect {
+        let _ = crate::gc::gc_collect_minor();
+    }
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn maybe_force_helper_gc_for_test() {}
 
 thread_local! {
     static MAP_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
@@ -23,15 +53,15 @@ fn register_map(ptr: *mut MapHeader) {
 }
 
 pub fn is_registered_map(addr: usize) -> bool {
-    // Fast pre-filter: gc_malloc'd Maps carry `GcHeader.obj_type ==
+    // Fast pre-filter: managed Maps carry `GcHeader.obj_type ==
     // GC_TYPE_MAP` at `addr - GC_HEADER_SIZE`. A single i8 load + cmp
     // short-circuits the non-Map path (the common case across the
     // typed-dispatch chain `if is_registered_map { ... } else if
     // is_registered_set { ... } ...`) without paying the
     // `HashSet<usize>::contains` SipHash. The HashSet check still runs
     // on byte-matches to defend against:
-    //   1. False-positive aliasing — a non-gc_malloc allocation (Set is
-    //      raw-alloc'd, BufferHeader for small buffers via a slab) whose
+    //   1. False-positive aliasing — another managed object or a non-GC
+    //      allocation (for example a small BufferHeader slab entry) whose
     //      preceding byte happens to read as 8.
     //   2. Stale post-sweep ptrs — drop_map_index removes from
     //      MAP_REGISTRY; the GcHeader byte may persist until the slot
@@ -171,8 +201,8 @@ fn string_content_hash(value_bits: u64) -> Option<u64> {
 }
 
 /// Drop the side-table entry AND deregister from `MAP_REGISTRY` for a
-/// map address that's about to be reused or freed (called from
-/// `gc::sweep`). Safe to call on unregistered addresses.
+/// map address that's about to be reused or freed. Safe to call on
+/// unregistered addresses.
 ///
 /// Without the `MAP_REGISTRY.remove`, a freed Map's address would
 /// permanently identify as a Map even after the GC slot is reused for
@@ -194,6 +224,124 @@ pub fn drop_map_index(addr: usize) {
     MAP_REGISTRY.with(|r| {
         r.borrow_mut().remove(&addr);
     });
+}
+
+pub(crate) fn map_header_moved_for_gc(old_addr: usize, new_addr: usize) {
+    if old_addr == 0 || new_addr == 0 || old_addr == new_addr {
+        return;
+    }
+    MAP_REGISTRY.with(|r| {
+        let mut registry = r.borrow_mut();
+        if registry.remove(&old_addr) {
+            registry.insert(new_addr);
+        }
+    });
+    MAP_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        idx.remove(&new_addr);
+        if let Some(slot) = idx.remove(&old_addr) {
+            idx.insert(new_addr, slot);
+        }
+    });
+    MAP_STRING_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        idx.remove(&new_addr);
+        if let Some(slot) = idx.remove(&old_addr) {
+            idx.insert(new_addr, slot);
+        }
+    });
+}
+
+pub(crate) unsafe fn finalize_map_side_allocation_for_gc(map: *mut MapHeader) {
+    if map.is_null() {
+        return;
+    }
+    let addr = map as usize;
+    let was_registered = MAP_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
+    MAP_INDEX.with(|idx| {
+        idx.borrow_mut().remove(&addr);
+    });
+    MAP_STRING_INDEX.with(|idx| {
+        idx.borrow_mut().remove(&addr);
+    });
+    if !was_registered {
+        return;
+    }
+
+    let entries = (*map).entries;
+    let capacity = (*map).capacity as usize;
+    if !entries.is_null() && capacity > 0 {
+        dealloc(entries as *mut u8, entries_layout(capacity));
+    }
+    // GC_STORE_AUDIT(POINTER_FREE): finalizer clears external entries side-allocation pointer after deregistration/deallocation.
+    (*map).entries = std::ptr::null_mut();
+    (*map).capacity = 0;
+    (*map).size = 0;
+}
+
+fn is_dead_copied_minor_from_space_map(addr: usize) -> bool {
+    let space = crate::arena::classify_heap_space(addr);
+    if !matches!(space, crate::arena::HeapSpace::NurseryEden)
+        && space != crate::arena::active_survivor_space()
+    {
+        return false;
+    }
+    if addr < crate::gc::GC_HEADER_SIZE {
+        return false;
+    }
+    unsafe {
+        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*header).obj_type != crate::gc::GC_TYPE_MAP {
+            return false;
+        }
+        let flags = (*header).gc_flags;
+        flags & crate::gc::GC_FLAG_ARENA != 0
+            && flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_FORWARDED) == 0
+    }
+}
+
+pub(crate) fn finalize_dead_copied_minor_from_space_maps() -> usize {
+    let maps = MAP_REGISTRY.with(|r| {
+        r.borrow()
+            .iter()
+            .copied()
+            .filter(|&addr| is_dead_copied_minor_from_space_map(addr))
+            .collect::<Vec<_>>()
+    });
+    let count = maps.len();
+    for addr in maps {
+        unsafe {
+            finalize_map_side_allocation_for_gc(addr as *mut MapHeader);
+        }
+    }
+    count
+}
+
+#[cfg(test)]
+pub(crate) fn test_map_numeric_index_contains(map: *const MapHeader, key: f64) -> bool {
+    let key = normalize_zero(key);
+    let bits = key.to_bits();
+    if !is_safe_numeric_key(bits) {
+        return false;
+    }
+    MAP_INDEX.with(|idx| {
+        idx.borrow()
+            .get(&(map as usize))
+            .is_some_and(|slot| slot.contains_key(&NumericKey(bits)))
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_map_string_index_contains(map: *const MapHeader, key: f64) -> bool {
+    let bits = key.to_bits();
+    let Some(hash) = string_content_hash(bits) else {
+        return false;
+    };
+    MAP_STRING_INDEX.with(|idx| {
+        idx.borrow()
+            .get(&(map as usize))
+            .is_some_and(|slot| slot.get(&hash).is_some_and(|bucket| !bucket.is_empty()))
+    })
 }
 
 /// Strip NaN-boxing tags from a map pointer (defensive guard).
@@ -218,7 +366,7 @@ fn clean_map_ptr_mut(map: *mut MapHeader) -> *mut MapHeader {
     clean_map_ptr(map as *const MapHeader) as *mut MapHeader
 }
 
-/// Map header - stable address, entries allocated separately
+/// Map header - GC-movable address, entries allocated separately
 #[repr(C)]
 pub struct MapHeader {
     /// Number of key-value pairs in the map
@@ -393,10 +541,11 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
     let cap = if capacity == 0 { 4 } else { capacity };
     let ent_layout = entries_layout(cap as usize);
 
-    // Allocate header via GC so the GC can trace Map entries (keys/values)
-    // and keep gc-allocated strings/arrays/objects alive
-    let ptr = crate::gc::gc_malloc(std::mem::size_of::<MapHeader>(), crate::gc::GC_TYPE_MAP)
-        as *mut MapHeader;
+    // Allocate the fixed-size header in the managed arena. The entries buffer
+    // remains external and is traced through the Map rewrite descriptor.
+    let ptr =
+        crate::arena::arena_alloc_gc(std::mem::size_of::<MapHeader>(), 8, crate::gc::GC_TYPE_MAP)
+            as *mut MapHeader;
 
     unsafe {
         // Entries array uses standard alloc (not gc-tracked, just data).
@@ -417,13 +566,14 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
         // Initialize header
         (*ptr).size = 0;
         (*ptr).capacity = cap;
+        // GC_STORE_AUDIT(INIT): map entries buffer is external storage; element stores are barriered separately.
         (*ptr).entries = entries;
 
         // Register in map registry for runtime type detection
         register_map(ptr);
 
         // Initialize / reset the O(1) lookup side-table for this address.
-        // gc_malloc may recycle a freed Map's GC slot, so a stale index
+        // Arena reuse may recycle a freed Map's GC slot, so a stale index
         // entry from the prior occupant must be cleared here.
         MAP_INDEX.with(|idx| {
             idx.borrow_mut()
@@ -562,6 +712,7 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
         panic!("Failed to grow map entries");
     }
 
+    // GC_STORE_AUDIT(INIT): map external buffer pointer moves; live entry slots are dirtied by caller.
     (*map).entries = new_entries;
     (*map).capacity = new_capacity;
     true
@@ -584,8 +735,8 @@ pub extern "C" fn js_map_set(map: *mut MapHeader, key: f64, value: f64) -> *mut 
             // Update existing value (key position unchanged → no index update)
             let entries = entries_ptr_mut(map);
             let value_slot = entries.add((idx as usize) * 2 + 1);
-            ptr::write(value_slot, value);
-            crate::gc::runtime_write_barrier_external_slot(
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map value slot uses the shared external-slot helper.
+            crate::gc::runtime_store_external_jsvalue_slot(
                 map as usize,
                 value_slot as usize,
                 value.to_bits(),
@@ -607,14 +758,13 @@ pub extern "C" fn js_map_set(map: *mut MapHeader, key: f64, value: f64) -> *mut 
 
         let key_slot = entries.add((size as usize) * 2);
         let value_slot = entries.add((size as usize) * 2 + 1);
-        ptr::write(key_slot, key);
-        ptr::write(value_slot, value);
-        crate::gc::runtime_write_barrier_external_slot(
+        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map append key/value slots use the shared external-slot helper.
+        crate::gc::runtime_store_external_jsvalue_slot(
             map as usize,
             key_slot as usize,
             key.to_bits(),
         );
-        crate::gc::runtime_write_barrier_external_slot(
+        crate::gc::runtime_store_external_jsvalue_slot(
             map as usize,
             value_slot as usize,
             value.to_bits(),
@@ -719,14 +869,13 @@ pub extern "C" fn js_map_delete(map: *mut MapHeader, key: f64) -> i32 {
             let last_value = ptr::read(entries.add(((size - 1) as usize) * 2 + 1));
             let key_slot = entries.add((idx as usize) * 2);
             let value_slot = entries.add((idx as usize) * 2 + 1);
-            ptr::write(key_slot, last_key);
-            ptr::write(value_slot, last_value);
-            crate::gc::runtime_write_barrier_external_slot(
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map swap-remove slots use the shared external-slot helper.
+            crate::gc::runtime_store_external_jsvalue_slot(
                 map as usize,
                 key_slot as usize,
                 last_key.to_bits(),
             );
-            crate::gc::runtime_write_barrier_external_slot(
+            crate::gc::runtime_store_external_jsvalue_slot(
                 map as usize,
                 value_slot as usize,
                 last_value.to_bits(),
@@ -876,41 +1025,44 @@ pub extern "C" fn js_map_entries(map: *const MapHeader) -> *mut crate::array::Ar
     if map.is_null() {
         return crate::array::js_array_alloc(0);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_raw_const_ptr(map);
     unsafe {
+        let map = map_handle.get_raw_const_ptr::<MapHeader>();
         let size = (*map).size as usize;
-        let entries = entries_ptr(map);
 
         // Outer Array sized exactly to hold N pair pointers — set length
         // up front so we can write directly into the elements buffer
         // instead of going through `js_array_push_f64` per pair.
         let result = crate::array::js_array_alloc_with_length(size as u32);
-        let result_elems =
-            (result as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+        let result_handle = scope.root_raw_mut_ptr(result);
+        maybe_force_helper_gc_for_test();
 
         for i in 0..size {
-            let key = ptr::read(entries.add(i * 2));
-            let value = ptr::read(entries.add(i * 2 + 1));
-
             // Inner pair Array: allocate via js_array_alloc (which floors
             // to MIN_ARRAY_CAPACITY), then write key/value/length directly.
             // Skips the two `js_array_push_f64` calls per pair (each does
             // its own bounds + capacity check).
             let pair = crate::array::js_array_alloc(2);
-            let pair_elems =
-                (pair as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
-            std::ptr::write(pair_elems, key.to_bits());
-            crate::array::note_array_slot(pair, 0, key.to_bits());
-            std::ptr::write(pair_elems.add(1), value.to_bits());
-            crate::array::note_array_slot(pair, 1, value.to_bits());
+            let map = map_handle.get_raw_const_ptr::<MapHeader>();
+            let entries = entries_ptr(map);
+            let key = ptr::read(entries.add(i * 2));
+            let value = ptr::read(entries.add(i * 2 + 1));
+            // GC_STORE_AUDIT(BARRIERED): pair array key slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(pair, 0, key.to_bits());
+            // GC_STORE_AUDIT(BARRIERED): pair array value slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(pair, 1, value.to_bits());
             (*pair).length = 2;
             crate::array::rebuild_array_layout_exact(pair);
 
             // Write the NaN-boxed pair pointer directly into the outer
             // array's element slot — no push.
             let pair_boxed = crate::value::js_nanbox_pointer(pair as i64);
-            std::ptr::write(result_elems.add(i), pair_boxed.to_bits());
-            crate::array::note_array_slot(result, i, pair_boxed.to_bits());
+            let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): outer entries array slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(result, i, pair_boxed.to_bits());
         }
+        let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
         crate::array::rebuild_array_layout_exact(result);
 
         result
@@ -924,17 +1076,26 @@ pub extern "C" fn js_map_keys(map: *const MapHeader) -> *mut crate::array::Array
     if map.is_null() {
         return crate::array::js_array_alloc(0);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_raw_const_ptr(map);
     unsafe {
+        let map = map_handle.get_raw_const_ptr::<MapHeader>();
         let size = (*map).size as usize;
-        let entries = entries_ptr(map);
         let result = crate::array::js_array_alloc(size as u32);
+        let result_handle = scope.root_raw_mut_ptr(result);
+        maybe_force_helper_gc_for_test();
 
         for i in 0..size {
+            let map = map_handle.get_raw_const_ptr::<MapHeader>();
+            let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
-            crate::array::js_array_push_f64(result, key);
+            let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): map keys array slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(result, i, key.to_bits());
+            (*result).length = (i + 1) as u32;
         }
 
-        result
+        result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>()
     }
 }
 
@@ -945,17 +1106,26 @@ pub extern "C" fn js_map_values(map: *const MapHeader) -> *mut crate::array::Arr
     if map.is_null() {
         return crate::array::js_array_alloc(0);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_raw_const_ptr(map);
     unsafe {
+        let map = map_handle.get_raw_const_ptr::<MapHeader>();
         let size = (*map).size as usize;
-        let entries = entries_ptr(map);
         let result = crate::array::js_array_alloc(size as u32);
+        let result_handle = scope.root_raw_mut_ptr(result);
+        maybe_force_helper_gc_for_test();
 
         for i in 0..size {
+            let map = map_handle.get_raw_const_ptr::<MapHeader>();
+            let entries = entries_ptr(map);
             let value = ptr::read(entries.add(i * 2 + 1));
-            crate::array::js_array_push_f64(result, value);
+            let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): map values array slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(result, i, value.to_bits());
+            (*result).length = (i + 1) as u32;
         }
 
-        result
+        result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>()
     }
 }
 
@@ -963,12 +1133,28 @@ pub extern "C" fn js_map_values(map: *const MapHeader) -> *mut crate::array::Arr
 /// Used for `new Map([["a", 1], ["b", 2]])` construction.
 #[no_mangle]
 pub extern "C" fn js_map_from_array(arr: *const crate::array::ArrayHeader) -> *mut MapHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = if arr.is_null() {
+        None
+    } else {
+        Some(scope.root_raw_const_ptr(arr))
+    };
     let map = js_map_alloc(4);
+    let map_handle = scope.root_raw_mut_ptr(map);
     if arr.is_null() {
-        return map;
+        return map_handle.get_raw_mut_ptr::<MapHeader>();
     }
+    maybe_force_helper_gc_for_test();
+    let arr = arr_handle
+        .as_ref()
+        .expect("non-null array should have a runtime handle")
+        .get_raw_const_ptr::<crate::array::ArrayHeader>();
     let len = crate::array::js_array_length(arr);
     for i in 0..len {
+        let arr = arr_handle
+            .as_ref()
+            .expect("non-null array should have a runtime handle")
+            .get_raw_const_ptr::<crate::array::ArrayHeader>();
         // Each entry must itself be a 2-element array [key, value].
         // Array elements are stored as f64 NaN-boxed values; nested arrays
         // come through as POINTER_TAG-boxed f64 values.
@@ -998,9 +1184,10 @@ pub extern "C" fn js_map_from_array(arr: *const crate::array::ArrayHeader) -> *m
         }
         let key = crate::array::js_array_get_f64(inner_ptr, 0);
         let value = crate::array::js_array_get_f64(inner_ptr, 1);
+        let map = map_handle.get_raw_mut_ptr::<MapHeader>();
         js_map_set(map, key, value);
     }
-    map
+    map_handle.get_raw_mut_ptr::<MapHeader>()
 }
 
 /// Iterate over map entries, calling a callback with (value, key, map) for each
@@ -1010,20 +1197,28 @@ pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64) {
     if map.is_null() {
         return;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_raw_const_ptr(map);
+    let callback_handle = scope.root_nanbox_f64(callback);
     unsafe {
+        let map = map_handle.get_raw_const_ptr::<MapHeader>();
         let size = (*map).size as usize;
-        let entries = entries_ptr(map);
 
         // Extract the closure pointer from the NaN-boxed callback.
         // The callback may be NaN-boxed with POINTER_TAG (0x7FFD) or
         // passed as a raw pointer (i64 bitcast to f64). Mask off the
         // upper 16 bits to get the real 48-bit pointer.
-        let closure_ptr =
-            (callback.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader;
 
         for i in 0..size {
+            let map = map_handle.get_raw_const_ptr::<MapHeader>();
+            if i >= (*map).size as usize {
+                break;
+            }
+            let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
             let value = ptr::read(entries.add(i * 2 + 1));
+            let closure_ptr = (callback_handle.get_nanbox_u64() & 0x0000_FFFF_FFFF_FFFF)
+                as *const crate::closure::ClosureHeader;
             // Call closure with (value, key) - Map.forEach callback signature
             crate::closure::js_closure_call2(closure_ptr, value, key);
         }

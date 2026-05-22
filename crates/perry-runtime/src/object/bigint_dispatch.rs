@@ -14,8 +14,10 @@ pub(crate) unsafe fn dispatch_bigint_binary_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a_handle = scope.root_bigint_ptr(a);
     // Extract second operand from args (if any)
-    let b = if args_len > 0 && !args_ptr.is_null() {
+    let b_ptr = if args_len > 0 && !args_ptr.is_null() {
         let arg_f64 = *args_ptr;
         let arg_jsval = JSValue::from_bits(arg_f64.to_bits());
         if arg_jsval.is_bigint() {
@@ -29,81 +31,84 @@ pub(crate) unsafe fn dispatch_bigint_binary_method(
     } else {
         std::ptr::null()
     };
+    let b_handle = scope.root_bigint_ptr(b_ptr);
+    let a_ptr = || a_handle.get_raw_const_ptr::<crate::bigint::BigIntHeader>();
+    let b_ptr = || b_handle.get_raw_const_ptr::<crate::bigint::BigIntHeader>();
 
     match method {
         // Binary arithmetic → returns BigInt
         "add" => {
-            let result = crate::bigint::js_bigint_add(a, b);
+            let result = crate::bigint::js_bigint_add(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "sub" => {
-            let result = crate::bigint::js_bigint_sub(a, b);
+            let result = crate::bigint::js_bigint_sub(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "mul" => {
-            let result = crate::bigint::js_bigint_mul(a, b);
+            let result = crate::bigint::js_bigint_mul(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "div" => {
-            let result = crate::bigint::js_bigint_div(a, b);
+            let result = crate::bigint::js_bigint_div(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "mod" | "umod" => {
-            let result = crate::bigint::js_bigint_mod(a, b);
+            let result = crate::bigint::js_bigint_mod(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "pow" => {
-            let result = crate::bigint::js_bigint_pow(a, b);
+            let result = crate::bigint::js_bigint_pow(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "and" => {
-            let result = crate::bigint::js_bigint_and(a, b);
+            let result = crate::bigint::js_bigint_and(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "or" => {
-            let result = crate::bigint::js_bigint_or(a, b);
+            let result = crate::bigint::js_bigint_or(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "xor" => {
-            let result = crate::bigint::js_bigint_xor(a, b);
+            let result = crate::bigint::js_bigint_xor(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "shln" => {
-            let result = crate::bigint::js_bigint_shl(a, b);
+            let result = crate::bigint::js_bigint_shl(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "shrn" => {
-            let result = crate::bigint::js_bigint_shr(a, b);
+            let result = crate::bigint::js_bigint_shr(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "maskn" => {
             // maskn(bits) — mask to lowest N bits
-            let result = crate::bigint::js_bigint_and(a, b); // approximate
+            let result = crate::bigint::js_bigint_and(a_ptr(), b_ptr()); // approximate
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         // Comparison → returns boolean/number
         "eq" => {
-            let result = crate::bigint::js_bigint_eq(a, b);
+            let result = crate::bigint::js_bigint_eq(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bool(result != 0).bits())
         }
         "lt" => {
-            let result = crate::bigint::js_bigint_cmp(a, b);
+            let result = crate::bigint::js_bigint_cmp(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bool(result < 0).bits())
         }
         "lte" => {
-            let result = crate::bigint::js_bigint_cmp(a, b);
+            let result = crate::bigint::js_bigint_cmp(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bool(result <= 0).bits())
         }
         "gt" => {
-            let result = crate::bigint::js_bigint_cmp(a, b);
+            let result = crate::bigint::js_bigint_cmp(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bool(result > 0).bits())
         }
         "gte" => {
-            let result = crate::bigint::js_bigint_cmp(a, b);
+            let result = crate::bigint::js_bigint_cmp(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bool(result >= 0).bits())
         }
         "cmp" => {
-            let result = crate::bigint::js_bigint_cmp(a, b);
+            let result = crate::bigint::js_bigint_cmp(a_ptr(), b_ptr());
             result as f64
         }
         "fromTwos" => {
@@ -111,6 +116,8 @@ pub(crate) unsafe fn dispatch_bigint_binary_method(
             // `width`-bit integer in two's complement. If bit (width-1) of
             // `a` is set the result is `a - 2^width`; otherwise return `a`.
             // `width` arrives in `b` (already a BigInt — see top of fn).
+            let b = b_ptr();
+            let a = a_ptr();
             let width = if b.is_null() { 0u64 } else { (*b).limbs[0] };
             let max_bits = (crate::bigint::BIGINT_LIMBS * 64) as u64;
             if width == 0 || width > max_bits {
@@ -135,6 +142,8 @@ pub(crate) unsafe fn dispatch_bigint_binary_method(
             // is negative the result is `a + 2^width` (mod 2^width);
             // otherwise return `a` unchanged. bn.js does not mask
             // non-negative inputs to `width` bits, so neither do we.
+            let b = b_ptr();
+            let a = a_ptr();
             let width = if b.is_null() { 0u64 } else { (*b).limbs[0] };
             let max_bits = (crate::bigint::BIGINT_LIMBS * 64) as u64;
             if width == 0 || width > max_bits {

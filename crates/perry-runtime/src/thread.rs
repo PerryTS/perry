@@ -445,6 +445,39 @@ unsafe fn serialize_closure(closure: *const ClosureHeader) -> SerializedValue {
 // Deserialization: SerializedValue → JSValue (into current thread's arena)
 // ============================================================================
 
+#[inline]
+unsafe fn store_thread_array_slot(arr: *mut crate::array::ArrayHeader, index: usize, bits: u64) {
+    crate::array::store_array_slot(arr, index, bits);
+    (*arr).length = (index + 1) as u32;
+}
+
+#[inline]
+unsafe fn store_thread_object_field(
+    obj: *mut crate::object::ObjectHeader,
+    index: usize,
+    bits: u64,
+) {
+    crate::object::store_object_field_slot(obj, index, bits);
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_store_thread_array_slot(
+    arr: *mut crate::array::ArrayHeader,
+    index: usize,
+    bits: u64,
+) {
+    store_thread_array_slot(arr, index, bits);
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_store_thread_object_field(
+    obj: *mut crate::object::ObjectHeader,
+    index: usize,
+    bits: u64,
+) {
+    store_thread_object_field(obj, index, bits);
+}
+
 /// Deserialize a SerializedValue into a NaN-boxed JSValue.
 ///
 /// Allocates any needed objects (strings, arrays, objects, closures) in the
@@ -472,14 +505,15 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
 
         SerializedValue::Array(elements) => {
             let arr = crate::array::js_array_alloc(elements.len() as u32);
-            let arr_elements =
-                (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let arr_handle = scope.root_raw_mut_ptr(arr);
             for (i, elem) in elements.iter().enumerate() {
                 let bits = deserialize_jsvalue(elem);
-                *arr_elements.add(i) = f64::from_bits(bits);
-                (*arr).length = (i + 1) as u32;
-                crate::array::note_array_slot(arr, i, bits);
+                let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+                // GC_STORE_AUDIT(BARRIERED): deserialized thread array slot uses the shared array slot-store helper.
+                store_thread_array_slot(arr, i, bits);
             }
+            let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
             (*arr).length = elements.len() as u32;
             JSValue::pointer(arr as *const u8).bits()
         }
@@ -495,23 +529,21 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
                 *parent_class_id,
                 fields.len() as u32,
             );
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(obj);
 
             // Set field values
-            let fields_ptr = (obj as *mut u8)
-                .add(std::mem::size_of::<crate::object::ObjectHeader>())
-                as *mut f64;
             for (i, field) in fields.iter().enumerate() {
                 let bits = deserialize_jsvalue(field);
-                *fields_ptr.add(i) = f64::from_bits(bits);
-                crate::gc::layout_note_slot(obj as usize, i, bits);
+                let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                // GC_STORE_AUDIT(BARRIERED): deserialized thread object field uses the shared object slot-store helper.
+                store_thread_object_field(obj, i, bits);
             }
 
             // Reconstruct keys array if present
             if let Some(key_strings) = keys {
                 let keys_arr = crate::array::js_array_alloc(key_strings.len() as u32);
-                let keys_elements = (keys_arr as *mut u8)
-                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                    as *mut f64;
+                let keys_handle = scope.root_raw_mut_ptr(keys_arr);
                 for (i, key_bytes) in key_strings.iter().enumerate() {
                     let str_ptr = crate::string::js_string_from_bytes(
                         if key_bytes.is_empty() {
@@ -522,14 +554,17 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
                         key_bytes.len() as u32,
                     );
                     let key_val = JSValue::string_ptr(str_ptr);
-                    *keys_elements.add(i) = f64::from_bits(key_val.bits());
-                    (*keys_arr).length = (i + 1) as u32;
-                    crate::array::note_array_slot(keys_arr, i, key_val.bits());
+                    let keys_arr = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+                    // GC_STORE_AUDIT(BARRIERED): deserialized key array slot uses the shared array slot-store helper.
+                    store_thread_array_slot(keys_arr, i, key_val.bits());
                 }
+                let keys_arr = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
                 (*keys_arr).length = key_strings.len() as u32;
-                (*obj).keys_array = keys_arr;
+                let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                crate::object::js_object_set_keys(obj, keys_arr);
             }
 
+            let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
             JSValue::pointer(obj as *const u8).bits()
         }
 
@@ -539,24 +574,24 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
             captures,
         } => {
             let closure = closure::js_closure_alloc(*func_ptr as *const u8, *capture_count);
-            let captures_base =
-                (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
             for (i, cap) in captures.iter().enumerate() {
                 let bits = deserialize_jsvalue(cap);
-                *captures_base.add(i) = f64::from_bits(bits);
-                crate::gc::layout_note_slot(closure as usize, i, bits);
+                crate::closure::js_closure_set_capture_f64(closure, i as u32, f64::from_bits(bits));
             }
             JSValue::pointer(closure as *const u8).bits()
         }
 
         SerializedValue::BigInt(limbs) => {
-            let ptr = gc::gc_malloc(std::mem::size_of::<BigIntHeader>(), gc::GC_TYPE_BIGINT)
-                as *mut BigIntHeader;
-            (*ptr).limbs = *limbs;
+            let ptr = bigint::bigint_alloc_with_limbs(*limbs);
             // NaN-box with BIGINT_TAG
             BIGINT_TAG | (ptr as u64 & POINTER_MASK)
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_deserialize_bigint_limbs(limbs: [u64; BIGINT_LIMBS]) -> u64 {
+    deserialize_jsvalue(&SerializedValue::BigInt(limbs))
 }
 
 // ============================================================================
@@ -713,11 +748,13 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                 let local_closure: *const ClosureHeader = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
                     let c = closure::js_closure_alloc(fp as *const u8, cc);
-                    let base = (c as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
                     for (i, cap) in cap_vals.iter().enumerate() {
                         let bits = deserialize_jsvalue(cap);
-                        *base.add(i) = f64::from_bits(bits);
-                        crate::gc::layout_note_slot(c as usize, i, bits);
+                        crate::closure::js_closure_set_capture_f64(
+                            c,
+                            i as u32,
+                            f64::from_bits(bits),
+                        );
                     }
                     c as *const ClosureHeader
                 } else {
@@ -748,19 +785,20 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
     // ── 7. Deserialize results into main thread's arena ──────────────
     let total_results: usize = all_results.iter().map(|r| r.len()).sum();
     let result_arr = crate::array::js_array_alloc(total_results as u32);
-    let result_elements =
-        (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result_handle = scope.root_raw_mut_ptr(result_arr);
 
     let mut write_idx = 0;
     for chunk_results in &all_results {
         for sv in chunk_results {
             let bits = deserialize_jsvalue(sv);
-            *result_elements.add(write_idx) = f64::from_bits(bits);
-            (*result_arr).length = (write_idx + 1) as u32;
-            crate::array::note_array_slot(result_arr, write_idx, bits);
+            let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): parallelMap result slot uses the shared array slot-store helper.
+            store_thread_array_slot(result_arr, write_idx, bits);
             write_idx += 1;
         }
     }
+    let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     (*result_arr).length = total_results as u32;
 
     result_arr as i64
@@ -776,8 +814,8 @@ unsafe fn single_thread_map(
     let elements_ptr =
         (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
     let result_arr = crate::array::js_array_alloc(len as u32);
-    let result_elements =
-        (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result_handle = scope.root_raw_mut_ptr(result_arr);
 
     let closure = if closure_ptr != 0 {
         closure_ptr as *const ClosureHeader
@@ -790,10 +828,11 @@ unsafe fn single_thread_map(
     for i in 0..len {
         let arg = *elements_ptr.add(i);
         let result = call_fn(closure, arg);
-        *result_elements.add(i) = result;
-        (*result_arr).length = (i + 1) as u32;
-        crate::array::note_array_slot(result_arr, i, result.to_bits());
+        let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        // GC_STORE_AUDIT(BARRIERED): single-thread map result slot uses the shared array slot-store helper.
+        store_thread_array_slot(result_arr, i, result.to_bits());
     }
+    let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     (*result_arr).length = len as u32;
 
     result_arr as i64
@@ -907,11 +946,13 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                 let local_closure: *const ClosureHeader = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
                     let c = closure::js_closure_alloc(fp as *const u8, cc);
-                    let base = (c as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
                     for (i, cap) in cap_vals.iter().enumerate() {
                         let bits = deserialize_jsvalue(cap);
-                        *base.add(i) = f64::from_bits(bits);
-                        crate::gc::layout_note_slot(c as usize, i, bits);
+                        crate::closure::js_closure_set_capture_f64(
+                            c,
+                            i as u32,
+                            f64::from_bits(bits),
+                        );
                     }
                     c as *const ClosureHeader
                 } else {
@@ -944,19 +985,20 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
     // Deserialize kept elements into main thread's arena (preserving order)
     let total: usize = all_results.iter().map(|r| r.len()).sum();
     let result_arr = crate::array::js_array_alloc(total as u32);
-    let result_elements =
-        (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result_handle = scope.root_raw_mut_ptr(result_arr);
 
     let mut write_idx = 0;
     for chunk_kept in &all_results {
         for sv in chunk_kept {
             let bits = deserialize_jsvalue(sv);
-            *result_elements.add(write_idx) = f64::from_bits(bits);
-            (*result_arr).length = (write_idx + 1) as u32;
-            crate::array::note_array_slot(result_arr, write_idx, bits);
+            let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): parallelFilter result slot uses the shared array slot-store helper.
+            store_thread_array_slot(result_arr, write_idx, bits);
             write_idx += 1;
         }
     }
+    let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     (*result_arr).length = total as u32;
 
     result_arr as i64
@@ -972,8 +1014,8 @@ unsafe fn single_thread_filter(
     let elements_ptr =
         (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
     let result_arr = crate::array::js_array_alloc(len as u32);
-    let result_elements =
-        (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result_handle = scope.root_raw_mut_ptr(result_arr);
 
     let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
     let mut count = 0u32;
@@ -983,12 +1025,13 @@ unsafe fn single_thread_filter(
         let result = call_fn(closure, arg);
         let keep = is_truthy_bits(result.to_bits());
         if keep {
-            *result_elements.add(count as usize) = arg;
-            (*result_arr).length = count + 1;
-            crate::array::note_array_slot(result_arr, count as usize, arg.to_bits());
+            let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): single-thread filter result slot uses the shared array slot-store helper.
+            store_thread_array_slot(result_arr, count as usize, arg.to_bits());
             count += 1;
         }
     }
+    let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     (*result_arr).length = count;
 
     result_arr as i64
@@ -1055,22 +1098,21 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     // ── 3. Spawn background thread ───────────────────────────────────
     std::thread::spawn(move || {
         // Reconstruct closure in this thread's arena
-        let local_closure: *const ClosureHeader =
-            if let Some((cc, ref cap_vals)) = serialized_captures {
-                let c = closure::js_closure_alloc(func_usize as *const u8, cc);
-                let base = (c as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
-                for (i, cap) in cap_vals.iter().enumerate() {
-                    unsafe {
-                        let bits = deserialize_jsvalue(cap);
-                        *base.add(i) = f64::from_bits(bits);
-                        crate::gc::layout_note_slot(c as usize, i, bits);
-                    }
+        let local_closure: *const ClosureHeader = if let Some((cc, ref cap_vals)) =
+            serialized_captures
+        {
+            let c = closure::js_closure_alloc(func_usize as *const u8, cc);
+            for (i, cap) in cap_vals.iter().enumerate() {
+                unsafe {
+                    let bits = deserialize_jsvalue(cap);
+                    crate::closure::js_closure_set_capture_f64(c, i as u32, f64::from_bits(bits));
                 }
-                c as *const ClosureHeader
-            } else {
-                // No captures — create a minimal closure header
-                closure::js_closure_alloc(func_usize as *const u8, 0) as *const ClosureHeader
-            };
+            }
+            c as *const ClosureHeader
+        } else {
+            // No captures — create a minimal closure header
+            closure::js_closure_alloc(func_usize as *const u8, 0) as *const ClosureHeader
+        };
 
         // Call the function — catch panics to avoid aborting across FFI boundary
         let call_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

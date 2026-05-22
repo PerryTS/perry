@@ -801,6 +801,9 @@ pub unsafe extern "C" fn js_object_set_method_by_name(
 /// lower_string_coerce_concat path.
 #[no_mangle]
 pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let value = value_handle.get_nanbox_f64();
     let bits = value.to_bits();
     let tag = bits & 0xFFFF_0000_0000_0000;
     if tag != POINTER_TAG {
@@ -817,24 +820,26 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     // Look up obj[Symbol.toPrimitive].
     let wk_ptr = well_known_symbol("toPrimitive");
     let sym_f64 = f64::from_bits(POINTER_TAG | (wk_ptr as u64 & POINTER_MASK));
-    let method = js_object_get_symbol_property(value, sym_f64);
+    let current_value = value_handle.get_nanbox_f64();
+    let method = js_object_get_symbol_property(current_value, sym_f64);
     if method.to_bits() == TAG_UNDEFINED {
-        return value;
+        return current_value;
     }
     // Method must be a closure pointer.
     let method_bits = method.to_bits();
     let method_tag = method_bits & 0xFFFF_0000_0000_0000;
     if method_tag != POINTER_TAG {
-        return value;
+        return value_handle.get_nanbox_f64();
     }
+    let method_handle = scope.root_nanbox_f64(method);
     let closure_ptr = (method_bits & POINTER_MASK) as *const crate::closure::ClosureHeader;
     if closure_ptr.is_null() || (closure_ptr as usize) < 0x1000 {
-        return value;
+        return value_handle.get_nanbox_f64();
     }
     // Validate CLOSURE_MAGIC before calling.
     let type_tag = std::ptr::read_volatile((closure_ptr as *const u8).add(12) as *const u32);
     if type_tag != crate::closure::CLOSURE_MAGIC {
-        return value;
+        return value_handle.get_nanbox_f64();
     }
     let hint_str: &[u8] = match hint {
         1 => b"number",
@@ -842,7 +847,12 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
         _ => b"default",
     };
     let hint_ptr = js_string_from_bytes(hint_str.as_ptr(), hint_str.len() as u32);
-    let hint_f64 = f64::from_bits(STRING_TAG | (hint_ptr as u64 & POINTER_MASK));
+    let hint_handle = scope.root_string_ptr(hint_ptr);
+    let hint_f64 = f64::from_bits(
+        STRING_TAG | (hint_handle.get_raw_const_ptr::<StringHeader>() as u64 & POINTER_MASK),
+    );
+    let method_bits = method_handle.get_nanbox_f64().to_bits();
+    let closure_ptr = (method_bits & POINTER_MASK) as *const crate::closure::ClosureHeader;
 
     // Spec says the return value must be a primitive; if it's still an
     // object pointer, that's a TypeError in JS, but we just return it

@@ -3,10 +3,32 @@
 //! Extracted from `lib.rs` for file-size hygiene. No behavior changes.
 
 use crate::*;
+use core::ffi::{c_char, CStr};
 
 // =============================================================================
 // System APIs (perry/system module)
 // =============================================================================
+
+// Emit a first-call no-op-stub diagnostic through perry-runtime's stable
+// C-ABI shim (`perry_stub_warn_ffi`) rather than the hash-mangled Rust path
+// `perry_runtime::stub_diag::perry_stub_warn`. Under the `geisterhand`
+// feature this UI lib and the linked runtime can be built with different
+// Cargo feature sets, which makes Rust-mangled symbols unresolvable at link
+// time (#1311); a `#[no_mangle]` symbol resolves regardless. Mirrors how
+// perry-ui-macos reaches `perry_app_group_suite_name`. `name`/`reason`/`issue`
+// are `'static` C-string literals.
+fn stub_warn(name: &CStr, reason: &CStr, issue: Option<&CStr>) {
+    extern "C" {
+        fn perry_stub_warn_ffi(name: *const c_char, reason: *const c_char, issue: *const c_char);
+    }
+    unsafe {
+        perry_stub_warn_ffi(
+            name.as_ptr(),
+            reason.as_ptr(),
+            issue.map_or(std::ptr::null(), CStr::as_ptr),
+        );
+    }
+}
 
 /// #917 — system share sheet (text). MVP stub on iOS: emits a
 /// first-call warning. The native implementation (issue follow-up)
@@ -16,20 +38,20 @@ use crate::*;
 /// platform — apps can compile-test against the API.
 #[no_mangle]
 pub extern "C" fn perry_system_share_text(_text_ptr: i64, _title_ptr: i64) {
-    perry_runtime::stub_diag::perry_stub_warn(
-        "perry_system_share_text",
-        "iOS UIActivityViewController not yet implemented (#917 follow-up)",
-        Some("#917"),
+    stub_warn(
+        c"perry_system_share_text",
+        c"iOS UIActivityViewController not yet implemented (#917 follow-up)",
+        Some(c"#917"),
     );
 }
 
 /// #917 — system share sheet (URL). MVP stub on iOS.
 #[no_mangle]
 pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
-    perry_runtime::stub_diag::perry_stub_warn(
-        "perry_system_share_url",
-        "iOS UIActivityViewController not yet implemented (#917 follow-up)",
-        Some("#917"),
+    stub_warn(
+        c"perry_system_share_url",
+        c"iOS UIActivityViewController not yet implemented (#917 follow-up)",
+        Some(c"#917"),
     );
 }
 
@@ -59,15 +81,30 @@ fn app_group_str_from_header_ios(ptr: *const u8) -> &'static str {
 /// when no `[ios] app_group` was baked in. Returns `None` so the
 /// caller can short-circuit before reaching for `UserDefaults`.
 fn app_group_suite_ios() -> Option<objc2::rc::Retained<objc2_foundation::NSString>> {
-    let suite = perry_runtime::app_group::configured_suite_name()?;
-    Some(objc2_foundation::NSString::from_str(suite))
+    // Reach the baked-in suite name through perry-runtime's stable C-ABI
+    // accessor instead of the hash-mangled Rust `configured_suite_name()`, so
+    // the symbol resolves even when this UI lib and the linked runtime were
+    // built with different Cargo feature sets (#1311). Mirrors perry-ui-macos.
+    extern "C" {
+        fn perry_app_group_suite_name(out_len: *mut i32) -> *const u8;
+    }
+    unsafe {
+        let mut len: i32 = 0;
+        let ptr = perry_app_group_suite_name(&mut len as *mut i32);
+        if ptr.is_null() || len <= 0 {
+            return None;
+        }
+        let slice = std::slice::from_raw_parts(ptr, len as usize);
+        let suite = std::str::from_utf8(slice).ok()?;
+        Some(objc2_foundation::NSString::from_str(suite))
+    }
 }
 
-fn warn_app_group_not_configured(symbol: &'static str) {
-    perry_runtime::stub_diag::perry_stub_warn(
+fn warn_app_group_not_configured(symbol: &CStr) {
+    stub_warn(
         symbol,
-        "App Group not configured. Add `[ios] app_group = \"group.com.example.shared\"` to perry.toml (#1178).",
-        Some("#1178"),
+        c"App Group not configured. Add `[ios] app_group = \"group.com.example.shared\"` to perry.toml (#1178).",
+        Some(c"#1178"),
     );
 }
 
@@ -92,7 +129,7 @@ pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
     unsafe {
         let defaults = app_group_defaults_ios();
         if defaults.is_null() {
-            warn_app_group_not_configured("perry_system_app_group_set");
+            warn_app_group_not_configured(c"perry_system_app_group_set");
             return;
         }
         let ns_key = objc2_foundation::NSString::from_str(key);
@@ -114,7 +151,7 @@ pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
     unsafe {
         let defaults = app_group_defaults_ios();
         if defaults.is_null() {
-            warn_app_group_not_configured("perry_system_app_group_get");
+            warn_app_group_not_configured(c"perry_system_app_group_get");
             return empty();
         }
         let ns_key = objc2_foundation::NSString::from_str(key);
@@ -144,7 +181,7 @@ pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
     unsafe {
         let defaults = app_group_defaults_ios();
         if defaults.is_null() {
-            warn_app_group_not_configured("perry_system_app_group_delete");
+            warn_app_group_not_configured(c"perry_system_app_group_delete");
             return;
         }
         let ns_key = objc2_foundation::NSString::from_str(key);
@@ -328,10 +365,10 @@ pub extern "C" fn perry_system_get_device_model() -> i64 {
 /// iOS; native impl will use `[[UIDevice currentDevice] systemVersion]`.
 #[no_mangle]
 pub extern "C" fn perry_system_get_os_version() -> i64 {
-    perry_runtime::stub_diag::perry_stub_warn(
-        "perry_system_get_os_version",
-        "iOS getOSVersion not yet implemented (UIDevice.systemVersion follow-up)",
-        Some("#918"),
+    stub_warn(
+        c"perry_system_get_os_version",
+        c"iOS getOSVersion not yet implemented (UIDevice.systemVersion follow-up)",
+        Some(c"#918"),
     );
     extern "C" {
         fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;

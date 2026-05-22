@@ -98,6 +98,7 @@ pub(crate) fn emit_v8_export_call(
             "{} = getelementptr inbounds [{} x double], ptr {}, i64 0, i64 {}",
             slot, alloca_count, args_slot, i
         ));
+        // GC_STORE_AUDIT(STACK): V8 interop args are transient stack alloca slots.
         blk.emit_raw(format!("store double {}, ptr {}, align 8", v, slot));
     }
 
@@ -200,6 +201,7 @@ pub(crate) fn emit_v8_member_method_call(
             "{} = getelementptr inbounds [{} x double], ptr {}, i64 0, i64 {}",
             slot, alloca_count, args_slot, i
         ));
+        // GC_STORE_AUDIT(STACK): V8 interop args are transient stack alloca slots.
         blk.emit_raw(format!("store double {}, ptr {}, align 8", v, slot));
     }
 

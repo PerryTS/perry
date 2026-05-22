@@ -84,9 +84,9 @@ pub unsafe fn note_closure_capture_slot(
     // post-store write barrier. The captured value remains rooted on the
     // caller's Rust stack between the store and this call, so a minor GC
     // triggered in that window cannot drop it.
-    crate::gc::layout_note_slot(closure as usize, index, value_bits);
     let slot = closure_capture_slots_mut(closure).add(index);
-    crate::gc::runtime_write_barrier_slot(closure as usize, slot as usize, value_bits);
+    crate::gc::layout_note_slot(closure as usize, index, value_bits);
+    crate::gc::runtime_write_barrier_gc_slot(closure as usize, slot as usize, value_bits);
 }
 
 #[inline]
@@ -179,8 +179,8 @@ pub extern "C" fn js_closure_alloc_singleton(func_ptr: *const u8) -> *mut Closur
 /// No-capture cache values are raw closure pointers. Captured cache entries
 /// additionally keep a bit-exact capture tuple as the cache key; each key word
 /// can be a NaN-boxed JSValue or a raw heap pointer, matching closure capture
-/// storage. The key words are metadata: they must be rewritten after movement
-/// so cache hits keep working, but the closure value is the actual root.
+/// storage. The mutable visitor lets copied-minor rewrite both the closure's
+/// heap capture slots and the cache key words after moving young captures.
 pub fn scan_singleton_closure_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     SINGLETON_CLOSURES.with(|s| {
         let mut closures = s.borrow_mut();
@@ -194,7 +194,7 @@ pub fn scan_singleton_closure_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
             for (capture_key, closure) in slots.iter_mut() {
                 visitor.visit_raw_mut_ptr_slot(closure);
                 for word in capture_key.iter_mut() {
-                    visitor.visit_metadata_heap_word_u64_slot(word);
+                    visitor.visit_heap_word_u64_slot(word);
                 }
             }
         }

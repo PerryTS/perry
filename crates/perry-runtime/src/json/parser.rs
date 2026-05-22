@@ -415,14 +415,10 @@ impl<'a> DirectParser<'a> {
                             if fast_idx < alloc_limit {
                                 let slot_idx = fast_idx;
                                 let value_bits = value.bits();
-                                let fields_ptr = (js_obj as *mut u8)
-                                    .add(std::mem::size_of::<crate::ObjectHeader>())
-                                    as *mut JSValue;
-                                let slot = fields_ptr.add(slot_idx);
-                                std::ptr::write(slot, JSValue::from_bits(value_bits));
-                                // New parse-owned object under GC suppression:
-                                // layout metadata is required, a barrier is not.
-                                crate::gc::layout_note_slot(js_obj as usize, slot_idx, value_bits);
+                                // GC_STORE_AUDIT(BARRIERED): shaped JSON field write uses the shared object slot-store helper.
+                                crate::object::store_object_field_slot(
+                                    js_obj, slot_idx, value_bits,
+                                );
                                 fast_idx += 1;
                                 took_fast = true;
                             }
@@ -656,11 +652,8 @@ impl<'a> DirectParser<'a> {
         let write_field = |i: usize, value: JSValue| {
             let value_bits = value.bits();
             unsafe {
-                let slot = fields_ptr.add(i);
-                std::ptr::write(slot, JSValue::from_bits(value_bits));
-                // New parse-owned object under GC suppression: layout
-                // metadata is required, a barrier is not.
-                crate::gc::layout_note_slot(js_obj as usize, i, value_bits);
+                // GC_STORE_AUDIT(BARRIERED): JSON object field write uses the shared object slot-store helper.
+                crate::object::store_object_field_slot(js_obj, i, value_bits);
             }
         };
         if let Some((_, values)) = heap_fields.as_ref() {

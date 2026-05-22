@@ -112,6 +112,45 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
+/// GC root scanner for Geisterhand callback storage. The widget registry and
+/// pending-action queue are Rust-owned containers, so moved closures and
+/// heap-valued callback args must be rewritten here after copied-minor GC.
+pub fn scan_geisterhand_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_geisterhand_roots_mut(&mut visitor);
+}
+
+pub fn scan_geisterhand_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    {
+        let mut reg = crate::gc::lock_gc_root_registry(&REGISTRY);
+        for widget in reg.iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut widget.closure_f64);
+        }
+    }
+    {
+        let mut actions = crate::gc::lock_gc_root_registry(&PENDING_ACTIONS);
+        for action in actions.iter_mut() {
+            match action {
+                PendingAction::InvokeCallback { closure_f64, args } => {
+                    visitor.visit_nanbox_f64_slot(closure_f64);
+                    for arg in args.iter_mut() {
+                        visitor.visit_nanbox_f64_slot(arg);
+                    }
+                }
+                PendingAction::SetState { value, .. } => {
+                    visitor.visit_nanbox_f64_slot(value);
+                }
+                PendingAction::ApplyStyle { .. } => {}
+                PendingAction::SetText { .. }
+                | PendingAction::ScrollTo { .. }
+                | PendingAction::ReadValue { .. }
+                | PendingAction::QueryWidgetTree
+                | PendingAction::CaptureScreenshot => {}
+            }
+        }
+    }
+}
+
 // Registered function pointers for UI operations. Platform UI crates call the register
 // functions below during initialization. This avoids extern "C" declarations that would
 // create hard linker dependencies on UI crate symbols.
@@ -429,17 +468,16 @@ pub extern "C" fn perry_geisterhand_pump() {
                         func(handle, str_ptr as i64);
                     }
                     // Fire onChange callback if registered
-                    if let Ok(reg) = REGISTRY.lock() {
-                        for w in reg.iter() {
-                            if w.handle == handle && w.callback_kind == CB_ON_CHANGE {
-                                let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
-                                let ptr =
-                                    unsafe { js_nanbox_get_pointer(w.closure_f64) } as *const u8;
-                                unsafe {
-                                    js_closure_call1(ptr, nanboxed);
-                                }
-                                break;
-                            }
+                    let callback = REGISTRY.lock().ok().and_then(|reg| {
+                        reg.iter()
+                            .find(|w| w.handle == handle && w.callback_kind == CB_ON_CHANGE)
+                            .map(|w| w.closure_f64)
+                    });
+                    if let Some(closure_f64) = callback {
+                        let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
+                        let ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
+                        unsafe {
+                            js_closure_call1(ptr, nanboxed);
                         }
                     }
                 }
@@ -793,4 +831,68 @@ pub extern "C" fn perry_geisterhand_get_closure(handle: i64, callback_kind: u8) 
         }
         Err(_) => 0.0,
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_geisterhand_roots() {
+    crate::gc::lock_gc_root_registry(&REGISTRY).clear();
+    crate::gc::lock_gc_root_registry(&PENDING_ACTIONS).clear();
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_geisterhand_roots(closure: f64, arg: f64, state: f64) {
+    {
+        let mut reg = crate::gc::lock_gc_root_registry(&REGISTRY);
+        reg.clear();
+        reg.push(RegisteredWidget {
+            handle: 1,
+            widget_type: WIDGET_BUTTON,
+            callback_kind: CB_ON_CLICK,
+            closure_f64: closure,
+            label: String::new(),
+            shortcut: String::new(),
+        });
+    }
+    {
+        let mut actions = crate::gc::lock_gc_root_registry(&PENDING_ACTIONS);
+        actions.clear();
+        actions.push(PendingAction::InvokeCallback {
+            closure_f64: closure,
+            args: vec![arg],
+        });
+        actions.push(PendingAction::SetState {
+            handle: 1,
+            value: state,
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_geisterhand_roots_snapshot() -> (u64, u64, u64, u64) {
+    let registered = crate::gc::lock_gc_root_registry(&REGISTRY)
+        .first()
+        .map(|widget| widget.closure_f64.to_bits())
+        .unwrap_or(0);
+    let actions = crate::gc::lock_gc_root_registry(&PENDING_ACTIONS);
+    let mut pending_closure = 0;
+    let mut pending_arg = 0;
+    let mut state = 0;
+    for action in actions.iter() {
+        match action {
+            PendingAction::InvokeCallback { closure_f64, args } => {
+                pending_closure = closure_f64.to_bits();
+                pending_arg = args.first().copied().map(f64::to_bits).unwrap_or(0);
+            }
+            PendingAction::SetState { value, .. } => {
+                state = value.to_bits();
+            }
+            PendingAction::ApplyStyle { .. } => {}
+            PendingAction::SetText { .. }
+            | PendingAction::ScrollTo { .. }
+            | PendingAction::ReadValue { .. }
+            | PendingAction::QueryWidgetTree
+            | PendingAction::CaptureScreenshot => {}
+        }
+    }
+    (registered, pending_closure, pending_arg, state)
 }

@@ -3,13 +3,12 @@
 //! issue #1098. Pure move — no logic changes.
 
 use anyhow::Result;
-use perry_hir::Expr;
+use perry_hir::{BinaryOp, Expr, UnaryOp};
 use perry_types::Type as HirType;
 
 use super::{lower_expr, FnCtx};
 use crate::block::LlBlock;
 use crate::nanbox::POINTER_MASK_I64;
-use crate::type_analysis::is_numeric_expr;
 use crate::types::{DOUBLE, I32, I64};
 
 /// Static-type predicate: the type's runtime array layout has no pointer
@@ -36,11 +35,88 @@ pub(crate) fn expr_has_numeric_pointer_free_array_layout(ctx: &FnCtx<'_>, expr: 
         .is_some_and(type_has_numeric_pointer_free_array_layout)
 }
 
-/// Numeric stores into statically numeric arrays preserve the initial
-/// pointer-free layout. Other stores still update the mask so pointer writes
-/// and pointer-clearing overwrites on mixed arrays remain precise.
+fn local_get_produces_non_pointer_bits_by_dataflow(ctx: &FnCtx<'_>, id: u32) -> bool {
+    (ctx.i32_counter_slots.contains_key(&id) || ctx.integer_locals.contains(&id))
+        && ctx.locals.contains_key(&id)
+        && !ctx.boxed_vars.contains(&id)
+        && !ctx.closure_captures.contains_key(&id)
+        && !ctx.module_globals.contains_key(&id)
+}
+
+fn expr_produces_numeric_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::Integer(_) | Expr::Number(_) | Expr::DateNow | Expr::NumberCoerce(_) => true,
+        Expr::LocalGet(id) => local_get_produces_non_pointer_bits_by_dataflow(ctx, *id),
+        Expr::Unary { op, operand } => match op {
+            UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot => {
+                expr_produces_numeric_bits_by_construction(ctx, operand)
+            }
+            UnaryOp::Not => false,
+        },
+        Expr::Binary { op, left, right } => {
+            !matches!(op, BinaryOp::Add)
+                && expr_produces_numeric_bits_by_construction(ctx, left)
+                && expr_produces_numeric_bits_by_construction(ctx, right)
+        }
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            expr_produces_numeric_bits_by_construction(ctx, then_expr)
+                && expr_produces_numeric_bits_by_construction(ctx, else_expr)
+        }
+        Expr::Sequence(exprs) => exprs
+            .last()
+            .is_some_and(|last| expr_produces_numeric_bits_by_construction(ctx, last)),
+        _ => false,
+    }
+}
+
+pub(crate) fn expr_produces_non_pointer_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Compare { .. }
+        | Expr::Void(_)
+        | Expr::BooleanCoerce(_)
+        | Expr::IsNaN(_)
+        | Expr::IsFinite(_)
+        | Expr::NumberIsNaN(_)
+        | Expr::NumberIsFinite(_)
+        | Expr::NumberIsInteger(_)
+        | Expr::NumberIsSafeInteger(_) => true,
+        Expr::Unary {
+            op: UnaryOp::Not, ..
+        } => true,
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            expr_produces_non_pointer_bits_by_construction(ctx, then_expr)
+                && expr_produces_non_pointer_bits_by_construction(ctx, else_expr)
+        }
+        Expr::Sequence(exprs) => exprs
+            .last()
+            .is_some_and(|last| expr_produces_non_pointer_bits_by_construction(ctx, last)),
+        _ => expr_produces_numeric_bits_by_construction(ctx, expr),
+    }
+}
+
+/// Stores into statically numeric arrays may preserve the initial
+/// pointer-free layout only when the stored value's bits are known from
+/// expression construction, not from TypeScript's local type alone. Other
+/// stores update the mask so pointer writes and pointer-clearing overwrites
+/// on mixed arrays remain precise.
 pub(crate) fn array_store_needs_layout_note(ctx: &FnCtx<'_>, array: &Expr, value: &Expr) -> bool {
-    !(expr_has_numeric_pointer_free_array_layout(ctx, array) && is_numeric_expr(ctx, value))
+    !(expr_has_numeric_pointer_free_array_layout(ctx, array)
+        && expr_produces_non_pointer_bits_by_construction(ctx, value))
+}
+
+pub(crate) fn array_store_needs_write_barrier(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    !expr_produces_non_pointer_bits_by_construction(ctx, value)
 }
 
 /// `lower_expr` variant that hands an expected-type hint down to the

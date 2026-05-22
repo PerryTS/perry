@@ -153,6 +153,22 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_event_emitter_new", &[]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        // node:perf_hooks — `new PerformanceObserver(cb)` registers the
+        // observer and returns its `perf_observer` namespace object (already
+        // NaN-boxed). `cb` is passed through so the runtime can invoke it on
+        // flush; absent → undefined.
+        "PerformanceObserver" => {
+            let cb = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_perf_observer_new",
+                &[(DOUBLE, &cb)],
+            )))
+        }
         // string_decoder.StringDecoder — issue #848. `new StringDecoder("utf8")`
         // pre-fix fell through to the generic `js_object_alloc(0, 0)` placeholder,
         // so `dec.write` / `dec.end` were `undefined`. Allocate a real handle

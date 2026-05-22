@@ -3,23 +3,43 @@
 //! and Promise type.
 
 use super::*;
+
+#[inline]
+unsafe fn store_promise_jsvalue_slot(promise: *mut Promise, slot: *mut f64, value: f64) {
+    crate::gc::runtime_store_gc_jsvalue_slot(promise as usize, slot as usize, value.to_bits());
+}
+
 /// Allocate a new Promise
 #[no_mangle]
 pub extern "C" fn js_promise_new() -> *mut Promise {
     bump(&MT_PROMISE_NEW_COUNT);
-    let raw = crate::gc::gc_malloc(std::mem::size_of::<Promise>(), crate::gc::GC_TYPE_PROMISE);
+    let hooks_active = crate::async_hooks::hooks_active();
+    let raw = if hooks_active {
+        crate::gc::gc_malloc(std::mem::size_of::<Promise>(), crate::gc::GC_TYPE_PROMISE)
+    } else {
+        crate::arena::arena_alloc_gc(
+            std::mem::size_of::<Promise>(),
+            std::mem::align_of::<Promise>(),
+            crate::gc::GC_TYPE_PROMISE,
+        )
+    };
     let promise = raw as *mut Promise;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let promise_handle = scope.root_raw_mut_ptr(promise);
     unsafe {
+        // GC_STORE_AUDIT(INIT): initializes freshly allocated Promise storage before the promise is published.
         ptr::write(promise, Promise::new());
-        if crate::async_hooks::hooks_active() {
+        if hooks_active {
+            let promise = promise_handle.get_raw_mut_ptr::<Promise>();
             let resource =
                 f64::from_bits(0x7FFD_0000_0000_0000 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF));
             let ids = crate::async_hooks::init_resource("PROMISE", resource, false);
+            let promise = promise_handle.get_raw_mut_ptr::<Promise>();
             (*promise).async_id = ids.async_id;
             (*promise).trigger_async_id = ids.trigger_async_id;
         }
     }
-    promise
+    promise_handle.get_raw_mut_ptr::<Promise>()
 }
 
 /// Free a Promise (no-op — GC handles deallocation)
@@ -86,7 +106,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
             return; // Already settled
         }
         (*promise).state = PromiseState::Fulfilled;
-        (*promise).value = value;
+        store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).value), value);
         crate::async_hooks::promise_resolve((*promise).async_id);
 
         // Schedule callbacks. Push to TASK_QUEUE whenever there's anything
@@ -236,7 +256,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
             return; // Already settled
         }
         (*promise).state = PromiseState::Rejected;
-        (*promise).reason = reason;
+        store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).reason), reason);
         crate::async_hooks::promise_resolve((*promise).async_id);
 
         // Schedule callbacks. Same propagation rule as `js_promise_resolve`

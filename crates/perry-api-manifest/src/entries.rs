@@ -91,6 +91,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "querystring",
     "cluster",
     "tty",
+    "perf_hooks",
     "process",
     "perry/tui",
     "perry/ui",
@@ -145,6 +146,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "perry/tui",
     "perry/background",
     "tty",
+    "perf_hooks",
 ];
 
 const fn method(
@@ -1775,6 +1777,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // (no NATIVE_MODULE_TABLE entry — direct dispatch like createHash).
     method("crypto", "createCipheriv", false, None),
     method("crypto", "createDecipheriv", false, None),
+    // `crypto.createSign(alg)` / `createVerify(alg)` — RSA PKCS#1 v1.5 sign /
+    // verify over the SHA family (#1364). SignHandle dispatched like createHash
+    // (no NATIVE_MODULE_TABLE entry — direct codegen dispatch in expr/calls.rs).
+    method("crypto", "createSign", false, None),
+    method("crypto", "createVerify", false, None),
     // `crypto.createSecretKey(key, encoding?)` — required by jose for the
     // JWT signing path; returns a Uint8Array-marked Buffer of the key
     // bytes that `instanceof Uint8Array` accepts on both sides of the
@@ -1783,6 +1790,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createSecretKey", false, None),
     method("crypto", "pbkdf2Sync", false, None),
     method("crypto", "pbkdf2", false, None),
+    // crypto.scryptSync(password, salt, keylen, options?) -> Buffer. Wired in
+    // codegen `expr/calls.rs`; HIR types the result as Uint8Array.
+    method("crypto", "scryptSync", false, None),
+    // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
+    method("crypto", "hkdfSync", false, None),
+    // crypto.generateKeyPairSync(type, options) -> { publicKey, privateKey }
+    // PEM strings (RSA / EC P-256). Wired in codegen `expr/calls.rs`.
+    method("crypto", "generateKeyPairSync", false, None),
+    // crypto.randomInt([min,] max) — uniform integer in [min, max).
+    // crypto.timingSafeEqual(a, b) — constant-time byte comparison.
+    // crypto.getHashes() / getCiphers() — supported-algorithm name lists.
+    // All wired in codegen `expr/calls.rs` (direct dispatch, like createHash).
+    method("crypto", "randomInt", false, None),
+    method("crypto", "timingSafeEqual", false, None),
+    method("crypto", "getHashes", false, None),
+    method("crypto", "getCiphers", false, None),
     // Web Crypto API (issue #561) — `crypto.subtle.*`. The HIR
     // lowering at `crates/perry-hir/src/lower/expr_call.rs` recognizes
     // the `crypto.subtle.<method>(args)` chain and emits a
@@ -2121,6 +2144,39 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("tty", "isatty", false, None),
     class("tty", "ReadStream"),
     class("tty", "WriteStream"),
+    // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
+    method("perf_hooks", "now", false, None),
+    method("perf_hooks", "mark", false, None),
+    method("perf_hooks", "measure", false, None),
+    method("perf_hooks", "getEntries", false, None),
+    method("perf_hooks", "getEntriesByName", false, None),
+    method("perf_hooks", "getEntriesByType", false, None),
+    method("perf_hooks", "clearMarks", false, None),
+    method("perf_hooks", "clearMeasures", false, None),
+    method("perf_hooks", "eventLoopUtilization", false, None),
+    method("perf_hooks", "toJSON", false, None),
+    method("perf_hooks", "clearResourceTimings", false, None),
+    method("perf_hooks", "setResourceTimingBufferSize", false, None),
+    property("perf_hooks", "timeOrigin"),
+    property("perf_hooks", "performance"),
+    property("perf_hooks", "constants"),
+    class("perf_hooks", "PerformanceObserver"),
+    class("perf_hooks", "PerformanceEntry"),
+    class("perf_hooks", "PerformanceMark"),
+    class("perf_hooks", "PerformanceMeasure"),
+    method("perf_hooks", "observe", true, Some("PerformanceObserver")),
+    method(
+        "perf_hooks",
+        "disconnect",
+        true,
+        Some("PerformanceObserver"),
+    ),
+    method(
+        "perf_hooks",
+        "takeRecords",
+        true,
+        Some("PerformanceObserver"),
+    ),
     // --- buffer (module-level helpers in addition to the Buffer class
     //     already registered above) ---
     method("buffer", "alloc", false, None),

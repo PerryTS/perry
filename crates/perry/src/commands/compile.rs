@@ -4455,10 +4455,26 @@ pub fn run_with_parse_cache(
     // prebuilt one. Auto-mode never enables panic=abort when geisterhand
     // is on, so the geisterhand path always uses the prebuilt variant.
     let runtime_lib = if ctx.needs_geisterhand {
-        if let Some(gh_rt) = find_geisterhand_runtime(target.as_deref()) {
-            gh_rt
-        } else {
-            find_runtime_library(target.as_deref())?
+        // The geisterhand-enabled runtime/UI/registry libs live in
+        // target/geisterhand and are auto-built on first use. On a cold
+        // build they don't exist yet at this point — the link step builds
+        // any missing ones, but that runs *after* runtime_lib is resolved.
+        // Build them now, before selecting the runtime, so we don't fall
+        // through to find_runtime_library() and pick the *host* runtime
+        // (wrong target + wrong feature set). That fallback is what makes a
+        // cold `--target ios --enable-geisterhand` fail with "building for
+        // 'iOS-simulator', but linking in object file built for 'macOS'"
+        // (#1311 Ask #2). This mirrors the missing-libs check in the link
+        // step and is idempotent — that check then finds them present.
+        let gh_missing = find_geisterhand_runtime(target.as_deref()).is_none()
+            || find_geisterhand_library(target.as_deref()).is_none()
+            || (ctx.needs_ui && find_geisterhand_ui(target.as_deref()).is_none());
+        if gh_missing {
+            build_geisterhand_libs(target.as_deref(), format)?;
+        }
+        match find_geisterhand_runtime(target.as_deref()) {
+            Some(gh_rt) => gh_rt,
+            None => find_runtime_library(target.as_deref())?,
         }
     } else if let Some(auto_rt) = optimized_libs.runtime.clone() {
         auto_rt

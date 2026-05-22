@@ -40,7 +40,10 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
                 (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
             (*gc_header).gc_flags |= crate::gc::GC_FLAG_PINNED;
         }
-        SMALL_INT_CACHE.with(|c| unsafe { (*c.get())[idx] = ptr });
+        SMALL_INT_CACHE.with(|c| unsafe {
+            // GC_STORE_AUDIT(ROOT): SMALL_INT_CACHE is scanned by scan_small_int_cache_roots_mut.
+            (*c.get())[idx] = ptr;
+        });
         return ptr;
     }
 
@@ -75,6 +78,51 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
 
     let bytes = s.as_bytes();
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+/// GC root scanner for the small-integer string cache.
+///
+/// The cache stores raw `StringHeader*` values, not NaN-boxed JSValues. The
+/// entries are allocated long-lived and pinned before publication, and this
+/// scanner keeps the slots visible to moving-GC verification/rewrite paths.
+pub fn scan_small_int_cache_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_small_int_cache_roots_mut(&mut visitor);
+}
+
+pub fn scan_small_int_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    SMALL_INT_CACHE.with(|c| unsafe {
+        for slot in (*c.get()).iter_mut() {
+            let mut addr = *slot as usize;
+            if visitor.visit_tagged_usize_slot(&mut addr, crate::value::STRING_TAG) {
+                *slot = addr as *mut StringHeader;
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_small_int_cache_root(index: usize, string_ptr: usize) {
+    let idx = index % SMALL_INT_CACHE_SIZE;
+    SMALL_INT_CACHE.with(|c| unsafe {
+        // GC_STORE_AUDIT(ROOT): test seed mirrors SMALL_INT_CACHE roots scanned by scan_small_int_cache_roots_mut.
+        (*c.get())[idx] = string_ptr as *mut StringHeader;
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_small_int_cache_root(index: usize) -> usize {
+    let idx = index % SMALL_INT_CACHE_SIZE;
+    SMALL_INT_CACHE.with(|c| unsafe { (*c.get())[idx] as usize })
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_small_int_cache_root(index: usize) {
+    let idx = index % SMALL_INT_CACHE_SIZE;
+    SMALL_INT_CACHE.with(|c| unsafe {
+        // GC_STORE_AUDIT(ROOT): test clear writes a non-pointer sentinel into scanned SMALL_INT_CACHE roots.
+        (*c.get())[idx] = std::ptr::null_mut();
+    });
 }
 
 /// Format a number with a fixed number of decimal places (Number.prototype.toFixed).

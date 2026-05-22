@@ -7,9 +7,17 @@
 
 use std::cell::RefCell;
 
+use crate::gc::{RuntimeHandle, RuntimeHandleScope};
+
 #[derive(Clone, Default)]
 pub struct AsyncContextSnapshot {
     entries: Vec<AsyncContextEntry>,
+}
+
+impl AsyncContextSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 #[derive(Clone)]
@@ -147,6 +155,37 @@ pub fn scan_active_context_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor
     ACTIVE_CONTEXT.with(|ctx| {
         scan_snapshot_roots_mut(&mut ctx.borrow_mut(), visitor);
     });
+}
+
+pub struct AsyncContextSnapshotRoots<'scope> {
+    stores: Vec<RuntimeHandle<'scope>>,
+}
+
+pub fn root_snapshot<'scope>(
+    scope: &'scope RuntimeHandleScope,
+    snapshot: &AsyncContextSnapshot,
+) -> AsyncContextSnapshotRoots<'scope> {
+    let stores = snapshot
+        .entries
+        .iter()
+        .flat_map(|entry| entry.stores.iter())
+        .map(|store| scope.root_nanbox_f64(*store))
+        .collect();
+    AsyncContextSnapshotRoots { stores }
+}
+
+pub fn refresh_snapshot_from_roots(
+    snapshot: &mut AsyncContextSnapshot,
+    roots: &AsyncContextSnapshotRoots<'_>,
+) {
+    let mut handles = roots.stores.iter();
+    for entry in &mut snapshot.entries {
+        for store in &mut entry.stores {
+            if let Some(handle) = handles.next() {
+                *store = handle.get_nanbox_f64();
+            }
+        }
+    }
 }
 
 #[cfg(test)]

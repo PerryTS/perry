@@ -25,6 +25,7 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
     is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+    static_type_of,
 };
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -45,6 +46,29 @@ use super::{
     unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
     I18nLowerCtx,
 };
+
+/// Whether a `createHash(...).update(e)` / `createHmac(alg, e)` argument is a
+/// Buffer / Uint8Array — either a direct buffer-producing expression or a
+/// local/field whose static type is `Buffer` / `Uint8Array`. Such inputs must
+/// not take the inline `*StringHeader` hash fast path, whose UTF-8 string
+/// unboxing reads the wrong bytes for a Buffer (#1354).
+fn hash_input_is_buffer(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if matches!(
+        e,
+        Expr::BufferFrom { .. }
+            | Expr::BufferFromArrayBuffer { .. }
+            | Expr::BufferAlloc { .. }
+            | Expr::BufferAllocUnsafe(_)
+            | Expr::BufferConcat(_)
+            | Expr::CryptoRandomBytes(_)
+    ) {
+        return true;
+    }
+    matches!(
+        static_type_of(ctx, e),
+        Some(HirType::Named(ref n)) if n == "Buffer" || n == "Uint8Array"
+    )
+}
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
@@ -149,8 +173,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let want_buffer = digest_args.first().is_none()
                 || matches!(digest_args.first(), Some(Expr::Undefined));
 
+            // The inline `js_crypto_sha256` / `js_crypto_md5` fast path only
+            // produces a hex string (or, for the no-arg form, a raw-byte
+            // Buffer). Any other digest encoding (`'base64'`, `'base64url'`,
+            // …) must fall through to the runtime handle dispatch, whose
+            // `dispatch_hash` honors the encoding (#1352). A non-literal
+            // encoding arg also can't be folded inline.
+            let enc_fast_ok = match digest_args.first() {
+                None | Some(Expr::Undefined) => true,
+                Some(Expr::String(s)) => s.eq_ignore_ascii_case("hex"),
+                _ => false,
+            };
+            // The inline path unboxes the data/key as a `*StringHeader` and
+            // hashes the UTF-8 string bytes. A Buffer / Uint8Array input has a
+            // different header layout, so hashing it through the string path
+            // reads the wrong bytes (#1354). Route Buffer-typed inputs to the
+            // handle dispatch, whose `bytes_from_ptr` reads either layout.
+            // Detect both inline buffer-producing expressions (`Buffer.from(…)`,
+            // `crypto.randomBytes(…)`, …) and locals/fields whose static type
+            // is Buffer / Uint8Array (see `hash_input_is_buffer`). Each borrow
+            // of `ctx` is scoped to the `is_some_and` call so it does not
+            // collide with the `&mut ctx` borrows in the arm bodies.
+            let data_is_buffer = update_args
+                .first()
+                .is_some_and(|e| hash_input_is_buffer(ctx, e));
+            let key_is_buffer = create_args
+                .get(1)
+                .is_some_and(|e| hash_input_is_buffer(ctx, e));
+            let fast_ok = enc_fast_ok && !data_is_buffer;
+            let hmac_fast_ok = fast_ok && !key_is_buffer;
+
             match (create_method, alg) {
-                ("createHash", "sha256") if !update_args.is_empty() => {
+                ("createHash", "sha256") if fast_ok && !update_args.is_empty() => {
                     let data_box = lower_expr(ctx, &update_args[0])?;
                     let blk = ctx.block();
                     // SSO-safe data unbox — both `js_crypto_sha256` and the
@@ -165,7 +219,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         Ok(nanbox_string_inline(blk, &result))
                     }
                 }
-                ("createHash", "md5") if !update_args.is_empty() => {
+                ("createHash", "md5") if fast_ok && !update_args.is_empty() => {
                     let data_box = lower_expr(ctx, &update_args[0])?;
                     let blk = ctx.block();
                     // SSO-safe — see sha256 arm above.
@@ -173,7 +227,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let result = blk.call(I64, "js_crypto_md5", &[(I64, &data_handle)]);
                     Ok(nanbox_string_inline(blk, &result))
                 }
-                ("createHmac", "sha256") if create_args.len() >= 2 && !update_args.is_empty() => {
+                ("createHmac", "sha256")
+                    if hmac_fast_ok && create_args.len() >= 2 && !update_args.is_empty() =>
+                {
                     let key_box = lower_expr(ctx, &create_args[1])?;
                     let data_box = lower_expr(ctx, &update_args[0])?;
                     let blk = ctx.block();
@@ -427,6 +483,42 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
 
+        // `crypto.createSign(alg)` / `crypto.createVerify(alg)` (#1364) —
+        // registers a SignHandle and returns a small-integer handle NaN-boxed
+        // as POINTER_TAG. HANDLE_METHOD_DISPATCH then routes `.update(d)` /
+        // `.sign(key, enc?)` / `.verify(key, sig, enc?)` through
+        // `dispatch_sign`. RSA PKCS#1 v1.5 over sha1/224/256/384/512.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property }
+                    if (property == "createSign" || property == "createVerify")
+                        && matches!(
+                            object.as_ref(),
+                            Expr::NativeModuleRef(n) if n == "crypto"
+                        )
+            ) =>
+        {
+            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                property.as_str()
+            } else {
+                unreachable!()
+            };
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let fname = if property == "createSign" {
+                "js_crypto_create_sign"
+            } else {
+                "js_crypto_create_verify"
+            };
+            // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
+            Ok(blk.call(DOUBLE, fname, &[(I64, &alg_handle)]))
+        }
+
         // Phase H crypto: `crypto.randomBytes(n)` as a Buffer.
         Expr::Call { callee, args, .. }
             if matches!(
@@ -462,6 +554,90 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &handle))
         }
 
+        // Phase H crypto: `crypto.randomInt([min,] max)` — uniform integer
+        // in `[min, max)`. The single-arg form defaults `min` to 0. The
+        // runtime returns the value as a plain double (a JS number), so no
+        // NaN-box is needed at the call site.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "randomInt" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(0.0));
+            }
+            let (min_box, max_box) = if args.len() == 1 {
+                let max_box = lower_expr(ctx, &args[0])?;
+                (double_literal(0.0), max_box)
+            } else {
+                let min_box = lower_expr(ctx, &args[0])?;
+                let max_box = lower_expr(ctx, &args[1])?;
+                (min_box, max_box)
+            };
+            let blk = ctx.block();
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_random_int",
+                &[(DOUBLE, &min_box), (DOUBLE, &max_box)],
+            ))
+        }
+
+        // Phase H crypto: `crypto.timingSafeEqual(a, b)` — constant-time
+        // compare of two byte sequences. Returns a NaN-boxed boolean.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "timingSafeEqual" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 2 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let a_box = lower_expr(ctx, &args[0])?;
+            let b_box = lower_expr(ctx, &args[1])?;
+            let blk = ctx.block();
+            let a_handle = unbox_to_i64(blk, &a_box);
+            let b_handle = unbox_to_i64(blk, &b_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_timing_safe_equal",
+                &[(I64, &a_handle), (I64, &b_handle)],
+            ))
+        }
+
+        // Phase H crypto: `crypto.getHashes()` / `crypto.getCiphers()` —
+        // return a `string[]` of supported algorithm names.
+        Expr::Call { callee, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property }
+                    if (property == "getHashes" || property == "getCiphers") && matches!(
+                        object.as_ref(),
+                        Expr::NativeModuleRef(n) if n == "crypto"
+                    )
+            ) =>
+        {
+            let fn_name = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                if property == "getCiphers" {
+                    "js_crypto_get_ciphers"
+                } else {
+                    "js_crypto_get_hashes"
+                }
+            } else {
+                unreachable!()
+            };
+            let blk = ctx.block();
+            let arr = blk.call(I64, fn_name, &[]);
+            Ok(nanbox_pointer_inline(blk, &arr))
+        }
+
         // `crypto.createSecretKey(key, encoding?)` — JWT signing key for
         // HS* algorithms. Native-side this returns a Uint8Array-marked
         // BufferHeader; the bridge then materializes a real v8::Uint8Array
@@ -490,11 +666,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
 
-        // crypto.pbkdf2Sync(password, salt, iterations, keylen, algorithm) -> Buffer.
-        // Only SHA-256 is wired through right now — that's what SCRAM needs.
-        // The `algorithm` arg is validated at runtime but ignored by codegen;
-        // callers that need non-SHA256 fall through to the generic path and
-        // get an empty Buffer back.
+        // crypto.pbkdf2Sync(password, salt, iterations, keylen, digest) -> Buffer.
+        // The digest algorithm (sha256/sha512/sha224/sha384/sha1) is passed
+        // through to the runtime so non-SHA256 keys derive correctly (#1355).
+        // An absent digest arg passes a null pointer; the runtime defaults to
+        // SHA-256 (what SCRAM relies on).
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
@@ -511,13 +687,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let salt_box = lower_expr(ctx, &args[1])?;
             let iter_box = lower_expr(ctx, &args[2])?;
             let keylen_box = lower_expr(ctx, &args[3])?;
-            // Ignore the digest algorithm arg for now — the FFI is SHA-256 only.
-            if args.len() >= 5 {
-                let _ = lower_expr(ctx, &args[4])?;
-            }
+            let digest_box = if args.len() >= 5 {
+                Some(lower_expr(ctx, &args[4])?)
+            } else {
+                None
+            };
             let blk = ctx.block();
             let pwd_handle = unbox_to_i64(blk, &pwd_box);
             let salt_handle = unbox_to_i64(blk, &salt_box);
+            let digest_handle = match &digest_box {
+                Some(b) => unbox_to_i64(blk, b),
+                None => "0".to_string(),
+            };
             let buf_handle = blk.call(
                 I64,
                 "js_crypto_pbkdf2_bytes",
@@ -526,9 +707,130 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (I64, &salt_handle),
                     (DOUBLE, &iter_box),
                     (DOUBLE, &keylen_box),
+                    (I64, &digest_handle),
                 ],
             );
             Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // crypto.scryptSync(password, salt, keylen, options?) -> Buffer.
+        // The runtime returns a Buffer (HIR types scryptSync as Uint8Array)
+        // and reads optional `{ N, r, p }` cost params from the options
+        // object pointer; an absent options arg passes a null pointer and the
+        // runtime uses Node's defaults (N=16384, r=8, p=1).
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "scryptSync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 3 {
+                return Ok(double_literal(0.0));
+            }
+            let pwd_box = lower_expr(ctx, &args[0])?;
+            let salt_box = lower_expr(ctx, &args[1])?;
+            let keylen_box = lower_expr(ctx, &args[2])?;
+            let opts_box = if args.len() >= 4 {
+                Some(lower_expr(ctx, &args[3])?)
+            } else {
+                None
+            };
+            let blk = ctx.block();
+            let pwd_handle = unbox_to_i64(blk, &pwd_box);
+            let salt_handle = unbox_to_i64(blk, &salt_box);
+            let opts_handle = match &opts_box {
+                Some(b) => unbox_to_i64(blk, b),
+                None => "0".to_string(),
+            };
+            let buf_handle = blk.call(
+                I64,
+                "js_crypto_scrypt_bytes",
+                &[
+                    (I64, &pwd_handle),
+                    (I64, &salt_handle),
+                    (DOUBLE, &keylen_box),
+                    (I64, &opts_handle),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
+        // The runtime returns an array-buffer-marked Buffer; callers wrap it
+        // with `Buffer.from(...)` / `new Uint8Array(...)`.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "hkdfSync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 5 {
+                return Ok(double_literal(0.0));
+            }
+            let digest_box = lower_expr(ctx, &args[0])?;
+            let ikm_box = lower_expr(ctx, &args[1])?;
+            let salt_box = lower_expr(ctx, &args[2])?;
+            let info_box = lower_expr(ctx, &args[3])?;
+            let keylen_box = lower_expr(ctx, &args[4])?;
+            let blk = ctx.block();
+            let digest_handle = unbox_to_i64(blk, &digest_box);
+            let ikm_handle = unbox_to_i64(blk, &ikm_box);
+            let salt_handle = unbox_to_i64(blk, &salt_box);
+            let info_handle = unbox_to_i64(blk, &info_box);
+            let buf_handle = blk.call(
+                I64,
+                "js_crypto_hkdf_sync",
+                &[
+                    (I64, &digest_handle),
+                    (I64, &ikm_handle),
+                    (I64, &salt_handle),
+                    (I64, &info_handle),
+                    (DOUBLE, &keylen_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // crypto.generateKeyPairSync(type, options) -> { publicKey, privateKey }.
+        // The runtime builds the object (PEM strings) and returns it already
+        // NaN-boxed; `.publicKey` / `.privateKey` reads go through the generic
+        // object property dispatch (the object carries a keys array).
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "generateKeyPairSync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let type_box = lower_expr(ctx, &args[0])?;
+            let opts_box = if args.len() >= 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
+            let blk = ctx.block();
+            let type_handle = unbox_to_i64(blk, &type_box);
+            let opts_handle = match &opts_box {
+                Some(b) => unbox_to_i64(blk, b),
+                None => "0".to_string(),
+            };
+            // Returns an already-NaN-boxed object (POINTER_TAG).
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_generate_key_pair_sync",
+                &[(I64, &type_handle), (I64, &opts_handle)],
+            ))
         }
 
         // Phase H fs: `fs.promises.METHOD(args...)` — HIR shape is a

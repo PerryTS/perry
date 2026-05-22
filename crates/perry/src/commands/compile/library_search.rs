@@ -1077,9 +1077,21 @@ pub(super) fn find_geisterhand_lib(name: &str, target: Option<&str>) -> Option<P
         }
         roots
     };
+    // When a cross-compile target is specified, ONLY look in that triple's
+    // release directories. Falling through to host `target/release/` returns
+    // a wrong-architecture `.a` that the linker then refuses with
+    //
+    //   ld: building for 'iOS-simulator', but linking in object file
+    //   (target/release/libperry_runtime.a[2]…) built for 'macOS'
+    //
+    // Pre-fix the host fallback also masked the "auto-build geisterhand for
+    // this target" check in `link/mod.rs` — `find_geisterhand_runtime`
+    // returned the host `.a`, `gh_missing` stayed `false`, and
+    // `build_geisterhand_libs(<cross-target>)` never fired. Surfaced on the
+    // v0.5.1024 simctl-tests workflow run.
+    let triple = rust_target_triple(target);
     for root in &search_roots {
-        // Cross-compilation target dir first
-        if let Some(triple) = rust_target_triple(target) {
+        if let Some(triple) = triple {
             // Separate geisterhand build dir
             let path = root.join(format!("target/geisterhand/{}/release/{}", triple, name));
             if path.exists() {
@@ -1090,8 +1102,11 @@ pub(super) fn find_geisterhand_lib(name: &str, target: Option<&str>) -> Option<P
             if path.exists() {
                 return Some(path);
             }
+            // No host fallback for cross-compile targets — see comment above.
+            continue;
         }
-        // Host build dir
+        // Host build (target is None / matches host triple) — search both
+        // geisterhand-specific and shared release directories.
         let path = root.join(format!("target/geisterhand/release/{}", name));
         if path.exists() {
             return Some(path);
@@ -1197,7 +1212,17 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
         .arg("--features")
         .arg(format!("{}/geisterhand", ui_crate))
         .arg("-p")
-        .arg("perry-ui-geisterhand");
+        .arg("perry-ui-geisterhand")
+        // Build perry-stdlib in the same invocation so the geisterhand lib
+        // set is complete and its shared `perry-runtime` is hash-consistent
+        // with the runtime/ui libs above (a separate `cargo build -p
+        // perry-stdlib` would resolve `perry-runtime` without the geisterhand
+        // feature → a second runtime variant → undefined-symbol link errors).
+        // Without stdlib here, apps that pull native-FFI packages depending on
+        // perry-stdlib's async surface (`perry_ffi_promise_*`) had no
+        // consistent stdlib to link against under --enable-geisterhand (#1383).
+        .arg("-p")
+        .arg("perry-stdlib");
 
     // Add cross-compilation target if needed
     if let Some(triple) = rust_target_triple(target) {

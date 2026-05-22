@@ -101,4 +101,7 @@ pub use table::{js_console_table, js_console_table_with_properties};
 pub(crate) use console::{test_console_log_singleton, test_set_console_log_singleton};
 
 #[cfg(test)]
-pub(crate) use globals::{test_queued_microtask_snapshot, test_seed_queued_microtask};
+pub(crate) use globals::{
+    test_queued_microtask_snapshot, test_seed_queued_microtask,
+    test_seed_queued_microtask_previous_context,
+};

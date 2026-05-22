@@ -69,7 +69,8 @@ pub(crate) use walk::{
 pub(crate) use reset::{
     active_survivor_block_index_range, copying_active_survivor_in_use_bytes,
     copying_from_space_in_use_bytes, copying_prepare_to_space, copying_reset_from_spaces_and_flip,
-    old_arena_reclaim_dead_blocks, survivor_arena_reclaim_dead_blocks,
+    old_arena_reclaim_dead_blocks, old_arena_reclaim_selected_dead_blocks,
+    survivor_arena_reclaim_dead_blocks,
 };
 pub use reset::{arena_reset_all_blocks_to_zero, arena_reset_empty_blocks};
 
@@ -83,11 +84,12 @@ pub use stats::{
 // page_meta.rs (public + pub(crate) classification/page-meta API)
 pub(crate) use page_meta::{
     classify_heap_generation, classify_heap_space, generation_page_for_addr,
-    old_arena_page_index_remove_object, old_arena_walk_objects_on_pages, old_object_page_overlaps,
-    old_page_account_dirty_slot, old_page_account_promoted_object, old_page_account_swept_object,
-    old_page_clear_dirty, old_page_mark_dirty, old_page_meta_snapshot, old_page_summary,
-    old_pages_begin_gc_cycle, old_pages_reset_sweep_accounting, unregister_old_object_pages,
-    HeapGeneration, HeapSpace, OldPageMeta, OldPageSummary,
+    old_arena_page_index_remove_object, old_arena_source_blocks_for_pages,
+    old_arena_walk_objects_on_pages, old_object_page_overlaps, old_page_account_dirty_slot,
+    old_page_account_promoted_object, old_page_account_swept_object, old_page_clear_dirty,
+    old_page_mark_dirty, old_page_meta_snapshot, old_page_summary, old_pages_begin_gc_cycle,
+    old_pages_reset_sweep_accounting, unregister_old_object_pages, HeapGeneration, HeapSpace,
+    OldPageMeta, OldPageSummary,
 };
 
 #[cfg(test)]

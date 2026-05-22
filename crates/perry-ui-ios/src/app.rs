@@ -625,6 +625,11 @@ define_class!(
                     js_callback_timer_tick();
                     js_interval_timer_tick();
                     js_promise_run_microtasks();
+                    // Drain deferred promise resolutions from perry-stdlib
+                    // tokio workers (async fetch/network completions). Without
+                    // this, `await fetch(...)` never resolves on iOS — the
+                    // macOS pump has always called it; iOS omitted it.
+                    js_run_stdlib_pump();
                     #[cfg(feature = "geisterhand")]
                     {
                         extern "C" { fn perry_geisterhand_pump(); }

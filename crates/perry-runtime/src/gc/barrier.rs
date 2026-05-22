@@ -181,38 +181,6 @@ pub(super) unsafe fn scan_dirty_slot_with_layout(
     visit_slot(slot, stats);
 }
 
-pub(super) unsafe fn scan_dirty_raw_ptr_slot<T>(
-    slot: *const *mut T,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    scan_dirty_raw_ptr_value_slot(slot as *mut u64, dirty_pages, stats, visit_slot);
-}
-
-pub(super) unsafe fn scan_dirty_const_raw_ptr_slot<T>(
-    slot: *const *const T,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    scan_dirty_raw_ptr_value_slot(slot as *mut u64, dirty_pages, stats, visit_slot);
-}
-
-pub(super) fn scan_dirty_raw_ptr_value_slot(
-    slot: *mut u64,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    if !dirty_pages_contains_addr(dirty_pages, slot as usize) {
-        return;
-    }
-    stats.dirty_slots_scanned += 1;
-    crate::arena::old_page_account_dirty_slot(slot as usize);
-    visit_slot(slot, stats);
-}
-
 pub(super) unsafe fn scan_dirty_slot_range(
     slots: *mut u64,
     slot_count: usize,
@@ -347,203 +315,43 @@ pub(super) unsafe fn scan_dirty_object_slots(
     stats: &mut RememberedSetTraceStats,
     visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
-    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-    match (*header).obj_type {
-        GC_TYPE_ARRAY => scan_dirty_array_slots(user_ptr, dirty_pages, stats, visit_slot),
-        GC_TYPE_OBJECT => scan_dirty_object_field_slots(user_ptr, dirty_pages, stats, visit_slot),
-        GC_TYPE_CLOSURE => scan_dirty_closure_slots(user_ptr, dirty_pages, stats, visit_slot),
-        GC_TYPE_PROMISE => scan_dirty_promise_slots(user_ptr, dirty_pages, stats, visit_slot),
-        GC_TYPE_ERROR => scan_dirty_error_slots(user_ptr, dirty_pages, stats, visit_slot),
-        GC_TYPE_MAP => scan_dirty_map_slots(user_ptr, dirty_pages, stats, visit_slot),
-        GC_TYPE_LAZY_ARRAY => scan_dirty_lazy_array_slots(user_ptr, dirty_pages, stats, visit_slot),
-        GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_TYPED_ARRAY => {}
-        _ => {}
-    }
-}
-
-pub(super) unsafe fn scan_dirty_gc_child_slots(
-    header: *mut GcHeader,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    let mut child_slots = gc_child_slots(header);
-    if let Some(slot) = child_slots.take_prefix_child_slot() {
-        scan_dirty_slot_with_layout(
-            slot,
-            HeapChildSlotReadKind::Prefix,
-            dirty_pages,
-            stats,
-            visit_slot,
-        );
-    }
-
-    match child_slots.payload_scan() {
-        HeapPayloadSlotScan::Empty => {}
-        HeapPayloadSlotScan::PointerFree => {
-            record_layout_pointer_free_range_skipped(child_slots.payload.slot_count());
-        }
-        HeapPayloadSlotScan::All(range) => {
-            scan_dirty_slot_range_with_layout(
-                range,
-                HeapChildSlotReadKind::Unknown,
-                dirty_pages,
-                stats,
-                visit_slot,
-            );
-        }
-        HeapPayloadSlotScan::Masked => {
-            for child_slot in child_slots {
-                if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
-                    scan_dirty_slot_with_layout(slot, layout_kind, dirty_pages, stats, visit_slot);
+    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
+        match descriptor {
+            GcMutableSlotDescriptor::Slot(slot) => {
+                if let Some(layout_kind) = slot.layout_kind {
+                    scan_dirty_slot_with_layout(
+                        slot.slot,
+                        layout_kind,
+                        dirty_pages,
+                        stats,
+                        visit_slot,
+                    );
+                } else {
+                    scan_dirty_slot(slot.slot, dirty_pages, stats, visit_slot);
                 }
             }
+            GcMutableSlotDescriptor::Range { range, layout_kind } => {
+                if let Some(layout_kind) = layout_kind {
+                    scan_dirty_slot_range_with_layout(
+                        range,
+                        layout_kind,
+                        dirty_pages,
+                        stats,
+                        visit_slot,
+                    );
+                } else {
+                    scan_dirty_slot_range(
+                        range.slots(),
+                        range.slot_count(),
+                        dirty_pages,
+                        stats,
+                        visit_slot,
+                    );
+                }
+            }
+            GcMutableSlotDescriptor::PointerFreeRange => {}
         }
-    }
-}
-
-pub(super) unsafe fn scan_dirty_array_slots(
-    user_ptr: *mut u8,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
-    scan_dirty_gc_child_slots(header as *mut GcHeader, dirty_pages, stats, visit_slot);
-}
-
-pub(super) unsafe fn scan_dirty_object_field_slots(
-    user_ptr: *mut u8,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
-    scan_dirty_gc_child_slots(header, dirty_pages, stats, visit_slot);
-}
-
-pub(super) unsafe fn scan_dirty_closure_slots(
-    user_ptr: *mut u8,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
-    scan_dirty_gc_child_slots(header, dirty_pages, stats, visit_slot);
-    crate::closure::visit_closure_dynamic_prop_value_slots_mut(user_ptr as usize, |slot| {
-        scan_dirty_slot(slot, dirty_pages, stats, visit_slot);
     });
-}
-
-pub(super) unsafe fn scan_dirty_promise_slots(
-    user_ptr: *mut u8,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    let promise = user_ptr as *const crate::promise::Promise;
-    scan_dirty_slot(
-        &(*promise).value as *const f64 as *mut u64,
-        dirty_pages,
-        stats,
-        visit_slot,
-    );
-    scan_dirty_slot(
-        &(*promise).reason as *const f64 as *mut u64,
-        dirty_pages,
-        stats,
-        visit_slot,
-    );
-    scan_dirty_const_raw_ptr_slot(&(*promise).on_fulfilled, dirty_pages, stats, visit_slot);
-    scan_dirty_const_raw_ptr_slot(&(*promise).on_rejected, dirty_pages, stats, visit_slot);
-    scan_dirty_raw_ptr_slot(&(*promise).next, dirty_pages, stats, visit_slot);
-}
-
-pub(super) unsafe fn scan_dirty_error_slots(
-    user_ptr: *mut u8,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    let error = user_ptr as *const crate::error::ErrorHeader;
-    scan_dirty_raw_ptr_slot(&(*error).message, dirty_pages, stats, visit_slot);
-    scan_dirty_raw_ptr_slot(&(*error).name, dirty_pages, stats, visit_slot);
-    scan_dirty_raw_ptr_slot(&(*error).stack, dirty_pages, stats, visit_slot);
-    scan_dirty_slot(
-        &(*error).cause as *const f64 as *mut u64,
-        dirty_pages,
-        stats,
-        visit_slot,
-    );
-    scan_dirty_raw_ptr_slot(&(*error).errors, dirty_pages, stats, visit_slot);
-}
-
-pub(super) unsafe fn scan_dirty_map_slots(
-    user_ptr: *mut u8,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    let map = user_ptr as *const crate::map::MapHeader;
-    let size = (*map).size;
-    let capacity = (*map).capacity;
-    if size > capacity || size > 100_000 || (*map).entries.is_null() {
-        return;
-    }
-    let entries = (*map).entries as *const u64;
-    scan_dirty_slot_range(
-        entries as *mut u64,
-        size as usize * 2,
-        dirty_pages,
-        stats,
-        visit_slot,
-    );
-}
-
-pub(super) unsafe fn scan_dirty_lazy_array_slots(
-    user_ptr: *mut u8,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    let lazy = user_ptr as *const crate::json_tape::LazyArrayHeader;
-    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
-        return;
-    }
-    scan_dirty_const_raw_ptr_slot(&(*lazy).blob_str, dirty_pages, stats, visit_slot);
-    scan_dirty_raw_ptr_slot(&(*lazy).materialized, dirty_pages, stats, visit_slot);
-    scan_dirty_raw_ptr_slot(
-        &(*lazy).materialized_elements,
-        dirty_pages,
-        stats,
-        visit_slot,
-    );
-    scan_dirty_raw_ptr_slot(&(*lazy).materialized_bitmap, dirty_pages, stats, visit_slot);
-
-    let cached_length = (*lazy).cached_length as usize;
-    let cache = (*lazy).materialized_elements;
-    let bitmap = (*lazy).materialized_bitmap;
-    if cache.is_null() || bitmap.is_null() || cached_length == 0 {
-        return;
-    }
-    let bitmap_words = cached_length.div_ceil(64);
-    for w in 0..bitmap_words {
-        let word = *bitmap.add(w);
-        if word == 0 {
-            continue;
-        }
-        let base_idx = w * 64;
-        for b in 0..64usize {
-            if word & (1u64 << b) == 0 {
-                continue;
-            }
-            let i = base_idx + b;
-            if i >= cached_length {
-                break;
-            }
-            scan_dirty_slot(cache.add(i) as *mut u64, dirty_pages, stats, visit_slot);
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -655,6 +463,7 @@ pub(super) fn bump_write_barrier_trace_counter(counter: BarrierTraceCounter) {
             BarrierTraceCounter::NonPointerChildSkips => counters.non_pointer_child_skips += 1,
             BarrierTraceCounter::ParentNotOldSkips => counters.parent_not_old_skips += 1,
             BarrierTraceCounter::ChildNotYoungSkips => counters.child_not_young_skips += 1,
+            BarrierTraceCounter::OldToYoungSlowHits => counters.old_to_young_slow_hits += 1,
             BarrierTraceCounter::RememberedSetInsertAttempts => {
                 counters.remembered_set_insert_attempts += 1;
             }
@@ -736,11 +545,10 @@ pub(super) fn write_barrier_slot_inner(
         bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerParentSkips);
         return;
     }
-    // Old → young check.
-    if !matches!(
-        crate::arena::classify_heap_generation(parent_addr),
-        crate::arena::HeapGeneration::Old
-    ) {
+    // Old → young check. Runtime-owned malloc GC objects are outside
+    // the nursery and must be treated as old when the caller uses the
+    // external-slot path for fields or side buffers.
+    if !barrier_parent_needs_remembering(parent_addr, external_slot) {
         bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
         return;
     }
@@ -752,6 +560,7 @@ pub(super) fn write_barrier_slot_inner(
         return;
     }
 
+    bump_write_barrier_trace_counter(BarrierTraceCounter::OldToYoungSlowHits);
     bump_write_barrier_trace_counter(BarrierTraceCounter::RememberedSetInsertAttempts);
     let inserted = if external_slot {
         remember_old_to_young_external_slot(parent_addr, slot_addr)
@@ -760,6 +569,34 @@ pub(super) fn write_barrier_slot_inner(
     };
     if inserted {
         bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+    }
+}
+
+#[inline]
+pub(super) fn barrier_parent_needs_remembering(parent_addr: usize, external_slot: bool) -> bool {
+    if matches!(
+        crate::arena::classify_heap_generation(parent_addr),
+        crate::arena::HeapGeneration::Old
+    ) {
+        return true;
+    }
+    external_slot && malloc_gc_parent_addr(parent_addr)
+}
+
+#[inline]
+pub(super) fn malloc_gc_parent_addr(parent_addr: usize) -> bool {
+    if parent_addr < GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    unsafe {
+        let header = header_from_user_ptr(parent_addr as *const u8);
+        let obj_type = (*header).obj_type;
+        let size = (*header).size as usize;
+        gc_type_info(obj_type).is_some()
+            && size >= GC_HEADER_SIZE
+            && size <= (1usize << 34)
+            && (*header).gc_flags & GC_FLAG_ARENA == 0
+            && (*header).gc_flags & GC_FLAG_FORWARDED == 0
     }
 }
 
@@ -875,6 +712,20 @@ pub(crate) fn runtime_write_barrier_slot(parent_addr: usize, slot_addr: usize, c
     js_write_barrier_slot(parent_addr as u64, slot_addr as u64, child_bits);
 }
 
+#[inline]
+pub(crate) fn runtime_store_jsvalue_slot(
+    parent_user: usize,
+    slot_addr: usize,
+    slot_index: usize,
+    value_bits: u64,
+) {
+    unsafe {
+        std::ptr::write(slot_addr as *mut u64, value_bits);
+    }
+    layout_note_slot(parent_user, slot_index, value_bits);
+    runtime_write_barrier_slot(parent_user, slot_addr, value_bits);
+}
+
 pub(crate) fn runtime_write_barrier_external_slot(
     parent_addr: usize,
     slot_addr: usize,
@@ -883,7 +734,80 @@ pub(crate) fn runtime_write_barrier_external_slot(
     if !write_barriers_enabled() {
         return;
     }
-    write_barrier_slot_inner(parent_addr as u64, slot_addr, child_bits, true);
+    write_barrier_slot_inner(
+        POINTER_TAG | (parent_addr as u64),
+        slot_addr,
+        child_bits,
+        true,
+    );
+}
+
+pub(crate) fn runtime_write_barrier_gc_slot(parent_addr: usize, slot_addr: usize, child_bits: u64) {
+    if !write_barriers_enabled() {
+        return;
+    }
+    let parent_is_malloc_gc = matches!(
+        crate::arena::classify_heap_generation(parent_addr),
+        crate::arena::HeapGeneration::Unknown
+    ) && malloc_gc_parent_addr(parent_addr);
+    write_barrier_slot_inner(
+        POINTER_TAG | (parent_addr as u64 & POINTER_MASK),
+        slot_addr,
+        child_bits,
+        parent_is_malloc_gc,
+    );
+}
+
+#[inline]
+pub(crate) fn runtime_store_gc_heap_word_slot(
+    parent_user: usize,
+    slot_addr: usize,
+    value_bits: u64,
+) {
+    unsafe {
+        std::ptr::write(slot_addr as *mut u64, value_bits);
+    }
+    runtime_write_barrier_gc_slot(parent_user, slot_addr, value_bits);
+}
+
+#[inline]
+pub(crate) fn runtime_store_gc_jsvalue_slot(parent_user: usize, slot_addr: usize, value_bits: u64) {
+    runtime_store_gc_heap_word_slot(parent_user, slot_addr, value_bits);
+}
+
+#[inline]
+pub(crate) fn runtime_store_external_heap_word_slot(
+    parent_user: usize,
+    slot_addr: usize,
+    value_bits: u64,
+) {
+    unsafe {
+        std::ptr::write(slot_addr as *mut u64, value_bits);
+    }
+    runtime_write_barrier_external_slot(parent_user, slot_addr, value_bits);
+}
+
+#[inline]
+pub(crate) fn runtime_store_external_jsvalue_slot(
+    parent_user: usize,
+    slot_addr: usize,
+    value_bits: u64,
+) {
+    runtime_store_external_heap_word_slot(parent_user, slot_addr, value_bits);
+}
+
+#[inline]
+pub(crate) fn runtime_store_external_jsvalue_slot_with_layout(
+    parent_user: usize,
+    slot_addr: usize,
+    slot_index: usize,
+    value_bits: u64,
+) {
+    unsafe {
+        std::ptr::write(slot_addr as *mut u64, value_bits);
+    }
+    layout_note_slot(parent_user, slot_index, value_bits);
+    runtime_write_barrier_external_slot(parent_user, slot_addr, value_bits);
 }
 
 pub(crate) fn runtime_dirty_external_slot_span(
@@ -905,10 +829,7 @@ pub(super) fn dirty_external_slot_span(
     if parent_addr < GC_HEADER_SIZE || first_slot_addr == 0 || slot_count == 0 {
         return;
     }
-    if !matches!(
-        crate::arena::classify_heap_generation(parent_addr),
-        crate::arena::HeapGeneration::Old
-    ) {
+    if !barrier_parent_needs_remembering(parent_addr, true) {
         return;
     }
     let Some(bytes) = slot_count.checked_mul(std::mem::size_of::<u64>()) else {
