@@ -79,6 +79,11 @@ pub unsafe fn note_closure_capture_slot(
     index: usize,
     value_bits: u64,
 ) {
+    // Standard generational-GC discipline: callers store `value_bits` into the
+    // slot *before* calling here; we then record the layout bit and fire the
+    // post-store write barrier. The captured value remains rooted on the
+    // caller's Rust stack between the store and this call, so a minor GC
+    // triggered in that window cannot drop it.
     crate::gc::layout_note_slot(closure as usize, index, value_bits);
     let slot = closure_capture_slots_mut(closure).add(index);
     crate::gc::runtime_write_barrier_slot(closure as usize, slot as usize, value_bits);

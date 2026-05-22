@@ -2,7 +2,7 @@
 //!
 //! Moved verbatim from the pre-split monolithic `string.rs`.
 
-use super::intern::{InternEntry, INTERN_TABLE, INTERN_TABLE_MASK};
+use super::intern::{with_intern_table, InternEntry, INTERN_TABLE_MASK};
 use super::*;
 
 fn malloc_object_count_for_test() -> usize {
@@ -98,7 +98,7 @@ fn interned_strings_remain_scannable_and_content_equal() {
     let key = b"gc-managed-intern-key";
     let hash = fnv1a_for_test(key);
     let slot = (hash as usize) & INTERN_TABLE_MASK;
-    let old_entry = unsafe { INTERN_TABLE[slot] };
+    let old_entry = with_intern_table(|t| unsafe { (*t)[slot] });
 
     let first = js_string_from_bytes(key.as_ptr(), key.len() as u32);
     let canonical = js_string_intern(first, hash);
@@ -123,8 +123,10 @@ fn interned_strings_remain_scannable_and_content_equal() {
     unsafe {
         let header = gc_header_for_string(canonical);
         assert_ne!((*header).gc_flags & crate::gc::GC_FLAG_INTERNED, 0);
-        INTERN_TABLE[slot] = old_entry;
     }
+    with_intern_table(|t| unsafe {
+        (*t)[slot] = old_entry;
+    });
 }
 
 #[test]

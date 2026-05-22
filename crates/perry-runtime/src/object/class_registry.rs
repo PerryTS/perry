@@ -775,7 +775,7 @@ pub fn is_class_id_registered(class_id: u32) -> bool {
 /// Function pointer type for dispatching method calls on handle-based objects.
 /// Handle-based objects use small integer IDs (1, 2, 3...) instead of real heap pointers.
 /// This is registered by perry-stdlib to dispatch to Fastify, ioredis, etc.
-type HandleMethodDispatchFn = unsafe extern "C" fn(
+pub type HandleMethodDispatchFn = unsafe extern "C" fn(
     handle: i64,
     method_name_ptr: *const u8,
     method_name_len: usize,
@@ -783,43 +783,79 @@ type HandleMethodDispatchFn = unsafe extern "C" fn(
     args_len: usize,
 ) -> f64;
 
-pub(crate) static mut HANDLE_METHOD_DISPATCH: Option<HandleMethodDispatchFn> = None;
-
 /// Function pointer type for dispatching property access on handle-based objects.
-type HandlePropertyDispatchFn = unsafe extern "C" fn(
+pub type HandlePropertyDispatchFn = unsafe extern "C" fn(
     handle: i64,
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64;
 
-pub static mut HANDLE_PROPERTY_DISPATCH: Option<HandlePropertyDispatchFn> = None;
-
 /// Function pointer type for dispatching property set on handle-based objects.
-type HandlePropertySetDispatchFn = unsafe extern "C" fn(
+pub type HandlePropertySetDispatchFn = unsafe extern "C" fn(
     handle: i64,
     property_name_ptr: *const u8,
     property_name_len: usize,
     value: f64,
 );
 
-pub static mut HANDLE_PROPERTY_SET_DISPATCH: Option<HandlePropertySetDispatchFn> = None;
+// Dispatch tables are written once at startup (by `js_register_handle_*_dispatch`)
+// and read from many threads thereafter (perry/thread workers run user code that
+// hits these). Stored as AtomicPtr to make reads/writes data-race-free; the
+// underlying value is still a single function pointer with Option semantics
+// (null = unset).
+static HANDLE_METHOD_DISPATCH_PTR: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static HANDLE_PROPERTY_DISPATCH_PTR: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static HANDLE_PROPERTY_SET_DISPATCH_PTR: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+#[inline]
+pub fn handle_method_dispatch() -> Option<HandleMethodDispatchFn> {
+    let p = HANDLE_METHOD_DISPATCH_PTR.load(std::sync::atomic::Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandleMethodDispatchFn>(p) })
+    }
+}
+
+#[inline]
+pub fn handle_property_dispatch() -> Option<HandlePropertyDispatchFn> {
+    let p = HANDLE_PROPERTY_DISPATCH_PTR.load(std::sync::atomic::Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandlePropertyDispatchFn>(p) })
+    }
+}
+
+#[inline]
+pub fn handle_property_set_dispatch() -> Option<HandlePropertySetDispatchFn> {
+    let p = HANDLE_PROPERTY_SET_DISPATCH_PTR.load(std::sync::atomic::Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandlePropertySetDispatchFn>(p) })
+    }
+}
 
 /// Register a function to handle method calls on handle-based objects
 #[no_mangle]
 pub unsafe extern "C" fn js_register_handle_method_dispatch(f: HandleMethodDispatchFn) {
-    HANDLE_METHOD_DISPATCH = Some(f);
+    HANDLE_METHOD_DISPATCH_PTR.store(f as *mut (), std::sync::atomic::Ordering::Release);
 }
 
 /// Register a function to handle property access on handle-based objects
 #[no_mangle]
 pub unsafe extern "C" fn js_register_handle_property_dispatch(f: HandlePropertyDispatchFn) {
-    HANDLE_PROPERTY_DISPATCH = Some(f);
+    HANDLE_PROPERTY_DISPATCH_PTR.store(f as *mut (), std::sync::atomic::Ordering::Release);
 }
 
 /// Register a function to handle property set on handle-based objects
 #[no_mangle]
 pub unsafe extern "C" fn js_register_handle_property_set_dispatch(f: HandlePropertySetDispatchFn) {
-    HANDLE_PROPERTY_SET_DISPATCH = Some(f);
+    HANDLE_PROPERTY_SET_DISPATCH_PTR.store(f as *mut (), std::sync::atomic::Ordering::Release);
 }
 
 /// Register a class method in the vtable registry.

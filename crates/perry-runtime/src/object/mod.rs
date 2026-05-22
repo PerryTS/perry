@@ -729,18 +729,30 @@ const TRANSITION_CACHE_SIZE: usize = 16384;
 #[allow(dead_code)]
 const TRANSITION_CACHE_MASK: usize = TRANSITION_CACHE_SIZE - 1;
 
-/// Main-thread transition cache — bypasses TLS overhead (user code is
-/// single-threaded). `#[no_mangle]` so the LLVM codegen can emit inline
-/// lookups against this symbol (write PIC).
-#[no_mangle]
-static mut TRANSITION_CACHE_GLOBAL: [TransitionEntry; TRANSITION_CACHE_SIZE] = [TransitionEntry {
-    prev_keys: 0,
-    key_ptr: 0,
-    next_keys: 0,
-    slot_idx: 0,
-    target_len: 0,
-};
-    TRANSITION_CACHE_SIZE];
+/// Per-thread transition cache. Was a process-wide `static mut`, but with
+/// `perry/thread` user code allocating objects on worker threads each
+/// thread has its own arena — cached `next_keys` / `key_ptr` pointers
+/// from another thread are use-after-free in our address space. The
+/// previous `#[no_mangle]` exposed the symbol for inline LLVM lookups
+/// but a grep across crates/perry-codegen confirms no codegen path ever
+/// resolved against it, so the export was dead.
+thread_local! {
+    static TRANSITION_CACHE_GLOBAL: std::cell::UnsafeCell<[TransitionEntry; TRANSITION_CACHE_SIZE]> =
+        const { std::cell::UnsafeCell::new([TransitionEntry {
+            prev_keys: 0,
+            key_ptr: 0,
+            next_keys: 0,
+            slot_idx: 0,
+            target_len: 0,
+        }; TRANSITION_CACHE_SIZE]) };
+}
+
+#[inline]
+fn with_transition_cache<R>(
+    f: impl FnOnce(*mut [TransitionEntry; TRANSITION_CACHE_SIZE]) -> R,
+) -> R {
+    TRANSITION_CACHE_GLOBAL.with(|c| f(c.get()))
+}
 
 /// FNV-1a content hash for a property-name string.
 /// Exported as `perry_key_content_hash` for the codegen write-PIC to
@@ -792,7 +804,7 @@ fn transition_cache_lookup(
 ) -> Option<(usize, u32)> {
     let kp = interned_key as usize;
     let slot = transition_cache_slot(prev_keys, kp);
-    let entry = unsafe { TRANSITION_CACHE_GLOBAL[slot] };
+    let entry = with_transition_cache(|t| unsafe { (*t)[slot] });
     if entry.next_keys != 0 && entry.prev_keys == prev_keys && entry.key_ptr == kp {
         let expected_len = entry.slot_idx.checked_add(1)?;
         if entry.target_len == expected_len {
@@ -856,14 +868,16 @@ fn transition_cache_insert(
                 target_len = expected_len;
             }
         }
-        TRANSITION_CACHE_GLOBAL[slot] = TransitionEntry {
+    }
+    with_transition_cache(|t| unsafe {
+        (*t)[slot] = TransitionEntry {
             prev_keys,
             key_ptr: kp,
             next_keys,
             slot_idx,
             target_len,
         };
-    }
+    });
     // Small dynamic shapes are stabilized eagerly because otherwise
     // the original builder can grow the cached target in place and
     // force future lookups to reject it. Large one-off dictionaries
@@ -885,10 +899,9 @@ pub fn scan_transition_cache_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let base: *mut TransitionEntry = (&raw mut TRANSITION_CACHE_GLOBAL).cast();
-    unsafe {
+    with_transition_cache(|table| unsafe {
         for i in 0..TRANSITION_CACHE_SIZE {
-            let entry = &mut *base.add(i);
+            let entry = &mut (*table)[i];
             if entry.next_keys != 0 {
                 let mut invalidate = false;
                 invalidate |= visitor.visit_metadata_usize_slot(&mut entry.prev_keys);
@@ -905,7 +918,7 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
                 }
             }
         }
-    }
+    });
 }
 
 /// GC root scanner: mark all cached shape keys arrays so they're not freed.
@@ -1012,33 +1025,33 @@ pub(crate) fn test_shape_cache_root(shape_id: u32) -> (usize, usize) {
 
 #[cfg(test)]
 pub(crate) fn test_seed_transition_cache_root(next_keys: usize) {
-    unsafe {
-        TRANSITION_CACHE_GLOBAL[0] = TransitionEntry {
+    with_transition_cache(|t| unsafe {
+        (*t)[0] = TransitionEntry {
             prev_keys: 0,
             key_ptr: 0,
             next_keys,
             slot_idx: 0,
             target_len: 0,
         };
-    }
+    });
 }
 
 #[cfg(test)]
 pub(crate) fn test_transition_cache_root() -> usize {
-    unsafe { TRANSITION_CACHE_GLOBAL[0].next_keys }
+    with_transition_cache(|t| unsafe { (*t)[0].next_keys })
 }
 
 #[cfg(test)]
 pub(crate) fn test_clear_transition_cache_root() {
-    unsafe {
-        TRANSITION_CACHE_GLOBAL[0] = TransitionEntry {
+    with_transition_cache(|t| unsafe {
+        (*t)[0] = TransitionEntry {
             prev_keys: 0,
             key_ptr: 0,
             next_keys: 0,
             slot_idx: 0,
             target_len: 0,
         };
-    }
+    });
 }
 
 #[cfg(test)]
@@ -1503,14 +1516,14 @@ mod tests {
         );
 
         let slot = transition_cache_slot(0, key as usize);
-        unsafe {
-            TRANSITION_CACHE_GLOBAL[slot] = TransitionEntry {
+        with_transition_cache(|t| unsafe {
+            (*t)[slot] = TransitionEntry {
                 prev_keys: 0,
                 key_ptr: 0,
                 next_keys: 0,
                 slot_idx: 0,
                 target_len: 0,
             };
-        }
+        });
     }
 }

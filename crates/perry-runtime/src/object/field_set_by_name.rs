@@ -75,9 +75,9 @@ pub extern "C" fn js_object_set_field_by_name(
             }
             if (raw as usize) < 0x10000 {
                 // Small handle — dispatch to handle property set if registered
-                unsafe {
-                    if let Some(dispatch) = HANDLE_PROPERTY_SET_DISPATCH {
-                        if !key.is_null() {
+                if let Some(dispatch) = handle_property_set_dispatch() {
+                    if !key.is_null() {
+                        unsafe {
                             let name_ptr =
                                 (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                             let name_len = (*key).byte_len as usize;
@@ -95,9 +95,9 @@ pub extern "C" fn js_object_set_field_by_name(
     if obj.is_null() || (obj as usize) < 0x10000 {
         // Small non-null value — could be a stripped handle (after ensure_i64 stripped NaN-box tag)
         if !obj.is_null() && (obj as usize) > 0 {
-            unsafe {
-                if let Some(dispatch) = HANDLE_PROPERTY_SET_DISPATCH {
-                    if !key.is_null() {
+            if let Some(dispatch) = handle_property_set_dispatch() {
+                if !key.is_null() {
+                    unsafe {
                         let name_ptr =
                             (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                         let name_len = (*key).byte_len as usize;

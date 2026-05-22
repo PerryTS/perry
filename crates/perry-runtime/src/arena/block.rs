@@ -103,14 +103,20 @@ impl ArenaBlock {
         // swept; the freed entries buffer was reused for a new alloc;
         // the first f64 key drifted to a denormal (~1.086e-311).
         let pad = align.max(8);
-        let aligned_offset = (self.offset + pad - 1) & !(pad - 1);
-        if aligned_offset + size > self.size {
+        // Check arithmetic on the bump path explicitly. `allocation_start`
+        // already uses checked_add for the excluded-pages slow path; this
+        // mirrors that on the fast path so a hostile `size`/`align` pair
+        // can never wrap and hand back an in-bounds pointer for an
+        // out-of-bounds region.
+        let aligned_offset = self.offset.checked_add(pad - 1)? & !(pad - 1);
+        let bumped = aligned_offset.checked_add(size)?;
+        if bumped > self.size {
             return None;
         }
 
         let ptr = unsafe { self.data.add(aligned_offset) };
-        let bumped = aligned_offset + size;
-        self.offset = (bumped + pad - 1) & !(pad - 1);
+        let next = bumped.checked_add(pad - 1)? & !(pad - 1);
+        self.offset = next;
         Some(ptr)
     }
 

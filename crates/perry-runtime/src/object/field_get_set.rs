@@ -932,8 +932,7 @@ pub extern "C" fn js_object_get_field_by_name(
                             return JSValue::from_bits(JSValue::pointer(null_obj_ptr).bits());
                         }
                     }
-                    let dispatch = unsafe { HANDLE_PROPERTY_DISPATCH };
-                    if let Some(dispatch) = dispatch {
+                    if let Some(dispatch) = handle_property_dispatch() {
                         unsafe {
                             let key_ptr =
                                 (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -970,8 +969,7 @@ pub extern "C" fn js_object_get_field_by_name(
                     return JSValue::from_bits(result.to_bits());
                 }
             }
-            let dispatch = unsafe { HANDLE_PROPERTY_DISPATCH };
-            if let Some(dispatch) = dispatch {
+            if let Some(dispatch) = handle_property_dispatch() {
                 unsafe {
                     let key_ptr =
                         (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -1795,8 +1793,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
                 return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
             }
         }
-        let dispatch = unsafe { HANDLE_PROPERTY_DISPATCH };
-        if let Some(dispatch) = dispatch {
+        if let Some(dispatch) = handle_property_dispatch() {
             unsafe {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;

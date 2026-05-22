@@ -293,7 +293,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // with no tag are raw handle IDs from Perry's integer-typed handle parameters.
     let raw_bits = object.to_bits();
     if raw_bits > 0 && raw_bits < 0x100000 {
-        if let Some(dispatch) = HANDLE_METHOD_DISPATCH {
+        if let Some(dispatch) = handle_method_dispatch() {
             return dispatch(
                 raw_bits as i64,
                 method_name.as_ptr(),
@@ -706,7 +706,7 @@ pub unsafe extern "C" fn js_native_call_method(
         let raw_ptr = jsval.as_pointer::<u8>() as usize;
         if raw_ptr > 0 && raw_ptr < 0x100000 {
             // This is a handle, not a real memory pointer - dispatch to stdlib
-            if let Some(dispatch) = HANDLE_METHOD_DISPATCH {
+            if let Some(dispatch) = handle_method_dispatch() {
                 return dispatch(
                     raw_ptr as i64,
                     method_name.as_ptr(),

@@ -220,7 +220,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
 
     // Check if this is a handle-based object (small integer, not a real heap pointer)
     if ptr < 0x100000 {
-        if let Some(dispatch) = crate::object::HANDLE_PROPERTY_DISPATCH {
+        if let Some(dispatch) = crate::object::handle_property_dispatch() {
             return dispatch(ptr, property_name_ptr as *const u8, property_name_len);
         }
         return f64::from_bits(TAG_UNDEFINED);
