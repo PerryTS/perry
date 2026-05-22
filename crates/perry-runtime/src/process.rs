@@ -65,6 +65,31 @@ pub extern "C" fn js_getenv(name_ptr: *const StringHeader) -> *mut StringHeader 
     }
 }
 
+/// Get an environment variable, returning a fully NaN-boxed JS value.
+///
+/// Unlike `js_getenv` (which returns a raw `*mut StringHeader`, 0 when
+/// unset), this returns an f64 NaN-boxed value the call site can use
+/// directly. An unset var yields `undefined` — matching Node, where
+/// `process.env.UNSET` is `undefined` — so `process.env.X ?? default`
+/// applies the default. Tagging the null pointer as a STRING_TAG value
+/// instead (the old fast-path behavior) produced a value that read as
+/// `typeof "string"` yet stringified to `null` and was non-nullish, so
+/// `??` silently swallowed the fallback (#1312).
+///
+/// A var that IS set to the empty string still returns `""` (a valid,
+/// non-null string), which is falsy but not nullish — also matching
+/// Node, so `??` won't clobber a legitimately empty value.
+#[no_mangle]
+pub extern "C" fn js_getenv_value(name_ptr: *const StringHeader) -> f64 {
+    let ptr = js_getenv(name_ptr);
+    let val = if ptr.is_null() {
+        JSValue::undefined()
+    } else {
+        JSValue::string_ptr(ptr)
+    };
+    f64::from_bits(val.bits())
+}
+
 /// Get resident set size (RSS) in bytes using platform-specific APIs
 pub(crate) fn get_rss_bytes() -> u64 {
     #[cfg(target_os = "macos")]
