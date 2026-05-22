@@ -62,6 +62,23 @@ thread_local! {
     /// the `===` identity check matches Node.
     static BUFFER_AB_ALIAS: RefCell<PtrHashMap<usize, usize>> =
         RefCell::new(new_ptr_hash_map());
+    /// Buffers returned by `crypto.createSecretKey`. They intentionally keep
+    /// Buffer storage so crypto/HMAC call paths can still read raw key bytes,
+    /// while object property/method dispatch exposes the KeyObject surface.
+    static SECRET_KEY_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+    /// Buffers that should behave as WebCrypto CryptoKey values. Metadata is
+    /// numeric to keep perry-runtime independent from perry-stdlib enums:
+    /// algo: 1 HMAC, 2 AES-GCM, 3 AES-KW, 4 AES-CBC, 5 AES-CTR, 6 HKDF, 7 PBKDF2
+    /// hash: 1 SHA-1, 2 SHA-256, 3 SHA-384, 4 SHA-512
+    /// kind: 1 secret, 2 private, 3 public
+    static CRYPTO_KEY_META_REGISTRY: RefCell<PtrHashMap<usize, (u8, u8, u8)>> =
+        RefCell::new(new_ptr_hash_map());
+    /// String-backed asymmetric KeyObject surrogates returned by crypto
+    /// helpers. They intentionally keep PEM/internal-string storage so the
+    /// stdlib crypto routines can parse/read them directly, while runtime
+    /// property dispatch can expose Node's KeyObject metadata surface.
+    static ASYMMETRIC_KEY_REGISTRY: RefCell<PtrHashMap<usize, (u8, u8)>> =
+        RefCell::new(new_ptr_hash_map());
 }
 
 pub fn mark_as_array_buffer(addr: usize) {
@@ -187,6 +204,37 @@ pub fn mark_as_uint8array(addr: usize) {
     UINT8ARRAY_FROM_CTOR.with(|r| {
         r.borrow_mut().insert(addr);
     });
+}
+
+pub fn mark_as_secret_key(addr: usize) {
+    SECRET_KEY_REGISTRY.with(|r| {
+        r.borrow_mut().insert(addr);
+    });
+}
+
+pub fn is_secret_key(addr: usize) -> bool {
+    SECRET_KEY_REGISTRY.with(|r| r.borrow().contains(&addr))
+}
+
+pub fn mark_as_crypto_key(addr: usize, algo: u8, hash: u8, kind: u8) {
+    CRYPTO_KEY_META_REGISTRY.with(|r| {
+        r.borrow_mut().insert(addr, (algo, hash, kind));
+    });
+}
+
+pub fn crypto_key_meta(addr: usize) -> Option<(u8, u8, u8)> {
+    CRYPTO_KEY_META_REGISTRY.with(|r| r.borrow().get(&addr).copied())
+}
+
+/// `kind`: 1 public, 2 private. `asym_type`: 1 rsa, 2 ec, 3 ed25519, 4 x25519.
+pub fn mark_as_asymmetric_key(addr: usize, kind: u8, asym_type: u8) {
+    ASYMMETRIC_KEY_REGISTRY.with(|r| {
+        r.borrow_mut().insert(addr, (kind, asym_type));
+    });
+}
+
+pub fn asymmetric_key_meta(addr: usize) -> Option<(u8, u8)> {
+    ASYMMETRIC_KEY_REGISTRY.with(|r| r.borrow().get(&addr).copied())
 }
 
 pub fn is_uint8array_buffer(addr: usize) -> bool {

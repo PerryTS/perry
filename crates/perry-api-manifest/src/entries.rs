@@ -1760,6 +1760,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // up in the dispatch-table extraction.
     method("crypto", "randomBytes", false, None),
     method("crypto", "randomUUID", false, None),
+    method("crypto", "randomInt", false, None),
+    method("crypto", "hash", false, None),
     method("crypto", "sha256", false, None),
     method("crypto", "md5", false, None),
     method("crypto", "getRandomValues", false, None),
@@ -1769,6 +1771,16 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // axios (Uint32Array) for ID generation.
     method("crypto", "randomFillSync", false, None),
     method("crypto", "createHash", false, None),
+    method("crypto", "createSign", false, None),
+    method("crypto", "createVerify", false, None),
+    class("crypto", "ECDH"),
+    method("crypto", "createECDH", false, None),
+    method("crypto", "createDiffieHellman", false, None),
+    method("crypto", "createDiffieHellmanGroup", false, None),
+    method("crypto", "getDiffieHellman", false, None),
+    method("crypto", "createPrivateKey", false, None),
+    method("crypto", "createPublicKey", false, None),
+    method("crypto", "generateKeyPairSync", false, None),
     method("crypto", "createHmac", false, None),
     // `crypto.createCipheriv(alg, key, iv)` / `createDecipheriv(...)` —
     // issue #1075. Registers a CipherHandle dispatched via the
@@ -1800,12 +1812,23 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "generateKeyPairSync", false, None),
     // crypto.randomInt([min,] max) — uniform integer in [min, max).
     // crypto.timingSafeEqual(a, b) — constant-time byte comparison.
-    // crypto.getHashes() / getCiphers() — supported-algorithm name lists.
-    // All wired in codegen `expr/calls.rs` (direct dispatch, like createHash).
+    // crypto.getHashes() / getCiphers() / getCurves() — supported-algorithm name lists.
+    // crypto.getFips() — FIPS mode flag.
+    // crypto.sign/verify/publicEncrypt/privateDecrypt/privateEncrypt/publicDecrypt —
+    // asymmetric one-shot helpers. All wired in codegen `expr/calls.rs`
+    // (direct dispatch, like createHash).
     method("crypto", "randomInt", false, None),
     method("crypto", "timingSafeEqual", false, None),
+    method("crypto", "sign", false, None),
+    method("crypto", "verify", false, None),
+    method("crypto", "publicEncrypt", false, None),
+    method("crypto", "privateDecrypt", false, None),
+    method("crypto", "privateEncrypt", false, None),
+    method("crypto", "publicDecrypt", false, None),
     method("crypto", "getHashes", false, None),
     method("crypto", "getCiphers", false, None),
+    method("crypto", "getCurves", false, None),
+    method("crypto", "getFips", false, None),
     // Web Crypto API (issue #561) — `crypto.subtle.*`. The HIR
     // lowering at `crates/perry-hir/src/lower/expr_call.rs` recognizes
     // the `crypto.subtle.<method>(args)` chain and emits a

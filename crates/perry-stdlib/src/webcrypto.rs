@@ -17,14 +17,12 @@
 //! - `decrypt({ name: "AES-GCM", iv, additionalData?, tagLength? }, key, data)`
 //!   → Promise<Uint8Array>
 //!
-//! AES-CBC, AES-CTR, and RSA-OAEP encrypt/decrypt remain TODO follow-
-//! ups. `generateKey`, `wrapKey`, `unwrapKey`, `deriveKey`, and
-//! asymmetric signing (RSA / ECDSA) are still out of scope per the
-//! issue.
+//! AES-CBC, AES-CTR, RSA-OAEP encrypt/decrypt, ECDH deriveBits, and
+//! RSA-PSS/RSASSA remain TODO follow-ups.
 //!
 //! `CryptoKey` is represented as a Buffer holding the raw key bytes,
-//! with an entry in `CRYPTO_KEY_REGISTRY` recording `(algo, hash)` so
-//! `sign` / `verify` can route to the correct primitive.
+//! with an entry in `CRYPTO_KEY_REGISTRY` recording `(algo, hash, kind)`
+//! so `sign` / `verify` can route to the correct primitive.
 //!
 //! The async aspect is decorative — these primitives are CPU-bound and
 //! resolve synchronously inside the returned Promise (the issue's
@@ -33,8 +31,38 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit as AesBlockKeyInit};
+use aes::{Aes128, Aes192, Aes256};
+use base64::Engine as _;
+use cbc::{
+    cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit},
+    Decryptor, Encryptor,
+};
 use hmac::{Hmac, KeyInit, Mac};
 use once_cell::sync::Lazy;
+use p256::ecdh::diffie_hellman as p256_diffie_hellman;
+use p256::ecdsa::signature::{Signer as EcdsaSigner, Verifier as EcdsaVerifier};
+use p256::ecdsa::{
+    Signature as P256EcdsaSignature, SigningKey as P256EcdsaSigningKey,
+    VerifyingKey as P256EcdsaVerifyingKey,
+};
+use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
+use rsa::pkcs1v15::{
+    Signature as RsaPkcs1v15Signature, SigningKey as RsaPkcs1v15SigningKey,
+    VerifyingKey as RsaPkcs1v15VerifyingKey,
+};
+use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
+use rsa::pss::{
+    Signature as RsaPssSignature, SigningKey as RsaPssSigningKey,
+    VerifyingKey as RsaPssVerifyingKey,
+};
+use rsa::sha2::{Sha256 as RsaSha256, Sha384 as RsaSha384, Sha512 as RsaSha512};
+use rsa::signature::{
+    RandomizedSigner as RsaRandomizedSigner, SignatureEncoding as RsaSignatureEncoding,
+};
+use rsa::traits::{PrivateKeyParts, PublicKeyParts};
+use rsa::{BigUint as RsaBigUint, Oaep, RsaPrivateKey, RsaPublicKey};
 use sha1::Sha1;
 use sha2::{Digest as Sha2Digest, Sha256, Sha384, Sha512};
 
@@ -42,7 +70,8 @@ use perry_runtime::{
     buffer::{
         buffer_alloc, buffer_data_mut, is_registered_buffer, mark_as_uint8array, BufferHeader,
     },
-    js_promise_resolved, JSValue, Promise, StringHeader,
+    js_object_alloc, js_object_set_field_by_name, js_promise_resolved, JSValue, Promise,
+    StringHeader,
 };
 
 /// `buffer_data` is private to perry-runtime — open-code the same offset.
@@ -78,7 +107,26 @@ enum HashAlgo {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum KeyAlgo {
     Hmac,
+    Hkdf,
+    Pbkdf2,
     AesGcm,
+    AesKw,
+    AesCbc,
+    AesCtr,
+    EcdsaP256,
+    EcdhP256,
+    Ed25519,
+    X25519,
+    RsaOaep,
+    RsassaPkcs1,
+    RsaPss,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum KeyKind {
+    Secret,
+    Private,
+    Public,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -88,6 +136,7 @@ struct CryptoKeyMaterial {
     /// unused (we keep `HashAlgo::Sha256` as a harmless placeholder so
     /// the struct stays `Copy`).
     hash: HashAlgo,
+    kind: KeyKind,
 }
 
 static CRYPTO_KEY_REGISTRY: Lazy<Mutex<HashMap<usize, CryptoKeyMaterial>>> =
@@ -98,7 +147,38 @@ fn register_crypto_key(buf_addr: usize, mat: CryptoKeyMaterial) {
 }
 
 fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
-    CRYPTO_KEY_REGISTRY.lock().unwrap().get(&buf_addr).copied()
+    CRYPTO_KEY_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&buf_addr)
+        .copied()
+        .or_else(|| {
+            let (algo, hash, kind) = perry_runtime::buffer::crypto_key_meta(buf_addr)?;
+            let algo = match algo {
+                1 => KeyAlgo::Hmac,
+                2 => KeyAlgo::AesGcm,
+                3 => KeyAlgo::AesKw,
+                4 => KeyAlgo::AesCbc,
+                5 => KeyAlgo::AesCtr,
+                6 => KeyAlgo::Hkdf,
+                7 => KeyAlgo::Pbkdf2,
+                _ => return None,
+            };
+            let hash = match hash {
+                1 => HashAlgo::Sha1,
+                2 => HashAlgo::Sha256,
+                3 => HashAlgo::Sha384,
+                4 => HashAlgo::Sha512,
+                _ => HashAlgo::Sha256,
+            };
+            let kind = match kind {
+                1 => KeyKind::Secret,
+                2 => KeyKind::Private,
+                3 => KeyKind::Public,
+                _ => KeyKind::Secret,
+            };
+            Some(CryptoKeyMaterial { algo, hash, kind })
+        })
 }
 
 /// Strip POINTER_TAG / STRING_TAG from a NaN-boxed value, returning the
@@ -229,6 +309,17 @@ unsafe fn extract_hmac_hash(algo_bits: u64) -> Option<HashAlgo> {
     extract_hash_algo(hash_val.bits())
 }
 
+unsafe fn extract_algorithm_hash(algo_bits: u64, default: HashAlgo) -> HashAlgo {
+    let obj_ptr = strip_ptr(algo_bits) as *const perry_runtime::ObjectHeader;
+    if (obj_ptr as usize) < 0x1000 {
+        return default;
+    }
+    let key = b"hash";
+    let key_ptr = perry_runtime::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let hash_val = perry_runtime::js_object_get_field_by_name(obj_ptr, key_ptr);
+    extract_hash_algo(hash_val.bits()).unwrap_or(default)
+}
+
 /// Allocate a fresh Buffer marked as Uint8Array (so `instanceof Uint8Array`
 /// is true and `new Uint8Array(buf)` memcpy's correctly), copy `bytes` in.
 unsafe fn alloc_uint8array_from_slice(bytes: &[u8]) -> *mut BufferHeader {
@@ -303,6 +394,147 @@ fn compute_hmac(hash: HashAlgo, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+fn generate_p256_signing_key() -> Option<P256EcdsaSigningKey> {
+    use rand::RngCore;
+    let mut rng = rand::rngs::OsRng;
+    for _ in 0..128 {
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
+        if let Ok(key) = P256EcdsaSigningKey::from_slice(&bytes) {
+            return Some(key);
+        }
+    }
+    None
+}
+
+fn generate_p256_secret_key() -> Option<P256SecretKey> {
+    use rand::RngCore;
+    let mut rng = rand::rngs::OsRng;
+    for _ in 0..128 {
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
+        if let Ok(key) = P256SecretKey::from_slice(&bytes) {
+            return Some(key);
+        }
+    }
+    None
+}
+
+fn rsa_oaep_encrypt(hash: HashAlgo, key: &RsaPublicKey, data: &[u8]) -> Option<Vec<u8>> {
+    let mut rng = rand::rngs::OsRng;
+    match hash {
+        HashAlgo::Sha1 => key
+            .encrypt(&mut rng, Oaep::new::<rsa_sha1::Sha1>(), data)
+            .ok(),
+        HashAlgo::Sha256 => key.encrypt(&mut rng, Oaep::new::<RsaSha256>(), data).ok(),
+        HashAlgo::Sha384 => key.encrypt(&mut rng, Oaep::new::<RsaSha384>(), data).ok(),
+        HashAlgo::Sha512 => key.encrypt(&mut rng, Oaep::new::<RsaSha512>(), data).ok(),
+    }
+}
+
+fn rsa_oaep_decrypt(hash: HashAlgo, key: &RsaPrivateKey, data: &[u8]) -> Option<Vec<u8>> {
+    let mut rng = rand::rngs::OsRng;
+    match hash {
+        HashAlgo::Sha1 => key
+            .decrypt_blinded(&mut rng, Oaep::new::<rsa_sha1::Sha1>(), data)
+            .ok(),
+        HashAlgo::Sha256 => key
+            .decrypt_blinded(&mut rng, Oaep::new::<RsaSha256>(), data)
+            .ok(),
+        HashAlgo::Sha384 => key
+            .decrypt_blinded(&mut rng, Oaep::new::<RsaSha384>(), data)
+            .ok(),
+        HashAlgo::Sha512 => key
+            .decrypt_blinded(&mut rng, Oaep::new::<RsaSha512>(), data)
+            .ok(),
+    }
+}
+
+fn rsa_pkcs1_sign(hash: HashAlgo, key: RsaPrivateKey, data: &[u8]) -> Option<Vec<u8>> {
+    match hash {
+        HashAlgo::Sha256 => Some(
+            RsaPkcs1v15SigningKey::<RsaSha256>::new(key)
+                .sign(data)
+                .to_vec(),
+        ),
+        HashAlgo::Sha384 => Some(
+            RsaPkcs1v15SigningKey::<RsaSha384>::new(key)
+                .sign(data)
+                .to_vec(),
+        ),
+        HashAlgo::Sha512 => Some(
+            RsaPkcs1v15SigningKey::<RsaSha512>::new(key)
+                .sign(data)
+                .to_vec(),
+        ),
+        HashAlgo::Sha1 => None,
+    }
+}
+
+fn rsa_pkcs1_verify(hash: HashAlgo, key: RsaPublicKey, data: &[u8], sig: &[u8]) -> Option<bool> {
+    let sig = RsaPkcs1v15Signature::try_from(sig).ok()?;
+    let ok = match hash {
+        HashAlgo::Sha256 => RsaPkcs1v15VerifyingKey::<RsaSha256>::new(key)
+            .verify(data, &sig)
+            .is_ok(),
+        HashAlgo::Sha384 => RsaPkcs1v15VerifyingKey::<RsaSha384>::new(key)
+            .verify(data, &sig)
+            .is_ok(),
+        HashAlgo::Sha512 => RsaPkcs1v15VerifyingKey::<RsaSha512>::new(key)
+            .verify(data, &sig)
+            .is_ok(),
+        HashAlgo::Sha1 => return None,
+    };
+    Some(ok)
+}
+
+fn rsa_pss_sign(
+    hash: HashAlgo,
+    key: RsaPrivateKey,
+    data: &[u8],
+    salt_len: usize,
+) -> Option<Vec<u8>> {
+    let mut rng = rand::rngs::OsRng;
+    match hash {
+        HashAlgo::Sha256 => RsaPssSigningKey::<RsaSha256>::new_with_salt_len(key, salt_len)
+            .try_sign_with_rng(&mut rng, data)
+            .ok()
+            .map(|s| s.to_vec()),
+        HashAlgo::Sha384 => RsaPssSigningKey::<RsaSha384>::new_with_salt_len(key, salt_len)
+            .try_sign_with_rng(&mut rng, data)
+            .ok()
+            .map(|s| s.to_vec()),
+        HashAlgo::Sha512 => RsaPssSigningKey::<RsaSha512>::new_with_salt_len(key, salt_len)
+            .try_sign_with_rng(&mut rng, data)
+            .ok()
+            .map(|s| s.to_vec()),
+        HashAlgo::Sha1 => None,
+    }
+}
+
+fn rsa_pss_verify(
+    hash: HashAlgo,
+    key: RsaPublicKey,
+    data: &[u8],
+    sig: &[u8],
+    salt_len: usize,
+) -> Option<bool> {
+    let sig = RsaPssSignature::try_from(sig).ok()?;
+    let ok = match hash {
+        HashAlgo::Sha256 => RsaPssVerifyingKey::<RsaSha256>::new_with_salt_len(key, salt_len)
+            .verify(data, &sig)
+            .is_ok(),
+        HashAlgo::Sha384 => RsaPssVerifyingKey::<RsaSha384>::new_with_salt_len(key, salt_len)
+            .verify(data, &sig)
+            .is_ok(),
+        HashAlgo::Sha512 => RsaPssVerifyingKey::<RsaSha512>::new_with_salt_len(key, salt_len)
+            .verify(data, &sig)
+            .is_ok(),
+        HashAlgo::Sha1 => return None,
+    };
+    Some(ok)
+}
+
 // =====================================================================
 // FFI entry points (called from codegen-emitted IR).
 // All four return `*mut Promise`; codegen NaN-boxes the result with
@@ -345,12 +577,16 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     _extractable_bits: f64,
     _usages_bits: f64,
 ) -> *mut Promise {
-    // Only "raw" format is supported.
     let format = match string_from_jsvalue(format_bits.to_bits()) {
         Some(s) => s,
         None => return resolve_undefined(),
     };
-    if format != "raw" {
+    let format_lower = format.to_ascii_lowercase();
+    if format_lower != "raw"
+        && format_lower != "spki"
+        && format_lower != "pkcs8"
+        && format_lower != "jwk"
+    {
         return resolve_undefined();
     }
     // Algorithm name — accepts string shorthand ("AES-GCM") or
@@ -360,21 +596,159 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         None => return resolve_undefined(),
     };
     let algo_upper = algo_name.to_ascii_uppercase();
-    let (key_algo, hash) = if algo_upper == "HMAC" {
+    let (key_algo, hash, kind) = if algo_upper == "HMAC"
+        && (format_lower == "raw" || format_lower == "jwk")
+    {
         let hash = match extract_hmac_hash(algo_bits.to_bits()) {
             Some(h) => h,
             None => return resolve_undefined(),
         };
-        (KeyAlgo::Hmac, hash)
-    } else if algo_upper == "AES-GCM" {
+        (KeyAlgo::Hmac, hash, KeyKind::Secret)
+    } else if algo_upper == "HKDF" && format_lower == "raw" {
+        let hash = extract_algorithm_hash(algo_bits.to_bits(), HashAlgo::Sha256);
+        (KeyAlgo::Hkdf, hash, KeyKind::Secret)
+    } else if algo_upper == "PBKDF2" && format_lower == "raw" {
+        let hash = extract_algorithm_hash(algo_bits.to_bits(), HashAlgo::Sha256);
+        (KeyAlgo::Pbkdf2, hash, KeyKind::Secret)
+    } else if algo_upper == "AES-GCM" && (format_lower == "raw" || format_lower == "jwk") {
         // AES-GCM: 128, 192, or 256-bit keys. We accept any length
         // here and let encrypt/decrypt fail loudly on mismatch.
-        (KeyAlgo::AesGcm, HashAlgo::Sha256)
+        (KeyAlgo::AesGcm, HashAlgo::Sha256, KeyKind::Secret)
+    } else if algo_upper == "AES-KW" && (format_lower == "raw" || format_lower == "jwk") {
+        // AES-KW: RFC 3394 key wrapping key. The wrap/unwrap path only
+        // needs the raw bytes plus a registered CryptoKey marker; key
+        // length is validated by the AES-KW helper itself.
+        (KeyAlgo::AesKw, HashAlgo::Sha256, KeyKind::Secret)
+    } else if algo_upper == "AES-CBC" && (format_lower == "raw" || format_lower == "jwk") {
+        (KeyAlgo::AesCbc, HashAlgo::Sha256, KeyKind::Secret)
+    } else if algo_upper == "AES-CTR" && (format_lower == "raw" || format_lower == "jwk") {
+        (KeyAlgo::AesCtr, HashAlgo::Sha256, KeyKind::Secret)
+    } else if algo_upper == "ECDSA" && (format_lower == "raw" || format_lower == "jwk") {
+        let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
+            Some(c) => c,
+            None => return resolve_undefined(),
+        };
+        let curve_upper = curve.to_ascii_uppercase();
+        if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
+            return resolve_undefined();
+        }
+        let kind =
+            if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
+                KeyKind::Private
+            } else {
+                KeyKind::Public
+            };
+        (KeyAlgo::EcdsaP256, HashAlgo::Sha256, kind)
+    } else if algo_upper == "ECDH" && (format_lower == "raw" || format_lower == "jwk") {
+        let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
+            Some(c) => c,
+            None => return resolve_undefined(),
+        };
+        let curve_upper = curve.to_ascii_uppercase();
+        if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
+            return resolve_undefined();
+        }
+        let kind =
+            if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
+                KeyKind::Private
+            } else {
+                KeyKind::Public
+            };
+        (KeyAlgo::EcdhP256, HashAlgo::Sha256, kind)
+    } else if algo_upper == "ED25519" && (format_lower == "raw" || format_lower == "jwk") {
+        let kind =
+            if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
+                KeyKind::Private
+            } else {
+                KeyKind::Public
+            };
+        (KeyAlgo::Ed25519, HashAlgo::Sha256, kind)
+    } else if algo_upper == "X25519" && (format_lower == "raw" || format_lower == "jwk") {
+        let kind =
+            if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
+                KeyKind::Private
+            } else {
+                KeyKind::Public
+            };
+        (KeyAlgo::X25519, HashAlgo::Sha256, kind)
+    } else if (algo_upper == "RSA-OAEP"
+        || algo_upper == "RSASSA-PKCS1-V1_5"
+        || algo_upper == "RSA-PSS")
+        && (format_lower == "spki" || format_lower == "pkcs8" || format_lower == "jwk")
+    {
+        let hash = extract_algorithm_hash(algo_bits.to_bits(), HashAlgo::Sha1);
+        let kind = if format_lower == "spki" {
+            KeyKind::Public
+        } else if format_lower == "pkcs8" {
+            KeyKind::Private
+        } else if object_field_string(key_bits.to_bits(), b"d").is_some() {
+            KeyKind::Private
+        } else {
+            KeyKind::Public
+        };
+        let key_algo = match algo_upper.as_str() {
+            "RSA-OAEP" => KeyAlgo::RsaOaep,
+            "RSASSA-PKCS1-V1_5" => KeyAlgo::RsassaPkcs1,
+            "RSA-PSS" => KeyAlgo::RsaPss,
+            _ => unreachable!(),
+        };
+        (key_algo, hash, kind)
     } else {
         return resolve_undefined();
     };
 
-    let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
+    let key_bytes = if format_lower == "jwk" {
+        jwk_import_key_bytes(key_bits.to_bits(), key_algo, kind).unwrap_or_else(|| Vec::new())
+    } else {
+        bytes_from_jsvalue(key_bits.to_bits())
+    };
+    if key_bytes.is_empty() && !matches!(key_algo, KeyAlgo::Hkdf | KeyAlgo::Pbkdf2) {
+        return resolve_undefined();
+    }
+    if matches!(key_algo, KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256) {
+        let ok = if kind == KeyKind::Public {
+            P256PublicKey::from_sec1_bytes(&key_bytes).is_ok()
+        } else {
+            P256SecretKey::from_slice(&key_bytes).is_ok()
+        };
+        if !ok {
+            return resolve_undefined();
+        }
+    }
+    if matches!(key_algo, KeyAlgo::Ed25519 | KeyAlgo::X25519) {
+        if key_bytes.len() != 32 {
+            return resolve_undefined();
+        }
+        if key_algo == KeyAlgo::Ed25519 {
+            let ok = if kind == KeyKind::Private {
+                let secret: Option<[u8; 32]> = key_bytes.as_slice().try_into().ok();
+                secret
+                    .map(|s| ed25519_dalek::SigningKey::from_bytes(&s))
+                    .is_some()
+            } else {
+                let public: Option<[u8; 32]> = key_bytes.as_slice().try_into().ok();
+                public
+                    .and_then(|p| ed25519_dalek::VerifyingKey::from_bytes(&p).ok())
+                    .is_some()
+            };
+            if !ok {
+                return resolve_undefined();
+            }
+        }
+    }
+    if matches!(
+        key_algo,
+        KeyAlgo::RsaOaep | KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss
+    ) {
+        let ok = if kind == KeyKind::Public {
+            RsaPublicKey::from_public_key_der(&key_bytes).is_ok()
+        } else {
+            RsaPrivateKey::from_pkcs8_der(&key_bytes).is_ok()
+        };
+        if !ok {
+            return resolve_undefined();
+        }
+    }
     let buf = alloc_uint8array_from_slice(&key_bytes);
     if buf.is_null() {
         return resolve_undefined();
@@ -384,10 +758,379 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         CryptoKeyMaterial {
             algo: key_algo,
             hash,
+            kind,
         },
     );
     let val = JSValue::pointer(buf as *const u8).bits();
     resolve_with_bits(val)
+}
+
+/// `crypto.subtle.exportKey("raw" | "spki" | "pkcs8", key)` → Promise<Uint8Array>.
+///
+/// The exported representation is the key byte buffer Perry uses
+/// internally: raw secret bytes / SEC1 public points, SPKI public DER,
+/// or PKCS#8 private DER.
+#[no_mangle]
+pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64) -> *mut Promise {
+    let format = match string_from_jsvalue(format_bits.to_bits()) {
+        Some(s) => s,
+        None => return resolve_undefined(),
+    };
+    let format_lower = format.to_ascii_lowercase();
+    let key_addr = strip_ptr(key_bits.to_bits());
+    let mat = match lookup_crypto_key(key_addr) {
+        Some(m) => m,
+        None => return resolve_undefined(),
+    };
+    if format_lower == "raw" && mat.kind == KeyKind::Private {
+        return resolve_undefined();
+    }
+    if format_lower == "jwk"
+        && mat.kind != KeyKind::Secret
+        && !matches!(
+            mat.algo,
+            KeyAlgo::RsaOaep
+                | KeyAlgo::RsassaPkcs1
+                | KeyAlgo::RsaPss
+                | KeyAlgo::EcdsaP256
+                | KeyAlgo::EcdhP256
+                | KeyAlgo::Ed25519
+                | KeyAlgo::X25519
+        )
+    {
+        return resolve_undefined();
+    }
+    if format_lower == "spki" && mat.kind != KeyKind::Public {
+        return resolve_undefined();
+    }
+    if format_lower == "pkcs8" && mat.kind != KeyKind::Private {
+        return resolve_undefined();
+    }
+    if format_lower != "raw"
+        && format_lower != "spki"
+        && format_lower != "pkcs8"
+        && format_lower != "jwk"
+    {
+        return resolve_undefined();
+    }
+    let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
+    if format_lower == "jwk" {
+        if mat.kind == KeyKind::Secret {
+            let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&key_bytes);
+            let obj = js_object_alloc(0, 2);
+            if obj.is_null() {
+                return resolve_undefined();
+            }
+            set_object_string_field(obj, b"kty", "oct");
+            set_object_string_field(obj, b"k", &encoded);
+            return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+        }
+        if matches!(
+            mat.algo,
+            KeyAlgo::RsaOaep | KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss
+        ) {
+            let obj = match rsa_jwk_export_object(&key_bytes, mat) {
+                Some(o) => o,
+                None => return resolve_undefined(),
+            };
+            return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+        }
+        if matches!(mat.algo, KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256) {
+            let obj = match ec_p256_jwk_export_object(&key_bytes, mat) {
+                Some(o) => o,
+                None => return resolve_undefined(),
+            };
+            return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+        }
+        if matches!(mat.algo, KeyAlgo::Ed25519 | KeyAlgo::X25519) {
+            let obj = match okp_jwk_export_object(&key_bytes, mat) {
+                Some(o) => o,
+                None => return resolve_undefined(),
+            };
+            return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+        }
+        return resolve_undefined();
+    }
+    resolve_with_bytes(&key_bytes)
+}
+
+fn b64u_uint(n: &RsaBigUint) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(n.to_bytes_be())
+}
+
+fn b64u_decode_uint(s: &str) -> Option<RsaBigUint> {
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s.as_bytes())
+        .ok()?;
+    Some(RsaBigUint::from_bytes_be(&bytes))
+}
+
+unsafe fn jwk_uint_field(obj_bits: u64, name: &[u8]) -> Option<RsaBigUint> {
+    let value = object_field_string(obj_bits, name)?;
+    b64u_decode_uint(&value)
+}
+
+fn rsa_jwk_alg(algo: KeyAlgo, hash: HashAlgo) -> &'static str {
+    match (algo, hash) {
+        (KeyAlgo::RsaOaep, HashAlgo::Sha1) => "RSA-OAEP",
+        (KeyAlgo::RsaOaep, HashAlgo::Sha256) => "RSA-OAEP-256",
+        (KeyAlgo::RsaOaep, HashAlgo::Sha384) => "RSA-OAEP-384",
+        (KeyAlgo::RsaOaep, HashAlgo::Sha512) => "RSA-OAEP-512",
+        (KeyAlgo::RsassaPkcs1, HashAlgo::Sha1) => "RS1",
+        (KeyAlgo::RsassaPkcs1, HashAlgo::Sha256) => "RS256",
+        (KeyAlgo::RsassaPkcs1, HashAlgo::Sha384) => "RS384",
+        (KeyAlgo::RsassaPkcs1, HashAlgo::Sha512) => "RS512",
+        (KeyAlgo::RsaPss, HashAlgo::Sha1) => "PS1",
+        (KeyAlgo::RsaPss, HashAlgo::Sha256) => "PS256",
+        (KeyAlgo::RsaPss, HashAlgo::Sha384) => "PS384",
+        (KeyAlgo::RsaPss, HashAlgo::Sha512) => "PS512",
+        _ => "",
+    }
+}
+
+unsafe fn jwk_ec_bytes(obj_bits: u64, kind: KeyKind) -> Option<Vec<u8>> {
+    let kty = object_field_string(obj_bits, b"kty")?;
+    let crv = object_field_string(obj_bits, b"crv")?;
+    if kty != "EC" || crv != "P-256" {
+        return None;
+    }
+    if kind == KeyKind::Private {
+        let d = object_field_string(obj_bits, b"d")?;
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(d.as_bytes())
+            .ok()?;
+        return if bytes.len() == 32 { Some(bytes) } else { None };
+    }
+    let x = object_field_string(obj_bits, b"x")?;
+    let y = object_field_string(obj_bits, b"y")?;
+    let x_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(x.as_bytes())
+        .ok()?;
+    let y_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(y.as_bytes())
+        .ok()?;
+    if x_bytes.len() != 32 || y_bytes.len() != 32 {
+        return None;
+    }
+    let mut sec1 = Vec::with_capacity(65);
+    sec1.push(0x04);
+    sec1.extend_from_slice(&x_bytes);
+    sec1.extend_from_slice(&y_bytes);
+    Some(sec1)
+}
+
+unsafe fn jwk_okp_bytes(obj_bits: u64, key_algo: KeyAlgo, kind: KeyKind) -> Option<Vec<u8>> {
+    let kty = object_field_string(obj_bits, b"kty")?;
+    let crv = object_field_string(obj_bits, b"crv")?;
+    let expected_crv = match key_algo {
+        KeyAlgo::Ed25519 => "Ed25519",
+        KeyAlgo::X25519 => "X25519",
+        _ => return None,
+    };
+    if kty != "OKP" || crv != expected_crv {
+        return None;
+    }
+    let field = if kind == KeyKind::Private { b"d" } else { b"x" };
+    let value = object_field_string(obj_bits, field)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(value.as_bytes())
+        .ok()?;
+    if bytes.len() == 32 {
+        Some(bytes)
+    } else {
+        None
+    }
+}
+
+unsafe fn jwk_import_key_bytes(obj_bits: u64, key_algo: KeyAlgo, kind: KeyKind) -> Option<Vec<u8>> {
+    let kty = object_field_string(obj_bits, b"kty")?;
+    if matches!(key_algo, KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256) {
+        return jwk_ec_bytes(obj_bits, kind);
+    }
+    if matches!(key_algo, KeyAlgo::Ed25519 | KeyAlgo::X25519) {
+        return jwk_okp_bytes(obj_bits, key_algo, kind);
+    }
+    if matches!(
+        key_algo,
+        KeyAlgo::Hmac | KeyAlgo::AesGcm | KeyAlgo::AesKw | KeyAlgo::AesCbc | KeyAlgo::AesCtr
+    ) {
+        if kty != "oct" {
+            return None;
+        }
+        let k = object_field_string(obj_bits, b"k")?;
+        return base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(k.as_bytes())
+            .ok();
+    }
+    if !matches!(
+        key_algo,
+        KeyAlgo::RsaOaep | KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss
+    ) || kty != "RSA"
+    {
+        return None;
+    }
+    let n = jwk_uint_field(obj_bits, b"n")?;
+    let e = jwk_uint_field(obj_bits, b"e")?;
+    if kind == KeyKind::Private {
+        let d = jwk_uint_field(obj_bits, b"d")?;
+        let p = jwk_uint_field(obj_bits, b"p")?;
+        let q = jwk_uint_field(obj_bits, b"q")?;
+        let private_key = RsaPrivateKey::from_components(n, e, d, vec![p, q]).ok()?;
+        let der = private_key.to_pkcs8_der().ok()?;
+        Some(der.as_bytes().to_vec())
+    } else {
+        let public_key = RsaPublicKey::new(n, e).ok()?;
+        let der = public_key.to_public_key_der().ok()?;
+        Some(der.as_bytes().to_vec())
+    }
+}
+
+unsafe fn rsa_jwk_export_object(
+    key_bytes: &[u8],
+    mat: CryptoKeyMaterial,
+) -> Option<*mut perry_runtime::ObjectHeader> {
+    if mat.kind == KeyKind::Public {
+        let public_key = RsaPublicKey::from_public_key_der(key_bytes).ok()?;
+        let obj = js_object_alloc(0, 4);
+        if obj.is_null() {
+            return None;
+        }
+        set_object_string_field(obj, b"kty", "RSA");
+        set_object_string_field(obj, b"alg", rsa_jwk_alg(mat.algo, mat.hash));
+        set_object_string_field(obj, b"n", &b64u_uint(public_key.n()));
+        set_object_string_field(obj, b"e", &b64u_uint(public_key.e()));
+        return Some(obj);
+    }
+
+    let private_key = RsaPrivateKey::from_pkcs8_der(key_bytes).ok()?;
+    let primes = private_key.primes();
+    if primes.len() < 2 {
+        return None;
+    }
+    let p = &primes[0];
+    let q = &primes[1];
+    let one = RsaBigUint::from(1u8);
+    let dp = private_key
+        .dp()
+        .cloned()
+        .unwrap_or_else(|| private_key.d() % (p - &one));
+    let dq = private_key
+        .dq()
+        .cloned()
+        .unwrap_or_else(|| private_key.d() % (q - &one));
+    let qi = private_key.qinv()?.to_biguint()?;
+    let obj = js_object_alloc(0, 10);
+    if obj.is_null() {
+        return None;
+    }
+    set_object_string_field(obj, b"kty", "RSA");
+    set_object_string_field(obj, b"alg", rsa_jwk_alg(mat.algo, mat.hash));
+    set_object_string_field(obj, b"n", &b64u_uint(private_key.n()));
+    set_object_string_field(obj, b"e", &b64u_uint(private_key.e()));
+    set_object_string_field(obj, b"d", &b64u_uint(private_key.d()));
+    set_object_string_field(obj, b"p", &b64u_uint(p));
+    set_object_string_field(obj, b"q", &b64u_uint(q));
+    set_object_string_field(obj, b"dp", &b64u_uint(&dp));
+    set_object_string_field(obj, b"dq", &b64u_uint(&dq));
+    set_object_string_field(obj, b"qi", &b64u_uint(&qi));
+    Some(obj)
+}
+
+unsafe fn okp_jwk_export_object(
+    key_bytes: &[u8],
+    mat: CryptoKeyMaterial,
+) -> Option<*mut perry_runtime::ObjectHeader> {
+    if key_bytes.len() != 32 {
+        return None;
+    }
+    let crv = match mat.algo {
+        KeyAlgo::Ed25519 => "Ed25519",
+        KeyAlgo::X25519 => "X25519",
+        _ => return None,
+    };
+    let public_bytes = if mat.kind == KeyKind::Private {
+        match mat.algo {
+            KeyAlgo::Ed25519 => {
+                let secret: [u8; 32] = key_bytes.try_into().ok()?;
+                ed25519_dalek::SigningKey::from_bytes(&secret)
+                    .verifying_key()
+                    .to_bytes()
+                    .to_vec()
+            }
+            KeyAlgo::X25519 => {
+                let secret: [u8; 32] = key_bytes.try_into().ok()?;
+                let secret = x25519_dalek::StaticSecret::from(secret);
+                x25519_dalek::PublicKey::from(&secret).to_bytes().to_vec()
+            }
+            _ => return None,
+        }
+    } else {
+        key_bytes.to_vec()
+    };
+    let obj = js_object_alloc(0, if mat.kind == KeyKind::Private { 4 } else { 3 });
+    if obj.is_null() {
+        return None;
+    }
+    set_object_string_field(obj, b"kty", "OKP");
+    set_object_string_field(obj, b"crv", crv);
+    set_object_string_field(
+        obj,
+        b"x",
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_bytes),
+    );
+    if mat.kind == KeyKind::Private {
+        set_object_string_field(
+            obj,
+            b"d",
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_bytes),
+        );
+    }
+    Some(obj)
+}
+
+unsafe fn ec_p256_jwk_export_object(
+    key_bytes: &[u8],
+    mat: CryptoKeyMaterial,
+) -> Option<*mut perry_runtime::ObjectHeader> {
+    let (public_bytes, private_d) = if mat.kind == KeyKind::Private {
+        let secret = P256SecretKey::from_slice(key_bytes).ok()?;
+        let public = secret
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+        (public, Some(key_bytes.to_vec()))
+    } else {
+        let public = P256PublicKey::from_sec1_bytes(key_bytes).ok()?;
+        (public.to_encoded_point(false).as_bytes().to_vec(), None)
+    };
+    if public_bytes.len() != 65 || public_bytes[0] != 0x04 {
+        return None;
+    }
+    let obj = js_object_alloc(0, if private_d.is_some() { 5 } else { 4 });
+    if obj.is_null() {
+        return None;
+    }
+    set_object_string_field(obj, b"kty", "EC");
+    set_object_string_field(obj, b"crv", "P-256");
+    set_object_string_field(
+        obj,
+        b"x",
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_bytes[1..33]),
+    );
+    set_object_string_field(
+        obj,
+        b"y",
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_bytes[33..65]),
+    );
+    if let Some(d) = private_d {
+        set_object_string_field(
+            obj,
+            b"d",
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&d),
+        );
+    }
+    Some(obj)
 }
 
 /// Extract the algorithm name from a `string | { name }` argument.
@@ -409,8 +1152,9 @@ unsafe fn extract_algo_name(bits: u64) -> Option<String> {
 
 /// `crypto.subtle.sign(algorithm, key, data)` → Promise<Uint8Array>
 ///
-/// Only `algorithm == "HMAC"` is supported. The hash is read from the
-/// CryptoKey's stored material (set at importKey time).
+/// Supports HMAC and ECDSA/P-256. HMAC reads the hash from the
+/// CryptoKey's stored material; ECDSA expects a private P-256 key
+/// produced by `generateKey`.
 #[no_mangle]
 pub unsafe extern "C" fn js_webcrypto_sign(
     algo_bits: f64,
@@ -421,9 +1165,7 @@ pub unsafe extern "C" fn js_webcrypto_sign(
         Some(s) => s,
         None => return resolve_undefined(),
     };
-    if algo_name.to_ascii_uppercase() != "HMAC" {
-        return resolve_undefined();
-    }
+    let algo_upper = algo_name.to_ascii_uppercase();
     let key_addr = strip_ptr(key_bits.to_bits());
     let mat = match lookup_crypto_key(key_addr) {
         Some(m) => m,
@@ -431,9 +1173,64 @@ pub unsafe extern "C" fn js_webcrypto_sign(
     };
     let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
     let data_bytes = bytes_from_jsvalue(data_bits.to_bits());
-    let sig = match compute_hmac(mat.hash, &key_bytes, &data_bytes) {
-        Some(s) => s,
-        None => return resolve_undefined(),
+    let sig = if algo_upper == "HMAC" {
+        if mat.algo != KeyAlgo::Hmac || mat.kind != KeyKind::Secret {
+            return resolve_undefined();
+        }
+        match compute_hmac(mat.hash, &key_bytes, &data_bytes) {
+            Some(s) => s,
+            None => return resolve_undefined(),
+        }
+    } else if algo_upper == "ECDSA" {
+        if mat.algo != KeyAlgo::EcdsaP256 || mat.kind != KeyKind::Private {
+            return resolve_undefined();
+        }
+        let signing_key = match P256EcdsaSigningKey::from_slice(&key_bytes) {
+            Ok(k) => k,
+            Err(_) => return resolve_undefined(),
+        };
+        let sig: P256EcdsaSignature = signing_key.sign(&data_bytes);
+        sig.to_bytes().as_slice().to_vec()
+    } else if algo_upper == "ED25519" {
+        if mat.algo != KeyAlgo::Ed25519 || mat.kind != KeyKind::Private {
+            return resolve_undefined();
+        }
+        let secret: [u8; 32] = match key_bytes.as_slice().try_into() {
+            Ok(s) => s,
+            Err(_) => return resolve_undefined(),
+        };
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
+        use ed25519_dalek::Signer as _;
+        signing_key.sign(&data_bytes).to_bytes().to_vec()
+    } else if algo_upper == "RSASSA-PKCS1-V1_5" {
+        if mat.algo != KeyAlgo::RsassaPkcs1 || mat.kind != KeyKind::Private {
+            return resolve_undefined();
+        }
+        let private_key = match RsaPrivateKey::from_pkcs8_der(&key_bytes) {
+            Ok(k) => k,
+            Err(_) => return resolve_undefined(),
+        };
+        match rsa_pkcs1_sign(mat.hash, private_key, &data_bytes) {
+            Some(s) => s,
+            None => return resolve_undefined(),
+        }
+    } else if algo_upper == "RSA-PSS" {
+        if mat.algo != KeyAlgo::RsaPss || mat.kind != KeyKind::Private {
+            return resolve_undefined();
+        }
+        let salt_len = object_field_bits(algo_bits.to_bits(), b"saltLength")
+            .and_then(number_from_bits)
+            .unwrap_or(32) as usize;
+        let private_key = match RsaPrivateKey::from_pkcs8_der(&key_bytes) {
+            Ok(k) => k,
+            Err(_) => return resolve_undefined(),
+        };
+        match rsa_pss_sign(mat.hash, private_key, &data_bytes, salt_len) {
+            Some(s) => s,
+            None => return resolve_undefined(),
+        }
+    } else {
+        return resolve_undefined();
     };
     resolve_with_bytes(&sig)
 }
@@ -450,9 +1247,7 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         Some(s) => s,
         None => return resolve_undefined(),
     };
-    if algo_name.to_ascii_uppercase() != "HMAC" {
-        return resolve_undefined();
-    }
+    let algo_upper = algo_name.to_ascii_uppercase();
     let key_addr = strip_ptr(key_bits.to_bits());
     let mat = match lookup_crypto_key(key_addr) {
         Some(m) => m,
@@ -460,12 +1255,71 @@ pub unsafe extern "C" fn js_webcrypto_verify(
     };
     let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
     let data_bytes = bytes_from_jsvalue(data_bits.to_bits());
-    let expected_sig = match compute_hmac(mat.hash, &key_bytes, &data_bytes) {
-        Some(s) => s,
-        None => return resolve_undefined(),
-    };
     let provided_sig = bytes_from_jsvalue(sig_bits.to_bits());
-    let ok = constant_time_eq(&expected_sig, &provided_sig);
+    let ok = if algo_upper == "HMAC" {
+        if mat.algo != KeyAlgo::Hmac || mat.kind != KeyKind::Secret {
+            return resolve_undefined();
+        }
+        let expected_sig = match compute_hmac(mat.hash, &key_bytes, &data_bytes) {
+            Some(s) => s,
+            None => return resolve_undefined(),
+        };
+        constant_time_eq(&expected_sig, &provided_sig)
+    } else if algo_upper == "ECDSA" {
+        if mat.algo != KeyAlgo::EcdsaP256 || mat.kind != KeyKind::Public {
+            return resolve_undefined();
+        }
+        let verifying_key = match P256EcdsaVerifyingKey::from_sec1_bytes(&key_bytes) {
+            Ok(k) => k,
+            Err(_) => return resolve_undefined(),
+        };
+        let sig = match P256EcdsaSignature::from_slice(&provided_sig) {
+            Ok(s) => s,
+            Err(_) => return resolve_with_bool(false),
+        };
+        verifying_key.verify(&data_bytes, &sig).is_ok()
+    } else if algo_upper == "ED25519" {
+        if mat.algo != KeyAlgo::Ed25519 || mat.kind != KeyKind::Public {
+            return resolve_undefined();
+        }
+        let public: [u8; 32] = match key_bytes.as_slice().try_into() {
+            Ok(p) => p,
+            Err(_) => return resolve_undefined(),
+        };
+        let verifying_key = match ed25519_dalek::VerifyingKey::from_bytes(&public) {
+            Ok(k) => k,
+            Err(_) => return resolve_undefined(),
+        };
+        let signature = match ed25519_dalek::Signature::try_from(provided_sig.as_slice()) {
+            Ok(sig) => sig,
+            Err(_) => return resolve_with_bool(false),
+        };
+        use ed25519_dalek::Verifier as _;
+        verifying_key.verify(&data_bytes, &signature).is_ok()
+    } else if algo_upper == "RSASSA-PKCS1-V1_5" {
+        if mat.algo != KeyAlgo::RsassaPkcs1 || mat.kind != KeyKind::Public {
+            return resolve_undefined();
+        }
+        let public_key = match RsaPublicKey::from_public_key_der(&key_bytes) {
+            Ok(k) => k,
+            Err(_) => return resolve_undefined(),
+        };
+        rsa_pkcs1_verify(mat.hash, public_key, &data_bytes, &provided_sig).unwrap_or(false)
+    } else if algo_upper == "RSA-PSS" {
+        if mat.algo != KeyAlgo::RsaPss || mat.kind != KeyKind::Public {
+            return resolve_undefined();
+        }
+        let salt_len = object_field_bits(algo_bits.to_bits(), b"saltLength")
+            .and_then(number_from_bits)
+            .unwrap_or(32) as usize;
+        let public_key = match RsaPublicKey::from_public_key_der(&key_bytes) {
+            Ok(k) => k,
+            Err(_) => return resolve_undefined(),
+        };
+        rsa_pss_verify(mat.hash, public_key, &data_bytes, &provided_sig, salt_len).unwrap_or(false)
+    } else {
+        return resolve_undefined();
+    };
     resolve_with_bool(ok)
 }
 
@@ -495,6 +1349,217 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= a[i] ^ b[i];
     }
     diff == 0
+}
+
+fn number_from_bits(bits: u64) -> Option<u32> {
+    let top16 = (bits >> 48) as u16;
+    if top16 == 0x7FFE {
+        let raw = (bits & 0xFFFF_FFFF) as i32;
+        return (raw >= 0).then_some(raw as u32);
+    }
+    let f = f64::from_bits(bits);
+    if f.is_finite() && f >= 0.0 && f <= u32::MAX as f64 {
+        Some(f as u32)
+    } else {
+        None
+    }
+}
+
+unsafe fn ecdh_shared_secret_bytes(algo_bits: u64, base_key_bits: u64) -> Option<Vec<u8>> {
+    let algo_name = extract_algo_name(algo_bits)?;
+    let algo_upper = algo_name.to_ascii_uppercase();
+    if algo_upper != "ECDH" && algo_upper != "X25519" {
+        return None;
+    }
+    let public_bits = object_field_bits(algo_bits, b"public")?;
+    let public_addr = strip_ptr(public_bits);
+    let public_mat = lookup_crypto_key(public_addr)?;
+    let base_key_addr = strip_ptr(base_key_bits);
+    let base_mat = lookup_crypto_key(base_key_addr)?;
+    if public_mat.kind != KeyKind::Public || base_mat.kind != KeyKind::Private {
+        return None;
+    }
+    let private_bytes = bytes_from_jsvalue(base_key_bits);
+    let public_bytes = bytes_from_jsvalue(public_bits);
+    if algo_upper == "X25519" {
+        if public_mat.algo != KeyAlgo::X25519 || base_mat.algo != KeyAlgo::X25519 {
+            return None;
+        }
+        let private: [u8; 32] = private_bytes.as_slice().try_into().ok()?;
+        let public: [u8; 32] = public_bytes.as_slice().try_into().ok()?;
+        let private = x25519_dalek::StaticSecret::from(private);
+        let public = x25519_dalek::PublicKey::from(public);
+        return Some(private.diffie_hellman(&public).as_bytes().to_vec());
+    }
+    if public_mat.algo != KeyAlgo::EcdhP256 || base_mat.algo != KeyAlgo::EcdhP256 {
+        return None;
+    }
+    let private_key = P256SecretKey::from_slice(&private_bytes).ok()?;
+    let public_key = P256PublicKey::from_sec1_bytes(&public_bytes).ok()?;
+    let secret = p256_diffie_hellman(private_key.to_nonzero_scalar(), public_key.as_affine());
+    Some(secret.raw_secret_bytes().to_vec())
+}
+
+fn hkdf_expand(hash: HashAlgo, ikm: &[u8], salt: &[u8], info: &[u8], out: &mut [u8]) -> bool {
+    match hash {
+        HashAlgo::Sha1 => hkdf::Hkdf::<Sha1>::new(Some(salt), ikm)
+            .expand(info, out)
+            .is_ok(),
+        HashAlgo::Sha256 => hkdf::Hkdf::<Sha256>::new(Some(salt), ikm)
+            .expand(info, out)
+            .is_ok(),
+        HashAlgo::Sha384 => hkdf::Hkdf::<Sha384>::new(Some(salt), ikm)
+            .expand(info, out)
+            .is_ok(),
+        HashAlgo::Sha512 => hkdf::Hkdf::<Sha512>::new(Some(salt), ikm)
+            .expand(info, out)
+            .is_ok(),
+    }
+}
+
+fn pbkdf2_derive(hash: HashAlgo, pass: &[u8], salt: &[u8], iterations: u32, out: &mut [u8]) {
+    match hash {
+        HashAlgo::Sha1 => pbkdf2::pbkdf2_hmac::<Sha1>(pass, salt, iterations, out),
+        HashAlgo::Sha256 => pbkdf2::pbkdf2_hmac::<Sha256>(pass, salt, iterations, out),
+        HashAlgo::Sha384 => pbkdf2::pbkdf2_hmac::<Sha384>(pass, salt, iterations, out),
+        HashAlgo::Sha512 => pbkdf2::pbkdf2_hmac::<Sha512>(pass, salt, iterations, out),
+    }
+}
+
+unsafe fn kdf_derive_bytes(algo_bits: u64, base_key_bits: u64, byte_len: usize) -> Option<Vec<u8>> {
+    let algo_name = extract_algo_name(algo_bits)?;
+    let algo_upper = algo_name.to_ascii_uppercase();
+    let base_key_addr = strip_ptr(base_key_bits);
+    let base_mat = lookup_crypto_key(base_key_addr)?;
+    if base_mat.kind != KeyKind::Secret {
+        return None;
+    }
+    let base_key = bytes_from_jsvalue(base_key_bits);
+    let mut out = vec![0u8; byte_len];
+    if algo_upper == "HKDF" {
+        if base_mat.algo != KeyAlgo::Hkdf {
+            return None;
+        }
+        let hash = extract_algorithm_hash(algo_bits, base_mat.hash);
+        let salt = object_field_bytes(algo_bits, b"salt").unwrap_or_default();
+        let info = object_field_bytes(algo_bits, b"info").unwrap_or_default();
+        if hkdf_expand(hash, &base_key, &salt, &info, &mut out) {
+            return Some(out);
+        }
+        return None;
+    }
+    if algo_upper == "PBKDF2" {
+        if base_mat.algo != KeyAlgo::Pbkdf2 {
+            return None;
+        }
+        let hash = extract_algorithm_hash(algo_bits, base_mat.hash);
+        let salt = object_field_bytes(algo_bits, b"salt").unwrap_or_default();
+        let iterations = object_field_number(algo_bits, b"iterations")?;
+        if iterations == 0 {
+            return None;
+        }
+        pbkdf2_derive(hash, &base_key, &salt, iterations, &mut out);
+        return Some(out);
+    }
+    None
+}
+
+/// `crypto.subtle.deriveBits({ name: "ECDH", public }, privateKey, length)`
+/// → Promise<Uint8Array>. Initial asymmetric-derive coverage implements
+/// P-256 ECDH, matching Node/Bun WebCrypto suites.
+#[no_mangle]
+pub unsafe extern "C" fn js_webcrypto_derive_bits(
+    algo_bits: f64,
+    base_key_bits: f64,
+    length_bits: f64,
+) -> *mut Promise {
+    let bit_len = match number_from_bits(length_bits.to_bits()) {
+        Some(n) => n,
+        None => return resolve_undefined(),
+    };
+    if bit_len % 8 != 0 {
+        return resolve_undefined();
+    }
+    let byte_len = (bit_len / 8) as usize;
+    if let Some(bytes) = kdf_derive_bytes(algo_bits.to_bits(), base_key_bits.to_bits(), byte_len) {
+        return resolve_with_bytes(&bytes);
+    }
+    if bit_len > 256 {
+        return resolve_undefined();
+    }
+    let shared = match ecdh_shared_secret_bytes(algo_bits.to_bits(), base_key_bits.to_bits()) {
+        Some(s) => s,
+        None => return resolve_undefined(),
+    };
+    resolve_with_bytes(&shared[..byte_len])
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_webcrypto_derive_key(
+    algo_bits: f64,
+    base_key_bits: f64,
+    derived_algo_bits: f64,
+    _extractable_bits: f64,
+    _usages_bits: f64,
+) -> *mut Promise {
+    let derived_name = match extract_algo_name(derived_algo_bits.to_bits()) {
+        Some(s) => s,
+        None => return resolve_undefined(),
+    };
+    let derived_upper = derived_name.to_ascii_uppercase();
+    let (key_algo, hash, bit_len) = if derived_upper == "HMAC" {
+        let hash = match extract_hmac_hash(derived_algo_bits.to_bits()) {
+            Some(h) => h,
+            None => return resolve_undefined(),
+        };
+        let length = object_field_number(derived_algo_bits.to_bits(), b"length").unwrap_or(256);
+        (KeyAlgo::Hmac, hash, length)
+    } else if derived_upper == "AES-GCM" {
+        let length = object_field_number(derived_algo_bits.to_bits(), b"length").unwrap_or(256);
+        (KeyAlgo::AesGcm, HashAlgo::Sha256, length)
+    } else if derived_upper == "AES-KW" {
+        let length = object_field_number(derived_algo_bits.to_bits(), b"length").unwrap_or(256);
+        (KeyAlgo::AesKw, HashAlgo::Sha256, length)
+    } else if derived_upper == "AES-CBC" {
+        let length = object_field_number(derived_algo_bits.to_bits(), b"length").unwrap_or(256);
+        (KeyAlgo::AesCbc, HashAlgo::Sha256, length)
+    } else if derived_upper == "AES-CTR" {
+        let length = object_field_number(derived_algo_bits.to_bits(), b"length").unwrap_or(256);
+        (KeyAlgo::AesCtr, HashAlgo::Sha256, length)
+    } else {
+        return resolve_undefined();
+    };
+    if bit_len % 8 != 0 || bit_len == 0 || bit_len > 256 {
+        return resolve_undefined();
+    }
+    let byte_len = (bit_len / 8) as usize;
+    let key_bytes = if let Some(bytes) =
+        kdf_derive_bytes(algo_bits.to_bits(), base_key_bits.to_bits(), byte_len)
+    {
+        bytes
+    } else {
+        let shared = match ecdh_shared_secret_bytes(algo_bits.to_bits(), base_key_bits.to_bits()) {
+            Some(s) => s,
+            None => return resolve_undefined(),
+        };
+        if byte_len > shared.len() {
+            return resolve_undefined();
+        }
+        shared[..byte_len].to_vec()
+    };
+    let buf = alloc_uint8array_from_slice(&key_bytes);
+    if buf.is_null() {
+        return resolve_undefined();
+    }
+    register_crypto_key(
+        buf as usize,
+        CryptoKeyMaterial {
+            algo: key_algo,
+            hash,
+            kind: KeyKind::Secret,
+        },
+    );
+    resolve_with_bits(JSValue::pointer(buf as *const u8).bits())
 }
 
 // =====================================================================
@@ -531,10 +1596,47 @@ unsafe fn object_field_bytes(obj_bits: u64, name: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+unsafe fn object_field_bits(obj_bits: u64, name: &[u8]) -> Option<u64> {
+    let obj_ptr = strip_ptr(obj_bits) as *const perry_runtime::ObjectHeader;
+    if (obj_ptr as usize) < 0x1000 {
+        return None;
+    }
+    let key_ptr = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let val = perry_runtime::js_object_get_field_by_name(obj_ptr, key_ptr);
+    let bits = val.bits();
+    if (bits >> 48) as u16 == 0x7FFC {
+        None
+    } else {
+        Some(bits)
+    }
+}
+
+/// Read an optional string field from an algorithm object.
+unsafe fn object_field_string(obj_bits: u64, name: &[u8]) -> Option<String> {
+    let obj_ptr = strip_ptr(obj_bits) as *const perry_runtime::ObjectHeader;
+    if (obj_ptr as usize) < 0x1000 {
+        return None;
+    }
+    let key_ptr = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let val = perry_runtime::js_object_get_field_by_name(obj_ptr, key_ptr);
+    string_from_jsvalue(val.bits())
+}
+
+unsafe fn set_object_string_field(obj: *mut perry_runtime::ObjectHeader, name: &[u8], value: &str) {
+    let key = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let val = perry_runtime::js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    js_object_set_field_by_name(
+        obj,
+        key,
+        f64::from_bits(STRING_TAG | ((val as u64) & POINTER_MASK)),
+    );
+}
+
 /// AES-GCM encrypt. Returns ciphertext || tag (matches WebCrypto spec).
 fn aes_gcm_encrypt(key: &[u8], iv: &[u8], aad: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
     use aes_gcm::aead::{Aead, KeyInit, Payload};
     use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
+    type Aes192Gcm = aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12>;
 
     if iv.len() != 12 {
         return None;
@@ -549,11 +1651,15 @@ fn aes_gcm_encrypt(key: &[u8], iv: &[u8], aad: &[u8], plaintext: &[u8]) -> Optio
             let cipher = Aes128Gcm::new_from_slice(key).ok()?;
             cipher.encrypt(nonce, payload).ok()
         }
+        24 => {
+            let cipher = Aes192Gcm::new_from_slice(key).ok()?;
+            cipher.encrypt(nonce, payload).ok()
+        }
         32 => {
             let cipher = Aes256Gcm::new_from_slice(key).ok()?;
             cipher.encrypt(nonce, payload).ok()
         }
-        _ => None, // 192-bit AES-GCM not in the aes-gcm 0.10 type set.
+        _ => None,
     }
 }
 
@@ -561,6 +1667,7 @@ fn aes_gcm_encrypt(key: &[u8], iv: &[u8], aad: &[u8], plaintext: &[u8]) -> Optio
 fn aes_gcm_decrypt(key: &[u8], iv: &[u8], aad: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
     use aes_gcm::aead::{Aead, KeyInit, Payload};
     use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
+    type Aes192Gcm = aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12>;
 
     if iv.len() != 12 {
         return None;
@@ -575,6 +1682,10 @@ fn aes_gcm_decrypt(key: &[u8], iv: &[u8], aad: &[u8], ciphertext: &[u8]) -> Opti
             let cipher = Aes128Gcm::new_from_slice(key).ok()?;
             cipher.decrypt(nonce, payload).ok()
         }
+        24 => {
+            let cipher = Aes192Gcm::new_from_slice(key).ok()?;
+            cipher.decrypt(nonce, payload).ok()
+        }
         32 => {
             let cipher = Aes256Gcm::new_from_slice(key).ok()?;
             cipher.decrypt(nonce, payload).ok()
@@ -583,10 +1694,140 @@ fn aes_gcm_decrypt(key: &[u8], iv: &[u8], aad: &[u8], ciphertext: &[u8]) -> Opti
     }
 }
 
+type Aes128CbcEnc = Encryptor<Aes128>;
+type Aes192CbcEnc = Encryptor<Aes192>;
+type Aes256CbcEnc = Encryptor<Aes256>;
+type Aes128CbcDec = Decryptor<Aes128>;
+type Aes192CbcDec = Decryptor<Aes192>;
+type Aes256CbcDec = Decryptor<Aes256>;
+
+fn aes_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
+    if iv.len() != 16 {
+        return None;
+    }
+    let padded_len = ((plaintext.len() / 16) + 1) * 16;
+    let mut buf = vec![0u8; padded_len];
+    buf[..plaintext.len()].copy_from_slice(plaintext);
+    let out = match key.len() {
+        16 => Aes128CbcEnc::new_from_slices(key, iv)
+            .ok()?
+            .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
+            .ok()?,
+        24 => Aes192CbcEnc::new_from_slices(key, iv)
+            .ok()?
+            .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
+            .ok()?,
+        32 => Aes256CbcEnc::new_from_slices(key, iv)
+            .ok()?
+            .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
+            .ok()?,
+        _ => return None,
+    };
+    Some(out.to_vec())
+}
+
+fn aes_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
+    if iv.len() != 16 || ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
+        return None;
+    }
+    let mut buf = ciphertext.to_vec();
+    let out = match key.len() {
+        16 => Aes128CbcDec::new_from_slices(key, iv)
+            .ok()?
+            .decrypt_padded_mut::<Pkcs7>(&mut buf)
+            .ok()?,
+        24 => Aes192CbcDec::new_from_slices(key, iv)
+            .ok()?
+            .decrypt_padded_mut::<Pkcs7>(&mut buf)
+            .ok()?,
+        32 => Aes256CbcDec::new_from_slices(key, iv)
+            .ok()?
+            .decrypt_padded_mut::<Pkcs7>(&mut buf)
+            .ok()?,
+        _ => return None,
+    };
+    Some(out.to_vec())
+}
+
+unsafe fn extract_aes_cbc_args(
+    algo_bits: u64,
+    key_bits: u64,
+    data_bits: u64,
+) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let algo_name = extract_algo_name(algo_bits)?;
+    if !algo_name.eq_ignore_ascii_case("AES-CBC") {
+        return None;
+    }
+    let iv = object_field_bytes(algo_bits, b"iv")?;
+    let key_addr = strip_ptr(key_bits);
+    let mat = lookup_crypto_key(key_addr)?;
+    if mat.algo != KeyAlgo::AesCbc {
+        return None;
+    }
+    let key_bytes = bytes_from_jsvalue(key_bits);
+    let data_bytes = bytes_from_jsvalue(data_bits);
+    Some((key_bytes, iv, data_bytes))
+}
+
 /// Shared AES-GCM arg-extraction for encrypt / decrypt: pulls the
 /// algorithm-name + iv (+ optional aad) from the algorithm object, plus
 /// the raw key bytes (validating they came from an AES-GCM importKey)
 /// and the data bytes. Returns `None` if any required piece is missing.
+
+fn increment_ctr_counter(counter: &mut [u8; 16], length: u32) {
+    let n = u128::from_be_bytes(*counter);
+    let mask = if length == 128 {
+        u128::MAX
+    } else {
+        (1u128 << length) - 1
+    };
+    let prefix = n & !mask;
+    let next = ((n & mask).wrapping_add(1)) & mask;
+    *counter = (prefix | next).to_be_bytes();
+}
+
+fn aes_ctr_apply(key: &[u8], counter: &[u8], length: u32, data: &[u8]) -> Option<Vec<u8>> {
+    if counter.len() != 16 || length == 0 || length > 128 {
+        return None;
+    }
+    let mut ctr = [0u8; 16];
+    ctr.copy_from_slice(counter);
+    let mut out = Vec::with_capacity(data.len());
+    for chunk in data.chunks(16) {
+        let mut block = GenericArray::clone_from_slice(&ctr);
+        match key.len() {
+            16 => Aes128::new_from_slice(key).ok()?.encrypt_block(&mut block),
+            24 => Aes192::new_from_slice(key).ok()?.encrypt_block(&mut block),
+            32 => Aes256::new_from_slice(key).ok()?.encrypt_block(&mut block),
+            _ => return None,
+        }
+        out.extend(chunk.iter().zip(block.iter()).map(|(a, b)| a ^ b));
+        increment_ctr_counter(&mut ctr, length);
+    }
+    Some(out)
+}
+
+unsafe fn extract_aes_ctr_args(
+    algo_bits: u64,
+    key_bits: u64,
+    data_bits: u64,
+) -> Option<(Vec<u8>, Vec<u8>, u32, Vec<u8>)> {
+    let algo_name = extract_algo_name(algo_bits)?;
+    if !algo_name.eq_ignore_ascii_case("AES-CTR") {
+        return None;
+    }
+    let counter = object_field_bytes(algo_bits, b"counter")?;
+    let length = object_field_number(algo_bits, b"length")?;
+    let key_addr = strip_ptr(key_bits);
+    let mat = lookup_crypto_key(key_addr)?;
+    if mat.algo != KeyAlgo::AesCtr {
+        return None;
+    }
+    let key_bytes = bytes_from_jsvalue(key_bits);
+    let data_bytes = bytes_from_jsvalue(data_bits);
+    Some((key_bytes, counter, length, data_bytes))
+}
+
 unsafe fn extract_aes_gcm_args(
     algo_bits: u64,
     key_bits: u64,
@@ -616,6 +1857,61 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
     key_bits: f64,
     data_bits: f64,
 ) -> *mut Promise {
+    let algo_name = match extract_algo_name(algo_bits.to_bits()) {
+        Some(s) => s,
+        None => return resolve_undefined(),
+    };
+    if algo_name.eq_ignore_ascii_case("RSA-OAEP") {
+        let key_addr = strip_ptr(key_bits.to_bits());
+        let mat = match lookup_crypto_key(key_addr) {
+            Some(m) => m,
+            None => return resolve_undefined(),
+        };
+        if mat.algo != KeyAlgo::RsaOaep || mat.kind != KeyKind::Public {
+            return resolve_undefined();
+        }
+        let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
+        let public_key = match RsaPublicKey::from_public_key_der(&key_bytes) {
+            Ok(k) => k,
+            Err(_) => return resolve_undefined(),
+        };
+        let data = bytes_from_jsvalue(data_bits.to_bits());
+        let ciphertext = match rsa_oaep_encrypt(mat.hash, &public_key, &data) {
+            Some(c) => c,
+            None => return resolve_undefined(),
+        };
+        return resolve_with_bytes(&ciphertext);
+    }
+    if algo_name.eq_ignore_ascii_case("AES-CBC") {
+        let (key, iv, data) = match extract_aes_cbc_args(
+            algo_bits.to_bits(),
+            key_bits.to_bits(),
+            data_bits.to_bits(),
+        ) {
+            Some(t) => t,
+            None => return resolve_undefined(),
+        };
+        let ciphertext = match aes_cbc_encrypt(&key, &iv, &data) {
+            Some(c) => c,
+            None => return resolve_undefined(),
+        };
+        return resolve_with_bytes(&ciphertext);
+    }
+    if algo_name.eq_ignore_ascii_case("AES-CTR") {
+        let (key, counter, length, data) = match extract_aes_ctr_args(
+            algo_bits.to_bits(),
+            key_bits.to_bits(),
+            data_bits.to_bits(),
+        ) {
+            Some(t) => t,
+            None => return resolve_undefined(),
+        };
+        let ciphertext = match aes_ctr_apply(&key, &counter, length, &data) {
+            Some(c) => c,
+            None => return resolve_undefined(),
+        };
+        return resolve_with_bytes(&ciphertext);
+    }
     let (key, iv, aad, data) =
         match extract_aes_gcm_args(algo_bits.to_bits(), key_bits.to_bits(), data_bits.to_bits()) {
             Some(t) => t,
@@ -636,6 +1932,61 @@ pub unsafe extern "C" fn js_webcrypto_decrypt(
     key_bits: f64,
     data_bits: f64,
 ) -> *mut Promise {
+    let algo_name = match extract_algo_name(algo_bits.to_bits()) {
+        Some(s) => s,
+        None => return resolve_undefined(),
+    };
+    if algo_name.eq_ignore_ascii_case("RSA-OAEP") {
+        let key_addr = strip_ptr(key_bits.to_bits());
+        let mat = match lookup_crypto_key(key_addr) {
+            Some(m) => m,
+            None => return resolve_undefined(),
+        };
+        if mat.algo != KeyAlgo::RsaOaep || mat.kind != KeyKind::Private {
+            return resolve_undefined();
+        }
+        let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
+        let private_key = match RsaPrivateKey::from_pkcs8_der(&key_bytes) {
+            Ok(k) => k,
+            Err(_) => return resolve_undefined(),
+        };
+        let data = bytes_from_jsvalue(data_bits.to_bits());
+        let plaintext = match rsa_oaep_decrypt(mat.hash, &private_key, &data) {
+            Some(p) => p,
+            None => return resolve_undefined(),
+        };
+        return resolve_with_bytes(&plaintext);
+    }
+    if algo_name.eq_ignore_ascii_case("AES-CBC") {
+        let (key, iv, data) = match extract_aes_cbc_args(
+            algo_bits.to_bits(),
+            key_bits.to_bits(),
+            data_bits.to_bits(),
+        ) {
+            Some(t) => t,
+            None => return resolve_undefined(),
+        };
+        let plaintext = match aes_cbc_decrypt(&key, &iv, &data) {
+            Some(p) => p,
+            None => return resolve_undefined(),
+        };
+        return resolve_with_bytes(&plaintext);
+    }
+    if algo_name.eq_ignore_ascii_case("AES-CTR") {
+        let (key, counter, length, data) = match extract_aes_ctr_args(
+            algo_bits.to_bits(),
+            key_bits.to_bits(),
+            data_bits.to_bits(),
+        ) {
+            Some(t) => t,
+            None => return resolve_undefined(),
+        };
+        let plaintext = match aes_ctr_apply(&key, &counter, length, &data) {
+            Some(p) => p,
+            None => return resolve_undefined(),
+        };
+        return resolve_with_bytes(&plaintext);
+    }
     let (key, iv, aad, data) =
         match extract_aes_gcm_args(algo_bits.to_bits(), key_bits.to_bits(), data_bits.to_bits()) {
             Some(t) => t,
@@ -685,13 +2036,15 @@ unsafe fn object_field_number(obj_bits: u64, name: &[u8]) -> Option<u32> {
 /// Promise<CryptoKey>
 ///
 /// Supported `algorithm` shapes:
-/// - `{ name: "AES-GCM", length: 128 | 256 }` — generates a random
-///   AES key. (192-bit is rejected: the `aes-gcm` 0.10 crate doesn't
-///   ship `Aes192Gcm`, matching the existing encrypt/decrypt path.)
+/// - `{ name: "AES-GCM", length: 128 | 192 | 256 }` — generates a random
+///   AES key.
 /// - String shorthand `"AES-GCM"` defaults to 256-bit per the WebCrypto
 ///   convention (jose's `generateSecret('A256GCM')` reaches this).
+/// - `{ name: "ECDSA", namedCurve: "P-256" }` — returns a
+///   `{ publicKey, privateKey }` CryptoKeyPair that can be used by
+///   `subtle.sign` / `subtle.verify`.
 ///
-/// Asymmetric algorithms (RSA-OAEP, RSA-PSS, ECDSA, ECDH) and HMAC
+/// Other asymmetric algorithms (RSA-OAEP, RSA-PSS, ECDH) and HMAC
 /// keygen are TODO follow-ups — `extractable` and `keyUsages` are
 /// accepted but not enforced (perry's threat model treats them as
 /// documentation, matching `importKey`).
@@ -706,19 +2059,298 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         None => return resolve_undefined(),
     };
     let algo_upper = algo_name.to_ascii_uppercase();
-    if algo_upper != "AES-GCM" {
-        // Other algorithms (HMAC, RSA-*, ECDSA, ECDH) are not yet
-        // implemented; reject with an undefined-resolved Promise so the
-        // caller sees a clear "TypeError" downstream.
+    if algo_upper == "RSA-OAEP" || algo_upper == "RSASSA-PKCS1-V1_5" || algo_upper == "RSA-PSS" {
+        let hash = extract_algorithm_hash(algo_bits.to_bits(), HashAlgo::Sha1);
+        let key_algo = match algo_upper.as_str() {
+            "RSA-OAEP" => KeyAlgo::RsaOaep,
+            "RSASSA-PKCS1-V1_5" => KeyAlgo::RsassaPkcs1,
+            "RSA-PSS" => KeyAlgo::RsaPss,
+            _ => unreachable!(),
+        };
+        let mut rng = rand::rngs::OsRng;
+        let private_key = match RsaPrivateKey::new(&mut rng, 2048) {
+            Ok(k) => k,
+            Err(_) => return resolve_undefined(),
+        };
+        let public_key = RsaPublicKey::from(&private_key);
+        let private_der = match private_key.to_pkcs8_der() {
+            Ok(der) => der.as_bytes().to_vec(),
+            Err(_) => return resolve_undefined(),
+        };
+        let public_der = match public_key.to_public_key_der() {
+            Ok(der) => der.as_bytes().to_vec(),
+            Err(_) => return resolve_undefined(),
+        };
+
+        let private_buf = alloc_uint8array_from_slice(&private_der);
+        let public_buf = alloc_uint8array_from_slice(&public_der);
+        if private_buf.is_null() || public_buf.is_null() {
+            return resolve_undefined();
+        }
+        register_crypto_key(
+            private_buf as usize,
+            CryptoKeyMaterial {
+                algo: key_algo,
+                hash,
+                kind: KeyKind::Private,
+            },
+        );
+        register_crypto_key(
+            public_buf as usize,
+            CryptoKeyMaterial {
+                algo: key_algo,
+                hash,
+                kind: KeyKind::Public,
+            },
+        );
+
+        let obj = js_object_alloc(0, 2);
+        if obj.is_null() {
+            return resolve_undefined();
+        }
+        let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
+        let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
+        js_object_set_field_by_name(
+            obj,
+            public_key_name,
+            f64::from_bits(JSValue::pointer(public_buf as *const u8).bits()),
+        );
+        js_object_set_field_by_name(
+            obj,
+            private_key_name,
+            f64::from_bits(JSValue::pointer(private_buf as *const u8).bits()),
+        );
+        return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+    }
+    if algo_upper == "ED25519" {
+        let mut seed = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut seed);
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let public_bytes = signing_key.verifying_key().to_bytes();
+
+        let private_buf = alloc_uint8array_from_slice(&seed);
+        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        if private_buf.is_null() || public_buf.is_null() {
+            return resolve_undefined();
+        }
+        register_crypto_key(
+            private_buf as usize,
+            CryptoKeyMaterial {
+                algo: KeyAlgo::Ed25519,
+                hash: HashAlgo::Sha256,
+                kind: KeyKind::Private,
+            },
+        );
+        register_crypto_key(
+            public_buf as usize,
+            CryptoKeyMaterial {
+                algo: KeyAlgo::Ed25519,
+                hash: HashAlgo::Sha256,
+                kind: KeyKind::Public,
+            },
+        );
+
+        let obj = js_object_alloc(0, 2);
+        if obj.is_null() {
+            return resolve_undefined();
+        }
+        let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
+        let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
+        js_object_set_field_by_name(
+            obj,
+            public_key_name,
+            f64::from_bits(JSValue::pointer(public_buf as *const u8).bits()),
+        );
+        js_object_set_field_by_name(
+            obj,
+            private_key_name,
+            f64::from_bits(JSValue::pointer(private_buf as *const u8).bits()),
+        );
+        return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+    }
+    if algo_upper == "X25519" {
+        let mut seed = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut seed);
+        let private_key = x25519_dalek::StaticSecret::from(seed);
+        let public_key = x25519_dalek::PublicKey::from(&private_key);
+        let private_bytes = private_key.to_bytes();
+        let public_bytes = public_key.to_bytes();
+
+        let private_buf = alloc_uint8array_from_slice(&private_bytes);
+        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        if private_buf.is_null() || public_buf.is_null() {
+            return resolve_undefined();
+        }
+        register_crypto_key(
+            private_buf as usize,
+            CryptoKeyMaterial {
+                algo: KeyAlgo::X25519,
+                hash: HashAlgo::Sha256,
+                kind: KeyKind::Private,
+            },
+        );
+        register_crypto_key(
+            public_buf as usize,
+            CryptoKeyMaterial {
+                algo: KeyAlgo::X25519,
+                hash: HashAlgo::Sha256,
+                kind: KeyKind::Public,
+            },
+        );
+
+        let obj = js_object_alloc(0, 2);
+        if obj.is_null() {
+            return resolve_undefined();
+        }
+        let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
+        let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
+        js_object_set_field_by_name(
+            obj,
+            public_key_name,
+            f64::from_bits(JSValue::pointer(public_buf as *const u8).bits()),
+        );
+        js_object_set_field_by_name(
+            obj,
+            private_key_name,
+            f64::from_bits(JSValue::pointer(private_buf as *const u8).bits()),
+        );
+        return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+    }
+    if algo_upper == "ECDH" {
+        let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
+            Some(c) => c,
+            None => return resolve_undefined(),
+        };
+        let curve_upper = curve.to_ascii_uppercase();
+        if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
+            return resolve_undefined();
+        }
+        let private_key = match generate_p256_secret_key() {
+            Some(k) => k,
+            None => return resolve_undefined(),
+        };
+        let private_bytes = private_key.to_bytes().as_slice().to_vec();
+        let public_bytes = private_key
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+
+        let private_buf = alloc_uint8array_from_slice(&private_bytes);
+        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        if private_buf.is_null() || public_buf.is_null() {
+            return resolve_undefined();
+        }
+        register_crypto_key(
+            private_buf as usize,
+            CryptoKeyMaterial {
+                algo: KeyAlgo::EcdhP256,
+                hash: HashAlgo::Sha256,
+                kind: KeyKind::Private,
+            },
+        );
+        register_crypto_key(
+            public_buf as usize,
+            CryptoKeyMaterial {
+                algo: KeyAlgo::EcdhP256,
+                hash: HashAlgo::Sha256,
+                kind: KeyKind::Public,
+            },
+        );
+
+        let obj = js_object_alloc(0, 2);
+        if obj.is_null() {
+            return resolve_undefined();
+        }
+        let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
+        let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
+        js_object_set_field_by_name(
+            obj,
+            public_key_name,
+            f64::from_bits(JSValue::pointer(public_buf as *const u8).bits()),
+        );
+        js_object_set_field_by_name(
+            obj,
+            private_key_name,
+            f64::from_bits(JSValue::pointer(private_buf as *const u8).bits()),
+        );
+        return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+    }
+    if algo_upper == "ECDSA" {
+        let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
+            Some(c) => c,
+            None => return resolve_undefined(),
+        };
+        let curve_upper = curve.to_ascii_uppercase();
+        if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
+            return resolve_undefined();
+        }
+        let signing_key = match generate_p256_signing_key() {
+            Some(k) => k,
+            None => return resolve_undefined(),
+        };
+        let private_bytes = signing_key.to_bytes().as_slice().to_vec();
+        let public_bytes = signing_key
+            .verifying_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+
+        let private_buf = alloc_uint8array_from_slice(&private_bytes);
+        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        if private_buf.is_null() || public_buf.is_null() {
+            return resolve_undefined();
+        }
+        register_crypto_key(
+            private_buf as usize,
+            CryptoKeyMaterial {
+                algo: KeyAlgo::EcdsaP256,
+                hash: HashAlgo::Sha256,
+                kind: KeyKind::Private,
+            },
+        );
+        register_crypto_key(
+            public_buf as usize,
+            CryptoKeyMaterial {
+                algo: KeyAlgo::EcdsaP256,
+                hash: HashAlgo::Sha256,
+                kind: KeyKind::Public,
+            },
+        );
+
+        let obj = js_object_alloc(0, 2);
+        if obj.is_null() {
+            return resolve_undefined();
+        }
+        let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
+        let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
+        js_object_set_field_by_name(
+            obj,
+            public_key_name,
+            f64::from_bits(JSValue::pointer(public_buf as *const u8).bits()),
+        );
+        js_object_set_field_by_name(
+            obj,
+            private_key_name,
+            f64::from_bits(JSValue::pointer(private_buf as *const u8).bits()),
+        );
+        return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+    }
+
+    if algo_upper != "AES-GCM"
+        && algo_upper != "AES-KW"
+        && algo_upper != "AES-CBC"
+        && algo_upper != "AES-CTR"
+    {
         return resolve_undefined();
     }
     // Read `length` from the algorithm object; default to 256 for the
     // string-shorthand form.
     let length = object_field_number(algo_bits.to_bits(), b"length").unwrap_or(256);
-    let byte_len = match length {
-        128 => 16,
-        256 => 32,
-        // 192 intentionally rejected — see encrypt/decrypt path above.
+    let byte_len = match (algo_upper.as_str(), length) {
+        (_, 128) => 16,
+        ("AES-GCM" | "AES-KW" | "AES-CBC" | "AES-CTR", 192) => 24,
+        (_, 256) => 32,
         _ => return resolve_undefined(),
     };
     // Pull cryptographically strong random bytes for the key.
@@ -735,8 +2367,17 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
     register_crypto_key(
         buf as usize,
         CryptoKeyMaterial {
-            algo: KeyAlgo::AesGcm,
+            algo: if algo_upper == "AES-CBC" {
+                KeyAlgo::AesCbc
+            } else if algo_upper == "AES-CTR" {
+                KeyAlgo::AesCtr
+            } else if algo_upper == "AES-KW" {
+                KeyAlgo::AesKw
+            } else {
+                KeyAlgo::AesGcm
+            },
             hash: HashAlgo::Sha256,
+            kind: KeyKind::Secret,
         },
     );
     let val = JSValue::pointer(buf as *const u8).bits();
@@ -885,6 +2526,53 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
             Some(c) => c,
             None => return resolve_undefined(),
         }
+    } else if upper == "AES-CBC" {
+        let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
+        if !matches!(lookup_crypto_key(wrapping_key_addr), Some(m) if m.algo == KeyAlgo::AesCbc) {
+            return resolve_undefined();
+        }
+        let iv = match object_field_bytes(wrap_algo_bits.to_bits(), b"iv") {
+            Some(v) => v,
+            None => return resolve_undefined(),
+        };
+        match aes_cbc_encrypt(&wrapping_key_bytes, &iv, &key_bytes) {
+            Some(c) => c,
+            None => return resolve_undefined(),
+        }
+    } else if upper == "AES-CTR" {
+        let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
+        if !matches!(lookup_crypto_key(wrapping_key_addr), Some(m) if m.algo == KeyAlgo::AesCtr) {
+            return resolve_undefined();
+        }
+        let counter = match object_field_bytes(wrap_algo_bits.to_bits(), b"counter") {
+            Some(v) => v,
+            None => return resolve_undefined(),
+        };
+        let length = match object_field_number(wrap_algo_bits.to_bits(), b"length") {
+            Some(v) => v,
+            None => return resolve_undefined(),
+        };
+        match aes_ctr_apply(&wrapping_key_bytes, &counter, length, &key_bytes) {
+            Some(c) => c,
+            None => return resolve_undefined(),
+        }
+    } else if upper == "RSA-OAEP" {
+        let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
+        let mat = match lookup_crypto_key(wrapping_key_addr) {
+            Some(m) => m,
+            None => return resolve_undefined(),
+        };
+        if mat.algo != KeyAlgo::RsaOaep || mat.kind != KeyKind::Public {
+            return resolve_undefined();
+        }
+        let public_key = match RsaPublicKey::from_public_key_der(&wrapping_key_bytes) {
+            Ok(k) => k,
+            Err(_) => return resolve_undefined(),
+        };
+        match rsa_oaep_encrypt(mat.hash, &public_key, &key_bytes) {
+            Some(c) => c,
+            None => return resolve_undefined(),
+        }
     } else {
         return resolve_undefined();
     };
@@ -941,23 +2629,69 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
             Some(p) => p,
             None => return resolve_undefined(),
         }
+    } else if upper == "AES-CBC" {
+        let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
+        if !matches!(lookup_crypto_key(unwrapping_key_addr), Some(m) if m.algo == KeyAlgo::AesCbc) {
+            return resolve_undefined();
+        }
+        let iv = match object_field_bytes(unwrap_algo_bits.to_bits(), b"iv") {
+            Some(v) => v,
+            None => return resolve_undefined(),
+        };
+        match aes_cbc_decrypt(&unwrapping_key_bytes, &iv, &wrapped_bytes) {
+            Some(p) => p,
+            None => return resolve_undefined(),
+        }
+    } else if upper == "AES-CTR" {
+        let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
+        if !matches!(lookup_crypto_key(unwrapping_key_addr), Some(m) if m.algo == KeyAlgo::AesCtr) {
+            return resolve_undefined();
+        }
+        let counter = match object_field_bytes(unwrap_algo_bits.to_bits(), b"counter") {
+            Some(v) => v,
+            None => return resolve_undefined(),
+        };
+        let length = match object_field_number(unwrap_algo_bits.to_bits(), b"length") {
+            Some(v) => v,
+            None => return resolve_undefined(),
+        };
+        match aes_ctr_apply(&unwrapping_key_bytes, &counter, length, &wrapped_bytes) {
+            Some(p) => p,
+            None => return resolve_undefined(),
+        }
+    } else if upper == "RSA-OAEP" {
+        let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
+        let mat = match lookup_crypto_key(unwrapping_key_addr) {
+            Some(m) => m,
+            None => return resolve_undefined(),
+        };
+        if mat.algo != KeyAlgo::RsaOaep || mat.kind != KeyKind::Private {
+            return resolve_undefined();
+        }
+        let private_key = match RsaPrivateKey::from_pkcs8_der(&unwrapping_key_bytes) {
+            Ok(k) => k,
+            Err(_) => return resolve_undefined(),
+        };
+        match rsa_oaep_decrypt(mat.hash, &private_key, &wrapped_bytes) {
+            Some(p) => p,
+            None => return resolve_undefined(),
+        }
     } else {
         return resolve_undefined();
     };
 
-    // Register the recovered bytes as a CryptoKey under the
-    // unwrappedKeyAlgorithm. Only AES-GCM is honored today — HMAC
-    // and others would need their hash-from-algo extraction wired
-    // through here (TODO follow-up; jose only round-trips AES-GCM
-    // through wrap/unwrap).
+    // Register the recovered bytes as a CryptoKey under the requested
+    // unwrappedKeyAlgorithm.
     let unwrapped_name = match wrap_algo_name(unwrapped_algo_bits.to_bits()) {
         Some(s) => s,
         None => return resolve_undefined(),
     };
-    let key_algo = if unwrapped_name == "AES-GCM" {
-        KeyAlgo::AesGcm
-    } else {
-        return resolve_undefined();
+    let key_algo = match unwrapped_name.as_str() {
+        "AES-GCM" => KeyAlgo::AesGcm,
+        "AES-KW" => KeyAlgo::AesKw,
+        "AES-CBC" => KeyAlgo::AesCbc,
+        "AES-CTR" => KeyAlgo::AesCtr,
+        _ => return resolve_undefined(),
     };
     let buf = alloc_uint8array_from_slice(&recovered);
     if buf.is_null() {
@@ -968,6 +2702,7 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
         CryptoKeyMaterial {
             algo: key_algo,
             hash: HashAlgo::Sha256,
+            kind: KeyKind::Secret,
         },
     );
     let val = JSValue::pointer(buf as *const u8).bits();

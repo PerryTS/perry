@@ -1078,20 +1078,97 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[I64, I64, DOUBLE, DOUBLE, I64],
     );
+    module.declare_function(
+        "js_crypto_pbkdf2_async_alg",
+        DOUBLE,
+        &[I64, I64, DOUBLE, DOUBLE, I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_crypto_hkdf_bytes_alg",
+        I64,
+        &[I64, I64, I64, I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_crypto_hkdf_async_alg",
+        DOUBLE,
+        &[I64, I64, I64, I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_crypto_scrypt_bytes", I64, &[I64, I64, DOUBLE, I64]);
+    module.declare_function(
+        "js_crypto_scrypt_async",
+        DOUBLE,
+        &[I64, I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_crypto_sign_rsa_sha256", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_crypto_sign_async", DOUBLE, &[I64, I64, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_crypto_verify_rsa_sha256",
+        DOUBLE,
+        &[I64, I64, DOUBLE, I64],
+    );
+    module.declare_function(
+        "js_crypto_verify_async",
+        DOUBLE,
+        &[I64, I64, DOUBLE, I64, DOUBLE],
+    );
+    module.declare_function("js_crypto_public_encrypt", I64, &[I64, I64]);
+    module.declare_function("js_crypto_private_decrypt", I64, &[I64, I64]);
+    module.declare_function("js_crypto_private_encrypt", I64, &[I64, I64]);
+    module.declare_function("js_crypto_public_decrypt", I64, &[I64, I64]);
+    module.declare_function("js_crypto_create_public_key", I64, &[I64]);
+    module.declare_function("js_crypto_create_private_key_value", I64, &[DOUBLE]);
+    module.declare_function("js_crypto_create_public_key_value", I64, &[DOUBLE]);
+    module.declare_function("js_crypto_generate_key_pair_sync_rsa", I64, &[DOUBLE]);
+    module.declare_function("js_crypto_generate_key_pair_sync_ec_p256", I64, &[DOUBLE]);
+    module.declare_function("js_crypto_generate_key_pair_sync_ed25519", I64, &[DOUBLE]);
+    module.declare_function("js_crypto_generate_key_pair_sync_x25519", I64, &[DOUBLE]);
+    module.declare_function(
+        "js_crypto_generate_key_pair_async",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_crypto_diffie_hellman", I64, &[DOUBLE]);
+    module.declare_function("js_crypto_get_cipher_info", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_crypto_get_curves", I64, &[]);
+    module.declare_function("js_crypto_secure_heap_used", I64, &[]);
     module.declare_function("js_crypto_random_bytes_buffer", I64, &[DOUBLE]);
+    module.declare_function("js_crypto_random_bytes_async", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_uuid", I64, &[]);
-    // crypto.randomInt([min,] max) -> number; codegen passes min=0 for the
+    // crypto.randomInt([min,] max[, cb]) -> number; codegen passes min=0 for the
     // single-arg form. Returns the integer as a plain double.
     module.declare_function("js_crypto_random_int", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_crypto_random_int_async",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     // crypto.timingSafeEqual(a, b) -> boolean (NaN-boxed). Args are unboxed
     // to raw i64 pointers (Buffer / TypedArray / string).
     module.declare_function("js_crypto_timing_safe_equal", DOUBLE, &[I64, I64]);
     // crypto.getHashes() / getCiphers() -> string[]; returns *mut ArrayHeader.
     module.declare_function("js_crypto_get_hashes", I64, &[]);
     module.declare_function("js_crypto_get_ciphers", I64, &[]);
+    module.declare_function("js_crypto_generate_prime_sync", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_crypto_generate_prime_async",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_crypto_check_prime_sync", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_crypto_check_prime_async",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     // `crypto.createSecretKey(key, encoding?)` — returns Uint8Array-marked
     // BufferHeader of the key bytes (jose accepts Uint8Array for HS*).
-    module.declare_function("js_crypto_create_secret_key", I64, &[I64]);
+    module.declare_function("js_crypto_create_secret_key", I64, &[I64, I64]);
+    module.declare_function("js_crypto_generate_key_sync", I64, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_crypto_generate_key_async",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE],
+    );
     // Web Crypto (issue #561): crypto.subtle.{digest,importKey,sign,verify}.
     // Each takes NaN-boxed JS values as f64 and returns a *mut Promise.
     module.declare_function("js_webcrypto_digest", I64, &[DOUBLE, DOUBLE]);
@@ -1100,11 +1177,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function("js_webcrypto_export_key", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_webcrypto_sign", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function(
         "js_webcrypto_verify",
         I64,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_webcrypto_derive_bits", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_webcrypto_derive_key",
+        I64,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
     // AES-GCM encrypt / decrypt (issue #561 follow-up). Same Promise
     // shape as sign/verify; runtime resolves synchronously.
@@ -1141,10 +1225,30 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_crypto_random_fill_async",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     // Hash-handle form (issue #86): `const h = crypto.createHash(alg);
     // h.update(x); h.digest()`. Returns a NaN-boxed POINTER_TAG handle id;
     // subsequent method dispatch flows through HANDLE_METHOD_DISPATCH.
     module.declare_function("js_crypto_create_hash", DOUBLE, &[I64]);
+    module.declare_function("js_crypto_create_hash_options", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_crypto_create_sign", DOUBLE, &[I64]);
+    module.declare_function("js_crypto_create_verify", DOUBLE, &[I64]);
+    module.declare_function("js_crypto_create_ecdh", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_crypto_create_diffie_hellman",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_crypto_get_diffie_hellman", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_crypto_ecdh_convert_key",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     // Hmac-handle form (issue #1076): `crypto.createHmac(alg, key).update(d).
     // digest(enc)` when `alg` isn't a literal string the chain-collapse
     // recognizes (`const alg = "sha256"`, for-of bindings, ternaries, etc.).

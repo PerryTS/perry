@@ -64,6 +64,29 @@ fn hash_input_is_buffer(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     ) {
         return true;
     }
+    // `crypto.createSecretKey(...)` / `crypto.generateKeySync(...)` /
+    // `crypto.pbkdf2Sync(...)` / `crypto.scryptSync(...)` / `crypto.hkdfSync(...)`
+    // all return a BufferHeader (Uint8Array-marked) — the HIR cannot infer
+    // that statically without this hint, so without it `createHmac(secretKey, ...)`
+    // would route to the string fast-path that misreads buffer bytes as UTF-8.
+    if let Expr::Call { callee, .. } = e {
+        if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if matches!(object.as_ref(), Expr::NativeModuleRef(n) if n == "crypto")
+                && matches!(
+                    property.as_str(),
+                    "createSecretKey"
+                        | "generateKeySync"
+                        | "pbkdf2Sync"
+                        | "scryptSync"
+                        | "hkdfSync"
+                        | "randomBytes"
+                        | "randomFillSync"
+                )
+            {
+                return true;
+            }
+        }
+    }
     matches!(
         static_type_of(ctx, e),
         Some(HirType::Named(ref n)) if n == "Buffer" || n == "Uint8Array"
@@ -108,7 +131,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         obj2.as_ref(),
                         Expr::Call { callee: c3, .. } if matches!(
                             c3.as_ref(),
-                            Expr::PropertyGet { property: p3, object: obj3 } if (p3 == "createHash" || p3 == "createHmac") && matches!(
+                            Expr::PropertyGet { property: p3, object: obj3 } if (p3 == "createHash" || p3 == "Hash" || p3 == "createHmac" || p3 == "Hmac") && matches!(
                                 obj3.as_ref(),
                                 Expr::NativeModuleRef(n) if n == "crypto"
                             )
@@ -118,7 +141,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             )
         ) =>
         {
-            // Walk the chain to extract: alg (from createHash/createHmac args),
+            // Walk the chain to extract: alg (from createHash/Hash/createHmac/Hmac args),
             // key (from createHmac's second arg, if present),
             // data (from update args), enc (from digest args).
             let digest_args = outer_args;
@@ -200,11 +223,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_is_buffer = create_args
                 .get(1)
                 .is_some_and(|e| hash_input_is_buffer(ctx, e));
-            let fast_ok = enc_fast_ok && !data_is_buffer;
-            let hmac_fast_ok = fast_ok && !key_is_buffer;
+            // The fast paths below unbox the data/key via `unbox_str_handle`
+            // and hash the raw `StringHeader` bytes. A literal string is
+            // statically known to be a `StringHeader`; any non-literal
+            // (Call, Identifier, PropertyGet, ...) may resolve to a Buffer
+            // or KeyObject at runtime (e.g. `crypto.createSecretKey(...)`),
+            // which `hash_input_is_buffer` cannot detect from the HIR alone.
+            // Tightening to literal-string keys/data closes that gap (this
+            // restores PR #1419's original gating). Non-literal cases drop
+            // through to the handle-dispatch fallback that calls
+            // `bytes_from_ptr` and reads either layout correctly.
+            let data_is_literal_string = matches!(update_args.first(), Some(Expr::String(_)));
+            let key_is_literal_string = matches!(create_args.get(1), Some(Expr::String(_)));
+            let fast_ok = enc_fast_ok && !data_is_buffer && data_is_literal_string;
+            let hmac_fast_ok = fast_ok && !key_is_buffer && key_is_literal_string;
 
             match (create_method, alg) {
-                ("createHash", "sha256") if fast_ok && !update_args.is_empty() => {
+                ("createHash", "sha256") if fast_ok && update_args.len() == 1 => {
                     let data_box = lower_expr(ctx, &update_args[0])?;
                     let blk = ctx.block();
                     // SSO-safe data unbox — both `js_crypto_sha256` and the
@@ -219,7 +254,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         Ok(nanbox_string_inline(blk, &result))
                     }
                 }
-                ("createHash", "md5") if fast_ok && !update_args.is_empty() => {
+                ("createHash", "md5") if fast_ok && update_args.len() == 1 => {
                     let data_box = lower_expr(ctx, &update_args[0])?;
                     let blk = ctx.block();
                     // SSO-safe — see sha256 arm above.
@@ -228,7 +263,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     Ok(nanbox_string_inline(blk, &result))
                 }
                 ("createHmac", "sha256")
-                    if hmac_fast_ok && create_args.len() >= 2 && !update_args.is_empty() =>
+                    if hmac_fast_ok && create_args.len() >= 2 && update_args.len() == 1 =>
                 {
                     let key_box = lower_expr(ctx, &create_args[1])?;
                     let data_box = lower_expr(ctx, &update_args[0])?;
@@ -273,12 +308,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // Lower all the sub-expressions before any FFI call so
                     // their side-effects run in the source order Node sees.
                     let alg_box = lower_expr(ctx, &create_args[0])?;
-                    let key_box_opt = if create_method == "createHmac" && create_args.len() >= 2 {
+                    let key_box_opt = if (create_method == "createHmac" || create_method == "Hmac")
+                        && create_args.len() >= 2
+                    {
+                        Some(lower_expr(ctx, &create_args[1])?)
+                    } else {
+                        None
+                    };
+                    let hash_options_box_opt = if (create_method == "createHash"
+                        || create_method == "Hash")
+                        && create_args.len() >= 2
+                    {
                         Some(lower_expr(ctx, &create_args[1])?)
                     } else {
                         None
                     };
                     let data_box = lower_expr(ctx, &update_args[0])?;
+                    let update_encoding_box_opt = if update_args.len() >= 2 {
+                        Some(lower_expr(ctx, &update_args[1])?)
+                    } else {
+                        None
+                    };
                     let enc_box_opt = if digest_args.is_empty() {
                         None
                     } else {
@@ -290,7 +340,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // Allocate the handle. Both helpers return f64 already
                     // NaN-boxed with POINTER_TAG, suitable as the receiver
                     // for `js_native_call_method`.
-                    let recv = if create_method == "createHmac" {
+                    let recv = if create_method == "createHmac" || create_method == "Hmac" {
                         let key_box = key_box_opt.expect("createHmac needs a key arg");
                         let key_handle = unbox_to_i64(blk, &key_box);
                         blk.call(
@@ -299,26 +349,43 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &[(I64, &alg_handle), (I64, &key_handle)],
                         )
                     } else {
-                        blk.call(DOUBLE, "js_crypto_create_hash", &[(I64, &alg_handle)])
+                        if let Some(options_box) = hash_options_box_opt {
+                            blk.call(
+                                DOUBLE,
+                                "js_crypto_create_hash_options",
+                                &[(I64, &alg_handle), (DOUBLE, &options_box)],
+                            )
+                        } else {
+                            blk.call(DOUBLE, "js_crypto_create_hash", &[(I64, &alg_handle)])
+                        }
                     };
 
-                    // Invoke `.update(data)` via the runtime's generic
-                    // handle-method dispatcher. Builds a 1-arg `double*`
-                    // arg buffer and a `js_string_from_bytes` rodata key.
+                    // Invoke `.update(data[, inputEncoding])` via the runtime's generic
+                    // handle-method dispatcher.
                     let update_name = emit_string_literal_global(ctx, "update");
+                    let update_argc_usize = if update_encoding_box_opt.is_some() {
+                        2
+                    } else {
+                        1
+                    };
+                    let update_argc = update_argc_usize.to_string();
                     let blk = ctx.block();
-                    let update_args_buf = ctx.func.alloca_entry_array(DOUBLE, 1);
+                    let update_args_buf = ctx.func.alloca_entry_array(DOUBLE, update_argc_usize);
                     {
                         let blk = ctx.block();
                         let slot = blk.gep(DOUBLE, &update_args_buf, &[(I64, "0")]);
                         blk.store(DOUBLE, &data_box, &slot);
+                        if let Some(update_encoding_box) = update_encoding_box_opt.as_ref() {
+                            let slot = blk.gep(DOUBLE, &update_args_buf, &[(I64, "1")]);
+                            blk.store(DOUBLE, update_encoding_box, &slot);
+                        }
                     }
                     let update_args_ptr = {
                         let blk = ctx.block();
                         let reg = blk.next_reg();
                         blk.emit_raw(format!(
-                            "{} = getelementptr [1 x double], ptr {}, i64 0, i64 0",
-                            reg, update_args_buf
+                            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                            reg, update_argc_usize, update_args_buf
                         ));
                         reg
                     };
@@ -331,7 +398,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             (PTR, &update_name),
                             (I64, &format!("{}", "update".len())),
                             (PTR, &update_args_ptr),
-                            (I64, "1"),
+                            (I64, &update_argc),
                         ],
                     );
 
@@ -371,7 +438,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
         }
 
-        // Standalone `crypto.createHash(alg)` — when the user binds the
+        // Standalone `crypto.createHash(alg)` / legacy callable
+        // `crypto.Hash(alg)` — when the user binds the
         // result to a local before calling `.update(...)` / `.digest()`,
         // the three-level chain-collapse above no longer matches and this
         // arm runs instead. It registers a HashHandle in perry-stdlib and
@@ -382,7 +450,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "createHash" && matches!(
+                Expr::PropertyGet { object, property } if (property == "createHash" || property == "Hash") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -392,13 +460,236 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             let alg_box = lower_expr(ctx, &args[0])?;
+            let options_box = if args.len() >= 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
             let blk = ctx.block();
             let alg_handle = unbox_to_i64(blk, &alg_box);
             // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
-            Ok(blk.call(DOUBLE, "js_crypto_create_hash", &[(I64, &alg_handle)]))
+            if let Some(options_box) = options_box {
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_crypto_create_hash_options",
+                    &[(I64, &alg_handle), (DOUBLE, &options_box)],
+                ))
+            } else {
+                Ok(blk.call(DOUBLE, "js_crypto_create_hash", &[(I64, &alg_handle)]))
+            }
         }
 
-        // Standalone `crypto.createHmac(alg, key)` — same shape as
+        // `crypto.createSign(alg)` / legacy `crypto.Sign(alg)` and
+        // `crypto.createVerify(alg)` / legacy `crypto.Verify(alg)` streaming
+        // RSA signature handles.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if (property == "createSign" || property == "Sign" || property == "createVerify" || property == "Verify") && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                property.as_str()
+            } else {
+                unreachable!()
+            };
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let fname = if property == "createSign" || property == "Sign" {
+                "js_crypto_create_sign"
+            } else {
+                "js_crypto_create_verify"
+            };
+            Ok(blk.call(DOUBLE, fname, &[(I64, &alg_handle)]))
+        }
+
+        // `crypto.createECDH(curve)` — Node-compatible ECDH handle. The
+        // runtime currently covers the high-value P-256 aliases used by
+        // Node/Bun/Deno parity tests: prime256v1, secp256r1, P-256.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "createECDH" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let curve_box = lower_expr(ctx, &args[0])?;
+            let blk = ctx.block();
+            let curve_handle = unbox_to_i64(blk, &curve_box);
+            Ok(blk.call(DOUBLE, "js_crypto_create_ecdh", &[(I64, &curve_handle)]))
+        }
+
+        // `crypto.createDiffieHellman(...)` / `crypto.getDiffieHellman(name)`
+        // / `crypto.createDiffieHellmanGroup(name)` classic DH handles.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if (property == "createDiffieHellman" || property == "getDiffieHellman" || property == "createDiffieHellmanGroup") && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                property.as_str()
+            } else {
+                unreachable!()
+            };
+            if property == "getDiffieHellman" || property == "createDiffieHellmanGroup" {
+                let group = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let blk = ctx.block();
+                return Ok(blk.call(DOUBLE, "js_crypto_get_diffie_hellman", &[(DOUBLE, &group)]));
+            }
+            let first = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let second = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let third = if let Some(arg) = args.get(2) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_create_diffie_hellman",
+                &[(DOUBLE, &first), (DOUBLE, &second), (DOUBLE, &third)],
+            ))
+        }
+
+        // Minimal KeyObject-compatible input path:
+        // `createPrivateKey(pem)` returns the PEM surrogate directly, while
+        // `createPublicKey(privateOrPublicPem)` derives a public PEM string.
+        // The asymmetric native helpers accept these PEM surrogates as keys.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if (property == "createPrivateKey" || property == "createPublicKey") && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                property.as_str()
+            } else {
+                unreachable!()
+            };
+            let key_box = lower_expr(ctx, &args[0])?;
+            let blk = ctx.block();
+            let fname = if property == "createPrivateKey" {
+                "js_crypto_create_private_key_value"
+            } else {
+                "js_crypto_create_public_key_value"
+            };
+            let pem = blk.call(I64, fname, &[(DOUBLE, &key_box)]);
+            Ok(nanbox_string_inline(blk, &pem))
+        }
+
+        // `crypto.generateKeyPair("rsa"|"ec"|"ed25519"|"x25519", options,
+        // callback)` — callback form. Native shim invokes `(err, publicKey,
+        // privateKey)`.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "generateKeyPair" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) && args.len() >= 3 =>
+        {
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let options = lower_expr(ctx, &args[1])?;
+            let callback = lower_expr(ctx, &args[2])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_generate_key_pair_async",
+                &[(I64, &alg_handle), (DOUBLE, &options), (DOUBLE, &callback)],
+            ))
+        }
+
+        // `crypto.generateKeyPairSync("rsa", { ...pem encodings... })` —
+        // returns a plain object with `publicKey`/`privateKey` PEM strings.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "generateKeyPairSync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            let options = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let fname = match args.first() {
+                Some(Expr::String(alg)) if alg == "ec" => {
+                    "js_crypto_generate_key_pair_sync_ec_p256"
+                }
+                Some(Expr::String(alg)) if alg == "ed25519" => {
+                    "js_crypto_generate_key_pair_sync_ed25519"
+                }
+                Some(Expr::String(alg)) if alg == "x25519" => {
+                    "js_crypto_generate_key_pair_sync_x25519"
+                }
+                _ => "js_crypto_generate_key_pair_sync_rsa",
+            };
+            let pair = blk.call(I64, fname, &[(DOUBLE, &options)]);
+            Ok(nanbox_pointer_inline(blk, &pair))
+        }
+
+        // `crypto.diffieHellman({ privateKey, publicKey })` — currently
+        // covers the high-value X25519 stateless DH path from Node/Bun.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "diffieHellman" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let options = lower_expr(ctx, &args[0])?;
+            let blk = ctx.block();
+            let secret = blk.call(I64, "js_crypto_diffie_hellman", &[(DOUBLE, &options)]);
+            Ok(nanbox_pointer_inline(blk, &secret))
+        }
+
+        // Standalone `crypto.createHmac(alg, key)` / legacy
+        // callable `crypto.Hmac(alg, key)` — same shape as
         // `createHash` above. Closes #1076 for the `const h = createHmac(...)`
         // / for-of patterns where the chain-collapse can't match because
         // `.update()` / `.digest()` happen on subsequent statements (or
@@ -409,7 +700,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "createHmac" && matches!(
+                Expr::PropertyGet { object, property } if (property == "createHmac" || property == "Hmac") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -466,6 +757,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let alg_box = lower_expr(ctx, &args[0])?;
             let key_box = lower_expr(ctx, &args[1])?;
             let iv_box = lower_expr(ctx, &args[2])?;
+            let options_box = if let Some(options) = args.get(3) {
+                lower_expr(ctx, options)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let alg_handle = unbox_to_i64(blk, &alg_box);
             let key_handle = unbox_to_i64(blk, &key_box);
@@ -479,7 +775,70 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.call(
                 DOUBLE,
                 fname,
-                &[(I64, &alg_handle), (I64, &key_handle), (I64, &iv_handle)],
+                &[
+                    (I64, &alg_handle),
+                    (I64, &key_handle),
+                    (I64, &iv_handle),
+                    (DOUBLE, &options_box),
+                ],
+            ))
+        }
+
+        // `crypto.randomBytes(size, callback)` — callback form. Perry
+        // invokes the callback synchronously in the native shim, but keeps
+        // Node's `(err, buffer)` shape.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "randomBytes" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) && args.len() >= 2 =>
+        {
+            let size_box = lower_expr(ctx, &args[0])?;
+            let cb_box = lower_expr(ctx, &args[1])?;
+            let blk = ctx.block();
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_random_bytes_async",
+                &[(DOUBLE, &size_box), (DOUBLE, &cb_box)],
+            ))
+        }
+
+        // `crypto.randomFill(buffer[, offset][, size], callback)`.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "randomFill" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) && args.len() >= 2 =>
+        {
+            let last = args.len() - 1;
+            let buf_box = lower_expr(ctx, &args[0])?;
+            let off_box = if last >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let sz_box = if last >= 3 {
+                lower_expr(ctx, &args[2])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let cb_box = lower_expr(ctx, &args[last])?;
+            let blk = ctx.block();
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_random_fill_async",
+                &[
+                    (DOUBLE, &buf_box),
+                    (DOUBLE, &off_box),
+                    (DOUBLE, &sz_box),
+                    (DOUBLE, &cb_box),
+                ],
             ))
         }
 
@@ -554,10 +913,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &handle))
         }
 
-        // Phase H crypto: `crypto.randomInt([min,] max)` — uniform integer
-        // in `[min, max)`. The single-arg form defaults `min` to 0. The
-        // runtime returns the value as a plain double (a JS number), so no
-        // NaN-box is needed at the call site.
+        // Phase H crypto: `crypto.randomInt([min,] max[, callback])` —
+        // uniform integer in `[min, max)`. The single-arg form defaults
+        // `min` to 0. The runtime returns the value as a plain double (a
+        // JS number), so no NaN-box is needed at the call site. The
+        // 3-arg callback form preserves Node's `(err, n)` shape and
+        // returns `undefined`.
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
@@ -570,15 +931,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if args.is_empty() {
                 return Ok(double_literal(0.0));
             }
-            let (min_box, max_box) = if args.len() == 1 {
-                let max_box = lower_expr(ctx, &args[0])?;
-                (double_literal(0.0), max_box)
+            let zero = Expr::Integer(0);
+            let (min_expr, max_expr, callback_expr) = match args.len() {
+                1 => (&zero, &args[0], None),
+                2 => (&args[0], &args[1], None),
+                _ => (&args[0], &args[1], Some(&args[2])),
+            };
+            let min_box = lower_expr(ctx, min_expr)?;
+            let max_box = lower_expr(ctx, max_expr)?;
+            let callback_box = if let Some(callback_expr) = callback_expr {
+                Some(lower_expr(ctx, callback_expr)?)
             } else {
-                let min_box = lower_expr(ctx, &args[0])?;
-                let max_box = lower_expr(ctx, &args[1])?;
-                (min_box, max_box)
+                None
             };
             let blk = ctx.block();
+            if let Some(callback_box) = callback_box {
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_crypto_random_int_async",
+                    &[
+                        (DOUBLE, &min_box),
+                        (DOUBLE, &max_box),
+                        (DOUBLE, &callback_box),
+                    ],
+                ));
+            }
             Ok(blk.call(
                 DOUBLE,
                 "js_crypto_random_int",
@@ -612,30 +989,315 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
 
-        // Phase H crypto: `crypto.getHashes()` / `crypto.getCiphers()` —
-        // return a `string[]` of supported algorithm names.
-        Expr::Call { callee, .. }
+        // Prime generation/checking APIs used by Node's crypto prime suite.
+        // Perry covers practical Buffer-returning shapes plus callback forms:
+        //   generatePrimeSync(size, options?)
+        //   generatePrime(size, options, callback)
+        //   checkPrimeSync(candidate, options?)
+        //   checkPrime(candidate, options, callback)
+        Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property }
-                    if (property == "getHashes" || property == "getCiphers") && matches!(
-                        object.as_ref(),
-                        Expr::NativeModuleRef(n) if n == "crypto"
-                    )
+                Expr::PropertyGet { object, property } if matches!(property.as_str(), "generatePrimeSync" | "generatePrime" | "checkPrimeSync" | "checkPrime") && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
             ) =>
         {
-            let fn_name = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
-                if property == "getCiphers" {
-                    "js_crypto_get_ciphers"
-                } else {
-                    "js_crypto_get_hashes"
-                }
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                property.as_str()
             } else {
                 unreachable!()
             };
+            let first_box = lower_expr(ctx, &args[0])?;
+            let options_box = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let callback_box =
+                if matches!(property, "generatePrime" | "checkPrime") && args.len() >= 3 {
+                    Some(lower_expr(ctx, &args[2])?)
+                } else {
+                    None
+                };
             let blk = ctx.block();
-            let arr = blk.call(I64, fn_name, &[]);
+            let is_generate = property == "generatePrime" || property == "generatePrimeSync";
+            if let Some(callback_box) = callback_box {
+                let fname = if is_generate {
+                    "js_crypto_generate_prime_async"
+                } else {
+                    "js_crypto_check_prime_async"
+                };
+                return Ok(blk.call(
+                    DOUBLE,
+                    fname,
+                    &[
+                        (DOUBLE, &first_box),
+                        (DOUBLE, &options_box),
+                        (DOUBLE, &callback_box),
+                    ],
+                ));
+            }
+            if is_generate {
+                let buf = blk.call(
+                    I64,
+                    "js_crypto_generate_prime_sync",
+                    &[(DOUBLE, &first_box), (DOUBLE, &options_box)],
+                );
+                Ok(nanbox_pointer_inline(blk, &buf))
+            } else {
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_crypto_check_prime_sync",
+                    &[(DOUBLE, &first_box), (DOUBLE, &options_box)],
+                ))
+            }
+        }
+
+        // `crypto.getHashes()` / `getCiphers()` / `getCurves()` — stable
+        // deterministic inventories used for feature detection. The runtime
+        // helper returns an ArrayHeader pointer.
+        Expr::Call {
+            callee, args: _, ..
+        } if matches!(
+            callee.as_ref(),
+            Expr::PropertyGet { object, property } if matches!(property.as_str(), "getHashes" | "getCiphers" | "getCurves") && matches!(
+                object.as_ref(),
+                Expr::NativeModuleRef(n) if n == "crypto"
+            )
+        ) =>
+        {
+            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                property.as_str()
+            } else {
+                unreachable!()
+            };
+            let fname = match property {
+                "getHashes" => "js_crypto_get_hashes",
+                "getCiphers" => "js_crypto_get_ciphers",
+                _ => "js_crypto_get_curves",
+            };
+            let blk = ctx.block();
+            let arr = blk.call(I64, fname, &[]);
             Ok(nanbox_pointer_inline(blk, &arr))
+        }
+
+        // `crypto.getCipherInfo(algorithm, options?)` — feature detection
+        // for supported symmetric ciphers.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "getCipherInfo" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let options_box = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_get_cipher_info",
+                &[(DOUBLE, &alg_box), (DOUBLE, &options_box)],
+            ))
+        }
+
+        // `crypto.getFips()` — Perry does not expose OpenSSL FIPS mode.
+        Expr::Call {
+            callee, args: _, ..
+        } if matches!(
+            callee.as_ref(),
+            Expr::PropertyGet { object, property } if property == "getFips" && matches!(
+                object.as_ref(),
+                Expr::NativeModuleRef(n) if n == "crypto"
+            )
+        ) =>
+        {
+            Ok(double_literal(0.0))
+        }
+
+        // `crypto.setFips(false|0)` — Perry has no OpenSSL FIPS mode, so
+        // accepting the disabling no-op matches Node's default environment.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "setFips" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+        }
+
+        // `crypto.secureHeapUsed()` — default Node shape when secure heap
+        // is not enabled: { total: 0, used: 0, utilization: 0, min: 0 }.
+        Expr::Call {
+            callee, args: _, ..
+        } if matches!(
+            callee.as_ref(),
+            Expr::PropertyGet { object, property } if property == "secureHeapUsed" && matches!(
+                object.as_ref(),
+                Expr::NativeModuleRef(n) if n == "crypto"
+            )
+        ) =>
+        {
+            let blk = ctx.block();
+            let obj = blk.call(I64, "js_crypto_secure_heap_used", &[]);
+            Ok(nanbox_pointer_inline(blk, &obj))
+        }
+
+        // One-shot asymmetric signing/verification. Initial native parity
+        // coverage supports Node's common RSA-SHA256/RSASSA-PKCS1-v1_5 PEM
+        // path and returns a Buffer / boolean respectively.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "sign" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 3 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let data_box = lower_expr(ctx, &args[1])?;
+            let key_box = lower_expr(ctx, &args[2])?;
+            let callback_box = if args.len() >= 4 {
+                Some(lower_expr(ctx, &args[3])?)
+            } else {
+                None
+            };
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let data_handle = unbox_to_i64(blk, &data_box);
+            if let Some(callback_box) = callback_box {
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_crypto_sign_async",
+                    &[
+                        (I64, &alg_handle),
+                        (I64, &data_handle),
+                        (DOUBLE, &key_box),
+                        (DOUBLE, &callback_box),
+                    ],
+                ));
+            }
+            let buf_handle = blk.call(
+                I64,
+                "js_crypto_sign_rsa_sha256",
+                &[(I64, &alg_handle), (I64, &data_handle), (DOUBLE, &key_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "verify" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 4 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_FALSE)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let data_box = lower_expr(ctx, &args[1])?;
+            let key_box = lower_expr(ctx, &args[2])?;
+            let sig_box = lower_expr(ctx, &args[3])?;
+            let callback_box = if args.len() >= 5 {
+                Some(lower_expr(ctx, &args[4])?)
+            } else {
+                None
+            };
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let data_handle = unbox_to_i64(blk, &data_box);
+            let sig_handle = unbox_to_i64(blk, &sig_box);
+            if let Some(callback_box) = callback_box {
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_crypto_verify_async",
+                    &[
+                        (I64, &alg_handle),
+                        (I64, &data_handle),
+                        (DOUBLE, &key_box),
+                        (I64, &sig_handle),
+                        (DOUBLE, &callback_box),
+                    ],
+                ));
+            }
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_verify_rsa_sha256",
+                &[
+                    (I64, &alg_handle),
+                    (I64, &data_handle),
+                    (DOUBLE, &key_box),
+                    (I64, &sig_handle),
+                ],
+            ))
+        }
+
+        // RSA encryption/decryption one-shot APIs. Covers the common
+        // Node/Bun `publicEncrypt(key, data)` → `privateDecrypt(key, data)`
+        // default OAEP roundtrip and `privateEncrypt` → `publicDecrypt`
+        // PKCS#1 v1.5 transform for PEM keys.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if (property == "publicEncrypt" || property == "privateDecrypt" || property == "privateEncrypt" || property == "publicDecrypt") && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 2 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                property.as_str()
+            } else {
+                unreachable!()
+            };
+            let key_box = lower_expr(ctx, &args[0])?;
+            let data_box = lower_expr(ctx, &args[1])?;
+            let blk = ctx.block();
+            let key_converter = match property {
+                "publicEncrypt" | "publicDecrypt" => "js_crypto_create_public_key_value",
+                "privateDecrypt" | "privateEncrypt" => "js_crypto_create_private_key_value",
+                _ => unreachable!(),
+            };
+            let key_handle = blk.call(I64, key_converter, &[(DOUBLE, &key_box)]);
+            let data_handle = unbox_to_i64(blk, &data_box);
+            let fname = match property {
+                "publicEncrypt" => "js_crypto_public_encrypt",
+                "privateDecrypt" => "js_crypto_private_decrypt",
+                "privateEncrypt" => "js_crypto_private_encrypt",
+                "publicDecrypt" => "js_crypto_public_decrypt",
+                _ => unreachable!(),
+            };
+            let buf_handle = blk.call(I64, fname, &[(I64, &key_handle), (I64, &data_handle)]);
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
 
         // `crypto.createSecretKey(key, encoding?)` — JWT signing key for
@@ -656,14 +1318,195 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             let key_box = lower_expr(ctx, &args[0])?;
-            // Ignore the encoding arg if present — we only honor utf8.
-            if args.len() >= 2 {
-                let _ = lower_expr(ctx, &args[1])?;
-            }
+            let enc_box = if args.len() >= 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
             let blk = ctx.block();
             let key_handle = unbox_to_i64(blk, &key_box);
-            let buf_handle = blk.call(I64, "js_crypto_create_secret_key", &[(I64, &key_handle)]);
+            let enc_handle = if let Some(enc) = enc_box {
+                unbox_to_i64(blk, &enc)
+            } else {
+                "0".to_string()
+            };
+            let buf_handle = blk.call(
+                I64,
+                "js_crypto_create_secret_key",
+                &[(I64, &key_handle), (I64, &enc_handle)],
+            );
             Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // `crypto.generateKeySync("aes"|"hmac", { length })` — returns a
+        // secret KeyObject-shaped BufferHeader, matching createSecretKey's
+        // property/export/equality surface.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "generateKeySync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 2 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let options_box = lower_expr(ctx, &args[1])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let buf_handle = blk.call(
+                I64,
+                "js_crypto_generate_key_sync",
+                &[(I64, &alg_handle), (DOUBLE, &options_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // `crypto.generateKey("aes"|"hmac", { length }, cb)` — async Node
+        // shape. Perry computes synchronously and invokes the callback with
+        // `(null, key)`, matching the observable parity tests.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "generateKey" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 3 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let options_box = lower_expr(ctx, &args[1])?;
+            let cb_box = lower_expr(ctx, &args[2])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_generate_key_async",
+                &[
+                    (I64, &alg_handle),
+                    (DOUBLE, &options_box),
+                    (DOUBLE, &cb_box),
+                ],
+            ))
+        }
+
+        // crypto.hkdfSync(algorithm, ikm, salt, info, keylen) -> Buffer.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "hkdfSync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 5 {
+                return Ok(double_literal(0.0));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let ikm_box = lower_expr(ctx, &args[1])?;
+            let salt_box = lower_expr(ctx, &args[2])?;
+            let info_box = lower_expr(ctx, &args[3])?;
+            let len_box = lower_expr(ctx, &args[4])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let ikm_handle = unbox_to_i64(blk, &ikm_box);
+            let salt_handle = unbox_to_i64(blk, &salt_box);
+            let info_handle = unbox_to_i64(blk, &info_box);
+            let buf_handle = blk.call(
+                I64,
+                "js_crypto_hkdf_bytes_alg",
+                &[
+                    (I64, &alg_handle),
+                    (I64, &ikm_handle),
+                    (I64, &salt_handle),
+                    (I64, &info_handle),
+                    (DOUBLE, &len_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // crypto.hkdf(algorithm, ikm, salt, info, keylen, callback)
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "hkdf" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 6 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let ikm_box = lower_expr(ctx, &args[1])?;
+            let salt_box = lower_expr(ctx, &args[2])?;
+            let info_box = lower_expr(ctx, &args[3])?;
+            let len_box = lower_expr(ctx, &args[4])?;
+            let cb_box = lower_expr(ctx, &args[5])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let ikm_handle = unbox_to_i64(blk, &ikm_box);
+            let salt_handle = unbox_to_i64(blk, &salt_box);
+            let info_handle = unbox_to_i64(blk, &info_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_hkdf_async_alg",
+                &[
+                    (I64, &alg_handle),
+                    (I64, &ikm_handle),
+                    (I64, &salt_handle),
+                    (I64, &info_handle),
+                    (DOUBLE, &len_box),
+                    (DOUBLE, &cb_box),
+                ],
+            ))
+        }
+
+        // crypto.scrypt(password, salt, keylen[, options], callback)
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "scrypt" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 4 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let pwd_box = lower_expr(ctx, &args[0])?;
+            let salt_box = lower_expr(ctx, &args[1])?;
+            let len_box = lower_expr(ctx, &args[2])?;
+            let cb_expr = if args.len() >= 5 {
+                let _ = lower_expr(ctx, &args[3])?;
+                &args[4]
+            } else {
+                &args[3]
+            };
+            let cb_box = lower_expr(ctx, cb_expr)?;
+            let blk = ctx.block();
+            let pwd_handle = unbox_to_i64(blk, &pwd_box);
+            let salt_handle = unbox_to_i64(blk, &salt_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_scrypt_async",
+                &[
+                    (I64, &pwd_handle),
+                    (I64, &salt_handle),
+                    (DOUBLE, &len_box),
+                    (DOUBLE, &cb_box),
+                ],
+            ))
         }
 
         // crypto.pbkdf2Sync(password, salt, iterations, keylen, digest) -> Buffer.
@@ -711,6 +1554,43 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ],
             );
             Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // crypto.pbkdf2(password, salt, iterations, keylen, algorithm, callback)
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "pbkdf2" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 6 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let pwd_box = lower_expr(ctx, &args[0])?;
+            let salt_box = lower_expr(ctx, &args[1])?;
+            let iter_box = lower_expr(ctx, &args[2])?;
+            let keylen_box = lower_expr(ctx, &args[3])?;
+            let alg_box = lower_expr(ctx, &args[4])?;
+            let cb_box = lower_expr(ctx, &args[5])?;
+            let blk = ctx.block();
+            let pwd_handle = unbox_to_i64(blk, &pwd_box);
+            let salt_handle = unbox_to_i64(blk, &salt_box);
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_pbkdf2_async_alg",
+                &[
+                    (I64, &pwd_handle),
+                    (I64, &salt_handle),
+                    (DOUBLE, &iter_box),
+                    (DOUBLE, &keylen_box),
+                    (I64, &alg_handle),
+                    (DOUBLE, &cb_box),
+                ],
+            ))
         }
 
         // crypto.scryptSync(password, salt, keylen, options?) -> Buffer.

@@ -27,9 +27,10 @@ pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
 
 // ---- Re-exports: allocation / registry helpers ----
 pub use header::{
-    buffer_ab_alias, buffer_alloc, buffer_data, buffer_data_mut, is_array_buffer,
-    is_registered_buffer, is_uint8array_buffer, mark_as_array_buffer, mark_as_uint8array,
-    register_buffer, resolve_buffer_ab_alias, set_buffer_ab_alias,
+    asymmetric_key_meta, buffer_ab_alias, buffer_alloc, buffer_data, buffer_data_mut,
+    crypto_key_meta, is_array_buffer, is_registered_buffer, is_secret_key, is_uint8array_buffer,
+    mark_as_array_buffer, mark_as_asymmetric_key, mark_as_crypto_key, mark_as_secret_key,
+    mark_as_uint8array, register_buffer, resolve_buffer_ab_alias, set_buffer_ab_alias,
 };
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----

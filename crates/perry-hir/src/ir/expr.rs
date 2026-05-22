@@ -806,6 +806,11 @@ pub enum Expr {
         extractable: Box<Expr>,
         usages: Box<Expr>,
     },
+    /// `crypto.subtle.exportKey(format, key)` -> Promise<ArrayBuffer>
+    WebCryptoExportKey {
+        format: Box<Expr>,
+        key: Box<Expr>,
+    },
     /// `crypto.subtle.sign(algorithm, key, data)` -> Promise<ArrayBuffer>
     WebCryptoSign {
         algorithm: Box<Expr>,
@@ -818,6 +823,21 @@ pub enum Expr {
         key: Box<Expr>,
         signature: Box<Expr>,
         data: Box<Expr>,
+    },
+    /// `crypto.subtle.deriveBits(algorithm, baseKey, length)` -> Promise<ArrayBuffer>
+    WebCryptoDeriveBits {
+        algorithm: Box<Expr>,
+        base_key: Box<Expr>,
+        length: Box<Expr>,
+    },
+    /// `crypto.subtle.deriveKey(algorithm, baseKey, derivedKeyAlgorithm, extractable, keyUsages)`
+    /// -> Promise<CryptoKey>
+    WebCryptoDeriveKey {
+        algorithm: Box<Expr>,
+        base_key: Box<Expr>,
+        derived_key_algorithm: Box<Expr>,
+        extractable: Box<Expr>,
+        usages: Box<Expr>,
     },
     /// `crypto.subtle.encrypt(algorithm, key, data)` -> Promise<ArrayBuffer>
     ///

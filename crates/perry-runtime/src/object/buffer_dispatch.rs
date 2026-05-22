@@ -4,6 +4,7 @@
 //! logic changes.
 
 use super::*;
+use base64::Engine as _;
 
 /// Dispatch a Buffer / Uint8Array instance method call. Receiver address
 /// is the raw heap pointer (already stripped of NaN-box tags). Routes
@@ -26,6 +27,8 @@ pub fn is_buffer_method_name(name: &str) -> bool {
             | "copy"
             | "write"
             | "toJSON"
+            | "export"
+            | "toCryptoKey"
             | "fill"
             | "equals"
             | "compare"
@@ -117,6 +120,125 @@ pub fn is_buffer_method_name(name: &str) -> bool {
     )
 }
 
+unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
+    let raw = bits.to_bits();
+    if (raw >> 48) as u16 == 0x7FFC {
+        return None;
+    }
+    let obj = (raw & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader;
+    if (obj as usize) < 0x1000 {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(b"format".as_ptr(), 6);
+    let val = js_object_get_field_by_name(obj, key);
+    let vbits = val.bits();
+    if (vbits >> 48) as u16 != 0x7FFF {
+        return None;
+    }
+    let ptr = (vbits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = std::slice::from_raw_parts(
+        (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+        (*ptr).byte_len as usize,
+    );
+    Some(String::from_utf8_lossy(bytes).to_ascii_lowercase())
+}
+
+unsafe fn secret_key_jwk_object(buf_ptr: *mut crate::buffer::BufferHeader) -> f64 {
+    let bytes = std::slice::from_raw_parts(
+        (buf_ptr as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>()),
+        (*buf_ptr).length as usize,
+    );
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    let obj = js_object_alloc(0, 2);
+    let kty_key = crate::string::js_string_from_bytes(b"kty".as_ptr(), 3);
+    let kty_val = crate::string::js_string_from_bytes(b"oct".as_ptr(), 3);
+    js_object_set_field_by_name(
+        obj,
+        kty_key,
+        f64::from_bits(JSValue::string_ptr(kty_val).bits()),
+    );
+    let k_key = crate::string::js_string_from_bytes(b"k".as_ptr(), 1);
+    let k_val = crate::string::js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
+    js_object_set_field_by_name(
+        obj,
+        k_key,
+        f64::from_bits(JSValue::string_ptr(k_val).bits()),
+    );
+    f64::from_bits(JSValue::pointer(obj as *mut u8).bits())
+}
+
+unsafe fn js_string_from_value(bits: f64) -> Option<String> {
+    let raw = bits.to_bits();
+    let top16 = (raw >> 48) as u16;
+    if top16 != 0x7FFF {
+        return None;
+    }
+    let ptr = (raw & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = std::slice::from_raw_parts(
+        (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+        (*ptr).byte_len as usize,
+    );
+    std::str::from_utf8(bytes).ok().map(str::to_string)
+}
+
+unsafe fn object_field_string_value(obj_bits: f64, name: &[u8]) -> Option<String> {
+    let raw = obj_bits.to_bits();
+    if (raw >> 48) as u16 != 0x7FFD {
+        return None;
+    }
+    let obj = (raw & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader;
+    if (obj as usize) < 0x1000 {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let val = js_object_get_field_by_name(obj, key);
+    js_string_from_value(f64::from_bits(val.bits()))
+}
+
+unsafe fn secret_to_crypto_key(addr: usize, algorithm_bits: f64) -> f64 {
+    let name = js_string_from_value(algorithm_bits)
+        .or_else(|| object_field_string_value(algorithm_bits, b"name"))
+        .unwrap_or_default();
+    let upper = name.to_ascii_uppercase();
+    let algo_id = match upper.as_str() {
+        "HMAC" => 1,
+        "AES-GCM" => 2,
+        "AES-KW" => 3,
+        "AES-CBC" => 4,
+        "AES-CTR" => 5,
+        "HKDF" => 6,
+        "PBKDF2" => 7,
+        _ => return f64::from_bits(JSValue::undefined().bits()),
+    };
+    let hash_name = object_field_string_value(algorithm_bits, b"hash")
+        .or_else(|| {
+            let raw = algorithm_bits.to_bits();
+            if (raw >> 48) as u16 != 0x7FFD {
+                return None;
+            }
+            let obj = (raw & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader;
+            let key = crate::string::js_string_from_bytes(b"hash".as_ptr(), 4);
+            let hash_val = js_object_get_field_by_name(obj, key);
+            object_field_string_value(f64::from_bits(hash_val.bits()), b"name")
+        })
+        .unwrap_or_else(|| "SHA-256".to_string());
+    let hash_id = match hash_name.to_ascii_uppercase().replace('-', "").as_str() {
+        "SHA1" => 1,
+        "SHA256" => 2,
+        "SHA384" => 3,
+        "SHA512" => 4,
+        _ => 2,
+    };
+    crate::buffer::mark_as_crypto_key(addr, algo_id, hash_id, 1);
+    f64::from_bits(JSValue::pointer(addr as *mut u8).bits())
+}
+
 pub unsafe fn dispatch_buffer_method(
     addr: usize,
     method_name: &str,
@@ -149,6 +271,10 @@ pub unsafe fn dispatch_buffer_method(
 
     match method_name {
         "length" => crate::buffer::js_buffer_length(buf_ptr) as f64,
+        "toString" if crate::buffer::is_secret_key(addr) => {
+            let s = crate::string::js_string_from_bytes(b"[object KeyObject]".as_ptr(), 18);
+            f64::from_bits(JSValue::string_ptr(s).bits())
+        }
         "toString" => {
             let enc = if !args.is_empty() {
                 crate::buffer::js_encoding_tag_from_value(args[0])
@@ -233,6 +359,32 @@ pub unsafe fn dispatch_buffer_method(
                 ((*buf_ptr).length as i32 - offset, 0)
             };
             crate::buffer::js_buffer_write_len(buf_ptr, str_ptr, offset, max_len, enc) as f64
+        }
+        "export" if crate::buffer::is_secret_key(addr) => {
+            let format = args.first().and_then(|v| buffer_secret_export_format(*v));
+            if matches!(format.as_deref(), Some("jwk")) {
+                return secret_key_jwk_object(buf_ptr);
+            }
+            let bytes = std::slice::from_raw_parts(
+                (buf_ptr as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>()),
+                (*buf_ptr).length as usize,
+            );
+            let out = crate::buffer::buffer_alloc(bytes.len() as u32);
+            if !out.is_null() {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    crate::buffer::buffer_data_mut(out),
+                    bytes.len(),
+                );
+                (*out).length = bytes.len() as u32;
+                // Node returns a `Buffer` (Uint8Array subclass) here so
+                // `instanceof Uint8Array` must hold on the result.
+                crate::buffer::mark_as_uint8array(out as usize);
+            }
+            f64::from_bits(JSValue::pointer(out as *mut u8).bits())
+        }
+        "toCryptoKey" if crate::buffer::is_secret_key(addr) && !args.is_empty() => {
+            secret_to_crypto_key(addr, args[0])
         }
         "fill" => {
             let len = (*buf_ptr).length as i32;

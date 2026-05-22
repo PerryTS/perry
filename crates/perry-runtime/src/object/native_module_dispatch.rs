@@ -107,8 +107,70 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::typedarray::lookup_typed_array_kind(addr)
         }
     };
+    let usize_arg = |v: f64| -> Option<usize> {
+        let raw = v.to_bits();
+        let top16 = (raw >> 48) as u16;
+        if JSValue::from_bits(raw).is_undefined() || JSValue::from_bits(raw).is_null() {
+            return None;
+        }
+        if top16 == 0x7FFE {
+            let i = (raw & 0xFFFF_FFFF) as u32 as i32;
+            return (i >= 0).then_some(i as usize);
+        }
+        // `is_sign_negative` is true for -0.0 too (a normal result of
+        // `0 - 0` in JS land). Accept -0.0 as 0 and only reject genuinely
+        // negative numbers.
+        if v.is_nan() || v.is_infinite() || (v.is_sign_negative() && v != 0.0) {
+            None
+        } else {
+            Some(v as usize)
+        }
+    };
 
     match (module_name, method_name) {
+        // ── crypto module ──
+        ("crypto", "randomFillSync") if args_len >= 1 => {
+            use rand::RngCore;
+            let target = arg(0);
+            let addr = ptr_addr(target);
+            let offset = usize_arg(arg(1));
+            let size = usize_arg(arg(2));
+            let range = |total: usize| -> (usize, usize) {
+                let start = offset.unwrap_or(0).min(total);
+                let end = size
+                    .map(|s| start.saturating_add(s).min(total))
+                    .unwrap_or(total);
+                (start, end)
+            };
+            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+                let ta = addr as *mut crate::typedarray::TypedArrayHeader;
+                let len = (*ta).length as usize;
+                let elem_size = (*ta).elem_size as usize;
+                let (start_elem, end_elem) = range(len);
+                let start = start_elem.saturating_mul(elem_size);
+                let end = end_elem.saturating_mul(elem_size);
+                if end > start {
+                    let data = (addr as *mut u8)
+                        .add(std::mem::size_of::<crate::typedarray::TypedArrayHeader>());
+                    rand::thread_rng()
+                        .fill_bytes(std::slice::from_raw_parts_mut(data.add(start), end - start));
+                }
+                target
+            } else if crate::buffer::is_registered_buffer(addr) {
+                let buf = addr as *mut crate::buffer::BufferHeader;
+                let total = (*buf).length as usize;
+                let (start, end) = range(total);
+                if end > start {
+                    let data = crate::buffer::buffer_data_mut(buf);
+                    rand::thread_rng()
+                        .fill_bytes(std::slice::from_raw_parts_mut(data.add(start), end - start));
+                }
+                target
+            } else {
+                target
+            }
+        }
+
         // ── tty module ──
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
 

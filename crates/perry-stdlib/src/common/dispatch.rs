@@ -145,6 +145,60 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return crate::crypto::dispatch_hmac(handle, method_name, &args);
     }
 
+    #[cfg(feature = "crypto")]
+    if matches!(method_name, "update" | "sign")
+        && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_sign(handle, method_name, &args);
+    }
+
+    #[cfg(feature = "crypto")]
+    if matches!(method_name, "update" | "verify")
+        && with_handle::<crate::crypto::VerifyHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_verify(handle, method_name, &args);
+    }
+
+    #[cfg(feature = "crypto")]
+    if matches!(
+        method_name,
+        "generateKeys"
+            | "getPublicKey"
+            | "getPrivateKey"
+            | "dhGetPrivateKey"
+            | "setPrivateKey"
+            | "setPublicKey"
+            | "computeSecret"
+            | "dhComputeSecret"
+    ) && with_handle::<crate::crypto::EcdhHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_ecdh(handle, method_name, &args);
+    }
+
+    #[cfg(feature = "crypto")]
+    if matches!(
+        method_name,
+        "generateKeys"
+            | "dhGenerateKeys"
+            | "computeSecret"
+            | "dhComputeSecret"
+            | "getPrime"
+            | "dhGetPrime"
+            | "getGenerator"
+            | "dhGetGenerator"
+            | "getPublicKey"
+            | "dhGetPublicKey"
+            | "getPrivateKey"
+            | "dhGetPrivateKey"
+            | "setPublicKey"
+            | "setPrivateKey"
+            | "verifyError"
+    ) && with_handle::<crate::crypto::DiffieHellmanHandle, bool, _>(handle, |_| true)
+        .unwrap_or(false)
+    {
+        return crate::crypto::dispatch_diffie_hellman(handle, method_name, &args);
+    }
+
     // crypto Cipher handle: createCipheriv(...) / createDecipheriv(...)
     // followed by .update(...).final() / .getAuthTag() / .setAuthTag() —
     // issue #1075. Method-gated like the Hash handle above so handle id
@@ -153,7 +207,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     #[cfg(feature = "crypto")]
     if matches!(
         method_name,
-        "update" | "final" | "getAuthTag" | "setAuthTag" | "setAAD"
+        "update" | "final" | "getAuthTag" | "setAuthTag" | "setAAD" | "setAutoPadding"
     ) && with_handle::<crate::crypto::CipherHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_cipher(handle, method_name, &args);
@@ -877,15 +931,75 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return crate::string_decoder::dispatch_string_decoder_property(handle, property_name);
     }
 
+    #[cfg(feature = "crypto")]
+    if matches!(property_name, "update" | "digest" | "copy")
+        && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_hash_property(handle, property_name);
+    }
+
+    #[cfg(feature = "crypto")]
+    if matches!(property_name, "update" | "digest")
+        && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_hmac_property(handle, property_name);
+    }
+
+    #[cfg(feature = "crypto")]
+    if matches!(property_name, "update" | "sign")
+        && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_sign_property(handle, property_name);
+    }
+
+    #[cfg(feature = "crypto")]
+    if matches!(property_name, "update" | "verify")
+        && with_handle::<crate::crypto::VerifyHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_verify_property(handle, property_name);
+    }
+
+    #[cfg(feature = "crypto")]
+    if matches!(
+        property_name,
+        "generateKeys"
+            | "getPublicKey"
+            | "getPrivateKey"
+            | "setPrivateKey"
+            | "setPublicKey"
+            | "computeSecret"
+    ) && with_handle::<crate::crypto::EcdhHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_ecdh_property(handle, property_name);
+    }
+
+    #[cfg(feature = "crypto")]
+    if matches!(
+        property_name,
+        "generateKeys"
+            | "computeSecret"
+            | "getPrime"
+            | "getGenerator"
+            | "getPublicKey"
+            | "getPrivateKey"
+            | "setPublicKey"
+            | "setPrivateKey"
+            | "verifyError"
+    ) && with_handle::<crate::crypto::DiffieHellmanHandle, bool, _>(handle, |_| true)
+        .unwrap_or(false)
+    {
+        return crate::crypto::dispatch_diffie_hellman_property(handle, property_name);
+    }
+
     // Issue #1111: CipherHandle method-as-value reads. Returns a
     // bound-method closure for `update` / `final` / `getAuthTag` /
-    // `setAuthTag` / `setAAD` so `c.getAuthTag?.()` doesn't short-circuit
+    // `setAuthTag` / `setAAD` / `setAutoPadding` so `c.getAuthTag?.()` doesn't short-circuit
     // on the optional-chain `c.getAuthTag == null` check. Same disjoint
     // method-name gate as the method-dispatch arm above.
     #[cfg(feature = "crypto")]
     if matches!(
         property_name,
-        "update" | "final" | "getAuthTag" | "setAuthTag" | "setAAD"
+        "update" | "final" | "getAuthTag" | "setAuthTag" | "setAAD" | "setAutoPadding"
     ) && with_handle::<crate::crypto::CipherHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_cipher_property(handle, property_name);

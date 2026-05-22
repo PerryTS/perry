@@ -679,6 +679,31 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         return nanbox_false;
     }
 
+    let obj_addr = obj_val.bits() & 0x0000_FFFF_FFFF_FFFF;
+    // Small handle receiver (`"prop" in crypto.createDiffieHellman(...)`,
+    // Fastify handles, etc.). The generic object path below would treat the
+    // handle id as an ObjectHeader pointer and can crash while reading
+    // `keys_array`. Mirror the property-get IC miss path: ask the registered
+    // handle property dispatcher whether the property resolves to a real
+    // value.
+    if obj_addr > 0 && obj_addr < 0x100000 {
+        if key_val.is_string() {
+            unsafe {
+                if let Some(dispatch) = super::class_registry::handle_property_dispatch() {
+                    let key_ptr = key_val.as_string_ptr();
+                    let name_ptr =
+                        (key_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let name_len = (*key_ptr).byte_len as usize;
+                    let result = dispatch(obj_addr as i64, name_ptr, name_len);
+                    if result.to_bits() != crate::value::TAG_UNDEFINED {
+                        return nanbox_true;
+                    }
+                }
+            }
+        }
+        return nanbox_false;
+    }
+
     let obj_ptr = obj_val.as_pointer::<ObjectHeader>();
     if obj_ptr.is_null() {
         return nanbox_false;
@@ -1006,6 +1031,19 @@ pub extern "C" fn js_object_get_field_by_name(
                     let b = obj as *const crate::buffer::BufferHeader;
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
+                if crate::buffer::is_secret_key(obj as usize) {
+                    if key_bytes == b"type" {
+                        let s = crate::string::js_string_from_bytes(b"secret".as_ptr(), 6);
+                        return JSValue::from_bits(JSValue::string_ptr(s).bits());
+                    }
+                    if key_bytes == b"symmetricKeySize" {
+                        let b = obj as *const crate::buffer::BufferHeader;
+                        return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
+                    }
+                    if key_bytes == b"asymmetricKeyType" || key_bytes == b"asymmetricKeyDetails" {
+                        return JSValue::undefined();
+                    }
+                }
                 if key_bytes == b"buffer" {
                     // Issue #1225: a copied Buffer aliases its source's
                     // ArrayBuffer identity so `Buffer.from(src).buffer ===
@@ -1264,6 +1302,63 @@ pub extern "C" fn js_object_get_field_by_name(
                 if key_bytes == b"length" {
                     let s = obj as *const crate::StringHeader;
                     return JSValue::number((*s).byte_len as f64);
+                }
+                if let Some((kind, asym_type)) = crate::buffer::asymmetric_key_meta(obj as usize) {
+                    if key_bytes == b"type" {
+                        let label = if kind == 1 {
+                            b"public".as_slice()
+                        } else {
+                            b"private".as_slice()
+                        };
+                        let s =
+                            crate::string::js_string_from_bytes(label.as_ptr(), label.len() as u32);
+                        return JSValue::from_bits(JSValue::string_ptr(s).bits());
+                    }
+                    if key_bytes == b"asymmetricKeyType" {
+                        let label = match asym_type {
+                            1 => b"rsa".as_slice(),
+                            2 => b"ec".as_slice(),
+                            3 => b"ed25519".as_slice(),
+                            4 => b"x25519".as_slice(),
+                            _ => b"".as_slice(),
+                        };
+                        if !label.is_empty() {
+                            let s = crate::string::js_string_from_bytes(
+                                label.as_ptr(),
+                                label.len() as u32,
+                            );
+                            return JSValue::from_bits(JSValue::string_ptr(s).bits());
+                        }
+                    }
+                    if key_bytes == b"asymmetricKeyDetails" {
+                        let details = js_object_alloc(0, if asym_type == 2 { 1 } else { 0 });
+                        if asym_type == 2 {
+                            let name =
+                                crate::string::js_string_from_bytes(b"namedCurve".as_ptr(), 10);
+                            let val =
+                                crate::string::js_string_from_bytes(b"prime256v1".as_ptr(), 10);
+                            js_object_set_field_by_name(
+                                details,
+                                name,
+                                f64::from_bits(JSValue::string_ptr(val).bits()),
+                            );
+                        }
+                        return JSValue::from_bits(JSValue::pointer(details as *mut u8).bits());
+                    }
+                    // `js_class_method_bind` only needs a pointer that stays
+                    // valid for the closure's lifetime — the static byte
+                    // literals satisfy that without per-read allocation.
+                    let static_name: Option<&'static [u8]> = match key_bytes {
+                        b"export" => Some(b"export"),
+                        b"equals" => Some(b"equals"),
+                        _ => None,
+                    };
+                    if let Some(name) = static_name {
+                        let this_f64 =
+                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                        let result = js_class_method_bind(this_f64, name.as_ptr(), name.len());
+                        return JSValue::from_bits(result.to_bits());
+                    }
                 }
             }
             return JSValue::undefined();

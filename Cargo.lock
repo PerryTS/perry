@@ -3892,6 +3892,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "keccak"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e24a010dd405bd7ed803e5253182815b41bf2e6a80cc3bfc066658e03a198aa"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+]
+
+[[package]]
 name = "kqueue"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5761,6 +5771,7 @@ dependencies = [
  "clap",
  "cron",
  "dashmap 6.2.1",
+ "ecb",
  "ed25519-dalek",
  "flate2",
  "futures-util",
@@ -5800,8 +5811,10 @@ dependencies = [
  "scrypt",
  "serde",
  "serde_json",
+ "sha1 0.10.6",
  "sha1 0.11.0",
  "sha2 0.11.0",
+ "sha3",
  "spki",
  "sqlx",
  "thiserror 1.0.69",
@@ -6914,6 +6927,7 @@ dependencies = [
  "pkcs1",
  "pkcs8",
  "rand_core 0.6.4",
+ "sha2 0.10.9",
  "signature",
  "spki",
  "subtle",
@@ -7398,6 +7412,16 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "digest 0.11.3",
+]
+
+[[package]]
+name = "sha3"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
+dependencies = [
+ "digest 0.11.3",
+ "keccak",
 ]
 
 [[package]]

@@ -120,6 +120,33 @@ pub(crate) fn lower_native_method_call(
         return Ok(v);
     }
 
+    if module == "crypto"
+        && class_name == Some("ECDH")
+        && method == "convertKey"
+        && object.is_none()
+    {
+        let mut lowered = Vec::with_capacity(5);
+        for i in 0..5 {
+            lowered.push(if let Some(arg) = args.get(i) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            });
+        }
+        let blk = ctx.block();
+        return Ok(blk.call(
+            DOUBLE,
+            "js_crypto_ecdh_convert_key",
+            &[
+                (DOUBLE, &lowered[0]),
+                (DOUBLE, &lowered[1]),
+                (DOUBLE, &lowered[2]),
+                (DOUBLE, &lowered[3]),
+                (DOUBLE, &lowered[4]),
+            ],
+        ));
+    }
+
     // `perry/ui.App({ title, width, height, body, icon? })` — minimum-viable
     // dispatch so a perry/ui app actually launches an NSApplication and
     // shows a window. Pre-v0.5.10 this fell into the receiver-less early-

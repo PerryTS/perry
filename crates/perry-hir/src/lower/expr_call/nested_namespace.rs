@@ -128,6 +128,15 @@ pub(super) fn try_web_crypto_subtle(
                                             usages: Box::new(usages),
                                         }));
                                     }
+                                    "exportKey" if args.len() >= 2 => {
+                                        let mut iter = args.into_iter();
+                                        let format = iter.next().unwrap();
+                                        let key = iter.next().unwrap();
+                                        return Ok(Ok(Expr::WebCryptoExportKey {
+                                            format: Box::new(format),
+                                            key: Box::new(key),
+                                        }));
+                                    }
                                     "sign" if args.len() >= 3 => {
                                         let mut iter = args.into_iter();
                                         let algorithm = iter.next().unwrap();
@@ -150,6 +159,32 @@ pub(super) fn try_web_crypto_subtle(
                                             key: Box::new(key),
                                             signature: Box::new(signature),
                                             data: Box::new(data),
+                                        }));
+                                    }
+                                    "deriveBits" if args.len() >= 3 => {
+                                        let mut iter = args.into_iter();
+                                        let algorithm = iter.next().unwrap();
+                                        let base_key = iter.next().unwrap();
+                                        let length = iter.next().unwrap();
+                                        return Ok(Ok(Expr::WebCryptoDeriveBits {
+                                            algorithm: Box::new(algorithm),
+                                            base_key: Box::new(base_key),
+                                            length: Box::new(length),
+                                        }));
+                                    }
+                                    "deriveKey" if args.len() >= 5 => {
+                                        let mut iter = args.into_iter();
+                                        let algorithm = iter.next().unwrap();
+                                        let base_key = iter.next().unwrap();
+                                        let derived_key_algorithm = iter.next().unwrap();
+                                        let extractable = iter.next().unwrap();
+                                        let usages = iter.next().unwrap();
+                                        return Ok(Ok(Expr::WebCryptoDeriveKey {
+                                            algorithm: Box::new(algorithm),
+                                            base_key: Box::new(base_key),
+                                            derived_key_algorithm: Box::new(derived_key_algorithm),
+                                            extractable: Box::new(extractable),
+                                            usages: Box::new(usages),
                                         }));
                                     }
                                     "encrypt" if args.len() >= 3 => {

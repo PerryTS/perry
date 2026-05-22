@@ -341,6 +341,10 @@ where
             f(extractable);
             f(usages);
         }
+        Expr::WebCryptoExportKey { format, key } => {
+            f(format);
+            f(key);
+        }
         Expr::WebCryptoSign {
             algorithm,
             key,
@@ -360,6 +364,28 @@ where
             f(key);
             f(signature);
             f(data);
+        }
+        Expr::WebCryptoDeriveBits {
+            algorithm,
+            base_key,
+            length,
+        } => {
+            f(algorithm);
+            f(base_key);
+            f(length);
+        }
+        Expr::WebCryptoDeriveKey {
+            algorithm,
+            base_key,
+            derived_key_algorithm,
+            extractable,
+            usages,
+        } => {
+            f(algorithm);
+            f(base_key);
+            f(derived_key_algorithm);
+            f(extractable);
+            f(usages);
         }
         Expr::WebCryptoEncrypt {
             algorithm,

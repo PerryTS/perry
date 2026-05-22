@@ -685,12 +685,126 @@ pub(super) fn try_global_builtins(
                     "randomUUID" => {
                         return Ok(Ok(Expr::CryptoRandomUUID));
                     }
+                    "randomInt" => {
+                        return Ok(Ok(Expr::Call {
+                            callee: Box::new(Expr::PropertyGet {
+                                object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
+                                property: "randomInt".to_string(),
+                            }),
+                            args,
+                            type_args: vec![],
+                        }));
+                    }
                     "randomBytes" => {
                         if !args.is_empty() {
+                            if args.len() >= 2 {
+                                return Ok(Ok(Expr::Call {
+                                    callee: Box::new(Expr::PropertyGet {
+                                        object: Box::new(Expr::NativeModuleRef(
+                                            "crypto".to_string(),
+                                        )),
+                                        property: "randomBytes".to_string(),
+                                    }),
+                                    args,
+                                    type_args: vec![],
+                                }));
+                            }
                             return Ok(Ok(Expr::CryptoRandomBytes(Box::new(
                                 args.into_iter().next().unwrap(),
                             ))));
                         }
+                    }
+                    "randomFill" => {
+                        if !args.is_empty() {
+                            return Ok(Ok(Expr::Call {
+                                callee: Box::new(Expr::PropertyGet {
+                                    object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
+                                    property: "randomFill".to_string(),
+                                }),
+                                args,
+                                type_args: vec![],
+                            }));
+                        }
+                    }
+                    "hash" => {
+                        if args.len() >= 2 {
+                            let mut iter = args.into_iter();
+                            let alg = iter.next().unwrap();
+                            let data = iter.next().unwrap();
+                            let enc = iter.next().unwrap_or_else(|| Expr::String("hex".into()));
+                            return Ok(Ok(Expr::Call {
+                                callee: Box::new(Expr::PropertyGet {
+                                    object: Box::new(Expr::Call {
+                                        callee: Box::new(Expr::PropertyGet {
+                                            object: Box::new(Expr::Call {
+                                                callee: Box::new(Expr::PropertyGet {
+                                                    object: Box::new(Expr::NativeModuleRef(
+                                                        "crypto".to_string(),
+                                                    )),
+                                                    property: "createHash".to_string(),
+                                                }),
+                                                args: vec![alg],
+                                                type_args: vec![],
+                                            }),
+                                            property: "update".to_string(),
+                                        }),
+                                        args: vec![data],
+                                        type_args: vec![],
+                                    }),
+                                    property: "digest".to_string(),
+                                }),
+                                args: vec![enc],
+                                type_args: vec![],
+                            }));
+                        }
+                    }
+                    "createHash"
+                    | "Hash"
+                    | "createSign"
+                    | "Sign"
+                    | "createVerify"
+                    | "Verify"
+                    | "createECDH"
+                    | "createDiffieHellman"
+                    | "createDiffieHellmanGroup"
+                    | "getDiffieHellman"
+                    | "createPrivateKey"
+                    | "createPublicKey"
+                    | "generateKeyPair"
+                    | "generateKeyPairSync"
+                    | "createHmac"
+                    | "Hmac"
+                    | "pbkdf2Sync"
+                    | "hkdfSync"
+                    | "scryptSync"
+                    | "timingSafeEqual"
+                    | "sign"
+                    | "verify"
+                    | "publicEncrypt"
+                    | "privateDecrypt"
+                    | "privateEncrypt"
+                    | "publicDecrypt"
+                    | "getHashes"
+                    | "getCiphers"
+                    | "getCurves"
+                    | "getFips"
+                    | "setFips"
+                    | "secureHeapUsed"
+                    | "randomInt"
+                    | "generatePrime"
+                    | "generatePrimeSync"
+                    | "checkPrime"
+                    | "checkPrimeSync"
+                    | "createCipheriv"
+                    | "createDecipheriv" => {
+                        return Ok(Ok(Expr::Call {
+                            callee: Box::new(Expr::PropertyGet {
+                                object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
+                                property: func_name.to_string(),
+                            }),
+                            args,
+                            type_args: vec![],
+                        }));
                     }
                     // `createSecretKey(key, encoding?)` from a named
                     // import. Without this arm the call lowered to a

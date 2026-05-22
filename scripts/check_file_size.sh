@@ -57,6 +57,19 @@ crates/perry-runtime/src/gc/tests.rs
 crates/perry-codegen-arkts/src/tests.rs
 crates/perry-api-manifest/src/entries.rs
 crates/perry/src/commands/compile.rs
+# Native-module dispatch table; one big match by (module, method, class).
+# Splitting per-namespace is tracked under the API-manifest refactor in #793.
+crates/perry-codegen/src/lower_call/native/mod.rs
+# HIR `Expr` enum + dependency-walker arms; splitting would need parallel
+# updates across every variant of the walker traits. Tracked alongside #793.
+crates/perry-hir/src/ir/expr.rs
+# node:crypto stdlib surface expanded by #1419 (sign/verify, RSA, EC, DH,
+# AES-GCM, …). Splitting into per-algorithm sub-modules is tracked as a
+# follow-up under #793.
+crates/perry-stdlib/src/crypto.rs
+# WebCrypto subtle.* surface expanded by #1419. Split-by-algorithm tracked
+# as a follow-up under #793.
+crates/perry-stdlib/src/webcrypto.rs
 EOF
 )
 

@@ -224,8 +224,11 @@ impl SH for Expr {
             Expr::CryptoMd5(e) => { tag(h, 196); e.as_ref().hash(h); }
             Expr::WebCryptoDigest { algo, data } => { tag(h, 197); algo.as_ref().hash(h); data.as_ref().hash(h); }
             Expr::WebCryptoImportKey { format, key, algorithm, extractable, usages, } => { tag(h, 198); format.as_ref().hash(h); key.as_ref().hash(h); algorithm.as_ref().hash(h); extractable.as_ref().hash(h); usages.as_ref().hash(h); }
+            Expr::WebCryptoExportKey { format, key, } => { tag(h, 472); format.as_ref().hash(h); key.as_ref().hash(h); }
             Expr::WebCryptoSign { algorithm, key, data, } => { tag(h, 199); algorithm.as_ref().hash(h); key.as_ref().hash(h); data.as_ref().hash(h); }
             Expr::WebCryptoVerify { algorithm, key, signature, data, } => { tag(h, 200); algorithm.as_ref().hash(h); key.as_ref().hash(h); signature.as_ref().hash(h); data.as_ref().hash(h); }
+            Expr::WebCryptoDeriveBits { algorithm, base_key, length, } => { tag(h, 473); algorithm.as_ref().hash(h); base_key.as_ref().hash(h); length.as_ref().hash(h); }
+            Expr::WebCryptoDeriveKey { algorithm, base_key, derived_key_algorithm, extractable, usages, } => { tag(h, 474); algorithm.as_ref().hash(h); base_key.as_ref().hash(h); derived_key_algorithm.as_ref().hash(h); extractable.as_ref().hash(h); usages.as_ref().hash(h); }
             Expr::WebCryptoEncrypt { algorithm, key, data, } => { tag(h, 466); algorithm.as_ref().hash(h); key.as_ref().hash(h); data.as_ref().hash(h); }
             Expr::WebCryptoDecrypt { algorithm, key, data, } => { tag(h, 467); algorithm.as_ref().hash(h); key.as_ref().hash(h); data.as_ref().hash(h); }
             Expr::WebCryptoGenerateKey { algorithm, extractable, usages, } => { tag(h, 469); algorithm.as_ref().hash(h); extractable.as_ref().hash(h); usages.as_ref().hash(h); }

@@ -1050,8 +1050,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::CryptoMd5(..)
         | Expr::WebCryptoDigest { .. }
         | Expr::WebCryptoImportKey { .. }
+        | Expr::WebCryptoExportKey { .. }
         | Expr::WebCryptoSign { .. }
         | Expr::WebCryptoVerify { .. }
+        | Expr::WebCryptoDeriveBits { .. }
+        | Expr::WebCryptoDeriveKey { .. }
         | Expr::WebCryptoEncrypt { .. }
         | Expr::WebCryptoDecrypt { .. }
         | Expr::WebCryptoGenerateKey { .. }

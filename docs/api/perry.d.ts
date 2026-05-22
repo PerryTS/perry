@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1101 entries across 80 modules
+// Coverage: 1121 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -311,6 +311,8 @@ declare module "cron" {
 
 declare module "crypto" {
   /** stdlib */
+  export class ECDH { [key: string]: any; }
+  /** stdlib */
   export const constants: any;
   /** stdlib */
   export const subtle: any;
@@ -319,9 +321,19 @@ declare module "crypto" {
   /** stdlib */
   export function createDecipheriv(...args: any[]): any;
   /** stdlib */
+  export function createDiffieHellman(...args: any[]): any;
+  /** stdlib */
+  export function createDiffieHellmanGroup(...args: any[]): any;
+  /** stdlib */
+  export function createECDH(...args: any[]): any;
+  /** stdlib */
   export function createHash(...args: any[]): any;
   /** stdlib */
   export function createHmac(...args: any[]): any;
+  /** stdlib */
+  export function createPrivateKey(...args: any[]): any;
+  /** stdlib */
+  export function createPublicKey(...args: any[]): any;
   /** stdlib */
   export function createSecretKey(...args: any[]): any;
   /** stdlib */
@@ -333,9 +345,17 @@ declare module "crypto" {
   /** stdlib */
   export function getCiphers(...args: any[]): any;
   /** stdlib */
+  export function getCurves(...args: any[]): any;
+  /** stdlib */
+  export function getDiffieHellman(...args: any[]): any;
+  /** stdlib */
+  export function getFips(...args: any[]): any;
+  /** stdlib */
   export function getHashes(...args: any[]): any;
   /** stdlib */
   export function getRandomValues(...args: any[]): any;
+  /** stdlib */
+  export function hash(...args: any[]): any;
   /** stdlib */
   export function hkdfSync(...args: any[]): any;
   /** stdlib */
@@ -344,6 +364,14 @@ declare module "crypto" {
   export function pbkdf2(...args: any[]): any;
   /** stdlib */
   export function pbkdf2Sync(...args: any[]): any;
+  /** stdlib */
+  export function privateDecrypt(...args: any[]): any;
+  /** stdlib */
+  export function privateEncrypt(...args: any[]): any;
+  /** stdlib */
+  export function publicDecrypt(...args: any[]): any;
+  /** stdlib */
+  export function publicEncrypt(...args: any[]): any;
   /** stdlib */
   export function randomBytes(...args: any[]): any;
   /** stdlib */
@@ -357,7 +385,11 @@ declare module "crypto" {
   /** stdlib */
   export function sha256(...args: any[]): any;
   /** stdlib */
+  export function sign(...args: any[]): any;
+  /** stdlib */
   export function timingSafeEqual(...args: any[]): any;
+  /** stdlib */
+  export function verify(...args: any[]): any;
 }
 
 declare module "date-fns" {

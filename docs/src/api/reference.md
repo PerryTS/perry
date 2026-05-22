@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1101 entries across 80 modules.
+Total: 1121 entries across 80 modules.
 
 ## Modules
 
@@ -375,30 +375,53 @@ Total: 1101 entries across 80 modules.
 
 ## `crypto`
 
+### Classes
+
+- `ECDH`
+
 ### Methods
 
 - `createCipheriv` — module
 - `createDecipheriv` — module
+- `createDiffieHellman` — module
+- `createDiffieHellmanGroup` — module
+- `createECDH` — module
 - `createHash` — module
 - `createHmac` — module
+- `createPrivateKey` — module
+- `createPublicKey` — module
 - `createSecretKey` — module
 - `createSign` — module
+- `createSign` — module
+- `createVerify` — module
 - `createVerify` — module
 - `generateKeyPairSync` — module
+- `generateKeyPairSync` — module
 - `getCiphers` — module
+- `getCurves` — module
+- `getDiffieHellman` — module
+- `getFips` — module
 - `getHashes` — module
 - `getRandomValues` — module
+- `hash` — module
 - `hkdfSync` — module
 - `md5` — module
 - `pbkdf2` — module
 - `pbkdf2Sync` — module
+- `privateDecrypt` — module
+- `privateEncrypt` — module
+- `publicDecrypt` — module
+- `publicEncrypt` — module
 - `randomBytes` — module
 - `randomFillSync` — module
+- `randomInt` — module
 - `randomInt` — module
 - `randomUUID` — module
 - `scryptSync` — module
 - `sha256` — module
+- `sign` — module
 - `timingSafeEqual` — module
+- `verify` — module
 
 ### Properties
 

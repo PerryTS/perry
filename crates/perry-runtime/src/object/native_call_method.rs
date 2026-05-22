@@ -485,6 +485,29 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
             };
             match method_name {
+                "export" if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some() => {
+                    // Minimal asymmetric KeyObject-surrogate export surface.
+                    // The native crypto layer stores PEM-backed RSA/EC keys
+                    // and internal Ed/X surrogates as heap strings. For the
+                    // high-value Node parity shape (`format: "pem"`), the
+                    // stored string is already the exported representation.
+                    return object;
+                }
+                "equals" if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some() => {
+                    if args_len == 0 || args_ptr.is_null() {
+                        return f64::from_bits(JSValue::bool(false).bits());
+                    }
+                    let other = unsafe { *args_ptr };
+                    let other_ptr = crate::value::js_get_string_pointer_unified(other)
+                        as *const crate::StringHeader;
+                    if other_ptr.is_null()
+                        || crate::buffer::asymmetric_key_meta(other_ptr as usize).is_none()
+                    {
+                        return f64::from_bits(JSValue::bool(false).bits());
+                    }
+                    let eq = crate::string::js_string_equals(s_ptr, other_ptr) != 0;
+                    return f64::from_bits(JSValue::bool(eq).bits());
+                }
                 "at" => {
                     return crate::string::js_string_at(s_ptr, arg_i32(0));
                 }

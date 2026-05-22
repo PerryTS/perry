@@ -192,6 +192,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(nanbox_pointer_inline(blk, &promise))
         }
+        Expr::WebCryptoExportKey { format, key } => {
+            let format_box = lower_expr(ctx, format)?;
+            let key_box = lower_expr(ctx, key)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_export_key",
+                &[(DOUBLE, &format_box), (DOUBLE, &key_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
         Expr::WebCryptoSign {
             algorithm,
             key,
@@ -227,6 +238,52 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &key_box),
                     (DOUBLE, &sig_box),
                     (DOUBLE, &data_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoDeriveBits {
+            algorithm,
+            base_key,
+            length,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let key_box = lower_expr(ctx, base_key)?;
+            let length_box = lower_expr(ctx, length)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_derive_bits",
+                &[
+                    (DOUBLE, &algo_box),
+                    (DOUBLE, &key_box),
+                    (DOUBLE, &length_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoDeriveKey {
+            algorithm,
+            base_key,
+            derived_key_algorithm,
+            extractable,
+            usages,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let key_box = lower_expr(ctx, base_key)?;
+            let derived_algo_box = lower_expr(ctx, derived_key_algorithm)?;
+            let extractable_box = lower_expr(ctx, extractable)?;
+            let usages_box = lower_expr(ctx, usages)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_derive_key",
+                &[
+                    (DOUBLE, &algo_box),
+                    (DOUBLE, &key_box),
+                    (DOUBLE, &derived_algo_box),
+                    (DOUBLE, &extractable_box),
+                    (DOUBLE, &usages_box),
                 ],
             );
             Ok(nanbox_pointer_inline(blk, &promise))

@@ -450,6 +450,59 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("console", "profile")
             | ("console", "profileEnd")
             | ("console", "timeStamp")
+            | ("crypto", "createHash")
+            | ("crypto", "Hash")
+            | ("crypto", "createSign")
+            | ("crypto", "Sign")
+            | ("crypto", "createVerify")
+            | ("crypto", "Verify")
+            | ("crypto", "ECDH")
+            | ("crypto", "createECDH")
+            | ("crypto", "createDiffieHellman")
+            | ("crypto", "createDiffieHellmanGroup")
+            | ("crypto", "getDiffieHellman")
+            | ("crypto", "createPrivateKey")
+            | ("crypto", "createPublicKey")
+            | ("crypto", "generateKeyPairSync")
+            | ("crypto", "generateKeyPair")
+            | ("crypto", "generateKeySync")
+            | ("crypto", "generateKey")
+            | ("crypto", "createHmac")
+            | ("crypto", "Hmac")
+            | ("crypto", "pbkdf2Sync")
+            | ("crypto", "pbkdf2")
+            | ("crypto", "hash")
+            | ("crypto", "hkdfSync")
+            | ("crypto", "hkdf")
+            | ("crypto", "scryptSync")
+            | ("crypto", "scrypt")
+            | ("crypto", "timingSafeEqual")
+            | ("crypto", "sign")
+            | ("crypto", "verify")
+            | ("crypto", "publicEncrypt")
+            | ("crypto", "privateDecrypt")
+            | ("crypto", "privateEncrypt")
+            | ("crypto", "publicDecrypt")
+            | ("crypto", "getHashes")
+            | ("crypto", "getCiphers")
+            | ("crypto", "getCipherInfo")
+            | ("crypto", "getCurves")
+            | ("crypto", "getFips")
+            | ("crypto", "setFips")
+            | ("crypto", "secureHeapUsed")
+            | ("crypto", "randomBytes")
+            | ("crypto", "randomUUID")
+            | ("crypto", "randomInt")
+            | ("crypto", "generatePrime")
+            | ("crypto", "generatePrimeSync")
+            | ("crypto", "checkPrime")
+            | ("crypto", "checkPrimeSync")
+            | ("crypto", "randomFill")
+            | ("crypto", "randomFillSync")
+            | ("crypto", "getRandomValues")
+            | ("crypto", "createCipheriv")
+            | ("crypto", "createDecipheriv")
+            | ("crypto", "createSecretKey")
     )
 }
 
@@ -526,6 +579,13 @@ pub extern "C" fn js_class_method_bind(
     crate::closure::js_closure_set_capture_f64(closure, 0, instance);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 2, method_name_len as i64);
+    if !method_name_ptr.is_null() && method_name_len > 0 {
+        if let Ok(name) = unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
+        } {
+            set_bound_native_closure_name(closure, name);
+        }
+    }
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
