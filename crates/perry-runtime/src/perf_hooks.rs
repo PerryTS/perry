@@ -217,7 +217,10 @@ unsafe fn option_detail_bits(options_obj: *const crate::object::ObjectHeader) ->
     if v.is_undefined() {
         JSValue::null().bits()
     } else {
-        v.bits()
+        // Node structured-clones `detail`, so the stored value deep-equals the
+        // input but is a distinct reference (mutating the original afterward
+        // doesn't affect the entry).
+        crate::builtins::js_structured_clone(f64::from_bits(v.bits())).to_bits()
     }
 }
 

@@ -44,18 +44,6 @@
     "category": "bug-open",
     "reason": "node:perf_hooks: performance.nodeTiming (PerformanceNodeTiming) unimplemented (not an object). Flips to PASS when #1337 lands."
   },
-  "node-suite/perf_hooks/mark/detail-structured-clone": {
-    "issue": "1340",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: mark detail is not structured-cloned (m.detail === input instead of a distinct deep-equal copy). Flips to PASS when #1340 lands."
-  },
-  "node-suite/perf_hooks/measure/detail-structured-clone": {
-    "issue": "1340",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: measure detail is not structured-cloned (same root as mark — #1340 covers both). Flips to PASS when #1340 lands."
-  },
   "node-suite/perf_hooks/entry/to-json": {
     "issue": "1387",
     "added": "2026-05-22",
