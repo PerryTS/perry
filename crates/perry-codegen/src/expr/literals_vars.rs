@@ -143,6 +143,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             n if is_global_this_builtin_function_name(n) => Some("function"),
                             _ => None,
                         }
+                    } else if let Expr::NativeModuleRef(module) = object.as_ref() {
+                        // #1343: `typeof <nativeModule>.<member>` (e.g.
+                        // `typeof crypto.randomBytes`, `typeof process.cwd`).
+                        // A method is only addressable through the call-
+                        // dispatch arms, so reading it as a plain value yields
+                        // the module's `0.0` stub and `js_value_typeof` reports
+                        // "undefined"/"number". Short-circuit only methods and
+                        // exported classes to "function". Properties fall
+                        // through (`None`): their value is materialized for
+                        // real, so the generic typeof already reports the right
+                        // primitive/object kind (`process.pid` → "number",
+                        // `os.EOL` → "string", `crypto.constants` → "object").
+                        match perry_api_manifest::module_has_symbol(module, property) {
+                            Some(e)
+                                if matches!(
+                                    e.kind,
+                                    perry_api_manifest::ApiKind::Method { .. }
+                                        | perry_api_manifest::ApiKind::Class
+                                ) =>
+                            {
+                                Some("function")
+                            }
+                            _ => None,
+                        }
                     } else {
                         // Refs #915 (gap 2 from #899): `typeof C.staticMethod`
                         // where `C` is `Expr::ClassRef` or a `LocalGet`
