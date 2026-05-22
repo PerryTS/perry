@@ -1065,7 +1065,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_crypto_md5", I64, &[I64]);
     module.declare_function("js_crypto_hmac_sha256", I64, &[I64, I64]);
     module.declare_function("js_crypto_hmac_sha256_bytes", I64, &[I64, I64]);
-    module.declare_function("js_crypto_pbkdf2_bytes", I64, &[I64, I64, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_crypto_pbkdf2_bytes",
+        I64,
+        &[I64, I64, DOUBLE, DOUBLE, I64],
+    );
     module.declare_function("js_crypto_random_bytes_buffer", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_uuid", I64, &[]);
     // crypto.randomInt([min,] max) -> number; codegen passes min=0 for the

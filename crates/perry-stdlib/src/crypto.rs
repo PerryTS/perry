@@ -501,23 +501,47 @@ pub unsafe extern "C" fn js_crypto_hmac_sha256_bytes(
     alloc_buffer_from_slice(&digest)
 }
 
-/// PBKDF2-HMAC-SHA-256 returning a Buffer. Counterpart of
-/// `crypto.pbkdf2Sync(password, salt, iterations, keylen, 'sha256')`.
+/// PBKDF2-HMAC returning a Buffer. Counterpart of
+/// `crypto.pbkdf2Sync(password, salt, iterations, keylen, digest)`.
 /// Accepts string or Buffer for both password and salt.
+///
+/// `digest_ptr` is the NaN-unboxed pointer to the digest-algorithm string
+/// (`'sha256'`, `'sha512'`, …). A null/empty/unknown digest defaults to
+/// SHA-256 — the algorithm SCRAM and the previous callers relied on. The
+/// digest was silently ignored before, so `pbkdf2Sync(..., 'sha512')`
+/// produced a SHA-256 key (#1355).
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_pbkdf2_bytes(
     password_ptr: i64,
     salt_ptr: i64,
     iterations: f64,
     keylen: f64,
+    digest_ptr: i64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
     use pbkdf2::pbkdf2_hmac;
+    use sha2::{Sha224, Sha384};
     let password = bytes_from_ptr(password_ptr);
     let salt = bytes_from_ptr(salt_ptr);
     let iter = iterations as u32;
     let klen = keylen as usize;
     let mut out = vec![0u8; klen];
-    pbkdf2_hmac::<Sha256>(&password, &salt, iter, &mut out);
+    // Resolve the digest algorithm. `digest_ptr` may be a null/sentinel
+    // pointer (no arg passed) — fall back to SHA-256 in that case.
+    let digest = if (digest_ptr as usize) < 0x1000 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&bytes_from_ptr(digest_ptr))
+            .to_ascii_lowercase()
+            .replace('-', "")
+    };
+    match digest.as_str() {
+        "sha1" => pbkdf2_hmac::<Sha1>(&password, &salt, iter, &mut out),
+        "sha224" => pbkdf2_hmac::<Sha224>(&password, &salt, iter, &mut out),
+        "sha384" => pbkdf2_hmac::<Sha384>(&password, &salt, iter, &mut out),
+        "sha512" => pbkdf2_hmac::<Sha512>(&password, &salt, iter, &mut out),
+        // "sha256" and the empty/unknown default.
+        _ => pbkdf2_hmac::<Sha256>(&password, &salt, iter, &mut out),
+    }
     alloc_buffer_from_slice(&out)
 }
 

@@ -574,11 +574,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
 
-        // crypto.pbkdf2Sync(password, salt, iterations, keylen, algorithm) -> Buffer.
-        // Only SHA-256 is wired through right now — that's what SCRAM needs.
-        // The `algorithm` arg is validated at runtime but ignored by codegen;
-        // callers that need non-SHA256 fall through to the generic path and
-        // get an empty Buffer back.
+        // crypto.pbkdf2Sync(password, salt, iterations, keylen, digest) -> Buffer.
+        // The digest algorithm (sha256/sha512/sha224/sha384/sha1) is passed
+        // through to the runtime so non-SHA256 keys derive correctly (#1355).
+        // An absent digest arg passes a null pointer; the runtime defaults to
+        // SHA-256 (what SCRAM relies on).
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
@@ -595,13 +595,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let salt_box = lower_expr(ctx, &args[1])?;
             let iter_box = lower_expr(ctx, &args[2])?;
             let keylen_box = lower_expr(ctx, &args[3])?;
-            // Ignore the digest algorithm arg for now — the FFI is SHA-256 only.
-            if args.len() >= 5 {
-                let _ = lower_expr(ctx, &args[4])?;
-            }
+            let digest_box = if args.len() >= 5 {
+                Some(lower_expr(ctx, &args[4])?)
+            } else {
+                None
+            };
             let blk = ctx.block();
             let pwd_handle = unbox_to_i64(blk, &pwd_box);
             let salt_handle = unbox_to_i64(blk, &salt_box);
+            let digest_handle = match &digest_box {
+                Some(b) => unbox_to_i64(blk, b),
+                None => "0".to_string(),
+            };
             let buf_handle = blk.call(
                 I64,
                 "js_crypto_pbkdf2_bytes",
@@ -610,6 +615,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (I64, &salt_handle),
                     (DOUBLE, &iter_box),
                     (DOUBLE, &keylen_box),
+                    (I64, &digest_handle),
                 ],
             );
             Ok(nanbox_pointer_inline(blk, &buf_handle))
