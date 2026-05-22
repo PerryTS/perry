@@ -129,7 +129,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // keep hash before net to avoid changing the priority of in-registry
     // matches relative to the v0.5.98/#88 ordering.
     #[cfg(feature = "crypto")]
-    if matches!(method_name, "update" | "digest")
+    if matches!(method_name, "update" | "digest" | "copy")
         && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hash(handle, method_name, &args);

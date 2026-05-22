@@ -974,6 +974,38 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
                 f64::from_bits(0x7FFF_0000_0000_0000u64 | ((s as u64) & 0x0000_FFFF_FFFF_FFFF))
             }
         }
+        // `hash.copy()` (#1369) — return an independent Hash whose internal
+        // state is a snapshot of this one, so the two can be `.update()`d and
+        // `.digest()`ed separately. The RustCrypto hashers are `Clone`. An
+        // already-digested hash (state taken) yields undefined, mirroring the
+        // error a caller would hit using a finalized hash. The optional
+        // `outputLength` arg only applies to XOF hashes (shake*), which Perry
+        // doesn't expose, so it is ignored.
+        "copy" => {
+            let cloned = {
+                let guard = h.state.lock().unwrap();
+                match guard.as_ref() {
+                    Some(HashState::Sha1(x)) => Some(HashState::Sha1(x.clone())),
+                    Some(HashState::Sha224(x)) => Some(HashState::Sha224(x.clone())),
+                    Some(HashState::Sha256(x)) => Some(HashState::Sha256(x.clone())),
+                    Some(HashState::Sha384(x)) => Some(HashState::Sha384(x.clone())),
+                    Some(HashState::Sha512(x)) => Some(HashState::Sha512(x.clone())),
+                    Some(HashState::Md5(x)) => Some(HashState::Md5(x.clone())),
+                    None => None,
+                }
+            };
+            match cloned {
+                Some(state) => {
+                    let new_handle: Handle = register_handle(HashHandle {
+                        state: std::sync::Mutex::new(Some(state)),
+                    });
+                    f64::from_bits(
+                        0x7FFD_0000_0000_0000u64 | ((new_handle as u64) & 0x0000_FFFF_FFFF_FFFF),
+                    )
+                }
+                None => f64::from_bits(0x7FFC_0000_0000_0001),
+            }
+        }
         _ => f64::from_bits(0x7FFC_0000_0000_0001),
     }
 }
