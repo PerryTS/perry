@@ -1687,5 +1687,29 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/flags/readable-aborted": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: readable.readableAborted getter — returns wrong value after destroy(err). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/writable-finished": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: writable.writableFinished getter — does not flip true on 'finish' event. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/compose/instance-method": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.prototype.compose(stream) instance method — not yet exposed (only free compose() works). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/readable-readable": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: readable.readable boolean — initial value or post-end value mismatches Node. Flips to PASS when #1531 lands."
   }
 }
