@@ -1687,5 +1687,11 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/iter-helpers/map-returns-readable": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: readable.map() returns iterable but not a Readable instance — `instanceof Readable` is false. Flips to PASS when #1558 lands."
   }
 }
