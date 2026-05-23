@@ -621,6 +621,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                         | "dlopen"
                                         | "hasUncaughtExceptionCaptureCallback"
                                         | "setUncaughtExceptionCaptureCallback"
+                                        | "loadEnvFile"
                                 )
                                 && ctx.lookup_local("process").is_none()
                             {

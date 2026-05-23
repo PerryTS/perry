@@ -150,6 +150,17 @@ pub(super) fn try_native_module_methods(
                             // is a no-op returning undefined.
                             return Ok(Ok(Expr::Undefined));
                         }
+                        "loadEnvFile" => {
+                            // #1399: process.loadEnvFile(path?) (Node 20.12+)
+                            // reads a `.env` file from disk and adds its
+                            // KEY=value entries to process.env. Perry today
+                            // doesn't persist `process.env.X = v` writes
+                            // (#1344) so eagerly loading would be moot;
+                            // returning undefined is the closest no-op for
+                            // call sites that probe-and-call. Real `.env`
+                            // loading is tracked separately.
+                            return Ok(Ok(Expr::Undefined));
+                        }
                         "exit" => {
                             // process.exit() / process.exit(code) — never
                             // returns, terminates the process. Until now this
