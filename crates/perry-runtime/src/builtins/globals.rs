@@ -144,6 +144,44 @@ pub extern "C" fn js_decode_uri_component(value: f64) -> i64 {
 // structuredClone
 // ============================================================
 
+// Cycle-detection state for `js_structured_clone` (#1512). Tracks the source
+// pointers currently mid-clone on this thread. On re-entry for a pointer
+// already in the set, we return the original value rather than recursing
+// — that breaks the spec's "preserve reference identity" guarantee but
+// keeps cycles from infinite-recursing into a stack overflow, which is
+// what previously caused `performance.mark("n", { detail: o.self = o })`
+// to crash. Full reference-identity preservation would need a src→dst
+// map; deferred until a real user-facing need surfaces.
+thread_local! {
+    static STRUCTURED_CLONE_IN_PROGRESS: std::cell::RefCell<std::collections::HashSet<usize>>
+        = std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+fn structured_clone_seen(ptr: usize) -> bool {
+    STRUCTURED_CLONE_IN_PROGRESS.with(|set| set.borrow().contains(&ptr))
+}
+
+fn structured_clone_mark(ptr: usize) {
+    STRUCTURED_CLONE_IN_PROGRESS.with(|set| {
+        set.borrow_mut().insert(ptr);
+    });
+}
+
+fn structured_clone_unmark(ptr: usize) {
+    STRUCTURED_CLONE_IN_PROGRESS.with(|set| {
+        set.borrow_mut().remove(&ptr);
+    });
+}
+
+/// RAII guard that unmarks a pointer from the in-progress set when dropped,
+/// even on early returns from `js_structured_clone`'s POINTER_TAG branches.
+struct CloneCycleGuard(usize);
+impl Drop for CloneCycleGuard {
+    fn drop(&mut self) {
+        structured_clone_unmark(self.0);
+    }
+}
+
 /// structuredClone(value) -> deep-cloned value
 /// Handles numbers (pass-through), strings (copy), arrays/objects (shallow for now)
 #[no_mangle]
@@ -188,6 +226,15 @@ pub extern "C" fn js_structured_clone(value: f64) -> f64 {
             if (ptr as usize) < 0x10000 {
                 return value;
             }
+            // #1512: short-circuit on cycle so `o.self = o` doesn't infinite-
+            // recurse. The cycle edge resolves to the original value, not
+            // the clone — that breaks full reference-identity preservation
+            // but keeps cycles from stack-overflowing the runtime.
+            if structured_clone_seen(ptr as usize) {
+                return value;
+            }
+            structured_clone_mark(ptr as usize);
+            let _guard = CloneCycleGuard(ptr as usize);
             // Set is tracked in SET_REGISTRY (not GC_TYPE_SET since it has
             // no GC header). Check the registry BEFORE touching the GC
             // header bytes — they'd be garbage for raw-allocated sets.

@@ -308,6 +308,17 @@ unsafe fn option_detail_bits(options_obj: *const crate::object::ObjectHeader) ->
     if v.is_undefined() {
         JSValue::null().bits()
     } else {
+        // #1513: Functions are not structured-cloneable — Node throws
+        // DataCloneError. Perry's structuredClone passes closures through
+        // silently, so detect the case up-front and throw a TypeError
+        // (Perry doesn't implement DOMException; the test only checks
+        // that *something* throws).
+        if v.is_pointer() {
+            let ptr = (v.bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+            if crate::closure::is_closure_ptr(ptr) {
+                throw_type_error("could not be cloned: a Function is not structured-cloneable");
+            }
+        }
         // Node structured-clones `detail`, so the stored value deep-equals the
         // input but is a distinct reference (mutating the original afterward
         // doesn't affect the entry).

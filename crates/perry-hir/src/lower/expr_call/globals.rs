@@ -574,12 +574,7 @@ pub(super) fn try_global_builtins(
             if module_name == "fs" {
                 match func_name {
                     "readFileSync" => {
-                        if args.len() >= 2 {
-                            // readFileSync(path, encoding) — returns string
-                            return Ok(Ok(Expr::FsReadFileSync(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        } else if args.len() == 1 {
+                        if args.len() == 1 {
                             // readFileSync(path) without encoding — returns Buffer (Node parity)
                             return Ok(Ok(Expr::FsReadFileBinary(Box::new(
                                 args.into_iter().next().unwrap(),
@@ -587,7 +582,7 @@ pub(super) fn try_global_builtins(
                         }
                     }
                     "writeFileSync" => {
-                        if args.len() >= 2 {
+                        if args.len() == 2 {
                             let mut iter = args.into_iter();
                             let path = iter.next().unwrap();
                             let content = iter.next().unwrap();
@@ -605,7 +600,7 @@ pub(super) fn try_global_builtins(
                         }
                     }
                     "mkdirSync" => {
-                        if !args.is_empty() {
+                        if args.len() == 1 {
                             return Ok(Ok(Expr::FsMkdirSync(Box::new(
                                 args.into_iter().next().unwrap(),
                             ))));
@@ -619,7 +614,7 @@ pub(super) fn try_global_builtins(
                         }
                     }
                     "appendFileSync" => {
-                        if args.len() >= 2 {
+                        if args.len() == 2 {
                             let mut iter = args.into_iter();
                             let path = iter.next().unwrap();
                             let content = iter.next().unwrap();
@@ -644,13 +639,7 @@ pub(super) fn try_global_builtins(
                         }
                     }
                     // Issue #648 fallout: see twin arm above.
-                    "rmSync" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::FsRmRecursive(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                    }
+                    "rmSync" => {}
                     _ => {} // Fall through
                 }
             }

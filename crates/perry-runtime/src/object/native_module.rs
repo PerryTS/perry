@@ -367,6 +367,95 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("os", "loadavg")
             | ("os", "machine")
             | ("os", "version")
+            | ("fs", "accessSync")
+            | ("fs", "access")
+            | ("fs", "appendFile")
+            | ("fs", "appendFileSync")
+            | ("fs", "chmodSync")
+            | ("fs", "chmod")
+            | ("fs", "chownSync")
+            | ("fs", "chown")
+            | ("fs", "copyFile")
+            | ("fs", "copyFileSync")
+            | ("fs", "cp")
+            | ("fs", "cpSync")
+            | ("fs", "createReadStream")
+            | ("fs", "createWriteStream")
+            | ("fs", "existsSync")
+            | ("fs", "exists")
+            | ("fs", "closeSync")
+            | ("fs", "close")
+            | ("fs", "fdatasync")
+            | ("fs", "fdatasyncSync")
+            | ("fs", "fstatSync")
+            | ("fs", "fstat")
+            | ("fs", "fsync")
+            | ("fs", "fsyncSync")
+            | ("fs", "fchmod")
+            | ("fs", "fchmodSync")
+            | ("fs", "fchown")
+            | ("fs", "fchownSync")
+            | ("fs", "futimes")
+            | ("fs", "futimesSync")
+            | ("fs", "ftruncate")
+            | ("fs", "ftruncateSync")
+            | ("fs", "glob")
+            | ("fs", "globSync")
+            | ("fs", "linkSync")
+            | ("fs", "link")
+            | ("fs", "lchown")
+            | ("fs", "lchownSync")
+            | ("fs", "lutimes")
+            | ("fs", "lutimesSync")
+            | ("fs", "mkdir")
+            | ("fs", "mkdirSync")
+            | ("fs", "mkdtempSync")
+            | ("fs", "mkdtemp")
+            | ("fs", "openSync")
+            | ("fs", "open")
+            | ("fs", "opendir")
+            | ("fs", "opendirSync")
+            | ("fs", "readFile")
+            | ("fs", "readFileSync")
+            | ("fs", "read")
+            | ("fs", "readSync")
+            | ("fs", "readlinkSync")
+            | ("fs", "readlink")
+            | ("fs", "readvSync")
+            | ("fs", "readdir")
+            | ("fs", "readdirSync")
+            | ("fs", "realpathSync")
+            | ("fs", "realpath")
+            | ("fs", "rename")
+            | ("fs", "renameSync")
+            | ("fs", "rm")
+            | ("fs", "rmSync")
+            | ("fs", "rmdirSync")
+            | ("fs", "rmdir")
+            | ("fs", "symlinkSync")
+            | ("fs", "symlink")
+            | ("fs", "stat")
+            | ("fs", "lstat")
+            | ("fs", "statfs")
+            | ("fs", "statfsSync")
+            | ("fs", "statSync")
+            | ("fs", "lstatSync")
+            | ("fs", "truncateSync")
+            | ("fs", "truncate")
+            | ("fs", "unlink")
+            | ("fs", "unlinkSync")
+            | ("fs", "utimes")
+            | ("fs", "utimesSync")
+            | ("fs", "watch")
+            | ("fs", "watchFile")
+            | ("fs", "unwatchFile")
+            | ("fs", "writeFile")
+            | ("fs", "writeFileSync")
+            | ("fs", "write")
+            | ("fs", "writeSync")
+            | ("fs", "writev")
+            | ("fs", "writevSync")
+            | ("fs", "readv")
             // node:perf_hooks — the `performance` object's methods, read as
             // values (`typeof performance.mark === "function"`, `const m =
             // performance.mark`). The call form is statically lowered in
@@ -390,6 +479,12 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // the property must still read as a function for
             // feature-detection (`typeof X === "function"`) wrappers.
             | ("perf_hooks", "markResourceTiming")
+            // #1335: performance.timerify(fn) wraps `fn` to record a
+            // 'function' timeline entry per call. Perry currently
+            // returns `fn` unchanged (no entry recorded), but the
+            // property must still read as a function for
+            // feature-detection.
+            | ("perf_hooks", "timerify")
             | ("perf_hooks", "PerformanceObserver")
             | ("perf_hooks", "PerformanceEntry")
             | ("perf_hooks", "PerformanceMark")
@@ -1466,7 +1561,9 @@ unsafe fn create_fs_constants_object() -> f64 {
         return f64::from_bits(cached);
     }
 
-    // POSIX file-access constants
+    // POSIX file-access/open/copy/mode constants mirrored from Node's
+    // fs.constants surface. Keep this in sync with `fs_const` above so
+    // both `fs.constants.X` and destructured constant reads agree.
     let field_names: &[&str] = &[
         "F_OK",
         "R_OK",
@@ -1476,7 +1573,22 @@ unsafe fn create_fs_constants_object() -> f64 {
         "O_WRONLY",
         "O_RDWR",
         "O_NOFOLLOW",
+        "O_CREAT",
+        "O_TRUNC",
+        "O_APPEND",
+        "O_EXCL",
         "COPYFILE_EXCL",
+        "COPYFILE_FICLONE",
+        "COPYFILE_FICLONE_FORCE",
+        "S_IRUSR",
+        "S_IWUSR",
+        "S_IXUSR",
+        "S_IRGRP",
+        "S_IWGRP",
+        "S_IXGRP",
+        "S_IROTH",
+        "S_IWOTH",
+        "S_IXOTH",
     ];
     let o_nofollow: f64 = {
         #[cfg(target_os = "macos")]
@@ -1493,10 +1605,30 @@ unsafe fn create_fs_constants_object() -> f64 {
         }
     };
     let field_values: &[f64] = &[
-        0.0, 4.0, 2.0, 1.0, // F_OK, R_OK, W_OK, X_OK
-        0.0, 1.0, 2.0,        // O_RDONLY, O_WRONLY, O_RDWR
-        o_nofollow, // O_NOFOLLOW
-        1.0,        // COPYFILE_EXCL
+        0.0,
+        4.0,
+        2.0,
+        1.0, // F_OK, R_OK, W_OK, X_OK
+        0.0,
+        1.0,
+        2.0,          // O_RDONLY, O_WRONLY, O_RDWR
+        o_nofollow,   // O_NOFOLLOW
+        0x200 as f64, // O_CREAT
+        0x400 as f64, // O_TRUNC
+        0x8 as f64,   // O_APPEND
+        0x800 as f64, // O_EXCL
+        1.0,
+        2.0,
+        4.0, // COPYFILE_*
+        0o400 as f64,
+        0o200 as f64,
+        0o100 as f64, // S_I*USR
+        0o040 as f64,
+        0o020 as f64,
+        0o010 as f64, // S_I*GRP
+        0o004 as f64,
+        0o002 as f64,
+        0o001 as f64, // S_I*OTH
     ];
 
     // Build null-separated packed keys: "F_OK\0R_OK\0..."

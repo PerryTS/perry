@@ -8,12 +8,6 @@
       "reason": "Free-text explanation. Keep the most-actionable signal first — what changes the verdict (a fixture, a Perry fix, a Node spec change)."
     }
   },
-  "node-suite/perf_hooks/timerify/timerify": {
-    "issue": "1335",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: performance.timerify(fn) unimplemented (not a function). Flips to PASS when #1335 lands."
-  },
   "node-suite/perf_hooks/histogram/monitor-event-loop-delay": {
     "issue": "1336",
     "added": "2026-05-22",
@@ -259,18 +253,6 @@
     "added": "2026-05-15",
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:dns/promises` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
-  "test_parity_fs": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:fs` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
-  "test_parity_fs_promises": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:fs/promises` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_http": {
     "issue": "793",

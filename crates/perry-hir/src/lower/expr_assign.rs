@@ -288,6 +288,30 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                         }
                     }
                 }
+                // #1350: process.exitCode = v. Route directly through
+                // the runtime setter so the read side
+                // (`process.exitCode` → `js_process_exit_code_get`)
+                // sees the assigned value. The setter returns its
+                // argument so the assignment expression yields the RHS,
+                // matching JS semantics. Bypasses the generic
+                // PropertySet → js_object_set_field_by_name path which
+                // would silently drop the write — same shape as the
+                // ProcessEnv assignment fix (#1344).
+                if obj_name == "process" && ctx.lookup_local("process").is_none() {
+                    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                        if prop_ident.sym.as_ref() == "exitCode" {
+                            return Ok(Expr::Call {
+                                callee: Box::new(Expr::ExternFuncRef {
+                                    name: "js_process_exit_code_set".to_string(),
+                                    param_types: vec![perry_types::Type::Number],
+                                    return_type: perry_types::Type::Number,
+                                }),
+                                args: vec![*value],
+                                type_args: vec![],
+                            });
+                        }
+                    }
+                }
             }
 
             // Issue #838: JS-classic prototype-method assignment.

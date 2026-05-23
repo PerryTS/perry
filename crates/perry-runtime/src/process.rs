@@ -499,6 +499,42 @@ pub extern "C" fn js_getenv_value(name_ptr: *const StringHeader) -> f64 {
     f64::from_bits(val.bits())
 }
 
+// ─── #1350: process.exitCode (default undefined + set/get) ────────────────────
+//
+// Node lets user code stash an exit code that `process.exit()` (no arg)
+// will use as the final code. Reads start `undefined`; writes coerce
+// the value to a number-like and stash it. We back this with a single
+// thread-local cell holding the NaN-boxed bits, default-initialised to
+// `JSValue::undefined()`'s bit pattern.
+
+thread_local! {
+    static PROCESS_EXIT_CODE: std::cell::Cell<u64> =
+        std::cell::Cell::new(crate::value::JSValue::undefined().bits());
+}
+
+/// `process.exitCode` value-read. Returns the last value assigned, or
+/// `undefined` if nothing has been set.
+#[no_mangle]
+pub extern "C" fn js_process_exit_code_get() -> f64 {
+    let bits = PROCESS_EXIT_CODE.with(|c| c.get());
+    f64::from_bits(bits)
+}
+
+/// `process.exitCode = v`. Stores the raw NaN-boxed bits verbatim so
+/// the read round-trips byte-for-byte — Node forwards e.g. the string
+/// `"0"` as a string and only coerces when `process.exit()` runs.
+///
+/// Returns `value` so the call site can use it as the result of the
+/// assignment expression (JS assignment evaluates to the RHS value).
+/// That keeps the codegen path uniform with other `js_*` runtime
+/// helpers that return f64 — see `lower_call/extern_func.rs:330` for
+/// the direct-call path.
+#[no_mangle]
+pub extern "C" fn js_process_exit_code_set(value: f64) -> f64 {
+    PROCESS_EXIT_CODE.with(|c| c.set(value.to_bits()));
+    value
+}
+
 /// Set an environment variable. Backs `process.env.X = v` (#1344).
 ///
 /// Reads via `js_getenv_value` already hit `std::env::var`, so writing
