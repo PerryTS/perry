@@ -314,12 +314,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:stream` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_stream_promises": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:stream/promises` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_stream_web": {
     "issue": "793",
     "added": "2026-05-15",
@@ -518,12 +512,6 @@
     "category": "bug-open",
     "reason": "node:stream: Writable does not invoke its write() option callback / finish event. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/imports/promises-ns": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: stream.promises namespace is undefined (used for `await pipeline()` / `await finished()`). Flips to PASS when #1533 lands."
-  },
   "node-suite/stream/static/readable-is-disturbed": {
     "issue": "1534",
     "added": "2026-05-23",
@@ -643,12 +631,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: pipeline with intermediate transform doesn't propagate data → end. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/promises/pipeline-await": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: stream/promises pipeline await doesn't resolve correctly (depends on streams + promises ns). Flips to PASS when #1533 lands."
   },
   "node-suite/stream/webstream/readable-to-web": {
     "issue": "1540",
@@ -1082,12 +1064,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline for already-ended source doesn't invoke callback. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/promises/pipeline-rejects-on-error": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/promises: pipeline doesn't reject with the underlying Error. Flips to PASS when #1533 lands."
-  },
   "node-suite/stream/readable/async-iterator-symbol": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1435,18 +1411,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: re-piping after unpipe does not flow / sink does not end. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/promises/finished-with-signal": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/promises: finished with signal does not reject on abort. Flips to PASS when #1533 lands."
-  },
-  "node-suite/stream/promises/pipeline-with-signal": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/promises: pipeline with signal does not reject on abort. Flips to PASS when #1533 lands."
   },
   "node-suite/stream/readable/no-options-defaults": {
     "issue": "1531",

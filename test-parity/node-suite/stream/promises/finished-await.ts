@@ -4,5 +4,6 @@ import { finished } from "node:stream/promises";
 // completion.
 const p = new PassThrough();
 p.end("done");
+p.resume();
 await finished(p);
 console.log("resolved cleanly");

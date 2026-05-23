@@ -26,8 +26,8 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::closure::{
     js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call_array,
-    js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_register_closure_arity,
-    ClosureHeader,
+    js_closure_get_capture_f64, js_closure_get_capture_ptr, js_closure_set_capture_f64,
+    js_closure_set_capture_ptr, js_register_closure_arity, ClosureHeader,
 };
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
@@ -451,14 +451,208 @@ thunk!(
     "node:readline/promises.Readline is not yet implemented in Perry (tracked by issue #793)."
 );
 
-thunk!(
-    thunk_streamP_pipeline,
-    "node:stream/promises.pipeline is not yet implemented in Perry (tracked by issue #793)."
-);
-thunk!(
-    thunk_streamP_finished,
-    "node:stream/promises.finished is not yet implemented in Perry (tracked by issue #793)."
-);
+#[inline]
+fn undefined_value() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[inline]
+fn value_from_ptr(ptr: *const u8) -> f64 {
+    f64::from_bits(JSValue::pointer(ptr).bits())
+}
+
+#[inline]
+fn raw_ptr_from_value(value: f64) -> usize {
+    let bits = value.to_bits();
+    let jsval = JSValue::from_bits(bits);
+    if jsval.is_pointer() || jsval.is_string() || jsval.is_bigint() {
+        return (bits & crate::value::POINTER_MASK) as usize;
+    }
+    if bits != 0 && bits < 0x0001_0000_0000_0000 {
+        return bits as usize;
+    }
+    0
+}
+
+#[inline]
+unsafe fn gc_type_for_ptr(raw: usize) -> Option<u8> {
+    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let gc_type = (*header).obj_type;
+    if gc_type <= crate::gc::GC_TYPE_MAX {
+        Some(gc_type)
+    } else {
+        None
+    }
+}
+
+fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
+    let raw = raw_ptr_from_value(value);
+    if raw < 0x10000 || crate::buffer::is_registered_buffer(raw) {
+        return None;
+    }
+    unsafe {
+        if gc_type_for_ptr(raw) != Some(crate::gc::GC_TYPE_OBJECT) {
+            return None;
+        }
+    }
+    Some(raw as *mut ObjectHeader)
+}
+
+fn get_object_property(value: f64, name: &[u8]) -> Option<f64> {
+    let obj = object_ptr_from_value(value)?;
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, key);
+    if JSValue::from_bits(value.to_bits()).is_undefined() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn options_signal(options: f64) -> Option<f64> {
+    let jsval = JSValue::from_bits(options.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        return None;
+    }
+    get_object_property(options, b"signal")
+}
+
+fn signal_aborted(signal: f64) -> bool {
+    get_object_property(signal, b"aborted").is_some_and(|v| crate::value::js_is_truthy(v) != 0)
+}
+
+fn abort_error_value() -> f64 {
+    let msg = b"AbortError";
+    let header = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_error_new_with_message(header);
+    value_from_ptr(err as *const u8)
+}
+
+fn signal_reason(signal: f64) -> f64 {
+    match get_object_property(signal, b"reason") {
+        Some(reason) if !JSValue::from_bits(reason.to_bits()).is_undefined() => reason,
+        _ => abort_error_value(),
+    }
+}
+
+extern "C" fn stream_promises_abort_listener(closure: *const ClosureHeader) -> f64 {
+    let promise_value = js_closure_get_capture_f64(closure, 0);
+    let signal = js_closure_get_capture_f64(closure, 1);
+    let promise =
+        crate::value::js_nanbox_get_pointer(promise_value) as *mut crate::promise::Promise;
+    crate::promise::js_promise_reject(promise, signal_reason(signal));
+    undefined_value()
+}
+
+fn promise_value_from_ptr(promise: *mut crate::promise::Promise) -> f64 {
+    value_from_ptr(promise as *const u8)
+}
+
+fn register_abort_listener(signal: f64, promise: *mut crate::promise::Promise) {
+    let Some(signal_obj) = object_ptr_from_value(signal) else {
+        return;
+    };
+    let closure = js_closure_alloc(stream_promises_abort_listener as *const u8, 2);
+    js_closure_set_capture_f64(closure, 0, promise_value_from_ptr(promise));
+    js_closure_set_capture_f64(closure, 1, signal);
+    let event = b"abort";
+    let event_str = js_string_from_bytes(event.as_ptr(), event.len() as u32);
+    let event_value = f64::from_bits(JSValue::string_ptr(event_str).bits());
+    let listener_value = value_from_ptr(closure as *const u8);
+    crate::url::js_abort_signal_add_listener(signal_obj, event_value, listener_value);
+}
+
+fn pending_abortable_promise(signal: f64) -> f64 {
+    let promise = crate::promise::js_promise_new();
+    register_abort_listener(signal, promise);
+    promise_value_from_ptr(promise)
+}
+
+fn invoke_destination_method(destination: f64, method: &[u8], args: &[f64]) -> f64 {
+    let Some(func) = get_object_property(destination, method) else {
+        return undefined_value();
+    };
+    let prev_this = crate::object::js_implicit_this_set(destination);
+    let result = unsafe { crate::closure::js_native_call_value(func, args.as_ptr(), args.len()) };
+    crate::object::js_implicit_this_set(prev_this);
+    result
+}
+
+fn write_chunks_to_destination(destination: f64, chunks: &[f64]) {
+    let undef = undefined_value();
+    for chunk in chunks {
+        let args = [*chunk, undef];
+        let _ = invoke_destination_method(destination, b"write", &args);
+    }
+    let end_args = [undef];
+    let _ = invoke_destination_method(destination, b"end", &end_args);
+}
+
+extern "C" fn thunk_streamP_pipeline(
+    _closure: *const ClosureHeader,
+    source: f64,
+    destination: f64,
+    options: f64,
+) -> f64 {
+    let signal = options_signal(options);
+    if let Some(signal) = signal {
+        if signal_aborted(signal) {
+            return promise_rejected(signal_reason(signal));
+        }
+    }
+
+    match crate::node_stream::js_node_stream_readable_chunks_result(source) {
+        Err(err) => promise_rejected(err),
+        Ok(Some(chunks)) => {
+            write_chunks_to_destination(destination, &chunks);
+            if let Some(signal) = signal {
+                if signal_aborted(signal) {
+                    return promise_rejected(signal_reason(signal));
+                }
+            }
+            promise_undefined()
+        }
+        Ok(None) => {
+            if let Some(signal) = signal {
+                pending_abortable_promise(signal)
+            } else if let Some(err) =
+                crate::node_stream::js_node_stream_hidden_error_after_read(source)
+            {
+                promise_rejected(err)
+            } else {
+                promise_undefined()
+            }
+        }
+    }
+}
+
+extern "C" fn thunk_streamP_finished(
+    _closure: *const ClosureHeader,
+    stream: f64,
+    options: f64,
+) -> f64 {
+    if let Some(signal) = options_signal(options) {
+        if signal_aborted(signal) {
+            return promise_rejected(signal_reason(signal));
+        }
+        if let Some(err) = crate::node_stream::js_node_stream_hidden_error_after_read(stream) {
+            return promise_rejected(err);
+        }
+        if crate::node_stream::js_node_stream_is_stub_ended_after_read(stream) {
+            return promise_undefined();
+        }
+        return pending_abortable_promise(signal);
+    }
+
+    if let Some(err) = crate::node_stream::js_node_stream_hidden_error_after_read(stream) {
+        promise_rejected(err)
+    } else {
+        promise_undefined()
+    }
+}
 
 fn buffer_from_bytes(
     bytes: &[u8],
@@ -905,11 +1099,11 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "pipeline",
-                thunk: ExportThunk::Fn1(thunk_streamP_pipeline),
+                thunk: ExportThunk::Fn3(thunk_streamP_pipeline),
             },
             ExportSpec {
                 name: "finished",
-                thunk: ExportThunk::Fn1(thunk_streamP_finished),
+                thunk: ExportThunk::Fn2(thunk_streamP_finished),
             },
         ],
     },
@@ -1096,6 +1290,14 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
             crate::object::js_object_set_field_by_name(obj, name_header, value_f64);
         }
     }
+    if submod.key == "stream_promises" {
+        let value = value_from_ptr(obj as *const u8);
+        let name = b"default";
+        let name_header = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        unsafe {
+            crate::object::js_object_set_field_by_name(obj, name_header, value);
+        }
+    }
     NAMESPACE_SINGLETONS.with(|m| {
         m.borrow_mut().insert(key, obj);
     });
@@ -1201,7 +1403,7 @@ pub(crate) fn test_node_submodule_roots() -> (usize, usize, usize) {
 // bytes from emitted IR (already produced as `private constant
 // [N x i8]` arrays via `emit_string_literal`).
 
-/// Returns a NaN-boxed function singleton for the given
+/// Returns a NaN-boxed export singleton for the given
 /// `(submodule, export)` pair. Falls back to NaN-boxed `TAG_TRUE`
 /// (preserving the pre-#841 sentinel) if no matching entry is found —
 /// this keeps any not-yet-listed export's behavior unchanged, so
@@ -1233,6 +1435,10 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
         Some(s) => s,
         None => return f64::from_bits(JSValue::bool(true).bits()),
     };
+    if submod.key == "stream_promises" && name == "default" {
+        let obj = ensure_namespace_singleton(submod);
+        return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    }
     let export = match find_export(submod, name) {
         Some(e) => e,
         None => return f64::from_bits(JSValue::bool(true).bits()),
@@ -1243,7 +1449,7 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
 
 /// Returns a NaN-boxed namespace stub object for the given submodule.
 /// Each known named export of that submodule is exposed as an own
-/// property on the object whose value is the function singleton
+/// property on the object whose value is the export singleton
 /// produced by `js_node_submodule_export_as_function`. Falls back to
 /// `js_unresolved_namespace_stub` (the empty-object stub Perry already
 /// hands out for unknown namespace imports) if `submod_key` doesn't
@@ -1273,6 +1479,7 @@ pub unsafe extern "C" fn js_node_submodule_namespace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     #[test]
     fn known_submodules_have_at_least_one_export() {
@@ -1324,5 +1531,194 @@ mod tests {
                 required
             );
         }
+    }
+
+    fn boxed_ptr(ptr: *const u8) -> f64 {
+        f64::from_bits(JSValue::pointer(ptr).bits())
+    }
+
+    fn promise_ptr(value: f64) -> *mut crate::promise::Promise {
+        crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise
+    }
+
+    fn string_value(s: &str) -> f64 {
+        let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    }
+
+    #[test]
+    fn stream_parent_promises_property_exposes_namespace() {
+        let value = unsafe {
+            crate::object::js_native_module_property_by_name(
+                b"stream".as_ptr(),
+                "stream".len(),
+                b"promises".as_ptr(),
+                "promises".len(),
+            )
+        };
+        let ns = object_ptr_from_value(value).expect("stream.promises should be an object");
+        assert!(get_object_property(boxed_ptr(ns as *const u8), b"pipeline").is_some());
+        assert!(get_object_property(boxed_ptr(ns as *const u8), b"finished").is_some());
+    }
+
+    #[test]
+    fn stream_promises_default_export_exposes_namespace() {
+        let value = unsafe {
+            js_node_submodule_export_as_function(
+                b"stream_promises".as_ptr(),
+                "stream_promises".len() as u32,
+                b"default".as_ptr(),
+                "default".len() as u32,
+            )
+        };
+        let ns = object_ptr_from_value(value).expect("default export should be an object");
+        let ns_value = boxed_ptr(ns as *const u8);
+
+        assert!(get_object_property(ns_value, b"pipeline").is_some());
+        assert!(get_object_property(ns_value, b"finished").is_some());
+        assert_eq!(
+            get_object_property(ns_value, b"default").unwrap().to_bits(),
+            ns_value.to_bits()
+        );
+    }
+
+    #[test]
+    fn stream_promises_finished_resolves_for_clean_stub_stream() {
+        let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 1);
+        assert_eq!(
+            crate::promise::js_promise_value(promise).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+    }
+
+    #[test]
+    fn stream_promises_finished_rejects_hidden_stream_error() {
+        let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+        let err = abort_error_value();
+        crate::node_stream::test_set_hidden_error(stream, err);
+
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 2);
+        assert_eq!(
+            crate::promise::js_promise_reason(promise).to_bits(),
+            err.to_bits()
+        );
+    }
+
+    thread_local! {
+        static PIPELINE_CAPTURED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    extern "C" fn pipeline_write_capture(
+        _closure: *const ClosureHeader,
+        chunk: f64,
+        _enc: f64,
+    ) -> f64 {
+        PIPELINE_CAPTURED.with(|captured| {
+            captured
+                .borrow_mut()
+                .push(string_from_value(chunk).unwrap_or_default());
+        });
+        f64::from_bits(crate::value::TAG_TRUE)
+    }
+
+    extern "C" fn pipeline_end_capture(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+        undefined_value()
+    }
+
+    #[test]
+    fn stream_promises_pipeline_transfers_readable_from_chunks() {
+        PIPELINE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+        crate::closure::js_register_closure_arity(pipeline_write_capture as *const u8, 2);
+        crate::closure::js_register_closure_arity(pipeline_end_capture as *const u8, 1);
+
+        let mut arr = crate::array::js_array_alloc(2);
+        arr = crate::array::js_array_push_f64(arr, string_value("await-"));
+        arr = crate::array::js_array_push_f64(arr, string_value("works"));
+        let source = crate::node_stream::js_node_stream_readable_from(boxed_ptr(arr as *const u8));
+
+        let sink = js_object_alloc(0, 2);
+        let write = js_closure_alloc(pipeline_write_capture as *const u8, 0);
+        let end = js_closure_alloc(pipeline_end_capture as *const u8, 0);
+        js_object_set_field_by_name(
+            sink,
+            js_string_from_bytes(b"write".as_ptr(), 5),
+            boxed_ptr(write as *const u8),
+        );
+        js_object_set_field_by_name(
+            sink,
+            js_string_from_bytes(b"end".as_ptr(), 3),
+            boxed_ptr(end as *const u8),
+        );
+
+        let promise_value = thunk_streamP_pipeline(
+            std::ptr::null(),
+            source,
+            boxed_ptr(sink as *const u8),
+            undefined_value(),
+        );
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 1);
+        PIPELINE_CAPTURED.with(|captured| {
+            assert_eq!(captured.borrow().join(""), "await-works");
+        });
+    }
+
+    #[test]
+    fn stream_promises_finished_rejects_when_signal_aborts() {
+        let controller = crate::url::js_abort_controller_new();
+        let signal = crate::url::js_abort_controller_signal(controller);
+        let opts = js_object_alloc(0, 1);
+        js_object_set_field_by_name(
+            opts,
+            js_string_from_bytes(b"signal".as_ptr(), 6),
+            boxed_ptr(signal as *const u8),
+        );
+        let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+
+        let promise_value =
+            thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));
+        let promise = promise_ptr(promise_value);
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        crate::url::js_abort_controller_abort(controller);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 2);
+    }
+
+    #[test]
+    fn stream_promises_finished_with_signal_resolves_for_ended_stub_stream() {
+        let controller = crate::url::js_abort_controller_new();
+        let signal = crate::url::js_abort_controller_signal(controller);
+        let opts = js_object_alloc(0, 1);
+        js_object_set_field_by_name(
+            opts,
+            js_string_from_bytes(b"signal".as_ptr(), 6),
+            boxed_ptr(signal as *const u8),
+        );
+        let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+        let end = get_object_property(stream, b"end").expect("stream.end should exist");
+        let prev_this = crate::object::js_implicit_this_set(stream);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
+        }
+        crate::object::js_implicit_this_set(prev_this);
+
+        let promise_value =
+            thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 1);
+        assert_eq!(
+            crate::promise::js_promise_value(promise).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
     }
 }
