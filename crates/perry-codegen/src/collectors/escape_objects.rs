@@ -436,6 +436,7 @@ pub fn check_object_literal_escapes_in_expr(
         | Expr::ProcessPid | Expr::ProcessPpid
         | Expr::ProcessVersion | Expr::ProcessVersions | Expr::ProcessHrtimeBigint
         | Expr::ProcessHrtime(_)
+        | Expr::ProcessTitle
         | Expr::ProcessStdin | Expr::ProcessStdout | Expr::ProcessStderr
         | Expr::ProcessEnv
         | Expr::GlobalThisExpr

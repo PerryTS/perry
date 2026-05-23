@@ -34,12 +34,7 @@ pub(super) fn try_module_static_methods(
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
                         "readFileSync" => {
-                            if args.len() >= 2 {
-                                // readFileSync(path, encoding) — returns string
-                                return Ok(Ok(Expr::FsReadFileSync(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            } else if args.len() == 1 {
+                            if args.len() == 1 {
                                 // readFileSync(path) without encoding — returns Buffer (Node parity)
                                 return Ok(Ok(Expr::FsReadFileBinary(Box::new(
                                     args.into_iter().next().unwrap(),
@@ -47,7 +42,7 @@ pub(super) fn try_module_static_methods(
                             }
                         }
                         "writeFileSync" => {
-                            if args.len() >= 2 {
+                            if args.len() == 2 {
                                 let mut iter = args.into_iter();
                                 let path = iter.next().unwrap();
                                 let content = iter.next().unwrap();
@@ -58,7 +53,7 @@ pub(super) fn try_module_static_methods(
                             }
                         }
                         "appendFileSync" => {
-                            if args.len() >= 2 {
+                            if args.len() == 2 {
                                 let mut iter = args.into_iter();
                                 let path = iter.next().unwrap();
                                 let content = iter.next().unwrap();
@@ -76,7 +71,7 @@ pub(super) fn try_module_static_methods(
                             }
                         }
                         "mkdirSync" => {
-                            if !args.is_empty() {
+                            if args.len() == 1 {
                                 return Ok(Ok(Expr::FsMkdirSync(Box::new(
                                     args.into_iter().next().unwrap(),
                                 ))));
@@ -111,13 +106,7 @@ pub(super) fn try_module_static_methods(
                         // `{recursive,force,maxRetries,retryDelay}` opts arg is
                         // ignored — `js_fs_rm_recursive` already does recursive
                         // removal unconditionally.
-                        "rmSync" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::FsRmRecursive(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
-                        }
+                        "rmSync" => {}
                         _ => {} // Fall through to generic handling
                     }
                 }
@@ -863,17 +852,18 @@ pub(super) fn try_module_static_methods(
             if is_crypto_module {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
+                    // #1434: keep the named-import + dotted form on one
+                    // shared lowering path for the methods whose shape
+                    // matches between sites.
+                    if super::crypto::is_passthrough_method(method_name) {
+                        if let Some(expr) = super::crypto::lower_crypto_passthrough(
+                            method_name,
+                            std::mem::take(&mut args),
+                        ) {
+                            return Ok(Ok(expr));
+                        }
+                    }
                     match method_name {
-                        "randomBytes" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::CryptoRandomBytes(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
-                        }
-                        "randomUUID" => {
-                            return Ok(Ok(Expr::CryptoRandomUUID));
-                        }
                         "sha256" => {
                             if !args.is_empty() {
                                 return Ok(Ok(Expr::CryptoSha256(Box::new(
@@ -907,27 +897,10 @@ pub(super) fn try_module_static_methods(
                                 }));
                             }
                         }
-                        // `crypto.randomFillSync(buf, offset?, size?)`
-                        // — fills `buf` in-place with random bytes
-                        // and returns it. Handles BufferHeader and
-                        // TypedArrayHeader (Uint8Array, Uint32Array,
-                        // etc — axios uses Uint32Array). The
-                        // offset/size args are optional; absent
-                        // values lower as Undefined and the runtime
-                        // treats them as 0 / full-length.
-                        "randomFillSync" => {
-                            if !args.is_empty() {
-                                let mut iter = args.into_iter();
-                                let buffer = iter.next().unwrap();
-                                let offset = iter.next().unwrap_or(Expr::Undefined);
-                                let size = iter.next().unwrap_or(Expr::Undefined);
-                                return Ok(Ok(Expr::CryptoRandomFillSync {
-                                    buffer: Box::new(buffer),
-                                    offset: Box::new(offset),
-                                    size: Box::new(size),
-                                }));
-                            }
-                        }
+                        // `crypto.randomBytes` / `randomUUID` /
+                        // `randomFillSync` are handled by the shared
+                        // `crypto::lower_crypto_passthrough` above —
+                        // see #1434.
                         _ => {} // Fall through to generic handling
                     }
                 }

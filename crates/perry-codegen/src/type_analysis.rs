@@ -127,6 +127,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // hit the string method fast path.
         | Expr::ProcessVersion
         | Expr::ProcessCwd
+        | Expr::ProcessTitle
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
@@ -852,6 +853,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         }
         | Expr::ProcessVersion
         | Expr::ProcessCwd
+        | Expr::ProcessTitle
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
@@ -1004,6 +1006,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // through to the generic native method dispatch and returns undefined.
         Expr::ProcessVersion
         | Expr::ProcessCwd
+        | Expr::ProcessTitle
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform

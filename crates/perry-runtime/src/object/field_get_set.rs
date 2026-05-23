@@ -1194,6 +1194,34 @@ pub extern "C" fn js_object_get_field_by_name(
                         }
                         return JSValue::from_bits(crate::js_nanbox_pointer(errs as i64).to_bits());
                     }
+                    b"syscall" => {
+                        // Node attaches `syscall` to system-call errors
+                        // (open/stat/access/…). Perry's fs helpers register
+                        // the value in a side table keyed by the message
+                        // StringHeader (parallel to the `.code` path).
+                        let msg = crate::error::js_error_get_message(err_ptr);
+                        if let Some(syscall) =
+                            crate::node_submodules::error_syscall_for_message(msg)
+                        {
+                            let s = crate::string::js_string_from_bytes(
+                                syscall.as_ptr(),
+                                syscall.len() as u32,
+                            );
+                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                        }
+                        return JSValue::undefined();
+                    }
+                    b"path" => {
+                        let msg = crate::error::js_error_get_message(err_ptr);
+                        if let Some(path) = crate::node_submodules::error_path_for_message(msg) {
+                            let s = crate::string::js_string_from_bytes(
+                                path.as_ptr(),
+                                path.len() as u32,
+                            );
+                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                        }
+                        return JSValue::undefined();
+                    }
                     _ => return JSValue::undefined(),
                 }
             }

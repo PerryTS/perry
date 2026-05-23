@@ -469,10 +469,10 @@ pub enum Expr {
     ProcessCpuUsage(Option<Box<Expr>>), // process.cpuUsage(prior?) -> { user, system } µs (diff if prior given)
     ProcessResourceUsage, // process.resourceUsage() -> {userCPUTime, maxRSS, ...} (#1376)
     ProcessActiveResourcesInfo, // process.getActiveResourcesInfo() -> string[] (#1376)
-    // process.stdin -> stub object { write: fn }
-    ProcessStdin,
-    // process.stdout -> stub object { write: fn }
-    ProcessStdout,
+    ProcessTitle,         // process.title getter (#1401)
+    ProcessSetTitle(Box<Expr>), // process.title = X setter (#1401)
+    ProcessStdin,         // process.stdin -> stub object { write: fn }
+    ProcessStdout,        // process.stdout -> stub object { write: fn }
     // process.stderr -> stub object { write: fn }
     ProcessStderr,
     // process.stdin.setRawMode(enabled) -> stdin (#347 Phase 2)

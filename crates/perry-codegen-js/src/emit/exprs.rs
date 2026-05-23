@@ -543,6 +543,14 @@ impl JsEmitter {
                 }
                 self.output.push_str(") : [0, 0])");
             }
+            Expr::ProcessTitle => {
+                self.output.push_str("(typeof process !== 'undefined' ? process.title : '')");
+            }
+            Expr::ProcessSetTitle(value) => {
+                self.output.push_str("(typeof process !== 'undefined' ? (process.title = ");
+                self.emit_expr(value);
+                self.output.push_str(") : undefined)");
+            }
             Expr::ProcessNextTick { callback, args } => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.nextTick(");
                 self.emit_expr(callback);

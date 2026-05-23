@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1114 entries across 80 modules.
+Total: 1174 entries across 80 modules.
 
 ## Modules
 
@@ -600,35 +600,95 @@ Total: 1114 entries across 80 modules.
 
 ### Methods
 
+- `access` — module
 - `accessSync` — module
 - `appendFile` — module
 - `appendFileSync` — module
+- `chmod` — module
 - `chmodSync` — module
+- `chown` — module
+- `chownSync` — module
+- `close` — module
+- `closeSync` — module
+- `copyFile` — module
 - `copyFileSync` — module
+- `cp` — module
+- `cpSync` — module
 - `createReadStream` — module
 - `createWriteStream` — module
+- `exists` — module
 - `existsSync` — module
+- `fchmod` — module
+- `fchmodSync` — module
+- `fchown` — module
+- `fchownSync` — module
+- `fdatasync` — module
+- `fdatasyncSync` — module
+- `fstat` — module
+- `fstatSync` — module
+- `fsync` — module
+- `fsyncSync` — module
+- `ftruncate` — module
+- `ftruncateSync` — module
+- `futimes` — module
+- `futimesSync` — module
+- `glob` — module
+- `globSync` — module
+- `lchown` — module
+- `lchownSync` — module
+- `link` — module
+- `linkSync` — module
+- `lstat` — module
 - `lstatSync` — module
+- `lutimes` — module
+- `lutimesSync` — module
 - `mkdir` — module
 - `mkdirSync` — module
+- `mkdtemp` — module
 - `mkdtempSync` — module
+- `open` — module
+- `openSync` — module
+- `opendir` — module
+- `opendirSync` — module
+- `read` — module
 - `readFile` — module
 - `readFileSync` — module
+- `readSync` — module
 - `readdir` — module
 - `readdirSync` — module
+- `readlink` — module
+- `readlinkSync` — module
+- `readv` — module
+- `readvSync` — module
+- `realpath` — module
 - `realpathSync` — module
+- `rename` — module
 - `renameSync` — module
 - `rm` — module
 - `rmSync` — module
+- `rmdir` — module
 - `rmdirSync` — module
 - `stat` — module
 - `statSync` — module
+- `statfs` — module
+- `statfsSync` — module
+- `symlink` — module
+- `symlinkSync` — module
+- `truncate` — module
+- `truncateSync` — module
 - `unlink` — module
 - `unlinkSync` — module
 - `unwatchFile` — module
+- `utimes` — module
+- `utimesSync` — module
+- `watch` — module
 - `watchFile` — module
+- `write` — module
 - `writeFile` — module
 - `writeFileSync` — module
+- `writeSync` — module
+- `writev` — module
+- `writevSync` — module
 
 ### Properties
 

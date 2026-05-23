@@ -129,6 +129,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .call(DOUBLE, "js_process_hrtime", &[(DOUBLE, &prior_val)]))
         }
 
+        // -------- process.title getter/setter (#1401) --------
+        Expr::ProcessTitle => Ok(ctx.block().call(DOUBLE, "js_process_title", &[])),
+        Expr::ProcessSetTitle(value) => {
+            let v = lower_expr(ctx, value)?;
+            ctx.block()
+                .call_void("js_process_set_title", &[(DOUBLE, &v)]);
+            Ok(v)
+        }
+
         // -------- RegExpExecIndex — reads thread-local from the last exec() call --------
         Expr::RegExpExecIndex => Ok(ctx.block().call(DOUBLE, "js_regexp_exec_get_index", &[])),
 

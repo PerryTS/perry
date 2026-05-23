@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1114 entries across 80 modules
+// Coverage: 1174 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -473,39 +473,131 @@ declare module "fs" {
   /** stdlib */
   export const promises: any;
   /** stdlib */
+  export function access(...args: any[]): any;
+  /** stdlib */
   export function accessSync(...args: any[]): any;
   /** stdlib */
   export function appendFile(...args: any[]): any;
   /** stdlib */
   export function appendFileSync(...args: any[]): any;
   /** stdlib */
+  export function chmod(...args: any[]): any;
+  /** stdlib */
   export function chmodSync(...args: any[]): any;
   /** stdlib */
+  export function chown(...args: any[]): any;
+  /** stdlib */
+  export function chownSync(...args: any[]): any;
+  /** stdlib */
+  export function close(...args: any[]): any;
+  /** stdlib */
+  export function closeSync(...args: any[]): any;
+  /** stdlib */
+  export function copyFile(...args: any[]): any;
+  /** stdlib */
   export function copyFileSync(...args: any[]): any;
+  /** stdlib */
+  export function cp(...args: any[]): any;
+  /** stdlib */
+  export function cpSync(...args: any[]): any;
   /** stdlib */
   export function createReadStream(...args: any[]): any;
   /** stdlib */
   export function createWriteStream(...args: any[]): any;
   /** stdlib */
+  export function exists(...args: any[]): any;
+  /** stdlib */
   export function existsSync(...args: any[]): any;
   /** stdlib */
+  export function fchmod(...args: any[]): any;
+  /** stdlib */
+  export function fchmodSync(...args: any[]): any;
+  /** stdlib */
+  export function fchown(...args: any[]): any;
+  /** stdlib */
+  export function fchownSync(...args: any[]): any;
+  /** stdlib */
+  export function fdatasync(...args: any[]): any;
+  /** stdlib */
+  export function fdatasyncSync(...args: any[]): any;
+  /** stdlib */
+  export function fstat(...args: any[]): any;
+  /** stdlib */
+  export function fstatSync(...args: any[]): any;
+  /** stdlib */
+  export function fsync(...args: any[]): any;
+  /** stdlib */
+  export function fsyncSync(...args: any[]): any;
+  /** stdlib */
+  export function ftruncate(...args: any[]): any;
+  /** stdlib */
+  export function ftruncateSync(...args: any[]): any;
+  /** stdlib */
+  export function futimes(...args: any[]): any;
+  /** stdlib */
+  export function futimesSync(...args: any[]): any;
+  /** stdlib */
+  export function glob(...args: any[]): any;
+  /** stdlib */
+  export function globSync(...args: any[]): any;
+  /** stdlib */
+  export function lchown(...args: any[]): any;
+  /** stdlib */
+  export function lchownSync(...args: any[]): any;
+  /** stdlib */
+  export function link(...args: any[]): any;
+  /** stdlib */
+  export function linkSync(...args: any[]): any;
+  /** stdlib */
+  export function lstat(...args: any[]): any;
+  /** stdlib */
   export function lstatSync(...args: any[]): any;
+  /** stdlib */
+  export function lutimes(...args: any[]): any;
+  /** stdlib */
+  export function lutimesSync(...args: any[]): any;
   /** stdlib */
   export function mkdir(...args: any[]): any;
   /** stdlib */
   export function mkdirSync(...args: any[]): any;
   /** stdlib */
+  export function mkdtemp(...args: any[]): any;
+  /** stdlib */
   export function mkdtempSync(...args: any[]): any;
+  /** stdlib */
+  export function open(...args: any[]): any;
+  /** stdlib */
+  export function openSync(...args: any[]): any;
+  /** stdlib */
+  export function opendir(...args: any[]): any;
+  /** stdlib */
+  export function opendirSync(...args: any[]): any;
+  /** stdlib */
+  export function read(...args: any[]): any;
   /** stdlib */
   export function readFile(...args: any[]): any;
   /** stdlib */
   export function readFileSync(...args: any[]): any;
   /** stdlib */
+  export function readSync(...args: any[]): any;
+  /** stdlib */
   export function readdir(...args: any[]): any;
   /** stdlib */
   export function readdirSync(...args: any[]): any;
   /** stdlib */
+  export function readlink(...args: any[]): any;
+  /** stdlib */
+  export function readlinkSync(...args: any[]): any;
+  /** stdlib */
+  export function readv(...args: any[]): any;
+  /** stdlib */
+  export function readvSync(...args: any[]): any;
+  /** stdlib */
+  export function realpath(...args: any[]): any;
+  /** stdlib */
   export function realpathSync(...args: any[]): any;
+  /** stdlib */
+  export function rename(...args: any[]): any;
   /** stdlib */
   export function renameSync(...args: any[]): any;
   /** stdlib */
@@ -513,11 +605,25 @@ declare module "fs" {
   /** stdlib */
   export function rmSync(...args: any[]): any;
   /** stdlib */
+  export function rmdir(...args: any[]): any;
+  /** stdlib */
   export function rmdirSync(...args: any[]): any;
   /** stdlib */
   export function stat(...args: any[]): any;
   /** stdlib */
   export function statSync(...args: any[]): any;
+  /** stdlib */
+  export function statfs(...args: any[]): any;
+  /** stdlib */
+  export function statfsSync(...args: any[]): any;
+  /** stdlib */
+  export function symlink(...args: any[]): any;
+  /** stdlib */
+  export function symlinkSync(...args: any[]): any;
+  /** stdlib */
+  export function truncate(...args: any[]): any;
+  /** stdlib */
+  export function truncateSync(...args: any[]): any;
   /** stdlib */
   export function unlink(...args: any[]): any;
   /** stdlib */
@@ -525,11 +631,25 @@ declare module "fs" {
   /** stdlib */
   export function unwatchFile(...args: any[]): any;
   /** stdlib */
+  export function utimes(...args: any[]): any;
+  /** stdlib */
+  export function utimesSync(...args: any[]): any;
+  /** stdlib */
+  export function watch(...args: any[]): any;
+  /** stdlib */
   export function watchFile(...args: any[]): any;
+  /** stdlib */
+  export function write(...args: any[]): any;
   /** stdlib */
   export function writeFile(...args: any[]): any;
   /** stdlib */
   export function writeFileSync(...args: any[]): any;
+  /** stdlib */
+  export function writeSync(...args: any[]): any;
+  /** stdlib */
+  export function writev(...args: any[]): any;
+  /** stdlib */
+  export function writevSync(...args: any[]): any;
 }
 
 declare module "http" {

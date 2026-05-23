@@ -283,12 +283,134 @@ pub(crate) unsafe fn dispatch_native_module_method(
 
         // ── fs module (args are NaN-boxed f64, booleans return as i32→f64) ──
         ("fs", "existsSync") => bool_to_f64(crate::fs::js_fs_exists_sync(arg(0))),
-        ("fs", "readFileSync") => str_to_f64(crate::fs::js_fs_read_file_sync(arg(0))),
-        ("fs", "writeFileSync") => bool_to_f64(crate::fs::js_fs_write_file_sync(arg(0), arg(1))),
-        ("fs", "appendFileSync") => bool_to_f64(crate::fs::js_fs_append_file_sync(arg(0), arg(1))),
-        ("fs", "mkdirSync") => bool_to_f64(crate::fs::js_fs_mkdir_sync(arg(0))),
+        ("fs", "readFileSync") => crate::fs::js_fs_read_file_dispatch(arg(0), arg(1)),
+        ("fs", "writeFileSync") => bool_to_f64(crate::fs::js_fs_write_file_sync_options(
+            arg(0),
+            arg(1),
+            arg(2),
+        )),
+        ("fs", "appendFileSync") => bool_to_f64(crate::fs::js_fs_append_file_sync_options(
+            arg(0),
+            arg(1),
+            arg(2),
+        )),
+        ("fs", "mkdirSync") => bool_to_f64(crate::fs::js_fs_mkdir_sync_options(arg(0), arg(1))),
         ("fs", "unlinkSync") => bool_to_f64(crate::fs::js_fs_unlink_sync(arg(0))),
-        ("fs", "readdirSync") => crate::fs::js_fs_readdir_sync(arg(0), arg(1)),
+        ("fs", "rmSync") => bool_to_f64(crate::fs::js_fs_rm_recursive_options(arg(0), arg(1))),
+        ("fs", "rmdirSync") => bool_to_f64(crate::fs::js_fs_rmdir_sync_options(arg(0), arg(1))),
+        ("fs", "readdirSync") => {
+            let raw = crate::fs::js_fs_readdir_sync(arg(0), arg(1));
+            f64::from_bits(JSValue::pointer(raw.to_bits() as *const u8).bits())
+        }
+        ("fs", "statSync") => crate::fs::js_fs_stat_sync_options(arg(0), arg(1)),
+        ("fs", "lstatSync") => crate::fs::js_fs_lstat_sync_options(arg(0), arg(1)),
+        ("fs", "renameSync") => bool_to_f64(crate::fs::js_fs_rename_sync(arg(0), arg(1))),
+        ("fs", "copyFileSync") => bool_to_f64(crate::fs::js_fs_copy_file_sync_flags(
+            arg(0),
+            arg(1),
+            arg(2),
+        )),
+        ("fs", "cpSync") => bool_to_f64(crate::fs::js_fs_cp_sync_options(arg(0), arg(1), arg(2))),
+        ("fs", "accessSync") => bool_to_f64(crate::fs::js_fs_access_sync_mode(arg(0), arg(1))),
+        ("fs", "realpathSync") => crate::fs::js_fs_realpath_dispatch(arg(0), arg(1)),
+        ("fs", "mkdtempSync") => crate::fs::js_fs_mkdtemp_dispatch(arg(0), arg(1)),
+        ("fs", "chmodSync") => bool_to_f64(crate::fs::js_fs_chmod_sync(arg(0), arg(1))),
+        ("fs", "chownSync") => bool_to_f64(crate::fs::js_fs_chown_sync(arg(0), arg(1), arg(2))),
+        ("fs", "lchownSync") => bool_to_f64(crate::fs::js_fs_lchown_sync(arg(0), arg(1), arg(2))),
+        ("fs", "truncateSync") => bool_to_f64(crate::fs::js_fs_truncate_sync(arg(0), arg(1))),
+        ("fs", "ftruncateSync") => bool_to_f64(crate::fs::js_fs_ftruncate_sync(arg(0), arg(1))),
+        ("fs", "fsyncSync") => bool_to_f64(crate::fs::js_fs_fsync_sync(arg(0))),
+        ("fs", "fdatasyncSync") => bool_to_f64(crate::fs::js_fs_fdatasync_sync(arg(0))),
+        ("fs", "fchmodSync") => bool_to_f64(crate::fs::js_fs_fchmod_sync(arg(0), arg(1))),
+        ("fs", "fchownSync") => bool_to_f64(crate::fs::js_fs_fchown_sync(arg(0), arg(1), arg(2))),
+        ("fs", "fstatSync") => crate::fs::js_fs_fstat_sync_options(arg(0), arg(1)),
+        ("fs", "utimesSync") => crate::fs::js_fs_utimes_sync(arg(0), arg(1), arg(2)) as f64,
+        ("fs", "lutimesSync") => crate::fs::js_fs_lutimes_sync(arg(0), arg(1), arg(2)) as f64,
+        ("fs", "futimesSync") => crate::fs::js_fs_futimes_sync(arg(0), arg(1), arg(2)) as f64,
+        ("fs", "readvSync") => crate::fs::js_fs_readv_sync(arg(0), arg(1), arg(2)),
+        ("fs", "writevSync") => crate::fs::js_fs_writev_sync(arg(0), arg(1), arg(2)),
+        ("fs", "statfsSync") => crate::fs::js_fs_statfs_sync_options(arg(0), arg(1)),
+        ("fs", "opendirSync") => crate::fs::js_fs_opendir_sync(arg(0)),
+        ("fs", "globSync") => {
+            let raw = crate::fs::js_fs_glob_sync_options(arg(0), arg(1));
+            f64::from_bits(JSValue::pointer(raw.to_bits() as *const u8).bits())
+        }
+        ("fs", "watch") => crate::fs::js_fs_watch(arg(0), arg(1), arg(2)),
+        ("fs", "watchFile") => crate::fs::js_fs_watch_file(arg(0), arg(1), arg(2)),
+        ("fs", "unwatchFile") => crate::fs::js_fs_unwatch_file(arg(0), arg(1)),
+        ("fs", "linkSync") => bool_to_f64(crate::fs::js_fs_link_sync(arg(0), arg(1))),
+        ("fs", "symlinkSync") => bool_to_f64(crate::fs::js_fs_symlink_sync(arg(0), arg(1))),
+        ("fs", "readlinkSync") => crate::fs::js_fs_readlink_dispatch(arg(0), arg(1)),
+        ("fs", "openSync") => crate::fs::js_fs_open_sync(arg(0), arg(1)),
+        ("fs", "closeSync") => bool_to_f64(crate::fs::js_fs_close_sync(arg(0))),
+        ("fs", "readSync") if args_len == 3 => {
+            crate::fs::js_fs_read_sync_options(arg(0), arg(1), arg(2))
+        }
+        ("fs", "readSync") => crate::fs::js_fs_read_sync(arg(0), arg(1), arg(2), arg(3), arg(4)),
+        ("fs", "writeSync") if args_len >= 5 => {
+            crate::fs::js_fs_write_buffer_sync(arg(0), arg(1), arg(2), arg(3), arg(4))
+        }
+        ("fs", "writeSync") if args_len >= 3 => {
+            crate::fs::js_fs_write_sync_options_dispatch(arg(0), arg(1), arg(2))
+        }
+        ("fs", "writeSync") => crate::fs::js_fs_write_sync(arg(0), arg(1)),
+        ("fs", "read") if args_len == 4 => {
+            crate::fs::js_fs_read_callback_options(arg(0), arg(1), arg(2), arg(3))
+        }
+        ("fs", "read") => {
+            crate::fs::js_fs_read_callback(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5))
+        }
+        ("fs", "write") if args_len >= 6 => {
+            crate::fs::js_fs_write_buffer_callback(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5))
+        }
+        ("fs", "write") if args_len == 4 => {
+            crate::fs::js_fs_write_buffer_callback_options(arg(0), arg(1), arg(2), arg(3))
+        }
+        ("fs", "write") => crate::fs::js_fs_write_callback(arg(0), arg(1), arg(2)),
+        ("fs", "readv") => crate::fs::js_fs_readv_callback(arg(0), arg(1), arg(2), arg(3)),
+        ("fs", "writev") => crate::fs::js_fs_writev_callback(arg(0), arg(1), arg(2), arg(3)),
+        ("fs", "createWriteStream") => crate::fs::js_fs_create_write_stream(arg(0), arg(1)),
+        ("fs", "createReadStream") => crate::fs::js_fs_create_read_stream(arg(0), arg(1)),
+        ("fs", "readFile") => crate::fs::js_fs_read_file_callback(arg(0), arg(1), arg(2)),
+        ("fs", "writeFile") => crate::fs::js_fs_write_file_callback(arg(0), arg(1), arg(2), arg(3)),
+        ("fs", "appendFile") => {
+            crate::fs::js_fs_append_file_callback(arg(0), arg(1), arg(2), arg(3))
+        }
+        ("fs", "chmod") => crate::fs::js_fs_chmod_callback(arg(0), arg(1), arg(2)),
+        ("fs", "chown") => crate::fs::js_fs_chown_callback(arg(0), arg(1), arg(2), arg(3)),
+        ("fs", "lchown") => crate::fs::js_fs_lchown_callback(arg(0), arg(1), arg(2), arg(3)),
+        ("fs", "truncate") => crate::fs::js_fs_truncate_callback(arg(0), arg(1), arg(2)),
+        ("fs", "link") => crate::fs::js_fs_link_callback(arg(0), arg(1), arg(2)),
+        ("fs", "symlink") => crate::fs::js_fs_symlink_callback(arg(0), arg(1), arg(2), arg(3)),
+        ("fs", "readlink") => crate::fs::js_fs_readlink_callback(arg(0), arg(1), arg(2)),
+        ("fs", "realpath") => crate::fs::js_fs_realpath_callback(arg(0), arg(1), arg(2)),
+        ("fs", "mkdtemp") => crate::fs::js_fs_mkdtemp_callback(arg(0), arg(1), arg(2)),
+        ("fs", "open") => crate::fs::js_fs_open_callback(arg(0), arg(1), arg(2), arg(3)),
+        ("fs", "close") => crate::fs::js_fs_close_callback(arg(0), arg(1)),
+        ("fs", "cp") => crate::fs::js_fs_cp_callback(arg(0), arg(1), arg(2), arg(3)),
+        ("fs", "mkdir") => crate::fs::js_fs_mkdir_callback(arg(0), arg(1), arg(2)),
+        ("fs", "unlink") => crate::fs::js_fs_unlink_callback(arg(0), arg(1)),
+        ("fs", "rmdir") => crate::fs::js_fs_rmdir_callback(arg(0), arg(1), arg(2)),
+        ("fs", "rm") => crate::fs::js_fs_rm_callback(arg(0), arg(1), arg(2)),
+        ("fs", "access") => crate::fs::js_fs_access_callback(arg(0), arg(1), arg(2)),
+        ("fs", "exists") => crate::fs::js_fs_exists_callback(arg(0), arg(1)),
+        ("fs", "readdir") => crate::fs::js_fs_readdir_callback(arg(0), arg(1), arg(2)),
+        ("fs", "stat") => crate::fs::js_fs_stat_callback(arg(0), arg(1), arg(2)),
+        ("fs", "lstat") => crate::fs::js_fs_lstat_callback(arg(0), arg(1), arg(2)),
+        ("fs", "statfs") => crate::fs::js_fs_statfs_callback(arg(0), arg(1), arg(2)),
+        ("fs", "opendir") => crate::fs::js_fs_opendir_callback(arg(0), arg(1), arg(2)),
+        ("fs", "glob") => crate::fs::js_fs_glob_callback(arg(0), arg(1), arg(2)),
+        ("fs", "fstat") => crate::fs::js_fs_fstat_callback(arg(0), arg(1), arg(2)),
+        ("fs", "ftruncate") => crate::fs::js_fs_ftruncate_callback(arg(0), arg(1), arg(2)),
+        ("fs", "fsync") => crate::fs::js_fs_fsync_callback(arg(0), arg(1)),
+        ("fs", "fdatasync") => crate::fs::js_fs_fdatasync_callback(arg(0), arg(1)),
+        ("fs", "fchmod") => crate::fs::js_fs_fchmod_callback(arg(0), arg(1), arg(2)),
+        ("fs", "fchown") => crate::fs::js_fs_fchown_callback(arg(0), arg(1), arg(2), arg(3)),
+        ("fs", "utimes") => crate::fs::js_fs_utimes_callback(arg(0), arg(1), arg(2), arg(3)),
+        ("fs", "lutimes") => crate::fs::js_fs_lutimes_callback(arg(0), arg(1), arg(2), arg(3)),
+        ("fs", "futimes") => crate::fs::js_fs_futimes_callback(arg(0), arg(1), arg(2), arg(3)),
+        ("fs", "rename") => crate::fs::js_fs_rename_callback(arg(0), arg(1), arg(2)),
+        ("fs", "copyFile") => crate::fs::js_fs_copy_file_callback(arg(0), arg(1), arg(2), arg(3)),
         ("fs", "isDirectory") => bool_to_f64(crate::fs::js_fs_is_directory(arg(0))),
 
         // ── os module (no args, return string or f64) ──

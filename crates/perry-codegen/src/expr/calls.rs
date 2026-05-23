@@ -860,20 +860,50 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             match property {
                 "readFile" if !args.is_empty() => {
                     let p = lower_expr(ctx, &args[0])?;
+                    let options = if args.len() >= 2 {
+                        lower_expr(ctx, &args[1])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
                     let blk = ctx.block();
-                    let str_handle = blk.call(I64, "js_fs_read_file_sync", &[(DOUBLE, &p)]);
-                    let str_box = nanbox_string_inline(blk, &str_handle);
-                    let promise_handle =
-                        blk.call(I64, "js_promise_resolved", &[(DOUBLE, &str_box)]);
+                    let value = blk.call(
+                        DOUBLE,
+                        "js_fs_read_file_dispatch",
+                        &[(DOUBLE, &p), (DOUBLE, &options)],
+                    );
+                    let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &value)]);
                     Ok(nanbox_pointer_inline(blk, &promise_handle))
                 }
                 "writeFile" if args.len() >= 2 => {
                     let path = lower_expr(ctx, &args[0])?;
                     let content = lower_expr(ctx, &args[1])?;
+                    let options = if args.len() >= 3 {
+                        lower_expr(ctx, &args[2])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
                     let _ = ctx.block().call(
                         I32,
-                        "js_fs_write_file_sync",
-                        &[(DOUBLE, &path), (DOUBLE, &content)],
+                        "js_fs_write_file_sync_options",
+                        &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
+                    );
+                    let blk = ctx.block();
+                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
+                    Ok(nanbox_pointer_inline(blk, &promise_handle))
+                }
+                "appendFile" if args.len() >= 2 => {
+                    let path = lower_expr(ctx, &args[0])?;
+                    let content = lower_expr(ctx, &args[1])?;
+                    let options = if args.len() >= 3 {
+                        lower_expr(ctx, &args[2])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    let _ = ctx.block().call(
+                        I32,
+                        "js_fs_append_file_sync_options",
+                        &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
                     );
                     let blk = ctx.block();
                     let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
@@ -926,9 +956,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 unreachable!()
             };
             match property {
+                "readFileSync" if !args.is_empty() => {
+                    let p = lower_expr(ctx, &args[0])?;
+                    let options = if args.len() >= 2 {
+                        lower_expr(ctx, &args[1])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_read_file_dispatch",
+                        &[(DOUBLE, &p), (DOUBLE, &options)],
+                    ))
+                }
                 "statSync" if !args.is_empty() => {
                     let p = lower_expr(ctx, &args[0])?;
-                    Ok(ctx.block().call(DOUBLE, "js_fs_stat_sync", &[(DOUBLE, &p)]))
+                    let options = if args.len() >= 2 {
+                        lower_expr(ctx, &args[1])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_stat_sync_options",
+                        &[(DOUBLE, &p), (DOUBLE, &options)],
+                    ))
                 }
                 "readdirSync" if !args.is_empty() => {
                     // Runtime returns a raw ArrayHeader pointer
@@ -965,10 +1017,45 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "copyFileSync" if args.len() >= 2 => {
                     let from = lower_expr(ctx, &args[0])?;
                     let to = lower_expr(ctx, &args[1])?;
+                    let flags = if args.len() >= 3 {
+                        lower_expr(ctx, &args[2])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
                     let _ = ctx.block().call(
                         I32,
-                        "js_fs_copy_file_sync",
-                        &[(DOUBLE, &from), (DOUBLE, &to)],
+                        "js_fs_copy_file_sync_flags",
+                        &[(DOUBLE, &from), (DOUBLE, &to), (DOUBLE, &flags)],
+                    );
+                    Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+                }
+                "writeFileSync" if args.len() >= 2 => {
+                    let path = lower_expr(ctx, &args[0])?;
+                    let content = lower_expr(ctx, &args[1])?;
+                    let options = if args.len() >= 3 {
+                        lower_expr(ctx, &args[2])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    let _ = ctx.block().call(
+                        I32,
+                        "js_fs_write_file_sync_options",
+                        &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
+                    );
+                    Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+                }
+                "appendFileSync" if args.len() >= 2 => {
+                    let path = lower_expr(ctx, &args[0])?;
+                    let content = lower_expr(ctx, &args[1])?;
+                    let options = if args.len() >= 3 {
+                        lower_expr(ctx, &args[2])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    let _ = ctx.block().call(
+                        I32,
+                        "js_fs_append_file_sync_options",
+                        &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
                     );
                     Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
                 }
@@ -979,46 +1066,82 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // nearest enclosing try/catch. Returns NaN-boxed
                     // undefined on success.
                     let p = lower_expr(ctx, &args[0])?;
-                    Ok(ctx
-                        .block()
-                        .call(DOUBLE, "js_fs_access_sync_throw", &[(DOUBLE, &p)]))
+                    let mode = if args.len() >= 2 {
+                        lower_expr(ctx, &args[1])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_access_sync_throw_mode",
+                        &[(DOUBLE, &p), (DOUBLE, &mode)],
+                    ))
                 }
                 "realpathSync" if !args.is_empty() => {
                     let p = lower_expr(ctx, &args[0])?;
-                    let blk = ctx.block();
-                    let str_handle = blk.call(I64, "js_fs_realpath_sync", &[(DOUBLE, &p)]);
-                    Ok(nanbox_string_inline(blk, &str_handle))
+                    let options = if args.len() >= 2 {
+                        lower_expr(ctx, &args[1])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_realpath_dispatch",
+                        &[(DOUBLE, &p), (DOUBLE, &options)],
+                    ))
                 }
                 "mkdtempSync" if !args.is_empty() => {
                     let p = lower_expr(ctx, &args[0])?;
-                    let blk = ctx.block();
-                    let str_handle = blk.call(I64, "js_fs_mkdtemp_sync", &[(DOUBLE, &p)]);
-                    Ok(nanbox_string_inline(blk, &str_handle))
+                    let options = if args.len() >= 2 {
+                        lower_expr(ctx, &args[1])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_mkdtemp_dispatch",
+                        &[(DOUBLE, &p), (DOUBLE, &options)],
+                    ))
                 }
                 "rmdirSync" if !args.is_empty() => {
                     let p = lower_expr(ctx, &args[0])?;
-                    let _ = ctx.block().call(I32, "js_fs_rmdir_sync", &[(DOUBLE, &p)]);
+                    let options = if args.len() >= 2 {
+                        lower_expr(ctx, &args[1])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    let _ = ctx.block().call(
+                        I32,
+                        "js_fs_rmdir_sync_options",
+                        &[(DOUBLE, &p), (DOUBLE, &options)],
+                    );
                     Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
                 }
                 "createWriteStream" if !args.is_empty() => {
-                    // Lower the options arg (if any) for side effects
-                    // but ignore it — the runtime defaults to utf-8.
                     let p = lower_expr(ctx, &args[0])?;
-                    if args.len() >= 2 {
-                        let _ = lower_expr(ctx, &args[1])?;
-                    }
-                    Ok(ctx
-                        .block()
-                        .call(DOUBLE, "js_fs_create_write_stream", &[(DOUBLE, &p)]))
+                    let options = if args.len() >= 2 {
+                        lower_expr(ctx, &args[1])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_create_write_stream",
+                        &[(DOUBLE, &p), (DOUBLE, &options)],
+                    ))
                 }
                 "createReadStream" if !args.is_empty() => {
                     let p = lower_expr(ctx, &args[0])?;
-                    if args.len() >= 2 {
-                        let _ = lower_expr(ctx, &args[1])?;
-                    }
-                    Ok(ctx
-                        .block()
-                        .call(DOUBLE, "js_fs_create_read_stream", &[(DOUBLE, &p)]))
+                    let options = if args.len() >= 2 {
+                        lower_expr(ctx, &args[1])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_create_read_stream",
+                        &[(DOUBLE, &p), (DOUBLE, &options)],
+                    ))
                 }
                 "readFile" if args.len() >= 3 => {
                     // Node `fs.readFile(path, encoding, callback)` —

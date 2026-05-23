@@ -1399,6 +1399,21 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
                     }
                 }
             }
+            // #1479: native-module namespaces don't go through the
+            // class toStringTag hook (they share one synthetic
+            // class_id), so look them up by module name. Node tags
+            // `performance` as "Performance" — wire that up here so
+            // `Object.prototype.toString.call(performance)` matches.
+            if tag_str.is_none() && class_id == crate::object::native_module::NATIVE_MODULE_CLASS_ID
+            {
+                if let Some(module_name) =
+                    crate::object::native_module::read_native_module_name(obj_ptr)
+                {
+                    if let Some(tag) = native_module_to_string_tag(&module_name) {
+                        tag_str = Some(tag.to_string());
+                    }
+                }
+            }
         }
     }
     let formatted = match tag_str {
@@ -1408,6 +1423,20 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     let bytes = formatted.as_bytes();
     let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
     f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK))
+}
+
+/// #1479: Map a native-module name (as stored in the namespace
+/// ObjectHeader's field 0) to its `Symbol.toStringTag` value. Only
+/// modules whose namespace is exposed as a singleton with a defined
+/// Node tag belong here — others fall back to "Object" via the
+/// caller's `None` arm.
+fn native_module_to_string_tag(module: &str) -> Option<&'static str> {
+    match module {
+        // `Object.prototype.toString.call(performance)` is
+        // "[object Performance]" in Node.
+        "perf_hooks" => Some("Performance"),
+        _ => None,
+    }
 }
 
 /// Mark a user-defined class as extending the built-in Error class.

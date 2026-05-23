@@ -574,12 +574,7 @@ pub(super) fn try_global_builtins(
             if module_name == "fs" {
                 match func_name {
                     "readFileSync" => {
-                        if args.len() >= 2 {
-                            // readFileSync(path, encoding) — returns string
-                            return Ok(Ok(Expr::FsReadFileSync(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        } else if args.len() == 1 {
+                        if args.len() == 1 {
                             // readFileSync(path) without encoding — returns Buffer (Node parity)
                             return Ok(Ok(Expr::FsReadFileBinary(Box::new(
                                 args.into_iter().next().unwrap(),
@@ -587,7 +582,7 @@ pub(super) fn try_global_builtins(
                         }
                     }
                     "writeFileSync" => {
-                        if args.len() >= 2 {
+                        if args.len() == 2 {
                             let mut iter = args.into_iter();
                             let path = iter.next().unwrap();
                             let content = iter.next().unwrap();
@@ -605,7 +600,7 @@ pub(super) fn try_global_builtins(
                         }
                     }
                     "mkdirSync" => {
-                        if !args.is_empty() {
+                        if args.len() == 1 {
                             return Ok(Ok(Expr::FsMkdirSync(Box::new(
                                 args.into_iter().next().unwrap(),
                             ))));
@@ -619,7 +614,7 @@ pub(super) fn try_global_builtins(
                         }
                     }
                     "appendFileSync" => {
-                        if args.len() >= 2 {
+                        if args.len() == 2 {
                             let mut iter = args.into_iter();
                             let path = iter.next().unwrap();
                             let content = iter.next().unwrap();
@@ -644,13 +639,7 @@ pub(super) fn try_global_builtins(
                         }
                     }
                     // Issue #648 fallout: see twin arm above.
-                    "rmSync" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::FsRmRecursive(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                    }
+                    "rmSync" => {}
                     _ => {} // Fall through
                 }
             }
@@ -668,30 +657,15 @@ pub(super) fn try_global_builtins(
             // arm above (line ~3060) uses, so both call shapes
             // share one codegen path.
             if module_name == "crypto" {
+                if super::crypto::is_passthrough_method(func_name) {
+                    if let Some(expr) = super::crypto::lower_crypto_passthrough(
+                        func_name,
+                        std::mem::take(&mut args),
+                    ) {
+                        return Ok(Ok(expr));
+                    }
+                }
                 match func_name {
-                    "randomFillSync" => {
-                        if !args.is_empty() {
-                            let mut iter = args.into_iter();
-                            let buffer = iter.next().unwrap();
-                            let offset = iter.next().unwrap_or(Expr::Undefined);
-                            let size = iter.next().unwrap_or(Expr::Undefined);
-                            return Ok(Ok(Expr::CryptoRandomFillSync {
-                                buffer: Box::new(buffer),
-                                offset: Box::new(offset),
-                                size: Box::new(size),
-                            }));
-                        }
-                    }
-                    "randomUUID" => {
-                        return Ok(Ok(Expr::CryptoRandomUUID));
-                    }
-                    "randomBytes" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::CryptoRandomBytes(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                    }
                     // `createSecretKey(key, encoding?)` from a named
                     // import. Without this arm the call lowered to a
                     // generic NativeMethodCall with no dispatcher for
