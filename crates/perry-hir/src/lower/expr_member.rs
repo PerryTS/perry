@@ -219,6 +219,7 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     // and `.has(...)` / `.size` / `for...of` iteration
                     // all exploded.
                     "allowedNodeEnvironmentFlags" => return Ok(Expr::SetNew),
+                    "report" => return Ok(process_report_literal()),
                     _ => {}
                 }
             }
@@ -304,6 +305,7 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                         ]));
                     }
                     "allowedNodeEnvironmentFlags" => return Ok(Expr::SetNew),
+                    "report" => return Ok(process_report_literal()),
                     _ => {}
                 }
             }
@@ -1280,6 +1282,41 @@ fn is_stream_api_member(module: &str, prop: &str) -> bool {
 /// generally branch on `openssl_is_boringssl` / `quic` / `typescript`
 /// rather than rejecting any unrecognised value, so a Perry-honest
 /// shape is safer than parroting Node's.
+/// process.report — Node 22's diagnostic-report control surface
+/// (`compact` / `directory` / `filename` / `signal` and the four
+/// `reportOn*` booleans, plus `getReport` / `writeReport` methods).
+/// Perry doesn't yet generate real diagnostic reports, but the shape
+/// must be present so shape-only consumers
+/// (`typeof process.report === "object"`, `Object.keys`,
+/// `process.report.directory = "..."`) don't fall over the 0.0
+/// sentinel. Methods are exposed as `undefined`; setting writable
+/// fields silently no-ops (PropertyGet/Set on a fresh object literal
+/// — Perry's runtime doesn't track an explicit cache, matching the
+/// `process.features` pattern (#1378)).
+///
+/// See #1396.
+fn process_report_literal() -> Expr {
+    fn b(k: &str, v: bool) -> (String, Expr) {
+        (k.to_string(), Expr::Bool(v))
+    }
+    fn s(k: &str, v: &str) -> (String, Expr) {
+        (k.to_string(), Expr::String(v.to_string()))
+    }
+    Expr::Object(vec![
+        b("compact", false),
+        s("directory", ""),
+        b("excludeEnv", false),
+        b("excludeNetwork", false),
+        s("filename", ""),
+        ("getReport".to_string(), Expr::Undefined),
+        b("reportOnFatalError", false),
+        b("reportOnSignal", false),
+        b("reportOnUncaughtException", false),
+        s("signal", "SIGUSR2"),
+        ("writeReport".to_string(), Expr::Undefined),
+    ])
+}
+
 fn process_features_literal() -> Expr {
     fn b(k: &str, v: bool) -> (String, Expr) {
         (k.to_string(), Expr::Bool(v))
