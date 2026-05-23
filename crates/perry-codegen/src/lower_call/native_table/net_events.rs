@@ -387,6 +387,39 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // #1534: static introspection helpers `isDisturbed` and
+    // `isErrored`. Node exposes them on every stream class (Readable /
+    // Writable / Duplex inherit from Stream). For a freshly-constructed
+    // stream both return `false`, which matches Perry's stub state
+    // (we don't track disturbed/errored bits yet). Consumers that
+    // branch on `if (Readable.isErrored(s)) cleanup()` typecheck,
+    // don't throw, and skip the error-cleanup arm — which is the
+    // honest answer for a stream we never let actually transfer data.
+    //
+    // The directional helpers `isReadable` / `isWritable` are NOT here:
+    // Node's answer depends on the stream type (Readable returns
+    // `true` for isReadable + `null` for isWritable; Writable swaps;
+    // Duplex says `true` for both). Perry's stub doesn't carry that
+    // information at runtime, so a uniform return would lie for at
+    // least one case — kept as a follow-up under #1534.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "isDisturbed",
+        class_filter: None,
+        runtime: "js_node_stream_is_disturbed",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "isErrored",
+        class_filter: None,
+        runtime: "js_node_stream_is_errored",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Events ==========
     NativeModSig {
         module: "events",

@@ -2197,6 +2197,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // through the `Readable.foo` -> `stream.foo` route in
     // `lower_call.rs`, so the gate keys off `stream.from`.
     method("stream", "from", false, None),
+    // #1534: static introspection helpers — `Readable.isDisturbed(s)`
+    // and `Readable.isErrored(s)`. Stub returns `false` (Perry's
+    // stream stubs don't track state yet) — correct for a fresh,
+    // untouched stream. Directional helpers `isReadable`/`isWritable`
+    // are deferred (their answer depends on stream direction which
+    // Perry's stub doesn't carry at runtime yet).
+    method("stream", "isDisturbed", false, None),
+    method("stream", "isErrored", false, None),
     // EventEmitter methods on stream instances. node:stream extends
     // EventEmitter — every Readable/Writable/Duplex/Transform/PassThrough
     // exposes the full `.on('data'|'end'|'error'|'close'|...)` /

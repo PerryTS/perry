@@ -807,6 +807,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_transform_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_passthrough_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_readable_from", DOUBLE, &[DOUBLE]);
+    // #1534: static introspection helpers — always return false today.
+    module.declare_function("js_node_stream_is_disturbed", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_is_errored", DOUBLE, &[DOUBLE]);
 
     // ========== Event emitter ==========
     module.declare_function("js_event_emitter_emit", DOUBLE, &[I64, I64, I64]);

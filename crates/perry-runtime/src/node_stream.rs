@@ -278,3 +278,26 @@ pub extern "C" fn js_node_stream_passthrough_new(_opts: f64) -> f64 {
 pub extern "C" fn js_node_stream_readable_from(_iterable: f64) -> f64 {
     js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED))
 }
+
+// ─────────────────────────────────────────────────────────────────
+// #1534: static introspection helpers `Readable.isDisturbed(s)` and
+// `Readable.isErrored(s)`. Node returns booleans reflecting the
+// stream's internal state machine; Perry's stream stubs don't track
+// any of that state yet, so both return `false` — which is the
+// correct answer for a freshly-constructed, untouched stream. The
+// directional helpers `isReadable` / `isWritable` aren't here
+// because Node's answer depends on the stream's actual direction
+// (Readable returns `true` for isReadable + `null` for isWritable
+// and so on); a uniform stub would lie for at least one case, so
+// they're deferred until Perry's stream stub tracks direction.
+// ─────────────────────────────────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_is_disturbed(_stream: f64) -> f64 {
+    f64::from_bits(TAG_FALSE)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_is_errored(_stream: f64) -> f64 {
+    f64::from_bits(TAG_FALSE)
+}
