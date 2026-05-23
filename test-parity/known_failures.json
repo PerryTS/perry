@@ -374,12 +374,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:test` (built-in test runner) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_timers": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "node:timers \u2014 `import * as timers` namespace now resolves (#1213, the namespace + setTimeout/setInterval/setImmediate/clear* surface passes). Remaining gap: the Timeout/Immediate handle's instance methods (ref/unref/hasRef/refresh/close) are not implemented (typeof reports undefined vs Node's function), so this full-surface test still fails. Flips to PASS when those land. Not a regression."
-  },
   "test_parity_tls": {
     "issue": "793",
     "added": "2026-05-15",

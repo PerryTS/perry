@@ -1805,6 +1805,23 @@ pub extern "C" fn js_object_get_field_ic_miss(
     // dispatch to the per-module accessor instead of silently
     // returning undefined.
     if (obj as usize) > 0 && (obj as usize) < 0x100000 {
+        // #1213: Timeout/Immediate handle methods (ref/unref/hasRef/refresh/
+        // close) read as bound-method function values so `typeof t.ref ===
+        // "function"` holds (the call form already works via
+        // js_native_call_method). The IC fast path funnels small handles here,
+        // bypassing the identical block in `js_object_get_field_by_name`, so it
+        // must be mirrored.
+        unsafe {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            if is_timer_handle_method_key(key_bytes) && crate::timer::is_known_timer_id(obj as i64)
+            {
+                let this_f64 =
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                return super::js_class_method_bind(this_f64, key_ptr, key_len);
+            }
+        }
         // Drizzle-sqlite blocker: synth `data.constructor` for small-handle
         // receivers — IC-miss path mirror of the constructor intercept in
         // `js_object_get_field_by_name`. Refs #645 deeper followup.
