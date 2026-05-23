@@ -425,10 +425,21 @@ pub fn select_linker_command(
     } else if is_android {
         // Use Android NDK clang to produce a shared library (.so)
         let ndk_home = std::env::var("ANDROID_NDK_HOME").map_err(|_| {
-            anyhow!("ANDROID_NDK_HOME not set. Set it to your NDK path, e.g. $HOME/Library/Android/sdk/ndk/28.0.12433566")
+            anyhow!(
+                "ANDROID_NDK_HOME not set. Set it to your NDK path, e.g. \
+                 $HOME/Library/Android/sdk/ndk/28.0.12433566 (macOS), \
+                 $HOME/Android/Sdk/ndk/28.0.12433566 (Linux), or \
+                 %LOCALAPPDATA%\\Android\\Sdk\\ndk\\28.0.12433566 (Windows)"
+            )
         })?;
+        // #1508: Windows host falls through to "linux-x86_64" and points at
+        // a path that doesn't exist on the NDK. The NDK ships per-host
+        // prebuilt toolchains under `toolchains/llvm/prebuilt/<host>/`;
+        // the host tag must match the build machine, not the target.
         let host_tag = if cfg!(target_os = "macos") {
             "darwin-x86_64"
+        } else if cfg!(target_os = "windows") {
+            "windows-x86_64"
         } else {
             "linux-x86_64"
         };

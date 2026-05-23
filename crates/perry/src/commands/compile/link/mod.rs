@@ -698,8 +698,11 @@ pub(super) fn build_and_run_link(
         )
         .ok();
         let ndk_home = std::env::var("ANDROID_NDK_HOME").unwrap_or_default();
+        // #1508: see platform_cmd.rs — same host-tag bug.
         let host_tag = if cfg!(target_os = "macos") {
             "darwin-x86_64"
+        } else if cfg!(target_os = "windows") {
+            "windows-x86_64"
         } else {
             "linux-x86_64"
         };
@@ -1311,6 +1314,22 @@ pub(super) fn build_and_run_link(
                     if is_harmonyos {
                         if let Some(sdk) = super::library_search::find_harmonyos_sdk() {
                             for (k, v) in super::library_search::harmonyos_cross_env(&sdk, target) {
+                                cargo_cmd.env(k, v);
+                            }
+                        }
+                    }
+                    // #1508: For Android, do the same with the NDK so cc-rs can
+                    // compile native C deps (libsqlite3-sys / libmimalloc-sys
+                    // / etc.) using the NDK clang. Without this, cc-rs falls
+                    // back to the host `cc` and fails with
+                    // `failed to find tool "clang.exe"` on Windows (and
+                    // architecturally-mismatched objects on Unix).
+                    if is_android {
+                        if let Some(ndk) = std::env::var_os("ANDROID_NDK_HOME") {
+                            for (k, v) in super::library_search::android_cross_env(
+                                std::path::Path::new(&ndk),
+                                target,
+                            ) {
                                 cargo_cmd.env(k, v);
                             }
                         }

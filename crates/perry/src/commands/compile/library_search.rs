@@ -1007,6 +1007,66 @@ pub(super) fn find_harmonyos_sdk() -> Option<PathBuf> {
     None
 }
 
+/// Build the `CC_*` / `CXX_*` / `CARGO_TARGET_*_LINKER` env vars that
+/// point cc-rs and rustc at the Android NDK toolchain. Issue #1508 —
+/// without these, `cargo build --target aarch64-linux-android` falls
+/// back to the host `cc`, which fails outright on Windows (`clang.exe
+/// not found`) and produces architecturally-mismatched objects on Unix.
+///
+/// Mirrors `harmonyos_cross_env` below. The NDK API level is fixed at
+/// 24 (Android 7.0) — matches the existing `platform_cmd.rs` /
+/// `link/mod.rs` JNI stub compile invocations.
+pub(super) fn android_cross_env(ndk_home: &Path, target: Option<&str>) -> Vec<(String, String)> {
+    let (triple, clang_target) = match target {
+        Some("android-x86_64") => ("x86_64-linux-android", "x86_64-linux-android24"),
+        // `android` (default) is the arm64 device target.
+        _ => ("aarch64-linux-android", "aarch64-linux-android24"),
+    };
+
+    // NDK ships per-host prebuilt toolchains. Tag must match the build
+    // machine, NOT the target — Windows-host builds were falling through
+    // to `linux-x86_64` and erroring out before this fix landed.
+    let host_tag = if cfg!(target_os = "macos") {
+        "darwin-x86_64"
+    } else if cfg!(target_os = "windows") {
+        "windows-x86_64"
+    } else {
+        "linux-x86_64"
+    };
+
+    let bin = ndk_home
+        .join("toolchains")
+        .join("llvm")
+        .join("prebuilt")
+        .join(host_tag)
+        .join("bin");
+    // On Windows the NDK's wrapper scripts are `.cmd` files.
+    let ext = if cfg!(target_os = "windows") {
+        ".cmd"
+    } else {
+        ""
+    };
+    let clang = bin.join(format!("{}-clang{}", clang_target, ext));
+    let clangpp = bin.join(format!("{}-clang++{}", clang_target, ext));
+
+    let triple_upper = triple.to_uppercase().replace('-', "_");
+    let triple_under = triple.replace('-', "_");
+
+    vec![
+        (format!("CC_{}", triple), clang.display().to_string()),
+        (format!("CC_{}", triple_under), clang.display().to_string()),
+        (format!("CXX_{}", triple), clangpp.display().to_string()),
+        (
+            format!("CXX_{}", triple_under),
+            clangpp.display().to_string(),
+        ),
+        (
+            format!("CARGO_TARGET_{}_LINKER", triple_upper),
+            clang.display().to_string(),
+        ),
+    ]
+}
+
 /// Cross-compile env vars to pass to `cargo build` so `cc-rs` picks up the
 /// OHOS SDK's clang + musl sysroot for any C source in dependency build.rs
 /// scripts (notably `libmimalloc-sys`, which needs `pthread.h`).

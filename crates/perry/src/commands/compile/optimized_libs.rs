@@ -577,6 +577,18 @@ pub(super) fn build_optimized_libs(
             }
         }
     }
+    // #1508: same shape for Android — cc-rs can't find the NDK clang
+    // otherwise (silent on Unix where `clang` happens to exist, hard fail
+    // on Windows with `clang.exe not found`).
+    if matches!(target, Some("android") | Some("android-x86_64")) {
+        if let Some(ndk) = std::env::var_os("ANDROID_NDK_HOME") {
+            for (k, v) in
+                super::library_search::android_cross_env(std::path::Path::new(&ndk), target)
+            {
+                cargo_cmd.env(k, v);
+            }
+        }
+    }
     if panic_abort_safe {
         // Override the workspace profile's `panic = "unwind"` for the
         // duration of this invocation. RUSTFLAGS is the only path that
