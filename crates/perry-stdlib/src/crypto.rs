@@ -1087,6 +1087,63 @@ pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
     rand::thread_rng().gen_range(min..max) as f64
 }
 
+/// #1577: dispatcher for captured-then-called `crypto.*` methods
+/// (`const f = crypto.createHash; f("sha256")`). The runtime's native-module
+/// dispatch (`dispatch_native_module_method`) routes `("crypto", method)`
+/// here once it's registered in `js_stdlib_init_dispatch` — the runtime can't
+/// call these stdlib impls directly (perry-stdlib depends on perry-runtime).
+/// Args arrive as NaN-boxed f64s; string args are unboxed SSO-safely the same
+/// way the direct-call lowering does. Unhandled methods return undefined.
+///
+/// # Safety
+/// `method_ptr`/`args_ptr` must be valid for their stated lengths (the runtime
+/// passes the live method name and call-arg buffer).
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_native_dispatch(
+    method_ptr: *const u8,
+    method_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let undefined = f64::from_bits(JSValue::undefined().bits());
+    let method = if method_ptr.is_null() || method_len == 0 {
+        ""
+    } else {
+        std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len)).unwrap_or("")
+    };
+    let arg = |n: usize| -> f64 {
+        if n < args_len && !args_ptr.is_null() {
+            *args_ptr.add(n)
+        } else {
+            undefined
+        }
+    };
+    // SSO-safe StringHeader pointer (matches `unbox_to_i64` on the direct path).
+    let str_ptr = |n: usize| -> i64 { perry_runtime::js_get_string_pointer_unified(arg(n)) as i64 };
+    // A buffer-or-string arg's raw pointer (bytes_from_ptr handles both).
+    let bytes_ptr = |n: usize| -> i64 {
+        let v = arg(n);
+        if JSValue::from_bits(v.to_bits()).is_any_string() {
+            perry_runtime::js_get_string_pointer_unified(v) as i64
+        } else {
+            perry_runtime::js_nanbox_get_pointer(v)
+        }
+    };
+    match method {
+        "createHash" => js_crypto_create_hash(str_ptr(0)),
+        "createHmac" => js_crypto_create_hmac(str_ptr(0), bytes_ptr(1)),
+        "randomUUID" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuid()).bits()),
+        "randomBytes" => {
+            let buf = js_crypto_random_bytes_buffer(arg(0));
+            f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+        }
+        // Node: randomInt(max) → [0,max); randomInt(min,max) → [min,max).
+        "randomInt" if args_len >= 2 => js_crypto_random_int(arg(0), arg(1)),
+        "randomInt" => js_crypto_random_int(0.0, arg(0)),
+        _ => undefined,
+    }
+}
+
 /// `crypto.randomInt(min, max, callback)` callback form. The random value is
 /// generated through the synchronous helper and delivered as `(err, n)`.
 #[no_mangle]

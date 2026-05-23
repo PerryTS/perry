@@ -38,6 +38,16 @@ pub extern "C" fn js_set_handle_call_method(func: JsHandleCallMethodFn) {
     JS_HANDLE_CALL_METHOD.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Set the node:crypto module-method dispatcher (called by perry-stdlib's
+/// `js_stdlib_init_dispatch` at program startup). Lets a captured-then-called
+/// crypto method (`const f = crypto.createHash; f(...)`) reach the stdlib
+/// crypto impls — this crate can't call them directly since perry-stdlib
+/// depends on it. Stays null when stdlib isn't linked. (#1577)
+#[no_mangle]
+pub extern "C" fn js_set_native_crypto_dispatch(func: JsNativeCryptoDispatchFn) {
+    JS_NATIVE_CRYPTO_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the native module JS property loader (called by perry-jsruntime)
 /// This callback loads a native module via V8 and gets a property from it.
 #[no_mangle]

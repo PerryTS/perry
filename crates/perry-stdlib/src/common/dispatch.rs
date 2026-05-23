@@ -1309,4 +1309,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_handle_method_dispatch(js_handle_method_dispatch);
     js_register_handle_property_dispatch(js_handle_property_dispatch);
     js_register_handle_property_set_dispatch(js_handle_property_set_dispatch);
+    // #1577: route captured-then-called `crypto.*` methods (which reach the
+    // runtime's native-module dispatch) back to the stdlib crypto impls.
+    perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);
 }

@@ -108,6 +108,12 @@ pub(crate) type JsNewFromHandleV8Fn = unsafe extern "C" fn(f64, *const f64, usiz
 /// 1 = "function" (V8 callable), 0 = "object" (everything else — including arrays).
 /// Negative values reserved for future use ("symbol" = 2 if V8 ever exposes it that way).
 pub(crate) type JsHandleTypeofFn = unsafe extern "C" fn(f64) -> i32;
+/// node:crypto module-method dispatcher (registered by perry-stdlib). Takes
+/// `(method_name_ptr, method_name_len, args_ptr, args_len)` and returns the
+/// NaN-boxed result. Lets a captured-then-called crypto method reach the
+/// stdlib crypto impls, which this crate can't call directly. (#1577)
+pub(crate) type JsNativeCryptoDispatchFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 
 // ----- JS handle dispatch atomics (shared between handle.rs and consumers) -----
 
@@ -120,3 +126,4 @@ pub static JS_HANDLE_CALL_METHOD: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_
 pub static JS_NATIVE_MODULE_JS_LOADER: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NEW_FROM_HANDLE_V8: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_HANDLE_TYPEOF: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_CRYPTO_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
