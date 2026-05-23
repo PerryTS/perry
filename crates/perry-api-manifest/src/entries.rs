@@ -1859,6 +1859,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "abort", false, None),
     method("process", "umask", false, None),
     method("process", "threadCpuUsage", false, None),
+    method("process", "availableMemory", false, None),
+    method("process", "constrainedMemory", false, None),
     property("process", "argv"),
     property("process", "platform"),
     property("process", "arch"),

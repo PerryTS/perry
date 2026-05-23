@@ -144,6 +144,17 @@ pub(super) fn try_native_module_methods(
                             // accepts none).
                             return Ok(Ok(Expr::ProcessThreadCpuUsage));
                         }
+                        "availableMemory" => {
+                            // process.availableMemory() — free system memory
+                            // available to the process, in bytes.
+                            return Ok(Ok(Expr::ProcessAvailableMemory));
+                        }
+                        "constrainedMemory" => {
+                            // process.constrainedMemory() — OS-imposed memory
+                            // limit (cgroups/container), in bytes. 0 when no
+                            // limit applies.
+                            return Ok(Ok(Expr::ProcessConstrainedMemory));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }

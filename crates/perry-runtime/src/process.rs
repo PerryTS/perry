@@ -84,6 +84,54 @@ pub extern "C" fn js_process_umask_set(mask: f64) -> f64 {
     }
 }
 
+/// process.availableMemory() -> number. Free system memory available to
+/// the process in bytes. Delegates to `js_os_freemem`'s host-statistics
+/// path on macOS/iOS, sysinfo on Linux, GlobalMemoryStatusEx on Windows.
+#[no_mangle]
+pub extern "C" fn js_process_available_memory() -> f64 {
+    crate::os::js_os_freemem()
+}
+
+/// process.constrainedMemory() -> number. The memory limit imposed by the
+/// OS (cgroups v2 on Linux containers), in bytes. Returns 0 when no
+/// effective limit applies — Node also returns 0 in that case. macOS and
+/// Windows have no per-process equivalent we read here, so they always
+/// return 0.
+#[no_mangle]
+pub extern "C" fn js_process_constrained_memory() -> f64 {
+    #[cfg(target_os = "linux")]
+    {
+        // cgroups v2 reports the memory limit as a decimal number in
+        // bytes, or the literal string "max" for "no limit". Older
+        // cgroups v1 expose memory.limit_in_bytes — we try both.
+        for path in [
+            "/sys/fs/cgroup/memory.max",
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+        ] {
+            if let Ok(s) = std::fs::read_to_string(path) {
+                let s = s.trim();
+                if s == "max" {
+                    return 0.0;
+                }
+                if let Ok(v) = s.parse::<u64>() {
+                    // Kernel returns u64::MAX (or close to it) to mean
+                    // "unlimited" in cgroups v1; treat anything near that
+                    // ceiling as unconstrained.
+                    if v < (u64::MAX / 2) {
+                        return v as f64;
+                    }
+                    return 0.0;
+                }
+            }
+        }
+        0.0
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        0.0
+    }
+}
+
 /// Get an environment variable by name (takes JS string pointer)
 /// Returns a string pointer, or null (0) if not found
 #[no_mangle]

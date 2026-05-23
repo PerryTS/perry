@@ -45,6 +45,8 @@ where
         | Expr::ProcessStderr
         | Expr::ProcessAbort
         | Expr::ProcessThreadCpuUsage
+        | Expr::ProcessAvailableMemory
+        | Expr::ProcessConstrainedMemory
         | Expr::ProcessStdinIsTTY
         | Expr::ProcessStdoutIsTTY
         | Expr::ProcessStderrIsTTY

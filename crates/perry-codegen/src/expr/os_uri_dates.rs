@@ -62,6 +62,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // { user, system }.
             Ok(ctx.block().call(DOUBLE, "js_process_thread_cpu_usage", &[]))
         }
+        Expr::ProcessAvailableMemory => {
+            Ok(ctx.block().call(DOUBLE, "js_process_available_memory", &[]))
+        }
+        Expr::ProcessConstrainedMemory => {
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_process_constrained_memory", &[]))
+        }
         Expr::EncodeURI(o) => {
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();

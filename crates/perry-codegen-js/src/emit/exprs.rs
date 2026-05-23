@@ -479,6 +479,12 @@ impl JsEmitter {
             Expr::ProcessThreadCpuUsage => {
                 self.output.push_str("(typeof process !== 'undefined' && typeof process.threadCpuUsage === 'function' ? process.threadCpuUsage() : {user: 0, system: 0})");
             }
+            Expr::ProcessAvailableMemory => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.availableMemory === 'function' ? process.availableMemory() : 0)");
+            }
+            Expr::ProcessConstrainedMemory => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.constrainedMemory === 'function' ? process.constrainedMemory() : 0)");
+            }
             Expr::ProcessPid => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.pid : 0)");
             }

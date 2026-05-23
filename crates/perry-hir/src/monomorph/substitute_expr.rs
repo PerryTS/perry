@@ -285,6 +285,8 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .map(|e| Box::new(substitute_expr(e, substitutions))),
         ),
         Expr::ProcessThreadCpuUsage => Expr::ProcessThreadCpuUsage,
+        Expr::ProcessAvailableMemory => Expr::ProcessAvailableMemory,
+        Expr::ProcessConstrainedMemory => Expr::ProcessConstrainedMemory,
 
         // File system
         Expr::FsReadFileSync(path) => {
