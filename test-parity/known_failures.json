@@ -1429,5 +1429,95 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: getReader({mode:byob}) BYOB reader not implemented. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/async-iter/two-iterators-error": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: two concurrent Symbol.asyncIterator on same Readable should error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/compose/with-async-fn": {
+    "issue": "1539",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: stream.compose with async-generator middle stage does not propagate. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/destroy/destroy-during-write": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: destroy(err) inside _write callback does not propagate error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/destroy/destroy-symbol": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: destroy(symbol) does not deliver via error event. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/ee/add-listener-alias": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: addListener / off aliases do not mirror the on / removeListener counts. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/ee/set-max-listeners-infinity": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: setMaxListeners(Infinity) and (0) not honored on streams. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/empty/from-empty-array": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from([]) does not fire empty-end. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/empty/from-empty-string": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from empty string does not emit + end correctly. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/four-stage-chain": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: four-stage pipe chain does not propagate through. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/read-on-destroyed": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: read() on a destroyed Readable should return null. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/transform-stream-pipethrough": {
+    "issue": "1545",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/web: pipeThrough() returns wrong type. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/writable/end-idempotent": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: second end() call should be a no-op. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/writable/end-null-chunk": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: end() with no args does not fire finish event. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/writable/write-empty-string": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: write empty string does not reach _write with empty Buffer. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/writable/write-on-errored": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: write after destroy(err) should emit additional error. Flips to PASS when #1532 lands."
   }
 }
