@@ -1687,5 +1687,29 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/flags/writable-corked": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: writable.writableCorked counter not exposed (cork/uncork balance). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/readable-did-read": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: readable.readableDidRead getter (Node 16.7+) — not exposed. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/readable/read-size-passed-to-_read": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: user _read(size) not invoked with the size hint from the read scheduler. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/readable/unshift-with-encoding": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: readable.unshift(chunk, encoding) — second-arg encoding form not honored. Flips to PASS when #1531 lands."
   }
 }
