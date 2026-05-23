@@ -167,7 +167,9 @@ pub use object::{
     js_object_set_unboxed_f64_field, js_object_values,
 };
 pub use promise::{js_is_promise, js_promise_run_microtasks, js_promise_state, js_promise_value};
-pub use promise::{js_promise_new, js_promise_reject, js_promise_resolve, js_promise_resolved};
+pub use promise::{
+    js_promise_new, js_promise_reject, js_promise_rejected, js_promise_resolve, js_promise_resolved,
+};
 pub use string::js_string_from_bytes;
 pub use value::{
     js_get_string_pointer_unified, js_jsvalue_to_string, js_nanbox_get_pointer, js_nanbox_pointer,

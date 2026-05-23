@@ -345,6 +345,34 @@ fn resolve_undefined() -> *mut Promise {
     js_promise_resolved(f64::from_bits(0x7FFC_0000_0000_0001))
 }
 
+/// Construct a DOMException-shaped object (`{ name, message, stack: "" }`)
+/// and return a rejected Promise carrying it. WebCrypto spec demands
+/// `DOMException` instances on subtle.* error paths (`OperationError`,
+/// `NotSupportedError`, `InvalidAccessError`, `DataError`, `SyntaxError`),
+/// and consumers (`.catch(e => e.name === "...")`) match on `.name` —
+/// we model that shape rather than the full DOM `code` lookup table.
+/// Issue #1431.
+unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mut Promise {
+    let obj = js_object_alloc(0, 3);
+    if obj.is_null() {
+        return resolve_undefined();
+    }
+    let name_key = perry_runtime::js_string_from_bytes(b"name".as_ptr(), 4);
+    let message_key = perry_runtime::js_string_from_bytes(b"message".as_ptr(), 7);
+    let stack_key = perry_runtime::js_string_from_bytes(b"stack".as_ptr(), 5);
+    let name_str = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let message_str = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let empty_str = perry_runtime::js_string_from_bytes(b"".as_ptr(), 0);
+    let name_val = f64::from_bits(JSValue::string_ptr(name_str).bits());
+    let message_val = f64::from_bits(JSValue::string_ptr(message_str).bits());
+    let stack_val = f64::from_bits(JSValue::string_ptr(empty_str).bits());
+    js_object_set_field_by_name(obj, name_key, name_val);
+    js_object_set_field_by_name(obj, message_key, message_val);
+    js_object_set_field_by_name(obj, stack_key, stack_val);
+    let obj_val = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    perry_runtime::js_promise_rejected(obj_val)
+}
+
 /// Resolve a Promise with a Uint8Array view of `bytes`.
 unsafe fn resolve_with_bytes(bytes: &[u8]) -> *mut Promise {
     let buf = alloc_uint8array_from_slice(bytes);
@@ -550,7 +578,9 @@ fn rsa_pss_verify(
 pub unsafe extern "C" fn js_webcrypto_digest(algo_bits: f64, data_bits: f64) -> *mut Promise {
     let algo = match extract_hash_algo(algo_bits.to_bits()) {
         Some(a) => a,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name")
+        }
     };
     let bytes = bytes_from_jsvalue(data_bits.to_bits());
     let digest = compute_digest(algo, &bytes);
@@ -579,7 +609,12 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
 ) -> *mut Promise {
     let format = match string_from_jsvalue(format_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception(
+                "TypeError",
+                "Failed to execute 'importKey' on 'SubtleCrypto': format must be a string",
+            )
+        }
     };
     let format_lower = format.to_ascii_lowercase();
     if format_lower != "raw"
@@ -587,13 +622,15 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         && format_lower != "pkcs8"
         && format_lower != "jwk"
     {
-        return resolve_undefined();
+        return reject_with_dom_exception("NotSupportedError", "Unsupported key format");
     }
     // Algorithm name — accepts string shorthand ("AES-GCM") or
     // `{ name: "..." }` object form.
     let algo_name = match extract_algo_name(algo_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name")
+        }
     };
     let algo_upper = algo_name.to_ascii_uppercase();
     let (key_algo, hash, kind) = if algo_upper == "HMAC"
@@ -694,7 +731,10 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         };
         (key_algo, hash, kind)
     } else {
-        return resolve_undefined();
+        return reject_with_dom_exception(
+            "NotSupportedError",
+            "Unsupported algorithm for the given key format",
+        );
     };
 
     let key_bytes = if format_lower == "jwk" {
@@ -703,7 +743,7 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         bytes_from_jsvalue(key_bits.to_bits())
     };
     if key_bytes.is_empty() && !matches!(key_algo, KeyAlgo::Hkdf | KeyAlgo::Pbkdf2) {
-        return resolve_undefined();
+        return reject_with_dom_exception("DataError", "Key data is empty or could not be read");
     }
     if matches!(key_algo, KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256) {
         let ok = if kind == KeyKind::Public {
@@ -774,13 +814,20 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
 pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64) -> *mut Promise {
     let format = match string_from_jsvalue(format_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception(
+                "TypeError",
+                "Failed to execute 'exportKey' on 'SubtleCrypto': format must be a string",
+            )
+        }
     };
     let format_lower = format.to_ascii_lowercase();
     let key_addr = strip_ptr(key_bits.to_bits());
     let mat = match lookup_crypto_key(key_addr) {
         Some(m) => m,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey")
+        }
     };
     if format_lower == "raw" && mat.kind == KeyKind::Private {
         return resolve_undefined();
@@ -1163,13 +1210,17 @@ pub unsafe extern "C" fn js_webcrypto_sign(
 ) -> *mut Promise {
     let algo_name = match extract_hmac_or_hash(algo_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name")
+        }
     };
     let algo_upper = algo_name.to_ascii_uppercase();
     let key_addr = strip_ptr(key_bits.to_bits());
     let mat = match lookup_crypto_key(key_addr) {
         Some(m) => m,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey")
+        }
     };
     let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
     let data_bytes = bytes_from_jsvalue(data_bits.to_bits());
@@ -1230,7 +1281,7 @@ pub unsafe extern "C" fn js_webcrypto_sign(
             None => return resolve_undefined(),
         }
     } else {
-        return resolve_undefined();
+        return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name");
     };
     resolve_with_bytes(&sig)
 }
@@ -1245,13 +1296,17 @@ pub unsafe extern "C" fn js_webcrypto_verify(
 ) -> *mut Promise {
     let algo_name = match extract_hmac_or_hash(algo_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name")
+        }
     };
     let algo_upper = algo_name.to_ascii_uppercase();
     let key_addr = strip_ptr(key_bits.to_bits());
     let mat = match lookup_crypto_key(key_addr) {
         Some(m) => m,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey")
+        }
     };
     let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
     let data_bytes = bytes_from_jsvalue(data_bits.to_bits());
@@ -1318,7 +1373,7 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         };
         rsa_pss_verify(mat.hash, public_key, &data_bytes, &provided_sig, salt_len).unwrap_or(false)
     } else {
-        return resolve_undefined();
+        return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name");
     };
     resolve_with_bool(ok)
 }
@@ -1504,7 +1559,12 @@ pub unsafe extern "C" fn js_webcrypto_derive_key(
 ) -> *mut Promise {
     let derived_name = match extract_algo_name(derived_algo_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception(
+                "NotSupportedError",
+                "Unrecognized derived-key algorithm name",
+            )
+        }
     };
     let derived_upper = derived_name.to_ascii_uppercase();
     let (key_algo, hash, bit_len) = if derived_upper == "HMAC" {
@@ -1859,7 +1919,9 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
 ) -> *mut Promise {
     let algo_name = match extract_algo_name(algo_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name")
+        }
     };
     if algo_name.eq_ignore_ascii_case("RSA-OAEP") {
         let key_addr = strip_ptr(key_bits.to_bits());
@@ -1934,7 +1996,9 @@ pub unsafe extern "C" fn js_webcrypto_decrypt(
 ) -> *mut Promise {
     let algo_name = match extract_algo_name(algo_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name")
+        }
     };
     if algo_name.eq_ignore_ascii_case("RSA-OAEP") {
         let key_addr = strip_ptr(key_bits.to_bits());
@@ -2056,7 +2120,9 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
 ) -> *mut Promise {
     let algo_name = match extract_algo_name(algo_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name")
+        }
     };
     let algo_upper = algo_name.to_ascii_uppercase();
     if algo_upper == "RSA-OAEP" || algo_upper == "RSASSA-PKCS1-V1_5" || algo_upper == "RSA-PSS" {
@@ -2492,25 +2558,38 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
 ) -> *mut Promise {
     let format = match string_from_jsvalue(format_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception(
+                "TypeError",
+                "Failed to execute 'wrapKey' on 'SubtleCrypto': format must be a string",
+            )
+        }
     };
     if format != "raw" {
-        return resolve_undefined();
+        return reject_with_dom_exception("NotSupportedError", "Unsupported key format");
     }
     let key_addr = strip_ptr(key_bits.to_bits());
     if lookup_crypto_key(key_addr).is_none() {
-        return resolve_undefined();
+        return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey");
     }
     let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
     let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
     if lookup_crypto_key(wrapping_key_addr).is_none() {
-        return resolve_undefined();
+        return reject_with_dom_exception(
+            "InvalidAccessError",
+            "Wrapping key is not a valid CryptoKey",
+        );
     }
     let wrapping_key_bytes = bytes_from_jsvalue(wrapping_key_bits.to_bits());
 
     let upper = match wrap_algo_name(wrap_algo_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception(
+                "NotSupportedError",
+                "Unrecognized wrap-algorithm name",
+            )
+        }
     };
     let wrapped = if upper == "AES-KW" {
         match aes_kw_wrap(&wrapping_key_bytes, &key_bytes) {
@@ -2599,21 +2678,34 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
 ) -> *mut Promise {
     let format = match string_from_jsvalue(format_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception(
+                "TypeError",
+                "Failed to execute 'unwrapKey' on 'SubtleCrypto': format must be a string",
+            )
+        }
     };
     if format != "raw" {
-        return resolve_undefined();
+        return reject_with_dom_exception("NotSupportedError", "Unsupported key format");
     }
     let wrapped_bytes = bytes_from_jsvalue(wrapped_key_bits.to_bits());
     let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
     if lookup_crypto_key(unwrapping_key_addr).is_none() {
-        return resolve_undefined();
+        return reject_with_dom_exception(
+            "InvalidAccessError",
+            "Unwrapping key is not a valid CryptoKey",
+        );
     }
     let unwrapping_key_bytes = bytes_from_jsvalue(unwrapping_key_bits.to_bits());
 
     let upper = match wrap_algo_name(unwrap_algo_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception(
+                "NotSupportedError",
+                "Unrecognized unwrap-algorithm name",
+            )
+        }
     };
     let recovered = if upper == "AES-KW" {
         match aes_kw_unwrap(&unwrapping_key_bytes, &wrapped_bytes) {
