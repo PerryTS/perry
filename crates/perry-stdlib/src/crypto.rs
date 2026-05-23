@@ -2092,6 +2092,210 @@ pub struct DiffieHellmanHandle {
     public_key: std::sync::Mutex<Option<Vec<u8>>>,
 }
 
+// ───────────────────────────────────────────────────────────────────
+// #1367: node:crypto X509Certificate. `new X509Certificate(pem|der)`
+// parses the cert and exposes Node's read-only properties. Parsing uses
+// RustCrypto's `x509-cert` (the der/spki/const-oid already in the lock).
+// ───────────────────────────────────────────────────────────────────
+
+pub struct X509Handle {
+    der: Vec<u8>,
+    cert: x509_cert::Certificate,
+}
+
+/// Short attribute name for an X.500 DN OID, matching Node's subject /
+/// issuer formatting (`CN`, `O`, `C`, …); falls back to the dotted OID.
+fn x509_attr_short_name(oid: &str) -> String {
+    match oid {
+        "2.5.4.3" => "CN",
+        "2.5.4.6" => "C",
+        "2.5.4.7" => "L",
+        "2.5.4.8" => "ST",
+        "2.5.4.10" => "O",
+        "2.5.4.11" => "OU",
+        "2.5.4.4" => "SN",
+        "2.5.4.42" => "GN",
+        "2.5.4.5" => "serialNumber",
+        "2.5.4.9" => "STREET",
+        "0.9.2342.19200300.100.1.25" => "DC",
+        "1.2.840.113549.1.9.1" => "emailAddress",
+        other => return other.to_string(),
+    }
+    .to_string()
+}
+
+/// Format an X.500 `Name` the way Node's `cert.subject` / `cert.issuer`
+/// do: one `TYPE=value` per line, newline-joined, in encoding order.
+fn x509_format_name(name: &x509_cert::name::Name) -> String {
+    use x509_cert::der::Encode;
+    let mut lines: Vec<String> = Vec::new();
+    for rdn in name.0.iter() {
+        for atv in rdn.0.iter() {
+            let oid = atv.oid.to_string();
+            // The value is an AttributeValue (ASN.1 Any); decode common
+            // string forms. Fall back to its UTF-8 lossy DER tail.
+            let value = atv
+                .value
+                .decode_as::<x509_cert::der::asn1::Utf8StringRef>()
+                .map(|s| s.as_str().to_string())
+                .or_else(|_| {
+                    atv.value
+                        .decode_as::<x509_cert::der::asn1::PrintableStringRef>()
+                        .map(|s| s.as_str().to_string())
+                })
+                .or_else(|_| {
+                    atv.value
+                        .decode_as::<x509_cert::der::asn1::Ia5StringRef>()
+                        .map(|s| s.as_str().to_string())
+                })
+                .unwrap_or_else(|_| {
+                    let bytes = atv.value.to_der().unwrap_or_default();
+                    // Skip the 2-byte tag+len header when present.
+                    let tail = if bytes.len() > 2 {
+                        &bytes[2..]
+                    } else {
+                        &bytes[..]
+                    };
+                    String::from_utf8_lossy(tail).to_string()
+                });
+            lines.push(format!("{}={}", x509_attr_short_name(&oid), value));
+        }
+    }
+    lines.join("\n")
+}
+
+/// Format an X.509 validity `Time` as Node does — `MMM D HH:MM:SS YYYY GMT`
+/// with a space-padded day (e.g. `Jan  1 00:00:00 2020 GMT`).
+fn x509_format_time(time: &x509_cert::time::Time) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let dt = time.to_date_time();
+    let month = MONTHS
+        .get((dt.month() as usize).saturating_sub(1))
+        .copied()
+        .unwrap_or("Jan");
+    format!(
+        "{} {:>2} {:02}:{:02}:{:02} {} GMT",
+        month,
+        dt.day(),
+        dt.hour(),
+        dt.minutes(),
+        dt.seconds(),
+        dt.year(),
+    )
+}
+
+/// Uppercase colon-separated hex of a digest, matching Node's
+/// `cert.fingerprint` / `.fingerprint256`.
+fn x509_colon_hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// `new crypto.X509Certificate(pem | der)` — parse and register a handle.
+/// Accepts a PEM string or a DER Buffer/Uint8Array. Returns `undefined`
+/// on a parse failure (Node throws; the stub degrades to undefined).
+///
+/// # Safety
+/// `input_ptr` must be a valid string/buffer pointer (the codegen-unboxed
+/// constructor argument).
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_x509_new(input_ptr: i64) -> f64 {
+    use x509_cert::der::{Decode, DecodePem, Encode};
+    let bytes = bytes_from_ptr(input_ptr);
+    let cert = if bytes.starts_with(b"-----BEGIN") {
+        match x509_cert::Certificate::from_pem(&bytes) {
+            Ok(c) => c,
+            Err(_) => return nanbox_undefined(),
+        }
+    } else {
+        match x509_cert::Certificate::from_der(&bytes) {
+            Ok(c) => c,
+            Err(_) => return nanbox_undefined(),
+        }
+    };
+    let der = match cert.to_der() {
+        Ok(d) => d,
+        Err(_) => return nanbox_undefined(),
+    };
+    let handle: Handle = register_handle(X509Handle { der, cert });
+    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
+}
+
+/// Read-only property dispatch for an X509Certificate handle.
+pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
+    use sha1::Sha1;
+    use sha2::{Digest, Sha256};
+    let h = match get_handle_mut::<X509Handle>(handle) {
+        Some(h) => h,
+        None => return nanbox_undefined(),
+    };
+    let string_f64 = |s: &str| -> f64 {
+        let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    };
+    let tbs = &h.cert.tbs_certificate;
+    match property {
+        "subject" => string_f64(&x509_format_name(&tbs.subject)),
+        "issuer" => string_f64(&x509_format_name(&tbs.issuer)),
+        "validFrom" => string_f64(&x509_format_time(&tbs.validity.not_before)),
+        "validTo" => string_f64(&x509_format_time(&tbs.validity.not_after)),
+        "serialNumber" => {
+            let hex_str: String = tbs
+                .serial_number
+                .as_bytes()
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect();
+            string_f64(&hex_str)
+        }
+        "fingerprint" => {
+            let digest = Sha1::digest(&h.der);
+            string_f64(&x509_colon_hex(&digest))
+        }
+        "fingerprint256" => {
+            let digest = Sha256::digest(&h.der);
+            string_f64(&x509_colon_hex(&digest))
+        }
+        "ca" => {
+            // BasicConstraints (id-ce 2.5.29.19) cA flag.
+            let is_ca = x509_basic_constraints_ca(&h.cert);
+            f64::from_bits(if is_ca {
+                0x7FFC_0000_0000_0004
+            } else {
+                0x7FFC_0000_0000_0003
+            })
+        }
+        "raw" => {
+            let buf = alloc_buffer_from_slice(&h.der);
+            f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
+        }
+        _ => nanbox_undefined(),
+    }
+}
+
+/// Extract the BasicConstraints `cA` flag (default false when absent).
+fn x509_basic_constraints_ca(cert: &x509_cert::Certificate) -> bool {
+    use x509_cert::der::Decode;
+    let Some(exts) = cert.tbs_certificate.extensions.as_ref() else {
+        return false;
+    };
+    for ext in exts.iter() {
+        if ext.extn_id.to_string() == "2.5.29.19" {
+            if let Ok(bc) =
+                x509_cert::ext::pkix::BasicConstraints::from_der(ext.extn_value.as_bytes())
+            {
+                return bc.ca;
+            }
+        }
+    }
+    false
+}
+
 const DH_DEFAULT_PRIME_HEX: &str = concat!(
     "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1",
     "29024E088A67CC74020BBEA63B139B22514A08798E3404DD",

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1237 entries across 81 modules
+// Coverage: 1238 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -312,6 +312,8 @@ declare module "cron" {
 declare module "crypto" {
   /** stdlib */
   export class ECDH { [key: string]: any; }
+  /** stdlib */
+  export class X509Certificate { [key: string]: any; }
   /** stdlib */
   export const constants: any;
   /** stdlib */

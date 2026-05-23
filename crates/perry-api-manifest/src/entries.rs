@@ -1780,6 +1780,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createSign", false, None),
     method("crypto", "createVerify", false, None),
     class("crypto", "ECDH"),
+    // #1367: X509Certificate — `new X509Certificate(pem|der)` + read-only
+    // subject/issuer/validFrom/validTo/serialNumber/fingerprint/ca props.
+    class("crypto", "X509Certificate"),
     method("crypto", "createECDH", false, None),
     method("crypto", "createDiffieHellman", false, None),
     method("crypto", "createDiffieHellmanGroup", false, None),

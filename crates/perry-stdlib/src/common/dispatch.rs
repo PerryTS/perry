@@ -991,6 +991,25 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return crate::crypto::dispatch_diffie_hellman_property(handle, property_name);
     }
 
+    // #1367: X509Certificate read-only properties (data values, not
+    // bound-method closures).
+    #[cfg(feature = "crypto")]
+    if matches!(
+        property_name,
+        "subject"
+            | "issuer"
+            | "validFrom"
+            | "validTo"
+            | "serialNumber"
+            | "fingerprint"
+            | "fingerprint256"
+            | "ca"
+            | "raw"
+    ) && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_x509_property(handle, property_name);
+    }
+
     // Issue #1111: CipherHandle method-as-value reads. Returns a
     // bound-method closure for `update` / `final` / `getAuthTag` /
     // `setAuthTag` / `setAAD` / `setAutoPadding` so `c.getAuthTag?.()` doesn't short-circuit
