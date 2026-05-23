@@ -822,7 +822,8 @@ export class Readable extends Stream {
         const readable = new Readable();
         if (iterable == null) readable._perryChunks = [];
         else if (Array.isArray(iterable)) readable._perryChunks = iterable.slice();
-        else if (typeof iterable === "string" || iterable instanceof ArrayBuffer || ArrayBuffer.isView(iterable)) readable._perryChunks = [iterable];
+        else if (typeof iterable === "string" || iterable instanceof ArrayBuffer || __PerryBufferCtor.isBuffer?.(iterable)) readable._perryChunks = [iterable];
+        else if (ArrayBuffer.isView(iterable)) readable._perryChunks = Array.from(iterable);
         else if (typeof iterable[Symbol.iterator] === "function") readable._perryChunks = Array.from(iterable);
         else readable._perryChunks = [iterable];
         return readable;
@@ -1356,8 +1357,15 @@ function __perryChunkToBytes(chunk) {
     if (typeof chunk === "string") return new TextEncoder().encode(chunk);
     if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
     if (ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-    if (typeof chunk === "number") return new Uint8Array([chunk & 255]);
-    return new Uint8Array(0);
+    if (typeof chunk === "number") return new TextEncoder().encode(String(chunk));
+    throw new TypeError(`The "chunk" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type ${typeof chunk}${typeof chunk === "number" ? ` (${chunk})` : ""}`);
+}
+
+function __perryChunkToTextBytes(chunk) {
+    if (typeof chunk === "number") {
+        throw new TypeError(`The "chunk" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type number (${chunk})`);
+    }
+    return __perryChunkToBytes(chunk);
 }
 
 async function __perryCollectChunks(stream) {
@@ -1436,7 +1444,16 @@ export async function bytes(stream) {
     return new Uint8Array(await arrayBuffer(stream));
 }
 export async function text(stream) {
-    return new TextDecoder().decode(await bytes(stream));
+    const chunks = await __perryCollectChunks(stream);
+    const arrays = chunks.map(__perryChunkToTextBytes);
+    const total = arrays.reduce((n, arr) => n + arr.byteLength, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const arr of arrays) {
+        out.set(arr, offset);
+        offset += arr.byteLength;
+    }
+    return new TextDecoder().decode(out);
 }
 export async function json(stream) {
     return JSON.parse(await text(stream));

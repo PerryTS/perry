@@ -314,9 +314,34 @@ fn is_single_chunk_value(value: f64) -> bool {
     raw >= 0x10000 && crate::buffer::is_registered_buffer(raw)
 }
 
+fn uint8array_byte_chunks(raw: usize) -> f64 {
+    let arr = crate::array::js_array_alloc(0);
+    if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
+        return box_pointer(arr as *const u8);
+    }
+    unsafe {
+        let buf = raw as *const crate::buffer::BufferHeader;
+        let len = (*buf).length as usize;
+        let data = crate::buffer::buffer_data(buf);
+        let mut out = arr;
+        for i in 0..len {
+            out = crate::array::js_array_push_f64(out, *data.add(i) as f64);
+        }
+        box_pointer(out as *const u8)
+    }
+}
+
 fn normalize_readable_from_input(iterable: f64) -> f64 {
     if let Some(chunks) = readable_hidden_chunks(iterable) {
         return chunks;
+    }
+    let raw = raw_ptr_from_value(iterable);
+    if raw >= 0x10000
+        && crate::buffer::is_registered_buffer(raw)
+        && crate::buffer::is_uint8array_buffer(raw)
+        && !crate::buffer::is_array_buffer(raw)
+    {
+        return uint8array_byte_chunks(raw);
     }
     if is_array_like_value(iterable) {
         return iterable;
@@ -379,6 +404,19 @@ fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
         append_string_bytes(value, out);
         return;
     }
+    if jsval.is_int32() {
+        out.extend_from_slice(jsval.as_int32().to_string().as_bytes());
+        return;
+    }
+    if jsval.is_number() && value.is_finite() {
+        let text = if value.fract() == 0.0 {
+            (value as i64).to_string()
+        } else {
+            value.to_string()
+        };
+        out.extend_from_slice(text.as_bytes());
+        return;
+    }
 
     let raw = raw_ptr_from_value(value);
     if raw < 0x10000 {
@@ -415,6 +453,29 @@ fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
 /// pretending Perry has a full Node stream pump yet.
 pub fn js_node_stream_collect_bytes(stream: f64) -> Vec<u8> {
     js_node_stream_collect_bytes_result(stream).unwrap_or_default()
+}
+
+pub fn js_node_stream_collect_chunks_result(stream: f64) -> Option<Result<f64, f64>> {
+    invoke_read_once(stream);
+    if let Some(err) = readable_hidden_error(stream) {
+        return Some(Err(err));
+    }
+    if let Some(chunks) = readable_hidden_chunks(stream) {
+        return Some(Ok(chunks));
+    }
+    if is_array_like_value(stream) {
+        return Some(Ok(stream));
+    }
+    if is_single_chunk_value(stream) {
+        let mut arr = crate::array::js_array_alloc(1);
+        arr = crate::array::js_array_push_f64(arr, stream);
+        return Some(Ok(box_pointer(arr as *const u8)));
+    }
+    if get_hidden_value(stream, hidden_read_key()).is_some() {
+        let arr = crate::array::js_array_alloc(0);
+        return Some(Ok(box_pointer(arr as *const u8)));
+    }
+    None
 }
 
 pub fn js_node_stream_collect_bytes_result(stream: f64) -> Result<Vec<u8>, f64> {
