@@ -1687,5 +1687,35 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/web/pipe-to-with-options": {
+    "issue": "1545",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/web: pipeTo preventClose option not honored. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/from-null-throws": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(null) / from(undefined) does not throw. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/finished/readable-false-option": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: finished({readable:false}) does not fire callback on writable-only close. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/dispose/sync-dispose": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Symbol.dispose presence on stream instances (Node 21+) misreports. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/web/pipe-to-prevent-cancel": {
+    "issue": "1545",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/web: pipeTo preventCancel option behavior not implemented. Flips to PASS when #1545 lands."
   }
 }
