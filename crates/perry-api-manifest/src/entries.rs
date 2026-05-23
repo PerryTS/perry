@@ -2224,6 +2224,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `util.inherits(SendStream, require('stream'))`, which reads
     // `Stream.prototype` — the gate rejects the access without this entry.
     property("stream", "prototype"),
+    // #1533: `stream.promises` namespace (`await pipeline(...)` /
+    // `finished(...)`). The read resolves to a `stream/promises`-tagged
+    // namespace object; its members are gated under that submodule name.
+    property("stream", "promises"),
+    method("stream/promises", "pipeline", false, None),
+    method("stream/promises", "finished", false, None),
     // `Readable.from(iterable)` — Node's static factory. Resolves
     // through the `Readable.foo` -> `stream.foo` route in
     // `lower_call.rs`, so the gate keys off `stream.from`.

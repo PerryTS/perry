@@ -134,6 +134,15 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     if module_name == "perf_hooks" && property_name == "constants" {
         return js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
     }
+    // #1533: node:stream exposes a `promises` namespace (`await pipeline(...)`
+    // / `finished(...)`). Resolve `stream.promises` to a `stream/promises`-
+    // tagged namespace object so `typeof stream.promises === "object"` and
+    // `stream.promises.pipeline` / `.finished` read as callable exports
+    // (same dispatch the `import ... from "node:stream/promises"` form uses).
+    if module_name == "stream" && property_name == "promises" {
+        let submodule = "stream/promises";
+        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+    }
 
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
         return val;
@@ -302,7 +311,10 @@ pub(crate) fn set_bound_native_closure_name(
 pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
     matches!(
         (module, prop),
-        ("process", "abort")
+        // #1533: node:stream `promises` namespace exports.
+        ("stream/promises", "pipeline")
+            | ("stream/promises", "finished")
+            | ("process", "abort")
             | ("process", "cwd")
             | ("process", "uptime")
             | ("process", "memoryUsage")

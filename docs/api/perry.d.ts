@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1234 entries across 81 modules
+// Coverage: 1237 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1760,6 +1760,8 @@ declare module "stream" {
   export class Transform { [key: string]: any; }
   /** stdlib */
   export class Writable { [key: string]: any; }
+  /** stdlib */
+  export const promises: any;
   /** stdlib */
   export const promises: any;
   /** stdlib */
