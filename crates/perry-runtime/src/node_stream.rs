@@ -28,7 +28,6 @@ use crate::object::{
     js_object_set_field_by_name, ObjectHeader,
 };
 use crate::value::JSValue;
-use std::sync::Once;
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
@@ -58,18 +57,13 @@ const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
 
 #[inline]
 fn this_value(closure: *const ClosureHeader) -> f64 {
-    let implicit = crate::object::js_implicit_this_get();
-    if object_ptr_from_value(implicit).is_some() {
-        return implicit;
-    }
-
     // Slot 0 was set by `build_object` to the NaN-boxed bits of the
     // host object value cast to i64; reverse the cast.
-    if closure.is_null() {
-        return implicit;
+    if !closure.is_null() {
+        let bits = js_closure_get_capture_ptr(closure, 0) as u64;
+        return f64::from_bits(bits);
     }
-    let bits = js_closure_get_capture_ptr(closure, 0) as u64;
-    f64::from_bits(bits)
+    crate::object::js_implicit_this_get()
 }
 
 extern "C" fn ns_chain0(closure: *const ClosureHeader) -> f64 {
@@ -262,26 +256,23 @@ fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut ObjectHeader 
 }
 
 fn register_stub_arities() {
-    static REGISTER: Once = Once::new();
-    REGISTER.call_once(|| {
-        let register = |func: *const u8, arity: u32| {
-            crate::closure::js_register_closure_arity(func, arity);
-        };
-        register(ns_chain0 as *const u8, 0);
-        register(ns_chain1 as *const u8, 1);
-        register(ns_chain2 as *const u8, 2);
-        register(ns_chain3 as *const u8, 3);
-        register(ns_emit2 as *const u8, 2);
-        register(ns_resume0 as *const u8, 0);
-        register(ns_read1 as *const u8, 1);
-        register(ns_pipe1 as *const u8, 1);
-        register(writable_write_callback_noop as *const u8, 0);
-        register(ns_write2 as *const u8, 2);
-        register(ns_end1 as *const u8, 1);
-        register(ns_listener_count as *const u8, 1);
-        register(ns_listeners as *const u8, 1);
-        register(ns_undefined0 as *const u8, 0);
-    });
+    let register = |func: *const u8, arity: u32| {
+        crate::closure::js_register_closure_arity(func, arity);
+    };
+    register(ns_chain0 as *const u8, 0);
+    register(ns_chain1 as *const u8, 1);
+    register(ns_chain2 as *const u8, 2);
+    register(ns_chain3 as *const u8, 3);
+    register(ns_emit2 as *const u8, 2);
+    register(ns_resume0 as *const u8, 0);
+    register(ns_read1 as *const u8, 1);
+    register(ns_pipe1 as *const u8, 1);
+    register(writable_write_callback_noop as *const u8, 0);
+    register(ns_write2 as *const u8, 2);
+    register(ns_end1 as *const u8, 1);
+    register(ns_listener_count as *const u8, 1);
+    register(ns_listeners as *const u8, 1);
+    register(ns_undefined0 as *const u8, 0);
 }
 
 #[inline]
@@ -1032,6 +1023,25 @@ mod tests {
     }
 
     #[test]
+    fn stream_method_closure_capture_wins_over_stale_implicit_this() {
+        let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+        let other = box_pointer(crate::object::js_object_alloc(0, 0) as *const u8);
+        let end = js_object_get_field_by_name_f64(
+            raw_ptr_from_value(stream) as *const ObjectHeader,
+            hidden_key(b"end"),
+        );
+
+        let prev_this = crate::object::js_implicit_this_set(other);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
+        }
+        crate::object::js_implicit_this_set(prev_this);
+
+        assert!(js_node_stream_is_stub_ended_after_read(stream));
+        assert!(!stream_hidden_ended(other));
+    }
+
+    #[test]
     fn stream_methods_dispatch_through_dynamic_method_call() {
         let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
         unsafe {
@@ -1063,5 +1073,28 @@ mod tests {
         let handle = raw_ptr_from_value(stream) as i64;
         let _ = js_node_stream_method_end(handle, f64::from_bits(TAG_UNDEFINED));
         assert!(js_node_stream_is_stub_ended_after_read(stream));
+    }
+
+    #[test]
+    fn stream_stub_arities_are_registered_per_thread() {
+        let _ = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+        assert_eq!(
+            crate::closure::lookup_closure_arity(ns_end1 as *const u8),
+            Some(1)
+        );
+
+        std::thread::spawn(|| {
+            let _ = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+            assert_eq!(
+                crate::closure::lookup_closure_arity(ns_end1 as *const u8),
+                Some(1)
+            );
+            assert_eq!(
+                crate::closure::lookup_closure_arity(ns_write2 as *const u8),
+                Some(2)
+            );
+        })
+        .join()
+        .expect("stream arity registration thread should not panic");
     }
 }
