@@ -1567,5 +1567,53 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: cork / uncork return type wrong. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/constructor/stream-legacy": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: stream.Stream legacy constructor not exposed as the default export. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/consumers/with-errored-stream": {
+    "issue": "1544",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/consumers: text(stream) does not reject when the stream errors. Flips to PASS when #1544 lands."
+  },
+  "node-suite/stream/destroy/destroy-string": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: destroy(string) does not deliver the string value via error event. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/error/error-then-end-order": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: after error, end event should NOT fire. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/object-mode/preserve-buffer": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: objectMode does not preserve Buffer identity through data event. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/options/auto-destroy-false": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: autoDestroy:false option not honored. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/options/construct-cb-error": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: construct() callback receiving Error does not propagate via error event. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/write/false-then-retry": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: write() return value sequence under backpressure not honored. Flips to PASS when #1531 lands."
   }
 }
