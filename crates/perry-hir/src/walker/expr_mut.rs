@@ -48,6 +48,8 @@ where
         | Expr::ProcessAvailableMemory
         | Expr::ProcessConstrainedMemory
         | Expr::ProcessPosixCredential(_)
+        | Expr::ProcessResourceUsage
+        | Expr::ProcessActiveResourcesInfo
         | Expr::ProcessStdinIsTTY
         | Expr::ProcessStdoutIsTTY
         | Expr::ProcessStderrIsTTY

@@ -195,6 +195,12 @@ pub(super) fn try_native_module_methods(
                             };
                             return Ok(Ok(Expr::ProcessCpuUsage(prior)));
                         }
+                        "resourceUsage" => {
+                            return Ok(Ok(Expr::ProcessResourceUsage));
+                        }
+                        "getActiveResourcesInfo" => {
+                            return Ok(Ok(Expr::ProcessActiveResourcesInfo));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }

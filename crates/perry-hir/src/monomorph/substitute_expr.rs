@@ -298,6 +298,8 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .as_ref()
                 .map(|e| Box::new(substitute_expr(e, substitutions))),
         ),
+        Expr::ProcessResourceUsage => Expr::ProcessResourceUsage,
+        Expr::ProcessActiveResourcesInfo => Expr::ProcessActiveResourcesInfo,
 
         // File system
         Expr::FsReadFileSync(path) => {

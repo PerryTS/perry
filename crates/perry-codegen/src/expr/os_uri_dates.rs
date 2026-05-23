@@ -115,6 +115,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(DOUBLE, "js_process_cpu_usage", &[(DOUBLE, &prior_val)]))
         }
+        Expr::ProcessResourceUsage => {
+            Ok(ctx.block().call(DOUBLE, "js_process_resource_usage", &[]))
+        }
+        Expr::ProcessActiveResourcesInfo => {
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_process_active_resources_info", &[]))
+        }
         Expr::EncodeURI(o) => {
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();

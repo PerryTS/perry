@@ -95,6 +95,8 @@ impl<'a> FuncEmitCtx<'a> {
             | Expr::ProcessAvailableMemory
             | Expr::ProcessConstrainedMemory
             | Expr::ProcessPosixCredential(_)
+            | Expr::ProcessResourceUsage
+            | Expr::ProcessActiveResourcesInfo
             | Expr::ProcessPid
             | Expr::ProcessPpid
             | Expr::ProcessVersion

@@ -130,6 +130,111 @@ pub extern "C" fn js_process_getegid() -> f64 {
     }
 }
 
+/// process.resourceUsage() -> object with getrusage(RUSAGE_SELF)
+/// counters matching Node's shape (#1376). Linux's `ru_maxrss` is in
+/// kilobytes; macOS/BSD's is in bytes — Node normalizes Linux to bytes,
+/// so we do too. Non-unix targets return zeroed fields.
+#[no_mangle]
+pub extern "C" fn js_process_resource_usage() -> f64 {
+    #[allow(unused_mut)]
+    let mut user_cpu: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut system_cpu: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut max_rss: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut shared_mem: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut unshared_data: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut unshared_stack: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut minor_faults: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut major_faults: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut swapped_out: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut fs_read: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut fs_write: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut ipc_sent: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut ipc_recv: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut signals: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut vcsw: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut ivcsw: f64 = 0.0;
+
+    #[cfg(unix)]
+    {
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } == 0 {
+            user_cpu = (usage.ru_utime.tv_sec as f64) * 1_000_000.0 + usage.ru_utime.tv_usec as f64;
+            system_cpu =
+                (usage.ru_stime.tv_sec as f64) * 1_000_000.0 + usage.ru_stime.tv_usec as f64;
+            #[cfg(target_os = "linux")]
+            {
+                max_rss = (usage.ru_maxrss as f64) * 1024.0;
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                max_rss = usage.ru_maxrss as f64;
+            }
+            shared_mem = usage.ru_ixrss as f64;
+            unshared_data = usage.ru_idrss as f64;
+            unshared_stack = usage.ru_isrss as f64;
+            minor_faults = usage.ru_minflt as f64;
+            major_faults = usage.ru_majflt as f64;
+            swapped_out = usage.ru_nswap as f64;
+            fs_read = usage.ru_inblock as f64;
+            fs_write = usage.ru_oublock as f64;
+            ipc_sent = usage.ru_msgsnd as f64;
+            ipc_recv = usage.ru_msgrcv as f64;
+            signals = usage.ru_nsignals as f64;
+            vcsw = usage.ru_nvcsw as f64;
+            ivcsw = usage.ru_nivcsw as f64;
+        }
+    }
+
+    let obj = crate::object::js_object_alloc(0, 16);
+    let set_field = |name: &str, value: f64| {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key, value);
+    };
+    set_field("userCPUTime", user_cpu);
+    set_field("systemCPUTime", system_cpu);
+    set_field("maxRSS", max_rss);
+    set_field("sharedMemorySize", shared_mem);
+    set_field("unsharedDataSize", unshared_data);
+    set_field("unsharedStackSize", unshared_stack);
+    set_field("minorPageFault", minor_faults);
+    set_field("majorPageFault", major_faults);
+    set_field("swappedOut", swapped_out);
+    set_field("fsRead", fs_read);
+    set_field("fsWrite", fs_write);
+    set_field("ipcSent", ipc_sent);
+    set_field("ipcReceived", ipc_recv);
+    set_field("signalsCount", signals);
+    set_field("voluntaryContextSwitches", vcsw);
+    set_field("involuntaryContextSwitches", ivcsw);
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+/// process.getActiveResourcesInfo() -> string[]. Node returns names of
+/// libuv handles currently keeping the loop alive (TLSWrap, Timeout,
+/// TCPSERVERWRAP, ...). Perry doesn't surface that introspection yet —
+/// return an empty array. The surface is callable so
+/// `typeof process.getActiveResourcesInfo === "function"` holds.
+#[no_mangle]
+pub extern "C" fn js_process_active_resources_info() -> f64 {
+    let arr = crate::array::js_array_alloc(0);
+    f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+}
+
 /// process.cpuUsage(prior?) -> { user, system } µs.
 /// Reads CPU time consumed by the process via getrusage(RUSAGE_SELF) on
 /// unix. With a `prior` object, returns the diff (clamped to >= 0).

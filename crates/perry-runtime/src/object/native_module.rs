@@ -286,6 +286,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "getegid")
             | ("process", "emitWarning")
             | ("process", "cpuUsage")
+            | ("process", "resourceUsage")
+            | ("process", "getActiveResourcesInfo")
             | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")

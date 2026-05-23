@@ -515,6 +515,12 @@ impl JsEmitter {
                 }
                 self.output.push_str(") : {user: 0, system: 0})");
             }
+            Expr::ProcessResourceUsage => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.resourceUsage === 'function' ? process.resourceUsage() : {})");
+            }
+            Expr::ProcessActiveResourcesInfo => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.getActiveResourcesInfo === 'function' ? process.getActiveResourcesInfo() : [])");
+            }
             Expr::ProcessPid => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.pid : 0)");
             }

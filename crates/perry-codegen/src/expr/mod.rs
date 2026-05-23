@@ -1178,6 +1178,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessPosixCredential(..)
         | Expr::ProcessEmitWarning(..)
         | Expr::ProcessCpuUsage(..)
+        | Expr::ProcessResourceUsage
+        | Expr::ProcessActiveResourcesInfo
         | Expr::EncodeURI(..)
         | Expr::DecodeURI(..)
         | Expr::EncodeURIComponent(..)

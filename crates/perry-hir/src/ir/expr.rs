@@ -452,8 +452,7 @@ pub enum Expr {
         event: Box<Expr>,
         handler: Box<Expr>,
     },
-    // process.chdir(directory) -> void
-    ProcessChdir(Box<Expr>),
+    ProcessChdir(Box<Expr>), // process.chdir(directory) -> void
     // process.kill(pid, signal?) -> void
     ProcessKill {
         pid: Box<Expr>,
@@ -468,6 +467,8 @@ pub enum Expr {
     ProcessPosixCredential(super::PosixCredentialKind), // process.{getuid,geteuid,getgid,getegid}() (#1408)
     ProcessEmitWarning(Vec<Expr>), // process.emitWarning(warning[, type, code, ctor]) -> undefined (#1375)
     ProcessCpuUsage(Option<Box<Expr>>), // process.cpuUsage(prior?) -> { user, system } µs (diff if prior given)
+    ProcessResourceUsage, // process.resourceUsage() -> {userCPUTime, maxRSS, ...} (#1376)
+    ProcessActiveResourcesInfo, // process.getActiveResourcesInfo() -> string[] (#1376)
     // process.stdin -> stub object { write: fn }
     ProcessStdin,
     // process.stdout -> stub object { write: fn }
