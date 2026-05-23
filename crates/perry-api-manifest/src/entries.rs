@@ -2205,6 +2205,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Perry's stub doesn't carry at runtime yet).
     method("stream", "isDisturbed", false, None),
     method("stream", "isErrored", false, None),
+    // #1541: `stream.addAbortSignal(signal, stream)` — Node wires
+    // the AbortSignal so aborting it destroys the stream. Stub
+    // ignores the signal and returns the stream verbatim so chain
+    // patterns (`r = addAbortSignal(s, r)`) keep working.
+    method("stream", "addAbortSignal", false, None),
     // EventEmitter methods on stream instances. node:stream extends
     // EventEmitter — every Readable/Writable/Duplex/Transform/PassThrough
     // exposes the full `.on('data'|'end'|'error'|'close'|...)` /

@@ -301,3 +301,15 @@ pub extern "C" fn js_node_stream_is_disturbed(_stream: f64) -> f64 {
 pub extern "C" fn js_node_stream_is_errored(_stream: f64) -> f64 {
     f64::from_bits(TAG_FALSE)
 }
+
+/// #1541: `stream.addAbortSignal(signal, stream)` — Node wires the
+/// AbortSignal so aborting it destroys the stream, and returns the
+/// stream for chaining. Perry's stream stubs don't implement the
+/// destroy / abort propagation yet, so the helper just returns the
+/// stream verbatim and ignores the signal. Caller chains
+/// (`r = addAbortSignal(s, r)`) keep working with the same stream
+/// reference they passed in.
+#[no_mangle]
+pub extern "C" fn js_node_stream_add_abort_signal(_signal: f64, stream: f64) -> f64 {
+    stream
+}

@@ -420,6 +420,22 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // #1541: `stream.addAbortSignal(signal, stream)` wires the
+    // AbortSignal so that aborting it destroys the stream — and
+    // returns the stream for chaining. Perry's stream stubs don't
+    // implement destroy/abort propagation yet, but the identity
+    // return shape (`r = addAbortSignal(s, r)`) needs to work so
+    // feature-detect-and-call sites don't crash. The signal is
+    // accepted and ignored; the stream is returned verbatim.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "addAbortSignal",
+        class_filter: None,
+        runtime: "js_node_stream_add_abort_signal",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
     // ========== Events ==========
     NativeModSig {
         module: "events",

@@ -810,6 +810,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // #1534: static introspection helpers — always return false today.
     module.declare_function("js_node_stream_is_disturbed", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_is_errored", DOUBLE, &[DOUBLE]);
+    // #1541: addAbortSignal(signal, stream) — identity-returns the stream.
+    module.declare_function("js_node_stream_add_abort_signal", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // ========== Event emitter ==========
     module.declare_function("js_event_emitter_emit", DOUBLE, &[I64, I64, I64]);
