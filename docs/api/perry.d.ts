@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1105 entries across 80 modules
+// Coverage: 1109 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1473,6 +1473,14 @@ declare module "process" {
   export function availableMemory(...args: any[]): any;
   /** stdlib */
   export function constrainedMemory(...args: any[]): any;
+  /** stdlib */
+  export function getegid(...args: any[]): any;
+  /** stdlib */
+  export function geteuid(...args: any[]): any;
+  /** stdlib */
+  export function getgid(...args: any[]): any;
+  /** stdlib */
+  export function getuid(...args: any[]): any;
   /** stdlib */
   export function threadCpuUsage(...args: any[]): any;
   /** stdlib */

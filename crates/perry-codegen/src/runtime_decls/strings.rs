@@ -456,6 +456,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_thread_cpu_usage", DOUBLE, &[]);
     module.declare_function("js_process_available_memory", DOUBLE, &[]);
     module.declare_function("js_process_constrained_memory", DOUBLE, &[]);
+    module.declare_function("js_process_getuid", DOUBLE, &[]);
+    module.declare_function("js_process_geteuid", DOUBLE, &[]);
+    module.declare_function("js_process_getgid", DOUBLE, &[]);
+    module.declare_function("js_process_getegid", DOUBLE, &[]);
     module.declare_function("js_process_env", DOUBLE, &[]);
     module.declare_function("js_process_hrtime_bigint", DOUBLE, &[]);
     module.declare_function("js_process_chdir", VOID, &[I64]);

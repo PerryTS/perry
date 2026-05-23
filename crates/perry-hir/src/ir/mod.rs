@@ -25,10 +25,10 @@ pub use constants::{
     package_name_for_source_path, refuse_dynamic_stdlib_dispatch_enabled, requires_stdlib,
     set_allow_dynamic_stdlib_packages, set_compile_packages_override, set_current_module_source,
     set_refuse_dynamic_stdlib_dispatch, typed_array_kind_for_name, ClassId, EnumId, InterfaceId,
-    ModuleInitKind, ModuleKind, TypeAliasId, NATIVE_MODULES, TYPED_ARRAY_KIND_FLOAT32,
-    TYPED_ARRAY_KIND_FLOAT64, TYPED_ARRAY_KIND_INT16, TYPED_ARRAY_KIND_INT32,
-    TYPED_ARRAY_KIND_INT8, TYPED_ARRAY_KIND_UINT16, TYPED_ARRAY_KIND_UINT32,
-    TYPED_ARRAY_KIND_UINT8, TYPED_ARRAY_KIND_UINT8_CLAMPED,
+    ModuleInitKind, ModuleKind, PosixCredentialKind, TypeAliasId, NATIVE_MODULES,
+    TYPED_ARRAY_KIND_FLOAT32, TYPED_ARRAY_KIND_FLOAT64, TYPED_ARRAY_KIND_INT16,
+    TYPED_ARRAY_KIND_INT32, TYPED_ARRAY_KIND_INT8, TYPED_ARRAY_KIND_UINT16,
+    TYPED_ARRAY_KIND_UINT32, TYPED_ARRAY_KIND_UINT8, TYPED_ARRAY_KIND_UINT8_CLAMPED,
 };
 
 // ---- module.rs ----

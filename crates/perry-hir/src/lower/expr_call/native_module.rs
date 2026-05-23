@@ -155,6 +155,28 @@ pub(super) fn try_native_module_methods(
                             // limit applies.
                             return Ok(Ok(Expr::ProcessConstrainedMemory));
                         }
+                        // POSIX credential accessors (#1408). All four delegate
+                        // to libc::{getuid,geteuid,getgid,getegid}() at runtime.
+                        "getuid" => {
+                            return Ok(Ok(Expr::ProcessPosixCredential(
+                                crate::ir::PosixCredentialKind::Uid,
+                            )));
+                        }
+                        "geteuid" => {
+                            return Ok(Ok(Expr::ProcessPosixCredential(
+                                crate::ir::PosixCredentialKind::Euid,
+                            )));
+                        }
+                        "getgid" => {
+                            return Ok(Ok(Expr::ProcessPosixCredential(
+                                crate::ir::PosixCredentialKind::Gid,
+                            )));
+                        }
+                        "getegid" => {
+                            return Ok(Ok(Expr::ProcessPosixCredential(
+                                crate::ir::PosixCredentialKind::Egid,
+                            )));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }

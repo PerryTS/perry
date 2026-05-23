@@ -84,6 +84,52 @@ pub extern "C" fn js_process_umask_set(mask: f64) -> f64 {
     }
 }
 
+/// POSIX credential accessors (#1408). On non-unix targets each returns 0.
+#[no_mangle]
+pub extern "C" fn js_process_getuid() -> f64 {
+    #[cfg(unix)]
+    unsafe {
+        libc::getuid() as f64
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
+    }
+}
+#[no_mangle]
+pub extern "C" fn js_process_geteuid() -> f64 {
+    #[cfg(unix)]
+    unsafe {
+        libc::geteuid() as f64
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
+    }
+}
+#[no_mangle]
+pub extern "C" fn js_process_getgid() -> f64 {
+    #[cfg(unix)]
+    unsafe {
+        libc::getgid() as f64
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
+    }
+}
+#[no_mangle]
+pub extern "C" fn js_process_getegid() -> f64 {
+    #[cfg(unix)]
+    unsafe {
+        libc::getegid() as f64
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
+    }
+}
+
 /// process.availableMemory() -> number. Free system memory available to
 /// the process in bytes. Delegates to `js_os_freemem`'s host-statistics
 /// path on macOS/iOS, sysinfo on Linux, GlobalMemoryStatusEx on Windows.

@@ -287,6 +287,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::ProcessThreadCpuUsage => Expr::ProcessThreadCpuUsage,
         Expr::ProcessAvailableMemory => Expr::ProcessAvailableMemory,
         Expr::ProcessConstrainedMemory => Expr::ProcessConstrainedMemory,
+        Expr::ProcessPosixCredential(k) => Expr::ProcessPosixCredential(*k),
 
         // File system
         Expr::FsReadFileSync(path) => {

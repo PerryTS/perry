@@ -70,6 +70,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(DOUBLE, "js_process_constrained_memory", &[]))
         }
+        Expr::ProcessPosixCredential(kind) => {
+            let fn_name = match kind {
+                perry_hir::PosixCredentialKind::Uid => "js_process_getuid",
+                perry_hir::PosixCredentialKind::Euid => "js_process_geteuid",
+                perry_hir::PosixCredentialKind::Gid => "js_process_getgid",
+                perry_hir::PosixCredentialKind::Egid => "js_process_getegid",
+            };
+            Ok(ctx.block().call(DOUBLE, fn_name, &[]))
+        }
         Expr::EncodeURI(o) => {
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();

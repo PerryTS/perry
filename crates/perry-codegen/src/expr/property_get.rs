@@ -542,7 +542,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // via dedicated HIR variants. (#1374, #1373)
                 if matches!(
                     property.as_str(),
-                    "abort" | "umask" | "threadCpuUsage" | "availableMemory" | "constrainedMemory"
+                    "abort"
+                        | "umask"
+                        | "threadCpuUsage"
+                        | "availableMemory"
+                        | "constrainedMemory"
+                        | "getuid"
+                        | "geteuid"
+                        | "getgid"
+                        | "getegid"
                 ) {
                     let mod_idx = ctx.strings.intern("process");
                     let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);

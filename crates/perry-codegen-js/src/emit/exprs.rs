@@ -485,6 +485,19 @@ impl JsEmitter {
             Expr::ProcessConstrainedMemory => {
                 self.output.push_str("(typeof process !== 'undefined' && typeof process.constrainedMemory === 'function' ? process.constrainedMemory() : 0)");
             }
+            Expr::ProcessPosixCredential(kind) => {
+                let method = match kind {
+                    perry_hir::PosixCredentialKind::Uid => "getuid",
+                    perry_hir::PosixCredentialKind::Euid => "geteuid",
+                    perry_hir::PosixCredentialKind::Gid => "getgid",
+                    perry_hir::PosixCredentialKind::Egid => "getegid",
+                };
+                let _ = write!(
+                    self.output,
+                    "(typeof process !== 'undefined' && typeof process.{m} === 'function' ? process.{m}() : 0)",
+                    m = method
+                );
+            }
             Expr::ProcessPid => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.pid : 0)");
             }

@@ -47,6 +47,7 @@ where
         | Expr::ProcessThreadCpuUsage
         | Expr::ProcessAvailableMemory
         | Expr::ProcessConstrainedMemory
+        | Expr::ProcessPosixCredential(_)
         | Expr::ProcessStdinIsTTY
         | Expr::ProcessStdoutIsTTY
         | Expr::ProcessStderrIsTTY

@@ -468,6 +468,7 @@ pub enum Expr {
     ProcessThreadCpuUsage, // process.threadCpuUsage() -> { user, system } microseconds (current thread)
     ProcessAvailableMemory, // process.availableMemory() -> number (free memory bytes)
     ProcessConstrainedMemory, // process.constrainedMemory() -> number (OS limit, 0 if unconstrained)
+    ProcessPosixCredential(super::PosixCredentialKind), // process.{getuid,geteuid,getgid,getegid}() (#1408)
     // process.stdin -> stub object { write: fn }
     ProcessStdin,
     // process.stdout -> stub object { write: fn }
