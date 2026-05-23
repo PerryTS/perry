@@ -376,6 +376,7 @@ pub(super) fn try_module_static_methods(
                             | "clearResourceTimings"
                             | "setResourceTimingBufferSize"
                             | "markResourceTiming"
+                            | "timerify"
                     ) {
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: "perf_hooks".to_string(),

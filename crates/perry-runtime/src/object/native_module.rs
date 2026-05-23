@@ -479,6 +479,12 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // the property must still read as a function for
             // feature-detection (`typeof X === "function"`) wrappers.
             | ("perf_hooks", "markResourceTiming")
+            // #1335: performance.timerify(fn) wraps `fn` to record a
+            // 'function' timeline entry per call. Perry currently
+            // returns `fn` unchanged (no entry recorded), but the
+            // property must still read as a function for
+            // feature-detection.
+            | ("perf_hooks", "timerify")
             | ("perf_hooks", "PerformanceObserver")
             | ("perf_hooks", "PerformanceEntry")
             | ("perf_hooks", "PerformanceMark")
