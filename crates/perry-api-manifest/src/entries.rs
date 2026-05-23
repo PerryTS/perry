@@ -2162,6 +2162,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("perf_hooks", "performance"),
     property("perf_hooks", "constants"),
     class("perf_hooks", "PerformanceObserver"),
+    // PerformanceObserver.supportedEntryTypes — static array of entry-type
+    // names. Read inline (`PerformanceObserver.supportedEntryTypes.includes(...)`)
+    // it resolves as a perf_hooks property; declare it so the read isn't gated.
+    property("perf_hooks", "supportedEntryTypes"),
     class("perf_hooks", "PerformanceEntry"),
     class("perf_hooks", "PerformanceMark"),
     class("perf_hooks", "PerformanceMeasure"),

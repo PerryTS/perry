@@ -603,6 +603,20 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             ) {
                                 return Ok(Expr::String("function".to_string()));
                             }
+                            // #1320: `typeof obs.observe` on a PerformanceObserver
+                            // instance. A bare member read on a native-class
+                            // instance lowers to a 0-arg NativeMethodCall (getter
+                            // semantics), so `typeof` evaluated `observe()` and
+                            // reported "undefined". These are methods, not
+                            // getters — fold to "function" (the call form
+                            // `obs.observe(...)` is unaffected).
+                            if matches!(
+                                ctx.lookup_native_instance(obj_name),
+                                Some(("perf_hooks", _))
+                            ) && matches!(prop_name, "observe" | "disconnect" | "takeRecords")
+                            {
+                                return Ok(Expr::String("function".to_string()));
+                            }
                             // #677: `typeof Function.prototype` → "object".
                             // `Function.prototype` is the (immutable) prototype
                             // chain root for all functions; in Node typeof is

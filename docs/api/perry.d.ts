@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1099 entries across 80 modules
+// Coverage: 1100 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -856,6 +856,8 @@ declare module "perf_hooks" {
   export const nodeTiming: any;
   /** stdlib */
   export const performance: any;
+  /** stdlib */
+  export const supportedEntryTypes: any;
   /** stdlib */
   export const timeOrigin: any;
   /** stdlib */
