@@ -542,9 +542,14 @@ pub fn inject_android_deeplinks(
     // Locate the existing PerryActivity's <intent-filter> for
     // android.intent.action.MAIN — we insert the deep-link filters
     // immediately AFTER that block, still inside <activity>.
-    let activity_marker = "android:name=\".PerryActivity\"";
+    // #1528: the template used to declare the activity as
+    // `android:name=".PerryActivity"` but we now use the fully-
+    // qualified Kotlin path so removing the manifest `package=`
+    // doesn't break resolution. Match the trailing portion either way
+    // so older / forked templates still work.
     let activity_pos = manifest
-        .find(activity_marker)
+        .find("android:name=\"com.perry.app.PerryActivity\"")
+        .or_else(|| manifest.find("android:name=\".PerryActivity\""))
         .ok_or_else(|| anyhow!("PerryActivity tag not found in AndroidManifest.xml"))?;
 
     // Add launchMode=singleTop to the activity tag if not already present.

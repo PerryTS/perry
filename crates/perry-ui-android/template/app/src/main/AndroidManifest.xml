@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.perry.app">
+<!--
+  #1528: the `package` attribute on <manifest> is deprecated since AGP 7.4
+  and removed in 8.0. Leaving it here pinned the APK's package name to
+  "com.perry.app" regardless of the bundle_id substituted into
+  `applicationId`, so `aapt dump badging app-debug.apk` reported
+  com.perry.app and `adb shell am start -n <bundle_id>/…` failed.
+  Removing it lets the Gradle `applicationId` (substituted from
+  `[project].bundle_id`) be the single source of the APK package name.
+  The PerryActivity is now declared fully-qualified to its real Kotlin
+  location (com.perry.app.PerryActivity), so the implicit `.X` resolution
+  against the removed package doesn't accidentally point at a class that
+  doesn't exist under the user's bundle_id.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -34,7 +46,7 @@
             android:value="__YOUR_GOOGLE_MAPS_API_KEY__" />
 
         <activity
-            android:name=".PerryActivity"
+            android:name="com.perry.app.PerryActivity"
             android:exported="true"
             android:theme="@style/Theme.Perry.Splash"
             android:configChanges="orientation|screenSize|keyboardHidden">
