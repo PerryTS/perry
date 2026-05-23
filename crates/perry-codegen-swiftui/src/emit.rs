@@ -232,7 +232,11 @@ fn emit_native_timeline_provider(widget: &WidgetDecl, name: &str) -> String {
     .unwrap();
     writeln!(out, "        let resultPtr = {}(configPtr)", func_name).unwrap();
     writeln!(out, "        let resultJson = perry_get_string(resultPtr)").unwrap();
-    writeln!(out, "        if let data = resultJson.data(using: .utf8),").unwrap();
+    writeln!(
+        out,
+        "        if let data = resultJson.data(using: String.Encoding.utf8),"
+    )
+    .unwrap();
     writeln!(
         out,
         "           let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],"
@@ -363,7 +367,11 @@ fn emit_app_intent_timeline_provider(
         .unwrap();
         writeln!(out, "        let resultPtr = {}(configPtr)", func_name).unwrap();
         writeln!(out, "        let resultJson = perry_get_string(resultPtr)").unwrap();
-        writeln!(out, "        if let data = resultJson.data(using: .utf8),").unwrap();
+        writeln!(
+            out,
+            "        if let data = resultJson.data(using: String.Encoding.utf8),"
+        )
+        .unwrap();
         writeln!(out, "           let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],").unwrap();
         writeln!(
             out,
@@ -650,26 +658,38 @@ pub fn emit_glue(widget: &WidgetDecl, name: &str) -> String {
     writeln!(out, "import Foundation").unwrap();
     writeln!(out).unwrap();
 
-    // Extern declarations for perry-runtime functions
+    // Extern declarations for perry-runtime functions.
+    //
+    // #1294: `private` on the @_silgen_name FFI imports + the
+    // String-overload helper / get_string wrapper scopes each
+    // declaration to its enclosing file, so the bundle's `swiftc
+    // *.swift` invocation doesn't see N copies of the same symbol
+    // across N widget glue files. The C symbol name (`js_nanbox_string`
+    // / `js_get_string_pointer_unified`) is still shared at the
+    // linker level — `@_silgen_name` just maps a Swift name onto it.
     writeln!(out, "// Perry runtime FFI").unwrap();
     writeln!(out, "@_silgen_name(\"perry_runtime_widget_init\")").unwrap();
-    writeln!(out, "func perry_runtime_widget_init()").unwrap();
+    writeln!(out, "private func perry_runtime_widget_init()").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "@_silgen_name(\"js_nanbox_string\")").unwrap();
     writeln!(
         out,
-        "func perry_nanbox_string(_ s: UnsafePointer<CChar>) -> Int64"
+        "private func perry_nanbox_string(_ s: UnsafePointer<CChar>) -> Int64"
     )
     .unwrap();
     writeln!(out).unwrap();
     writeln!(out, "@_silgen_name(\"js_get_string_pointer_unified\")").unwrap();
     writeln!(
         out,
-        "func perry_get_string_ptr(_ val: Int64) -> UnsafePointer<CChar>"
+        "private func perry_get_string_ptr(_ val: Int64) -> UnsafePointer<CChar>"
     )
     .unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "func perry_nanbox_string(_ s: String) -> Int64 {{").unwrap();
+    writeln!(
+        out,
+        "private func perry_nanbox_string(_ s: String) -> Int64 {{"
+    )
+    .unwrap();
     writeln!(
         out,
         "    return s.withCString {{ perry_nanbox_string($0) }}"
@@ -677,7 +697,11 @@ pub fn emit_glue(widget: &WidgetDecl, name: &str) -> String {
     .unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "func perry_get_string(_ val: Int64) -> String {{").unwrap();
+    writeln!(
+        out,
+        "private func perry_get_string(_ val: Int64) -> String {{"
+    )
+    .unwrap();
     writeln!(out, "    return String(cString: perry_get_string_ptr(val))").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
