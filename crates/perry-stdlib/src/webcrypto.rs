@@ -2799,11 +2799,21 @@ mod tests {
     }
 
     #[test]
-    fn aes_gcm_rejects_192_bit_key() {
-        // 192-bit AES-GCM is intentionally not in the aes-gcm 0.10
-        // type set; document the rejection so we notice if it changes.
+    fn aes_gcm_round_trip_192() {
+        // Node accepts AES-192-GCM in `crypto.subtle.*` even though the
+        // browser WebCrypto spec only lists 128 / 256. We support it via
+        // the typed `AesGcm<Aes192, U12>` alias to match Node parity
+        // (see `test-parity/node-suite/crypto/webcrypto/aes-gcm-192.ts`).
+        // This test was previously asserting rejection of 24-byte keys —
+        // now it asserts a clean encrypt + decrypt round-trip instead.
         let key = [0u8; 24];
         let iv = [0u8; 12];
-        assert!(aes_gcm_encrypt(&key, &iv, b"", b"x").is_none());
+        let aad = b"aad";
+        let plaintext = b"the quick brown fox";
+        let ciphertext =
+            aes_gcm_encrypt(&key, &iv, aad, plaintext).expect("192-bit GCM should encrypt");
+        let recovered =
+            aes_gcm_decrypt(&key, &iv, aad, &ciphertext).expect("192-bit GCM should decrypt");
+        assert_eq!(recovered, plaintext);
     }
 }
