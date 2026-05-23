@@ -165,6 +165,16 @@ pub fn try_lower_extern_func_call(
                 crate::nanbox::TAG_UNDEFINED,
             ))));
         }
+        // #1454: clearImmediate(handle) — immediates live in the shared timer
+        // pool, so the timeout-clear helper retains-out the immediate too.
+        "clearImmediate" if args.len() == 1 => {
+            let id_box = lower_expr(ctx, &args[0])?;
+            ctx.block()
+                .call_void("js_clear_timeout_value", &[(DOUBLE, &id_box)]);
+            return Ok(Some(double_literal(f64::from_bits(
+                crate::nanbox::TAG_UNDEFINED,
+            ))));
+        }
         "gc" => {
             ctx.block().call_void("js_gc_collect", &[]);
             return Ok(Some(double_literal(f64::from_bits(

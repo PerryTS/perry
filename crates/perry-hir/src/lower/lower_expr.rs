@@ -572,6 +572,24 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     if id.sym.as_ref() == "Function" && ctx.lookup_local("Function").is_none() {
                         return Ok(Expr::String("function".to_string()));
                     }
+                    // #1454: global timer builtins (+ fetch) are functions, but
+                    // a bare read lowers to an ExternFuncRef whose typeof reads
+                    // "boolean". Fold to "function" (gc is excluded — it's
+                    // undefined in Node without --expose-gc).
+                    let n = id.sym.as_ref();
+                    if matches!(
+                        n,
+                        "setTimeout"
+                            | "setInterval"
+                            | "setImmediate"
+                            | "clearTimeout"
+                            | "clearInterval"
+                            | "clearImmediate"
+                            | "fetch"
+                    ) && ctx.lookup_local(n).is_none()
+                    {
+                        return Ok(Expr::String("function".to_string()));
+                    }
                 }
                 if let ast::Expr::Member(member) = unary.arg.as_ref() {
                     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
