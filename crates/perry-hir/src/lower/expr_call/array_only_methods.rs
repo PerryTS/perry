@@ -9,6 +9,60 @@ use swc_ecma_ast as ast;
 use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
 
+/// Is `expr` a reference to a node:stream class constructor — bare
+/// (`Readable`) or namespaced (`stream.Readable`)? Used by
+/// [`chain_roots_at_stream`].
+fn is_stream_class_ref(expr: &ast::Expr) -> bool {
+    let name = match expr {
+        ast::Expr::Ident(i) => i.sym.as_ref(),
+        ast::Expr::Member(m) => match &m.prop {
+            ast::MemberProp::Ident(p) => p.sym.as_ref(),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    matches!(name, "Readable" | "Duplex" | "Transform" | "PassThrough")
+}
+
+/// Does this expression's method chain originate from a node:stream
+/// source — `Readable.from(...)` / `Readable.of(...)`, `new Transform()`,
+/// or a chain of lazy iterator helpers (`map`/`filter`/`flatMap`/`take`/
+/// `drop`) on top of one? (#1558)
+///
+/// The lazy stream helpers return another Readable, not an array, so a
+/// chain like `Readable.from(x).map(f).filter(g)` must NOT be folded
+/// into `Expr::Array<Method>` ops — `js_array_map` would read garbage
+/// out of the stream object's header. Detecting the stream root here
+/// keeps such chains on dynamic dispatch so the runtime's stream
+/// iterator-helper stubs run. AST-only (no type info) so it catches the
+/// common inline-chain form without depending on receiver inference.
+fn chain_roots_at_stream(expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::Paren(p) => chain_roots_at_stream(&p.expr),
+        ast::Expr::Await(a) => chain_roots_at_stream(&a.arg),
+        ast::Expr::New(new) => is_stream_class_ref(&new.callee),
+        ast::Expr::Call(call) => {
+            let ast::Callee::Expr(callee) = &call.callee else {
+                return false;
+            };
+            let ast::Expr::Member(m) = callee.as_ref() else {
+                return false;
+            };
+            let ast::MemberProp::Ident(prop) = &m.prop else {
+                return false;
+            };
+            match prop.sym.as_ref() {
+                // Static factories that produce a Readable.
+                "from" | "of" => is_stream_class_ref(&m.obj),
+                // Lazy helpers preserve the stream — recurse into the receiver.
+                "map" | "filter" | "flatMap" | "take" | "drop" => chain_roots_at_stream(&m.obj),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 use super::super::{
     extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
     resolve_typed_parse_ty, LoweringContext,
@@ -228,6 +282,12 @@ pub(super) fn try_array_only_methods(
                     }
                     _ => false,
                 };
+                // #1558: a node:stream chain (`Readable.from(x).map(f).filter(g)`)
+                // must not be folded into Array<Method> ops — the lazy stream
+                // transforms return a Readable, not an array, so `js_array_map`
+                // would read garbage out of the stream object's header. Bail to
+                // dynamic dispatch so the runtime's iterator-helper stubs run.
+                let recv_is_class = recv_is_class || chain_roots_at_stream(member.obj.as_ref());
                 match method_name {
                     "reduce" if !args.is_empty() && !recv_is_class => {
                         let array_expr = lower_expr(ctx, &member.obj)?;

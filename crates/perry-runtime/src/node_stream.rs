@@ -35,13 +35,17 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 // Shape ids — pick a band well clear of fs streams (`STREAM_SHAPE_ID =
-// 0x7FFF_FE40` + method_count). Each method-set length must yield a
-// unique cache key.
+// 0x7FFF_FE40` + method_count). The base ids are spaced 0x40 (64
+// slots) apart so each constructor's `base + method_count` lands in
+// its own band and stays a unique shape-cache key — Readable's method
+// set grew to 28 with the #1558 iterator helpers, so the historical
+// 16-slot spacing no longer left enough headroom.
 const READABLE_SHAPE_ID: u32 = 0x7FFF_FE60;
-const WRITABLE_SHAPE_ID: u32 = 0x7FFF_FE70;
-const DUPLEX_SHAPE_ID: u32 = 0x7FFF_FE80;
+const WRITABLE_SHAPE_ID: u32 = 0x7FFF_FEA0;
+const DUPLEX_SHAPE_ID: u32 = 0x7FFF_FEE0;
 const READABLE_CHUNKS_KEY: &[u8] = b"__perryReadableChunks";
 const READABLE_ERROR_KEY: &[u8] = b"__perryReadableError";
+const READABLE_SIGNAL_KEY: &[u8] = b"__perryReadableSignal";
 const READABLE_READ_KEY: &[u8] = b"__perryReadableRead";
 const READABLE_READ_INVOKED_KEY: &[u8] = b"__perryReadableReadInvoked";
 const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
@@ -198,6 +202,472 @@ extern "C" fn ns_listeners(_closure: *const ClosureHeader, _e: f64) -> f64 {
 }
 extern "C" fn ns_undefined0(_closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
+}
+
+// ─────────────────────────────────────────────────────────────────
+// #1558: Readable async iterator helpers (Node 17+).
+//
+// `map` / `filter` / `flatMap` / `take` / `drop` are lazy in Node —
+// they return a new Readable — while `toArray` / `reduce` / `forEach`
+// / `find` / `some` / `every` consume the stream and return a
+// Promise. Perry's stub Readable already retains its source chunks in
+// the hidden `__perryReadableChunks` array (see `Readable.from`), so
+// these operate on that snapshot eagerly: the transforming helpers
+// build a fresh chunk array wrapped in a new Readable (so chains like
+// `r.map(f).filter(g).toArray()` keep working), and the consuming
+// helpers compute the value and hand back an already-resolved Promise
+// so `await` unwraps the expected result. A Readable with no retained
+// chunks (a bare `new Readable()`) is treated as an empty source.
+// ─────────────────────────────────────────────────────────────────
+
+/// Extract the callback's closure pointer, or null when the argument
+/// isn't a heap pointer (e.g. a missing/undefined callback).
+#[inline]
+fn callback_closure(value: f64) -> *const ClosureHeader {
+    let raw = raw_ptr_from_value(value);
+    if raw < 0x10000 {
+        std::ptr::null()
+    } else {
+        raw as *const ClosureHeader
+    }
+}
+
+/// The readable's retained chunk list as an `ArrayHeader*`, or null
+/// when it has no array-backed chunk storage.
+#[inline]
+fn readable_chunks_array(this: f64) -> *const crate::array::ArrayHeader {
+    match readable_hidden_chunks(this) {
+        Some(chunks) if is_array_like_value(chunks) => {
+            raw_ptr_from_value(chunks) as *const crate::array::ArrayHeader
+        }
+        _ => std::ptr::null(),
+    }
+}
+
+/// Wrap `value` in an already-fulfilled Promise, NaN-boxed.
+#[inline]
+fn resolved_promise(value: f64) -> f64 {
+    let promise = crate::promise::js_promise_resolved(value);
+    box_pointer(promise as *const u8)
+}
+
+/// Build a fresh Readable whose retained chunks are `chunks`.
+#[inline]
+fn readable_from_chunks(chunks: *const crate::array::ArrayHeader) -> f64 {
+    js_node_stream_readable_from(box_pointer(chunks as *const u8))
+}
+
+/// NaN-box a freshly-allocated string.
+#[inline]
+fn string_value(bytes: &[u8]) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+/// Build the rejection reason used when an operation is aborted — a
+/// plain `{ name: "AbortError", message }` object. Node rejects with a
+/// DOMException whose `.name` is `"AbortError"`; callers only inspect
+/// `.name`, so a plain object is byte-equivalent for parity.
+fn abort_error() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 2);
+    js_object_set_field_by_name(obj, hidden_key(b"name"), string_value(b"AbortError"));
+    js_object_set_field_by_name(
+        obj,
+        hidden_key(b"message"),
+        string_value(b"The operation was aborted"),
+    );
+    box_pointer(obj as *const u8)
+}
+
+/// A rejected Promise carrying `reason`, NaN-boxed.
+#[inline]
+fn rejected_promise(reason: f64) -> f64 {
+    box_pointer(crate::promise::js_promise_rejected(reason) as *const u8)
+}
+
+#[inline]
+fn hidden_signal_key() -> *mut crate::string::StringHeader {
+    hidden_key(READABLE_SIGNAL_KEY)
+}
+
+/// The `AbortSignal` carried in `opts.signal`, if any.
+fn options_signal(opts: f64) -> Option<f64> {
+    get_hidden_value(opts, hidden_key(b"signal"))
+}
+
+/// The `AbortSignal` a lazy helper propagated onto this stream.
+fn readable_stored_signal(this: f64) -> Option<f64> {
+    get_hidden_value(this, hidden_signal_key())
+}
+
+/// The signal governing an operation on `this` with call `opts` — the
+/// call's own `{ signal }` wins, otherwise one inherited from an
+/// upstream lazy helper.
+fn effective_signal(this: f64, opts: f64) -> Option<f64> {
+    options_signal(opts).or_else(|| readable_stored_signal(this))
+}
+
+/// True when `signal` is an `AbortSignal` whose `aborted` flag is set.
+fn signal_is_aborted(signal: f64) -> bool {
+    match get_hidden_value(signal, hidden_key(b"aborted")) {
+        Some(v) => crate::value::js_is_truthy(v) != 0,
+        None => false,
+    }
+}
+
+/// Recover a NaN-boxed Promise pointer from a closure capture slot.
+#[inline]
+fn promise_from_capture(closure: *const ClosureHeader, idx: u32) -> *mut crate::promise::Promise {
+    let bits = js_closure_get_capture_ptr(closure, idx) as u64;
+    crate::value::js_nanbox_get_pointer(f64::from_bits(bits)) as *mut crate::promise::Promise
+}
+
+/// Abort-listener body: reject the captured Promise with an AbortError.
+extern "C" fn ns_abort_reject(closure: *const ClosureHeader) -> f64 {
+    let p = promise_from_capture(closure, 0);
+    if !p.is_null() {
+        crate::promise::js_promise_reject(p, abort_error());
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// Deferred-resolve body: fulfill the captured Promise (slot 0) with the
+/// captured value (slot 1) on the next microtask — a no-op if an abort
+/// already rejected it.
+extern "C" fn ns_deferred_resolve(closure: *const ClosureHeader) -> f64 {
+    let p = promise_from_capture(closure, 0);
+    let value = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
+    if !p.is_null() {
+        crate::promise::js_promise_resolve(p, value);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// Build a pending Promise for a consuming helper running under a
+/// not-yet-aborted signal: an abort listener rejects it with an
+/// AbortError, while a queued microtask fulfills it with `value` if no
+/// abort fires first. This matches Node's async timing — the operation
+/// is in flight when a synchronous `controller.abort()` lands before
+/// the awaiter resumes.
+fn deferred_promise(signal: f64, value: f64) -> f64 {
+    let promise = crate::promise::js_promise_new();
+    let promise_box = box_pointer(promise as *const u8);
+
+    if let Some(sig_obj) = object_ptr_from_value(signal) {
+        let reject_cl = js_closure_alloc(ns_abort_reject as *const u8, 1);
+        crate::closure::js_closure_set_capture_ptr(reject_cl, 0, promise_box.to_bits() as i64);
+        crate::url::js_abort_signal_add_listener(
+            sig_obj,
+            string_value(b"abort"),
+            box_pointer(reject_cl as *const u8),
+        );
+    }
+
+    let resolve_cl = js_closure_alloc(ns_deferred_resolve as *const u8, 2);
+    crate::closure::js_closure_set_capture_ptr(resolve_cl, 0, promise_box.to_bits() as i64);
+    crate::closure::js_closure_set_capture_ptr(resolve_cl, 1, value.to_bits() as i64);
+    crate::builtins::js_queue_microtask(resolve_cl as i64);
+
+    promise_box
+}
+
+/// Settle a consuming helper's result under any governing signal: reject
+/// now if already aborted, defer if a signal is pending, else resolve.
+fn settle_consuming(this: f64, opts: f64, value: f64) -> f64 {
+    if let Some(err) = readable_hidden_error(this) {
+        return rejected_promise(err);
+    }
+    match effective_signal(this, opts) {
+        Some(sig) if signal_is_aborted(sig) => rejected_promise(abort_error()),
+        Some(sig) => deferred_promise(sig, value),
+        None => resolved_promise(value),
+    }
+}
+
+/// Carry a lazy helper's source error and governing signal onto its
+/// freshly-built result stream so a downstream consuming helper can
+/// observe an abort or error that happens later in the chain.
+fn propagate_stream_state(this: f64, opts: f64, result: f64) {
+    if let Some(err) = readable_hidden_error(this) {
+        set_hidden_value(result, hidden_error_key(), err);
+    }
+    if let Some(sig) = effective_signal(this, opts) {
+        set_hidden_value(result, hidden_signal_key(), sig);
+    }
+}
+
+/// Resolve a callback result that may be a Promise (an async mapper /
+/// predicate) by draining microtasks until it settles, then reading the
+/// fulfilled value. Bounded so a never-settling promise can't hang the
+/// stub; an unresolved or rejected promise yields the original value.
+fn settle(value: f64) -> f64 {
+    if crate::promise::js_value_is_promise(value) == 0 {
+        return value;
+    }
+    let p = crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise;
+    if p.is_null() {
+        return value;
+    }
+    for _ in 0..10_000 {
+        if unsafe { (*p).state } != crate::promise::PromiseState::Pending {
+            break;
+        }
+        if crate::promise::js_promise_run_microtasks() == 0 {
+            break;
+        }
+    }
+    unsafe {
+        if (*p).state == crate::promise::PromiseState::Fulfilled {
+            (*p).value
+        } else {
+            value
+        }
+    }
+}
+
+/// Invoke a single-argument stream callback and settle an async result.
+#[inline]
+fn call_settled(cb: *const ClosureHeader, arg: f64) -> f64 {
+    settle(crate::closure::js_closure_call1(cb, arg))
+}
+
+/// Coerce a `take(n)` / `drop(n)` count argument to a clamped element
+/// count (negative / NaN → 0, matching Node's normalization).
+#[inline]
+fn count_arg(value: f64) -> u32 {
+    let n = JSValue::from_bits(value.to_bits()).to_number();
+    if n.is_nan() || n <= 0.0 {
+        0
+    } else if n >= u32::MAX as f64 {
+        u32::MAX
+    } else {
+        n as u32
+    }
+}
+
+/// Append every element of array `arr` to `out`, returning the
+/// possibly-reallocated `out`.
+#[inline]
+fn extend_with_array(
+    mut out: *mut crate::array::ArrayHeader,
+    arr: *const crate::array::ArrayHeader,
+) -> *mut crate::array::ArrayHeader {
+    let len = crate::array::js_array_length(arr);
+    for i in 0..len {
+        out = crate::array::js_array_push_f64(out, crate::array::js_array_get_f64(arr, i));
+    }
+    out
+}
+
+extern "C" fn ns_iter_to_array(closure: *const ClosureHeader, opts: f64) -> f64 {
+    let this = this_value(closure);
+    let arr = readable_chunks_array(this);
+    let mut out = crate::array::js_array_alloc(0);
+    if !arr.is_null() {
+        out = extend_with_array(out, arr);
+    }
+    settle_consuming(this, opts, box_pointer(out as *const u8))
+}
+
+extern "C" fn ns_iter_map(closure: *const ClosureHeader, mapper: f64, opts: f64) -> f64 {
+    let this = this_value(closure);
+    let arr = readable_chunks_array(this);
+    let cb = callback_closure(mapper);
+    let mut out = crate::array::js_array_alloc(0);
+    if !arr.is_null() && !cb.is_null() {
+        let len = crate::array::js_array_length(arr);
+        for i in 0..len {
+            let el = crate::array::js_array_get_f64(arr, i);
+            out = crate::array::js_array_push_f64(out, call_settled(cb, el));
+        }
+    }
+    let result = readable_from_chunks(out);
+    propagate_stream_state(this, opts, result);
+    result
+}
+
+extern "C" fn ns_iter_filter(closure: *const ClosureHeader, predicate: f64, opts: f64) -> f64 {
+    let this = this_value(closure);
+    let arr = readable_chunks_array(this);
+    let cb = callback_closure(predicate);
+    let mut out = crate::array::js_array_alloc(0);
+    if !arr.is_null() && !cb.is_null() {
+        let len = crate::array::js_array_length(arr);
+        for i in 0..len {
+            let el = crate::array::js_array_get_f64(arr, i);
+            if crate::value::js_is_truthy(call_settled(cb, el)) != 0 {
+                out = crate::array::js_array_push_f64(out, el);
+            }
+        }
+    }
+    let result = readable_from_chunks(out);
+    propagate_stream_state(this, opts, result);
+    result
+}
+
+extern "C" fn ns_iter_reduce(
+    closure: *const ClosureHeader,
+    reducer: f64,
+    initial: f64,
+    opts: f64,
+) -> f64 {
+    let this = this_value(closure);
+    let arr = readable_chunks_array(this);
+    let cb = callback_closure(reducer);
+    let len = if arr.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(arr)
+    };
+    let has_initial = initial.to_bits() != TAG_UNDEFINED;
+    let (mut acc, start) = if has_initial {
+        (initial, 0)
+    } else if len > 0 {
+        (crate::array::js_array_get_f64(arr, 0), 1)
+    } else {
+        // Node throws "Reduce of empty stream with no initial value";
+        // the stub resolves undefined rather than crash.
+        return settle_consuming(this, opts, f64::from_bits(TAG_UNDEFINED));
+    };
+    if !cb.is_null() {
+        for i in start..len {
+            let el = crate::array::js_array_get_f64(arr, i);
+            // Node's stream reducer is (accumulator, current) — no index.
+            acc = settle(crate::closure::js_closure_call2(cb, acc, el));
+        }
+    }
+    settle_consuming(this, opts, acc)
+}
+
+extern "C" fn ns_iter_for_each(closure: *const ClosureHeader, action: f64, opts: f64) -> f64 {
+    let this = this_value(closure);
+    let arr = readable_chunks_array(this);
+    let cb = callback_closure(action);
+    if !arr.is_null() && !cb.is_null() {
+        let len = crate::array::js_array_length(arr);
+        for i in 0..len {
+            let el = crate::array::js_array_get_f64(arr, i);
+            let _ = call_settled(cb, el);
+        }
+    }
+    settle_consuming(this, opts, f64::from_bits(TAG_UNDEFINED))
+}
+
+extern "C" fn ns_iter_find(closure: *const ClosureHeader, predicate: f64, opts: f64) -> f64 {
+    let this = this_value(closure);
+    let arr = readable_chunks_array(this);
+    let cb = callback_closure(predicate);
+    let mut found = f64::from_bits(TAG_UNDEFINED);
+    if !arr.is_null() && !cb.is_null() {
+        let len = crate::array::js_array_length(arr);
+        for i in 0..len {
+            let el = crate::array::js_array_get_f64(arr, i);
+            if crate::value::js_is_truthy(call_settled(cb, el)) != 0 {
+                found = el;
+                break;
+            }
+        }
+    }
+    settle_consuming(this, opts, found)
+}
+
+extern "C" fn ns_iter_some(closure: *const ClosureHeader, predicate: f64, opts: f64) -> f64 {
+    let this = this_value(closure);
+    let arr = readable_chunks_array(this);
+    let cb = callback_closure(predicate);
+    let mut result = f64::from_bits(TAG_FALSE);
+    if !arr.is_null() && !cb.is_null() {
+        let len = crate::array::js_array_length(arr);
+        for i in 0..len {
+            let el = crate::array::js_array_get_f64(arr, i);
+            if crate::value::js_is_truthy(call_settled(cb, el)) != 0 {
+                result = f64::from_bits(TAG_TRUE);
+                break;
+            }
+        }
+    }
+    settle_consuming(this, opts, result)
+}
+
+extern "C" fn ns_iter_every(closure: *const ClosureHeader, predicate: f64, opts: f64) -> f64 {
+    let this = this_value(closure);
+    let arr = readable_chunks_array(this);
+    let cb = callback_closure(predicate);
+    let mut result = f64::from_bits(TAG_TRUE);
+    if !arr.is_null() && !cb.is_null() {
+        let len = crate::array::js_array_length(arr);
+        for i in 0..len {
+            let el = crate::array::js_array_get_f64(arr, i);
+            if crate::value::js_is_truthy(call_settled(cb, el)) == 0 {
+                result = f64::from_bits(TAG_FALSE);
+                break;
+            }
+        }
+    }
+    settle_consuming(this, opts, result)
+}
+
+extern "C" fn ns_iter_flat_map(closure: *const ClosureHeader, mapper: f64, opts: f64) -> f64 {
+    let this = this_value(closure);
+    let arr = readable_chunks_array(this);
+    let cb = callback_closure(mapper);
+    let mut out = crate::array::js_array_alloc(0);
+    if !arr.is_null() && !cb.is_null() {
+        let len = crate::array::js_array_length(arr);
+        for i in 0..len {
+            let el = crate::array::js_array_get_f64(arr, i);
+            let mapped = call_settled(cb, el);
+            // flatMap flattens one level: an array result is spread, a
+            // Readable result contributes its retained chunks, anything
+            // else is appended as a single chunk. (A bare async-generator
+            // mapper isn't flattened yet — tracked separately.)
+            if is_array_like_value(mapped) {
+                out = extend_with_array(out, raw_ptr_from_value(mapped) as *const _);
+            } else if let Some(inner) = readable_hidden_chunks(mapped) {
+                if is_array_like_value(inner) {
+                    out = extend_with_array(out, raw_ptr_from_value(inner) as *const _);
+                } else {
+                    out = crate::array::js_array_push_f64(out, mapped);
+                }
+            } else {
+                out = crate::array::js_array_push_f64(out, mapped);
+            }
+        }
+    }
+    let result = readable_from_chunks(out);
+    propagate_stream_state(this, opts, result);
+    result
+}
+
+extern "C" fn ns_iter_take(closure: *const ClosureHeader, count: f64) -> f64 {
+    let this = this_value(closure);
+    let arr = readable_chunks_array(this);
+    let mut out = crate::array::js_array_alloc(0);
+    if !arr.is_null() {
+        let len = crate::array::js_array_length(arr);
+        let take = count_arg(count).min(len);
+        for i in 0..take {
+            out = crate::array::js_array_push_f64(out, crate::array::js_array_get_f64(arr, i));
+        }
+    }
+    let result = readable_from_chunks(out);
+    propagate_stream_state(this, f64::from_bits(TAG_UNDEFINED), result);
+    result
+}
+
+extern "C" fn ns_iter_drop(closure: *const ClosureHeader, count: f64) -> f64 {
+    let this = this_value(closure);
+    let arr = readable_chunks_array(this);
+    let mut out = crate::array::js_array_alloc(0);
+    if !arr.is_null() {
+        let len = crate::array::js_array_length(arr);
+        for i in count_arg(count).min(len)..len {
+            out = crate::array::js_array_push_f64(out, crate::array::js_array_get_f64(arr, i));
+        }
+    }
+    let result = readable_from_chunks(out);
+    propagate_stream_state(this, f64::from_bits(TAG_UNDEFINED), result);
+    result
 }
 
 type StubFn = unsafe extern "C" fn();
@@ -700,11 +1170,11 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
 // Method tables. Order is locked in — it determines the shape's
 // packed-keys order. Each method set's length is a unique
 // shape-cache key when added to its base shape id, so e.g. Readable's
-// 17 methods at READABLE_SHAPE_ID don't collide with Writable's at
+// 28 methods at READABLE_SHAPE_ID don't collide with Writable's at
 // WRITABLE_SHAPE_ID.
 // ─────────────────────────────────────────────────────────────────
 
-fn readable_methods() -> [(&'static str, StubFn); 17] {
+fn readable_methods() -> [(&'static str, StubFn); 28] {
     [
         ("on", cast2(ns_chain2)),
         ("once", cast2(ns_chain2)),
@@ -723,6 +1193,22 @@ fn readable_methods() -> [(&'static str, StubFn); 17] {
         ("destroy", cast1(ns_chain1)),
         ("setEncoding", cast1(ns_chain1)),
         ("isPaused", cast0(ns_undefined0)),
+        // #1558 — async iterator helpers. The consuming helpers accept a
+        // trailing `{ signal }` options arg; the lazy transforms accept one
+        // too (Node's signature). Arities are registered in
+        // `register_iter_helper_arities` so under-supplied calls pad the
+        // missing trailing args with `undefined`.
+        ("toArray", cast1(ns_iter_to_array)),
+        ("map", cast2(ns_iter_map)),
+        ("filter", cast2(ns_iter_filter)),
+        ("reduce", cast3(ns_iter_reduce)),
+        ("forEach", cast2(ns_iter_for_each)),
+        ("find", cast2(ns_iter_find)),
+        ("some", cast2(ns_iter_some)),
+        ("every", cast2(ns_iter_every)),
+        ("flatMap", cast2(ns_iter_flat_map)),
+        ("take", cast1(ns_iter_take)),
+        ("drop", cast1(ns_iter_drop)),
     ]
 }
 
@@ -789,8 +1275,42 @@ fn duplex_methods() -> [(&'static str, StubFn); 22] {
 // the wider stream state machine out of this compatibility layer.
 // ─────────────────────────────────────────────────────────────────
 
+thread_local! {
+    static ITER_HELPER_ARITIES_REGISTERED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Register declared arities for the iterator-helper stubs (once per
+/// thread) so the closure dispatcher pads missing trailing args with
+/// `undefined` instead of reading register garbage. `reduce` strictly
+/// needs it — `reduce(fn)` omits the initial value — and registering
+/// the single-arg helpers makes a missing-callback call (`map()`)
+/// degrade to a no-op rather than dereference junk.
+fn register_iter_helper_arities() {
+    if ITER_HELPER_ARITIES_REGISTERED.with(|c| c.replace(true)) {
+        return;
+    }
+    let entries: &[(StubFn, u32)] = &[
+        (cast1(ns_iter_to_array), 1),
+        (cast2(ns_iter_map), 2),
+        (cast2(ns_iter_filter), 2),
+        (cast3(ns_iter_reduce), 3),
+        (cast2(ns_iter_for_each), 2),
+        (cast2(ns_iter_find), 2),
+        (cast2(ns_iter_some), 2),
+        (cast2(ns_iter_every), 2),
+        (cast2(ns_iter_flat_map), 2),
+        (cast1(ns_iter_take), 1),
+        (cast1(ns_iter_drop), 1),
+    ];
+    for (f, arity) in entries {
+        crate::closure::js_register_closure_arity(*f as *const u8, *arity);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
+    register_iter_helper_arities();
     let methods = readable_methods();
     let obj = build_object(&methods, READABLE_SHAPE_ID + methods.len() as u32);
     let readable = f64::from_bits(JSValue::pointer(obj as *const u8).bits());

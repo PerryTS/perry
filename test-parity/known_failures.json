@@ -1394,113 +1394,11 @@
     "category": "bug-open",
     "reason": "node:stream: write() return value sequence under backpressure not honored. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/iter-helpers/to-array": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.toArray() not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/map": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.map() not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/filter": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.filter() not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/reduce": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.reduce() not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/for-each": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.forEach() not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/find": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.find() not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/some": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.some() not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/every": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.every() not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/flat-map": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.flatMap() not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/take": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.take() not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/drop": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.drop() not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/map-concurrency": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.map with concurrency option not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/chained": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: chained map.filter.take.toArray pipeline not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/filter-with-signal": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.filter with signal option not implemented. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/iter-helpers/flat-map-async": {
-    "issue": "1558",
+    "issue": "1572",
     "added": "2026-05-23",
     "category": "bug-open",
-    "reason": "node:stream: Readable.flatMap with async generator not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/to-array-with-signal": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.toArray with signal not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/for-each-with-signal": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.forEach with signal not implemented. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/reduce-with-signal": {
-    "issue": "1558",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.reduce with signal not implemented. Flips to PASS when #1558 lands."
+    "reason": "node:stream: Readable.flatMap with an async-generator mapper isn't driven through the async-iterator protocol yet (the other iterator helpers + AbortSignal landed in #1558). Flips to PASS when #1572 lands."
   },
   "node-suite/stream/readable/from-map-iterable": {
     "issue": "1532",
