@@ -120,14 +120,15 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     "stdout" => return Ok(Expr::ProcessStdout),
                     "stderr" => return Ok(Expr::ProcessStderr),
                     "env" => return Ok(Expr::ProcessEnv),
-                    // #1407: IPC-only members. When the process wasn't
-                    // spawned with an IPC channel (the default), Node
-                    // leaves these as `undefined` rather than exposing a
-                    // dummy method. Reads here must short-circuit to
-                    // Undefined so `typeof process.send === "undefined"`
-                    // matches Node and downstream `if (process.send)`
-                    // guards do the right thing.
-                    "send" | "disconnect" => return Ok(Expr::Undefined),
+                    // #1407 / #1397: IPC-only members. When the process
+                    // wasn't spawned with an IPC channel (the default),
+                    // Node leaves these as `undefined` rather than
+                    // exposing a dummy method/boolean. Reads here must
+                    // short-circuit to Undefined so
+                    // `typeof process.send === "undefined"` matches Node
+                    // and downstream `if (process.send)` /
+                    // `if (process.connected)` guards do the right thing.
+                    "send" | "disconnect" | "connected" => return Ok(Expr::Undefined),
                     _ => {}
                 }
             }
@@ -187,7 +188,7 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     "version" => return Ok(Expr::ProcessVersion),
                     "versions" => return Ok(Expr::ProcessVersions),
                     "env" => return Ok(Expr::ProcessEnv),
-                    "send" | "disconnect" => return Ok(Expr::Undefined),
+                    "send" | "disconnect" | "connected" => return Ok(Expr::Undefined),
                     _ => {}
                 }
             }
