@@ -1051,6 +1051,11 @@ where
                 f(v);
             }
         }
+        Expr::ProcessEmitWarning(args) => {
+            for a in args {
+                f(a);
+            }
+        }
 
         // ─── Child process ───────────────────────────────────────────────
         Expr::ChildProcessExecSync { command, options } => {

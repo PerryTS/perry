@@ -1032,6 +1032,11 @@ where
                 f(v);
             }
         }
+        Expr::ProcessEmitWarning(args) => {
+            for a in args {
+                f(a);
+            }
+        }
         Expr::ChildProcessExecSync { command, options } => {
             f(command);
             if let Some(o) = options {

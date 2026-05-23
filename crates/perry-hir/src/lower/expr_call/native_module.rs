@@ -177,6 +177,13 @@ pub(super) fn try_native_module_methods(
                                 crate::ir::PosixCredentialKind::Egid,
                             )));
                         }
+                        "emitWarning" => {
+                            // process.emitWarning(warning[, type, code, ctor])
+                            // — writes a formatted warning to stderr. Perry
+                            // collapses the overloads into a positional Vec
+                            // and lets the runtime do the formatting.
+                            return Ok(Ok(Expr::ProcessEmitWarning(args)));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }

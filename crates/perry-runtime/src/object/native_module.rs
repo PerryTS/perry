@@ -284,6 +284,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "geteuid")
             | ("process", "getgid")
             | ("process", "getegid")
+            | ("process", "emitWarning")
             | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")

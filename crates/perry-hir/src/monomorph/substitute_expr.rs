@@ -288,6 +288,11 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::ProcessAvailableMemory => Expr::ProcessAvailableMemory,
         Expr::ProcessConstrainedMemory => Expr::ProcessConstrainedMemory,
         Expr::ProcessPosixCredential(k) => Expr::ProcessPosixCredential(*k),
+        Expr::ProcessEmitWarning(args) => Expr::ProcessEmitWarning(
+            args.iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
+        ),
 
         // File system
         Expr::FsReadFileSync(path) => {

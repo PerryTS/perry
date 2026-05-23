@@ -1176,6 +1176,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessAvailableMemory
         | Expr::ProcessConstrainedMemory
         | Expr::ProcessPosixCredential(..)
+        | Expr::ProcessEmitWarning(..)
         | Expr::EncodeURI(..)
         | Expr::DecodeURI(..)
         | Expr::EncodeURIComponent(..)

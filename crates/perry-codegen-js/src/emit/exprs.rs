@@ -498,6 +498,16 @@ impl JsEmitter {
                     m = method
                 );
             }
+            Expr::ProcessEmitWarning(args) => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.emitWarning === 'function' ? process.emitWarning(");
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
+                    self.emit_expr(a);
+                }
+                self.output.push_str(") : undefined)");
+            }
             Expr::ProcessPid => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.pid : 0)");
             }

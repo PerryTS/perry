@@ -79,6 +79,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             Ok(ctx.block().call(DOUBLE, fn_name, &[]))
         }
+        Expr::ProcessEmitWarning(args) => {
+            // First three positional args (warning, type, code). Missing
+            // slots are passed as TAG_UNDEFINED so the runtime can detect
+            // and skip them.
+            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let warning = if let Some(e) = args.first() {
+                lower_expr(ctx, e)?
+            } else {
+                undef.clone()
+            };
+            let type_v = if let Some(e) = args.get(1) {
+                lower_expr(ctx, e)?
+            } else {
+                undef.clone()
+            };
+            let code_v = if let Some(e) = args.get(2) {
+                lower_expr(ctx, e)?
+            } else {
+                undef.clone()
+            };
+            ctx.block().call_void(
+                "js_process_emit_warning",
+                &[(DOUBLE, &warning), (DOUBLE, &type_v), (DOUBLE, &code_v)],
+            );
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+        }
         Expr::EncodeURI(o) => {
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();

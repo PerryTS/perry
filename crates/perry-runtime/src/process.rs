@@ -130,6 +130,51 @@ pub extern "C" fn js_process_getegid() -> f64 {
     }
 }
 
+/// process.emitWarning(warning[, type, code, ctor]) -> undefined.
+/// Writes a formatted warning to stderr matching Node's shape:
+/// `(node:<pid>) <Type> [CODE]: <message>`. Anything that can't be
+/// coerced to a string is rendered via `js_jsvalue_to_string`. The 4th
+/// `ctor` arg (Node's trace anchor) is accepted but ignored — Perry
+/// doesn't capture stack traces here.
+#[no_mangle]
+pub extern "C" fn js_process_emit_warning(warning: f64, type_name: f64, code: f64) {
+    use std::io::Write;
+    let undef_bits = crate::value::TAG_UNDEFINED;
+    let value_to_string = |v: f64| -> String {
+        if v.to_bits() == undef_bits {
+            return String::new();
+        }
+        let ptr = crate::value::js_jsvalue_to_string(v);
+        if ptr.is_null() {
+            return String::new();
+        }
+        unsafe {
+            let header = &*ptr;
+            let len = header.byte_len as usize;
+            let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+            String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+        }
+    };
+
+    let msg = value_to_string(warning);
+    let raw_type = value_to_string(type_name);
+    let raw_code = value_to_string(code);
+    let label = if raw_type.is_empty() {
+        "Warning".to_string()
+    } else {
+        raw_type
+    };
+    let code_part = if raw_code.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", raw_code)
+    };
+    let pid = std::process::id();
+    let line = format!("(node:{}) {}{}: {}\n", pid, label, code_part, msg);
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_all(line.as_bytes());
+}
+
 /// process.availableMemory() -> number. Free system memory available to
 /// the process in bytes. Delegates to `js_os_freemem`'s host-statistics
 /// path on macOS/iOS, sysinfo on Linux, GlobalMemoryStatusEx on Windows.
