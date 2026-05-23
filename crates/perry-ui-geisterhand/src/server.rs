@@ -1,6 +1,7 @@
 //! HTTP server for geisterhand.
 //! Routes: /widgets, /click/:handle, /type/:handle, /slide/:handle,
-//! /toggle/:handle, /state/:handle, /key, /scroll/:handle, /chaos/start, /chaos/stop, /chaos/status
+//! /select/:handle, /toggle/:handle, /state/:handle, /key,
+//! /scroll/:handle, /chaos/start, /chaos/stop, /chaos/status
 
 use tiny_http::{Header, Method, Response, Server};
 
@@ -425,6 +426,33 @@ pub fn run_server(port: u16) {
                     if closure != 0.0 {
                         unsafe {
                             perry_geisterhand_queue_action1(closure, value);
+                        }
+                        ok_json(r#"{"ok":true}"#)
+                    } else {
+                        error_json(404, "no onChange callback for this handle")
+                    }
+                }
+                None => error_json(400, "invalid handle"),
+            },
+
+            // POST /select/:handle — set Picker selected index + fire onChange.
+            // #1488: Picker registers as widget kind 4 (`callback_kind=1` =
+            // onChange) but had no automation route. Mirrors /slide — the
+            // index is queued as the onChange arg, and the JS-side state
+            // setter (`onChange={(idx) => setSelected(idx)}` pattern) drives
+            // the re-render. Body shape: `{"index": N}`. (Label-string lookup
+            // suggested in the issue is a later step — see the issue thread.)
+            (Method::Post, p) if p.starts_with("/select/") => match parse_handle(p, "/select/") {
+                Some(handle) => {
+                    let body = read_body(&mut request);
+                    let index = match serde_json::from_str::<serde_json::Value>(&body) {
+                        Ok(v) => v.get("index").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                        Err(_) => 0.0,
+                    };
+                    let closure = unsafe { perry_geisterhand_get_closure(handle, CB_ON_CHANGE) };
+                    if closure != 0.0 {
+                        unsafe {
+                            perry_geisterhand_queue_action1(closure, index);
                         }
                         ok_json(r#"{"ok":true}"#)
                     } else {
