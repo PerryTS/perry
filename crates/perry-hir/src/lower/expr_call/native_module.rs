@@ -106,6 +106,19 @@ pub(super) fn try_native_module_methods(
                             // on "value is not a function".
                             return Ok(Ok(Expr::Undefined));
                         }
+                        "getBuiltinModule" => {
+                            // #1398: process.getBuiltinModule(id) — Node
+                            // 22.3+ accessor. Returns the named built-in
+                            // module if loaded into the interpreter,
+                            // `undefined` otherwise (no throw). Perry
+                            // AOT-compiles every imported module, so
+                            // there's no observable runtime "is this
+                            // loaded?" query — `undefined` is the spec-
+                            // compatible answer for *every* id, and
+                            // consumers fall back to `import` (which we
+                            // already handle).
+                            return Ok(Ok(Expr::Undefined));
+                        }
                         "exit" => {
                             // process.exit() / process.exit(code) — never
                             // returns, terminates the process. Until now this
