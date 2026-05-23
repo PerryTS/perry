@@ -225,6 +225,20 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::perf_hooks::current_list_get_by_name(arg(0))
         }
 
+        // ── Histogram instance methods (#1336) ──
+        // Every method is a no-op on the stub — `enable`/`disable`/`reset`
+        // don't sample anything, `record`/`recordDelta`/`add` discard input.
+        // `percentile(p)` returns 0 (no samples => no rank).
+        ("perf_histogram", "enable")
+        | ("perf_histogram", "disable")
+        | ("perf_histogram", "reset")
+        | ("perf_histogram", "record")
+        | ("perf_histogram", "recordDelta")
+        | ("perf_histogram", "add") => crate::perf_hooks::js_perf_histogram_noop(),
+        ("perf_histogram", "percentile") | ("perf_histogram", "percentileBigInt") => {
+            crate::perf_hooks::js_perf_histogram_percentile(arg(0))
+        }
+
         // ── timers module ──
         ("timers", "setTimeout") if args_len >= 2 => {
             let cb = arg(0);

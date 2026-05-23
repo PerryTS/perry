@@ -1019,3 +1019,58 @@ pub fn scan_perf_entries_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         }
     });
 }
+
+// ── Histograms (perf_histogram namespace) ────────────────────────────────────
+// `monitorEventLoopDelay()` returns an IntervalHistogram and
+// `createHistogram()` returns a RecordableHistogram. Perry doesn't actually
+// sample event-loop delay or record user-supplied values yet — every stat
+// reads as 0, and enable/disable/reset/record/recordDelta/add are no-ops.
+// The shape is enough to satisfy feature-detection (`typeof h.record ===
+// "function"`, `typeof h.mean === "number"`) and the trivial-call paths
+// that user code drives through these histograms. Issue #1336.
+
+/// Build a `perf_histogram`-tagged namespace object. Distinguishing
+/// IntervalHistogram vs RecordableHistogram is unnecessary for the stub
+/// surface — every method/property is shared and trivial — so the same
+/// shape covers both. The receiver-less property reads route through
+/// `is_native_module_callable_export` (methods) and
+/// `get_native_module_constant` (numeric accessors).
+unsafe fn make_histogram_object() -> f64 {
+    let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 1);
+    let module = b"perf_histogram";
+    let mname = crate::string::js_string_from_bytes(module.as_ptr(), module.len() as u32);
+    js_object_set_field(obj, 0, JSValue::string_ptr(mname));
+    let mut keys = crate::array::js_array_alloc(1);
+    let kp = crate::string::js_string_from_bytes(b"__module__".as_ptr(), 10);
+    keys = crate::array::js_array_push(keys, JSValue::string_ptr(kp));
+    crate::object::js_object_set_keys(obj, keys);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+/// `perf_hooks.monitorEventLoopDelay(options?)` — returns an IntervalHistogram.
+#[no_mangle]
+pub extern "C" fn js_perf_monitor_event_loop_delay(_options: f64) -> f64 {
+    unsafe { make_histogram_object() }
+}
+
+/// `perf_hooks.createHistogram(options?)` — returns a RecordableHistogram.
+#[no_mangle]
+pub extern "C" fn js_perf_create_histogram(_options: f64) -> f64 {
+    unsafe { make_histogram_object() }
+}
+
+/// `histogram.enable()` / `.disable()` / `.reset()` / `.record(n)` /
+/// `.recordDelta()` / `.add(other)` — no-ops on the stub. Returns
+/// `undefined` per Node's signature for the void-returning methods;
+/// `.enable()` actually returns `true` in Node (was it running before?),
+/// but `undefined` is what the unobserved-stub case warrants.
+#[no_mangle]
+pub extern "C" fn js_perf_histogram_noop() -> f64 {
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+/// `histogram.percentile(p)` — returns 0 (no recorded samples).
+#[no_mangle]
+pub extern "C" fn js_perf_histogram_percentile(_p: f64) -> f64 {
+    0.0
+}

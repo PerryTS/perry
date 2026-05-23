@@ -504,6 +504,19 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("perf_observer_list", "getEntries")
             | ("perf_observer_list", "getEntriesByType")
             | ("perf_observer_list", "getEntriesByName")
+            // #1336: monitorEventLoopDelay() / createHistogram() return
+            // a `perf_histogram`-tagged namespace object. Property reads
+            // of method names need to satisfy `typeof h.enable === "function"`.
+            | ("perf_hooks", "monitorEventLoopDelay")
+            | ("perf_hooks", "createHistogram")
+            | ("perf_histogram", "enable")
+            | ("perf_histogram", "disable")
+            | ("perf_histogram", "reset")
+            | ("perf_histogram", "record")
+            | ("perf_histogram", "recordDelta")
+            | ("perf_histogram", "add")
+            | ("perf_histogram", "percentile")
+            | ("perf_histogram", "percentileBigInt")
             // node:cluster — namespace property reads of these callables
             // need to satisfy `typeof cluster.fork === "function"` etc.
             // The fixtures only probe types, but compiled npm code that
@@ -1493,6 +1506,19 @@ pub(crate) unsafe fn get_native_module_constant(
             // #463 gate doesn't reject the typeof read at compile time;
             // here we resolve them to undefined at runtime.
             "on" | "addListener" => Some(f64::from_bits(JSValue::undefined().bits())),
+            _ => None,
+        },
+        // #1336: Histograms returned by perf_hooks.monitorEventLoopDelay /
+        // .createHistogram expose numeric stats via property read. Perry's
+        // stub doesn't record samples so every accessor reads 0; `exceeds`
+        // and `count` matter for code that branches on counts before
+        // computing averages.
+        "perf_histogram" => match property {
+            "mean" | "min" | "max" | "stddev" | "exceeds" | "count" => Some(0.0),
+            "percentiles" | "percentilesBigInt" => {
+                let obj = unsafe { js_object_alloc(0, 0) };
+                Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
+            }
             _ => None,
         },
         _ => None,

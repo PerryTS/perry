@@ -1105,6 +1105,13 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_perf_observer_observe", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_disconnect", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_observer_take_records", DOUBLE, &[DOUBLE]);
+    // #1336: histogram stubs for perf_hooks.monitorEventLoopDelay() /
+    // .createHistogram(). Histogram methods route via the perf_histogram
+    // namespace through native_module_dispatch.
+    module.declare_function("js_perf_monitor_event_loop_delay", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perf_create_histogram", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perf_histogram_noop", DOUBLE, &[]);
+    module.declare_function("js_perf_histogram_percentile", DOUBLE, &[DOUBLE]);
 
     // ========== Async-step iter-result scratch (perf hot path) ==========
     // See promise.rs::ITER_RESULT_VALUE / ITER_RESULT_DONE — eliminates

@@ -148,6 +148,22 @@ pub(super) fn lower_perf_hooks_method(
             // isn't in our supported entryTypes set today, so no
             // observer would see it anyway).
             "timerify" => lower_or_undef(ctx, 0)?,
+            // #1336: perf_hooks.monitorEventLoopDelay(options?) returns
+            // an IntervalHistogram; createHistogram(options?) returns a
+            // RecordableHistogram. Both are stubs (every stat reads 0
+            // and enable/disable/reset/record are no-ops), but the
+            // returned object has the right shape for feature-detection
+            // and trivial-call paths.
+            "monitorEventLoopDelay" => {
+                let a0 = lower_or_undef(ctx, 0)?;
+                ctx.block()
+                    .call(DOUBLE, "js_perf_monitor_event_loop_delay", &[(DOUBLE, &a0)])
+            }
+            "createHistogram" => {
+                let a0 = lower_or_undef(ctx, 0)?;
+                ctx.block()
+                    .call(DOUBLE, "js_perf_create_histogram", &[(DOUBLE, &a0)])
+            }
             _ => return Ok(None),
         };
         return Ok(Some(v));

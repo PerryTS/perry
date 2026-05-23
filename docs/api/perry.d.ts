@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1203 entries across 80 modules
+// Coverage: 1221 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -993,6 +993,41 @@ declare module "path" {
   export function toNamespacedPath(...args: any[]): any;
 }
 
+declare module "perf_histogram" {
+  /** stdlib */
+  export const count: any;
+  /** stdlib */
+  export const exceeds: any;
+  /** stdlib */
+  export const max: any;
+  /** stdlib */
+  export const mean: any;
+  /** stdlib */
+  export const min: any;
+  /** stdlib */
+  export const percentiles: any;
+  /** stdlib */
+  export const percentilesBigInt: any;
+  /** stdlib */
+  export const stddev: any;
+  /** stdlib */
+  export function add(...args: any[]): any;
+  /** stdlib */
+  export function disable(...args: any[]): any;
+  /** stdlib */
+  export function enable(...args: any[]): any;
+  /** stdlib */
+  export function percentile(...args: any[]): any;
+  /** stdlib */
+  export function percentileBigInt(...args: any[]): any;
+  /** stdlib */
+  export function record(...args: any[]): any;
+  /** stdlib */
+  export function recordDelta(...args: any[]): any;
+  /** stdlib */
+  export function reset(...args: any[]): any;
+}
+
 declare module "perf_hooks" {
   /** stdlib */
   export class PerformanceEntry { [key: string]: any; }
@@ -1019,6 +1054,8 @@ declare module "perf_hooks" {
   /** stdlib */
   export function clearResourceTimings(...args: any[]): any;
   /** stdlib */
+  export function createHistogram(...args: any[]): any;
+  /** stdlib */
   export function eventLoopUtilization(...args: any[]): any;
   /** stdlib */
   export function getEntries(...args: any[]): any;
@@ -1032,6 +1069,8 @@ declare module "perf_hooks" {
   export function markResourceTiming(...args: any[]): any;
   /** stdlib */
   export function measure(...args: any[]): any;
+  /** stdlib */
+  export function monitorEventLoopDelay(...args: any[]): any;
   /** stdlib */
   export function now(...args: any[]): any;
   /** stdlib */
