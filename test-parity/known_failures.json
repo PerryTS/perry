@@ -1687,5 +1687,29 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/from-with-options": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(iter, options) — 2nd-arg stream options (objectMode/highWaterMark) ignored. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/end-false-option": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipe(dst, {end: false}) — destination still ended when source ends. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/tee-while-locked-throws": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: tee() on a locked stream does not throw TypeError. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/events/readable-event-order": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: 'readable' event ordering relative to 'end' — extra readable before end missing or out-of-order. Flips to PASS when #1532 lands."
   }
 }
