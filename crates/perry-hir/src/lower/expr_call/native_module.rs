@@ -119,6 +119,21 @@ pub(super) fn try_native_module_methods(
                             // already handle).
                             return Ok(Ok(Expr::Undefined));
                         }
+                        "dlopen" => {
+                            // #1409: process.dlopen(module, filename, flags?)
+                            // is Node's native-addon (.node) loader. Perry
+                            // statically links every dependency at compile
+                            // time — there's no dynamic loader to call.
+                            // Returning undefined is the closest no-op:
+                            // call sites that probe for the function before
+                            // attempting to load an addon (a common pattern
+                            // in optional-dep wrappers) see typeof "function"
+                            // and a "loaded" non-error, then fall back to
+                            // their pure-JS path. Real addon-loading
+                            // attempts will surface as the addon's exports
+                            // being undefined downstream.
+                            return Ok(Ok(Expr::Undefined));
+                        }
                         "exit" => {
                             // process.exit() / process.exit(code) — never
                             // returns, terminates the process. Until now this
