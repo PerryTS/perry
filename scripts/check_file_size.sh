@@ -70,6 +70,10 @@ crates/perry-stdlib/src/crypto.rs
 # WebCrypto subtle.* surface expanded by #1419. Split-by-algorithm tracked
 # as a follow-up under #793.
 crates/perry-stdlib/src/webcrypto.rs
+# Object field get/set + handle/native dispatch shim; grew past the limit
+# after the #1419 KeyObject/.export/.equals routing + main's process-module
+# additions. Splitting tracked under #1435.
+crates/perry-runtime/src/object/field_get_set.rs
 EOF
 )
 
