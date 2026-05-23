@@ -74,6 +74,10 @@ crates/perry-stdlib/src/webcrypto.rs
 # after the #1419 KeyObject/.export/.equals routing + main's process-module
 # additions. Splitting tracked under #1435.
 crates/perry-runtime/src/object/field_get_set.rs
+# Codegen `Call` dispatch tower; grew past the limit after #1419's crypto
+# fast-path gate refinements + main's process / fs / perf_hooks Expr
+# additions. Splitting per-builtin family tracked alongside #1435.
+crates/perry-codegen/src/expr/calls.rs
 EOF
 )
 
