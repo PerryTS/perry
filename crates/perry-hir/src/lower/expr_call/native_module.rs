@@ -87,6 +87,15 @@ pub(super) fn try_native_module_methods(
                                 }));
                             }
                         }
+                        "ref" | "unref" => {
+                            // #1410: process.ref() / process.unref() — no-ops
+                            // in Node (process always keeps the loop alive,
+                            // so there's nothing to ref/unref). Return
+                            // undefined so callers that probe and invoke them
+                            // (e.g. graceful-shutdown helpers) don't crash on
+                            // "value is not a function".
+                            return Ok(Ok(Expr::Undefined));
+                        }
                         "exit" => {
                             // process.exit() / process.exit(code) — never
                             // returns, terminates the process. Until now this
