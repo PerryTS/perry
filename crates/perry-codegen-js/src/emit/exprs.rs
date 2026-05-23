@@ -508,6 +508,38 @@ impl JsEmitter {
                 }
                 self.output.push_str(") : undefined)");
             }
+            Expr::ProcessEmitterCall { op, args } => {
+                use perry_hir::ProcessEmitterOp as Op;
+                let method = match op {
+                    Op::Emit => "emit",
+                    Op::Listeners => "listeners",
+                    Op::EventNames => "eventNames",
+                    Op::ListenerCount => "listenerCount",
+                    Op::RemoveListener => "removeListener",
+                    Op::RemoveAllListeners => "removeAllListeners",
+                    Op::PrependListener => "prependListener",
+                    Op::PrependOnceListener => "prependOnceListener",
+                    Op::SetMaxListeners => "setMaxListeners",
+                    Op::GetMaxListeners => "getMaxListeners",
+                };
+                self.output.push_str(&format!(
+                    "(typeof process !== 'undefined' ? process.{method}("
+                ));
+                if matches!(op, Op::Emit) {
+                    // args == [event, payloadArray]; spread the payload.
+                    self.emit_expr(&args[0]);
+                    self.output.push_str(", ...");
+                    self.emit_expr(&args[1]);
+                } else {
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
+                        self.emit_expr(a);
+                    }
+                }
+                self.output.push_str(") : undefined)");
+            }
             Expr::ProcessCpuUsage(prior) => {
                 self.output.push_str("(typeof process !== 'undefined' && typeof process.cpuUsage === 'function' ? process.cpuUsage(");
                 if let Some(p) = prior {

@@ -648,10 +648,12 @@ fn extract_hrtime_prior(value: f64) -> (i64, i64) {
     (to_i64(secs), to_i64(nanos))
 }
 
-// process.on/once handlers, partitioned by event name. Today only
-// 'uncaughtException' actually fires from the runtime (during the diag
-// uncaught-drain hook); 'exit' and any other event names are stored so
-// the closure stays rooted but never invoked.
+// process is an EventEmitter (#1372). Listeners are kept in a single
+// insertion-ordered name → listeners map so `eventNames()` reports names
+// in registration order (Node parity). 'uncaughtException' additionally
+// fires from the runtime during the diag uncaught-drain hook
+// (emit_process_uncaught_exception); all other event names fire only via
+// an explicit `process.emit(name, ...)`.
 //
 // Each entry tracks whether it was registered via `once` so that a
 // one-shot handler is drained from the list after its first invocation.
@@ -662,9 +664,12 @@ struct ProcessHandler {
 }
 
 thread_local! {
-    static UNCAUGHT_HANDLERS: std::cell::RefCell<Vec<ProcessHandler>> = const { std::cell::RefCell::new(Vec::new()) };
-    static EXIT_HANDLERS: std::cell::RefCell<Vec<ProcessHandler>> = const { std::cell::RefCell::new(Vec::new()) };
-    static OTHER_PROCESS_HANDLERS: std::cell::RefCell<Vec<ProcessHandler>> = const { std::cell::RefCell::new(Vec::new()) };
+    static PROCESS_EVENT_HANDLERS: std::cell::RefCell<Vec<(String, Vec<ProcessHandler>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    // process.setMaxListeners / getMaxListeners round-trip value. Node's
+    // default is 10; Perry stores it for shape parity but never emits the
+    // "possible memory leak" warning.
+    static PROCESS_MAX_LISTENERS: std::cell::Cell<f64> = const { std::cell::Cell::new(10.0) };
 }
 
 fn read_event_name(event_ptr: *const StringHeader) -> Option<String> {
@@ -679,20 +684,85 @@ fn read_event_name(event_ptr: *const StringHeader) -> Option<String> {
     }
 }
 
+/// Run `f` against the (creating if absent) listener bucket for `name`.
+fn with_event_bucket<R>(name: &str, f: impl FnOnce(&mut Vec<ProcessHandler>) -> R) -> R {
+    PROCESS_EVENT_HANDLERS.with(|h| {
+        let mut map = h.borrow_mut();
+        let idx = match map.iter().position(|(n, _)| n == name) {
+            Some(i) => i,
+            None => {
+                map.push((name.to_string(), Vec::new()));
+                map.len() - 1
+            }
+        };
+        f(&mut map[idx].1)
+    })
+}
+
+/// Snapshot the listeners for `name` without creating a bucket. Reads
+/// (`listeners`/`listenerCount`/`emit`) must not pollute `eventNames()`.
+fn peek_event_handlers(name: &str) -> Vec<ProcessHandler> {
+    PROCESS_EVENT_HANDLERS.with(|h| {
+        h.borrow()
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    })
+}
+
+/// Drain the one-shot entries from the bucket for `name` after an emit.
+fn drain_once_handlers(name: &str) {
+    PROCESS_EVENT_HANDLERS.with(|h| {
+        if let Some((_, v)) = h.borrow_mut().iter_mut().find(|(n, _)| n == name) {
+            v.retain(|entry| !entry.once);
+        }
+    });
+}
+
 fn register_process_handler(
     event_ptr: *const StringHeader,
     handler: *const crate::closure::ClosureHeader,
     once: bool,
+    prepend: bool,
 ) {
     let entry = ProcessHandler {
         closure: handler,
         once,
     };
-    match read_event_name(event_ptr).as_deref() {
-        Some("uncaughtException") => UNCAUGHT_HANDLERS.with(|h| h.borrow_mut().push(entry)),
-        Some("exit") => EXIT_HANDLERS.with(|h| h.borrow_mut().push(entry)),
-        _ => OTHER_PROCESS_HANDLERS.with(|h| h.borrow_mut().push(entry)),
+    if let Some(name) = read_event_name(event_ptr) {
+        with_event_bucket(&name, |v| {
+            if prepend {
+                v.insert(0, entry);
+            } else {
+                v.push(entry);
+            }
+        });
     }
+}
+
+/// Read the variadic emit args out of the NaN-boxed JS array the codegen
+/// builds for `process.emit(event, ...args)`.
+fn read_emit_args(args_array: f64) -> Vec<f64> {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(args_array.to_bits());
+    if !jv.is_pointer() {
+        return Vec::new();
+    }
+    let arr = jv.as_pointer::<ArrayHeader>();
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let arr_i64 = arr as i64;
+    let len = crate::array::js_array_get_length(arr_i64);
+    if len <= 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        out.push(crate::array::js_array_get_element(arr_i64, i));
+    }
+    out
 }
 
 /// process.on(event, handler) — register an event listener.
@@ -701,7 +771,7 @@ pub extern "C" fn js_process_on(
     event_ptr: *const StringHeader,
     handler: *const crate::closure::ClosureHeader,
 ) {
-    register_process_handler(event_ptr, handler, false);
+    register_process_handler(event_ptr, handler, false, false);
 }
 
 /// process.once(event, handler) — one-shot listener (Node parity).
@@ -710,18 +780,173 @@ pub extern "C" fn js_process_once(
     event_ptr: *const StringHeader,
     handler: *const crate::closure::ClosureHeader,
 ) {
-    register_process_handler(event_ptr, handler, true);
+    register_process_handler(event_ptr, handler, true, false);
+}
+
+/// process.prependListener(event, handler) — insert at the front.
+#[no_mangle]
+pub extern "C" fn js_process_prepend_listener(
+    event_ptr: *const StringHeader,
+    handler: *const crate::closure::ClosureHeader,
+) {
+    register_process_handler(event_ptr, handler, false, true);
+}
+
+/// process.prependOnceListener(event, handler).
+#[no_mangle]
+pub extern "C" fn js_process_prepend_once_listener(
+    event_ptr: *const StringHeader,
+    handler: *const crate::closure::ClosureHeader,
+) {
+    register_process_handler(event_ptr, handler, true, true);
+}
+
+/// process.emit(event, ...args) — synchronously invoke every listener with
+/// the supplied args. Returns `true` if there was at least one listener.
+#[no_mangle]
+pub extern "C" fn js_process_emit(event_ptr: *const StringHeader, args_array: f64) -> f64 {
+    use crate::value::JSValue;
+    let name = match read_event_name(event_ptr) {
+        Some(n) => n,
+        None => return f64::from_bits(JSValue::bool(false).bits()),
+    };
+    // Snapshot before firing — handlers may add/remove listeners while running.
+    let handlers = peek_event_handlers(&name);
+    let had_listeners = !handlers.is_empty();
+    let args = read_emit_args(args_array);
+    for handler in &handlers {
+        unsafe {
+            crate::closure::js_closure_call_array(
+                handler.closure as i64,
+                args.as_ptr(),
+                args.len() as i64,
+            );
+        }
+    }
+    drain_once_handlers(&name);
+    f64::from_bits(JSValue::bool(had_listeners).bits())
+}
+
+/// process.listeners(event) -> Function[] (copy of the listener list).
+#[no_mangle]
+pub extern "C" fn js_process_listeners(event_ptr: *const StringHeader) -> f64 {
+    use crate::value::JSValue;
+    let name = read_event_name(event_ptr).unwrap_or_default();
+    let handlers = peek_event_handlers(&name);
+    let mut arr = crate::array::js_array_alloc(handlers.len() as u32);
+    for handler in &handlers {
+        arr = crate::array::js_array_push(arr, JSValue::pointer(handler.closure as *const u8));
+    }
+    f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+}
+
+/// process.eventNames() -> string[] of events that currently have listeners.
+#[no_mangle]
+pub extern "C" fn js_process_event_names() -> f64 {
+    use crate::value::JSValue;
+    let names: Vec<String> = PROCESS_EVENT_HANDLERS.with(|h| {
+        h.borrow()
+            .iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(n, _)| n.clone())
+            .collect()
+    });
+    let mut arr = crate::array::js_array_alloc(names.len() as u32);
+    for n in &names {
+        let s = js_string_from_bytes(n.as_ptr(), n.len() as u32);
+        arr = crate::array::js_array_push(arr, JSValue::string_ptr(s));
+    }
+    f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+}
+
+/// process.listenerCount(event) -> number.
+#[no_mangle]
+pub extern "C" fn js_process_listener_count(event_ptr: *const StringHeader) -> f64 {
+    let name = read_event_name(event_ptr).unwrap_or_default();
+    peek_event_handlers(&name).len() as f64
+}
+
+/// process.removeListener(event, handler) / off(...) — remove the first
+/// matching listener. Returns undefined (Node returns `process`; callers
+/// that chain are rare and unsupported here).
+#[no_mangle]
+pub extern "C" fn js_process_remove_listener(
+    event_ptr: *const StringHeader,
+    handler: *const crate::closure::ClosureHeader,
+) -> f64 {
+    if let Some(name) = read_event_name(event_ptr) {
+        PROCESS_EVENT_HANDLERS.with(|h| {
+            if let Some((_, v)) = h.borrow_mut().iter_mut().find(|(n, _)| *n == name) {
+                if let Some(pos) = v.iter().position(|e| e.closure == handler) {
+                    v.remove(pos);
+                }
+            }
+        });
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// process.removeAllListeners([event]) — drop every listener for `event`,
+/// or for all events when `event_ptr` is null/empty.
+#[no_mangle]
+pub extern "C" fn js_process_remove_all_listeners(event_ptr: *const StringHeader) -> f64 {
+    match read_event_name(event_ptr) {
+        Some(name) if !name.is_empty() => {
+            PROCESS_EVENT_HANDLERS.with(|h| {
+                if let Some((_, v)) = h.borrow_mut().iter_mut().find(|(n, _)| *n == name) {
+                    v.clear();
+                }
+            });
+        }
+        _ => PROCESS_EVENT_HANDLERS.with(|h| h.borrow_mut().clear()),
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// process.setMaxListeners(n) — store the limit (no enforcement).
+#[no_mangle]
+pub extern "C" fn js_process_set_max_listeners(n: f64) -> f64 {
+    PROCESS_MAX_LISTENERS.with(|c| c.set(n));
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// process.getMaxListeners() -> number.
+#[no_mangle]
+pub extern "C" fn js_process_get_max_listeners() -> f64 {
+    PROCESS_MAX_LISTENERS.with(|c| c.get())
 }
 
 pub fn emit_process_uncaught_exception(error: f64) {
     // Snapshot, fire, then drain the one-shot entries. Iteration over a
     // clone is required because handlers may register/unregister further
     // listeners while running.
-    let handlers = UNCAUGHT_HANDLERS.with(|h| h.borrow().clone());
+    let handlers = peek_event_handlers("uncaughtException");
     for handler in &handlers {
         crate::closure::js_closure_call1(handler.closure, error);
     }
-    UNCAUGHT_HANDLERS.with(|h| h.borrow_mut().retain(|entry| !entry.once));
+    drain_once_handlers("uncaughtException");
+}
+
+/// GC root scanner for the process EventEmitter listener closures. Without
+/// this, a listener registered against a nursery closure could be collected
+/// before a later `emit` fires it. Mirrors the native-callable-export
+/// scanner — closure pointers are rewritten if a copying collection moves
+/// their backing allocation.
+pub fn scan_process_event_handler_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    PROCESS_EVENT_HANDLERS.with(|h| {
+        let mut map = h.borrow_mut();
+        for (_, handlers) in map.iter_mut() {
+            for entry in handlers.iter_mut() {
+                if entry.closure.is_null() {
+                    continue;
+                }
+                let mut ptr = entry.closure as *mut crate::closure::ClosureHeader;
+                if visitor.visit_raw_mut_ptr_slot(&mut ptr) {
+                    entry.closure = ptr as *const crate::closure::ClosureHeader;
+                }
+            }
+        }
+    });
 }
 
 /// process.nextTick(callback) — schedule callback as a microtask.

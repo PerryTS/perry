@@ -263,6 +263,58 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                             type_args: vec![],
                         });
                     }
+                    // #1343 / #1372: process method VALUES (not calls). The
+                    // call forms are intercepted earlier in
+                    // expr_call/native_module.rs and lower to dedicated
+                    // variants; a bare value read previously fell through to
+                    // the 0.0 sentinel so `typeof process.cwd` reported
+                    // "undefined"/"number". Route through the native-module
+                    // property helper (the same path `import process from
+                    // "node:process"` already uses) so typeof reports
+                    // "function" and capturing the value yields a callable
+                    // bound-method closure. Includes the full EventEmitter
+                    // surface (#1372).
+                    "cwd"
+                    | "nextTick"
+                    | "exit"
+                    | "uptime"
+                    | "memoryUsage"
+                    | "kill"
+                    | "chdir"
+                    | "abort"
+                    | "umask"
+                    | "hrtime"
+                    | "cpuUsage"
+                    | "threadCpuUsage"
+                    | "availableMemory"
+                    | "constrainedMemory"
+                    | "getuid"
+                    | "geteuid"
+                    | "getgid"
+                    | "getegid"
+                    | "emitWarning"
+                    | "resourceUsage"
+                    | "getActiveResourcesInfo"
+                    | "on"
+                    | "once"
+                    | "addListener"
+                    | "off"
+                    | "emit"
+                    | "listeners"
+                    | "rawListeners"
+                    | "eventNames"
+                    | "listenerCount"
+                    | "removeListener"
+                    | "removeAllListeners"
+                    | "prependListener"
+                    | "prependOnceListener"
+                    | "setMaxListeners"
+                    | "getMaxListeners" => {
+                        return Ok(Expr::PropertyGet {
+                            object: Box::new(Expr::NativeModuleRef("process".to_string())),
+                            property: prop_ident.sym.to_string(),
+                        });
+                    }
                     _ => {}
                 }
             }

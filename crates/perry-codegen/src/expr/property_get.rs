@@ -556,6 +556,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         | "resourceUsage"
                         | "getActiveResourcesInfo"
                         | "hrtime"
+                        // #1343: method values whose call forms have dedicated
+                        // HIR variants but whose plain value reads previously
+                        // hit the 0.0 stub (typeof "number"/"undefined").
+                        | "cwd"
+                        | "nextTick"
+                        | "exit"
+                        | "uptime"
+                        | "memoryUsage"
+                        | "kill"
+                        | "chdir"
+                        // #1372: process EventEmitter surface.
+                        | "on"
+                        | "once"
+                        | "addListener"
+                        | "off"
+                        | "emit"
+                        | "listeners"
+                        | "rawListeners"
+                        | "eventNames"
+                        | "listenerCount"
+                        | "removeListener"
+                        | "removeAllListeners"
+                        | "prependListener"
+                        | "prependOnceListener"
+                        | "setMaxListeners"
+                        | "getMaxListeners"
                 ) {
                     let mod_idx = ctx.strings.intern("process");
                     let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);

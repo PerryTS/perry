@@ -167,6 +167,47 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             }
                             _ => None,
                         }
+                    } else if (is_set_expr(ctx, object)
+                        && matches!(
+                            property.as_str(),
+                            "has"
+                                | "add"
+                                | "delete"
+                                | "clear"
+                                | "forEach"
+                                | "entries"
+                                | "keys"
+                                | "values"
+                                | "union"
+                                | "intersection"
+                                | "difference"
+                                | "symmetricDifference"
+                                | "isSubsetOf"
+                                | "isSupersetOf"
+                                | "isDisjointFrom"
+                        ))
+                        || (is_map_expr(ctx, object)
+                            && matches!(
+                                property.as_str(),
+                                "has"
+                                    | "get"
+                                    | "set"
+                                    | "delete"
+                                    | "clear"
+                                    | "forEach"
+                                    | "entries"
+                                    | "keys"
+                                    | "values"
+                            ))
+                    {
+                        // #1380: `typeof someSet.has` / `typeof someMap.get`
+                        // — Set/Map prototype methods dispatch through
+                        // dedicated HIR call variants, so reading them as
+                        // plain values fell through to the generic
+                        // PropertyGet path and reported "undefined". Spec
+                        // says "function". Powers
+                        // process.allowedNodeEnvironmentFlags (a Set).
+                        Some("function")
                     } else {
                         // Refs #915 (gap 2 from #899): `typeof C.staticMethod`
                         // where `C` is `Expr::ClassRef` or a `LocalGet`

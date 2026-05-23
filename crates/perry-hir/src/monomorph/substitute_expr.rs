@@ -293,6 +293,13 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .map(|a| substitute_expr(a, substitutions))
                 .collect(),
         ),
+        Expr::ProcessEmitterCall { op, args } => Expr::ProcessEmitterCall {
+            op: *op,
+            args: args
+                .iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
+        },
         Expr::ProcessCpuUsage(prior) => Expr::ProcessCpuUsage(
             prior
                 .as_ref()

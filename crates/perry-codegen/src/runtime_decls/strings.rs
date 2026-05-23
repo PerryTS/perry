@@ -557,6 +557,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_umask_set", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_on", VOID, &[I64, I64]);
     module.declare_function("js_process_once", VOID, &[I64, I64]);
+    // process EventEmitter listener-management surface (#1372).
+    module.declare_function("js_process_prepend_listener", VOID, &[I64, I64]);
+    module.declare_function("js_process_prepend_once_listener", VOID, &[I64, I64]);
+    module.declare_function("js_process_emit", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_process_listeners", DOUBLE, &[I64]);
+    module.declare_function("js_process_event_names", DOUBLE, &[]);
+    module.declare_function("js_process_listener_count", DOUBLE, &[I64]);
+    module.declare_function("js_process_remove_listener", DOUBLE, &[I64, I64]);
+    module.declare_function("js_process_remove_all_listeners", DOUBLE, &[I64]);
+    module.declare_function("js_process_set_max_listeners", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_process_get_max_listeners", DOUBLE, &[]);
     module.declare_function("js_process_next_tick", VOID, &[I64]);
     module.declare_function("js_process_stdin", DOUBLE, &[]);
     module.declare_function("js_process_stdout", DOUBLE, &[]);

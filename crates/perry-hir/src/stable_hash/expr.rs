@@ -94,6 +94,7 @@ impl SH for Expr {
             Expr::ProcessConstrainedMemory => tag(h, 11228),
             Expr::ProcessPosixCredential(k) => { tag(h, 11229); (*k as u8).hash(h); }
             Expr::ProcessEmitWarning(args) => { tag(h, 11230); for a in args { a.hash(h); } }
+            Expr::ProcessEmitterCall { op, args } => { tag(h, 11240); (*op as u8).hash(h); for a in args { a.hash(h); } }
             Expr::ProcessCpuUsage(e) => { tag(h, 11231); e.hash(h); }
             Expr::ProcessResourceUsage => tag(h, 11232),
             Expr::ProcessActiveResourcesInfo => tag(h, 11233),

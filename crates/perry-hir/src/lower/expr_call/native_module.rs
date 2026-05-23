@@ -267,6 +267,102 @@ pub(super) fn try_native_module_methods(
                             };
                             return Ok(Ok(Expr::ProcessHrtime(prior)));
                         }
+                        // process is an EventEmitter (#1372). `on`/`once` have
+                        // their own variants above; the rest share
+                        // ProcessEmitterCall. `addListener` / `off` are Node
+                        // aliases for `on` / `removeListener`.
+                        "emit" => {
+                            // Reshape `emit(event, ...payload)` into
+                            // `[event, [payload...]]` so codegen lowers the
+                            // variadic payload through the existing array
+                            // builder and the runtime sees one args array.
+                            let mut iter = args.into_iter();
+                            let event = iter.next().unwrap_or(Expr::Undefined);
+                            let payload: Vec<Expr> = iter.collect();
+                            return Ok(Ok(Expr::ProcessEmitterCall {
+                                op: crate::ir::ProcessEmitterOp::Emit,
+                                args: vec![event, Expr::Array(payload)],
+                            }));
+                        }
+                        "addListener" => {
+                            if args.len() >= 2 {
+                                let mut iter = args.into_iter();
+                                let event = iter.next().unwrap();
+                                let handler = iter.next().unwrap();
+                                return Ok(Ok(Expr::ProcessOn {
+                                    event: Box::new(event),
+                                    handler: Box::new(handler),
+                                }));
+                            }
+                        }
+                        "prependListener" => {
+                            if args.len() >= 2 {
+                                return Ok(Ok(Expr::ProcessEmitterCall {
+                                    op: crate::ir::ProcessEmitterOp::PrependListener,
+                                    args,
+                                }));
+                            }
+                        }
+                        "prependOnceListener" => {
+                            if args.len() >= 2 {
+                                return Ok(Ok(Expr::ProcessEmitterCall {
+                                    op: crate::ir::ProcessEmitterOp::PrependOnceListener,
+                                    args,
+                                }));
+                            }
+                        }
+                        "removeListener" | "off" => {
+                            if args.len() >= 2 {
+                                return Ok(Ok(Expr::ProcessEmitterCall {
+                                    op: crate::ir::ProcessEmitterOp::RemoveListener,
+                                    args,
+                                }));
+                            }
+                        }
+                        "removeAllListeners" => {
+                            return Ok(Ok(Expr::ProcessEmitterCall {
+                                op: crate::ir::ProcessEmitterOp::RemoveAllListeners,
+                                args,
+                            }));
+                        }
+                        "listeners" => {
+                            return Ok(Ok(Expr::ProcessEmitterCall {
+                                op: crate::ir::ProcessEmitterOp::Listeners,
+                                args,
+                            }));
+                        }
+                        "rawListeners" => {
+                            // Perry doesn't wrap once-listeners, so rawListeners
+                            // and listeners return the same closures.
+                            return Ok(Ok(Expr::ProcessEmitterCall {
+                                op: crate::ir::ProcessEmitterOp::Listeners,
+                                args,
+                            }));
+                        }
+                        "eventNames" => {
+                            return Ok(Ok(Expr::ProcessEmitterCall {
+                                op: crate::ir::ProcessEmitterOp::EventNames,
+                                args,
+                            }));
+                        }
+                        "listenerCount" => {
+                            return Ok(Ok(Expr::ProcessEmitterCall {
+                                op: crate::ir::ProcessEmitterOp::ListenerCount,
+                                args,
+                            }));
+                        }
+                        "setMaxListeners" => {
+                            return Ok(Ok(Expr::ProcessEmitterCall {
+                                op: crate::ir::ProcessEmitterOp::SetMaxListeners,
+                                args,
+                            }));
+                        }
+                        "getMaxListeners" => {
+                            return Ok(Ok(Expr::ProcessEmitterCall {
+                                op: crate::ir::ProcessEmitterOp::GetMaxListeners,
+                                args,
+                            }));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }

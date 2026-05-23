@@ -1085,6 +1085,11 @@ where
                 f(a);
             }
         }
+        Expr::ProcessEmitterCall { args, .. } => {
+            for a in args {
+                f(a);
+            }
+        }
         Expr::ProcessCpuUsage(opt) => {
             if let Some(v) = opt {
                 f(v);

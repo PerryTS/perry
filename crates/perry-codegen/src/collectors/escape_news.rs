@@ -486,6 +486,11 @@ fn collect_used_new_fields_in_expr(
             collect_used_new_fields_in_expr(event, non_escaping_news, used);
             collect_used_new_fields_in_expr(handler, non_escaping_news, used);
         }
+        Expr::ProcessEmitterCall { args, .. } => {
+            for a in args {
+                collect_used_new_fields_in_expr(a, non_escaping_news, used);
+            }
+        }
         Expr::FinalizationRegistryRegister {
             registry,
             target,

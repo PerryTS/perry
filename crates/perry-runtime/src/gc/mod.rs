@@ -712,6 +712,8 @@ pub fn gc_init() {
     // them if a copying collection moves their backing allocations.
     gc_register_mutable_root_scanner(crate::object::scan_native_callable_export_roots_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_stream_singleton_roots_mut);
+    // process EventEmitter listener closures (#1372).
+    gc_register_mutable_root_scanner(crate::os::scan_process_event_handler_roots_mut);
     #[cfg(feature = "full")]
     gc_register_mutable_root_scanner(crate::plugin::scan_plugin_roots_mut);
     gc_register_mutable_root_scanner(crate::geisterhand_registry::scan_geisterhand_roots_mut);

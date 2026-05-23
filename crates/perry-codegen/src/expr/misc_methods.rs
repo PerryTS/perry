@@ -565,7 +565,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let event_box = lower_expr(ctx, event)?;
             let handler_box = lower_expr(ctx, handler)?;
             let blk = ctx.block();
-            let event_handle = unbox_to_i64(blk, &event_box);
+            // SSO event-name literals have no heap StringHeader; resolve
+            // through the unified pointer helper so on()/emit() agree on the
+            // event name (#1372). Same applies to once/emitter-call below.
+            let event_handle = unbox_str_handle(blk, &event_box);
             let handler_handle = unbox_to_i64(blk, &handler_box);
             blk.call_void(
                 "js_process_on",
@@ -580,13 +583,109 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let event_box = lower_expr(ctx, event)?;
             let handler_box = lower_expr(ctx, handler)?;
             let blk = ctx.block();
-            let event_handle = unbox_to_i64(blk, &event_box);
+            let event_handle = unbox_str_handle(blk, &event_box);
             let handler_handle = unbox_to_i64(blk, &handler_box);
             blk.call_void(
                 "js_process_once",
                 &[(I64, &event_handle), (I64, &handler_handle)],
             );
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+        }
+
+        // -------- process EventEmitter listener-management (#1372).
+        // `on`/`once` are handled above; this arm covers emit / listeners /
+        // eventNames / listenerCount / removeListener / removeAllListeners /
+        // prependListener / prependOnceListener / set|getMaxListeners.
+        Expr::ProcessEmitterCall { op, args } => {
+            use perry_hir::ProcessEmitterOp as Op;
+            // Helper: lower the event arg (args[0]) to an SSO-safe string
+            // handle. Returns "0" (null ptr) when there's no event arg.
+            match op {
+                Op::Emit => {
+                    // args == [event, payloadArray]
+                    let event_box = lower_expr(ctx, &args[0])?;
+                    let payload_box = lower_expr(ctx, &args[1])?;
+                    let blk = ctx.block();
+                    let event_handle = unbox_str_handle(blk, &event_box);
+                    Ok(blk.call(
+                        DOUBLE,
+                        "js_process_emit",
+                        &[(I64, &event_handle), (DOUBLE, &payload_box)],
+                    ))
+                }
+                Op::Listeners => {
+                    let event_box = lower_expr(ctx, &args[0])?;
+                    let blk = ctx.block();
+                    let event_handle = unbox_str_handle(blk, &event_box);
+                    Ok(blk.call(DOUBLE, "js_process_listeners", &[(I64, &event_handle)]))
+                }
+                Op::EventNames => Ok(ctx.block().call(DOUBLE, "js_process_event_names", &[])),
+                Op::ListenerCount => {
+                    let event_box = lower_expr(ctx, &args[0])?;
+                    let blk = ctx.block();
+                    let event_handle = unbox_str_handle(blk, &event_box);
+                    Ok(blk.call(DOUBLE, "js_process_listener_count", &[(I64, &event_handle)]))
+                }
+                Op::RemoveListener => {
+                    let event_box = lower_expr(ctx, &args[0])?;
+                    let handler_box = lower_expr(ctx, &args[1])?;
+                    let blk = ctx.block();
+                    let event_handle = unbox_str_handle(blk, &event_box);
+                    let handler_handle = unbox_to_i64(blk, &handler_box);
+                    Ok(blk.call(
+                        DOUBLE,
+                        "js_process_remove_listener",
+                        &[(I64, &event_handle), (I64, &handler_handle)],
+                    ))
+                }
+                Op::RemoveAllListeners => {
+                    // Optional event arg; pass null (0) when omitted so the
+                    // runtime clears every event.
+                    let event_handle = if args.is_empty() {
+                        "0".to_string()
+                    } else {
+                        let event_box = lower_expr(ctx, &args[0])?;
+                        let blk = ctx.block();
+                        unbox_str_handle(blk, &event_box)
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_process_remove_all_listeners",
+                        &[(I64, &event_handle)],
+                    ))
+                }
+                Op::PrependListener | Op::PrependOnceListener => {
+                    let event_box = lower_expr(ctx, &args[0])?;
+                    let handler_box = lower_expr(ctx, &args[1])?;
+                    let blk = ctx.block();
+                    let event_handle = unbox_str_handle(blk, &event_box);
+                    let handler_handle = unbox_to_i64(blk, &handler_box);
+                    let func = if matches!(op, Op::PrependListener) {
+                        "js_process_prepend_listener"
+                    } else {
+                        "js_process_prepend_once_listener"
+                    };
+                    blk.call_void(func, &[(I64, &event_handle), (I64, &handler_handle)]);
+                    Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+                }
+                Op::SetMaxListeners => {
+                    let n_box = if args.is_empty() {
+                        double_literal(0.0)
+                    } else {
+                        lower_expr(ctx, &args[0])?
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_process_set_max_listeners",
+                        &[(DOUBLE, &n_box)],
+                    ))
+                }
+                Op::GetMaxListeners => {
+                    Ok(ctx
+                        .block()
+                        .call(DOUBLE, "js_process_get_max_listeners", &[]))
+                }
+            }
         }
 
         // -------- process.stdin.setRawMode(enabled) — toggle raw-mode

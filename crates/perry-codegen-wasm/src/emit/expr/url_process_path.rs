@@ -125,6 +125,7 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::ProcessNextTick { .. }
             | Expr::ProcessChdir(_)
             | Expr::ProcessOn { .. }
+            | Expr::ProcessEmitterCall { .. }
             | Expr::ProcessKill { .. }
             | Expr::ProcessExit(_)
             | Expr::ProcessAbort

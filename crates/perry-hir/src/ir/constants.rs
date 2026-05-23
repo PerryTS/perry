@@ -311,6 +311,35 @@ pub enum PosixCredentialKind {
     Egid,
 }
 
+/// process EventEmitter method (#1372). `process` is an EventEmitter;
+/// `on`/`once` already have dedicated HIR variants (ProcessOn/ProcessOnce),
+/// while the remaining listener-management surface shares one variant
+/// (ProcessEmitterCall) that carries the operation kind so expr.rs doesn't
+/// grow a dozen near-identical variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProcessEmitterOp {
+    /// emit(event, ...args) -> boolean
+    Emit,
+    /// listeners(event) -> Function[]
+    Listeners,
+    /// eventNames() -> (string | symbol)[]
+    EventNames,
+    /// listenerCount(event) -> number
+    ListenerCount,
+    /// removeListener(event, handler) / off(event, handler)
+    RemoveListener,
+    /// removeAllListeners([event])
+    RemoveAllListeners,
+    /// prependListener(event, handler)
+    PrependListener,
+    /// prependOnceListener(event, handler)
+    PrependOnceListener,
+    /// setMaxListeners(n)
+    SetMaxListeners,
+    /// getMaxListeners() -> number
+    GetMaxListeners,
+}
+
 /// Whether a module is initialized eagerly (at program start, in topo order
 /// across static imports) or lazily (on first dynamic `import()` resolving
 /// to it). See issue #100.

@@ -466,6 +466,13 @@ pub enum Expr {
     ProcessConstrainedMemory, // process.constrainedMemory() -> number (OS limit, 0 if unconstrained)
     ProcessPosixCredential(super::PosixCredentialKind), // process.{getuid,geteuid,getgid,getegid}() (#1408)
     ProcessEmitWarning(Vec<Expr>), // process.emitWarning(warning[, type, code, ctor]) -> undefined (#1375)
+    // process EventEmitter listener-management methods (#1372). The `op`
+    // selects which method; `args` are the (already-lowered) call arguments
+    // in source order (e.g. emit's `[event, ...payload]`).
+    ProcessEmitterCall {
+        op: super::ProcessEmitterOp,
+        args: Vec<Expr>,
+    },
     ProcessCpuUsage(Option<Box<Expr>>), // process.cpuUsage(prior?) -> { user, system } µs (diff if prior given)
     ProcessResourceUsage, // process.resourceUsage() -> {userCPUTime, maxRSS, ...} (#1376)
     ProcessActiveResourcesInfo, // process.getActiveResourcesInfo() -> string[] (#1376)

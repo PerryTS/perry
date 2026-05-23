@@ -663,6 +663,11 @@ pub fn check_escapes_in_expr(
             check_escapes_in_expr(event, candidates, classes, escaped);
             check_escapes_in_expr(handler, candidates, classes, escaped);
         }
+        Expr::ProcessEmitterCall { args, .. } => {
+            for a in args {
+                check_escapes_in_expr(a, candidates, classes, escaped);
+            }
+        }
         Expr::FsWriteFileSync(a, b)
         | Expr::JsonParseReviver {
             text: a,
