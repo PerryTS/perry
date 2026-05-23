@@ -170,6 +170,16 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     // doing `typeof process.sourceMapsEnabled === "boolean"`
                     // bailed out (e.g. some Vitest stack-trace formatters).
                     "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    // #1412: `process.moduleLoadList` is Node's list of
+                    // built-in modules already loaded into the
+                    // interpreter. Perry AOT-compiles every reachable
+                    // module into the binary — there is no runtime
+                    // module loader and no observable "load list", so
+                    // the spec-compatible value is an empty array. Code
+                    // that probes the shape (Array.isArray, .length,
+                    // .includes(name)) now does the right thing instead
+                    // of crashing on the 0.0 sentinel.
+                    "moduleLoadList" => return Ok(Expr::Array(vec![])),
                     _ => {}
                 }
             }
@@ -240,6 +250,7 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     }
                     "features" => return Ok(process_features_literal()),
                     "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    "moduleLoadList" => return Ok(Expr::Array(vec![])),
                     _ => {}
                 }
             }
