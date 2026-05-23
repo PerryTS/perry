@@ -1008,42 +1008,21 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
             if ptr.is_null() {
                 "null".to_string()
             } else {
-                // First check if this is an Error object
-                let object_type = *(ptr as *const u32);
-                if object_type == crate::error::OBJECT_TYPE_ERROR {
-                    // Format Error as "Error: <message>"
-                    let error_ptr = ptr as *const crate::error::ErrorHeader;
-                    let name_ptr = (*error_ptr).name;
-                    let message_ptr = (*error_ptr).message;
-
-                    let name_str = if name_ptr.is_null() {
-                        "Error".to_string()
-                    } else {
-                        let len = (*name_ptr).byte_len as usize;
-                        let data = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                        let bytes = std::slice::from_raw_parts(data, len);
-                        std::str::from_utf8(bytes).unwrap_or("Error").to_string()
-                    };
-
-                    let message_str = if message_ptr.is_null() {
-                        "".to_string()
-                    } else {
-                        let len = (*message_ptr).byte_len as usize;
-                        let data =
-                            (message_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                        let bytes = std::slice::from_raw_parts(data, len);
-                        std::str::from_utf8(bytes).unwrap_or("").to_string()
-                    };
-
-                    if message_str.is_empty() {
-                        name_str
-                    } else {
-                        format!("{}: {}", name_str, message_str)
-                    }
+                // #1457: classify the heap type from the GC header, NOT from
+                // `*(ptr as *const u32)`. That first word is an ArrayHeader's
+                // `length`, so a length-2 array collided with
+                // `OBJECT_TYPE_ERROR == 2` and was misread as an Error —
+                // dereferencing element bits as name/message string pointers
+                // and segfaulting (any object with a 2-element array field,
+                // tape or not, crashed `console.log`). Mirrors the main
+                // `format_jsvalue` formatter's GC-header dispatch.
+                //
+                // A small registry-id handle (`< 0x100000`, e.g. a Web Fetch
+                // Request) carries no GC header, so reading `ptr - 8` would
+                // deref unmapped memory — print a placeholder instead.
+                if (ptr as usize) < 0x100000 {
+                    "[object Object]".to_string()
                 } else {
-                    // Use GC type header to determine the actual type
-                    // instead of heuristic pointer checks which can
-                    // misinterpret arrays as objects or vice versa.
                     let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                         as *const crate::gc::GcHeader;
                     let mut gc_type = (*gc_header).obj_type;
@@ -1067,7 +1046,38 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                             ptr
                         };
 
-                    if gc_type == crate::gc::GC_TYPE_ARRAY {
+                    if gc_type == crate::gc::GC_TYPE_ERROR {
+                        // Error object — format as "Error: <message>".
+                        let error_ptr = ptr as *const crate::error::ErrorHeader;
+                        let name_ptr = (*error_ptr).name;
+                        let message_ptr = (*error_ptr).message;
+
+                        let name_str = if name_ptr.is_null() {
+                            "Error".to_string()
+                        } else {
+                            let len = (*name_ptr).byte_len as usize;
+                            let data =
+                                (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                            let bytes = std::slice::from_raw_parts(data, len);
+                            std::str::from_utf8(bytes).unwrap_or("Error").to_string()
+                        };
+
+                        let message_str = if message_ptr.is_null() {
+                            "".to_string()
+                        } else {
+                            let len = (*message_ptr).byte_len as usize;
+                            let data =
+                                (message_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                            let bytes = std::slice::from_raw_parts(data, len);
+                            std::str::from_utf8(bytes).unwrap_or("").to_string()
+                        };
+
+                        if message_str.is_empty() {
+                            name_str
+                        } else {
+                            format!("{}: {}", name_str, message_str)
+                        }
+                    } else if gc_type == crate::gc::GC_TYPE_ARRAY {
                         // Cycle check FIRST so back-edges always print as
                         // `[Circular *N]` regardless of depth (#1204). The
                         // depth cap is overridable via INSPECT_DEPTH_LIMIT
