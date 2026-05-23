@@ -1687,5 +1687,29 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/pipeline/premature-close-code": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipeline() does not set err.code=ERR_STREAM_PREMATURE_CLOSE on mid-chain destroy. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/get-reader-twice-throws": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: second getReader() on locked stream does not throw TypeError. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/transform/separate-hwm": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Transform with distinct readableHighWaterMark/writableHighWaterMark — second value not preserved (both end up equal). Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/push/push-returns-false-on-full": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: push() always returns true even when buffer crosses highWaterMark — backpressure signal missing. Flips to PASS when #1539 lands."
   }
 }
