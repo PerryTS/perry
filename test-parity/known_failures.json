@@ -1657,5 +1657,35 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: Readable instance exposes Symbol.iterator incorrectly (should be undefined; only asyncIterator). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/dispose/async-dispose": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Symbol.asyncDispose (Node 21+ explicit disposal protocol) not implemented on stream instances. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/ee/get-event-listeners": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:events.getEventListeners(stream, name) does not return the listener array. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/iterator/return-method": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: async iterator's return() does not resolve { value: undefined, done: true }. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/web/writable-multiple-writers-fails": {
+    "issue": "1545",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/web: second getWriter() on a locked WritableStream should throw. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/web/writer-close-returns-promise": {
+    "issue": "1545",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
   }
 }
