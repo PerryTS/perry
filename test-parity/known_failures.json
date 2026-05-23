@@ -176,12 +176,6 @@
     "category": "bug-open",
     "reason": "AsyncLocalStorage `.enterWith()` / `.exit()` aren't implemented end-to-end — the test prints the first 10 lines (await/then/catch/nextTick/timer/immediate/interval contexts + nested outer) and then exits silently when `enterWith()` is invoked, missing the last 7 lines covering enterWith semantics + exit/restore mechanics. Sibling slice of #788 #789 (real AsyncLocalStorage tracking across await/microtasks/timers + real `async_hooks.createHook` lifecycle). Surfaced as a NEW failure on v0.5.1024 release-packages parity. Flips to PASS when `.enterWith` / `.exit` land."
   },
-  "test_json_lazy_reviver": {
-    "issue": "1424",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "`JSON.parse(blob, reviver)` with a lazy-tape top-level array (PERRY_JSON_TAPE=1 path) produces zero output — the reviver dispatch on the materialised lazy array crashes / exits before any of the 4 `console.log` lines fire. Likely fallout from the GC checkpoint + copied-minor work under #1090 / #1146 / #1235 / #1324. Surfaced as a NEW failure on v0.5.1024 release-packages parity. Flips to PASS when the lazy-tape reviver dispatch is fixed."
-  },
   "test_jsruntime_mixed_async_ordering_matrix": {
     "issue": null,
     "added": "2026-05-17",
