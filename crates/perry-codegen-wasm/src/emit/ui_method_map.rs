@@ -74,6 +74,11 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "textfieldSetFontSize" => "perry_ui_set_font_size",
         "textfieldSetBorderless" => "perry_ui_textfield_set_borderless",
         "stackSetAlignment" => "perry_ui_stack_set_alignment",
+        // #1546: showToast(msg) renders a bottom-of-page toast on web —
+        // previously was a no-op (only HarmonyOS routed
+        // `promptAction.showToast` through the runtime drain queue).
+        // Now wires to a JS-side fade-in/out div in wasm_runtime.js.
+        "showToast" => "perry_ui_show_toast",
         // Text decoration (issue #185 Phase B). 0=none, 1=underline,
         // 2=strikethrough on the canonical FFI; CSS-side translates.
         "textSetDecoration" | "text_set_decoration" => "perry_ui_text_set_decoration",

@@ -2636,6 +2636,43 @@ function uiStateSet(h, value) {
 
 // ---------- Widget creation functions (take JS values, return handle_id) ----------
 
+// #1546: showToast(msg) — bottom-center fade-in/out toast for --target web.
+// HarmonyOS routes through `promptAction.showToast` via a runtime drain queue;
+// on web the previous behavior was a documented no-op. The implementation here
+// stays minimal: one host-managed div, queued messages, default 3s visible.
+function perry_ui_show_toast(message) {
+  if (typeof document === "undefined") return;
+  const msg = (message === null || message === undefined) ? "" : String(message);
+  if (!perry_ui_show_toast._q) perry_ui_show_toast._q = [];
+  perry_ui_show_toast._q.push(msg);
+  if (perry_ui_show_toast._busy) return;
+  perry_ui_show_toast._busy = true;
+  const drain = () => {
+    const next = perry_ui_show_toast._q.shift();
+    if (next === undefined) { perry_ui_show_toast._busy = false; return; }
+    let el = perry_ui_show_toast._el;
+    if (!el) {
+      el = document.createElement("div");
+      el.setAttribute("data-perry-toast", "");
+      el.style.cssText =
+        "position:fixed;left:50%;bottom:32px;transform:translateX(-50%);" +
+        "background:rgba(28,28,30,0.92);color:#fff;padding:10px 18px;" +
+        "border-radius:18px;font:14px -apple-system,system-ui,Segoe UI,Roboto,sans-serif;" +
+        "max-width:80vw;box-shadow:0 6px 24px rgba(0,0,0,0.25);" +
+        "opacity:0;transition:opacity .18s ease;pointer-events:none;z-index:2147483647;";
+      document.body.appendChild(el);
+      perry_ui_show_toast._el = el;
+    }
+    el.textContent = next;
+    requestAnimationFrame(() => { el.style.opacity = "1"; });
+    setTimeout(() => {
+      el.style.opacity = "0";
+      setTimeout(drain, 200);
+    }, 3000);
+  };
+  drain();
+}
+
 function perry_ui_app_create(titleOrOpts, width, height) {
   let title = "Perry App", bodyH, w = 800, ht = 600;
   if (typeof titleOrOpts === "object" && titleOrOpts !== null) {
@@ -3810,6 +3847,8 @@ const __perryUiDispatch = {
   perry_ui_widget_set_context_menu,
   // Animations
   perry_ui_animate_opacity, perry_ui_animate_position,
+  // #1546: showToast on web
+  perry_ui_show_toast,
   // Events
   perry_ui_set_on_click, perry_ui_set_on_hover, perry_ui_set_on_double_click,
   // State
