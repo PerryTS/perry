@@ -1681,5 +1681,29 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: Readable.drop() not implemented. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/iter-helpers/map-concurrency": {
+    "issue": "1558",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.map with concurrency option not implemented. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/iter-helpers/chained": {
+    "issue": "1558",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: chained map.filter.take.toArray pipeline not implemented. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/iter-helpers/filter-with-signal": {
+    "issue": "1558",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.filter with signal option not implemented. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/iter-helpers/flat-map-async": {
+    "issue": "1558",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.flatMap with async generator not implemented. Flips to PASS when #1558 lands."
   }
 }
