@@ -454,7 +454,27 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // The GC header is located GC_HEADER_SIZE bytes before the user pointer.
                 let gc_header =
                     (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                let gc_type = (*gc_header).obj_type;
+                let mut gc_type = (*gc_header).obj_type;
+                // #1448: a lazy-tape array (PERRY_JSON_TAPE) has obj_type
+                // GC_TYPE_LAZY_ARRAY, which misses the array branch below and
+                // prints `[object Object]`. Materialize it to a real array so
+                // it inspects like one (mirrors the stringify redirect).
+                let ptr: *const crate::array::ArrayHeader =
+                    if gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+                        let m = crate::json_tape::force_materialize_lazy(
+                            ptr as *mut crate::json_tape::LazyArrayHeader,
+                        );
+                        if m.is_null() {
+                            ptr
+                        } else {
+                            gc_type = (*((m as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                                as *const crate::gc::GcHeader))
+                                .obj_type;
+                            m as *const crate::array::ArrayHeader
+                        }
+                    } else {
+                        ptr
+                    };
 
                 if gc_type == crate::gc::GC_TYPE_ERROR {
                     // Error object
@@ -1026,7 +1046,26 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     // misinterpret arrays as objects or vice versa.
                     let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                         as *const crate::gc::GcHeader;
-                    let gc_type = (*gc_header).obj_type;
+                    let mut gc_type = (*gc_header).obj_type;
+                    // #1448: materialize a nested lazy-tape array so it inspects
+                    // as a real array. Reading its LazyArrayHeader as an
+                    // ArrayHeader below would otherwise read garbage and SIGSEGV.
+                    let ptr: *const crate::array::ArrayHeader =
+                        if gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+                            let m = crate::json_tape::force_materialize_lazy(
+                                ptr as *mut crate::json_tape::LazyArrayHeader,
+                            );
+                            if m.is_null() {
+                                ptr
+                            } else {
+                                gc_type = (*((m as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                                    as *const crate::gc::GcHeader))
+                                    .obj_type;
+                                m as *const crate::array::ArrayHeader
+                            }
+                        } else {
+                            ptr
+                        };
 
                     if gc_type == crate::gc::GC_TYPE_ARRAY {
                         // Cycle check FIRST so back-edges always print as
