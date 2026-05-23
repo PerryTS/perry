@@ -1735,5 +1735,23 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: TransformStreamDefaultController.terminate not implemented. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/compose/single-transform": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: stream.compose(single-transform) does not deliver data through. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/inheritance/constructor-name": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: stream classes' constructor.name does not match the export name. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/symbol/no-sync-iterator": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Readable instance exposes Symbol.iterator incorrectly (should be undefined; only asyncIterator). Flips to PASS when #1531 lands."
   }
 }
