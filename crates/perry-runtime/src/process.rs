@@ -47,6 +47,59 @@ pub extern "C" fn js_process_abort() {
     std::process::abort();
 }
 
+/// Thread-local cell holding the process title set via `process.title = X`
+/// (#1401). `None` means "not assigned yet, fall back to argv[0]". The
+/// setter records the value here; on Linux it also calls `prctl(PR_SET_NAME)`
+/// so `/proc/<pid>/comm` reflects the new value. macOS has no per-process
+/// analog — the assignment is still observable via subsequent `process.title`
+/// reads, matching Node's best-effort semantics.
+thread_local! {
+    static PROCESS_TITLE: std::cell::RefCell<Option<String>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// process.title -> string. Returns the value set via the setter, or
+/// falls back to argv[0].
+#[no_mangle]
+pub extern "C" fn js_process_title() -> f64 {
+    use crate::value::JSValue;
+    let stored: Option<String> = PROCESS_TITLE.with(|c| c.borrow().clone());
+    let s = stored.unwrap_or_else(|| std::env::args().next().unwrap_or_default());
+    let bytes = s.as_bytes();
+    let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+/// process.title = value — coerces to string and stores in the cell.
+#[no_mangle]
+pub extern "C" fn js_process_set_title(value: f64) {
+    let ptr = crate::value::js_jsvalue_to_string(value);
+    let s = if ptr.is_null() {
+        String::new()
+    } else {
+        unsafe {
+            let header = &*ptr;
+            let len = header.byte_len as usize;
+            let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+            String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+        }
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let mut buf = [0i8; 16];
+        let src = s.as_bytes();
+        let copy_len = std::cmp::min(src.len(), 15);
+        for i in 0..copy_len {
+            buf[i] = src[i] as i8;
+        }
+        unsafe {
+            libc::prctl(libc::PR_SET_NAME, buf.as_ptr() as libc::c_ulong, 0, 0, 0);
+        }
+    }
+    PROCESS_TITLE.with(|c| *c.borrow_mut() = Some(s));
+}
+
 /// process.umask() -> number. Returns the current file-mode creation mask
 /// without modifying it. POSIX's `umask` syscall has no read-only form, so
 /// we set the mask to 0, capture the previous value, then restore it.

@@ -305,6 +305,10 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .as_ref()
                 .map(|e| Box::new(substitute_expr(e, substitutions))),
         ),
+        Expr::ProcessTitle => Expr::ProcessTitle,
+        Expr::ProcessSetTitle(v) => {
+            Expr::ProcessSetTitle(Box::new(substitute_expr(v, substitutions)))
+        }
 
         // File system
         Expr::FsReadFileSync(path) => {

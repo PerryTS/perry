@@ -234,11 +234,16 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     // to argv[0] too until something assigns `.title`).
                     // Settable `process.title` is tracked separately
                     // (#1401); the shape-only read is what closes #1346.
-                    "argv0" | "execPath" | "title" => {
+                    "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
                             object: Box::new(Expr::ProcessArgv),
                             index: Box::new(Expr::Number(0.0)),
                         });
+                    }
+                    "title" => {
+                        // #1401: title is settable; route through a
+                        // runtime cell that falls back to argv[0].
+                        return Ok(Expr::ProcessTitle);
                     }
                     _ => {}
                 }
@@ -326,12 +331,13 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     }
                     "allowedNodeEnvironmentFlags" => return Ok(Expr::SetNew),
                     "report" => return Ok(process_report_literal()),
-                    "argv0" | "execPath" | "title" => {
+                    "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
                             object: Box::new(Expr::ProcessArgv),
                             index: Box::new(Expr::Number(0.0)),
                         });
                     }
+                    "title" => return Ok(Expr::ProcessTitle),
                     _ => {}
                 }
             }

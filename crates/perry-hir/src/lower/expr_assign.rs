@@ -626,6 +626,18 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             proto: value,
                         });
                     }
+                    // #1401: process.title = X — route through a runtime
+                    // cell so subsequent reads see the new value. Without
+                    // this, the assignment lands on the GlobalGet sentinel
+                    // that the title getter never consults, so reads still
+                    // return argv[0].
+                    if property == "title" {
+                        if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                            if obj_ident.sym.as_ref() == "process" {
+                                return Ok(Expr::ProcessSetTitle(value));
+                            }
+                        }
+                    }
                     Ok(Expr::PropertySet {
                         object,
                         property,
