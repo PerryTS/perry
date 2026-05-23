@@ -129,6 +129,16 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     // and downstream `if (process.send)` /
                     // `if (process.connected)` guards do the right thing.
                     "send" | "disconnect" | "connected" => return Ok(Expr::Undefined),
+                    // #1412: `process.moduleLoadList` is Node's list of
+                    // built-in modules already loaded into the
+                    // interpreter. Perry AOT-compiles every reachable
+                    // module into the binary — there is no runtime
+                    // module loader and no observable "load list", so
+                    // the spec-compatible value is an empty array. Code
+                    // that probes the shape (Array.isArray, .length,
+                    // .includes(name)) now does the right thing instead
+                    // of crashing on the 0.0 sentinel.
+                    "moduleLoadList" => return Ok(Expr::Array(vec![])),
                     _ => {}
                 }
             }
@@ -189,6 +199,7 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     "versions" => return Ok(Expr::ProcessVersions),
                     "env" => return Ok(Expr::ProcessEnv),
                     "send" | "disconnect" | "connected" => return Ok(Expr::Undefined),
+                    "moduleLoadList" => return Ok(Expr::Array(vec![])),
                     _ => {}
                 }
             }
@@ -1157,3 +1168,4 @@ fn is_stream_api_member(module: &str, prop: &str) -> bool {
         _ => false,
     }
 }
+// trigger CI
