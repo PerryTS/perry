@@ -218,6 +218,12 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             ];
             // setTitleColor:forState: UIControlStateNormal = 0
             let _: () = msg_send![&*view, setTitleColor: &*color, forState: 0u64];
+            // Mirror onto tintColor so any SF Symbol image attached via
+            // `buttonSetImage` (which renders in template mode after the
+            // fix in this PR) tints to match the title color. Without
+            // this an SF-symbol Sign-Out button keeps the default
+            // system-blue glyph next to a black title.
+            let _: () = msg_send![&*view, setTintColor: &*color];
 
             if a < 1.0 {
                 apply_button_title_color_via_attributed(&view, &color);
@@ -309,27 +315,35 @@ pub fn set_image(handle: i64, name_ptr: *const u8) {
             let img_cls = objc2::runtime::AnyClass::get(c"UIImage").unwrap();
             let img: *mut AnyObject = msg_send![img_cls, systemImageNamed: &*ns_name];
             if !img.is_null() {
+                // Force template rendering so the symbol tints to the
+                // button's titleColor — otherwise SF Symbols paint in
+                // their default multicolor style and ignore the button.
+                // UIImage.RenderingMode.alwaysTemplate = 2.
+                let templated: *mut AnyObject = msg_send![img, imageWithRenderingMode: 2_i64];
+                let base = if !templated.is_null() { templated } else { img };
+
                 // Apply large symbol configuration
                 let config_cls = objc2::runtime::AnyClass::get(c"UIImageSymbolConfiguration");
-                if let Some(config_cls) = config_cls {
+                let final_img = if let Some(config_cls) = config_cls {
                     // UIImageSymbolScale: 1=small, 2=medium, 3=large
                     let config: *mut AnyObject = msg_send![
                         config_cls, configurationWithScale: 3_i64
                     ];
                     if !config.is_null() {
-                        let scaled_img: *mut AnyObject =
-                            msg_send![img, imageWithConfiguration: config];
-                        if !scaled_img.is_null() {
-                            let _: () = msg_send![&*view, setImage: scaled_img, forState: 0_u64];
+                        let scaled: *mut AnyObject =
+                            msg_send![base, imageWithConfiguration: config];
+                        if !scaled.is_null() {
+                            scaled
                         } else {
-                            let _: () = msg_send![&*view, setImage: img, forState: 0_u64];
+                            base
                         }
                     } else {
-                        let _: () = msg_send![&*view, setImage: img, forState: 0_u64];
+                        base
                     }
                 } else {
-                    let _: () = msg_send![&*view, setImage: img, forState: 0_u64];
-                }
+                    base
+                };
+                let _: () = msg_send![&*view, setImage: final_img, forState: 0_u64];
             }
         }
     }
