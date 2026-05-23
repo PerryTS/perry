@@ -1172,6 +1172,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::OsMachine => string_regex_proc::lower(ctx, expr),
         Expr::OsVersion
         | Expr::ProcessMemoryUsage
+        | Expr::ProcessThreadCpuUsage
         | Expr::EncodeURI(..)
         | Expr::DecodeURI(..)
         | Expr::EncodeURIComponent(..)

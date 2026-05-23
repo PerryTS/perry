@@ -127,6 +127,13 @@ pub(super) fn try_native_module_methods(
                             };
                             return Ok(Ok(Expr::ProcessUmask(mask)));
                         }
+                        "threadCpuUsage" => {
+                            // process.threadCpuUsage() — CPU time used by
+                            // the current thread, as { user, system } in
+                            // microseconds. Ignores any arguments (Node
+                            // accepts none).
+                            return Ok(Ok(Expr::ProcessThreadCpuUsage));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }

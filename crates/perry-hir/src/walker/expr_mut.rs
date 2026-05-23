@@ -44,6 +44,7 @@ where
         | Expr::ProcessStdout
         | Expr::ProcessStderr
         | Expr::ProcessAbort
+        | Expr::ProcessThreadCpuUsage
         | Expr::ProcessStdinIsTTY
         | Expr::ProcessStdoutIsTTY
         | Expr::ProcessStderrIsTTY

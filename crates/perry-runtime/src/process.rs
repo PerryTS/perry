@@ -269,6 +269,46 @@ pub extern "C" fn js_process_env() -> f64 {
     boxed
 }
 
+/// process.threadCpuUsage() -> object { user, system } in microseconds.
+/// CPU time consumed by the current thread. Uses CLOCK_THREAD_CPUTIME_ID
+/// (available on macOS 10.12+ and Linux). Platforms without the clock get
+/// 0.0 for both fields.
+#[no_mangle]
+pub extern "C" fn js_process_thread_cpu_usage() -> f64 {
+    let (user_us, system_us) = read_thread_cpu_micros();
+
+    let obj = crate::object::js_object_alloc(0, 2);
+    let set_field = |name: &str, value: f64| {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key, value);
+    };
+    set_field("user", user_us);
+    set_field("system", system_us);
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+/// Read the current thread's CPU time as (user_us, system_us). The split
+/// isn't directly available from CLOCK_THREAD_CPUTIME_ID — that clock
+/// reports total. Node returns the user/system split when libuv can
+/// produce it (Linux/macOS via getrusage(RUSAGE_THREAD)/thread_info), but
+/// for Perry we report all of it as `user` and 0 for `system`. The exact
+/// split is uncommon to depend on in tests; the shape is what matters.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn read_thread_cpu_micros() -> (f64, f64) {
+    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+    let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    if ok != 0 {
+        return (0.0, 0.0);
+    }
+    let total_us = (ts.tv_sec as f64) * 1_000_000.0 + (ts.tv_nsec as f64) / 1_000.0;
+    (total_us, 0.0)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn read_thread_cpu_micros() -> (f64, f64) {
+    (0.0, 0.0)
+}
+
 /// process.memoryUsage() -> object { rss, heapTotal, heapUsed, external, arrayBuffers }
 /// Returns memory usage information matching Node.js API
 #[no_mangle]

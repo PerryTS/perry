@@ -468,6 +468,7 @@ pub enum Expr {
     // sets and returns the previous mask. Both forms hit the same HIR node;
     // codegen routes to the read or set runtime helper based on Option.
     ProcessUmask(Option<Box<Expr>>),
+    ProcessThreadCpuUsage, // process.threadCpuUsage() -> { user, system } microseconds (current thread)
     // process.stdin -> stub object { write: fn }
     ProcessStdin,
     // process.stdout -> stub object { write: fn }

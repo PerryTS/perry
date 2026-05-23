@@ -476,6 +476,9 @@ impl JsEmitter {
             Expr::ProcessMemoryUsage => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.memoryUsage() : {rss: 0, heapTotal: 0, heapUsed: 0, external: 0, arrayBuffers: 0})");
             }
+            Expr::ProcessThreadCpuUsage => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.threadCpuUsage === 'function' ? process.threadCpuUsage() : {user: 0, system: 0})");
+            }
             Expr::ProcessPid => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.pid : 0)");
             }

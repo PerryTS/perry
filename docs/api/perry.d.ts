@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1102 entries across 80 modules
+// Coverage: 1103 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1469,6 +1469,8 @@ declare module "process" {
   export const versions: any;
   /** stdlib */
   export function abort(...args: any[]): any;
+  /** stdlib */
+  export function threadCpuUsage(...args: any[]): any;
   /** stdlib */
   export function umask(...args: any[]): any;
 }

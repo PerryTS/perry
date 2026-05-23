@@ -57,6 +57,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Runtime returns an already NaN-boxed pointer (f64).
             Ok(ctx.block().call(DOUBLE, "js_process_memory_usage", &[]))
         }
+        Expr::ProcessThreadCpuUsage => {
+            // Runtime returns an already NaN-boxed pointer (f64) for
+            // { user, system }.
+            Ok(ctx.block().call(DOUBLE, "js_process_thread_cpu_usage", &[]))
+        }
         Expr::EncodeURI(o) => {
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();

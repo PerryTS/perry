@@ -540,7 +540,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // native-module property helper, which returns a bound-method
                 // closure (typeof "function"). The call forms lower separately
                 // via dedicated HIR variants. (#1374, #1373)
-                if matches!(property.as_str(), "abort" | "umask") {
+                if matches!(property.as_str(), "abort" | "umask" | "threadCpuUsage") {
                     let mod_idx = ctx.strings.intern("process");
                     let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
                     let mod_len_str = "process".len().to_string();

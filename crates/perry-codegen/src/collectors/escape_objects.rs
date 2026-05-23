@@ -428,7 +428,7 @@ pub fn check_object_literal_escapes_in_expr(
         | Expr::IterResultGetValue | Expr::IterResultGetDone
         // Process leaf intrinsics
         | Expr::ProcessCwd | Expr::ProcessUptime | Expr::ProcessArgv
-        | Expr::ProcessMemoryUsage | Expr::ProcessPid | Expr::ProcessPpid
+        | Expr::ProcessMemoryUsage | Expr::ProcessThreadCpuUsage | Expr::ProcessPid | Expr::ProcessPpid
         | Expr::ProcessVersion | Expr::ProcessVersions | Expr::ProcessHrtimeBigint
         | Expr::ProcessStdin | Expr::ProcessStdout | Expr::ProcessStderr
         | Expr::ProcessEnv

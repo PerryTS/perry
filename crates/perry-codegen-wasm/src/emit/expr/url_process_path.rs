@@ -91,6 +91,7 @@ impl<'a> FuncEmitCtx<'a> {
             }
             Expr::ProcessUptime
             | Expr::ProcessMemoryUsage
+            | Expr::ProcessThreadCpuUsage
             | Expr::ProcessPid
             | Expr::ProcessPpid
             | Expr::ProcessVersion

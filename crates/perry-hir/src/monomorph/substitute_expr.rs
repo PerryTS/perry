@@ -284,6 +284,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             mask.as_ref()
                 .map(|e| Box::new(substitute_expr(e, substitutions))),
         ),
+        Expr::ProcessThreadCpuUsage => Expr::ProcessThreadCpuUsage,
 
         // File system
         Expr::FsReadFileSync(path) => {

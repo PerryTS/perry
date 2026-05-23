@@ -1858,6 +1858,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // process — properties mapped to Expr::Process* / Expr::Os* in expr_member.rs.
     method("process", "abort", false, None),
     method("process", "umask", false, None),
+    method("process", "threadCpuUsage", false, None),
     property("process", "argv"),
     property("process", "platform"),
     property("process", "arch"),

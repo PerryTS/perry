@@ -277,6 +277,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
         (module, prop),
         ("process", "abort")
             | ("process", "umask")
+            | ("process", "threadCpuUsage")
             | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
