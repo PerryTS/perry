@@ -96,6 +96,71 @@ pub(super) fn try_native_module_methods(
                             // "value is not a function".
                             return Ok(Ok(Expr::Undefined));
                         }
+                        "setSourceMapsEnabled" => {
+                            // #1400: process.setSourceMapsEnabled(bool) —
+                            // toggles runtime source-map resolution in Node.
+                            // Perry compiles AOT and has no resolver to
+                            // toggle, so the call is a no-op returning
+                            // undefined. Without this, framework startup
+                            // code that conditionally enables maps crashes
+                            // on "value is not a function".
+                            return Ok(Ok(Expr::Undefined));
+                        }
+                        "getBuiltinModule" => {
+                            // #1398: process.getBuiltinModule(id) — Node
+                            // 22.3+ accessor. Returns the named built-in
+                            // module if loaded into the interpreter,
+                            // `undefined` otherwise (no throw). Perry
+                            // AOT-compiles every imported module, so
+                            // there's no observable runtime "is this
+                            // loaded?" query — `undefined` is the spec-
+                            // compatible answer for *every* id, and
+                            // consumers fall back to `import` (which we
+                            // already handle).
+                            return Ok(Ok(Expr::Undefined));
+                        }
+                        "dlopen" => {
+                            // #1409: process.dlopen(module, filename, flags?)
+                            // is Node's native-addon (.node) loader. Perry
+                            // statically links every dependency at compile
+                            // time — there's no dynamic loader to call.
+                            // Returning undefined is the closest no-op:
+                            // call sites that probe for the function before
+                            // attempting to load an addon (a common pattern
+                            // in optional-dep wrappers) see typeof "function"
+                            // and a "loaded" non-error, then fall back to
+                            // their pure-JS path. Real addon-loading
+                            // attempts will surface as the addon's exports
+                            // being undefined downstream.
+                            return Ok(Ok(Expr::Undefined));
+                        }
+                        "hasUncaughtExceptionCaptureCallback" => {
+                            // #1406: returns a boolean indicating whether
+                            // a capture callback has been installed via
+                            // setUncaughtExceptionCaptureCallback. Perry
+                            // doesn't expose that hook, so the answer is
+                            // always `false`.
+                            return Ok(Ok(Expr::Bool(false)));
+                        }
+                        "setUncaughtExceptionCaptureCallback" => {
+                            // #1406: installs a single callback that
+                            // intercepts uncaught exceptions before they
+                            // reach the `uncaughtException` event. Perry
+                            // doesn't have the hook to install — the call
+                            // is a no-op returning undefined.
+                            return Ok(Ok(Expr::Undefined));
+                        }
+                        "loadEnvFile" => {
+                            // #1399: process.loadEnvFile(path?) (Node 20.12+)
+                            // reads a `.env` file from disk and adds its
+                            // KEY=value entries to process.env. Perry today
+                            // doesn't persist `process.env.X = v` writes
+                            // (#1344) so eagerly loading would be moot;
+                            // returning undefined is the closest no-op for
+                            // call sites that probe-and-call. Real `.env`
+                            // loading is tracked separately.
+                            return Ok(Ok(Expr::Undefined));
+                        }
                         "exit" => {
                             // process.exit() / process.exit(code) — never
                             // returns, terminates the process. Until now this
@@ -126,6 +191,81 @@ pub(super) fn try_native_module_methods(
                                 None
                             };
                             return Ok(Ok(Expr::ProcessUmask(mask)));
+                        }
+                        "threadCpuUsage" => {
+                            // process.threadCpuUsage() — CPU time used by
+                            // the current thread, as { user, system } in
+                            // microseconds. Ignores any arguments (Node
+                            // accepts none).
+                            return Ok(Ok(Expr::ProcessThreadCpuUsage));
+                        }
+                        "availableMemory" => {
+                            // process.availableMemory() — free system memory
+                            // available to the process, in bytes.
+                            return Ok(Ok(Expr::ProcessAvailableMemory));
+                        }
+                        "constrainedMemory" => {
+                            // process.constrainedMemory() — OS-imposed memory
+                            // limit (cgroups/container), in bytes. 0 when no
+                            // limit applies.
+                            return Ok(Ok(Expr::ProcessConstrainedMemory));
+                        }
+                        // POSIX credential accessors (#1408). All four delegate
+                        // to libc::{getuid,geteuid,getgid,getegid}() at runtime.
+                        "getuid" => {
+                            return Ok(Ok(Expr::ProcessPosixCredential(
+                                crate::ir::PosixCredentialKind::Uid,
+                            )));
+                        }
+                        "geteuid" => {
+                            return Ok(Ok(Expr::ProcessPosixCredential(
+                                crate::ir::PosixCredentialKind::Euid,
+                            )));
+                        }
+                        "getgid" => {
+                            return Ok(Ok(Expr::ProcessPosixCredential(
+                                crate::ir::PosixCredentialKind::Gid,
+                            )));
+                        }
+                        "getegid" => {
+                            return Ok(Ok(Expr::ProcessPosixCredential(
+                                crate::ir::PosixCredentialKind::Egid,
+                            )));
+                        }
+                        "emitWarning" => {
+                            // process.emitWarning(warning[, type, code, ctor])
+                            // — writes a formatted warning to stderr. Perry
+                            // collapses the overloads into a positional Vec
+                            // and lets the runtime do the formatting.
+                            return Ok(Ok(Expr::ProcessEmitWarning(args)));
+                        }
+                        "cpuUsage" => {
+                            // process.cpuUsage(prior?) — { user, system } in
+                            // microseconds. If prior is given, returns the
+                            // diff (clamped to >= 0).
+                            let prior = if !args.is_empty() {
+                                Some(Box::new(args.into_iter().next().unwrap()))
+                            } else {
+                                None
+                            };
+                            return Ok(Ok(Expr::ProcessCpuUsage(prior)));
+                        }
+                        "resourceUsage" => {
+                            return Ok(Ok(Expr::ProcessResourceUsage));
+                        }
+                        "getActiveResourcesInfo" => {
+                            return Ok(Ok(Expr::ProcessActiveResourcesInfo));
+                        }
+                        "hrtime" => {
+                            // process.hrtime(prior?) — [secs, nanos] from a
+                            // monotonic clock. With prior, returns the diff.
+                            // `process.hrtime.bigint()` is intercepted earlier.
+                            let prior = if !args.is_empty() {
+                                Some(Box::new(args.into_iter().next().unwrap()))
+                            } else {
+                                None
+                            };
+                            return Ok(Ok(Expr::ProcessHrtime(prior)));
                         }
                         _ => {} // Fall through to generic handling
                     }

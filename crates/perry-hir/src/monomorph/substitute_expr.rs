@@ -284,6 +284,31 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             mask.as_ref()
                 .map(|e| Box::new(substitute_expr(e, substitutions))),
         ),
+        Expr::ProcessThreadCpuUsage => Expr::ProcessThreadCpuUsage,
+        Expr::ProcessAvailableMemory => Expr::ProcessAvailableMemory,
+        Expr::ProcessConstrainedMemory => Expr::ProcessConstrainedMemory,
+        Expr::ProcessPosixCredential(k) => Expr::ProcessPosixCredential(*k),
+        Expr::ProcessEmitWarning(args) => Expr::ProcessEmitWarning(
+            args.iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
+        ),
+        Expr::ProcessCpuUsage(prior) => Expr::ProcessCpuUsage(
+            prior
+                .as_ref()
+                .map(|e| Box::new(substitute_expr(e, substitutions))),
+        ),
+        Expr::ProcessResourceUsage => Expr::ProcessResourceUsage,
+        Expr::ProcessActiveResourcesInfo => Expr::ProcessActiveResourcesInfo,
+        Expr::ProcessHrtime(prior) => Expr::ProcessHrtime(
+            prior
+                .as_ref()
+                .map(|e| Box::new(substitute_expr(e, substitutions))),
+        ),
+        Expr::ProcessTitle => Expr::ProcessTitle,
+        Expr::ProcessSetTitle(v) => {
+            Expr::ProcessSetTitle(Box::new(substitute_expr(v, substitutions)))
+        }
 
         // File system
         Expr::FsReadFileSync(path) => {

@@ -434,8 +434,8 @@ pub enum Expr {
     ProcessVersion,
     // Process versions object: process.versions -> { node, v8, ... }
     ProcessVersions,
-    // process.hrtime.bigint() -> bigint (nanoseconds since arbitrary point)
-    ProcessHrtimeBigint,
+    ProcessHrtimeBigint, // process.hrtime.bigint() -> bigint (nanoseconds since arbitrary point)
+    ProcessHrtime(Option<Box<Expr>>), // process.hrtime(prior?) -> [secs, nanos] (diff if prior) (#1345)
     // process.nextTick(callback, ...args) -> void.
     // Trailing args are forwarded to the callback when it fires (#1351).
     ProcessNextTick {
@@ -452,26 +452,27 @@ pub enum Expr {
         event: Box<Expr>,
         handler: Box<Expr>,
     },
-    // process.chdir(directory) -> void
-    ProcessChdir(Box<Expr>),
+    ProcessChdir(Box<Expr>), // process.chdir(directory) -> void
     // process.kill(pid, signal?) -> void
     ProcessKill {
         pid: Box<Expr>,
         signal: Option<Box<Expr>>,
     },
-    // process.exit(code?) -> never. Bare `process.exit()` lowers as
-    // `ProcessExit(None)` which the runtime treats as code 0.
-    ProcessExit(Option<Box<Expr>>),
-    // process.abort() -> never. Calls SIGABRT to terminate (no clean shutdown).
-    ProcessAbort,
-    // process.umask(mask?) -> number. No-arg reads current mask; with-arg
-    // sets and returns the previous mask. Both forms hit the same HIR node;
-    // codegen routes to the read or set runtime helper based on Option.
-    ProcessUmask(Option<Box<Expr>>),
-    // process.stdin -> stub object { write: fn }
-    ProcessStdin,
-    // process.stdout -> stub object { write: fn }
-    ProcessStdout,
+    ProcessExit(Option<Box<Expr>>), // process.exit(code?) -> never; None means code 0
+    ProcessAbort,                   // process.abort() -> never; raises SIGABRT
+    ProcessUmask(Option<Box<Expr>>), // process.umask(mask?) -> number; no-arg reads, arg sets and returns previous
+    ProcessThreadCpuUsage,           // process.threadCpuUsage() -> { user, system } microseconds
+    ProcessAvailableMemory,          // process.availableMemory() -> number (free memory bytes)
+    ProcessConstrainedMemory, // process.constrainedMemory() -> number (OS limit, 0 if unconstrained)
+    ProcessPosixCredential(super::PosixCredentialKind), // process.{getuid,geteuid,getgid,getegid}() (#1408)
+    ProcessEmitWarning(Vec<Expr>), // process.emitWarning(warning[, type, code, ctor]) -> undefined (#1375)
+    ProcessCpuUsage(Option<Box<Expr>>), // process.cpuUsage(prior?) -> { user, system } µs (diff if prior given)
+    ProcessResourceUsage, // process.resourceUsage() -> {userCPUTime, maxRSS, ...} (#1376)
+    ProcessActiveResourcesInfo, // process.getActiveResourcesInfo() -> string[] (#1376)
+    ProcessTitle,         // process.title getter (#1401)
+    ProcessSetTitle(Box<Expr>), // process.title = X setter (#1401)
+    ProcessStdin,         // process.stdin -> stub object { write: fn }
+    ProcessStdout,        // process.stdout -> stub object { write: fn }
     // process.stderr -> stub object { write: fn }
     ProcessStderr,
     // process.stdin.setRawMode(enabled) -> stdin (#347 Phase 2)

@@ -234,6 +234,27 @@ fn lock_safe_runtime_scanners_manual_gc_unsafe_zone_stays_noop_after_unlock() {
 }
 
 #[test]
+fn lock_safe_runtime_scanners_auto_gc_unsafe_zone_stays_noop() {
+    // #1467: the affected v0.5.1025 binary let automatic threshold GC
+    // collect while native server work had marked worker JSValue refs unsafe.
+    let _test_lock = lock_safe_runtime_scanner_test_guard();
+    let _reset = ShadowAndGlobalRootResetGuard;
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _unsafe_zone = GcUnsafeZoneResetGuard::enter();
+
+    _trigger.make_arena_trigger_due();
+
+    let before = gc_collection_count();
+    gc_check_trigger();
+
+    assert_eq!(
+        gc_collection_count(),
+        before,
+        "automatic threshold GC must no-op while unsafe zones are active"
+    );
+}
+
+#[test]
 fn lock_safe_runtime_scanners_deferred_manual_gc_respects_unsafe_zone_at_flush() {
     let _test_lock = lock_safe_runtime_scanner_test_guard();
     let _reset = ShadowAndGlobalRootResetGuard;
@@ -264,6 +285,46 @@ fn lock_safe_runtime_scanners_deferred_manual_gc_respects_unsafe_zone_at_flush()
     assert_eq!(
         crate::tui::state::js_perry_tui_state_get(handle).to_bits(),
         bits
+    );
+    crate::tui::state::test_reset_state_slots();
+}
+
+#[test]
+fn lock_safe_runtime_scanners_deferred_auto_gc_respects_unsafe_zone_at_flush() {
+    // #1467: a trigger deferred by a root lock must re-check unsafe zones
+    // before flushing, or it can collect worker-held JSValues after unlock.
+    let _test_lock = lock_safe_runtime_scanner_test_guard();
+    let _reset = ShadowAndGlobalRootResetGuard;
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    ensure_lock_safe_runtime_scanners_registered();
+    crate::tui::state::test_reset_state_slots();
+    let _unsafe_zone = GcUnsafeZoneResetGuard::clear();
+
+    let (ptr, _bits, value) = lock_safe_runtime_scanner_closure();
+    let _handle = crate::tui::state::js_perry_tui_state_alloc(value);
+
+    _trigger.make_arena_trigger_due();
+
+    let before = gc_collection_count();
+    let _shadow = ActiveShadowFrame::push_empty();
+    crate::tui::state::test_with_state_slots_locked(|| {
+        gc_check_trigger();
+        assert_eq!(
+            gc_collection_count(),
+            before,
+            "automatic threshold GC should defer while a state root lock is held"
+        );
+        GC_UNSAFE_ZONES.store(1, std::sync::atomic::Ordering::Release);
+    });
+
+    assert_eq!(
+        gc_collection_count(),
+        before,
+        "deferred automatic threshold GC should re-check unsafe zones before flushing after unlock"
+    );
+    assert!(
+        malloc_user_ptr_tracked(ptr),
+        "state slot root should remain tracked when deferred auto GC is skipped"
     );
     crate::tui::state::test_reset_state_slots();
 }

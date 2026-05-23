@@ -127,6 +127,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // hit the string method fast path.
         | Expr::ProcessVersion
         | Expr::ProcessCwd
+        | Expr::ProcessTitle
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
@@ -322,15 +323,36 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                         _ => {}
                     }
                 }
-                if matches!(object.as_ref(), Expr::NativeModuleRef(m) if m == "crypto")
-                    && matches!(property.as_str(), "getHashes" | "getCiphers" | "getCurves")
-                {
-                    return Some(HirType::Array(Box::new(HirType::String)));
-                }
-                if matches!(object.as_ref(), Expr::NativeModuleRef(m) if m == "crypto")
-                    && property == "generateKeyPairSync"
-                {
-                    return Some(HirType::Named("CryptoKeyPair".into()));
+                if matches!(object.as_ref(), Expr::NativeModuleRef(m) if m == "crypto") {
+                    match property.as_str() {
+                        // #1432: crypto factories / KDFs that return a
+                        // NaN-boxed BufferHeader. Without this refinement
+                        // they're typed `Any`, so the HMAC fast-path's
+                        // `key_is_buffer` check can't identify a
+                        // `SecretKey` / `pbkdf2Sync` result as a Buffer —
+                        // the call falls through to handle-dispatch
+                        // (~3 mutex locks) instead of the inline-FFI
+                        // literal-key fast path.
+                        "createSecretKey"
+                        | "generateKeySync"
+                        | "scryptSync"
+                        | "pbkdf2Sync"
+                        | "hkdfSync"
+                        | "randomBytes" => {
+                            return Some(HirType::Named("Buffer".into()));
+                        }
+                        // Inventory helpers expose a `string[]` to JS.
+                        "getHashes" | "getCiphers" | "getCurves" => {
+                            return Some(HirType::Array(Box::new(HirType::String)));
+                        }
+                        // `generateKeyPairSync` returns a `{ publicKey,
+                        // privateKey }` object; tagging it lets callers
+                        // refine the field types downstream.
+                        "generateKeyPairSync" => {
+                            return Some(HirType::Named("CryptoKeyPair".into()));
+                        }
+                        _ => {}
+                    }
                 }
             }
             // `crypto.createHash(alg).update(data).digest(enc)` chain.
@@ -860,6 +882,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         }
         | Expr::ProcessVersion
         | Expr::ProcessCwd
+        | Expr::ProcessTitle
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
@@ -1012,6 +1035,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // through to the generic native method dispatch and returns undefined.
         Expr::ProcessVersion
         | Expr::ProcessCwd
+        | Expr::ProcessTitle
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform

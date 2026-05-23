@@ -28,6 +28,7 @@ use super::{
 };
 
 mod array_only_methods;
+mod crypto;
 mod globals;
 mod imported_array_methods;
 mod inline_array_methods;

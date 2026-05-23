@@ -91,11 +91,19 @@ impl<'a> FuncEmitCtx<'a> {
             }
             Expr::ProcessUptime
             | Expr::ProcessMemoryUsage
+            | Expr::ProcessThreadCpuUsage
+            | Expr::ProcessAvailableMemory
+            | Expr::ProcessConstrainedMemory
+            | Expr::ProcessPosixCredential(_)
+            | Expr::ProcessResourceUsage
+            | Expr::ProcessActiveResourcesInfo
             | Expr::ProcessPid
             | Expr::ProcessPpid
             | Expr::ProcessVersion
             | Expr::ProcessVersions
             | Expr::ProcessHrtimeBigint
+            | Expr::ProcessHrtime(_)
+            | Expr::ProcessTitle
             | Expr::ProcessStdin
             | Expr::ProcessStdout
             | Expr::ProcessStderr
@@ -120,7 +128,10 @@ impl<'a> FuncEmitCtx<'a> {
             | Expr::ProcessKill { .. }
             | Expr::ProcessExit(_)
             | Expr::ProcessAbort
-            | Expr::ProcessUmask(_) => {
+            | Expr::ProcessUmask(_)
+            | Expr::ProcessEmitWarning(_)
+            | Expr::ProcessCpuUsage(_)
+            | Expr::ProcessSetTitle(_) => {
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
             Expr::EnvGet(_) | Expr::EnvGetDynamic(_) => {

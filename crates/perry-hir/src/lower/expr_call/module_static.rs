@@ -386,6 +386,7 @@ pub(super) fn try_module_static_methods(
                             | "toJSON"
                             | "clearResourceTimings"
                             | "setResourceTimingBufferSize"
+                            | "markResourceTiming"
                     ) {
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: "perf_hooks".to_string(),
@@ -862,96 +863,18 @@ pub(super) fn try_module_static_methods(
             if is_crypto_module {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
+                    // #1434: keep the named-import + dotted form on one
+                    // shared lowering path for the methods whose shape
+                    // matches between sites.
+                    if super::crypto::is_passthrough_method(method_name) {
+                        if let Some(expr) = super::crypto::lower_crypto_passthrough(
+                            method_name,
+                            std::mem::take(&mut args),
+                        ) {
+                            return Ok(Ok(expr));
+                        }
+                    }
                     match method_name {
-                        "randomBytes" => {
-                            if !args.is_empty() {
-                                if args.len() >= 2 {
-                                    return Ok(Ok(Expr::Call {
-                                        callee: Box::new(Expr::PropertyGet {
-                                            object: Box::new(Expr::NativeModuleRef(
-                                                "crypto".to_string(),
-                                            )),
-                                            property: "randomBytes".to_string(),
-                                        }),
-                                        args,
-                                        type_args: vec![],
-                                    }));
-                                }
-                                return Ok(Ok(Expr::CryptoRandomBytes(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
-                        }
-                        "randomFill" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::Call {
-                                    callee: Box::new(Expr::PropertyGet {
-                                        object: Box::new(Expr::NativeModuleRef(
-                                            "crypto".to_string(),
-                                        )),
-                                        property: "randomFill".to_string(),
-                                    }),
-                                    args,
-                                    type_args: vec![],
-                                }));
-                            }
-                        }
-                        "randomUUID" => {
-                            return Ok(Ok(Expr::CryptoRandomUUID));
-                        }
-                        "randomInt" => {
-                            return Ok(Ok(Expr::Call {
-                                callee: Box::new(Expr::PropertyGet {
-                                    object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
-                                    property: "randomInt".to_string(),
-                                }),
-                                args,
-                                type_args: vec![],
-                            }));
-                        }
-                        method_name @ ("generatePrime" | "generatePrimeSync" | "checkPrime"
-                        | "checkPrimeSync") => {
-                            return Ok(Ok(Expr::Call {
-                                callee: Box::new(Expr::PropertyGet {
-                                    object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
-                                    property: method_name.to_string(),
-                                }),
-                                args,
-                                type_args: vec![],
-                            }));
-                        }
-                        "hash" => {
-                            if args.len() >= 2 {
-                                let mut iter = args.into_iter();
-                                let alg = iter.next().unwrap();
-                                let data = iter.next().unwrap();
-                                let enc = iter.next().unwrap_or_else(|| Expr::String("hex".into()));
-                                return Ok(Ok(Expr::Call {
-                                    callee: Box::new(Expr::PropertyGet {
-                                        object: Box::new(Expr::Call {
-                                            callee: Box::new(Expr::PropertyGet {
-                                                object: Box::new(Expr::Call {
-                                                    callee: Box::new(Expr::PropertyGet {
-                                                        object: Box::new(Expr::NativeModuleRef(
-                                                            "crypto".to_string(),
-                                                        )),
-                                                        property: "createHash".to_string(),
-                                                    }),
-                                                    args: vec![alg],
-                                                    type_args: vec![],
-                                                }),
-                                                property: "update".to_string(),
-                                            }),
-                                            args: vec![data],
-                                            type_args: vec![],
-                                        }),
-                                        property: "digest".to_string(),
-                                    }),
-                                    args: vec![enc],
-                                    type_args: vec![],
-                                }));
-                            }
-                        }
                         "sha256" => {
                             if !args.is_empty() {
                                 return Ok(Ok(Expr::CryptoSha256(Box::new(
@@ -985,27 +908,10 @@ pub(super) fn try_module_static_methods(
                                 }));
                             }
                         }
-                        // `crypto.randomFillSync(buf, offset?, size?)`
-                        // — fills `buf` in-place with random bytes
-                        // and returns it. Handles BufferHeader and
-                        // TypedArrayHeader (Uint8Array, Uint32Array,
-                        // etc — axios uses Uint32Array). The
-                        // offset/size args are optional; absent
-                        // values lower as Undefined and the runtime
-                        // treats them as 0 / full-length.
-                        "randomFillSync" => {
-                            if !args.is_empty() {
-                                let mut iter = args.into_iter();
-                                let buffer = iter.next().unwrap();
-                                let offset = iter.next().unwrap_or(Expr::Undefined);
-                                let size = iter.next().unwrap_or(Expr::Undefined);
-                                return Ok(Ok(Expr::CryptoRandomFillSync {
-                                    buffer: Box::new(buffer),
-                                    offset: Box::new(offset),
-                                    size: Box::new(size),
-                                }));
-                            }
-                        }
+                        // `crypto.randomBytes` / `randomUUID` /
+                        // `randomFillSync` are handled by the shared
+                        // `crypto::lower_crypto_passthrough` above —
+                        // see #1434.
                         _ => {} // Fall through to generic handling
                     }
                 }

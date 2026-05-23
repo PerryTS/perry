@@ -1043,6 +1043,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ObjectDefineProperty(..)
         | Expr::PathIsAbsolute(..)
         | Expr::ProcessHrtimeBigint
+        | Expr::ProcessHrtime(..)
+        | Expr::ProcessTitle
+        | Expr::ProcessSetTitle(..)
         | Expr::RegExpExecIndex
         | Expr::CryptoRandomUUID
         | Expr::CryptoRandomBytes(..)
@@ -1175,6 +1178,14 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::OsMachine => string_regex_proc::lower(ctx, expr),
         Expr::OsVersion
         | Expr::ProcessMemoryUsage
+        | Expr::ProcessThreadCpuUsage
+        | Expr::ProcessAvailableMemory
+        | Expr::ProcessConstrainedMemory
+        | Expr::ProcessPosixCredential(..)
+        | Expr::ProcessEmitWarning(..)
+        | Expr::ProcessCpuUsage(..)
+        | Expr::ProcessResourceUsage
+        | Expr::ProcessActiveResourcesInfo
         | Expr::EncodeURI(..)
         | Expr::DecodeURI(..)
         | Expr::EncodeURIComponent(..)

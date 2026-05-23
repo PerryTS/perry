@@ -47,6 +47,59 @@ pub extern "C" fn js_process_abort() {
     std::process::abort();
 }
 
+/// Thread-local cell holding the process title set via `process.title = X`
+/// (#1401). `None` means "not assigned yet, fall back to argv[0]". The
+/// setter records the value here; on Linux it also calls `prctl(PR_SET_NAME)`
+/// so `/proc/<pid>/comm` reflects the new value. macOS has no per-process
+/// analog — the assignment is still observable via subsequent `process.title`
+/// reads, matching Node's best-effort semantics.
+thread_local! {
+    static PROCESS_TITLE: std::cell::RefCell<Option<String>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// process.title -> string. Returns the value set via the setter, or
+/// falls back to argv[0].
+#[no_mangle]
+pub extern "C" fn js_process_title() -> f64 {
+    use crate::value::JSValue;
+    let stored: Option<String> = PROCESS_TITLE.with(|c| c.borrow().clone());
+    let s = stored.unwrap_or_else(|| std::env::args().next().unwrap_or_default());
+    let bytes = s.as_bytes();
+    let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+/// process.title = value — coerces to string and stores in the cell.
+#[no_mangle]
+pub extern "C" fn js_process_set_title(value: f64) {
+    let ptr = crate::value::js_jsvalue_to_string(value);
+    let s = if ptr.is_null() {
+        String::new()
+    } else {
+        unsafe {
+            let header = &*ptr;
+            let len = header.byte_len as usize;
+            let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+            String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+        }
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let mut buf = [0i8; 16];
+        let src = s.as_bytes();
+        let copy_len = std::cmp::min(src.len(), 15);
+        for i in 0..copy_len {
+            buf[i] = src[i] as i8;
+        }
+        unsafe {
+            libc::prctl(libc::PR_SET_NAME, buf.as_ptr() as libc::c_ulong, 0, 0, 0);
+        }
+    }
+    PROCESS_TITLE.with(|c| *c.borrow_mut() = Some(s));
+}
+
 /// process.umask() -> number. Returns the current file-mode creation mask
 /// without modifying it. POSIX's `umask` syscall has no read-only form, so
 /// we set the mask to 0, capture the previous value, then restore it.
@@ -80,6 +133,313 @@ pub extern "C" fn js_process_umask_set(mask: f64) -> f64 {
     #[cfg(not(unix))]
     {
         let _ = mask;
+        0.0
+    }
+}
+
+/// POSIX credential accessors (#1408). On non-unix targets each returns 0.
+#[no_mangle]
+pub extern "C" fn js_process_getuid() -> f64 {
+    #[cfg(unix)]
+    unsafe {
+        libc::getuid() as f64
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
+    }
+}
+#[no_mangle]
+pub extern "C" fn js_process_geteuid() -> f64 {
+    #[cfg(unix)]
+    unsafe {
+        libc::geteuid() as f64
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
+    }
+}
+#[no_mangle]
+pub extern "C" fn js_process_getgid() -> f64 {
+    #[cfg(unix)]
+    unsafe {
+        libc::getgid() as f64
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
+    }
+}
+#[no_mangle]
+pub extern "C" fn js_process_getegid() -> f64 {
+    #[cfg(unix)]
+    unsafe {
+        libc::getegid() as f64
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
+    }
+}
+
+/// process.resourceUsage() -> object with getrusage(RUSAGE_SELF)
+/// counters matching Node's shape (#1376). Linux's `ru_maxrss` is in
+/// kilobytes; macOS/BSD's is in bytes — Node normalizes Linux to bytes,
+/// so we do too. Non-unix targets return zeroed fields.
+#[no_mangle]
+pub extern "C" fn js_process_resource_usage() -> f64 {
+    #[allow(unused_mut)]
+    let mut user_cpu: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut system_cpu: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut max_rss: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut shared_mem: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut unshared_data: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut unshared_stack: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut minor_faults: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut major_faults: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut swapped_out: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut fs_read: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut fs_write: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut ipc_sent: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut ipc_recv: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut signals: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut vcsw: f64 = 0.0;
+    #[allow(unused_mut)]
+    let mut ivcsw: f64 = 0.0;
+
+    #[cfg(unix)]
+    {
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } == 0 {
+            user_cpu = (usage.ru_utime.tv_sec as f64) * 1_000_000.0 + usage.ru_utime.tv_usec as f64;
+            system_cpu =
+                (usage.ru_stime.tv_sec as f64) * 1_000_000.0 + usage.ru_stime.tv_usec as f64;
+            #[cfg(target_os = "linux")]
+            {
+                max_rss = (usage.ru_maxrss as f64) * 1024.0;
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                max_rss = usage.ru_maxrss as f64;
+            }
+            shared_mem = usage.ru_ixrss as f64;
+            unshared_data = usage.ru_idrss as f64;
+            unshared_stack = usage.ru_isrss as f64;
+            minor_faults = usage.ru_minflt as f64;
+            major_faults = usage.ru_majflt as f64;
+            swapped_out = usage.ru_nswap as f64;
+            fs_read = usage.ru_inblock as f64;
+            fs_write = usage.ru_oublock as f64;
+            ipc_sent = usage.ru_msgsnd as f64;
+            ipc_recv = usage.ru_msgrcv as f64;
+            signals = usage.ru_nsignals as f64;
+            vcsw = usage.ru_nvcsw as f64;
+            ivcsw = usage.ru_nivcsw as f64;
+        }
+    }
+
+    let obj = crate::object::js_object_alloc(0, 16);
+    let set_field = |name: &str, value: f64| {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key, value);
+    };
+    set_field("userCPUTime", user_cpu);
+    set_field("systemCPUTime", system_cpu);
+    set_field("maxRSS", max_rss);
+    set_field("sharedMemorySize", shared_mem);
+    set_field("unsharedDataSize", unshared_data);
+    set_field("unsharedStackSize", unshared_stack);
+    set_field("minorPageFault", minor_faults);
+    set_field("majorPageFault", major_faults);
+    set_field("swappedOut", swapped_out);
+    set_field("fsRead", fs_read);
+    set_field("fsWrite", fs_write);
+    set_field("ipcSent", ipc_sent);
+    set_field("ipcReceived", ipc_recv);
+    set_field("signalsCount", signals);
+    set_field("voluntaryContextSwitches", vcsw);
+    set_field("involuntaryContextSwitches", ivcsw);
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+/// process.getActiveResourcesInfo() -> string[]. Node returns names of
+/// libuv handles currently keeping the loop alive (TLSWrap, Timeout,
+/// TCPSERVERWRAP, ...). Perry doesn't surface that introspection yet —
+/// return an empty array. The surface is callable so
+/// `typeof process.getActiveResourcesInfo === "function"` holds.
+#[no_mangle]
+pub extern "C" fn js_process_active_resources_info() -> f64 {
+    let arr = crate::array::js_array_alloc(0);
+    f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+}
+
+/// process.cpuUsage(prior?) -> { user, system } µs.
+/// Reads CPU time consumed by the process via getrusage(RUSAGE_SELF) on
+/// unix. With a `prior` object, returns the diff (clamped to >= 0).
+/// Non-unix targets return `{ user: 0, system: 0 }`.
+#[no_mangle]
+pub extern "C" fn js_process_cpu_usage(prior: f64) -> f64 {
+    let (mut user_us, mut system_us) = read_process_cpu_micros();
+    let undef_bits = crate::value::TAG_UNDEFINED;
+    if prior.to_bits() != undef_bits {
+        let (prev_user, prev_system) = extract_cpu_pair(prior);
+        user_us = (user_us - prev_user).max(0.0);
+        system_us = (system_us - prev_system).max(0.0);
+    }
+    let obj = crate::object::js_object_alloc(0, 2);
+    let set_field = |name: &str, value: f64| {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key, value);
+    };
+    set_field("user", user_us);
+    set_field("system", system_us);
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+#[cfg(unix)]
+fn read_process_cpu_micros() -> (f64, f64) {
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } != 0 {
+        return (0.0, 0.0);
+    }
+    let user = (usage.ru_utime.tv_sec as f64) * 1_000_000.0 + usage.ru_utime.tv_usec as f64;
+    let system = (usage.ru_stime.tv_sec as f64) * 1_000_000.0 + usage.ru_stime.tv_usec as f64;
+    (user, system)
+}
+
+#[cfg(not(unix))]
+fn read_process_cpu_micros() -> (f64, f64) {
+    (0.0, 0.0)
+}
+
+/// Read `.user` and `.system` (numbers, microseconds) from a JS object
+/// — used by `js_process_cpu_usage` to compute diffs. Missing fields
+/// or non-numeric values count as 0.
+fn extract_cpu_pair(value: f64) -> (f64, f64) {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return (0.0, 0.0);
+    }
+    let obj_ptr = jv.as_pointer::<u8>() as *mut crate::object::ObjectHeader;
+    if obj_ptr.is_null() {
+        return (0.0, 0.0);
+    }
+    let get_num = |name: &str| -> f64 {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let v = crate::object::js_object_get_field_by_name_f64(obj_ptr, key);
+        if v.is_nan() {
+            0.0
+        } else {
+            v
+        }
+    };
+    (get_num("user"), get_num("system"))
+}
+
+/// process.emitWarning(warning[, type, code, ctor]) -> undefined.
+/// Writes a formatted warning to stderr matching Node's shape:
+/// `(node:<pid>) <Type> [CODE]: <message>`. Anything that can't be
+/// coerced to a string is rendered via `js_jsvalue_to_string`. The 4th
+/// `ctor` arg (Node's trace anchor) is accepted but ignored — Perry
+/// doesn't capture stack traces here.
+#[no_mangle]
+pub extern "C" fn js_process_emit_warning(warning: f64, type_name: f64, code: f64) {
+    use std::io::Write;
+    let undef_bits = crate::value::TAG_UNDEFINED;
+    let value_to_string = |v: f64| -> String {
+        if v.to_bits() == undef_bits {
+            return String::new();
+        }
+        let ptr = crate::value::js_jsvalue_to_string(v);
+        if ptr.is_null() {
+            return String::new();
+        }
+        unsafe {
+            let header = &*ptr;
+            let len = header.byte_len as usize;
+            let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+            String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+        }
+    };
+
+    let msg = value_to_string(warning);
+    let raw_type = value_to_string(type_name);
+    let raw_code = value_to_string(code);
+    let label = if raw_type.is_empty() {
+        "Warning".to_string()
+    } else {
+        raw_type
+    };
+    let code_part = if raw_code.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", raw_code)
+    };
+    let pid = std::process::id();
+    let line = format!("(node:{}) {}{}: {}\n", pid, label, code_part, msg);
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_all(line.as_bytes());
+}
+
+/// process.availableMemory() -> number. Free system memory available to
+/// the process in bytes. Delegates to `js_os_freemem`'s host-statistics
+/// path on macOS/iOS, sysinfo on Linux, GlobalMemoryStatusEx on Windows.
+#[no_mangle]
+pub extern "C" fn js_process_available_memory() -> f64 {
+    crate::os::js_os_freemem()
+}
+
+/// process.constrainedMemory() -> number. The memory limit imposed by the
+/// OS (cgroups v2 on Linux containers), in bytes. Returns 0 when no
+/// effective limit applies — Node also returns 0 in that case. macOS and
+/// Windows have no per-process equivalent we read here, so they always
+/// return 0.
+#[no_mangle]
+pub extern "C" fn js_process_constrained_memory() -> f64 {
+    #[cfg(target_os = "linux")]
+    {
+        // cgroups v2 reports the memory limit as a decimal number in
+        // bytes, or the literal string "max" for "no limit". Older
+        // cgroups v1 expose memory.limit_in_bytes — we try both.
+        for path in [
+            "/sys/fs/cgroup/memory.max",
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+        ] {
+            if let Ok(s) = std::fs::read_to_string(path) {
+                let s = s.trim();
+                if s == "max" {
+                    return 0.0;
+                }
+                if let Ok(v) = s.parse::<u64>() {
+                    // Kernel returns u64::MAX (or close to it) to mean
+                    // "unlimited" in cgroups v1; treat anything near that
+                    // ceiling as unconstrained.
+                    if v < (u64::MAX / 2) {
+                        return v as f64;
+                    }
+                    return 0.0;
+                }
+            }
+        }
+        0.0
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
         0.0
     }
 }
@@ -137,6 +497,76 @@ pub extern "C" fn js_getenv_value(name_ptr: *const StringHeader) -> f64 {
         JSValue::string_ptr(ptr)
     };
     f64::from_bits(val.bits())
+}
+
+/// Set an environment variable. Backs `process.env.X = v` (#1344).
+///
+/// Reads via `js_getenv_value` already hit `std::env::var`, so writing
+/// through `std::env::set_var` round-trips with no caching layer to
+/// keep in sync. Non-string values are coerced via the same
+/// `js_jsvalue_to_string` Perry uses for `String(x)` / template
+/// concat — matching Node, which coerces `process.env.PORT = 8080` to
+/// `"8080"` before storing.
+///
+/// On unset (calling code routes `delete process.env.X` here too if
+/// it lowers the delete to `process.env.X = undefined` — the empty
+/// SAFE-EMPTY-STRING vs unset distinction is handled by
+/// `js_removeenv` below, which the delete path can call directly).
+#[no_mangle]
+pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
+    use crate::value::js_jsvalue_to_string;
+    unsafe {
+        if name_ptr.is_null() || (name_ptr as usize) < 0x1000 {
+            return;
+        }
+        let len = (*name_ptr).byte_len as usize;
+        let data_ptr = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let name_bytes = std::slice::from_raw_parts(data_ptr, len);
+        let name = match std::str::from_utf8(name_bytes) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        // Coerce value to string. js_jsvalue_to_string handles
+        // numbers/booleans/null/undefined and returns a *mut StringHeader.
+        let value_str_hdr = js_jsvalue_to_string(value);
+        if value_str_hdr.is_null() {
+            // Defensive: null shouldn't happen for non-undefined inputs,
+            // but if it does we silently no-op rather than crash. The
+            // `= undefined` case is intentionally rare in practice.
+            return;
+        }
+
+        // Read the string bytes back into a Rust &str directly off the
+        // StringHeader payload — same layout as `js_getenv` uses for the
+        // name above.
+        let v_len = (*value_str_hdr).byte_len as usize;
+        let v_data = (value_str_hdr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let v_bytes = std::slice::from_raw_parts(v_data, v_len);
+        let v_str = match std::str::from_utf8(v_bytes) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        std::env::set_var(name, v_str);
+    }
+}
+
+/// Unset an environment variable. Backs `delete process.env.X` (#1344).
+#[no_mangle]
+pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
+    unsafe {
+        if name_ptr.is_null() || (name_ptr as usize) < 0x1000 {
+            return;
+        }
+        let len = (*name_ptr).byte_len as usize;
+        let data_ptr = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let name_bytes = std::slice::from_raw_parts(data_ptr, len);
+        let name = match std::str::from_utf8(name_bytes) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        std::env::remove_var(name);
+    }
 }
 
 /// Get resident set size (RSS) in bytes using platform-specific APIs
@@ -267,6 +697,46 @@ pub extern "C" fn js_process_env() -> f64 {
     let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     CACHED_ENV.with(|c| c.set(boxed));
     boxed
+}
+
+/// process.threadCpuUsage() -> object { user, system } in microseconds.
+/// CPU time consumed by the current thread. Uses CLOCK_THREAD_CPUTIME_ID
+/// (available on macOS 10.12+ and Linux). Platforms without the clock get
+/// 0.0 for both fields.
+#[no_mangle]
+pub extern "C" fn js_process_thread_cpu_usage() -> f64 {
+    let (user_us, system_us) = read_thread_cpu_micros();
+
+    let obj = crate::object::js_object_alloc(0, 2);
+    let set_field = |name: &str, value: f64| {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key, value);
+    };
+    set_field("user", user_us);
+    set_field("system", system_us);
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+/// Read the current thread's CPU time as (user_us, system_us). The split
+/// isn't directly available from CLOCK_THREAD_CPUTIME_ID — that clock
+/// reports total. Node returns the user/system split when libuv can
+/// produce it (Linux/macOS via getrusage(RUSAGE_THREAD)/thread_info), but
+/// for Perry we report all of it as `user` and 0 for `system`. The exact
+/// split is uncommon to depend on in tests; the shape is what matters.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn read_thread_cpu_micros() -> (f64, f64) {
+    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+    let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    if ok != 0 {
+        return (0.0, 0.0);
+    }
+    let total_us = (ts.tv_sec as f64) * 1_000_000.0 + (ts.tv_nsec as f64) / 1_000.0;
+    (total_us, 0.0)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn read_thread_cpu_micros() -> (f64, f64) {
+    (0.0, 0.0)
 }
 
 /// process.memoryUsage() -> object { rss, heapTotal, heapUsed, external, arrayBuffers }

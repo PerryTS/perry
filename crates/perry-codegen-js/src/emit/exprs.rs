@@ -476,6 +476,51 @@ impl JsEmitter {
             Expr::ProcessMemoryUsage => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.memoryUsage() : {rss: 0, heapTotal: 0, heapUsed: 0, external: 0, arrayBuffers: 0})");
             }
+            Expr::ProcessThreadCpuUsage => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.threadCpuUsage === 'function' ? process.threadCpuUsage() : {user: 0, system: 0})");
+            }
+            Expr::ProcessAvailableMemory => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.availableMemory === 'function' ? process.availableMemory() : 0)");
+            }
+            Expr::ProcessConstrainedMemory => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.constrainedMemory === 'function' ? process.constrainedMemory() : 0)");
+            }
+            Expr::ProcessPosixCredential(kind) => {
+                let method = match kind {
+                    perry_hir::PosixCredentialKind::Uid => "getuid",
+                    perry_hir::PosixCredentialKind::Euid => "geteuid",
+                    perry_hir::PosixCredentialKind::Gid => "getgid",
+                    perry_hir::PosixCredentialKind::Egid => "getegid",
+                };
+                let _ = write!(
+                    self.output,
+                    "(typeof process !== 'undefined' && typeof process.{m} === 'function' ? process.{m}() : 0)",
+                    m = method
+                );
+            }
+            Expr::ProcessEmitWarning(args) => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.emitWarning === 'function' ? process.emitWarning(");
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
+                    self.emit_expr(a);
+                }
+                self.output.push_str(") : undefined)");
+            }
+            Expr::ProcessCpuUsage(prior) => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.cpuUsage === 'function' ? process.cpuUsage(");
+                if let Some(p) = prior {
+                    self.emit_expr(p);
+                }
+                self.output.push_str(") : {user: 0, system: 0})");
+            }
+            Expr::ProcessResourceUsage => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.resourceUsage === 'function' ? process.resourceUsage() : {})");
+            }
+            Expr::ProcessActiveResourcesInfo => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.getActiveResourcesInfo === 'function' ? process.getActiveResourcesInfo() : [])");
+            }
             Expr::ProcessPid => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.pid : 0)");
             }
@@ -490,6 +535,21 @@ impl JsEmitter {
             }
             Expr::ProcessHrtimeBigint => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.hrtime.bigint() : BigInt(Date.now()) * 1000000n)");
+            }
+            Expr::ProcessHrtime(prior) => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.hrtime === 'function' ? process.hrtime(");
+                if let Some(p) = prior {
+                    self.emit_expr(p);
+                }
+                self.output.push_str(") : [0, 0])");
+            }
+            Expr::ProcessTitle => {
+                self.output.push_str("(typeof process !== 'undefined' ? process.title : '')");
+            }
+            Expr::ProcessSetTitle(value) => {
+                self.output.push_str("(typeof process !== 'undefined' ? (process.title = ");
+                self.emit_expr(value);
+                self.output.push_str(") : undefined)");
             }
             Expr::ProcessNextTick { callback, args } => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.nextTick(");
