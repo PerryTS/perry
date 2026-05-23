@@ -1097,6 +1097,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessChdir(..)
         | Expr::ProcessExit(..)
         | Expr::ProcessAbort
+        | Expr::ProcessUmask(..)
         | Expr::ObjectGetPrototypeOf(..)
         | Expr::ObjectDefineProperties(..)
         | Expr::ObjectSetPrototypeOf(..)

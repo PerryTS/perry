@@ -1857,6 +1857,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("path", "win32"),
     // process — properties mapped to Expr::Process* / Expr::Os* in expr_member.rs.
     method("process", "abort", false, None),
+    method("process", "umask", false, None),
     property("process", "argv"),
     property("process", "platform"),
     property("process", "arch"),

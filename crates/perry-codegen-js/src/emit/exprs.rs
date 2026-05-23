@@ -535,6 +535,13 @@ impl JsEmitter {
             Expr::ProcessAbort => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.abort() : undefined)");
             }
+            Expr::ProcessUmask(mask) => {
+                self.output.push_str("(typeof process !== 'undefined' ? process.umask(");
+                if let Some(m) = mask {
+                    self.emit_expr(m);
+                }
+                self.output.push_str(") : 0)");
+            }
             Expr::ProcessStdin => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.stdin : { write: () => true })");
             }
