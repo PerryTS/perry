@@ -2284,26 +2284,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perf_hooks", "timerify", false, None),
     // #1336: monitorEventLoopDelay() / createHistogram() return a
     // Histogram-shaped object whose method/property reads route
-    // through the `perf_histogram` namespace below. Stub — every stat
-    // reads 0 and the mutators are no-ops.
+    // through the internal `perf_histogram` namespace (not listed in
+    // NATIVE_MODULES because users never import it — they receive the
+    // object as a return value, same pattern as `perf_observer`).
+    // Stub — every stat reads 0 and the mutators are no-ops.
     method("perf_hooks", "monitorEventLoopDelay", false, None),
     method("perf_hooks", "createHistogram", false, None),
-    method("perf_histogram", "enable", false, None),
-    method("perf_histogram", "disable", false, None),
-    method("perf_histogram", "reset", false, None),
-    method("perf_histogram", "record", false, None),
-    method("perf_histogram", "recordDelta", false, None),
-    method("perf_histogram", "add", false, None),
-    method("perf_histogram", "percentile", false, None),
-    method("perf_histogram", "percentileBigInt", false, None),
-    property("perf_histogram", "mean"),
-    property("perf_histogram", "min"),
-    property("perf_histogram", "max"),
-    property("perf_histogram", "stddev"),
-    property("perf_histogram", "exceeds"),
-    property("perf_histogram", "count"),
-    property("perf_histogram", "percentiles"),
-    property("perf_histogram", "percentilesBigInt"),
     property("perf_hooks", "timeOrigin"),
     property("perf_hooks", "nodeTiming"),
     property("perf_hooks", "performance"),
