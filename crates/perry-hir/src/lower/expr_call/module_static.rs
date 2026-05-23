@@ -386,6 +386,7 @@ pub(super) fn try_module_static_methods(
                             | "toJSON"
                             | "clearResourceTimings"
                             | "setResourceTimingBufferSize"
+                            | "markResourceTiming"
                     ) {
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: "perf_hooks".to_string(),

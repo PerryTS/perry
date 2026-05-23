@@ -128,6 +128,15 @@ pub(super) fn lower_perf_hooks_method(
                     &[(DOUBLE, &a0)],
                 )
             }
+            // #1478: performance.markResourceTiming(info) appends a
+            // PerformanceResourceTiming entry built from a
+            // PerformanceTimingInfo-shaped object. Perry doesn't track
+            // the resource-timing buffer yet — return undefined as a
+            // no-op so feature-detect-and-call (`typeof X === "function"`
+            // + invocation) doesn't crash. The accompanying read of
+            // performance.getEntriesByType("resource") still returns
+            // an empty array.
+            "markResourceTiming" => undef.clone(),
             _ => return Ok(None),
         };
         return Ok(Some(v));

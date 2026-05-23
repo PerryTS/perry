@@ -358,6 +358,11 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("perf_hooks", "toJSON")
             | ("perf_hooks", "clearResourceTimings")
             | ("perf_hooks", "setResourceTimingBufferSize")
+            // #1478: performance.markResourceTiming(info) records a
+            // PerformanceResourceTiming. Perry's runtime no-ops it but
+            // the property must still read as a function for
+            // feature-detection (`typeof X === "function"`) wrappers.
+            | ("perf_hooks", "markResourceTiming")
             | ("perf_hooks", "PerformanceObserver")
             | ("perf_hooks", "PerformanceEntry")
             | ("perf_hooks", "PerformanceMark")
