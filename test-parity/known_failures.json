@@ -1687,5 +1687,23 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/flags/readable-errored": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: readable.errored getter — stored Error after destroy(err) not exposed. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/writable-errored": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: writable.errored getter — stored Error after destroy(err) not exposed. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/writable-lifecycle": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: writable.writable boolean lifecycle — does not flip false after finish/close. Flips to PASS when #1531 lands."
   }
 }
