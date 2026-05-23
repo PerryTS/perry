@@ -38,9 +38,13 @@ pub(super) fn try_native_module_methods(
                         "memoryUsage" => return Ok(Ok(Expr::ProcessMemoryUsage)),
                         "nextTick" => {
                             if !args.is_empty() {
-                                return Ok(Ok(Expr::ProcessNextTick(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
+                                let mut iter = args.into_iter();
+                                let callback = iter.next().unwrap();
+                                let trailing: Vec<Expr> = iter.collect();
+                                return Ok(Ok(Expr::ProcessNextTick {
+                                    callback: Box::new(callback),
+                                    args: trailing,
+                                }));
                             }
                         }
                         "on" => {

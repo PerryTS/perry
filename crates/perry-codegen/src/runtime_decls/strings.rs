@@ -892,6 +892,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Microtask queue (queueMicrotask / process.nextTick).
     module.declare_function("js_queue_microtask", VOID, &[I64]);
     module.declare_function("js_queue_next_tick", VOID, &[I64]);
+    // #1351: process.nextTick(cb, ...args) — trailing args packed into a
+    // stack buffer of doubles, forwarded when the tick fires.
+    module.declare_function(
+        "js_queue_next_tick_args",
+        VOID,
+        &[I64, crate::types::PTR, I32],
+    );
     module.declare_function("js_drain_queued_microtasks", VOID, &[]);
     // Uint8Array constructor wrapper that flags the resulting buffer so the
     // formatter prints `Uint8Array(N) [ ... ]` instead of `<Buffer ...>`.

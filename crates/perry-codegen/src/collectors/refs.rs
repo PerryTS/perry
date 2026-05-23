@@ -217,7 +217,6 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::WeakRefDeref(operand)
         | Expr::StructuredClone(operand)
         | Expr::QueueMicrotask(operand)
-        | Expr::ProcessNextTick(operand)
         | Expr::FsExistsSync(operand)
         | Expr::FsReadFileSync(operand)
         | Expr::FsReadFileBinary(operand)
@@ -254,6 +253,12 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(operand, out);
         }
         Expr::JsonParseTyped { text, .. } => walk(text, out),
+        Expr::ProcessNextTick { callback, args } => {
+            walk(callback, out);
+            for a in args {
+                walk(a, out);
+            }
+        }
         Expr::Call { callee, args, .. } => {
             walk(callee, out);
             for a in args {

@@ -491,11 +491,15 @@ impl JsEmitter {
             Expr::ProcessHrtimeBigint => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.hrtime.bigint() : BigInt(Date.now()) * 1000000n)");
             }
-            Expr::ProcessNextTick(cb) => {
+            Expr::ProcessNextTick { callback, args } => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.nextTick(");
-                self.emit_expr(cb);
+                self.emit_expr(callback);
+                for a in args {
+                    self.output.push_str(", ");
+                    self.emit_expr(a);
+                }
                 self.output.push_str(") : queueMicrotask(");
-                self.emit_expr(cb);
+                self.emit_expr(callback);
                 self.output.push_str("))");
             }
             Expr::ProcessOn { event, handler } => {

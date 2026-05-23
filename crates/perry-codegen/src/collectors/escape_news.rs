@@ -252,7 +252,6 @@ fn collect_used_new_fields_in_expr(
         | Expr::FinalizationRegistryNew(operand)
         | Expr::StructuredClone(operand)
         | Expr::QueueMicrotask(operand)
-        | Expr::ProcessNextTick(operand)
         | Expr::ArrayIsArray(operand)
         | Expr::ObjectRest {
             object: operand, ..
@@ -262,6 +261,12 @@ fn collect_used_new_fields_in_expr(
         | Expr::Btoa(operand) => collect_used_new_fields_in_expr(operand, non_escaping_news, used),
         Expr::JsonParseTyped { text, .. } => {
             collect_used_new_fields_in_expr(text, non_escaping_news, used)
+        }
+        Expr::ProcessNextTick { callback, args } => {
+            collect_used_new_fields_in_expr(callback, non_escaping_news, used);
+            for a in args {
+                collect_used_new_fields_in_expr(a, non_escaping_news, used);
+            }
         }
         Expr::Conditional {
             condition,

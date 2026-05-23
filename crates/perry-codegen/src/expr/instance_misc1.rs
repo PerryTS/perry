@@ -414,21 +414,47 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
         }
 
-        // -------- queueMicrotask(fn) / process.nextTick(fn) stubs --------
-        // Real microtask scheduling needs the runtime's queue. For
-        // now we lower the callback for side effects (it might be a
-        // closure expression that needs to register slots) and
-        // return undefined.
-        Expr::QueueMicrotask(cb) | Expr::ProcessNextTick(cb) => {
+        // -------- queueMicrotask(fn) stub --------
+        Expr::QueueMicrotask(cb) => {
             let cb_box = lower_expr(ctx, cb)?;
             let blk = ctx.block();
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            let runtime = match expr {
-                Expr::QueueMicrotask(_) => "js_queue_microtask",
-                Expr::ProcessNextTick(_) => "js_queue_next_tick",
-                _ => unreachable!(),
-            };
-            blk.call_void(runtime, &[(I64, &cb_handle)]);
+            blk.call_void("js_queue_microtask", &[(I64, &cb_handle)]);
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+        }
+
+        // -------- process.nextTick(fn, ...args) --------
+        // Trailing args are forwarded to the callback when the tick fires
+        // (#1351). Pack them into a stack buffer of doubles and hand off to
+        // the varargs runtime entry; the no-args form goes through the
+        // simpler `js_queue_next_tick` to avoid the alloca cost.
+        Expr::ProcessNextTick { callback, args } => {
+            let cb_box = lower_expr(ctx, callback)?;
+            if args.is_empty() {
+                let blk = ctx.block();
+                let cb_handle = unbox_to_i64(blk, &cb_box);
+                blk.call_void("js_queue_next_tick", &[(I64, &cb_handle)]);
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let n = args.len();
+            let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+            for (i, a) in args.iter().enumerate() {
+                let v = lower_expr(ctx, a)?;
+                let blk = ctx.block();
+                let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+                blk.store(DOUBLE, &v, &slot);
+            }
+            let ptr_reg = ctx.block().next_reg();
+            ctx.block().emit_raw(format!(
+                "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                ptr_reg, n, buf
+            ));
+            let blk = ctx.block();
+            let cb_handle = unbox_to_i64(blk, &cb_box);
+            blk.call_void(
+                "js_queue_next_tick_args",
+                &[(I64, &cb_handle), (PTR, &ptr_reg), (I32, &n.to_string())],
+            );
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
 

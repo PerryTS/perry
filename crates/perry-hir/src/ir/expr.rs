@@ -436,8 +436,12 @@ pub enum Expr {
     ProcessVersions,
     // process.hrtime.bigint() -> bigint (nanoseconds since arbitrary point)
     ProcessHrtimeBigint,
-    // process.nextTick(callback) -> void
-    ProcessNextTick(Box<Expr>),
+    // process.nextTick(callback, ...args) -> void.
+    // Trailing args are forwarded to the callback when it fires (#1351).
+    ProcessNextTick {
+        callback: Box<Expr>,
+        args: Vec<Expr>,
+    },
     // process.on(event, handler) -> void (registers an event listener)
     ProcessOn {
         event: Box<Expr>,

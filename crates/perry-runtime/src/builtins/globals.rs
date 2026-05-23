@@ -339,15 +339,33 @@ pub extern "C" fn js_structured_clone(value: f64) -> f64 {
 /// should print "sync" then "micro", not "micro" then "sync".
 #[no_mangle]
 pub extern "C" fn js_queue_microtask(callback: i64) {
-    queue_microtask_with_type(callback, "Microtask");
+    queue_microtask_with_type(callback, "Microtask", Vec::new());
 }
 
 #[no_mangle]
 pub extern "C" fn js_queue_next_tick(callback: i64) {
-    queue_microtask_with_type(callback, "TickObject");
+    queue_microtask_with_type(callback, "TickObject", Vec::new());
 }
 
-fn queue_microtask_with_type(callback: i64, type_name: &str) {
+/// process.nextTick(cb, ...args) — forwards trailing args to `cb` when the
+/// tick fires (#1351). `args_ptr`/`n_args` describe a NaN-boxed-f64 buffer
+/// allocated on the caller's stack; we copy the slice eagerly because the
+/// drain runs after the caller returns.
+///
+/// # Safety
+/// `args_ptr` must point to `n_args` valid `f64` values, or be null if
+/// `n_args == 0`.
+#[no_mangle]
+pub unsafe extern "C" fn js_queue_next_tick_args(callback: i64, args_ptr: *const f64, n_args: i32) {
+    let args: Vec<f64> = if args_ptr.is_null() || n_args <= 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(args_ptr, n_args as usize).to_vec()
+    };
+    queue_microtask_with_type(callback, "TickObject", args);
+}
+
+fn queue_microtask_with_type(callback: i64, type_name: &str, args: Vec<f64>) {
     let context = crate::async_context::capture_context();
     let ids = crate::async_hooks::init_resource(
         type_name,
@@ -355,13 +373,26 @@ fn queue_microtask_with_type(callback: i64, type_name: &str) {
         false,
     );
     QUEUED_MICROTASKS.with(|q| {
-        q.borrow_mut()
-            .push((callback, context, ids.async_id, ids.trigger_async_id));
+        q.borrow_mut().push(QueuedMicrotask {
+            callback,
+            context,
+            async_id: ids.async_id,
+            trigger_async_id: ids.trigger_async_id,
+            args,
+        });
     });
 }
 
+pub(crate) struct QueuedMicrotask {
+    pub callback: i64,
+    pub context: crate::async_context::AsyncContextSnapshot,
+    pub async_id: u64,
+    pub trigger_async_id: u64,
+    pub args: Vec<f64>,
+}
+
 thread_local! {
-    static QUEUED_MICROTASKS: std::cell::RefCell<Vec<(i64, crate::async_context::AsyncContextSnapshot, u64, u64)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static QUEUED_MICROTASKS: std::cell::RefCell<Vec<QueuedMicrotask>> = const { std::cell::RefCell::new(Vec::new()) };
     static QUEUED_MICROTASK_PREV_CONTEXTS: std::cell::RefCell<Vec<crate::async_context::AsyncContextSnapshot>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -377,7 +408,10 @@ pub fn restore_queued_microtask_contexts() {
 /// Drain queued microtasks. Called by `js_promise_run_microtasks`.
 #[no_mangle]
 pub extern "C" fn js_drain_queued_microtasks() {
-    use crate::closure::js_closure_call0;
+    use crate::closure::{
+        js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3, js_closure_call4,
+        js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
+    };
     loop {
         let task = QUEUED_MICROTASKS.with(|q| {
             let mut queue = q.borrow_mut();
@@ -388,16 +422,61 @@ pub extern "C" fn js_drain_queued_microtasks() {
             }
         });
         match task {
-            Some((cb, context, async_id, trigger_async_id)) => {
+            Some(QueuedMicrotask {
+                callback: cb,
+                context,
+                async_id,
+                trigger_async_id,
+                args,
+            }) => {
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let callback_handle =
                     scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
+                let arg_handles = scope.root_nanbox_f64_slice(&args);
                 let previous = crate::async_context::enter_context(&context);
                 QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
                     stack.borrow_mut().push(previous);
                 });
                 crate::async_hooks::before(async_id, trigger_async_id);
-                js_closure_call0(callback_handle.get_raw_const_ptr());
+                let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+                let cb_ptr = callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
+                match a.len() {
+                    0 => {
+                        js_closure_call0(cb_ptr);
+                    }
+                    1 => {
+                        js_closure_call1(cb_ptr, a[0]);
+                    }
+                    2 => {
+                        js_closure_call2(cb_ptr, a[0], a[1]);
+                    }
+                    3 => {
+                        js_closure_call3(cb_ptr, a[0], a[1], a[2]);
+                    }
+                    4 => {
+                        js_closure_call4(cb_ptr, a[0], a[1], a[2], a[3]);
+                    }
+                    5 => {
+                        js_closure_call5(cb_ptr, a[0], a[1], a[2], a[3], a[4]);
+                    }
+                    6 => {
+                        js_closure_call6(cb_ptr, a[0], a[1], a[2], a[3], a[4], a[5]);
+                    }
+                    7 => {
+                        js_closure_call7(cb_ptr, a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+                    }
+                    8 => {
+                        js_closure_call8(cb_ptr, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+                    }
+                    _ => {
+                        // >= 9 args: clamp to 9. Mirrors the setTimeout
+                        // dispatch fallback; real-world nextTick rarely
+                        // exceeds 1-2 trailing args.
+                        js_closure_call9(
+                            cb_ptr, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8],
+                        );
+                    }
+                }
                 crate::async_hooks::after(async_id);
                 crate::async_hooks::destroy(async_id);
                 QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
@@ -418,9 +497,14 @@ pub fn scan_queued_microtask_roots(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_queued_microtask_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     QUEUED_MICROTASKS.with(|q| {
-        for (callback, context, _, _) in q.borrow_mut().iter_mut() {
-            visitor.visit_i64_slot(callback);
-            crate::async_context::scan_snapshot_roots_mut(context, visitor);
+        for task in q.borrow_mut().iter_mut() {
+            visitor.visit_i64_slot(&mut task.callback);
+            crate::async_context::scan_snapshot_roots_mut(&mut task.context, visitor);
+            // #1351: trailing nextTick args may be heap pointers — keep
+            // them rooted alongside the callback closure.
+            for arg in task.args.iter_mut() {
+                visitor.visit_nanbox_f64_slot(arg);
+            }
         }
     });
     QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
@@ -436,7 +520,13 @@ pub(crate) fn test_seed_queued_microtask(callback: i64, context_store: f64) {
     QUEUED_MICROTASKS.with(|q| {
         let mut q = q.borrow_mut();
         q.clear();
-        q.push((callback, context, 0, 0));
+        q.push(QueuedMicrotask {
+            callback,
+            context,
+            async_id: 0,
+            trigger_async_id: 0,
+            args: Vec::new(),
+        });
     });
     QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| stack.borrow_mut().clear());
 }
@@ -457,10 +547,10 @@ pub(crate) fn test_queued_microtask_snapshot() -> (usize, u64, u64) {
         let q = q.borrow();
         let (callback, store_bits) = q
             .first()
-            .map(|(callback, context, _, _)| {
+            .map(|task| {
                 (
-                    *callback as usize,
-                    crate::async_context::test_snapshot_first_store(context)
+                    task.callback as usize,
+                    crate::async_context::test_snapshot_first_store(&task.context)
                         .map(f64::to_bits)
                         .unwrap_or(0),
                 )

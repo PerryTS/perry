@@ -81,7 +81,7 @@ impl SH for Expr {
             Expr::ProcessVersion => tag(h, 62),
             Expr::ProcessVersions => tag(h, 63),
             Expr::ProcessHrtimeBigint => tag(h, 64),
-            Expr::ProcessNextTick(e) => { tag(h, 65); e.as_ref().hash(h); }
+            Expr::ProcessNextTick { callback, args } => { tag(h, 65); callback.as_ref().hash(h); for a in args { a.hash(h); } }
             Expr::ProcessOn { event, handler } => { tag(h, 66); event.as_ref().hash(h); handler.as_ref().hash(h); }
             Expr::ProcessOnce { event, handler } => { tag(h, 11223); event.as_ref().hash(h); handler.as_ref().hash(h); }
             Expr::ProcessChdir(e) => { tag(h, 67); e.as_ref().hash(h); }

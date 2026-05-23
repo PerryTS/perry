@@ -114,7 +114,7 @@ impl<'a> FuncEmitCtx<'a> {
             | Expr::OsEOL => {
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
-            Expr::ProcessNextTick(_)
+            Expr::ProcessNextTick { .. }
             | Expr::ProcessChdir(_)
             | Expr::ProcessOn { .. }
             | Expr::ProcessKill { .. }
