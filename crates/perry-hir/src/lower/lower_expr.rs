@@ -590,6 +590,23 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     {
                         return Ok(Expr::String("function".to_string()));
                     }
+                    // #1535: `import Stream from "node:stream"` should make
+                    // `typeof Stream === "function"` (legacy Stream
+                    // constructor with class statics hung off it). Perry
+                    // resolves the default import to a native-module
+                    // namespace today, so the read defaulted to typeof
+                    // "object". Fold when the local ident is bound as the
+                    // default import of a node module whose default export
+                    // Node exposes as a constructor function. (Other
+                    // modules whose default is a non-callable namespace —
+                    // `node:os`, `node:path` — stay typeof "object".)
+                    if ctx.lookup_local(n).is_none() {
+                        if let Some((module_name, None)) = ctx.lookup_native_module(n) {
+                            if matches!(module_name, "stream" | "node:stream") {
+                                return Ok(Expr::String("function".to_string()));
+                            }
+                        }
+                    }
                 }
                 if let ast::Expr::Member(member) = unary.arg.as_ref() {
                     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
