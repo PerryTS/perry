@@ -17,3 +17,18 @@ pub mod state_widgets;
 pub mod system_api;
 pub mod tabbar_layout;
 pub mod text_scroll;
+
+// Re-export every `pub extern "C"` symbol at the `crate::ffi` level (and
+// therefore — via `pub use ffi::*;` in lib.rs — at the crate root).
+// Without this, code that references `crate::perry_ui_*` (notably
+// `app.rs` and `geisterhand_style.rs`) fails to resolve.
+pub use basic_widgets::*;
+pub use canvas_picker::*;
+pub use embed_misc::*;
+pub use image_nav::*;
+pub use issue_553::*;
+pub use menu_dialog::*;
+pub use state_widgets::*;
+pub use system_api::*;
+pub use tabbar_layout::*;
+pub use text_scroll::*;
