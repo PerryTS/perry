@@ -322,6 +322,33 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                         _ => {}
                     }
                 }
+                // #1432: crypto factories / KDFs that return a NaN-boxed
+                // BufferHeader. Without this refinement they're typed
+                // `Any`, so the HMAC fast-path's `key_is_buffer` check
+                // can't identify a `SecretKey` / `pbkdf2Sync` result as
+                // a Buffer — the call falls through to handle-dispatch
+                // (~3 mutex locks) instead of the inline-FFI literal-key
+                // fast path. The runtime values are real Buffers, so
+                // tagging them `Named("Buffer")` is correct.
+                //
+                // Mirrors the existing `Expr::CryptoRandomBytes(_) →
+                // Uint8Array` arm in `static_type_of`; we use `"Buffer"`
+                // rather than `"Uint8Array"` here because the HMAC
+                // fast-path key check specifically matches the
+                // `Named("Buffer")` name (see `is_buffer_expr`).
+                if matches!(object.as_ref(), Expr::NativeModuleRef(m) if m == "crypto") {
+                    match property.as_str() {
+                        "createSecretKey"
+                        | "generateKeySync"
+                        | "scryptSync"
+                        | "pbkdf2Sync"
+                        | "hkdfSync"
+                        | "randomBytes" => {
+                            return Some(HirType::Named("Buffer".into()));
+                        }
+                        _ => {}
+                    }
+                }
             }
             // `crypto.createHash(alg).update(data).digest(enc)` chain.
             // The expr.rs handler collapses this into a runtime call. With an
