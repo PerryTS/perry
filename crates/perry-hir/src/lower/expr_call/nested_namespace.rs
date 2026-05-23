@@ -44,6 +44,40 @@ pub(super) fn try_process_hrtime_bigint(
     Err(args)
 }
 
+/// `process.memoryUsage.rss()` — Node's fast-path that returns just the
+/// RSS as a number instead of allocating the full `MemoryUsage` object
+/// (issue #1395). AST shape mirrors `process.hrtime.bigint()` above.
+///
+/// Implementation: lower to `(process.memoryUsage()).rss`. Same value
+/// Node's fast path returns; we don't have the no-allocation fast path
+/// but parity tests only care about the numeric result.
+pub(super) fn try_process_memory_usage_rss(
+    expr: &ast::Expr,
+    args: Vec<Expr>,
+) -> Result<Expr, Vec<Expr>> {
+    if let ast::Expr::Member(outer_member) = expr {
+        if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
+            if let ast::Expr::Ident(inner_obj) = inner_member.obj.as_ref() {
+                if inner_obj.sym.as_ref() == "process" {
+                    if let ast::MemberProp::Ident(inner_prop) = &inner_member.prop {
+                        if inner_prop.sym.as_ref() == "memoryUsage" {
+                            if let ast::MemberProp::Ident(method_ident) = &outer_member.prop {
+                                if method_ident.sym.as_ref() == "rss" {
+                                    return Ok(Expr::PropertyGet {
+                                        object: Box::new(Expr::ProcessMemoryUsage),
+                                        property: "rss".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Err(args)
+}
+
 /// Web Crypto API — `crypto.subtle.<method>(args)` (issue #561).
 /// AST shape is the same nested-Member pattern as
 /// `process.hrtime.bigint()` above. We resolve here BEFORE the
