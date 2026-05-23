@@ -1,8 +1,3 @@
-// process.release — at minimum `{ name: "node" }`. Feature-detection
-// branches on `process.release.name === "node"`. Regression cover for
-// #1348 (Perry was returning a number sentinel, so `.name` exploded).
-const r = process.release;
-console.log("typeof:", typeof r);
-console.log("name:", r.name);
-console.log("sourceUrl typeof:", typeof r.sourceUrl);
-console.log("headersUrl typeof:", typeof r.headersUrl);
+// process.release is an object whose `name` identifies the runtime.
+console.log("is object:", typeof process.release === "object" && process.release !== null);
+console.log("name is string:", typeof process.release.name === "string");

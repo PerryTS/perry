@@ -1,11 +1,11 @@
 {
   "_schema": {
-    "description": "Each entry maps a parity-suite test name to a structured record. The CI gate in .github/workflows/test.yml reads `keys[]` from this file \u2014 a test that fails AND is not a key here breaks CI. Add entries here only with full provenance (issue + added date) so we can revalidate.",
+    "description": "Each entry maps a parity-suite test name to a structured record. The CI gate in .github/workflows/test.yml reads `keys[]` from this file — a test that fails AND is not a key here breaks CI. Add entries here only with full provenance (issue + added date) so we can revalidate.",
     "fields": {
-      "issue": "Open GitHub issue number tracking this failure (e.g. \"793\"), or null when the failure is environmental / pending triage. Closed issues must be re-evaluated \u2014 flag the entry as `category: bug-stale` until a new tracking issue is filed.",
+      "issue": "Open GitHub issue number tracking this failure (e.g. \"793\"), or null when the failure is environmental / pending triage. Closed issues must be re-evaluated — flag the entry as `category: bug-stale` until a new tracking issue is filed.",
       "added": "ISO date (YYYY-MM-DD) when the test was first skip-listed. Use 2026-05-15 for entries inherited from the pre-audit format where the historical date is unknown.",
-      "category": "ci-env | module-inventory | bug-open | bug-stale | gap-categorical | gap-bisect \u2014 see test-parity/README.md for definitions.",
-      "reason": "Free-text explanation. Keep the most-actionable signal first \u2014 what changes the verdict (a fixture, a Perry fix, a Node spec change)."
+      "category": "ci-env | module-inventory | bug-open | bug-stale | gap-categorical | gap-bisect — see test-parity/README.md for definitions.",
+      "reason": "Free-text explanation. Keep the most-actionable signal first — what changes the verdict (a fixture, a Perry fix, a Node spec change)."
     }
   },
   "node-suite/perf_hooks/timerify/timerify": {
@@ -72,7 +72,7 @@
     "issue": "655",
     "added": "2026-05-15",
     "category": "bug-open",
-    "reason": "Canonical regression-catcher for issue #655. Flips to PASS when the underlying fix lands. Keep regardless of CI verdict \u2014 it's a deliberate failing repro."
+    "reason": "Canonical regression-catcher for issue #655. Flips to PASS when the underlying fix lands. Keep regardless of CI verdict — it's a deliberate failing repro."
   },
   "test_edge_regression": {
     "issue": null,
@@ -90,7 +90,7 @@
     "issue": null,
     "added": "2026-05-15",
     "category": "gap-bisect",
-    "reason": "Array method coverage probe \u2014 small divergences (flat/flatMap/finally specific edge cases). Targeted bisect needed; not a recent regression. File a tracking issue once a specific sub-case is pinned."
+    "reason": "Array method coverage probe — small divergences (flat/flatMap/finally specific edge cases). Targeted bisect needed; not a recent regression. File a tracking issue once a specific sub-case is pinned."
   },
   "test_gap_console_methods": {
     "issue": "1278",
@@ -102,13 +102,13 @@
     "issue": null,
     "added": "2026-05-17",
     "category": "gap-bisect",
-    "reason": "Advanced class features (static blocks, private brand checks, etc.) \u2014 bisect required to identify which sub-feature fails byte-for-byte vs Node."
+    "reason": "Advanced class features (static blocks, private brand checks, etc.) — bisect required to identify which sub-feature fails byte-for-byte vs Node."
   },
   "test_gap_regexp_advanced": {
     "issue": null,
     "added": "2026-05-15",
     "category": "gap-categorical",
-    "reason": "Lookbehind regex assertions \u2014 Rust's `regex` crate doesn't support `(?<=)` / `(?<!)`. Documented in CLAUDE.md as a known categorical gap. Unblocking requires swapping the regex backend or implementing a separate matcher for lookbehind."
+    "reason": "Lookbehind regex assertions — Rust's `regex` crate doesn't support `(?<=)` / `(?<!)`. Documented in CLAUDE.md as a known categorical gap. Unblocking requires swapping the regex backend or implementing a separate matcher for lookbehind."
   },
   "test_harness_async_context": {
     "issue": "788",
@@ -120,31 +120,31 @@
     "issue": "806",
     "added": "2026-05-16",
     "category": "bug-stale",
-    "reason": "#806 harness for `class X extends Fn(...)<...>` patterns. Two sub-cases surface real Perry gaps today: (1) bare-factory subclass loses the base's field initializer (`bare.kind: undefined` vs Node's `bare.kind: bare`); (2) chained mixin `WithA(WithB(WithC(Base)))` throws `TypeError: value is not a function` at construction. Captured-factory + Effect double-call shapes pass post-#740 \u2014 the harness verifies that survives. Linked to #321 umbrella; will flip to PASS as each sub-case lands."
+    "reason": "#806 harness for `class X extends Fn(...)<...>` patterns. Two sub-cases surface real Perry gaps today: (1) bare-factory subclass loses the base's field initializer (`bare.kind: undefined` vs Node's `bare.kind: bare`); (2) chained mixin `WithA(WithB(WithC(Base)))` throws `TypeError: value is not a function` at construction. Captured-factory + Effect double-call shapes pass post-#740 — the harness verifies that survives. Linked to #321 umbrella; will flip to PASS as each sub-case lands."
   },
   "test_issue_233_async_array_param_push": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "bug-stale",
-    "reason": "#233 (16-element cap on async array-param push) closed on macOS. Linux CI still surfaces a divergence \u2014 bisect needed to pin the Linux-only sub-case before filing a new tracking issue. Rolled under the parity roadmap (#793) in the meantime."
+    "reason": "#233 (16-element cap on async array-param push) closed on macOS. Linux CI still surfaces a divergence — bisect needed to pin the Linux-only sub-case before filing a new tracking issue. Rolled under the parity roadmap (#793) in the meantime."
   },
   "test_issue_422_socket_connect": {
     "issue": null,
     "added": "2026-05-15",
     "category": "ci-env",
-    "reason": "#422 closed (net.Socket connect/error events + factory). The test passes locally with an echo server running but fails on Linux CI because no echo fixture server runs. Environmental \u2014 needs a CI-side fixture, not a Perry fix."
+    "reason": "#422 closed (net.Socket connect/error events + factory). The test passes locally with an echo server running but fails on Linux CI because no echo fixture server runs. Environmental — needs a CI-side fixture, not a Perry fix."
   },
   "test_issue_462_nullish_property_access": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "bug-stale",
-    "reason": "Behavior is correct (TypeError thrown, UNREACHABLE never prints). Only stack-trace format diverges from Node \u2014 #616 closed with framing improvements but byte-for-byte parity requires source-text retention through the runtime. Track under the parity roadmap; file a dedicated stack-format issue if/when it becomes a real blocker."
+    "reason": "Behavior is correct (TypeError thrown, UNREACHABLE never prints). Only stack-trace format diverges from Node — #616 closed with framing improvements but byte-for-byte parity requires source-text retention through the runtime. Track under the parity roadmap; file a dedicated stack-format issue if/when it becomes a real blocker."
   },
   "test_issue_510_primitive_method_typeerror": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "bug-stale",
-    "reason": "Same root cause as test_issue_462 \u2014 see #616 (closed). Behavior correct; framing differs. Regression vector: v0.5.702 (#596) routed throw helpers through js_throw which exposed the format gap. Track under the parity roadmap until a stack-format issue is filed."
+    "reason": "Same root cause as test_issue_462 — see #616 (closed). Behavior correct; framing differs. Regression vector: v0.5.702 (#596) routed throw helpers through js_throw which exposed the format gap. Track under the parity roadmap until a stack-format issue is filed."
   },
   "test_issue_561_sigv4_chain": {
     "issue": "793",
@@ -168,7 +168,7 @@
     "issue": "922",
     "added": "2026-05-17",
     "category": "bug-open",
-    "reason": "Regression test from #922 (P0 production /api crash). Deliberate failing repro until the underlying codegen bug is fixed; #934 added a circuit breaker that converts the runaway loop into [PERRY ABORT] (so test fails by design \u2014 the abort message diverges from Node's success output)."
+    "reason": "Regression test from #922 (P0 production /api crash). Deliberate failing repro until the underlying codegen bug is fixed; #934 added a circuit breaker that converts the runaway loop into [PERRY ABORT] (so test fails by design — the abort message diverges from Node's success output)."
   },
   "test_issue_express_map_undefined": {
     "issue": "912",
@@ -192,229 +192,229 @@
     "issue": null,
     "added": "2026-05-15",
     "category": "ci-env",
-    "reason": "Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental \u2014 needs a CI-side fixture, not a Perry fix."
+    "reason": "Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental — needs a CI-side fixture, not a Perry fix."
   },
   "test_net_socket": {
     "issue": null,
     "added": "2026-05-15",
     "category": "ci-env",
-    "reason": "Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental \u2014 needs a CI-side fixture, not a Perry fix."
+    "reason": "Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental — needs a CI-side fixture, not a Perry fix."
   },
   "test_net_upgrade_tls": {
     "issue": null,
     "added": "2026-05-15",
     "category": "ci-env",
-    "reason": "Net test needs a TLS-capable echo server fixture; not available on CI. Environmental \u2014 needs a CI-side fixture."
+    "reason": "Net test needs a TLS-capable echo server fixture; not available on CI. Environmental — needs a CI-side fixture."
   },
   "test_parity_assert": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:assert` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:assert` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_async_hooks": {
     "issue": "789",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:async_hooks` createHook lifecycle + asyncId tracking missing. Tracked in #789. Flips to PASS once createHook fires."
+    "reason": "Node.js module inventory — `node:async_hooks` createHook lifecycle + asyncId tracking missing. Tracked in #789. Flips to PASS once createHook fires."
   },
   "test_parity_buffer": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:buffer` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:buffer` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_child_process": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:child_process` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:child_process` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_crypto": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:crypto` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:crypto` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_dgram": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:dgram` (UDP) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:dgram` (UDP) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_diagnostics_channel": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:diagnostics_channel` not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:diagnostics_channel` not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_dns": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:dns` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:dns` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_dns_promises": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:dns/promises` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:dns/promises` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_fs": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:fs` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:fs` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_fs_promises": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:fs/promises` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:fs/promises` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_http": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:http` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:http` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_http2": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:http2` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:http2` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_https": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:https` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:https` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_module": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:module` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:module` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_net": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:net` socket-layer surface not implemented (Server/Socket classes, BlockList, SocketAddress). Classification helpers landed via #811. Tracker for surface coverage; flips to PASS as each API lands."
+    "reason": "Node.js module inventory — `node:net` socket-layer surface not implemented (Server/Socket classes, BlockList, SocketAddress). Classification helpers landed via #811. Tracker for surface coverage; flips to PASS as each API lands."
   },
   "test_parity_os": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:os` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:os` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_path": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:path` surface. Per-method gaps closed via #741 and #810 (path.posix/win32 sub-namespace). This test now PASSes byte-for-byte; entry retained until the next sweep confirms it can be removed."
+    "reason": "Node.js module inventory — `node:path` surface. Per-method gaps closed via #741 and #810 (path.posix/win32 sub-namespace). This test now PASSes byte-for-byte; entry retained until the next sweep confirms it can be removed."
   },
   "test_parity_perf_hooks": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:perf_hooks` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:perf_hooks` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_process": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:process` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:process` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_readline": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:readline` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:readline` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_readline_promises": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:readline/promises` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:readline/promises` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_sqlite": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:sqlite` (Node 22.5+ built-in) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:sqlite` (Node 22.5+ built-in) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_stream": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:stream` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:stream` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_stream_consumers": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:stream/consumers` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:stream/consumers` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_stream_promises": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:stream/promises` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:stream/promises` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_stream_web": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:stream/web` (WHATWG streams) surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:stream/web` (WHATWG streams) surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_sys": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:sys` (legacy alias for util) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:sys` (legacy alias for util) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_test": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:test` (built-in test runner) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:test` (built-in test runner) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_tls": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:tls` surface not fully implemented (Socket-level TLS upgrade works via net.upgradeToTLS; the higher-level tls.connect/Server is partial). Tracker for surface coverage."
+    "reason": "Node.js module inventory — `node:tls` surface not fully implemented (Socket-level TLS upgrade works via net.upgradeToTLS; the higher-level tls.connect/Server is partial). Tracker for surface coverage."
   },
   "test_parity_url": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:url` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:url` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_util": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:util` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:util` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_worker_threads": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:worker_threads` surface not implemented (perry/thread provides a Perry-native alternative). Tracker for surface coverage; flips to PASS as each API lands."
+    "reason": "Node.js module inventory — `node:worker_threads` surface not implemented (perry/thread provides a Perry-native alternative). Tracker for surface coverage; flips to PASS as each API lands."
   },
   "test_parity_zlib": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:zlib` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:zlib` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_sock_write_map": {
     "issue": null,
     "added": "2026-05-15",
     "category": "ci-env",
-    "reason": "Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental \u2014 issue #91 dispatch fix landed in v0.5.581 and is no longer the cause; needs a CI-side fixture."
+    "reason": "Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental — issue #91 dispatch fix landed in v0.5.581 and is no longer the cause; needs a CI-side fixture."
   },
   "test_decorators_nest_js_common_canary": {
     "issue": null,
@@ -426,18 +426,144 @@
     "issue": null,
     "added": "2026-05-18",
     "category": "ci-env",
-    "reason": "Ramda npm-package fixture failure on Linux CI; observed on #1038's CI run pre-merge. Companion to the existing test_ramda_user_import skip in the compile-smoke list \u2014 the parity harness can't npm-install ramda. File a CI-side fixture issue if/when this matters for sweep coverage."
+    "reason": "Ramda npm-package fixture failure on Linux CI; observed on #1038's CI run pre-merge. Companion to the existing test_ramda_user_import skip in the compile-smoke list — the parity harness can't npm-install ramda. File a CI-side fixture issue if/when this matters for sweep coverage."
   },
   "test_stream_on": {
     "issue": null,
     "added": "2026-05-18",
     "category": "ci-env",
-    "reason": "node:stream emitter wiring still incomplete (cf. existing test_parity_stream module-inventory entry). Same failure observed on #1038 pre-merge \u2014 not a regression."
+    "reason": "node:stream emitter wiring still incomplete (cf. existing test_parity_stream module-inventory entry). Same failure observed on #1038 pre-merge — not a regression."
   },
   "test_zlib_brotli_decompress": {
     "issue": null,
     "added": "2026-05-18",
     "category": "ci-env",
-    "reason": "Brotli decompression path under node:zlib not yet implemented (cf. existing test_parity_zlib module-inventory entry). Same failure observed on #1038 pre-merge \u2014 not a regression."
+    "reason": "Brotli decompression path under node:zlib not yet implemented (cf. existing test_parity_zlib module-inventory entry). Same failure observed on #1038 pre-merge — not a regression."
+  },
+  "node-suite/process/shapes/method-types": {
+    "issue": "1343",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: typeof process.<method> reflection (cwd/nextTick/hrtime/exit/on/uptime/memoryUsage/cpuUsage) reports wrong type. Fix was in #1371 but that PR merged into the #1331 branch not main; reconstruction dropped it. Flips to PASS when #1343 lands."
+  },
+  "node-suite/process/nexttick/is-function": {
+    "issue": "1343",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: typeof process.nextTick !== \"function\" — same method-value reflection gap. Flips to PASS when #1343 lands."
+  },
+  "node-suite/process/methods/chdir": {
+    "issue": "1343",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: typeof process.chdir !== \"function\" — method-value reflection. Flips to PASS when #1343 lands."
+  },
+  "node-suite/process/methods/exit": {
+    "issue": "1343",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: typeof process.exit !== \"function\" — method-value reflection. Flips to PASS when #1343 lands."
+  },
+  "node-suite/process/methods/kill": {
+    "issue": "1343",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: typeof process.kill !== \"function\" — method-value reflection. Flips to PASS when #1343 lands."
+  },
+  "node-suite/process/env/write": {
+    "issue": "1344",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: process.env.X = v does not persist (assignment lowering). Fix was in #1371 not yet on main. Flips to PASS when #1344 lands."
+  },
+  "node-suite/process/hrtime/tuple": {
+    "issue": "1345",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: process.hrtime() (tuple form) unwired; only .bigint() works. Fix was in #1371 not yet on main. Flips to PASS when #1345 lands."
+  },
+  "node-suite/process/props/string-props": {
+    "issue": "1346",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: argv0/execPath/title read as number, not string. Fix was in #1371 not yet on main. Flips to PASS when #1346 lands."
+  },
+  "node-suite/process/cpu/cpu-usage-shape": {
+    "issue": "1347",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: process.cpuUsage() throws \"value is not a function\". Flips to PASS when #1347 lands."
+  },
+  "node-suite/process/exit-code/exit-code-default": {
+    "issue": "1350",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: process.exitCode does not default to undefined. Flips to PASS when #1350 lands."
+  },
+  "node-suite/process/events/on-emit": {
+    "issue": "1372",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: EventEmitter on()/emit() round-trip throws. Flips to PASS when #1372 lands."
+  },
+  "node-suite/process/events/listener-management": {
+    "issue": "1372",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: EventEmitter listeners/eventNames/listenerCount/removeListener unimplemented. Flips to PASS when #1372 lands."
+  },
+  "node-suite/process/resource/resource-usage": {
+    "issue": "1376",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: process.resourceUsage() throws. Flips to PASS when #1376 lands."
+  },
+  "node-suite/process/resource/active-resources": {
+    "issue": "1376",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: process.getActiveResourcesInfo() throws. Flips to PASS when #1376 lands."
+  },
+  "node-suite/process/memory/rss-method": {
+    "issue": "1395",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: process.memoryUsage.rss() fast-path unimplemented. Flips to PASS when #1395 lands."
+  },
+  "node-suite/process/report/report": {
+    "issue": "1396",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: process.report is not an object. Flips to PASS when #1396 lands."
+  },
+  "node-suite/process/methods/get-builtin-module": {
+    "issue": "1398",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: process.getBuiltinModule(id) unimplemented. Flips to PASS when #1398 lands."
+  },
+  "node-suite/process/methods/load-env-file": {
+    "issue": "1399",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: process.loadEnvFile unimplemented. Flips to PASS when #1399 lands."
+  },
+  "node-suite/process/title/title-set": {
+    "issue": "1401",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: process.title is not settable. Flips to PASS when #1401 lands."
+  },
+  "node-suite/process/exception/uncaught-capture": {
+    "issue": "1406",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: hasUncaughtExceptionCaptureCallback / setUncaughtExceptionCaptureCallback unimplemented. Flips to PASS when #1406 lands."
+  },
+  "node-suite/process/methods/dlopen": {
+    "issue": "1409",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:process: process.dlopen unimplemented. Flips to PASS when #1409 lands."
   }
 }
