@@ -1687,5 +1687,29 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/dispose/await-using-disposes": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: await using does not trigger Symbol.asyncDispose on the stream. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/push/push-undefined": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: push(undefined) crashes instead of being treated as end-of-stream. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/compose/from-async-iterable": {
+    "issue": "1539",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: stream.compose with async-iterable source does not propagate data. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/promises/pipeline-returns-undefined": {
+    "issue": "1533",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/promises: pipeline resolves with the wrong value. Flips to PASS when #1533 lands."
   }
 }
