@@ -210,6 +210,15 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                             ("target_defaults".to_string(), Expr::Object(Vec::new())),
                         ]));
                     }
+                    // #1380: process.allowedNodeEnvironmentFlags — the
+                    // set of NODE_OPTIONS / V8 flags Node will accept
+                    // from the environment. Perry binaries are AOT and
+                    // don't honour NODE_OPTIONS-style runtime flags, so
+                    // the empty Set is the spec-compatible shape.
+                    // Without this, the bare read returned a 0 sentinel
+                    // and `.has(...)` / `.size` / `for...of` iteration
+                    // all exploded.
+                    "allowedNodeEnvironmentFlags" => return Ok(Expr::SetNew),
                     _ => {}
                 }
             }
@@ -294,6 +303,7 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                             ("target_defaults".to_string(), Expr::Object(Vec::new())),
                         ]));
                     }
+                    "allowedNodeEnvironmentFlags" => return Ok(Expr::SetNew),
                     _ => {}
                 }
             }
