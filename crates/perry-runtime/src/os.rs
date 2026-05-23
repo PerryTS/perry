@@ -520,15 +520,35 @@ pub extern "C" fn js_process_version() -> *mut StringHeader {
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
 
-/// process.versions -> { node, v8, perry }
+/// process.versions -> populated `{ node, v8, perry, ...node sub-fields }`.
+///
+/// Issue #1381: shape-only consumers feature-detect on individual fields
+/// (`typeof process.versions.uv === "string"`, `process.versions.modules`
+/// for the NAPI ABI gate, etc.). Pre-fix Perry only exposed `node` / `v8`
+/// / `perry`, so every other sub-field came back `undefined` and a long
+/// tail of npm packages assumed they were running on an outdated Node.
+///
+/// Values are strings; consumers parse them with `parseInt` / `semver`.
+/// Perry's runtime does not embed libuv / OpenSSL / etc., so versions
+/// reflect the upstream toolchain spec we target (Node 22) rather than
+/// what is statically linked. `"0"` for ABI counters (NAPI, modules)
+/// flags "do not assume this is a real Node host" without breaking
+/// consumers that only ever check `typeof`.
 #[no_mangle]
 pub extern "C" fn js_process_versions() -> f64 {
     use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::{js_nanbox_string, JSValue};
 
-    // Build the object via shape with packed keys
-    let packed = b"node\0v8\0perry\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF21, 3, packed.as_ptr(), packed.len() as u32);
+    // Build the object via shape with packed keys. Order MUST match the
+    // js_object_set_field calls below — slot indices are positional.
+    let packed = b"node\0v8\0perry\0uv\0modules\0openssl\0zlib\0ares\0icu\0unicode\0napi\0llhttp\0nghttp2\0undici\0";
+    let field_count: u32 = 14;
+    let obj = js_object_alloc_with_shape(
+        0x7FFF_FF21,
+        field_count,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
 
     let nb = |s: &str| -> JSValue {
         let bytes = s.as_bytes();
@@ -539,6 +559,17 @@ pub extern "C" fn js_process_versions() -> f64 {
     js_object_set_field(obj, 0, nb("22.0.0"));
     js_object_set_field(obj, 1, nb("12.4.254.21"));
     js_object_set_field(obj, 2, nb("0.4.71"));
+    js_object_set_field(obj, 3, nb("1.51.0")); // uv (target spec; Perry doesn't link libuv)
+    js_object_set_field(obj, 4, nb("0")); // modules (NAPI ABI counter — "do not assume real Node host")
+    js_object_set_field(obj, 5, nb("0")); // openssl (Perry's TLS uses rustls; no OpenSSL link)
+    js_object_set_field(obj, 6, nb("1.3.0")); // zlib
+    js_object_set_field(obj, 7, nb("0")); // ares
+    js_object_set_field(obj, 8, nb("0")); // icu
+    js_object_set_field(obj, 9, nb("16.0")); // unicode
+    js_object_set_field(obj, 10, nb("0")); // napi
+    js_object_set_field(obj, 11, nb("0")); // llhttp
+    js_object_set_field(obj, 12, nb("0")); // nghttp2
+    js_object_set_field(obj, 13, nb("0")); // undici
 
     // Return as NaN-boxed pointer
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
