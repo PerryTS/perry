@@ -8,18 +8,6 @@
       "reason": "Free-text explanation. Keep the most-actionable signal first — what changes the verdict (a fixture, a Perry fix, a Node spec change)."
     }
   },
-  "node-suite/perf_hooks/histogram/monitor-event-loop-delay": {
-    "issue": "1336",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: monitorEventLoopDelay() unimplemented (not a function). Flips to PASS when #1336 lands."
-  },
-  "node-suite/perf_hooks/histogram/create-histogram": {
-    "issue": "1336",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: createHistogram() unimplemented (not a function). Flips to PASS when #1336 lands."
-  },
   "node-suite/perf_hooks/shapes/to-string-tag": {
     "issue": "1479",
     "added": "2026-05-23",
