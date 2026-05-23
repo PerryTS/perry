@@ -619,6 +619,8 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                         | "setSourceMapsEnabled"
                                         | "getBuiltinModule"
                                         | "dlopen"
+                                        | "hasUncaughtExceptionCaptureCallback"
+                                        | "setUncaughtExceptionCaptureCallback"
                                 )
                                 && ctx.lookup_local("process").is_none()
                             {

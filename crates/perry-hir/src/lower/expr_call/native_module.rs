@@ -134,6 +134,22 @@ pub(super) fn try_native_module_methods(
                             // being undefined downstream.
                             return Ok(Ok(Expr::Undefined));
                         }
+                        "hasUncaughtExceptionCaptureCallback" => {
+                            // #1406: returns a boolean indicating whether
+                            // a capture callback has been installed via
+                            // setUncaughtExceptionCaptureCallback. Perry
+                            // doesn't expose that hook, so the answer is
+                            // always `false`.
+                            return Ok(Ok(Expr::Bool(false)));
+                        }
+                        "setUncaughtExceptionCaptureCallback" => {
+                            // #1406: installs a single callback that
+                            // intercepts uncaught exceptions before they
+                            // reach the `uncaughtException` event. Perry
+                            // doesn't have the hook to install — the call
+                            // is a no-op returning undefined.
+                            return Ok(Ok(Expr::Undefined));
+                        }
                         "exit" => {
                             // process.exit() / process.exit(code) — never
                             // returns, terminates the process. Until now this
