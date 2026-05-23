@@ -36,6 +36,10 @@ extern "C" {
     fn CGContextSetLineCap(c: CGContextRef, cap: i32);
     fn CGContextSetLineJoin(c: CGContextRef, join: i32);
     fn CGContextSetRGBStrokeColor(c: CGContextRef, r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat);
+    fn CGContextSetRGBFillColor(c: CGContextRef, r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat);
+    fn CGContextFillPath(c: CGContextRef);
+    fn CGContextFillRect(c: CGContextRef, rect: CGRect);
+    fn CGContextStrokeRect(c: CGContextRef, rect: CGRect);
     fn CGContextDrawLinearGradient(
         c: CGContextRef,
         gradient: CGGradientRef,
@@ -78,6 +82,36 @@ enum DrawCommand {
         a2: f64,
         direction: f64,
     },
+    // Stateful (HTML5-canvas-style) API: setters update current state,
+    // StrokePath/FillPath render the accumulated path with that state.
+    SetStrokeColor {
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    },
+    SetFillColor {
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    },
+    SetLineWidth(f64),
+    ClosePath,
+    StrokePath,
+    FillPath,
+    FillRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
+    StrokeRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
 }
 
 thread_local! {
@@ -119,11 +153,17 @@ define_class!(
                     // Track current path points for gradient fill
                     let mut path_points: Vec<(f64, f64)> = Vec::new();
                     let mut in_path = false;
+                    // Stateful API current values
+                    let mut cur_stroke = (0.0f64, 0.0f64, 0.0f64, 1.0f64);
+                    let mut cur_fill = (0.0f64, 0.0f64, 0.0f64, 1.0f64);
+                    let mut cur_width = 1.0f64;
+                    let mut path_closed = false;
 
                     for cmd in commands.iter() {
                         match cmd {
                             DrawCommand::BeginPath => {
                                 path_points.clear();
+                                path_closed = false;
                                 in_path = true;
                             }
                             DrawCommand::MoveTo(x, y) => {
@@ -200,6 +240,74 @@ define_class!(
                                     }
                                 }
                                 in_path = false;
+                            }
+                            DrawCommand::SetStrokeColor { r, g, b, a } => {
+                                cur_stroke = (*r, *g, *b, *a);
+                            }
+                            DrawCommand::SetFillColor { r, g, b, a } => {
+                                cur_fill = (*r, *g, *b, *a);
+                            }
+                            DrawCommand::SetLineWidth(w) => {
+                                cur_width = *w;
+                            }
+                            DrawCommand::ClosePath => {
+                                path_closed = true;
+                            }
+                            DrawCommand::StrokePath => {
+                                if path_points.len() >= 2 {
+                                    unsafe {
+                                        CGContextSaveGState(ctx);
+                                        CGContextSetRGBStrokeColor(ctx, cur_stroke.0, cur_stroke.1, cur_stroke.2, cur_stroke.3);
+                                        CGContextSetLineWidth(ctx, cur_width);
+                                        CGContextSetLineCap(ctx, 1);
+                                        CGContextSetLineJoin(ctx, 1);
+                                        CGContextBeginPath(ctx);
+                                        CGContextMoveToPoint(ctx, path_points[0].0, path_points[0].1);
+                                        for pt in &path_points[1..] {
+                                            CGContextAddLineToPoint(ctx, pt.0, pt.1);
+                                        }
+                                        if path_closed {
+                                            CGContextClosePath(ctx);
+                                        }
+                                        CGContextStrokePath(ctx);
+                                        CGContextRestoreGState(ctx);
+                                    }
+                                }
+                                in_path = false;
+                            }
+                            DrawCommand::FillPath => {
+                                if path_points.len() >= 2 {
+                                    unsafe {
+                                        CGContextSaveGState(ctx);
+                                        CGContextSetRGBFillColor(ctx, cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
+                                        CGContextBeginPath(ctx);
+                                        CGContextMoveToPoint(ctx, path_points[0].0, path_points[0].1);
+                                        for pt in &path_points[1..] {
+                                            CGContextAddLineToPoint(ctx, pt.0, pt.1);
+                                        }
+                                        CGContextClosePath(ctx);
+                                        CGContextFillPath(ctx);
+                                        CGContextRestoreGState(ctx);
+                                    }
+                                }
+                                in_path = false;
+                            }
+                            DrawCommand::FillRect { x, y, w, h } => {
+                                unsafe {
+                                    CGContextSaveGState(ctx);
+                                    CGContextSetRGBFillColor(ctx, cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
+                                    CGContextFillRect(ctx, CGRect::new(CGPoint::new(*x, *y), CGSize::new(*w, *h)));
+                                    CGContextRestoreGState(ctx);
+                                }
+                            }
+                            DrawCommand::StrokeRect { x, y, w, h } => {
+                                unsafe {
+                                    CGContextSaveGState(ctx);
+                                    CGContextSetRGBStrokeColor(ctx, cur_stroke.0, cur_stroke.1, cur_stroke.2, cur_stroke.3);
+                                    CGContextSetLineWidth(ctx, cur_width);
+                                    CGContextStrokeRect(ctx, CGRect::new(CGPoint::new(*x, *y), CGSize::new(*w, *h)));
+                                    CGContextRestoreGState(ctx);
+                                }
                             }
                         }
                     }
@@ -378,4 +486,61 @@ pub fn fill_gradient(
             }
         }
     }
+}
+
+// ── Stateful (HTML5-canvas-style) API ────────────────────────────────
+// Setters record state; stroke_path/fill render the accumulated path.
+
+fn push_cmd(handle: i64, cmd: DrawCommand) {
+    if let Some(key) = get_canvas_key(handle) {
+        CANVAS_COMMANDS.with(|cmds| {
+            if let Some(commands) = cmds.borrow_mut().get_mut(&key) {
+                commands.push(cmd);
+            }
+        });
+    }
+}
+
+fn redraw(handle: i64) {
+    if let Some(view) = super::get_widget(handle) {
+        unsafe {
+            let _: () = msg_send![&*view, setNeedsDisplay];
+        }
+    }
+}
+
+pub fn set_stroke_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    push_cmd(handle, DrawCommand::SetStrokeColor { r, g, b, a });
+}
+
+pub fn set_fill_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    push_cmd(handle, DrawCommand::SetFillColor { r, g, b, a });
+}
+
+pub fn set_line_width(handle: i64, w: f64) {
+    push_cmd(handle, DrawCommand::SetLineWidth(w));
+}
+
+pub fn close_path(handle: i64) {
+    push_cmd(handle, DrawCommand::ClosePath);
+}
+
+pub fn stroke_path(handle: i64) {
+    push_cmd(handle, DrawCommand::StrokePath);
+    redraw(handle);
+}
+
+pub fn fill(handle: i64) {
+    push_cmd(handle, DrawCommand::FillPath);
+    redraw(handle);
+}
+
+pub fn fill_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCommand::FillRect { x, y, w, h });
+    redraw(handle);
+}
+
+pub fn stroke_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCommand::StrokeRect { x, y, w, h });
+    redraw(handle);
 }
