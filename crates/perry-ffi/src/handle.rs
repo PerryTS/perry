@@ -39,7 +39,7 @@
 //! [`with_handle`] which scopes the borrow under a closure.
 
 use std::any::Any;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -66,6 +66,9 @@ static MUTABLE_ROOT_SCANNERS: Lazy<Mutex<Vec<NamedGcMutableRootScanner>>> =
 
 thread_local! {
     static ROOT_SCANNER_TRAMPOLINE_REGISTERED: Cell<bool> = const { Cell::new(false) };
+    static MUTABLE_ROOT_SCANNER_TRAMPOLINES_REGISTERED: RefCell<Vec<usize>> = const {
+        RefCell::new(Vec::new())
+    };
 }
 
 type PerryFfiRootMarker = extern "C" fn(value: f64, ctx: *mut c_void);
@@ -418,24 +421,33 @@ pub fn gc_register_mutable_root_scanner_named(source: &'static str, scanner: GcM
         let mut scanners = MUTABLE_ROOT_SCANNERS
             .lock()
             .expect("perry-ffi mutable root scanner registry poisoned");
-        if scanners
+        if let Some((scanner_id, _)) = scanners
             .iter()
-            .any(|registered| registered.scanner as usize == scanner as usize)
+            .enumerate()
+            .find(|(_, registered)| registered.scanner as usize == scanner as usize)
         {
+            scanner_id
+        } else {
+            let scanner_id = scanners.len();
+            scanners.push(NamedGcMutableRootScanner { scanner });
+            scanner_id
+        }
+    };
+    MUTABLE_ROOT_SCANNER_TRAMPOLINES_REGISTERED.with(|registered| {
+        let mut registered = registered.borrow_mut();
+        if registered.contains(&scanner_id) {
             return;
         }
-        let scanner_id = scanners.len();
-        scanners.push(NamedGcMutableRootScanner { scanner });
-        scanner_id
-    };
-    unsafe {
-        perry_ffi_gc_register_mutable_root_scanner_named(
-            source.as_ptr(),
-            source.len(),
-            scanner_id,
-            scan_registered_mutable_root_by_id,
-        );
-    }
+        unsafe {
+            perry_ffi_gc_register_mutable_root_scanner_named(
+                source.as_ptr(),
+                source.len(),
+                scanner_id,
+                scan_registered_mutable_root_by_id,
+            );
+        }
+        registered.push(scanner_id);
+    });
 }
 
 fn assert_valid_root_source(source: &'static str) {
