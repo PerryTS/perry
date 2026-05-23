@@ -280,6 +280,10 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::ProcessUptime => Expr::ProcessUptime,
         Expr::ProcessMemoryUsage => Expr::ProcessMemoryUsage,
         Expr::ProcessAbort => Expr::ProcessAbort,
+        Expr::ProcessUmask(mask) => Expr::ProcessUmask(
+            mask.as_ref()
+                .map(|e| Box::new(substitute_expr(e, substitutions))),
+        ),
 
         // File system
         Expr::FsReadFileSync(path) => {

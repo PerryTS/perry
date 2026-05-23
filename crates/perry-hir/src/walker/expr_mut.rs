@@ -1068,6 +1068,11 @@ where
                 f(v);
             }
         }
+        Expr::ProcessUmask(opt) => {
+            if let Some(v) = opt {
+                f(v);
+            }
+        }
 
         // ─── Child process ───────────────────────────────────────────────
         Expr::ChildProcessExecSync { command, options } => {

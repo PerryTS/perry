@@ -268,6 +268,7 @@ fn specialized_stdlib_call(expr: &Expr) -> Option<(&'static str, &'static str)> 
         Expr::ProcessCwd => ("process", "cwd"),
         Expr::ProcessArgv => ("process", "argv"),
         Expr::ProcessAbort => ("process", "abort"),
+        Expr::ProcessUmask(_) => ("process", "umask"),
         Expr::ProcessStdinIsTTY => ("process", "stdin.isTTY"),
         Expr::ProcessStdoutIsTTY => ("process", "stdout.isTTY"),
         Expr::ProcessStderrIsTTY => ("process", "stderr.isTTY"),

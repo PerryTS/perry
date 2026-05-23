@@ -131,6 +131,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ctx.block().call_void("js_process_abort", &[]);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
+        Expr::ProcessUmask(mask) => {
+            // process.umask(mask?) — returns the current file-mode creation
+            // mask as a number. The arg form sets the mask first and returns
+            // the previous value. The no-arg form reads-and-restores so the
+            // mask isn't disturbed.
+            if let Some(e) = mask {
+                let v = lower_expr(ctx, e)?;
+                Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_process_umask_set", &[(DOUBLE, &v)]))
+            } else {
+                Ok(ctx.block().call(DOUBLE, "js_process_umask", &[]))
+            }
+        }
         Expr::ObjectGetPrototypeOf(o) => {
             // v0.5.751: route through the runtime helper which walks
             // the class registry's parent_class_id chain for INT32-tagged

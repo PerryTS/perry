@@ -116,6 +116,17 @@ pub(super) fn try_native_module_methods(
                             // shutdown. Maps to libc::abort() at runtime.
                             return Ok(Ok(Expr::ProcessAbort));
                         }
+                        "umask" => {
+                            // process.umask(mask?) — returns the current
+                            // file-mode creation mask, optionally setting
+                            // a new one first and returning the previous.
+                            let mask = if !args.is_empty() {
+                                Some(Box::new(args.into_iter().next().unwrap()))
+                            } else {
+                                None
+                            };
+                            return Ok(Ok(Expr::ProcessUmask(mask)));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }

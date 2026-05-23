@@ -47,6 +47,43 @@ pub extern "C" fn js_process_abort() {
     std::process::abort();
 }
 
+/// process.umask() -> number. Returns the current file-mode creation mask
+/// without modifying it. POSIX's `umask` syscall has no read-only form, so
+/// we set the mask to 0, capture the previous value, then restore it.
+#[no_mangle]
+pub extern "C" fn js_process_umask() -> f64 {
+    #[cfg(unix)]
+    unsafe {
+        let prev = libc::umask(0);
+        libc::umask(prev);
+        prev as f64
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
+    }
+}
+
+/// process.umask(mask) -> number. Sets the file-mode creation mask to
+/// `mask` (coerced to integer) and returns the previous value.
+#[no_mangle]
+pub extern "C" fn js_process_umask_set(mask: f64) -> f64 {
+    #[cfg(unix)]
+    unsafe {
+        let m = if mask.is_nan() || mask.is_infinite() {
+            0
+        } else {
+            mask as libc::mode_t
+        };
+        libc::umask(m) as f64
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mask;
+        0.0
+    }
+}
+
 /// Get an environment variable by name (takes JS string pointer)
 /// Returns a string pointer, or null (0) if not found
 #[no_mangle]

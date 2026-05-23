@@ -533,14 +533,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ],
                     ));
                 }
-                // node:process — `process.abort` read as a VALUE (not called).
-                // Bare `process` lowers to the GlobalGet(0) sentinel, so the
-                // receiver name is gone here; route by the process-distinctive
-                // property name through the native-module property helper,
-                // which returns a bound-method closure (typeof "function").
-                // The call form `process.abort()` lowers separately via the
-                // dedicated HIR variant. (#1374)
-                if property.as_str() == "abort" {
+                // node:process — `process.abort` / `process.umask` etc. read
+                // as VALUES (not called). Bare `process` lowers to the
+                // GlobalGet(0) sentinel, so the receiver name is gone here;
+                // route by the process-distinctive property name through the
+                // native-module property helper, which returns a bound-method
+                // closure (typeof "function"). The call forms lower separately
+                // via dedicated HIR variants. (#1374, #1373)
+                if matches!(property.as_str(), "abort" | "umask") {
                     let mod_idx = ctx.strings.intern("process");
                     let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
                     let mod_len_str = "process".len().to_string();

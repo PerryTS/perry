@@ -119,7 +119,8 @@ impl<'a> FuncEmitCtx<'a> {
             | Expr::ProcessOn { .. }
             | Expr::ProcessKill { .. }
             | Expr::ProcessExit(_)
-            | Expr::ProcessAbort => {
+            | Expr::ProcessAbort
+            | Expr::ProcessUmask(_) => {
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
             Expr::EnvGet(_) | Expr::EnvGetDynamic(_) => {
