@@ -130,6 +130,69 @@ pub extern "C" fn js_process_getegid() -> f64 {
     }
 }
 
+/// process.cpuUsage(prior?) -> { user, system } µs.
+/// Reads CPU time consumed by the process via getrusage(RUSAGE_SELF) on
+/// unix. With a `prior` object, returns the diff (clamped to >= 0).
+/// Non-unix targets return `{ user: 0, system: 0 }`.
+#[no_mangle]
+pub extern "C" fn js_process_cpu_usage(prior: f64) -> f64 {
+    let (mut user_us, mut system_us) = read_process_cpu_micros();
+    let undef_bits = crate::value::TAG_UNDEFINED;
+    if prior.to_bits() != undef_bits {
+        let (prev_user, prev_system) = extract_cpu_pair(prior);
+        user_us = (user_us - prev_user).max(0.0);
+        system_us = (system_us - prev_system).max(0.0);
+    }
+    let obj = crate::object::js_object_alloc(0, 2);
+    let set_field = |name: &str, value: f64| {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key, value);
+    };
+    set_field("user", user_us);
+    set_field("system", system_us);
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+#[cfg(unix)]
+fn read_process_cpu_micros() -> (f64, f64) {
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } != 0 {
+        return (0.0, 0.0);
+    }
+    let user = (usage.ru_utime.tv_sec as f64) * 1_000_000.0 + usage.ru_utime.tv_usec as f64;
+    let system = (usage.ru_stime.tv_sec as f64) * 1_000_000.0 + usage.ru_stime.tv_usec as f64;
+    (user, system)
+}
+
+#[cfg(not(unix))]
+fn read_process_cpu_micros() -> (f64, f64) {
+    (0.0, 0.0)
+}
+
+/// Read `.user` and `.system` (numbers, microseconds) from a JS object
+/// — used by `js_process_cpu_usage` to compute diffs. Missing fields
+/// or non-numeric values count as 0.
+fn extract_cpu_pair(value: f64) -> (f64, f64) {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return (0.0, 0.0);
+    }
+    let obj_ptr = jv.as_pointer::<u8>() as *mut crate::object::ObjectHeader;
+    if obj_ptr.is_null() {
+        return (0.0, 0.0);
+    }
+    let get_num = |name: &str| -> f64 {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let v = crate::object::js_object_get_field_by_name_f64(obj_ptr, key);
+        if v.is_nan() {
+            0.0
+        } else {
+            v
+        }
+    };
+    (get_num("user"), get_num("system"))
+}
+
 /// process.emitWarning(warning[, type, code, ctor]) -> undefined.
 /// Writes a formatted warning to stderr matching Node's shape:
 /// `(node:<pid>) <Type> [CODE]: <message>`. Anything that can't be

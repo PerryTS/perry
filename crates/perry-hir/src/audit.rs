@@ -281,6 +281,7 @@ fn specialized_stdlib_call(expr: &Expr) -> Option<(&'static str, &'static str)> 
             ("process", "getegid")
         }
         Expr::ProcessEmitWarning(_) => ("process", "emitWarning"),
+        Expr::ProcessCpuUsage(_) => ("process", "cpuUsage"),
         Expr::ProcessStdinIsTTY => ("process", "stdin.isTTY"),
         Expr::ProcessStdoutIsTTY => ("process", "stdout.isTTY"),
         Expr::ProcessStderrIsTTY => ("process", "stderr.isTTY"),

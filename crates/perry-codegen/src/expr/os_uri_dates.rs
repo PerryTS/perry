@@ -105,6 +105,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
+        Expr::ProcessCpuUsage(prior) => {
+            let prior_val = if let Some(e) = prior {
+                lower_expr(ctx, e)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_process_cpu_usage", &[(DOUBLE, &prior_val)]))
+        }
         Expr::EncodeURI(o) => {
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();

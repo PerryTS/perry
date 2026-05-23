@@ -1866,6 +1866,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "getgid", false, None),
     method("process", "getegid", false, None),
     method("process", "emitWarning", false, None),
+    method("process", "cpuUsage", false, None),
     property("process", "argv"),
     property("process", "platform"),
     property("process", "arch"),

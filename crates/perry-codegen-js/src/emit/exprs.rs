@@ -508,6 +508,13 @@ impl JsEmitter {
                 }
                 self.output.push_str(") : undefined)");
             }
+            Expr::ProcessCpuUsage(prior) => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.cpuUsage === 'function' ? process.cpuUsage(");
+                if let Some(p) = prior {
+                    self.emit_expr(p);
+                }
+                self.output.push_str(") : {user: 0, system: 0})");
+            }
             Expr::ProcessPid => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.pid : 0)");
             }

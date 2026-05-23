@@ -1037,6 +1037,11 @@ where
                 f(a);
             }
         }
+        Expr::ProcessCpuUsage(opt) => {
+            if let Some(v) = opt {
+                f(v);
+            }
+        }
         Expr::ChildProcessExecSync { command, options } => {
             f(command);
             if let Some(o) = options {

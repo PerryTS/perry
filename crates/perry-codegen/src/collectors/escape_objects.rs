@@ -431,6 +431,7 @@ pub fn check_object_literal_escapes_in_expr(
         | Expr::ProcessMemoryUsage | Expr::ProcessThreadCpuUsage
         | Expr::ProcessAvailableMemory | Expr::ProcessConstrainedMemory
         | Expr::ProcessPosixCredential(_)
+        | Expr::ProcessCpuUsage(_)
         | Expr::ProcessPid | Expr::ProcessPpid
         | Expr::ProcessVersion | Expr::ProcessVersions | Expr::ProcessHrtimeBigint
         | Expr::ProcessStdin | Expr::ProcessStdout | Expr::ProcessStderr

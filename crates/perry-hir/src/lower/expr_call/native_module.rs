@@ -184,6 +184,17 @@ pub(super) fn try_native_module_methods(
                             // and lets the runtime do the formatting.
                             return Ok(Ok(Expr::ProcessEmitWarning(args)));
                         }
+                        "cpuUsage" => {
+                            // process.cpuUsage(prior?) — { user, system } in
+                            // microseconds. If prior is given, returns the
+                            // diff (clamped to >= 0).
+                            let prior = if !args.is_empty() {
+                                Some(Box::new(args.into_iter().next().unwrap()))
+                            } else {
+                                None
+                            };
+                            return Ok(Ok(Expr::ProcessCpuUsage(prior)));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }

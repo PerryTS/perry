@@ -293,6 +293,11 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .map(|a| substitute_expr(a, substitutions))
                 .collect(),
         ),
+        Expr::ProcessCpuUsage(prior) => Expr::ProcessCpuUsage(
+            prior
+                .as_ref()
+                .map(|e| Box::new(substitute_expr(e, substitutions))),
+        ),
 
         // File system
         Expr::FsReadFileSync(path) => {
