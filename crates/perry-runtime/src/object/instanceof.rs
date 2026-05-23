@@ -84,6 +84,30 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         return false_val;
     }
 
+    // ArrayBuffer — Perry models ArrayBuffer storage with BufferHeader values
+    // marked in a side registry. They can arrive either NaN-boxed or as raw
+    // buffer pointers, matching the Buffer/Uint8Array path above.
+    const CLASS_ID_ARRAY_BUFFER: u32 = 0xFFFF0025;
+    if class_id == CLASS_ID_ARRAY_BUFFER {
+        let addr = if jsval.is_pointer() {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else {
+            let top16 = (bits >> 48) as u16;
+            if top16 == 0 && bits >= 0x1000 {
+                bits as usize
+            } else {
+                0
+            }
+        };
+        if addr != 0
+            && crate::buffer::is_registered_buffer(addr)
+            && crate::buffer::is_array_buffer(addr)
+        {
+            return true_val;
+        }
+        return false_val;
+    }
+
     // Built-in JS types Map / Set / RegExp / Date — Perry doesn't define
     // user classes for these, so we use reserved class IDs and detect via
     // the per-type registries (MAP_REGISTRY / SET_REGISTRY / REGEX_POINTERS)

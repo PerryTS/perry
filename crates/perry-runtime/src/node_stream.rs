@@ -23,7 +23,10 @@
 //! runtime rewrite.
 
 use crate::closure::{js_closure_alloc, js_closure_get_capture_ptr, ClosureHeader};
-use crate::object::{js_object_alloc_with_shape, js_object_set_field, ObjectHeader};
+use crate::object::{
+    js_object_alloc_with_shape, js_object_get_field_by_name_f64, js_object_set_field,
+    js_object_set_field_by_name, ObjectHeader,
+};
 use crate::value::JSValue;
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -37,6 +40,10 @@ const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const READABLE_SHAPE_ID: u32 = 0x7FFF_FE60;
 const WRITABLE_SHAPE_ID: u32 = 0x7FFF_FE70;
 const DUPLEX_SHAPE_ID: u32 = 0x7FFF_FE80;
+const READABLE_CHUNKS_KEY: &[u8] = b"__perryReadableChunks";
+const READABLE_ERROR_KEY: &[u8] = b"__perryReadableError";
+const READABLE_READ_KEY: &[u8] = b"__perryReadableRead";
+const READABLE_READ_INVOKED_KEY: &[u8] = b"__perryReadableReadInvoked";
 
 // ─────────────────────────────────────────────────────────────────
 // Stub method bodies. Each receives the closure pointer (slot 0
@@ -67,7 +74,11 @@ extern "C" fn ns_chain3(closure: *const ClosureHeader, _a: f64, _b: f64, _c: f64
     this_value(closure)
 }
 
-extern "C" fn ns_emit2(_closure: *const ClosureHeader, _e: f64, _a: f64) -> f64 {
+extern "C" fn ns_emit2(closure: *const ClosureHeader, event: f64, arg: f64) -> f64 {
+    if string_value_eq(event, b"error") {
+        set_hidden_value(this_value(closure), hidden_error_key(), arg);
+        return f64::from_bits(TAG_TRUE);
+    }
     f64::from_bits(TAG_FALSE)
 }
 extern "C" fn ns_read1(_closure: *const ClosureHeader, _n: f64) -> f64 {
@@ -142,6 +153,281 @@ fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut ObjectHeader 
         js_object_set_field(obj, i as u32, val);
     }
     obj
+}
+
+#[inline]
+fn box_pointer(ptr: *const u8) -> f64 {
+    f64::from_bits(JSValue::pointer(ptr).bits())
+}
+
+#[inline]
+#[cfg(test)]
+fn box_string(ptr: *mut crate::string::StringHeader) -> f64 {
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+#[inline]
+fn raw_ptr_from_value(value: f64) -> usize {
+    let bits = value.to_bits();
+    let jsval = JSValue::from_bits(bits);
+    if jsval.is_pointer() || jsval.is_string() || jsval.is_bigint() {
+        return (bits & crate::value::POINTER_MASK) as usize;
+    }
+    if bits != 0 && bits < 0x0001_0000_0000_0000 {
+        return bits as usize;
+    }
+    0
+}
+
+#[inline]
+unsafe fn gc_type_for_ptr(raw: usize) -> Option<u8> {
+    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let gc_type = (*header).obj_type;
+    if gc_type <= crate::gc::GC_TYPE_MAX {
+        Some(gc_type)
+    } else {
+        None
+    }
+}
+
+#[inline]
+fn hidden_chunks_key() -> *mut crate::string::StringHeader {
+    hidden_key(READABLE_CHUNKS_KEY)
+}
+
+#[inline]
+fn hidden_error_key() -> *mut crate::string::StringHeader {
+    hidden_key(READABLE_ERROR_KEY)
+}
+
+#[inline]
+fn hidden_read_key() -> *mut crate::string::StringHeader {
+    hidden_key(READABLE_READ_KEY)
+}
+
+#[inline]
+fn hidden_read_invoked_key() -> *mut crate::string::StringHeader {
+    hidden_key(READABLE_READ_INVOKED_KEY)
+}
+
+fn hidden_key(bytes: &[u8]) -> *mut crate::string::StringHeader {
+    crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+fn string_value_eq(value: f64, expected: &[u8]) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_any_string() {
+        return false;
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
+    if ptr.is_null() || (ptr as usize) < 0x10000 {
+        return false;
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        if len != expected.len() {
+            return false;
+        }
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        std::slice::from_raw_parts(data, len) == expected
+    }
+}
+
+fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
+    let raw = raw_ptr_from_value(value);
+    if raw < 0x10000 || crate::buffer::is_registered_buffer(raw) {
+        return None;
+    }
+    unsafe {
+        if gc_type_for_ptr(raw) != Some(crate::gc::GC_TYPE_OBJECT) {
+            return None;
+        }
+    }
+    Some(raw as *mut ObjectHeader)
+}
+
+fn get_hidden_value(value: f64, key: *mut crate::string::StringHeader) -> Option<f64> {
+    let obj = object_ptr_from_value(value)?;
+    let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, key);
+    if value.to_bits() == TAG_UNDEFINED {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn set_hidden_value(value: f64, key: *mut crate::string::StringHeader, field_value: f64) {
+    if let Some(obj) = object_ptr_from_value(value) {
+        js_object_set_field_by_name(obj, key, field_value);
+    }
+}
+
+fn is_array_like_value(value: f64) -> bool {
+    let raw = raw_ptr_from_value(value);
+    if raw < 0x10000 || crate::buffer::is_registered_buffer(raw) {
+        return false;
+    }
+    unsafe {
+        matches!(
+            gc_type_for_ptr(raw),
+            Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY)
+        )
+    }
+}
+
+fn readable_hidden_chunks(value: f64) -> Option<f64> {
+    get_hidden_value(value, hidden_chunks_key())
+}
+
+fn readable_hidden_error(value: f64) -> Option<f64> {
+    get_hidden_value(value, hidden_error_key())
+}
+
+fn read_callback_from_options(opts: f64) -> Option<f64> {
+    get_hidden_value(opts, hidden_key(b"read"))
+}
+
+fn invoke_read_once(stream: f64) {
+    let Some(read) = get_hidden_value(stream, hidden_read_key()) else {
+        return;
+    };
+    if get_hidden_value(stream, hidden_read_invoked_key()).is_some() {
+        return;
+    }
+    set_hidden_value(stream, hidden_read_invoked_key(), f64::from_bits(TAG_TRUE));
+    let prev_this = crate::object::js_implicit_this_set(stream);
+    unsafe {
+        let _ = crate::closure::js_native_call_value(read, std::ptr::null(), 0);
+    }
+    crate::object::js_implicit_this_set(prev_this);
+}
+
+fn is_single_chunk_value(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_any_string() {
+        return true;
+    }
+    let raw = raw_ptr_from_value(value);
+    raw >= 0x10000 && crate::buffer::is_registered_buffer(raw)
+}
+
+fn normalize_readable_from_input(iterable: f64) -> f64 {
+    if let Some(chunks) = readable_hidden_chunks(iterable) {
+        return chunks;
+    }
+    if is_array_like_value(iterable) {
+        return iterable;
+    }
+
+    let arr = crate::array::js_array_alloc(1);
+    if is_single_chunk_value(iterable) {
+        let arr = crate::array::js_array_push_f64(arr, iterable);
+        return box_pointer(arr as *const u8);
+    }
+    box_pointer(arr as *const u8)
+}
+
+fn append_string_bytes(value: f64, out: &mut Vec<u8>) {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
+    append_string_ptr_bytes(ptr, out);
+}
+
+fn append_string_ptr_bytes(ptr: *const crate::StringHeader, out: &mut Vec<u8>) {
+    if ptr.is_null() || (ptr as usize) < 0x10000 {
+        return;
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        out.extend_from_slice(std::slice::from_raw_parts(data, len));
+    }
+}
+
+fn append_buffer_bytes(raw: usize, out: &mut Vec<u8>) {
+    if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
+        return;
+    }
+    unsafe {
+        let buf = raw as *const crate::buffer::BufferHeader;
+        let len = (*buf).length as usize;
+        let data = crate::buffer::buffer_data(buf);
+        out.extend_from_slice(std::slice::from_raw_parts(data, len));
+    }
+}
+
+fn append_array_chunks(raw: usize, out: &mut Vec<u8>, depth: u8) {
+    if raw < 0x10000 {
+        return;
+    }
+    let arr = raw as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(arr);
+    for i in 0..len {
+        let chunk = crate::array::js_array_get_f64(arr, i);
+        append_chunk_bytes(chunk, out, depth + 1);
+    }
+}
+
+fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
+    if depth > 8 {
+        return;
+    }
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_any_string() {
+        append_string_bytes(value, out);
+        return;
+    }
+
+    let raw = raw_ptr_from_value(value);
+    if raw < 0x10000 {
+        return;
+    }
+    if crate::buffer::is_registered_buffer(raw) {
+        append_buffer_bytes(raw, out);
+        return;
+    }
+
+    unsafe {
+        match gc_type_for_ptr(raw) {
+            Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY) => {
+                append_array_chunks(raw, out, depth);
+            }
+            Some(crate::gc::GC_TYPE_OBJECT) => {
+                if let Some(chunks) = readable_hidden_chunks(value) {
+                    append_chunk_bytes(chunks, out, depth + 1);
+                }
+            }
+            Some(crate::gc::GC_TYPE_STRING) => {
+                append_string_ptr_bytes(raw as *const crate::StringHeader, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Drain the chunk storage Perry attaches in `Readable.from(iterable)`.
+///
+/// This intentionally handles only the current stream stub's concrete shapes:
+/// arrays of strings/Buffers/Uint8Arrays/ArrayBuffers plus direct single
+/// string/binary chunks. It gives `node:stream/consumers` useful data without
+/// pretending Perry has a full Node stream pump yet.
+pub fn js_node_stream_collect_bytes(stream: f64) -> Vec<u8> {
+    js_node_stream_collect_bytes_result(stream).unwrap_or_default()
+}
+
+pub fn js_node_stream_collect_bytes_result(stream: f64) -> Result<Vec<u8>, f64> {
+    invoke_read_once(stream);
+    if let Some(err) = readable_hidden_error(stream) {
+        return Err(err);
+    }
+    let mut out = Vec::new();
+    append_chunk_bytes(stream, &mut out, 0);
+    if let Some(err) = readable_hidden_error(stream) {
+        return Err(err);
+    }
+    Ok(out)
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -238,10 +524,17 @@ fn duplex_methods() -> [(&'static str, StubFn); 22] {
 // ─────────────────────────────────────────────────────────────────
 
 #[no_mangle]
-pub extern "C" fn js_node_stream_readable_new(_opts: f64) -> f64 {
+pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     let methods = readable_methods();
     let obj = build_object(&methods, READABLE_SHAPE_ID + methods.len() as u32);
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    let readable = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    if let Some(read) = read_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_read_key(), read);
+        let emit_key = hidden_key(b"emit");
+        let emit = js_object_get_field_by_name_f64(obj as *const ObjectHeader, emit_key);
+        set_hidden_value(opts, emit_key, emit);
+    }
+    readable
 }
 
 #[no_mangle]
@@ -271,12 +564,17 @@ pub extern "C" fn js_node_stream_passthrough_new(_opts: f64) -> f64 {
 }
 
 /// `Readable.from(iterable)` — Node's static factory. Returns a
-/// Readable object that would, in a real implementation, stream
-/// chunks from the iterable. For the stub it's identical to
-/// `new Readable()` — the iterable arg is accepted and discarded.
+/// Readable object and retains simple iterable chunks so
+/// `node:stream/consumers` can drain the current stub stream surface.
 #[no_mangle]
-pub extern "C" fn js_node_stream_readable_from(_iterable: f64) -> f64 {
-    js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED))
+pub extern "C" fn js_node_stream_readable_from(iterable: f64) -> f64 {
+    let readable = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let raw = raw_ptr_from_value(readable);
+    if raw >= 0x10000 {
+        let chunks = normalize_readable_from_input(iterable);
+        js_object_set_field_by_name(raw as *mut ObjectHeader, hidden_chunks_key(), chunks);
+    }
+    readable
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -298,8 +596,12 @@ pub extern "C" fn js_node_stream_is_disturbed(_stream: f64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_stream_is_errored(_stream: f64) -> f64 {
-    f64::from_bits(TAG_FALSE)
+pub extern "C" fn js_node_stream_is_errored(stream: f64) -> f64 {
+    if readable_hidden_error(stream).is_some() {
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_FALSE)
+    }
 }
 
 /// #1541: `stream.addAbortSignal(signal, stream)` — Node wires the
@@ -375,4 +677,49 @@ pub extern "C" fn js_node_stream_to_web(_node_stream: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_stream_from_web(_web_stream: f64) -> f64 {
     js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn string_value(s: &str) -> f64 {
+        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        box_string(ptr)
+    }
+
+    fn buffer_value(bytes: &[u8]) -> f64 {
+        let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
+        unsafe {
+            (*buf).length = bytes.len() as u32;
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                crate::buffer::buffer_data_mut(buf),
+                bytes.len(),
+            );
+        }
+        box_pointer(buf as *const u8)
+    }
+
+    #[test]
+    fn readable_from_retains_string_chunks_for_consumers() {
+        let mut arr = crate::array::js_array_alloc(2);
+        arr = crate::array::js_array_push_f64(arr, string_value("he"));
+        arr = crate::array::js_array_push_f64(arr, string_value("llo"));
+
+        let readable = js_node_stream_readable_from(box_pointer(arr as *const u8));
+
+        assert_eq!(js_node_stream_collect_bytes(readable), b"hello");
+    }
+
+    #[test]
+    fn readable_from_retains_buffer_chunks_for_consumers() {
+        let mut arr = crate::array::js_array_alloc(2);
+        arr = crate::array::js_array_push_f64(arr, buffer_value(b"ab"));
+        arr = crate::array::js_array_push_f64(arr, buffer_value(b"cd"));
+
+        let readable = js_node_stream_readable_from(box_pointer(arr as *const u8));
+
+        assert_eq!(js_node_stream_collect_bytes(readable), b"abcd");
+    }
 }

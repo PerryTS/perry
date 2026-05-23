@@ -250,11 +250,11 @@ pub fn try_lower_property_get_method_call(
             // js_native_call_method fallback handles it correctly via
             // js_string_replace_string.
             "replace" if args.len() == 2 && matches!(&args[1], Expr::Closure { .. }) => true,
-            // slice/indexOf/includes exist on both strings and arrays.
-            // Route to string path only when args rule out the array
-            // variant (e.g., slice(0) is ambiguous but slice() with 0
-            // args is always array.slice to copy).
-            "slice" if !args.is_empty() => true,
+            // `slice` exists on strings, arrays, buffers, and Blob-like
+            // objects. Let the runtime dispatcher choose by receiver shape;
+            // forcing the string path here turns Blob slices into string
+            // slices for Any-typed native-module results.
+            "slice" => false,
             // `indexOf` / `includes` are NOT string-forced here: an
             // Any-typed receiver may be a runtime array (e.g. a native
             // module property like `PerformanceObserver.supportedEntryTypes`),

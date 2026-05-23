@@ -796,20 +796,46 @@ export default { platform, arch, cpus, homedir, tmpdir, hostname, type, release,
 // So we make `Stream` a real class, attach the sub-classes as static
 // properties, and export the *class itself* as default.
 class Stream {
-    constructor() {}
+    constructor() { this._perryError = undefined; }
     pipe(dest) { return dest; }
     on() { return this; }
     once() { return this; }
-    emit() { return false; }
+    emit(event, arg) {
+        if (event === "error") {
+            this._perryError = arg;
+            return true;
+        }
+        return false;
+    }
     off() { return this; }
     addListener() { return this; }
     removeListener() { return this; }
     removeAllListeners() { return this; }
 }
 export class Readable extends Stream {
-    constructor() { super(); }
-    read() { return null; }
+    constructor(options = undefined) {
+        super();
+        if (options && typeof options.read === "function") this._perryRead = options.read;
+        this._perryReadInvoked = false;
+    }
+    static from(iterable) {
+        const readable = new Readable();
+        if (iterable == null) readable._perryChunks = [];
+        else if (Array.isArray(iterable)) readable._perryChunks = iterable.slice();
+        else if (typeof iterable === "string" || iterable instanceof ArrayBuffer || ArrayBuffer.isView(iterable)) readable._perryChunks = [iterable];
+        else if (typeof iterable[Symbol.iterator] === "function") readable._perryChunks = Array.from(iterable);
+        else readable._perryChunks = [iterable];
+        return readable;
+    }
+    read() {
+        if (this._perryChunks && this._perryChunks.length > 0) return this._perryChunks.shift();
+        return null;
+    }
     pipe(dest) { return dest; }
+    async *[Symbol.asyncIterator]() {
+        const chunks = this._perryChunks || [];
+        for (const chunk of chunks) yield chunk;
+    }
 }
 export class Writable extends Stream {
     constructor() { super(); }
@@ -1309,13 +1335,113 @@ export async function finished() { throw new Error('stream.promises.finished not
 export default { pipeline, finished };
 "#.to_string(),
         "stream/consumers" => r#"
-// Stub implementation for Node.js 'stream/consumers' module
-export async function arrayBuffer() { throw new Error('stream.consumers.arrayBuffer not supported'); }
-export async function blob() { throw new Error('stream.consumers.blob not supported'); }
-export async function buffer() { throw new Error('stream.consumers.buffer not supported'); }
-export async function json() { throw new Error('stream.consumers.json not supported'); }
-export async function text() { throw new Error('stream.consumers.text not supported'); }
-export default { arrayBuffer, blob, buffer, json, text };
+// Lightweight implementation for Node.js 'stream/consumers' module.
+class __PerryBuffer extends Uint8Array {
+    static from(input, encoding) {
+        if (typeof input === "string") return new __PerryBuffer(new TextEncoder().encode(input));
+        if (input instanceof ArrayBuffer) return new __PerryBuffer(input.slice(0));
+        if (ArrayBuffer.isView(input)) return new __PerryBuffer(input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength));
+        if (Array.isArray(input)) return new __PerryBuffer(input);
+        return new __PerryBuffer(0);
+    }
+    toString(encoding = "utf8") {
+        if (encoding === "hex") return Array.from(this, (b) => b.toString(16).padStart(2, "0")).join("");
+        return new TextDecoder().decode(this);
+    }
+}
+
+const __PerryBufferCtor = globalThis.Buffer || __PerryBuffer;
+
+function __perryChunkToBytes(chunk) {
+    if (typeof chunk === "string") return new TextEncoder().encode(chunk);
+    if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
+    if (ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    if (typeof chunk === "number") return new Uint8Array([chunk & 255]);
+    return new Uint8Array(0);
+}
+
+async function __perryCollectChunks(stream) {
+    if (stream == null) return [];
+    if (stream._perryError !== undefined) throw stream._perryError;
+    if (typeof stream._perryRead === "function" && !stream._perryReadInvoked) {
+        stream._perryReadInvoked = true;
+        stream._perryRead.call(stream);
+    }
+    if (stream._perryError !== undefined) throw stream._perryError;
+    if (Array.isArray(stream._perryChunks)) return stream._perryChunks.slice();
+    if (typeof stream[Symbol.asyncIterator] === "function") {
+        const chunks = [];
+        for await (const chunk of stream) chunks.push(chunk);
+        if (stream._perryError !== undefined) throw stream._perryError;
+        return chunks;
+    }
+    if (typeof stream[Symbol.iterator] === "function") return Array.from(stream);
+    return [stream];
+}
+
+async function __perryCollectBytes(stream) {
+    const chunks = await __perryCollectChunks(stream);
+    const arrays = chunks.map(__perryChunkToBytes);
+    const total = arrays.reduce((n, arr) => n + arr.byteLength, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const arr of arrays) {
+        out.set(arr, offset);
+        offset += arr.byteLength;
+    }
+    return out;
+}
+
+export async function arrayBuffer(stream) {
+    const data = await __perryCollectBytes(stream);
+    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+}
+export async function blob(stream) {
+    const data = await __perryCollectBytes(stream);
+    if (typeof Blob !== "undefined") {
+        const value = new Blob([data]);
+        if (typeof value.bytes !== "function") value.bytes = async () => new Uint8Array(await value.arrayBuffer());
+        return value;
+    }
+    return {
+        size: data.byteLength,
+        type: "",
+        async text() { return new TextDecoder().decode(data); },
+        async arrayBuffer() { return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength); },
+        async bytes() { return new Uint8Array(data); },
+        slice(start = 0, end = data.byteLength, type = "") {
+            const normalize = (value, fallback) => {
+                if (value === undefined) return fallback;
+                const n = Number(value);
+                return n < 0 ? Math.max(data.byteLength + n, 0) : Math.min(n, data.byteLength);
+            };
+            const lo = normalize(start, 0);
+            const hi = Math.max(normalize(end, data.byteLength), lo);
+            const sliced = data.slice(lo, hi);
+            return {
+                size: sliced.byteLength,
+                type: String(type || ""),
+                async text() { return new TextDecoder().decode(sliced); },
+                async arrayBuffer() { return sliced.buffer.slice(sliced.byteOffset, sliced.byteOffset + sliced.byteLength); },
+                async bytes() { return new Uint8Array(sliced); },
+            };
+        },
+        stream() { return { _perryChunks: [data] }; },
+    };
+}
+export async function buffer(stream) {
+    return __PerryBufferCtor.from(await arrayBuffer(stream));
+}
+export async function bytes(stream) {
+    return new Uint8Array(await arrayBuffer(stream));
+}
+export async function text(stream) {
+    return new TextDecoder().decode(await bytes(stream));
+}
+export async function json(stream) {
+    return JSON.parse(await text(stream));
+}
+export default { arrayBuffer, blob, buffer, bytes, json, text };
 "#.to_string(),
         "stream/web" => r#"
 // Stub implementation for Node.js 'stream/web' module

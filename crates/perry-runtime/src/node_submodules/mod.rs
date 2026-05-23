@@ -15,16 +15,12 @@
 //! is `"function"`, plus per-submodule namespace stubs whose properties point
 //! at the same singletons.
 //!
-//! The thunks are deliberately minimal — they throw `Error("<api> is not yet
-//! implemented in Perry")` when invoked. Full functional implementations of
-//! these APIs are tracked separately under the #793 Node compatibility
-//! roadmap. The fix here is strictly about restoring the import surface so
-//! consuming code can at least introspect the bindings (typeof checks,
-//! `=== util.format` comparisons, dynamic-shape introspection) without
-//! tripping over `true`-as-a-function downstream errors.
+//! Most thunks are deliberately minimal — they throw `Error("<api> is not yet
+//! implemented in Perry")` when invoked. `node:stream/consumers` is the first
+//! submodule here with concrete behavior, so consuming code can import and use
+//! its helpers while the broader #793 Node compatibility roadmap continues.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::os::raw::c_int;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -174,7 +170,13 @@ thunk!(
 );
 
 fn promise_value(value: f64) -> f64 {
-    let promise = crate::promise::js_promise_resolved(value);
+    let promise = crate::promise::js_promise_new();
+    crate::promise::js_promise_resolve(promise, value);
+    f64::from_bits(JSValue::pointer(promise as *const u8).bits())
+}
+
+fn promise_rejected(reason: f64) -> f64 {
+    let promise = crate::promise::js_promise_rejected(reason);
     f64::from_bits(JSValue::pointer(promise as *const u8).bits())
 }
 
@@ -458,30 +460,233 @@ thunk!(
     "node:stream/promises.finished is not yet implemented in Perry (tracked by issue #793)."
 );
 
-thunk!(
-    thunk_consumers_text,
-    "node:stream/consumers.text is not yet implemented in Perry (tracked by issue #793)."
-);
-thunk!(
-    thunk_consumers_json,
-    "node:stream/consumers.json is not yet implemented in Perry (tracked by issue #793)."
-);
-thunk!(
-    thunk_consumers_buffer,
-    "node:stream/consumers.buffer is not yet implemented in Perry (tracked by issue #793)."
-);
-thunk!(
-    thunk_consumers_arrayBuffer,
-    "node:stream/consumers.arrayBuffer is not yet implemented in Perry (tracked by issue #793)."
-);
-thunk!(
-    thunk_consumers_bytes,
-    "node:stream/consumers.bytes is not yet implemented in Perry (tracked by issue #793)."
-);
-thunk!(
-    thunk_consumers_blob,
-    "node:stream/consumers.blob is not yet implemented in Perry (tracked by issue #793)."
-);
+fn buffer_from_bytes(
+    bytes: &[u8],
+    mark_array_buffer: bool,
+    mark_uint8_array: bool,
+) -> *mut crate::buffer::BufferHeader {
+    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
+    unsafe {
+        (*buf).length = bytes.len() as u32;
+        if !bytes.is_empty() {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                crate::buffer::buffer_data_mut(buf),
+                bytes.len(),
+            );
+        }
+    }
+    if mark_array_buffer {
+        crate::buffer::mark_as_array_buffer(buf as usize);
+    }
+    if mark_uint8_array {
+        crate::buffer::mark_as_uint8array(buf as usize);
+    }
+    buf
+}
+
+fn bytes_to_buffer_value(bytes: &[u8]) -> f64 {
+    let buf = buffer_from_bytes(bytes, false, false);
+    f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+}
+
+fn bytes_to_array_buffer_value(bytes: &[u8]) -> f64 {
+    let buf = buffer_from_bytes(bytes, true, false);
+    f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+}
+
+fn bytes_to_uint8_array_value(bytes: &[u8]) -> f64 {
+    let buf = buffer_from_bytes(bytes, false, true);
+    f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+}
+
+fn bytes_to_text_value(bytes: &[u8]) -> f64 {
+    let cow = String::from_utf8_lossy(bytes);
+    let ptr = js_string_from_bytes(cow.as_bytes().as_ptr(), cow.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn stream_consumer_bytes(stream: f64) -> Result<Vec<u8>, f64> {
+    crate::node_stream::js_node_stream_collect_bytes_result(stream)
+}
+
+const CLASS_ID_BLOB: u32 = 0xFFFF0026;
+
+extern "C" fn blob_text_method(closure: *const ClosureHeader) -> f64 {
+    let bytes = captured_blob_bytes(closure);
+    promise_value(bytes_to_text_value(&bytes))
+}
+
+extern "C" fn blob_array_buffer_method(closure: *const ClosureHeader) -> f64 {
+    let bytes = captured_blob_bytes(closure);
+    promise_value(bytes_to_array_buffer_value(&bytes))
+}
+
+extern "C" fn blob_bytes_method(closure: *const ClosureHeader) -> f64 {
+    let bytes = captured_blob_bytes(closure);
+    promise_value(bytes_to_uint8_array_value(&bytes))
+}
+
+extern "C" fn blob_slice_method(
+    closure: *const ClosureHeader,
+    start: f64,
+    end: f64,
+    content_type: f64,
+) -> f64 {
+    let bytes = captured_blob_bytes(closure);
+    let len = bytes.len() as i64;
+    let normalize = |value: f64, default: i64| -> i64 {
+        if value.is_nan() || value.to_bits() == crate::value::TAG_UNDEFINED {
+            return default;
+        }
+        let n = value as i64;
+        if n < 0 {
+            (len + n).max(0)
+        } else {
+            n.min(len)
+        }
+    };
+    let lo = normalize(start, 0);
+    let hi = normalize(end, len);
+    let (lo, hi) = if hi < lo { (lo, lo) } else { (lo, hi) };
+    let content_type = string_from_value(content_type).unwrap_or_default();
+    blob_value_from_bytes_and_type(&bytes[lo as usize..hi as usize], &content_type)
+}
+
+extern "C" fn blob_stream_method(closure: *const ClosureHeader) -> f64 {
+    let bytes = captured_blob_bytes(closure);
+    crate::node_stream::js_node_stream_readable_from(bytes_to_uint8_array_value(&bytes))
+}
+
+fn captured_blob_bytes(closure: *const ClosureHeader) -> Vec<u8> {
+    let raw = js_closure_get_capture_ptr(closure, 0) as usize;
+    if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
+        return Vec::new();
+    }
+    unsafe {
+        let buf = raw as *const crate::buffer::BufferHeader;
+        let len = (*buf).length as usize;
+        let data = crate::buffer::buffer_data(buf);
+        std::slice::from_raw_parts(data, len).to_vec()
+    }
+}
+
+fn set_named_value(obj: *mut ObjectHeader, name: &[u8], value: f64) {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(obj, key, value);
+}
+
+#[allow(clippy::missing_transmute_annotations)]
+fn blob_method_value(
+    func: *const u8,
+    arity: u32,
+    backing: *mut crate::buffer::BufferHeader,
+) -> f64 {
+    js_register_closure_arity(func, arity);
+    let closure = js_closure_alloc(func, 1);
+    js_closure_set_capture_ptr(closure, 0, backing as i64);
+    f64::from_bits(JSValue::pointer(closure as *const u8).bits())
+}
+
+fn blob_value_from_bytes(bytes: &[u8]) -> f64 {
+    blob_value_from_bytes_and_type(bytes, "")
+}
+
+fn blob_value_from_bytes_and_type(bytes: &[u8], content_type: &str) -> f64 {
+    let backing = buffer_from_bytes(bytes, false, false);
+    let obj = js_object_alloc(CLASS_ID_BLOB, 7);
+    set_named_value(obj, b"size", bytes.len() as f64);
+    set_named_value(obj, b"type", bytes_to_text_value(content_type.as_bytes()));
+    set_named_value(
+        obj,
+        b"text",
+        blob_method_value(blob_text_method as *const u8, 0, backing),
+    );
+    set_named_value(
+        obj,
+        b"arrayBuffer",
+        blob_method_value(blob_array_buffer_method as *const u8, 0, backing),
+    );
+    set_named_value(
+        obj,
+        b"bytes",
+        blob_method_value(blob_bytes_method as *const u8, 0, backing),
+    );
+    set_named_value(
+        obj,
+        b"slice",
+        blob_method_value(blob_slice_method as *const u8, 3, backing),
+    );
+    set_named_value(
+        obj,
+        b"stream",
+        blob_method_value(blob_stream_method as *const u8, 0, backing),
+    );
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+fn string_from_value(value: f64) -> Option<String> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_any_string() {
+        return None;
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    if ptr.is_null() || (ptr as usize) < 0x10000 {
+        return None;
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned())
+    }
+}
+
+extern "C" fn thunk_consumers_text(_closure: *const ClosureHeader, stream: f64) -> f64 {
+    match stream_consumer_bytes(stream) {
+        Ok(bytes) => promise_value(bytes_to_text_value(&bytes)),
+        Err(err) => promise_rejected(err),
+    }
+}
+
+extern "C" fn thunk_consumers_json(_closure: *const ClosureHeader, stream: f64) -> f64 {
+    match stream_consumer_bytes(stream) {
+        Ok(bytes) => {
+            let text = bytes_to_text_value(&bytes);
+            let text_ptr = crate::value::js_get_string_pointer_unified(text) as *const StringHeader;
+            let parsed = unsafe { crate::json::js_json_parse(text_ptr) };
+            promise_value(f64::from_bits(parsed.bits()))
+        }
+        Err(err) => promise_rejected(err),
+    }
+}
+
+extern "C" fn thunk_consumers_buffer(_closure: *const ClosureHeader, stream: f64) -> f64 {
+    match stream_consumer_bytes(stream) {
+        Ok(bytes) => promise_value(bytes_to_buffer_value(&bytes)),
+        Err(err) => promise_rejected(err),
+    }
+}
+
+extern "C" fn thunk_consumers_arrayBuffer(_closure: *const ClosureHeader, stream: f64) -> f64 {
+    match stream_consumer_bytes(stream) {
+        Ok(bytes) => promise_value(bytes_to_array_buffer_value(&bytes)),
+        Err(err) => promise_rejected(err),
+    }
+}
+
+extern "C" fn thunk_consumers_bytes(_closure: *const ClosureHeader, stream: f64) -> f64 {
+    match stream_consumer_bytes(stream) {
+        Ok(bytes) => promise_value(bytes_to_uint8_array_value(&bytes)),
+        Err(err) => promise_rejected(err),
+    }
+}
+
+extern "C" fn thunk_consumers_blob(_closure: *const ClosureHeader, stream: f64) -> f64 {
+    match stream_consumer_bytes(stream) {
+        Ok(bytes) => promise_value(blob_value_from_bytes(&bytes)),
+        Err(err) => promise_rejected(err),
+    }
+}
 
 // node:sys is a deprecated alias for node:util — point each export at
 // the same thunks until util's named-export surface is wired up. The

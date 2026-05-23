@@ -54,7 +54,7 @@ impl NodeModuleLoader {
     }
 
     /// Resolve a module specifier to an absolute path
-    fn resolve_module_path(&self, specifier: &str, referrer: &Path) -> Result<PathBuf> {
+    pub(super) fn resolve_module_path(&self, specifier: &str, referrer: &Path) -> Result<PathBuf> {
         // Issue #818 follow-up: prefer embedded-bundle lookups over disk
         // probes. For bare specifiers ("hono", "@scope/x") an alias map
         // gives us the canonical build-time path directly; for relative

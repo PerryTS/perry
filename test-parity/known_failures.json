@@ -326,12 +326,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:stream` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_stream_consumers": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:stream/consumers` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_stream_promises": {
     "issue": "793",
     "added": "2026-05-15",
@@ -1046,30 +1040,6 @@
     "category": "bug-open",
     "reason": "node:stream: transform() callback with Error doesn't propagate as `error` event. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/consumers/buffer": {
-    "issue": "1544",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/consumers.buffer(stream) not implemented. Flips to PASS when #1544 lands."
-  },
-  "node-suite/stream/consumers/text": {
-    "issue": "1544",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/consumers.text(stream) not implemented. Flips to PASS when #1544 lands."
-  },
-  "node-suite/stream/consumers/json": {
-    "issue": "1544",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/consumers.json(stream) not implemented. Flips to PASS when #1544 lands."
-  },
-  "node-suite/stream/consumers/array-buffer": {
-    "issue": "1544",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/consumers.arrayBuffer(stream) not implemented. Flips to PASS when #1544 lands."
-  },
   "node-suite/stream/web/imports": {
     "issue": "1545",
     "added": "2026-05-23",
@@ -1159,12 +1129,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: stream.compose(t1, t2) chain doesn't propagate through transforms. Flips to PASS when #1539 lands."
-  },
-  "node-suite/stream/consumers/blob": {
-    "issue": "1544",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/consumers.blob(stream) not implemented. Flips to PASS when #1544 lands."
   },
   "node-suite/stream/pipeline/already-ended": {
     "issue": "1532",
@@ -1573,12 +1537,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: stream.Stream legacy constructor not exposed as the default export. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/consumers/with-errored-stream": {
-    "issue": "1544",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/consumers: text(stream) does not reject when the stream errors. Flips to PASS when #1544 lands."
   },
   "node-suite/stream/destroy/destroy-string": {
     "issue": "1532",

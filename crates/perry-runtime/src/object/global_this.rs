@@ -139,6 +139,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "AbortController",
     "AbortSignal",
     "FormData",
+    "Blob",
     "Headers",
     "Request",
     "Response",

@@ -1,7 +1,6 @@
 import { Readable } from "node:stream";
 import { json } from "node:stream/consumers";
-// stream/consumers.json(stream) consumes a JSON-encoded stream and resolves
-// to the parsed value.
-const r = Readable.from(['{"x":', "1}"]);
-const obj = await json(r);
-console.log("x:", (obj as any).x);
+
+const value = await json(Readable.from(['{"a":', "1", ',"b":"ok"}']));
+console.log("json a:", (value as { a: number }).a);
+console.log("json b:", (value as { b: string }).b);

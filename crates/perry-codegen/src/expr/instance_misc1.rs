@@ -93,6 +93,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "Set" => 0xFFFF0023u32,
                 // `Array` — runtime detects via GC_TYPE_ARRAY at obj-8.
                 "Array" => 0xFFFF0024u32,
+                // `ArrayBuffer` — runtime detects BufferHeader storage marked
+                // with Perry's ArrayBuffer side registry.
+                "ArrayBuffer" => 0xFFFF0025u32,
+                // `Blob` — stream consumers allocate a scoped Blob-shaped
+                // ObjectHeader tagged with this reserved class id.
+                "Blob" => 0xFFFF0026u32,
                 // `Object` — every non-primitive matches per ECMAScript;
                 // reserved id mapped in the runtime. Pre-#585 this fell
                 // into the `cid = 0` fallback and matched accidentally
