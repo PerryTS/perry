@@ -2231,6 +2231,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perf_hooks", "toJSON", false, None),
     method("perf_hooks", "clearResourceTimings", false, None),
     method("perf_hooks", "setResourceTimingBufferSize", false, None),
+    method("perf_hooks", "timerify", false, None),
     property("perf_hooks", "timeOrigin"),
     property("perf_hooks", "nodeTiming"),
     property("perf_hooks", "performance"),

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1174 entries across 80 modules
+// Coverage: 1175 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1002,6 +1002,8 @@ declare module "perf_hooks" {
   export function now(...args: any[]): any;
   /** stdlib */
   export function setResourceTimingBufferSize(...args: any[]): any;
+  /** stdlib */
+  export function timerify(...args: any[]): any;
   /** stdlib */
   export function toJSON(...args: any[]): any;
 }

@@ -137,6 +137,13 @@ pub(super) fn lower_perf_hooks_method(
             // performance.getEntriesByType("resource") still returns
             // an empty array.
             "markResourceTiming" => undef.clone(),
+            // #1335: performance.timerify(fn) returns a wrapper that records
+            // a 'function' timeline entry per call. Perry's wrapper is a
+            // pass-through closure (the timing-entry side-channel isn't
+            // observable here without a PerformanceObserver, so the
+            // simplest correct shape is to return the input fn — typeof
+            // stays "function" and call semantics are unchanged).
+            "timerify" => lower_or_undef(ctx, 0)?,
             _ => return Ok(None),
         };
         return Ok(Some(v));
