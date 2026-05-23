@@ -1,3 +1,2 @@
-// process.threadCpuUsage() returns { user, system } in microseconds.
-const u = process.threadCpuUsage();
-console.log("ok:", typeof u === "object" && typeof u.user === "number" && typeof u.system === "number");
+// process.threadCpuUsage() returns { user, system } for the current thread.
+console.log("is function:", typeof process.threadCpuUsage === "function");

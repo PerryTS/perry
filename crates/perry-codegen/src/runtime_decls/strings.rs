@@ -510,6 +510,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_boxed_primitive", DOUBLE, &[DOUBLE]);
     module.declare_function("js_getenv", I64, &[I64]);
     module.declare_function("js_getenv_value", DOUBLE, &[I64]);
+    // #1344: process.env.X = v / delete process.env.X.
+    module.declare_function("js_setenv", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_removeenv", VOID, &[I64]);
     module.declare_function("js_console_table", VOID, &[DOUBLE]);
     module.declare_function("js_console_table_with_properties", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_console_trace", VOID, &[DOUBLE]);
@@ -530,8 +533,19 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_thread_cpu_usage", DOUBLE, &[]);
     module.declare_function("js_process_available_memory", DOUBLE, &[]);
     module.declare_function("js_process_constrained_memory", DOUBLE, &[]);
+    module.declare_function("js_process_getuid", DOUBLE, &[]);
+    module.declare_function("js_process_geteuid", DOUBLE, &[]);
+    module.declare_function("js_process_getgid", DOUBLE, &[]);
+    module.declare_function("js_process_getegid", DOUBLE, &[]);
+    module.declare_function("js_process_emit_warning", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_process_cpu_usage", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_process_resource_usage", DOUBLE, &[]);
+    module.declare_function("js_process_active_resources_info", DOUBLE, &[]);
     module.declare_function("js_process_env", DOUBLE, &[]);
     module.declare_function("js_process_hrtime_bigint", DOUBLE, &[]);
+    module.declare_function("js_process_hrtime", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_process_title", DOUBLE, &[]);
+    module.declare_function("js_process_set_title", VOID, &[DOUBLE]);
     module.declare_function("js_process_chdir", VOID, &[I64]);
     module.declare_function("js_process_kill", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_process_exit", VOID, &[DOUBLE]);

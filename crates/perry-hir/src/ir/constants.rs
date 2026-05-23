@@ -300,6 +300,17 @@ pub enum ModuleKind {
     Interpreted,
 }
 
+/// POSIX credential accessor kind. process.{getuid,geteuid,getgid,getegid}()
+/// (#1408) all share runtime/codegen plumbing — one HIR variant carries
+/// the kind so expr.rs doesn't grow by four near-identical variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PosixCredentialKind {
+    Uid,
+    Euid,
+    Gid,
+    Egid,
+}
+
 /// Whether a module is initialized eagerly (at program start, in topo order
 /// across static imports) or lazily (on first dynamic `import()` resolving
 /// to it). See issue #100.

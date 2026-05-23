@@ -520,15 +520,35 @@ pub extern "C" fn js_process_version() -> *mut StringHeader {
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
 
-/// process.versions -> { node, v8, perry }
+/// process.versions -> populated `{ node, v8, perry, ...node sub-fields }`.
+///
+/// Issue #1381: shape-only consumers feature-detect on individual fields
+/// (`typeof process.versions.uv === "string"`, `process.versions.modules`
+/// for the NAPI ABI gate, etc.). Pre-fix Perry only exposed `node` / `v8`
+/// / `perry`, so every other sub-field came back `undefined` and a long
+/// tail of npm packages assumed they were running on an outdated Node.
+///
+/// Values are strings; consumers parse them with `parseInt` / `semver`.
+/// Perry's runtime does not embed libuv / OpenSSL / etc., so versions
+/// reflect the upstream toolchain spec we target (Node 22) rather than
+/// what is statically linked. `"0"` for ABI counters (NAPI, modules)
+/// flags "do not assume this is a real Node host" without breaking
+/// consumers that only ever check `typeof`.
 #[no_mangle]
 pub extern "C" fn js_process_versions() -> f64 {
     use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::{js_nanbox_string, JSValue};
 
-    // Build the object via shape with packed keys
-    let packed = b"node\0v8\0perry\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF21, 3, packed.as_ptr(), packed.len() as u32);
+    // Build the object via shape with packed keys. Order MUST match the
+    // js_object_set_field calls below — slot indices are positional.
+    let packed = b"node\0v8\0perry\0uv\0modules\0openssl\0zlib\0ares\0icu\0unicode\0napi\0llhttp\0nghttp2\0undici\0";
+    let field_count: u32 = 14;
+    let obj = js_object_alloc_with_shape(
+        0x7FFF_FF21,
+        field_count,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
 
     let nb = |s: &str| -> JSValue {
         let bytes = s.as_bytes();
@@ -539,6 +559,17 @@ pub extern "C" fn js_process_versions() -> f64 {
     js_object_set_field(obj, 0, nb("22.0.0"));
     js_object_set_field(obj, 1, nb("12.4.254.21"));
     js_object_set_field(obj, 2, nb("0.4.71"));
+    js_object_set_field(obj, 3, nb("1.51.0")); // uv (target spec; Perry doesn't link libuv)
+    js_object_set_field(obj, 4, nb("0")); // modules (NAPI ABI counter — "do not assume real Node host")
+    js_object_set_field(obj, 5, nb("0")); // openssl (Perry's TLS uses rustls; no OpenSSL link)
+    js_object_set_field(obj, 6, nb("1.3.0")); // zlib
+    js_object_set_field(obj, 7, nb("0")); // ares
+    js_object_set_field(obj, 8, nb("0")); // icu
+    js_object_set_field(obj, 9, nb("16.0")); // unicode
+    js_object_set_field(obj, 10, nb("0")); // napi
+    js_object_set_field(obj, 11, nb("0")); // llhttp
+    js_object_set_field(obj, 12, nb("0")); // nghttp2
+    js_object_set_field(obj, 13, nb("0")); // undici
 
     // Return as NaN-boxed pointer
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
@@ -555,6 +586,66 @@ pub extern "C" fn js_process_hrtime_bigint() -> f64 {
     let nanos = elapsed.as_nanos() as u64 + 1_000_000_000;
     let bi = js_bigint_from_u64(nanos);
     js_nanbox_bigint(bi as i64)
+}
+
+/// process.hrtime(prior?) -> [seconds, nanoseconds] integer array.
+/// Uses the same monotonic baseline as `hrtime.bigint()` (`get_hrtime_start`)
+/// — they share a single point of origin, so successive readings on
+/// either form are comparable. With a prior `[secs, nanos]` array, the
+/// diff is returned (clamped to non-negative).
+#[no_mangle]
+pub extern "C" fn js_process_hrtime(prior: f64) -> f64 {
+    use crate::value::JSValue;
+    let elapsed = get_hrtime_start().elapsed();
+    let total_ns = elapsed.as_nanos() as u64 + 1_000_000_000;
+    let mut secs = (total_ns / 1_000_000_000) as i64;
+    let mut nanos = (total_ns % 1_000_000_000) as i64;
+
+    let undef_bits = crate::value::TAG_UNDEFINED;
+    if prior.to_bits() != undef_bits {
+        let (prev_s, prev_ns) = extract_hrtime_prior(prior);
+        let mut diff_s = secs - prev_s;
+        let mut diff_ns = nanos - prev_ns;
+        if diff_ns < 0 {
+            diff_s -= 1;
+            diff_ns += 1_000_000_000;
+        }
+        if diff_s < 0 {
+            diff_s = 0;
+            diff_ns = 0;
+        }
+        secs = diff_s;
+        nanos = diff_ns;
+    }
+
+    let arr = crate::array::js_array_alloc(2);
+    let arr = crate::array::js_array_push(arr, JSValue::number(secs as f64));
+    let arr = crate::array::js_array_push(arr, JSValue::number(nanos as f64));
+    f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+}
+
+/// Read the two numeric fields of a prior hrtime tuple (an array). The
+/// array's two leading slots are coerced to integer seconds and nanos.
+fn extract_hrtime_prior(value: f64) -> (i64, i64) {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return (0, 0);
+    }
+    let arr = jv.as_pointer::<crate::array::ArrayHeader>();
+    if arr.is_null() {
+        return (0, 0);
+    }
+    let secs = crate::array::js_array_get(arr, 0).to_number();
+    let nanos = crate::array::js_array_get(arr, 1).to_number();
+    let to_i64 = |v: f64| -> i64 {
+        if v.is_nan() || v.is_infinite() {
+            0
+        } else {
+            v as i64
+        }
+    };
+    (to_i64(secs), to_i64(nanos))
 }
 
 // process.on/once handlers, partitioned by event name. Today only

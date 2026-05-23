@@ -197,6 +197,54 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                             ("unregister".to_string(), Expr::Undefined),
                         ]));
                     }
+                    // #1379: process.config — object describing build-time
+                    // config (`{ variables, target_defaults }` in Node).
+                    // Perry has no `node-gyp`-style build to surface, but
+                    // consumers feature-detect on `process.config.variables`
+                    // existing (or specific fields like `target_arch`), so
+                    // return the shape with empty sub-objects rather than
+                    // letting the bare read fall through to the 0 sentinel.
+                    "config" => {
+                        return Ok(Expr::Object(vec![
+                            ("variables".to_string(), Expr::Object(Vec::new())),
+                            ("target_defaults".to_string(), Expr::Object(Vec::new())),
+                        ]));
+                    }
+                    // #1380: process.allowedNodeEnvironmentFlags — the
+                    // set of NODE_OPTIONS / V8 flags Node will accept
+                    // from the environment. Perry binaries are AOT and
+                    // don't honour NODE_OPTIONS-style runtime flags, so
+                    // the empty Set is the spec-compatible shape.
+                    // Without this, the bare read returned a 0 sentinel
+                    // and `.has(...)` / `.size` / `for...of` iteration
+                    // all exploded.
+                    "allowedNodeEnvironmentFlags" => return Ok(Expr::SetNew),
+                    "report" => return Ok(process_report_literal()),
+                    // #1346: process.argv0 / execPath / title — Node
+                    // documents these as strings (program-invocation
+                    // name / resolved-binary path / OS-displayed
+                    // title). Perry was hitting the 0.0 sentinel and
+                    // `typeof process.argv0 === "string"` failed; any
+                    // `.length` / `.endsWith(...)` then crashed.
+                    //
+                    // Lower all three to `process.argv[0]` — Perry's
+                    // own argv[0] is already the binary path / name
+                    // we'd want for argv0 and execPath, and is a
+                    // reasonable default for `title` (Node defaults
+                    // to argv[0] too until something assigns `.title`).
+                    // Settable `process.title` is tracked separately
+                    // (#1401); the shape-only read is what closes #1346.
+                    "argv0" | "execPath" => {
+                        return Ok(Expr::IndexGet {
+                            object: Box::new(Expr::ProcessArgv),
+                            index: Box::new(Expr::Number(0.0)),
+                        });
+                    }
+                    "title" => {
+                        // #1401: title is settable; route through a
+                        // runtime cell that falls back to argv[0].
+                        return Ok(Expr::ProcessTitle);
+                    }
                     _ => {}
                 }
             }
@@ -275,6 +323,21 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                             ("unregister".to_string(), Expr::Undefined),
                         ]));
                     }
+                    "config" => {
+                        return Ok(Expr::Object(vec![
+                            ("variables".to_string(), Expr::Object(Vec::new())),
+                            ("target_defaults".to_string(), Expr::Object(Vec::new())),
+                        ]));
+                    }
+                    "allowedNodeEnvironmentFlags" => return Ok(Expr::SetNew),
+                    "report" => return Ok(process_report_literal()),
+                    "argv0" | "execPath" => {
+                        return Ok(Expr::IndexGet {
+                            object: Box::new(Expr::ProcessArgv),
+                            index: Box::new(Expr::Number(0.0)),
+                        });
+                    }
+                    "title" => return Ok(Expr::ProcessTitle),
                     _ => {}
                 }
             }
@@ -1251,6 +1314,41 @@ fn is_stream_api_member(module: &str, prop: &str) -> bool {
 /// generally branch on `openssl_is_boringssl` / `quic` / `typescript`
 /// rather than rejecting any unrecognised value, so a Perry-honest
 /// shape is safer than parroting Node's.
+/// process.report — Node 22's diagnostic-report control surface
+/// (`compact` / `directory` / `filename` / `signal` and the four
+/// `reportOn*` booleans, plus `getReport` / `writeReport` methods).
+/// Perry doesn't yet generate real diagnostic reports, but the shape
+/// must be present so shape-only consumers
+/// (`typeof process.report === "object"`, `Object.keys`,
+/// `process.report.directory = "..."`) don't fall over the 0.0
+/// sentinel. Methods are exposed as `undefined`; setting writable
+/// fields silently no-ops (PropertyGet/Set on a fresh object literal
+/// — Perry's runtime doesn't track an explicit cache, matching the
+/// `process.features` pattern (#1378)).
+///
+/// See #1396.
+fn process_report_literal() -> Expr {
+    fn b(k: &str, v: bool) -> (String, Expr) {
+        (k.to_string(), Expr::Bool(v))
+    }
+    fn s(k: &str, v: &str) -> (String, Expr) {
+        (k.to_string(), Expr::String(v.to_string()))
+    }
+    Expr::Object(vec![
+        b("compact", false),
+        s("directory", ""),
+        b("excludeEnv", false),
+        b("excludeNetwork", false),
+        s("filename", ""),
+        ("getReport".to_string(), Expr::Undefined),
+        b("reportOnFatalError", false),
+        b("reportOnSignal", false),
+        b("reportOnUncaughtException", false),
+        s("signal", "SIGUSR2"),
+        ("writeReport".to_string(), Expr::Undefined),
+    ])
+}
+
 fn process_features_literal() -> Expr {
     fn b(k: &str, v: bool) -> (String, Expr) {
         (k.to_string(), Expr::Bool(v))

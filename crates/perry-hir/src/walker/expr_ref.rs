@@ -48,6 +48,10 @@ where
         | Expr::ProcessThreadCpuUsage
         | Expr::ProcessAvailableMemory
         | Expr::ProcessConstrainedMemory
+        | Expr::ProcessPosixCredential(_)
+        | Expr::ProcessResourceUsage
+        | Expr::ProcessActiveResourcesInfo
+        | Expr::ProcessTitle
         | Expr::ProcessStdinIsTTY
         | Expr::ProcessStdoutIsTTY
         | Expr::ProcessStderrIsTTY
@@ -1031,6 +1035,22 @@ where
                 f(v);
             }
         }
+        Expr::ProcessEmitWarning(args) => {
+            for a in args {
+                f(a);
+            }
+        }
+        Expr::ProcessCpuUsage(opt) => {
+            if let Some(v) = opt {
+                f(v);
+            }
+        }
+        Expr::ProcessHrtime(opt) => {
+            if let Some(v) = opt {
+                f(v);
+            }
+        }
+        Expr::ProcessSetTitle(v) => f(v),
         Expr::ChildProcessExecSync { command, options } => {
             f(command);
             if let Some(o) = options {

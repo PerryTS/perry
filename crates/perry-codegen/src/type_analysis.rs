@@ -127,6 +127,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // hit the string method fast path.
         | Expr::ProcessVersion
         | Expr::ProcessCwd
+        | Expr::ProcessTitle
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
@@ -318,6 +319,33 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                         "realpathSync" | "mkdtempSync" | "readlinkSync"
                         | "readFileSync" => {
                             return Some(HirType::String);
+                        }
+                        _ => {}
+                    }
+                }
+                // #1432: crypto factories / KDFs that return a NaN-boxed
+                // BufferHeader. Without this refinement they're typed
+                // `Any`, so the HMAC fast-path's `key_is_buffer` check
+                // can't identify a `SecretKey` / `pbkdf2Sync` result as
+                // a Buffer — the call falls through to handle-dispatch
+                // (~3 mutex locks) instead of the inline-FFI literal-key
+                // fast path. The runtime values are real Buffers, so
+                // tagging them `Named("Buffer")` is correct.
+                //
+                // Mirrors the existing `Expr::CryptoRandomBytes(_) →
+                // Uint8Array` arm in `static_type_of`; we use `"Buffer"`
+                // rather than `"Uint8Array"` here because the HMAC
+                // fast-path key check specifically matches the
+                // `Named("Buffer")` name (see `is_buffer_expr`).
+                if matches!(object.as_ref(), Expr::NativeModuleRef(m) if m == "crypto") {
+                    match property.as_str() {
+                        "createSecretKey"
+                        | "generateKeySync"
+                        | "scryptSync"
+                        | "pbkdf2Sync"
+                        | "hkdfSync"
+                        | "randomBytes" => {
+                            return Some(HirType::Named("Buffer".into()));
                         }
                         _ => {}
                     }
@@ -825,6 +853,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         }
         | Expr::ProcessVersion
         | Expr::ProcessCwd
+        | Expr::ProcessTitle
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
@@ -977,6 +1006,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // through to the generic native method dispatch and returns undefined.
         Expr::ProcessVersion
         | Expr::ProcessCwd
+        | Expr::ProcessTitle
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
