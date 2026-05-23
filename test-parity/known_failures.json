@@ -26,12 +26,6 @@
     "category": "bug-open",
     "reason": "node:perf_hooks: createHistogram() unimplemented (not a function). Flips to PASS when #1336 lands."
   },
-  "node-suite/perf_hooks/resource-timing/mark-resource-timing": {
-    "issue": "1478",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: performance.markResourceTiming is unimplemented (not a function). Flips to PASS when #1478 lands."
-  },
   "node-suite/perf_hooks/shapes/to-string-tag": {
     "issue": "1479",
     "added": "2026-05-23",
@@ -476,24 +470,6 @@
     "category": "bug-open",
     "reason": "node:process: process.env.X = v does not persist (assignment lowering). Fix was in #1371 not yet on main. Flips to PASS when #1344 lands."
   },
-  "node-suite/process/hrtime/tuple": {
-    "issue": "1345",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: process.hrtime() (tuple form) unwired; only .bigint() works. Fix was in #1371 not yet on main. Flips to PASS when #1345 lands."
-  },
-  "node-suite/process/props/string-props": {
-    "issue": "1346",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: argv0/execPath/title read as number, not string. Fix was in #1371 not yet on main. Flips to PASS when #1346 lands."
-  },
-  "node-suite/process/cpu/cpu-usage-shape": {
-    "issue": "1347",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: process.cpuUsage() throws \"value is not a function\". Flips to PASS when #1347 lands."
-  },
   "node-suite/process/exit-code/exit-code-default": {
     "issue": "1350",
     "added": "2026-05-23",
@@ -512,41 +488,11 @@
     "category": "bug-open",
     "reason": "node:process: EventEmitter listeners/eventNames/listenerCount/removeListener unimplemented. Flips to PASS when #1372 lands."
   },
-  "node-suite/process/resource/resource-usage": {
-    "issue": "1376",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: process.resourceUsage() throws. Flips to PASS when #1376 lands."
-  },
-  "node-suite/process/resource/active-resources": {
-    "issue": "1376",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: process.getActiveResourcesInfo() throws. Flips to PASS when #1376 lands."
-  },
   "node-suite/process/memory/rss-method": {
     "issue": "1395",
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:process: process.memoryUsage.rss() fast-path unimplemented. Flips to PASS when #1395 lands."
-  },
-  "node-suite/process/report/report": {
-    "issue": "1396",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: process.report is not an object. Flips to PASS when #1396 lands."
-  },
-  "node-suite/process/methods/get-builtin-module": {
-    "issue": "1398",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: process.getBuiltinModule(id) unimplemented. Flips to PASS when #1398 lands."
-  },
-  "node-suite/process/methods/load-env-file": {
-    "issue": "1399",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: process.loadEnvFile unimplemented. Flips to PASS when #1399 lands."
   },
   "node-suite/process/title/title-set": {
     "issue": "1401",
@@ -554,16 +500,28 @@
     "category": "bug-open",
     "reason": "node:process: process.title is not settable. Flips to PASS when #1401 lands."
   },
-  "node-suite/process/exception/uncaught-capture": {
-    "issue": "1406",
+  "node-suite/process/env/allowed-flags": {
+    "issue": "1380",
     "added": "2026-05-23",
     "category": "bug-open",
-    "reason": "node:process: hasUncaughtExceptionCaptureCallback / setUncaughtExceptionCaptureCallback unimplemented. Flips to PASS when #1406 lands."
+    "reason": "node:process: allowedNodeEnvironmentFlags Set-like behavior incomplete — main returns Expr::SetNew but the test (instanceof Set / .has) still fails. #1380 reopened. Flips to PASS when #1380 lands fully."
   },
-  "node-suite/process/methods/dlopen": {
-    "issue": "1409",
+  "node-suite/process/exit-code/coerced-int": {
+    "issue": "1350",
     "added": "2026-05-23",
     "category": "bug-open",
-    "reason": "node:process: process.dlopen unimplemented. Flips to PASS when #1409 lands."
+    "reason": "node:process: process.exitCode = N does not round-trip via read (same root as exit-code-default). Flips to PASS when #1350 lands."
+  },
+  "node-suite/perf_hooks/mark/detail-circular": {
+    "issue": "1512",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:perf_hooks: mark detail with a circular reference should be accepted (structuredClone handles cycles). Perry throws. Flips to PASS when #1512 lands."
+  },
+  "node-suite/perf_hooks/mark/detail-function-throws": {
+    "issue": "1513",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:perf_hooks: mark detail with a Function value should throw DataCloneError (structuredClone refuses). Perry silently accepts. Flips to PASS when #1513 lands."
   }
 }
