@@ -485,6 +485,15 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // property must still read as a function for
             // feature-detection.
             | ("perf_hooks", "timerify")
+            // #1366: `crypto.getRandomValues` is the WebCrypto sync
+            // randomness API. Perry lowers the call form via a
+            // synthetic `$$cryptoFillRandom` method on the buffer
+            // (see `lower/expr_call/module_static.rs`), but reading
+            // it as a value (`typeof crypto.getRandomValues ===
+            // "function"`, `const f = crypto.getRandomValues`)
+            // needs the property-read form to be a bound-method
+            // closure.
+            | ("crypto", "getRandomValues")
             | ("perf_hooks", "PerformanceObserver")
             | ("perf_hooks", "PerformanceEntry")
             | ("perf_hooks", "PerformanceMark")
@@ -1352,6 +1361,15 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "crypto" => match property {
             "constants" => Some(create_sub_namespace("crypto.constants")),
+            // #1366: `crypto.subtle` is the WebCrypto SubtleCrypto
+            // instance. Resolve to a sub-namespace so `typeof
+            // crypto.subtle === "object"` matches Node and call
+            // sites that read `subtle` as a value (e.g.
+            // `const s = crypto.subtle; s.digest(...)`) get an
+            // object. The actual `subtle.<method>(...)` lowering
+            // is handled statically by HIR (see
+            // `lower/expr_call/nested_namespace.rs`).
+            "subtle" => Some(create_sub_namespace("crypto.subtle")),
             _ => None,
         },
         "crypto.constants" => crypto_const(property),
