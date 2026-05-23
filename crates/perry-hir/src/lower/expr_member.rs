@@ -137,6 +137,20 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     // returns a 0 sentinel and `Array.isArray(...)` /
                     // `.length` / iteration all explode.
                     "execArgv" => return Ok(Expr::Array(Vec::new())),
+                    // #1348: process.release — object describing the
+                    // current runtime release. Node returns at least
+                    // `{ name, sourceUrl, headersUrl }`. Perry binaries
+                    // are AOT and shouldn't pretend to be a Node download
+                    // tarball, but consumers feature-detect on
+                    // `process.release.name === "node"`, so we match that
+                    // shape with empty source/headers URLs.
+                    "release" => {
+                        return Ok(Expr::Object(vec![
+                            ("name".to_string(), Expr::String("node".to_string())),
+                            ("sourceUrl".to_string(), Expr::String(String::new())),
+                            ("headersUrl".to_string(), Expr::String(String::new())),
+                        ]));
+                    }
                     _ => {}
                 }
             }
@@ -198,6 +212,13 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     "env" => return Ok(Expr::ProcessEnv),
                     "send" | "disconnect" | "connected" => return Ok(Expr::Undefined),
                     "execArgv" => return Ok(Expr::Array(Vec::new())),
+                    "release" => {
+                        return Ok(Expr::Object(vec![
+                            ("name".to_string(), Expr::String("node".to_string())),
+                            ("sourceUrl".to_string(), Expr::String(String::new())),
+                            ("headersUrl".to_string(), Expr::String(String::new())),
+                        ]));
+                    }
                     _ => {}
                 }
             }
