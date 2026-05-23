@@ -925,6 +925,63 @@
         globalThis.URL = URL;
     }
 
+    const __installProcessEventEmitter = (proc) => {
+        if (!proc || typeof proc.on === 'function') return;
+        const events = Object.create(null);
+        let maxListeners = 10;
+        const add = (name, fn, once, prepend) => {
+            const key = String(name);
+            const entry = { fn, once: !!once };
+            const list = events[key] || (events[key] = []);
+            if (prepend) list.unshift(entry); else list.push(entry);
+            return proc;
+        };
+        const remove = (name, fn) => {
+            const key = String(name);
+            const list = events[key];
+            if (!list) return proc;
+            for (let i = list.length - 1; i >= 0; i--) {
+                if (list[i].fn === fn) {
+                    list.splice(i, 1);
+                    break;
+                }
+            }
+            if (list.length === 0) delete events[key];
+            return proc;
+        };
+        proc.on = proc.addListener = (name, fn) => add(name, fn, false, false);
+        proc.once = (name, fn) => add(name, fn, true, false);
+        proc.prependListener = (name, fn) => add(name, fn, false, true);
+        proc.prependOnceListener = (name, fn) => add(name, fn, true, true);
+        proc.emit = (name, ...args) => {
+            const key = String(name);
+            const list = events[key];
+            if (!list || list.length === 0) return false;
+            const snapshot = list.slice();
+            events[key] = list.filter((entry) => !entry.once);
+            if (events[key].length === 0) delete events[key];
+            for (const entry of snapshot) entry.fn(...args);
+            return true;
+        };
+        proc.removeListener = proc.off = remove;
+        proc.removeAllListeners = (name) => {
+            if (name === undefined) {
+                for (const key of Object.keys(events)) delete events[key];
+            } else {
+                delete events[String(name)];
+            }
+            return proc;
+        };
+        proc.listenerCount = (name, fn) => {
+            const list = events[String(name)] || [];
+            return typeof fn === 'function' ? list.filter((entry) => entry.fn === fn).length : list.length;
+        };
+        proc.listeners = proc.rawListeners = (name) => (events[String(name)] || []).map((entry) => entry.fn);
+        proc.eventNames = () => Object.keys(events);
+        proc.setMaxListeners = (n) => { maxListeners = Number(n); return proc; };
+        proc.getMaxListeners = () => maxListeners;
+    };
+
     // Also provide process.env and process.version if not present
     if (typeof globalThis.process === 'undefined') {
         globalThis.process = {
@@ -956,4 +1013,5 @@
             };
         }
     }
+    __installProcessEventEmitter(globalThis.process);
 })();

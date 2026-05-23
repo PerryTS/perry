@@ -73,17 +73,6 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         arr
     };
-    let label_arg_ptr = |n: usize| -> *const crate::StringHeader {
-        if n >= args_len || args_ptr.is_null() {
-            return std::ptr::null();
-        }
-        let v = arg(n);
-        if JSValue::from_bits(v.to_bits()).is_undefined() {
-            std::ptr::null()
-        } else {
-            crate::builtins::js_string_coerce(v) as *const crate::StringHeader
-        }
-    };
     let bool_tag = |v: bool| -> f64 {
         if v {
             f64::from_bits(0x7FFC_0000_0000_0004)
@@ -99,6 +88,22 @@ pub(crate) unsafe fn dispatch_native_module_method(
             bits as usize
         }
     };
+    let arg_event_ptr = |n: usize| -> *const crate::StringHeader {
+        crate::value::js_get_string_pointer_unified(arg(n)) as *const crate::StringHeader
+    };
+    let arg_closure_ptr = |n: usize| -> *const crate::closure::ClosureHeader {
+        if n >= args_len {
+            return std::ptr::null();
+        }
+        let v = arg(n);
+        let jsv = JSValue::from_bits(v.to_bits());
+        if jsv.is_undefined() || jsv.is_null() {
+            std::ptr::null()
+        } else {
+            ptr_addr(v) as *const crate::closure::ClosureHeader
+        }
+    };
+    let ptr_to_f64 = |ptr: *const u8| -> f64 { f64::from_bits(JSValue::pointer(ptr).bits()) };
     let typed_kind = |v: f64| -> Option<u8> {
         let addr = ptr_addr(v);
         if crate::buffer::is_uint8array_buffer(addr) {
@@ -128,6 +133,59 @@ pub(crate) unsafe fn dispatch_native_module_method(
     };
 
     match (module_name, method_name) {
+        // ── process EventEmitter API ──
+        ("process", "on") => crate::os::js_process_on(arg_event_ptr(0), arg_closure_ptr(1)),
+        ("process", "addListener") => {
+            crate::os::js_process_add_listener(arg_event_ptr(0), arg_closure_ptr(1))
+        }
+        ("process", "once") => crate::os::js_process_once(arg_event_ptr(0), arg_closure_ptr(1)),
+        ("process", "prependListener") => {
+            crate::os::js_process_prepend_listener(arg_event_ptr(0), arg_closure_ptr(1))
+        }
+        ("process", "prependOnceListener") => {
+            crate::os::js_process_prepend_once_listener(arg_event_ptr(0), arg_closure_ptr(1))
+        }
+        ("process", "emit") => crate::os::js_process_emit(arg_event_ptr(0), pack_args_from(1)),
+        ("process", "removeListener") => {
+            crate::os::js_process_remove_listener(arg_event_ptr(0), arg_closure_ptr(1))
+        }
+        ("process", "off") => crate::os::js_process_off(arg_event_ptr(0), arg_closure_ptr(1)),
+        ("process", "removeAllListeners") => {
+            crate::os::js_process_remove_all_listeners(arg_event_ptr(0))
+        }
+        ("process", "listenerCount") => {
+            crate::os::js_process_listener_count(arg_event_ptr(0), arg_closure_ptr(1))
+        }
+        ("process", "listeners") => {
+            ptr_to_f64(crate::os::js_process_listeners(arg_event_ptr(0)) as *const u8)
+        }
+        ("process", "rawListeners") => {
+            ptr_to_f64(crate::os::js_process_raw_listeners(arg_event_ptr(0)) as *const u8)
+        }
+        ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
+        ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
+        ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
+        ("process", "cwd") => str_to_f64(crate::os::js_process_cwd()),
+        ("process", "uptime") => crate::os::js_process_uptime(),
+        ("process", "memoryUsage") => crate::process::js_process_memory_usage(),
+        ("process", "nextTick") => {
+            crate::os::js_process_next_tick(arg_closure_ptr(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "chdir") => {
+            crate::os::js_process_chdir(arg_event_ptr(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "kill") => {
+            crate::os::js_process_kill(arg(0), arg(1));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "exit") => {
+            crate::process::js_process_exit(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "hrtime") => crate::os::js_process_hrtime(arg(0)),
+        ("process", "cpuUsage") => crate::process::js_process_cpu_usage(arg(0)),
         // ── crypto module ──
         ("crypto", "randomFillSync") if args_len >= 1 => {
             use rand::RngCore;

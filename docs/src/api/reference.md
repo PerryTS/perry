@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1205 entries across 80 modules.
+Total: 1227 entries across 80 modules.
 
 ## Modules
 
@@ -1494,19 +1494,41 @@ Total: 1205 entries across 80 modules.
 ### Methods
 
 - `abort` — module
+- `addListener` — module
 - `availableMemory` — module
+- `chdir` — module
 - `constrainedMemory` — module
 - `cpuUsage` — module
+- `cwd` — module
+- `emit` — module
 - `emitWarning` — module
+- `eventNames` — module
+- `exit` — module
 - `getActiveResourcesInfo` — module
+- `getMaxListeners` — module
 - `getegid` — module
 - `geteuid` — module
 - `getgid` — module
 - `getuid` — module
 - `hrtime` — module
+- `kill` — module
+- `listenerCount` — module
+- `listeners` — module
+- `memoryUsage` — module
+- `nextTick` — module
+- `off` — module
+- `on` — module
+- `once` — module
+- `prependListener` — module
+- `prependOnceListener` — module
+- `rawListeners` — module
+- `removeAllListeners` — module
+- `removeListener` — module
 - `resourceUsage` — module
+- `setMaxListeners` — module
 - `threadCpuUsage` — module
 - `umask` — module
+- `uptime` — module
 
 ### Properties
 

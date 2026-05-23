@@ -196,6 +196,7 @@ fn reset_copying_nursery_runtime_test_state() {
     crate::object::test_clear_transition_cache_root();
     crate::object::test_clear_object_cache_roots();
     crate::set::test_clear_set_roots();
+    crate::os::test_clear_process_event_listeners();
     crate::promise::test_clear_promise_scanner_roots();
     crate::closure::test_clear_singleton_closure_caches();
     crate::geisterhand_registry::test_clear_geisterhand_roots();

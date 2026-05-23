@@ -367,6 +367,26 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                             type_args: vec![],
                         });
                     }
+                    "on"
+                    | "addListener"
+                    | "once"
+                    | "prependListener"
+                    | "prependOnceListener"
+                    | "emit"
+                    | "listeners"
+                    | "rawListeners"
+                    | "eventNames"
+                    | "listenerCount"
+                    | "removeListener"
+                    | "off"
+                    | "removeAllListeners"
+                    | "setMaxListeners"
+                    | "getMaxListeners" => {
+                        return Ok(Expr::PropertyGet {
+                            object: Box::new(Expr::GlobalGet(0)),
+                            property: prop_ident.sym.to_string(),
+                        });
+                    }
                     _ => {}
                 }
             }

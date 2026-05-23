@@ -868,6 +868,9 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
         fixture.nursery_user as *mut crate::object::ObjectHeader,
         fixture.nursery_user as *mut crate::closure::ClosureHeader,
     );
+    crate::os::test_seed_process_event_listener_root(
+        fixture.nursery_user as *const crate::closure::ClosureHeader,
+    );
     crate::promise::js_iter_result_set(fixture.nursery_value(), 0);
     crate::promise::test_seed_async_step_thunk_cache(
         fixture.nursery_addr(),
@@ -915,6 +918,7 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     small_int_cache_mutable_root_scanner(&mut visitor);
     crate::builtins::scan_console_log_singleton_roots_mut(&mut visitor);
     crate::node_submodules::scan_node_submodule_singleton_roots_mut(&mut visitor);
+    crate::os::scan_process_event_listener_roots_mut(&mut visitor);
     crate::r#box::scan_box_roots_mut(&mut visitor);
     crate::promise::scan_iter_result_root_mut(&mut visitor);
     crate::promise::scan_async_step_thunk_cache_mut(&mut visitor);
@@ -1018,6 +1022,10 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
         (fixture.old_addr(), fixture.old_addr(), fixture.old_addr())
     );
     assert_eq!(
+        crate::os::test_process_event_listener_root_snapshot(),
+        fixture.old_addr()
+    );
+    assert_eq!(
         crate::r#box::js_box_get(box_ptr).to_bits(),
         fixture.old_bits
     );
@@ -1091,6 +1099,7 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     crate::string::test_clear_small_int_cache_root(7);
     crate::builtins::test_set_console_log_singleton(0);
     crate::async_hooks::reset_for_tests();
+    crate::os::test_clear_process_event_listeners();
     crate::promise::js_iter_result_set(0.0, 0);
     crate::closure::test_clear_singleton_closure_caches();
     crate::tui::state::test_reset_state_slots();

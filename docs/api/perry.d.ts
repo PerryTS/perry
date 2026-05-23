@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1205 entries across 80 modules
+// Coverage: 1227 entries across 80 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1630,15 +1630,29 @@ declare module "process" {
   /** stdlib */
   export function abort(...args: any[]): any;
   /** stdlib */
+  export function addListener(...args: any[]): any;
+  /** stdlib */
   export function availableMemory(...args: any[]): any;
+  /** stdlib */
+  export function chdir(...args: any[]): any;
   /** stdlib */
   export function constrainedMemory(...args: any[]): any;
   /** stdlib */
   export function cpuUsage(...args: any[]): any;
   /** stdlib */
+  export function cwd(...args: any[]): any;
+  /** stdlib */
+  export function emit(...args: any[]): any;
+  /** stdlib */
   export function emitWarning(...args: any[]): any;
   /** stdlib */
+  export function eventNames(...args: any[]): any;
+  /** stdlib */
+  export function exit(...args: any[]): any;
+  /** stdlib */
   export function getActiveResourcesInfo(...args: any[]): any;
+  /** stdlib */
+  export function getMaxListeners(...args: any[]): any;
   /** stdlib */
   export function getegid(...args: any[]): any;
   /** stdlib */
@@ -1650,11 +1664,41 @@ declare module "process" {
   /** stdlib */
   export function hrtime(...args: any[]): any;
   /** stdlib */
+  export function kill(...args: any[]): any;
+  /** stdlib */
+  export function listenerCount(...args: any[]): any;
+  /** stdlib */
+  export function listeners(...args: any[]): any;
+  /** stdlib */
+  export function memoryUsage(...args: any[]): any;
+  /** stdlib */
+  export function nextTick(...args: any[]): any;
+  /** stdlib */
+  export function off(...args: any[]): any;
+  /** stdlib */
+  export function on(...args: any[]): any;
+  /** stdlib */
+  export function once(...args: any[]): any;
+  /** stdlib */
+  export function prependListener(...args: any[]): any;
+  /** stdlib */
+  export function prependOnceListener(...args: any[]): any;
+  /** stdlib */
+  export function rawListeners(...args: any[]): any;
+  /** stdlib */
+  export function removeAllListeners(...args: any[]): any;
+  /** stdlib */
+  export function removeListener(...args: any[]): any;
+  /** stdlib */
   export function resourceUsage(...args: any[]): any;
+  /** stdlib */
+  export function setMaxListeners(...args: any[]): any;
   /** stdlib */
   export function threadCpuUsage(...args: any[]): any;
   /** stdlib */
   export function umask(...args: any[]): any;
+  /** stdlib */
+  export function uptime(...args: any[]): any;
 }
 
 declare module "querystring" {

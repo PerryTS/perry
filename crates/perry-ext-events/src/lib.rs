@@ -47,6 +47,26 @@ const MAX_HEAP_POINTER: u64 = 0x0000_FFFF_FFFF_FFFF;
 // pump-registration coupling entirely.
 extern "C" {
     fn js_promise_resolve(promise: *mut Promise, value: f64);
+    // #1557: closure allocation hooks needed by events.on's queue-listener.
+    // Mirrors perry-runtime::closure exports; declared here because perry-ffi
+    // doesn't yet expose them and perry-ext-events deliberately avoids a
+    // direct perry-runtime dep.
+    fn js_closure_alloc(fn_ptr: *const u8, capture_count: u32) -> *mut RawClosureHeader;
+    fn js_closure_set_capture_ptr(closure: *mut RawClosureHeader, slot: u32, ptr: i64);
+    fn js_closure_get_capture_ptr(closure: *const RawClosureHeader, slot: u32) -> i64;
+    fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader;
+    // #1557: AbortSignal listener attachment for events.addAbortListener.
+    fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
+    fn js_abort_signal_add_listener(signal: *mut u8, event: f64, listener: f64);
+}
+
+const TAG_UNDEFINED_F64_BITS: u64 = 0x7FFC_0000_0000_0001;
+const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+#[inline]
+fn nanbox_pointer_bits(ptr: i64) -> f64 {
+    f64::from_bits(POINTER_TAG | ((ptr as u64) & POINTER_MASK))
 }
 
 /// One registered listener: a raw closure pointer (i64 to satisfy
@@ -622,6 +642,81 @@ pub unsafe extern "C" fn js_events_once(
             .push(raw);
     }
     raw
+}
+
+/// Queue listener for `events.on(...)` — captures the queue array in
+/// slot 0 and pushes `[arg]` onto it for each emitted event. The
+/// `for await (... of iter)` loop pulls items off the array as the
+/// stream produces them.
+extern "C" fn events_on_queue_listener(closure: *const RawClosureHeader, arg0: f64) -> f64 {
+    unsafe {
+        let queue = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
+        if !queue.is_null() {
+            let mut args = js_array_alloc(0);
+            args = js_array_push_f64(args, arg0);
+            let args_val = nanbox_pointer_bits(args as i64);
+            let _ = js_array_push_f64(queue, args_val);
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED_F64_BITS)
+}
+
+/// `events.on(emitter, eventName)` — returns an async-iterable queue of
+/// argument arrays. Perry's `for await` lowering already accepts plain arrays
+/// as async-iterable inputs, so the implementation backs the iterator with an
+/// Array and appends one `[arg]` entry per emitted event. Ported from
+/// `perry-stdlib/src/events.rs` (#1557).
+///
+/// # Safety
+///
+/// `event_name_ptr` must be null or a Perry-runtime `StringHeader`.
+#[no_mangle]
+pub unsafe extern "C" fn js_events_on(
+    handle: Handle,
+    event_name_ptr: *const StringHeader,
+) -> *mut ArrayHeader {
+    ensure_gc_scanner_registered();
+    let queue = js_array_alloc(0);
+    let Some(event_name) = read_str(event_name_ptr) else {
+        return queue;
+    };
+
+    let listener = js_closure_alloc(events_on_queue_listener as *const u8, 1);
+    js_closure_set_capture_ptr(listener, 0, queue as i64);
+
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        emitter.add_listener(&event_name, listener as i64, false, false);
+    }
+    queue
+}
+
+/// `events.addAbortListener(signal, listener)` — attach `listener` to the
+/// AbortSignal's "abort" event and return a `Disposable`-shaped plain object
+/// (currently a function-shaped placeholder — listener removal can be
+/// tightened later). Ported from `perry-stdlib/src/events.rs` (#1557).
+///
+/// # Safety
+///
+/// `signal_ptr` must be null or a Perry-runtime `ObjectHeader` (the
+/// AbortSignal instance); `callback_ptr` must be null or a closure pointer.
+#[no_mangle]
+pub unsafe extern "C" fn js_events_add_abort_listener(signal_ptr: i64, callback_ptr: i64) -> i64 {
+    if signal_ptr == 0 || callback_ptr == 0 {
+        return 0;
+    }
+    let event_name = b"abort";
+    let event_str = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
+    let event_val = f64::from_bits(nanbox_string_bits(event_str));
+    let listener_val = nanbox_pointer_bits(callback_ptr);
+    js_abort_signal_add_listener(signal_ptr as *mut u8, event_val, listener_val);
+    // Perry currently surfaces the disposable as the listener itself
+    // (matching node's `{ [Symbol.dispose]: () => signal.removeEventListener(...) }`
+    // shape requires symbol-property writes that this crate doesn't expose
+    // yet; perry-stdlib's version uses perry_runtime::symbol helpers). The
+    // returned pointer is callable, so `disposable[Symbol.dispose]?.()` won't
+    // crash — it just won't actually unsubscribe. Tightening this is tracked
+    // in #1557's follow-up bullet.
+    callback_ptr
 }
 
 /// `events.getEventListeners(emitter, eventName)` — alias for

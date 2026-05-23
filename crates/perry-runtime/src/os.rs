@@ -4,6 +4,7 @@ use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -648,23 +649,48 @@ fn extract_hrtime_prior(value: f64) -> (i64, i64) {
     (to_i64(secs), to_i64(nanos))
 }
 
-// process.on/once handlers, partitioned by event name. Today only
-// 'uncaughtException' actually fires from the runtime (during the diag
-// uncaught-drain hook); 'exit' and any other event names are stored so
-// the closure stays rooted but never invoked.
-//
-// Each entry tracks whether it was registered via `once` so that a
-// one-shot handler is drained from the list after its first invocation.
 #[derive(Clone, Copy)]
-struct ProcessHandler {
-    closure: *const crate::closure::ClosureHeader,
+struct ProcessListener {
+    callback: *const crate::closure::ClosureHeader,
     once: bool,
 }
 
+struct ProcessEmitter {
+    events: HashMap<String, Vec<ProcessListener>>,
+    event_order: Vec<String>,
+    max_listeners: i32,
+}
+
+impl ProcessEmitter {
+    fn new() -> Self {
+        Self {
+            events: HashMap::new(),
+            event_order: Vec::new(),
+            max_listeners: 10,
+        }
+    }
+
+    fn ensure_event_order(&mut self, event: &str) {
+        if !self.event_order.iter().any(|name| name == event) {
+            self.event_order.push(event.to_string());
+        }
+    }
+
+    fn prune_event_if_empty(&mut self, event: &str) {
+        if self
+            .events
+            .get(event)
+            .map(|listeners| listeners.is_empty())
+            .unwrap_or(false)
+        {
+            self.events.remove(event);
+            self.event_order.retain(|name| name != event);
+        }
+    }
+}
+
 thread_local! {
-    static UNCAUGHT_HANDLERS: std::cell::RefCell<Vec<ProcessHandler>> = const { std::cell::RefCell::new(Vec::new()) };
-    static EXIT_HANDLERS: std::cell::RefCell<Vec<ProcessHandler>> = const { std::cell::RefCell::new(Vec::new()) };
-    static OTHER_PROCESS_HANDLERS: std::cell::RefCell<Vec<ProcessHandler>> = const { std::cell::RefCell::new(Vec::new()) };
+    static PROCESS_EMITTER: RefCell<ProcessEmitter> = RefCell::new(ProcessEmitter::new());
 }
 
 fn read_event_name(event_ptr: *const StringHeader) -> Option<String> {
@@ -679,20 +705,117 @@ fn read_event_name(event_ptr: *const StringHeader) -> Option<String> {
     }
 }
 
-fn register_process_handler(
+fn process_namespace_value() -> f64 {
+    crate::object::js_create_native_module_namespace(b"process".as_ptr(), "process".len())
+}
+
+fn register_process_listener(
     event_ptr: *const StringHeader,
-    handler: *const crate::closure::ClosureHeader,
+    callback: *const crate::closure::ClosureHeader,
     once: bool,
-) {
-    let entry = ProcessHandler {
-        closure: handler,
-        once,
+    prepend: bool,
+) -> f64 {
+    let Some(event) = read_event_name(event_ptr) else {
+        return process_namespace_value();
     };
-    match read_event_name(event_ptr).as_deref() {
-        Some("uncaughtException") => UNCAUGHT_HANDLERS.with(|h| h.borrow_mut().push(entry)),
-        Some("exit") => EXIT_HANDLERS.with(|h| h.borrow_mut().push(entry)),
-        _ => OTHER_PROCESS_HANDLERS.with(|h| h.borrow_mut().push(entry)),
+    if callback.is_null() {
+        return process_namespace_value();
     }
+
+    PROCESS_EMITTER.with(|emitter| {
+        let mut emitter = emitter.borrow_mut();
+        emitter.ensure_event_order(&event);
+        let listener = ProcessListener { callback, once };
+        let listeners = emitter.events.entry(event).or_default();
+        if prepend {
+            listeners.insert(0, listener);
+        } else {
+            listeners.push(listener);
+        }
+    });
+    process_namespace_value()
+}
+
+fn boxed_bool(value: bool) -> f64 {
+    f64::from_bits(if value {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
+fn listener_array(event_ptr: *const StringHeader, _raw: bool) -> *mut ArrayHeader {
+    let Some(event) = read_event_name(event_ptr) else {
+        return crate::array::js_array_alloc(0);
+    };
+    let callbacks = PROCESS_EMITTER.with(|emitter| {
+        emitter
+            .borrow()
+            .events
+            .get(&event)
+            .map(|listeners| {
+                listeners
+                    .iter()
+                    .map(|listener| listener.callback)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    let mut arr = crate::array::js_array_alloc(callbacks.len() as u32);
+    for callback in callbacks {
+        arr =
+            crate::array::js_array_push(arr, crate::value::JSValue::pointer(callback as *const u8));
+    }
+    arr
+}
+
+fn collect_emit_args(args: *const ArrayHeader) -> Vec<f64> {
+    if args.is_null() {
+        return Vec::new();
+    }
+    let len = crate::array::js_array_length(args) as usize;
+    let mut values = Vec::with_capacity(len);
+    for i in 0..len {
+        values.push(crate::array::js_array_get_f64(args, i as u32));
+    }
+    values
+}
+
+fn emit_process_event(event: &str, args: &[f64]) -> bool {
+    let listeners = PROCESS_EMITTER.with(|emitter| {
+        let mut emitter = emitter.borrow_mut();
+        let Some(listeners) = emitter.events.get_mut(event) else {
+            return Vec::new();
+        };
+        let snapshot = listeners.clone();
+        if snapshot.iter().any(|listener| listener.once) {
+            listeners.retain(|listener| !listener.once);
+        }
+        emitter.prune_event_if_empty(event);
+        snapshot
+    });
+
+    if listeners.is_empty() {
+        if event == "error" {
+            crate::exception::js_throw(
+                args.first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
+            );
+        }
+        return false;
+    }
+
+    for listener in listeners {
+        unsafe {
+            crate::closure::js_closure_call_array(
+                listener.callback as i64,
+                args.as_ptr(),
+                args.len() as i64,
+            );
+        }
+    }
+    true
 }
 
 /// process.on(event, handler) — register an event listener.
@@ -700,8 +823,17 @@ fn register_process_handler(
 pub extern "C" fn js_process_on(
     event_ptr: *const StringHeader,
     handler: *const crate::closure::ClosureHeader,
-) {
-    register_process_handler(event_ptr, handler, false);
+) -> f64 {
+    register_process_listener(event_ptr, handler, false, false)
+}
+
+/// process.addListener(event, handler) — alias for on().
+#[no_mangle]
+pub extern "C" fn js_process_add_listener(
+    event_ptr: *const StringHeader,
+    handler: *const crate::closure::ClosureHeader,
+) -> f64 {
+    register_process_listener(event_ptr, handler, false, false)
 }
 
 /// process.once(event, handler) — one-shot listener (Node parity).
@@ -709,19 +841,190 @@ pub extern "C" fn js_process_on(
 pub extern "C" fn js_process_once(
     event_ptr: *const StringHeader,
     handler: *const crate::closure::ClosureHeader,
+) -> f64 {
+    register_process_listener(event_ptr, handler, true, false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_prepend_listener(
+    event_ptr: *const StringHeader,
+    handler: *const crate::closure::ClosureHeader,
+) -> f64 {
+    register_process_listener(event_ptr, handler, false, true)
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_prepend_once_listener(
+    event_ptr: *const StringHeader,
+    handler: *const crate::closure::ClosureHeader,
+) -> f64 {
+    register_process_listener(event_ptr, handler, true, true)
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_emit(event_ptr: *const StringHeader, args: *const ArrayHeader) -> f64 {
+    let Some(event) = read_event_name(event_ptr) else {
+        return boxed_bool(false);
+    };
+    let values = collect_emit_args(args);
+    boxed_bool(emit_process_event(&event, &values))
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_remove_listener(
+    event_ptr: *const StringHeader,
+    handler: *const crate::closure::ClosureHeader,
+) -> f64 {
+    if let Some(event) = read_event_name(event_ptr) {
+        PROCESS_EMITTER.with(|emitter| {
+            let mut emitter = emitter.borrow_mut();
+            if let Some(listeners) = emitter.events.get_mut(&event) {
+                if let Some(pos) = listeners
+                    .iter()
+                    .rposition(|listener| listener.callback == handler)
+                {
+                    listeners.remove(pos);
+                }
+            }
+            emitter.prune_event_if_empty(&event);
+        });
+    }
+    process_namespace_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_off(
+    event_ptr: *const StringHeader,
+    handler: *const crate::closure::ClosureHeader,
+) -> f64 {
+    js_process_remove_listener(event_ptr, handler)
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_remove_all_listeners(event_ptr: *const StringHeader) -> f64 {
+    PROCESS_EMITTER.with(|emitter| {
+        let mut emitter = emitter.borrow_mut();
+        if let Some(event) = read_event_name(event_ptr) {
+            emitter.events.remove(&event);
+            emitter.event_order.retain(|name| name != &event);
+        } else {
+            emitter.events.clear();
+            emitter.event_order.clear();
+        }
+    });
+    process_namespace_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_listener_count(
+    event_ptr: *const StringHeader,
+    handler: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let Some(event) = read_event_name(event_ptr) else {
+        return 0.0;
+    };
+    PROCESS_EMITTER.with(|emitter| {
+        let emitter = emitter.borrow();
+        let Some(listeners) = emitter.events.get(&event) else {
+            return 0.0;
+        };
+        if handler.is_null() {
+            listeners.len() as f64
+        } else {
+            listeners
+                .iter()
+                .filter(|listener| listener.callback == handler)
+                .count() as f64
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_listeners(event_ptr: *const StringHeader) -> *mut ArrayHeader {
+    listener_array(event_ptr, false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_raw_listeners(event_ptr: *const StringHeader) -> *mut ArrayHeader {
+    listener_array(event_ptr, true)
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_event_names() -> *mut ArrayHeader {
+    let names = PROCESS_EMITTER.with(|emitter| emitter.borrow().event_order.clone());
+    let mut arr = crate::array::js_array_alloc(names.len() as u32);
+    for name in names {
+        let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        arr = crate::array::js_array_push(arr, crate::value::JSValue::string_ptr(s));
+    }
+    arr
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_set_max_listeners(value: f64) -> f64 {
+    if value.is_finite() && value >= 0.0 {
+        PROCESS_EMITTER.with(|emitter| {
+            emitter.borrow_mut().max_listeners = value as i32;
+        });
+    }
+    process_namespace_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_get_max_listeners() -> f64 {
+    PROCESS_EMITTER.with(|emitter| emitter.borrow().max_listeners as f64)
+}
+
+pub fn scan_process_event_listener_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    PROCESS_EMITTER.with(|emitter| {
+        let mut emitter = emitter.borrow_mut();
+        for listeners in emitter.events.values_mut() {
+            for listener in listeners {
+                visitor.visit_raw_const_ptr_slot(&mut listener.callback);
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_process_event_listeners() {
+    PROCESS_EMITTER.with(|emitter| {
+        *emitter.borrow_mut() = ProcessEmitter::new();
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_process_event_listener_root(
+    callback: *const crate::closure::ClosureHeader,
 ) {
-    register_process_handler(event_ptr, handler, true);
+    PROCESS_EMITTER.with(|emitter| {
+        let mut emitter = emitter.borrow_mut();
+        emitter.ensure_event_order("__test__");
+        emitter.events.insert(
+            "__test__".to_string(),
+            vec![ProcessListener {
+                callback,
+                once: false,
+            }],
+        );
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_process_event_listener_root_snapshot() -> usize {
+    PROCESS_EMITTER.with(|emitter| {
+        emitter
+            .borrow()
+            .events
+            .get("__test__")
+            .and_then(|listeners| listeners.first())
+            .map(|listener| listener.callback as usize)
+            .unwrap_or(0)
+    })
 }
 
 pub fn emit_process_uncaught_exception(error: f64) {
-    // Snapshot, fire, then drain the one-shot entries. Iteration over a
-    // clone is required because handlers may register/unregister further
-    // listeners while running.
-    let handlers = UNCAUGHT_HANDLERS.with(|h| h.borrow().clone());
-    for handler in &handlers {
-        crate::closure::js_closure_call1(handler.closure, error);
-    }
-    UNCAUGHT_HANDLERS.with(|h| h.borrow_mut().retain(|entry| !entry.once));
+    emit_process_event("uncaughtException", &[error]);
 }
 
 /// process.nextTick(callback) — schedule callback as a microtask.

@@ -47,27 +47,28 @@ pub(super) fn try_native_module_methods(
                                 }));
                             }
                         }
-                        "on" => {
-                            if args.len() >= 2 {
-                                let mut iter = args.into_iter();
-                                let event = iter.next().unwrap();
-                                let handler = iter.next().unwrap();
-                                return Ok(Ok(Expr::ProcessOn {
-                                    event: Box::new(event),
-                                    handler: Box::new(handler),
-                                }));
-                            }
-                        }
-                        "once" => {
-                            if args.len() >= 2 {
-                                let mut iter = args.into_iter();
-                                let event = iter.next().unwrap();
-                                let handler = iter.next().unwrap();
-                                return Ok(Ok(Expr::ProcessOnce {
-                                    event: Box::new(event),
-                                    handler: Box::new(handler),
-                                }));
-                            }
+                        "on"
+                        | "addListener"
+                        | "once"
+                        | "prependListener"
+                        | "prependOnceListener"
+                        | "emit"
+                        | "listeners"
+                        | "rawListeners"
+                        | "eventNames"
+                        | "listenerCount"
+                        | "removeListener"
+                        | "off"
+                        | "removeAllListeners"
+                        | "setMaxListeners"
+                        | "getMaxListeners" => {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name.to_string(),
+                                args,
+                            }));
                         }
                         "chdir" => {
                             if !args.is_empty() {

@@ -416,36 +416,6 @@
     "category": "ci-env",
     "reason": "Brotli decompression path under node:zlib not yet implemented (cf. existing test_parity_zlib module-inventory entry). Same failure observed on #1038 pre-merge — not a regression."
   },
-  "node-suite/process/shapes/method-types": {
-    "issue": "1343",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: typeof process.<method> reflection (cwd/nextTick/hrtime/exit/on/uptime/memoryUsage/cpuUsage) reports wrong type. Fix was in #1371 but that PR merged into the #1331 branch not main; reconstruction dropped it. Flips to PASS when #1343 lands."
-  },
-  "node-suite/process/nexttick/is-function": {
-    "issue": "1343",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: typeof process.nextTick !== \"function\" — same method-value reflection gap. Flips to PASS when #1343 lands."
-  },
-  "node-suite/process/methods/chdir": {
-    "issue": "1343",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: typeof process.chdir !== \"function\" — method-value reflection. Flips to PASS when #1343 lands."
-  },
-  "node-suite/process/methods/exit": {
-    "issue": "1343",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: typeof process.exit !== \"function\" — method-value reflection. Flips to PASS when #1343 lands."
-  },
-  "node-suite/process/methods/kill": {
-    "issue": "1343",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: typeof process.kill !== \"function\" — method-value reflection. Flips to PASS when #1343 lands."
-  },
   "node-suite/process/env/write": {
     "issue": "1344",
     "added": "2026-05-23",
@@ -457,18 +427,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:process: process.exitCode does not default to undefined. Flips to PASS when #1350 lands."
-  },
-  "node-suite/process/events/on-emit": {
-    "issue": "1372",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: EventEmitter on()/emit() round-trip throws. Flips to PASS when #1372 lands."
-  },
-  "node-suite/process/events/listener-management": {
-    "issue": "1372",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:process: EventEmitter listeners/eventNames/listenerCount/removeListener unimplemented. Flips to PASS when #1372 lands."
   },
   "node-suite/process/memory/rss-method": {
     "issue": "1395",
