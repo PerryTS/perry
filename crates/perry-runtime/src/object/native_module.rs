@@ -72,6 +72,33 @@ pub extern "C" fn js_create_native_module_namespace(
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
+/// #1479: read the module-name string stored in field 0 of a
+/// native-module-namespace ObjectHeader. Returns `None` if the field
+/// is missing, not a string, or the bytes aren't valid UTF-8. Caller
+/// must have confirmed `class_id == NATIVE_MODULE_CLASS_ID` already.
+///
+/// # Safety
+/// `obj_ptr` must point to a live `ObjectHeader` with
+/// `class_id == NATIVE_MODULE_CLASS_ID` (i.e. one produced by
+/// [`js_create_native_module_namespace`]).
+pub(crate) unsafe fn read_native_module_name(
+    obj_ptr: *const crate::object::ObjectHeader,
+) -> Option<String> {
+    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let field = crate::object::js_object_get_field(obj_ptr, 0);
+    if !field.is_string() {
+        return None;
+    }
+    let str_ptr = (field.bits() & POINTER_MASK) as *const crate::string::StringHeader;
+    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
+        return None;
+    }
+    let len = (*str_ptr).byte_len as usize;
+    let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
+}
+
 /// Issue #649: codegen entry for `PropertyGet { NativeModuleRef(name),
 /// property }`. `NativeModuleRef` lowers to a literal `0.0` at the codegen
 /// level, so the generic PropertyGet path can't find the namespace
