@@ -342,3 +342,37 @@ pub extern "C" fn js_node_stream_duplex_pair(_opts: f64) -> f64 {
     crate::array::js_array_push(arr, JSValue::from_bits(b.to_bits()));
     f64::from_bits(JSValue::pointer(arr as *const u8).bits())
 }
+
+// ─────────────────────────────────────────────────────────────────
+// #1540: Web-stream interop. Node exposes static helpers on the
+// stream classes for converting between Node streams and WHATWG
+// streams:
+//   - `Readable.toWeb(nodeReadable)` → WHATWG ReadableStream
+//   - `Readable.fromWeb(webStream)` → Node Readable
+//   - `Writable.toWeb(nodeWritable)` → WHATWG WritableStream
+//   - `Writable.fromWeb(webStream)` → Node Writable
+//
+// Perry's stubs return a Node stream of the appropriate direction
+// for all four (data isn't actually forwarded between the two
+// universes yet). That's the closest shape match: consumers that
+// branch on `typeof toWeb(s) === "object"` or destructure with
+// `const w = Readable.fromWeb(...)` get a non-null object back and
+// don't crash. Real bidirectional adapters are tracked separately.
+// ─────────────────────────────────────────────────────────────────
+
+/// `Readable.toWeb` / `Writable.toWeb` — Perry returns a fresh
+/// Duplex stub for either direction. It's not a real WHATWG
+/// ReadableStream / WritableStream, but typeof / truthy / method
+/// existence checks (`.pipeTo`, etc. via duplex_methods) pass.
+#[no_mangle]
+pub extern "C" fn js_node_stream_to_web(_node_stream: f64) -> f64 {
+    js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+}
+
+/// `Readable.fromWeb` / `Writable.fromWeb` — Perry returns a fresh
+/// Duplex stub for either direction. Real bidirectional adapters
+/// are tracked separately.
+#[no_mangle]
+pub extern "C" fn js_node_stream_from_web(_web_stream: f64) -> f64 {
+    js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+}

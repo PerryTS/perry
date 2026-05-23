@@ -461,6 +461,32 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // #1540: Web-stream interop. Node exposes static helpers on
+    // both Readable and Writable for converting to/from WHATWG
+    // streams (Readable.toWeb / Readable.fromWeb /
+    // Writable.toWeb / Writable.fromWeb). Perry returns a fresh
+    // Duplex stub for either direction (data isn't propagated
+    // between Node and WHATWG universes yet); typeof + truthy +
+    // method-existence checks pass. Real adapters are tracked
+    // separately.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "toWeb",
+        class_filter: None,
+        runtime: "js_node_stream_to_web",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "fromWeb",
+        class_filter: None,
+        runtime: "js_node_stream_from_web",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Events ==========
     NativeModSig {
         module: "events",

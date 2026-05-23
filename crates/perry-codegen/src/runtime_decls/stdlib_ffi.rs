@@ -815,6 +815,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // #1539: compose(...streams) -> new Duplex; duplexPair(opts) -> [Duplex, Duplex].
     module.declare_function("js_node_stream_compose", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_duplex_pair", DOUBLE, &[DOUBLE]);
+    // #1540: Readable/Writable .toWeb / .fromWeb — return fresh Duplex stubs.
+    module.declare_function("js_node_stream_to_web", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_from_web", DOUBLE, &[DOUBLE]);
 
     // ========== Event emitter ==========
     module.declare_function("js_event_emitter_emit", DOUBLE, &[I64, I64, I64]);

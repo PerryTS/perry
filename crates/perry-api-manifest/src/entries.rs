@@ -2215,6 +2215,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `[Duplex, Duplex]`. Both return fresh Duplex stubs today.
     method("stream", "compose", false, None),
     method("stream", "duplexPair", false, None),
+    // #1540: Web-stream interop helpers — Readable/Writable .toWeb /
+    // .fromWeb. Stubs return a fresh Duplex (data isn't propagated
+    // between Node and WHATWG universes yet).
+    method("stream", "toWeb", false, None),
+    method("stream", "fromWeb", false, None),
     // EventEmitter methods on stream instances. node:stream extends
     // EventEmitter — every Readable/Writable/Duplex/Transform/PassThrough
     // exposes the full `.on('data'|'end'|'error'|'close'|...)` /
