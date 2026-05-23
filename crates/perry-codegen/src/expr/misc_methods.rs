@@ -117,6 +117,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- process.hrtime.bigint() — returns already NaN-boxed BigInt --------
         Expr::ProcessHrtimeBigint => Ok(ctx.block().call(DOUBLE, "js_process_hrtime_bigint", &[])),
 
+        // -------- process.hrtime(prior?) — [secs, nanos] tuple (#1345) --------
+        Expr::ProcessHrtime(prior) => {
+            let prior_val = if let Some(e) = prior {
+                lower_expr(ctx, e)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_process_hrtime", &[(DOUBLE, &prior_val)]))
+        }
+
         // -------- RegExpExecIndex — reads thread-local from the last exec() call --------
         Expr::RegExpExecIndex => Ok(ctx.block().call(DOUBLE, "js_regexp_exec_get_index", &[])),
 

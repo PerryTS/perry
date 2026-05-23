@@ -1063,6 +1063,11 @@ where
                 f(v);
             }
         }
+        Expr::ProcessHrtime(opt) => {
+            if let Some(v) = opt {
+                f(v);
+            }
+        }
 
         // ─── Child process ───────────────────────────────────────────────
         Expr::ChildProcessExecSync { command, options } => {

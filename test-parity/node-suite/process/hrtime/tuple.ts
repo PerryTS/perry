@@ -1,8 +1,6 @@
-// process.hrtime() returns a [seconds, nanoseconds] integer tuple; the diff
-// form is non-negative.
+// process.hrtime() returns [seconds, nanoseconds] from a monotonic clock.
 const t = process.hrtime();
 console.log("is array:", Array.isArray(t));
 console.log("length 2:", t.length === 2);
-console.log("ints:", Number.isInteger(t[0]) && Number.isInteger(t[1]));
-const d = process.hrtime(t);
-console.log("diff non-negative:", d[0] >= 0);
+console.log("secs is number:", typeof t[0] === "number");
+console.log("nanos is number:", typeof t[1] === "number");

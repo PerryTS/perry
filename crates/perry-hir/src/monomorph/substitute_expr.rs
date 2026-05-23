@@ -300,6 +300,11 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         ),
         Expr::ProcessResourceUsage => Expr::ProcessResourceUsage,
         Expr::ProcessActiveResourcesInfo => Expr::ProcessActiveResourcesInfo,
+        Expr::ProcessHrtime(prior) => Expr::ProcessHrtime(
+            prior
+                .as_ref()
+                .map(|e| Box::new(substitute_expr(e, substitutions))),
+        ),
 
         // File system
         Expr::FsReadFileSync(path) => {

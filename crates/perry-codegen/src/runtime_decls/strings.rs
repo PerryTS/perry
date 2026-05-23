@@ -466,6 +466,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_active_resources_info", DOUBLE, &[]);
     module.declare_function("js_process_env", DOUBLE, &[]);
     module.declare_function("js_process_hrtime_bigint", DOUBLE, &[]);
+    module.declare_function("js_process_hrtime", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_chdir", VOID, &[I64]);
     module.declare_function("js_process_kill", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_process_exit", VOID, &[DOUBLE]);

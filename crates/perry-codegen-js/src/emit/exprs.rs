@@ -536,6 +536,13 @@ impl JsEmitter {
             Expr::ProcessHrtimeBigint => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.hrtime.bigint() : BigInt(Date.now()) * 1000000n)");
             }
+            Expr::ProcessHrtime(prior) => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.hrtime === 'function' ? process.hrtime(");
+                if let Some(p) = prior {
+                    self.emit_expr(p);
+                }
+                self.output.push_str(") : [0, 0])");
+            }
             Expr::ProcessNextTick { callback, args } => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.nextTick(");
                 self.emit_expr(callback);

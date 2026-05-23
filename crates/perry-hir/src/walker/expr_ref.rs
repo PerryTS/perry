@@ -1044,6 +1044,11 @@ where
                 f(v);
             }
         }
+        Expr::ProcessHrtime(opt) => {
+            if let Some(v) = opt {
+                f(v);
+            }
+        }
         Expr::ChildProcessExecSync { command, options } => {
             f(command);
             if let Some(o) = options {

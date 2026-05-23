@@ -97,6 +97,7 @@ impl SH for Expr {
             Expr::ProcessCpuUsage(e) => { tag(h, 11231); e.hash(h); }
             Expr::ProcessResourceUsage => tag(h, 11232),
             Expr::ProcessActiveResourcesInfo => tag(h, 11233),
+            Expr::ProcessHrtime(e) => { tag(h, 11234); e.hash(h); }
             Expr::ProcessStdin => tag(h, 70),
             Expr::ProcessStdout => tag(h, 71),
             Expr::ProcessStderr => tag(h, 72),

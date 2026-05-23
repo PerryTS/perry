@@ -588,6 +588,66 @@ pub extern "C" fn js_process_hrtime_bigint() -> f64 {
     js_nanbox_bigint(bi as i64)
 }
 
+/// process.hrtime(prior?) -> [seconds, nanoseconds] integer array.
+/// Uses the same monotonic baseline as `hrtime.bigint()` (`get_hrtime_start`)
+/// — they share a single point of origin, so successive readings on
+/// either form are comparable. With a prior `[secs, nanos]` array, the
+/// diff is returned (clamped to non-negative).
+#[no_mangle]
+pub extern "C" fn js_process_hrtime(prior: f64) -> f64 {
+    use crate::value::JSValue;
+    let elapsed = get_hrtime_start().elapsed();
+    let total_ns = elapsed.as_nanos() as u64 + 1_000_000_000;
+    let mut secs = (total_ns / 1_000_000_000) as i64;
+    let mut nanos = (total_ns % 1_000_000_000) as i64;
+
+    let undef_bits = crate::value::TAG_UNDEFINED;
+    if prior.to_bits() != undef_bits {
+        let (prev_s, prev_ns) = extract_hrtime_prior(prior);
+        let mut diff_s = secs - prev_s;
+        let mut diff_ns = nanos - prev_ns;
+        if diff_ns < 0 {
+            diff_s -= 1;
+            diff_ns += 1_000_000_000;
+        }
+        if diff_s < 0 {
+            diff_s = 0;
+            diff_ns = 0;
+        }
+        secs = diff_s;
+        nanos = diff_ns;
+    }
+
+    let arr = crate::array::js_array_alloc(2);
+    let arr = crate::array::js_array_push(arr, JSValue::number(secs as f64));
+    let arr = crate::array::js_array_push(arr, JSValue::number(nanos as f64));
+    f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+}
+
+/// Read the two numeric fields of a prior hrtime tuple (an array). The
+/// array's two leading slots are coerced to integer seconds and nanos.
+fn extract_hrtime_prior(value: f64) -> (i64, i64) {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return (0, 0);
+    }
+    let arr = jv.as_pointer::<crate::array::ArrayHeader>();
+    if arr.is_null() {
+        return (0, 0);
+    }
+    let secs = crate::array::js_array_get(arr, 0).to_number();
+    let nanos = crate::array::js_array_get(arr, 1).to_number();
+    let to_i64 = |v: f64| -> i64 {
+        if v.is_nan() || v.is_infinite() {
+            0
+        } else {
+            v as i64
+        }
+    };
+    (to_i64(secs), to_i64(nanos))
+}
+
 // process.on/once handlers, partitioned by event name. Today only
 // 'uncaughtException' actually fires from the runtime (during the diag
 // uncaught-drain hook); 'exit' and any other event names are stored so

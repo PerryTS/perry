@@ -229,6 +229,17 @@ pub(super) fn try_native_module_methods(
                         "getActiveResourcesInfo" => {
                             return Ok(Ok(Expr::ProcessActiveResourcesInfo));
                         }
+                        "hrtime" => {
+                            // process.hrtime(prior?) — [secs, nanos] from a
+                            // monotonic clock. With prior, returns the diff.
+                            // `process.hrtime.bigint()` is intercepted earlier.
+                            let prior = if !args.is_empty() {
+                                Some(Box::new(args.into_iter().next().unwrap()))
+                            } else {
+                                None
+                            };
+                            return Ok(Ok(Expr::ProcessHrtime(prior)));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }

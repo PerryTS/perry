@@ -434,8 +434,8 @@ pub enum Expr {
     ProcessVersion,
     // Process versions object: process.versions -> { node, v8, ... }
     ProcessVersions,
-    // process.hrtime.bigint() -> bigint (nanoseconds since arbitrary point)
-    ProcessHrtimeBigint,
+    ProcessHrtimeBigint, // process.hrtime.bigint() -> bigint (nanoseconds since arbitrary point)
+    ProcessHrtime(Option<Box<Expr>>), // process.hrtime(prior?) -> [secs, nanos] (diff if prior) (#1345)
     // process.nextTick(callback, ...args) -> void.
     // Trailing args are forwarded to the callback when it fires (#1351).
     ProcessNextTick {

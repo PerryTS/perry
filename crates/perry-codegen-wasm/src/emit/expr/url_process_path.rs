@@ -102,6 +102,7 @@ impl<'a> FuncEmitCtx<'a> {
             | Expr::ProcessVersion
             | Expr::ProcessVersions
             | Expr::ProcessHrtimeBigint
+            | Expr::ProcessHrtime(_)
             | Expr::ProcessStdin
             | Expr::ProcessStdout
             | Expr::ProcessStderr

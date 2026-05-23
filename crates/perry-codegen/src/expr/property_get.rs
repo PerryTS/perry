@@ -555,6 +555,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         | "cpuUsage"
                         | "resourceUsage"
                         | "getActiveResourcesInfo"
+                        | "hrtime"
                 ) {
                     let mod_idx = ctx.strings.intern("process");
                     let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);

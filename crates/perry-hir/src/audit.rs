@@ -284,6 +284,7 @@ fn specialized_stdlib_call(expr: &Expr) -> Option<(&'static str, &'static str)> 
         Expr::ProcessCpuUsage(_) => ("process", "cpuUsage"),
         Expr::ProcessResourceUsage => ("process", "resourceUsage"),
         Expr::ProcessActiveResourcesInfo => ("process", "getActiveResourcesInfo"),
+        Expr::ProcessHrtime(_) => ("process", "hrtime"),
         Expr::ProcessStdinIsTTY => ("process", "stdin.isTTY"),
         Expr::ProcessStdoutIsTTY => ("process", "stdout.isTTY"),
         Expr::ProcessStderrIsTTY => ("process", "stderr.isTTY"),
