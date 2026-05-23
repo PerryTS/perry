@@ -1519,5 +1519,53 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: write after destroy(err) should emit additional error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/repipe-after-unpipe": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: re-piping after unpipe does not flow / sink does not end. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/promises/finished-with-signal": {
+    "issue": "1533",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/promises: finished with signal does not reject on abort. Flips to PASS when #1533 lands."
+  },
+  "node-suite/stream/promises/pipeline-with-signal": {
+    "issue": "1533",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/promises: pipeline with signal does not reject on abort. Flips to PASS when #1533 lands."
+  },
+  "node-suite/stream/readable/no-options-defaults": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: new Readable() with no options does not expose default flags + hwm. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/readable/read-zero": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: read(0) special case not handled. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/web/transform-stream-with-hwm": {
+    "issue": "1545",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/web: TransformStream with custom queuing strategies not implemented. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/web/writer-write-returns-promise": {
+    "issue": "1545",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/web: writer.write does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/writable/uncork-chainable": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: cork / uncork return type wrong. Flips to PASS when #1531 lands."
   }
 }
