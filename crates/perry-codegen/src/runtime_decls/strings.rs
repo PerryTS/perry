@@ -1281,6 +1281,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("setInterval", I64, &[I64, DOUBLE]);
     module.declare_function("clearTimeout", VOID, &[I64]);
     module.declare_function("clearInterval", VOID, &[I64]);
+    module.declare_function("js_clear_timeout_value", VOID, &[DOUBLE]);
+    module.declare_function("js_clear_interval_value", VOID, &[DOUBLE]);
     module.declare_function("js_buffer_from_array", I64, &[I64]);
     module.declare_function("js_buffer_from_arraybuffer_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_buffer_length", I32, &[I64]);

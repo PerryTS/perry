@@ -148,19 +148,19 @@ pub fn try_lower_extern_func_call(
             return Ok(Some(nanbox_pointer_inline(blk, &id)));
         }
         "clearTimeout" if args.len() == 1 => {
+            // Pass the raw NaN-boxed arg so the runtime accepts both the
+            // handle and its primitive numeric id (`clearTimeout(+t)`, #1213).
             let id_box = lower_expr(ctx, &args[0])?;
-            let blk = ctx.block();
-            let id_handle = unbox_to_i64(blk, &id_box);
-            blk.call_void("clearTimeout", &[(I64, &id_handle)]);
+            ctx.block()
+                .call_void("js_clear_timeout_value", &[(DOUBLE, &id_box)]);
             return Ok(Some(double_literal(f64::from_bits(
                 crate::nanbox::TAG_UNDEFINED,
             ))));
         }
         "clearInterval" if args.len() == 1 => {
             let id_box = lower_expr(ctx, &args[0])?;
-            let blk = ctx.block();
-            let id_handle = unbox_to_i64(blk, &id_box);
-            blk.call_void("clearInterval", &[(I64, &id_handle)]);
+            ctx.block()
+                .call_void("js_clear_interval_value", &[(DOUBLE, &id_box)]);
             return Ok(Some(double_literal(f64::from_bits(
                 crate::nanbox::TAG_UNDEFINED,
             ))));

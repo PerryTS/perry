@@ -526,6 +526,40 @@ pub extern "C" fn clearTimeout(timer_id: i64) {
     intervals.retain(|t| !t.cleared);
 }
 
+/// Resolve a `clearTimeout`/`clearInterval` argument to a timer id. Accepts
+/// both the Timeout/Immediate handle (POINTER_TAG, lower 48 bits = id) and the
+/// primitive numeric id (`+timeout`), so `clearTimeout(+t)` works (#1213).
+/// Returns `None` for nullish/other values (a no-op clear, matching Node).
+fn arg_to_timer_id(arg: f64) -> Option<i64> {
+    let v = crate::value::JSValue::from_bits(arg.to_bits());
+    if v.is_int32() {
+        Some(v.as_int32() as i64)
+    } else if v.is_number() {
+        let n = v.as_number();
+        n.is_finite().then_some(n as i64)
+    } else if v.is_pointer() {
+        Some((arg.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64)
+    } else {
+        None
+    }
+}
+
+/// `clearTimeout(handleOrId)` — accepts the handle or its numeric id (#1213).
+#[no_mangle]
+pub extern "C" fn js_clear_timeout_value(arg: f64) {
+    if let Some(id) = arg_to_timer_id(arg) {
+        clearTimeout(id);
+    }
+}
+
+/// `clearInterval(handleOrId)` — accepts the handle or its numeric id (#1213).
+#[no_mangle]
+pub extern "C" fn js_clear_interval_value(arg: f64) {
+    if let Some(id) = arg_to_timer_id(arg) {
+        clearInterval(id);
+    }
+}
+
 // ============================================================================
 // setInterval / clearInterval support
 // ============================================================================
