@@ -1757,6 +1757,9 @@ fn is_timer_handle_method_key(key: &[u8]) -> bool {
             | b"refresh"
             | b"close"
             | b"__perry_dispose__"
+            // `using t = setTimeout(...)` / `t[Symbol.dispose]` — the
+            // well-known dispose symbol lowers to this key. (#1213)
+            | b"@@__perry_wk_dispose"
             | b"@@__perry_wk_toPrimitive"
     )
 }

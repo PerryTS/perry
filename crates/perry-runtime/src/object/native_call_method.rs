@@ -250,7 +250,10 @@ pub unsafe extern "C" fn js_native_call_method(
                         crate::timer::clearInterval(id);
                         return object;
                     }
-                    "__perry_dispose__" => {
+                    // `__perry_dispose__` is the class-member form; the
+                    // well-known `Symbol.dispose` computed form lowers to
+                    // `@@__perry_wk_dispose`. Both clear the timer (#1213).
+                    "__perry_dispose__" | "@@__perry_wk_dispose" => {
                         crate::timer::clearTimeout(id);
                         crate::timer::clearInterval(id);
                         return f64::from_bits(JSValue::undefined().bits());
