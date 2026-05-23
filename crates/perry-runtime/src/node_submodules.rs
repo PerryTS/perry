@@ -93,14 +93,27 @@ macro_rules! thunk {
     };
 }
 
-thunk!(
-    thunk_timers_setTimeout,
-    "node:timers/promises.setTimeout is not yet implemented in Perry (tracked by issue #793)."
-);
-thunk!(
-    thunk_timers_setImmediate,
-    "node:timers/promises.setImmediate is not yet implemented in Perry (tracked by issue #793)."
-);
+/// node:timers/promises.setTimeout(delay, value?) — a Promise that resolves
+/// with `value` (or undefined) after `delay` ms. Composes the existing
+/// promise-returning timer primitive; the closure dispatch pads a missing
+/// `value` arg with undefined (arity registered in `ensure_export_singleton`).
+/// Refs #1213.
+extern "C" fn timers_promises_set_timeout(
+    _closure: *const ClosureHeader,
+    delay_ms: f64,
+    value: f64,
+) -> f64 {
+    let promise = crate::timer::js_set_timeout_value(delay_ms, value);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+/// node:timers/promises.setImmediate(value?) — a Promise that resolves with
+/// `value` (or undefined) on a later turn. Refs #1213.
+extern "C" fn timers_promises_set_immediate(_closure: *const ClosureHeader, value: f64) -> f64 {
+    let promise = crate::timer::js_set_timeout_value(0.0, value);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
 thunk!(
     thunk_timers_setInterval,
     "node:timers/promises.setInterval is not yet implemented in Perry (tracked by issue #793)."
@@ -1238,11 +1251,11 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "setTimeout",
-                thunk: ExportThunk::Fn1(thunk_timers_setTimeout),
+                thunk: ExportThunk::Fn2(timers_promises_set_timeout),
             },
             ExportSpec {
                 name: "setImmediate",
-                thunk: ExportThunk::Fn1(thunk_timers_setImmediate),
+                thunk: ExportThunk::Fn1(timers_promises_set_immediate),
             },
             ExportSpec {
                 name: "setInterval",
@@ -1435,6 +1448,16 @@ fn ensure_export_singleton(
             "subscribe" | "unsubscribe" => 2,
             "channel" | "hasSubscribers" | "tracingChannel" => 1,
             "publish" => 2,
+            _ => 1,
+        };
+        js_register_closure_arity(thunk_ptr, arity);
+    }
+    // #1213: timers/promises.setTimeout takes (delay, value); registering the
+    // arity makes the closure dispatch pad a missing `value` with undefined.
+    if submod.key == "timers_promises" {
+        let arity = match export.name {
+            "setTimeout" => 2,
+            "setImmediate" => 1,
             _ => 1,
         };
         js_register_closure_arity(thunk_ptr, arity);

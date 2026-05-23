@@ -1,2 +1,0 @@
-setTimeout error node:timers/promises.setTimeout is not yet implemented in Perry (tracked by issue #793).
-setImmediate error node:timers/promises.setImmediate is not yet implemented in Perry (tracked by issue #793).
