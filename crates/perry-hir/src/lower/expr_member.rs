@@ -129,6 +129,14 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     // and downstream `if (process.send)` /
                     // `if (process.connected)` guards do the right thing.
                     "send" | "disconnect" | "connected" => return Ok(Expr::Undefined),
+                    // #1349: process.execArgv is the array of runtime CLI
+                    // flags the interpreter was started with (`["--inspect",
+                    // ...]` for Node). Perry binaries are AOT — there's no
+                    // runtime flag list to forward — so the empty array is
+                    // the correct shape. Without this, the bare read
+                    // returns a 0 sentinel and `Array.isArray(...)` /
+                    // `.length` / iteration all explode.
+                    "execArgv" => return Ok(Expr::Array(Vec::new())),
                     _ => {}
                 }
             }
@@ -189,6 +197,7 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     "versions" => return Ok(Expr::ProcessVersions),
                     "env" => return Ok(Expr::ProcessEnv),
                     "send" | "disconnect" | "connected" => return Ok(Expr::Undefined),
+                    "execArgv" => return Ok(Expr::Array(Vec::new())),
                     _ => {}
                 }
             }
