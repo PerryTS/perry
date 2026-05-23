@@ -601,14 +601,15 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             {
                                 return Ok(Expr::String("function".to_string()));
                             }
-                            // #1410: `typeof process.ref` / `typeof process.unref`.
-                            // The methods are pure no-op stubs that lower to
-                            // `Expr::Undefined` when called; a bare member
-                            // read still falls through to the generic process
-                            // member path (returns 0 / "number" typeof), so
-                            // fold to "function" here to match Node.
+                            // #1410 / #1400: `typeof process.ref` / `typeof
+                            // process.unref` / `typeof process.setSourceMapsEnabled`.
+                            // These methods lower to `Expr::Undefined` /
+                            // no-ops when called; a bare member read still
+                            // falls through to the generic process member
+                            // path (returns 0 / "number" typeof), so fold
+                            // to "function" here to match Node.
                             if obj_name == "process"
-                                && matches!(prop_name, "ref" | "unref")
+                                && matches!(prop_name, "ref" | "unref" | "setSourceMapsEnabled")
                                 && ctx.lookup_local("process").is_none()
                             {
                                 return Ok(Expr::String("function".to_string()));

@@ -96,6 +96,16 @@ pub(super) fn try_native_module_methods(
                             // "value is not a function".
                             return Ok(Ok(Expr::Undefined));
                         }
+                        "setSourceMapsEnabled" => {
+                            // #1400: process.setSourceMapsEnabled(bool) —
+                            // toggles runtime source-map resolution in Node.
+                            // Perry compiles AOT and has no resolver to
+                            // toggle, so the call is a no-op returning
+                            // undefined. Without this, framework startup
+                            // code that conditionally enables maps crashes
+                            // on "value is not a function".
+                            return Ok(Ok(Expr::Undefined));
+                        }
                         "exit" => {
                             // process.exit() / process.exit(code) — never
                             // returns, terminates the process. Until now this

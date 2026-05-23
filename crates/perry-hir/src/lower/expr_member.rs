@@ -161,6 +161,15 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     // runtime's `node:dgram`/network stack handles it) —
                     // the literal mirrors what we actually link in.
                     "features" => return Ok(process_features_literal()),
+                    // #1400: process.sourceMapsEnabled — boolean indicating
+                    // whether the runtime's source-map support is on. Perry
+                    // compiles AOT and doesn't ship a source-map resolver,
+                    // so the value is always false. Without this arm the
+                    // bare read returned a 0 sentinel — falsy in a boolean
+                    // context but `typeof` was `"number"`, so libraries
+                    // doing `typeof process.sourceMapsEnabled === "boolean"`
+                    // bailed out (e.g. some Vitest stack-trace formatters).
+                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
                     _ => {}
                 }
             }
@@ -230,6 +239,7 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                         ]));
                     }
                     "features" => return Ok(process_features_literal()),
+                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
                     _ => {}
                 }
             }
