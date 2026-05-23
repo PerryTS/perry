@@ -1321,7 +1321,8 @@ fn unix_ctime_ms(_meta: &fs::Metadata) -> Option<f64> {
 #[cfg(unix)]
 fn metadata_times_ns(meta: &fs::Metadata) -> (i64, i64, i64, i64) {
     let to_ns = |secs: i64, nsecs: i64| -> i64 {
-        secs.saturating_mul(1_000_000_000).saturating_add(nsecs.max(0))
+        secs.saturating_mul(1_000_000_000)
+            .saturating_add(nsecs.max(0))
     };
     let a = to_ns(meta.atime(), meta.atime_nsec());
     let m = to_ns(meta.mtime(), meta.mtime_nsec());
@@ -2810,8 +2811,7 @@ pub extern "C" fn js_fs_readv_sync(fd_value: f64, buffers_value: f64, position_v
                 let mut filled = 0usize;
                 let mut eof = false;
                 while filled < cap {
-                    let slice =
-                        std::slice::from_raw_parts_mut(data.add(filled), cap - filled);
+                    let slice = std::slice::from_raw_parts_mut(data.add(filled), cap - filled);
                     match file.read(slice) {
                         Ok(0) => {
                             eof = true;
@@ -4315,11 +4315,14 @@ unsafe fn fs_callback_lstat_error(path_value: f64, syscall: &'static str) -> Opt
 /// where the target file is allowed to not exist yet.
 unsafe fn fs_callback_write_parent_error(path_value: f64, syscall: &'static str) -> Option<f64> {
     let path = decode_path_value(path_value)?;
-    let parent = std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new("."));
+    let parent = std::path::Path::new(&path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
     match fs::metadata(parent) {
         Ok(meta) if meta.is_dir() => None,
         Ok(_) => {
-            let err = std::io::Error::new(std::io::ErrorKind::NotFound, "parent is not a directory");
+            let err =
+                std::io::Error::new(std::io::ErrorKind::NotFound, "parent is not a directory");
             Some(build_fs_error_value(&err, syscall, &path))
         }
         Err(err) => Some(build_fs_error_value(&err, syscall, &path)),
@@ -4896,7 +4899,10 @@ pub extern "C" fn js_fs_open_callback(path_value: f64, arg1: f64, arg2: f64, arg
 /// Exposed at `pub(crate)` so `node_submodules::thunk_fs_promises_open` can
 /// turn the io::Error into a rejected Promise instead of resolving with a
 /// FileHandle whose `fd === -1`.
-pub(crate) unsafe fn fs_promises_open_probe_error(path_value: f64, flags_value: f64) -> Option<f64> {
+pub(crate) unsafe fn fs_promises_open_probe_error(
+    path_value: f64,
+    flags_value: f64,
+) -> Option<f64> {
     // Only probe for read-only flags; anything that may create the file —
     // including numeric `O_CREAT|…` bitsets — is left to the underlying
     // open so it can succeed when the file doesn't exist yet.

@@ -49,6 +49,13 @@ pub(super) fn try_module_class_static(
                                 | ("fs", "constants")
                                 | ("path", "posix")
                                 | ("path", "win32")
+                                // #1320: `PerformanceObserver.supportedEntryTypes`
+                                // is a static *array value*, not a class — so
+                                // `…supportedEntryTypes.includes(x)` is a value
+                                // method, not a class static. Fall through to
+                                // value-method dispatch instead of building a
+                                // bogus NativeMethodCall(class="supportedEntryTypes").
+                                | ("perf_hooks", "supportedEntryTypes")
                         );
                         // Unimplemented-API gate (#463) for the chained
                         // `mod.X.Y()` case. The lower_member gate fires

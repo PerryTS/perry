@@ -28,9 +28,8 @@ use crate::request::{
 };
 use crate::response::{alloc_server_response, HyperResponseShape, ServerResponse};
 use crate::types::{
-    extract_host, extract_port, js_gc_enter_unsafe_zone, js_gc_exit_unsafe_zone,
-    js_promise_run_microtasks, js_promise_state, jsvalue_to_owned_string, read_string_header,
-    Promise, POINTER_TAG, PTR_MASK, TAG_NULL,
+    extract_host, extract_port, js_promise_run_microtasks, js_promise_state,
+    jsvalue_to_owned_string, read_string_header, Promise, POINTER_TAG, PTR_MASK, TAG_NULL,
 };
 
 /// Backing struct for an `http.Server` JS-side handle.
@@ -133,9 +132,10 @@ pub unsafe extern "C" fn js_node_http_server_listen(
         return;
     }
 
-    // Mark GC-unsafe — request closures dispatch on tokio worker
-    // threads whose stacks the main-thread GC can't scan (issue #31).
-    js_gc_enter_unsafe_zone();
+    // Hyper workers queue Rust request handles; JS callbacks run later in
+    // `js_node_http_server_process_pending` on the main thread. Keeping the
+    // whole listener lifetime in a GC-unsafe zone would disable `gc()` for
+    // long-running servers without adding safety.
 
     let request_tx = Arc::new(request_tx);
     let upgrade_tx = Arc::new(upgrade_tx);
@@ -246,14 +246,6 @@ pub unsafe extern "C" fn js_node_http_server_close(server_handle: i64, callback:
             let _ = closure.call0();
         }
     }
-    // Closes #604 — match the `js_gc_enter_unsafe_zone` from
-    // `js_node_http_server_listen`. Pre-#604 this exit lived in
-    // `event_loop`'s tail; with `listen()` now non-blocking, it moves
-    // here so the GC stays suppressed for the lifetime of the listening
-    // server but is restored once the user explicitly closes it. If
-    // multiple servers are listening, every close balances one enter
-    // (the runtime's unsafe-zone counter is reentrant).
-    js_gc_exit_unsafe_zone();
 }
 
 /// `server.closeAllConnections()` — placeholder. Active hyper

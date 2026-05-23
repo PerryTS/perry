@@ -1856,6 +1856,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("path", "posix"),
     property("path", "win32"),
     // process — properties mapped to Expr::Process* / Expr::Os* in expr_member.rs.
+    method("process", "abort", false, None),
     property("process", "argv"),
     property("process", "platform"),
     property("process", "arch"),
@@ -2218,9 +2219,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perf_hooks", "clearResourceTimings", false, None),
     method("perf_hooks", "setResourceTimingBufferSize", false, None),
     property("perf_hooks", "timeOrigin"),
+    property("perf_hooks", "nodeTiming"),
     property("perf_hooks", "performance"),
     property("perf_hooks", "constants"),
     class("perf_hooks", "PerformanceObserver"),
+    // PerformanceObserver.supportedEntryTypes — static array of entry-type
+    // names. Read inline (`PerformanceObserver.supportedEntryTypes.includes(...)`)
+    // it resolves as a perf_hooks property; declare it so the read isn't gated.
+    property("perf_hooks", "supportedEntryTypes"),
     class("perf_hooks", "PerformanceEntry"),
     class("perf_hooks", "PerformanceMark"),
     class("perf_hooks", "PerformanceMeasure"),

@@ -34,7 +34,14 @@ def gc_cycle(
     *,
     eligible=True,
     conservative_pinned_bytes=0,
+    compiled_frame_conservative_pinned_bytes=0,
+    runtime_conservative_pinned_bytes=0,
+    conservative_stack_truncated=False,
+    conservative_stack_unbounded=False,
     legacy_pinned_bytes=0,
+    legacy_emitted_young_roots=0,
+    legacy_emitted_malloc_roots=0,
+    legacy_sources=None,
     malloc_registry_rebuilds=0,
     malloc_kinds=None,
     layout_scans=None,
@@ -43,8 +50,20 @@ def gc_cycle(
     cycle = {
         "event": "gc_cycle",
         "conservative_pinned_bytes": conservative_pinned_bytes,
+        "compiled_frame_conservative_pinned_bytes": (
+            compiled_frame_conservative_pinned_bytes
+        ),
+        "runtime_conservative_pinned_bytes": runtime_conservative_pinned_bytes,
+        "conservative_stack_scan_bytes": 0,
+        "conservative_stack_scan_limit_bytes": 8 * 1024 * 1024,
+        "conservative_stack_truncated": conservative_stack_truncated,
+        "conservative_stack_unbounded": conservative_stack_unbounded,
+        "conservative_sources": {},
         "legacy_copy_only_scanner_pinned": {
             "bytes": legacy_pinned_bytes,
+            "emitted_young_roots": legacy_emitted_young_roots,
+            "emitted_malloc_roots": legacy_emitted_malloc_roots,
+            "sources": legacy_sources or {},
         },
         "copying_nursery": {
             "fallback_reason": fallback_reason,
@@ -228,6 +247,79 @@ class CopiedMinorFallbackReportTests(unittest.TestCase):
         self.assertNotEqual(exit_code, 0)
         self.assertIn("conservative_pinned_bytes=32, want 0", stderr)
 
+    def test_strict_mode_fails_compiled_frame_pinned_bytes(self):
+        exit_code, stderr, _ = self.run_report(
+            {
+                "json_roundtrip": [
+                    gc_cycle(compiled_frame_conservative_pinned_bytes=16),
+                ]
+            },
+            strict=True,
+        )
+
+        self.assertNotEqual(exit_code, 0)
+        self.assertIn(
+            "compiled_frame_conservative_pinned_bytes=16, want 0",
+            stderr,
+        )
+
+    def test_strict_mode_fails_truncated_or_unbounded_conservative_stack(self):
+        exit_code, stderr, _ = self.run_report(
+            {
+                "json_roundtrip": [
+                    gc_cycle(conservative_stack_truncated=True),
+                    gc_cycle(conservative_stack_unbounded=True),
+                ]
+            },
+            strict=True,
+        )
+
+        self.assertNotEqual(exit_code, 0)
+        self.assertIn("conservative_stack_truncated cycles=1, want 0", stderr)
+        self.assertIn("conservative_stack_unbounded cycles=1, want 0", stderr)
+
+    def test_strict_mode_fails_unattributed_root_emissions(self):
+        exit_code, stderr, _ = self.run_report(
+            {
+                "json_roundtrip": [
+                    gc_cycle(
+                        legacy_sources={
+                            "unattributed": {
+                                "emitted_roots": 1,
+                            }
+                        }
+                    ),
+                ]
+            },
+            strict=True,
+        )
+
+        self.assertNotEqual(exit_code, 0)
+        self.assertIn("unattributed root scanner emitted roots=1, want 0", stderr)
+
+    def test_strict_mode_fails_copy_only_young_and_malloc_emissions(self):
+        exit_code, stderr, _ = self.run_report(
+            {
+                "json_roundtrip": [
+                    gc_cycle(
+                        legacy_emitted_young_roots=2,
+                        legacy_emitted_malloc_roots=1,
+                    ),
+                ]
+            },
+            strict=True,
+        )
+
+        self.assertNotEqual(exit_code, 0)
+        self.assertIn(
+            "legacy_copy_only_scanner_pinned.emitted_young_roots=2, want 0",
+            stderr,
+        )
+        self.assertIn(
+            "legacy_copy_only_scanner_pinned.emitted_malloc_roots=1, want 0",
+            stderr,
+        )
+
     def test_strict_mode_fails_ineligible_cycles(self):
         exit_code, stderr, _ = self.run_report(
             {
@@ -347,13 +439,39 @@ class CopiedMinorFallbackReportTests(unittest.TestCase):
 
     def test_non_strict_mode_permits_known_fallback_reasons_for_reporting(self):
         exit_code, stderr, report = self.run_report(
-            {"json_roundtrip": [gc_cycle("copy_only_roots", eligible=False)]},
+            {
+                "json_roundtrip": [
+                    gc_cycle("copy_only_roots", eligible=False),
+                    gc_cycle("copy_only_roots", eligible=False),
+                    gc_cycle("conservative_stack_truncated", eligible=False),
+                    gc_cycle("conservative_stack_unbounded", eligible=False),
+                    gc_cycle("unattributed_root_source", eligible=False),
+                ]
+            },
         )
 
         self.assertEqual(exit_code, 0, stderr)
         self.assertEqual(
             report["workloads"]["json_roundtrip"]["fallback_reason_counts"][
                 "copy_only_roots"
+            ],
+            2,
+        )
+        self.assertEqual(
+            report["workloads"]["json_roundtrip"]["fallback_reason_counts"][
+                "conservative_stack_truncated"
+            ],
+            1,
+        )
+        self.assertEqual(
+            report["workloads"]["json_roundtrip"]["fallback_reason_counts"][
+                "conservative_stack_unbounded"
+            ],
+            1,
+        )
+        self.assertEqual(
+            report["workloads"]["json_roundtrip"]["fallback_reason_counts"][
+                "unattributed_root_source"
             ],
             1,
         )

@@ -250,7 +250,10 @@ pub unsafe extern "C" fn js_native_call_method(
                         crate::timer::clearInterval(id);
                         return object;
                     }
-                    "__perry_dispose__" => {
+                    // `__perry_dispose__` is the class-member form; the
+                    // well-known `Symbol.dispose` computed form lowers to
+                    // `@@__perry_wk_dispose`. Both clear the timer (#1213).
+                    "__perry_dispose__" | "@@__perry_wk_dispose" => {
                         crate::timer::clearTimeout(id);
                         crate::timer::clearInterval(id);
                         return f64::from_bits(JSValue::undefined().bits());
@@ -1678,6 +1681,20 @@ pub unsafe extern "C" fn js_native_call_method(
             }
             let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
             return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+        }
+
+        // #1387: synthesized `PerformanceEntry#toJSON()`. Entry objects are
+        // plain shaped objects with no stored `toJSON` field, so the
+        // field-scan dispatch below would miss it. A bound-method read (from
+        // the property-get intercept) routes here via `dispatch_bound_method`,
+        // and a direct `entry.toJSON()` call lands here too — both serialize
+        // the entry's fields into a plain object. Safe to read the header:
+        // `obj` is a validated heap object (gc_type read above).
+        if method_name == "toJSON"
+            && gc_type == crate::gc::GC_TYPE_OBJECT
+            && crate::perf_hooks::is_perf_entry_object(obj)
+        {
+            return crate::perf_hooks::perf_entry_to_json(object);
         }
 
         if gc_type != crate::gc::GC_TYPE_OBJECT {

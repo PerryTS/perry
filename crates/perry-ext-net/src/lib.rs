@@ -31,7 +31,7 @@
 //! for backwards compat; the well-known flip routes here.
 
 use perry_ffi::{
-    alloc_buffer, alloc_string, build_object_shape, gc_register_mutable_root_scanner,
+    alloc_buffer, alloc_string, build_object_shape, gc_register_mutable_root_scanner_named,
     js_object_alloc_with_shape, js_object_set_field, nanbox_string_bits, BufferHeader,
     GcRootVisitor, JsClosure, JsPromise, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
 };
@@ -160,7 +160,7 @@ static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 /// `js_net_*` entry point on the main thread.
 fn ensure_gc_scanner_registered() {
     NET_GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner(scan_net_roots);
+        gc_register_mutable_root_scanner_named("perry-ext-net", scan_net_roots);
     });
 }
 
@@ -1896,7 +1896,7 @@ mod tests {
     #[test]
     fn gc_mutable_scanner_rewrites_listener_roots() {
         let _guard = GcTestGuard::new();
-        perry_ffi::gc_register_mutable_root_scanner(scan_net_roots);
+        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-net", scan_net_roots);
 
         let socket_id = -9_001;
         let _cleanup = NetHandleCleanup::new(vec![socket_id]);

@@ -20,7 +20,7 @@
 //! `events.getMaxListeners` / `events.setMaxListeners` helpers.
 
 use perry_ffi::{
-    gc_register_mutable_root_scanner, get_handle_mut, iter_handles_of_mut, js_array_alloc,
+    gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut, js_array_alloc,
     js_array_get, js_array_push, nanbox_string_bits, read_string, register_handle, ArrayHeader,
     GcRootVisitor, Handle, JsClosure, JsPromise, JsString, JsValue, Promise, RawClosureHeader,
     StringHeader,
@@ -126,7 +126,7 @@ static EVENTS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 fn ensure_gc_scanner_registered() {
     EVENTS_GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner(scan_events_roots);
+        gc_register_mutable_root_scanner_named("perry-ext-events", scan_events_roots);
     });
 }
 
@@ -798,7 +798,7 @@ mod tests {
     #[test]
     fn gc_mutable_scanner_rewrites_listener_and_pending_promise_roots() {
         let _guard = GcTestGuard::new();
-        perry_ffi::gc_register_mutable_root_scanner(scan_events_roots);
+        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-events", scan_events_roots);
 
         let listener = young_gc_root();
         let promise = young_promise_root();

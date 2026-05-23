@@ -532,6 +532,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_chdir", VOID, &[I64]);
     module.declare_function("js_process_kill", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_process_exit", VOID, &[DOUBLE]);
+    module.declare_function("js_process_abort", VOID, &[]);
     module.declare_function("js_process_on", VOID, &[I64, I64]);
     module.declare_function("js_process_once", VOID, &[I64, I64]);
     module.declare_function("js_process_next_tick", VOID, &[I64]);
@@ -966,6 +967,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Microtask queue (queueMicrotask / process.nextTick).
     module.declare_function("js_queue_microtask", VOID, &[I64]);
     module.declare_function("js_queue_next_tick", VOID, &[I64]);
+    // #1351: process.nextTick(cb, ...args) — trailing args packed into a
+    // stack buffer of doubles, forwarded when the tick fires.
+    module.declare_function(
+        "js_queue_next_tick_args",
+        VOID,
+        &[I64, crate::types::PTR, I32],
+    );
     module.declare_function("js_drain_queued_microtasks", VOID, &[]);
     // Uint8Array constructor wrapper that flags the resulting buffer so the
     // formatter prints `Uint8Array(N) [ ... ]` instead of `<Buffer ...>`.
@@ -1355,6 +1363,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("setInterval", I64, &[I64, DOUBLE]);
     module.declare_function("clearTimeout", VOID, &[I64]);
     module.declare_function("clearInterval", VOID, &[I64]);
+    module.declare_function("js_clear_timeout_value", VOID, &[DOUBLE]);
+    module.declare_function("js_clear_interval_value", VOID, &[DOUBLE]);
     module.declare_function("js_buffer_from_array", I64, &[I64]);
     module.declare_function("js_buffer_from_arraybuffer_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_buffer_length", I32, &[I64]);

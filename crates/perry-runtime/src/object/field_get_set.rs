@@ -1213,9 +1213,7 @@ pub extern "C" fn js_object_get_field_by_name(
                     }
                     b"path" => {
                         let msg = crate::error::js_error_get_message(err_ptr);
-                        if let Some(path) =
-                            crate::node_submodules::error_path_for_message(msg)
-                        {
+                        if let Some(path) = crate::node_submodules::error_path_for_message(msg) {
                             let s = crate::string::js_string_from_bytes(
                                 path.as_ptr(),
                                 path.len() as u32,
@@ -1359,6 +1357,26 @@ pub extern "C" fn js_object_get_field_by_name(
             let object_type = (*obj).object_type;
             if object_type != crate::error::OBJECT_TYPE_REGULAR {
                 return JSValue::undefined();
+            }
+        }
+
+        // #1387: `PerformanceEntry#toJSON` is a synthesized (non-enumerable)
+        // method — entry objects are plain shaped objects with no stored
+        // `toJSON` field, so a `entry.toJSON` read (e.g. `typeof entry.toJSON`)
+        // would otherwise miss the keys_array and return undefined. Return a
+        // bound-method closure; the call lands in `js_native_call_method`'s
+        // toJSON arm via `dispatch_bound_method`. Gated on the key bytes first
+        // so non-toJSON reads pay only a length+compare, not the identity
+        // check.
+        if !key.is_null() {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            if key_bytes == b"toJSON" && crate::perf_hooks::is_perf_entry_object(obj) {
+                let this_f64 =
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                let result = js_class_method_bind(this_f64, b"toJSON".as_ptr(), 6);
+                return JSValue::from_bits(result.to_bits());
             }
         }
 
@@ -1787,6 +1805,9 @@ fn is_timer_handle_method_key(key: &[u8]) -> bool {
             | b"refresh"
             | b"close"
             | b"__perry_dispose__"
+            // `using t = setTimeout(...)` / `t[Symbol.dispose]` — the
+            // well-known dispose symbol lowers to this key. (#1213)
+            | b"@@__perry_wk_dispose"
             | b"@@__perry_wk_toPrimitive"
     )
 }
@@ -1835,6 +1856,23 @@ pub extern "C" fn js_object_get_field_ic_miss(
     // dispatch to the per-module accessor instead of silently
     // returning undefined.
     if (obj as usize) > 0 && (obj as usize) < 0x100000 {
+        // #1213: Timeout/Immediate handle methods (ref/unref/hasRef/refresh/
+        // close) read as bound-method function values so `typeof t.ref ===
+        // "function"` holds (the call form already works via
+        // js_native_call_method). The IC fast path funnels small handles here,
+        // bypassing the identical block in `js_object_get_field_by_name`, so it
+        // must be mirrored.
+        unsafe {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            if is_timer_handle_method_key(key_bytes) && crate::timer::is_known_timer_id(obj as i64)
+            {
+                let this_f64 =
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                return super::js_class_method_bind(this_f64, key_ptr, key_len);
+            }
+        }
         // Drizzle-sqlite blocker: synth `data.constructor` for small-handle
         // receivers — IC-miss path mirror of the constructor intercept in
         // `js_object_get_field_by_name`. Refs #645 deeper followup.

@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 
 use super::context::{extract_buffer_bytes, BodyKind};
-use super::{ClosurePtr, FastifyApp, FastifyContext};
+use super::{ClosurePtr, FastifyApp, FastifyContext, RoutePattern};
 use crate::common::{for_each_handle_of, get_handle, register_handle, Handle, RUNTIME};
 
 struct ClosureCallResult {
@@ -31,6 +31,21 @@ enum HookOutcome {
     Continue,
     Sent,
     Error(f64),
+}
+
+#[derive(Clone)]
+struct RouteMatcher {
+    method: String,
+    pattern: RoutePattern,
+}
+
+impl RouteMatcher {
+    fn from_route(route: &super::Route) -> Self {
+        Self {
+            method: route.method.clone(),
+            pattern: route.pattern.clone(),
+        }
+    }
 }
 
 /// Server handle for managing the running server.
@@ -106,19 +121,23 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
 
     let request_tx = Arc::new(request_tx);
 
-    // Clone app for matching in the server task
+    // Snapshot only match metadata for worker tasks. Handler closure
+    // pointers stay in the FastifyApp handle and are read by the
+    // main-thread pump during dispatch.
     let app_for_server = if let Some(app) = get_handle::<FastifyApp>(app_handle) {
-        app.routes.clone()
+        app.routes
+            .iter()
+            .map(RouteMatcher::from_route)
+            .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
     let routes_arc = Arc::new(app_for_server);
 
-    // Fastify dispatches request callbacks on tokio worker threads whose
-    // stacks the main-thread GC can't scan. Mark GC-unsafe so user-level
-    // `gc()` calls from setInterval don't collect objects still
-    // referenced from worker stacks (issue #31).
-    perry_runtime::gc::js_gc_enter_unsafe_zone();
+    // Tokio workers only match routes and queue raw request data here.
+    // User hooks/handlers run later in `js_fastify_process_pending` on
+    // the main thread, with closure slots covered by the Fastify root
+    // scanner, so this listener lifetime must not suppress GC.
 
     // Spawn the server
     let routes_for_spawn = routes_arc.clone();
@@ -230,7 +249,7 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
 async fn handle_request(
     req: Request<Incoming>,
     request_tx: Arc<mpsc::Sender<FastifyPendingRequest>>,
-    routes: Arc<Vec<super::Route>>,
+    routes: Arc<Vec<RouteMatcher>>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().to_string();
     let uri = req.uri();
@@ -1126,8 +1145,6 @@ pub unsafe extern "C" fn js_fastify_close(server_handle: Handle) -> bool {
         if let Some(tx) = server.shutdown_tx.take() {
             let _ = tx.send(());
         }
-        // Re-balance the `js_gc_enter_unsafe_zone` from listen().
-        perry_runtime::gc::js_gc_exit_unsafe_zone();
         return true;
     }
     false

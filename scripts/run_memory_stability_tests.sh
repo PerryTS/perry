@@ -1752,6 +1752,11 @@ run_test test-files/test_gc_aggressive_forced.ts    50 "done, acc=8022890"
 run_test test-files/test_gc_deep_recursion.ts       30 "done, result=320400"
 
 echo ""
+echo "=== Server GC unsafe-zone regression tests ==="
+run_canary "issue #1425 Fastify/ws manual gc" \
+    tests/test_issue_1425_gc_unsafe_zones.sh
+
+echo ""
 echo "=== Forced-evacuation verifier canaries ==="
 run_canary "evacuation verifier surfaces" \
     cargo test -p perry-runtime --release test_evacuation_verify

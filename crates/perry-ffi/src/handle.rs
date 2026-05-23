@@ -39,7 +39,7 @@
 //! [`with_handle`] which scopes the borrow under a closure.
 
 use std::any::Any;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -61,20 +61,27 @@ static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> = Lazy::new(Da
 static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
 static ROOT_SCANNERS: Lazy<Mutex<Vec<fn(&mut dyn FnMut(f64))>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
-static MUTABLE_ROOT_SCANNERS: Lazy<Mutex<Vec<GcMutableRootScanner>>> =
+static MUTABLE_ROOT_SCANNERS: Lazy<Mutex<Vec<NamedGcMutableRootScanner>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
 
 thread_local! {
     static ROOT_SCANNER_TRAMPOLINE_REGISTERED: Cell<bool> = const { Cell::new(false) };
-    static MUTABLE_ROOT_SCANNER_TRAMPOLINE_REGISTERED: Cell<bool> = const { Cell::new(false) };
+    static MUTABLE_ROOT_SCANNER_TRAMPOLINES_REGISTERED: RefCell<Vec<usize>> = const {
+        RefCell::new(Vec::new())
+    };
 }
 
 type PerryFfiRootMarker = extern "C" fn(value: f64, ctx: *mut c_void);
 type PerryFfiRootScanner = extern "C" fn(mark: PerryFfiRootMarker, ctx: *mut c_void);
 type PerryFfiMutableRootVisitor =
     extern "C" fn(kind: u32, slot: *mut c_void, ctx: *mut c_void) -> bool;
-type PerryFfiMutableRootScanner =
-    extern "C" fn(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void);
+type PerryFfiNamedMutableRootScanner =
+    extern "C" fn(scanner_id: usize, visit: PerryFfiMutableRootVisitor, ctx: *mut c_void);
+
+#[derive(Clone, Copy)]
+struct NamedGcMutableRootScanner {
+    scanner: GcMutableRootScanner,
+}
 
 const FFI_ROOT_SLOT_I64: u32 = 1;
 const FFI_ROOT_SLOT_USIZE: u32 = 2;
@@ -84,7 +91,12 @@ const FFI_ROOT_SLOT_NANBOX_U64: u32 = 5;
 
 extern "C" {
     fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanner);
-    fn perry_ffi_gc_register_mutable_root_scanner(scanner: PerryFfiMutableRootScanner);
+    fn perry_ffi_gc_register_mutable_root_scanner_named(
+        source_ptr: *const u8,
+        source_len: usize,
+        scanner_id: usize,
+        scanner: PerryFfiNamedMutableRootScanner,
+    );
 }
 
 /// Function pointer type for native wrappers that expose mutable GC root slots.
@@ -371,17 +383,19 @@ pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
     });
 }
 
-/// Register a mutable GC root scanner with Perry's runtime.
+/// Register an anonymous mutable GC root scanner with Perry's runtime.
 ///
-/// This is the preferred scanner API for native wrappers that keep Perry heap
-/// pointers in handle-owned Rust fields. Unlike [`gc_register_root_scanner`],
-/// this API exposes the actual slots, so copied-minor GC can rewrite them after
-/// moving young objects.
+/// This mutable scanner family is preferred for native wrappers that keep Perry
+/// heap pointers in handle-owned Rust fields. Unlike
+/// [`gc_register_root_scanner`], it exposes the actual slots, so copied-minor GC
+/// can rewrite them after moving young objects. Prefer
+/// [`gc_register_mutable_root_scanner_named`] for in-tree or package-owned
+/// scanners so GC diagnostics can attribute roots to the wrapper that owns them.
 ///
 /// Wrapper authors typically combine this with [`iter_handles_of_mut`]:
 ///
 /// ```ignore
-/// use perry_ffi::{gc_register_mutable_root_scanner, iter_handles_of_mut, GcRootVisitor};
+/// use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
 ///
 /// fn scan_my_roots(visitor: &mut GcRootVisitor<'_>) {
 ///     iter_handles_of_mut::<MyHandle, _>(|h| {
@@ -389,28 +403,58 @@ pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
 ///     });
 /// }
 ///
-/// gc_register_mutable_root_scanner(scan_my_roots);
+/// gc_register_mutable_root_scanner_named("my-wrapper", scan_my_roots);
 /// ```
 pub fn gc_register_mutable_root_scanner(scanner: GcMutableRootScanner) {
-    {
+    gc_register_mutable_root_scanner_named("ffi:anonymous", scanner);
+}
+
+/// Register a source-attributed mutable GC root scanner with Perry's runtime.
+///
+/// `source` should be a short, stable package or subsystem name such as
+/// `perry-ext-http-server`. It is copied into runtime GC diagnostics and
+/// verifier errors so native roots do not collapse behind `perry-ffi`'s shared
+/// dispatcher.
+pub fn gc_register_mutable_root_scanner_named(source: &'static str, scanner: GcMutableRootScanner) {
+    assert_valid_root_source(source);
+    let scanner_id = {
         let mut scanners = MUTABLE_ROOT_SCANNERS
             .lock()
             .expect("perry-ffi mutable root scanner registry poisoned");
-        if !scanners
+        if let Some((scanner_id, _)) = scanners
             .iter()
-            .any(|registered| *registered as usize == scanner as usize)
+            .enumerate()
+            .find(|(_, registered)| registered.scanner as usize == scanner as usize)
         {
-            scanners.push(scanner);
+            scanner_id
+        } else {
+            let scanner_id = scanners.len();
+            scanners.push(NamedGcMutableRootScanner { scanner });
+            scanner_id
         }
-    }
-    MUTABLE_ROOT_SCANNER_TRAMPOLINE_REGISTERED.with(|registered| {
-        if !registered.get() {
-            unsafe {
-                perry_ffi_gc_register_mutable_root_scanner(scan_registered_mutable_roots);
-            }
-            registered.set(true);
+    };
+    MUTABLE_ROOT_SCANNER_TRAMPOLINES_REGISTERED.with(|registered| {
+        let mut registered = registered.borrow_mut();
+        if registered.contains(&scanner_id) {
+            return;
         }
+        unsafe {
+            perry_ffi_gc_register_mutable_root_scanner_named(
+                source.as_ptr(),
+                source.len(),
+                scanner_id,
+                scan_registered_mutable_root_by_id,
+            );
+        }
+        registered.push(scanner_id);
     });
+}
+
+fn assert_valid_root_source(source: &'static str) {
+    assert!(
+        !source.is_empty() && source.len() <= 128 && source.chars().all(|c| !c.is_control()),
+        "perry-ffi GC root scanner source must be non-empty, <= 128 bytes, and printable"
+    );
 }
 
 extern "C" fn scan_registered_roots(mark: PerryFfiRootMarker, ctx: *mut c_void) {
@@ -423,15 +467,21 @@ extern "C" fn scan_registered_roots(mark: PerryFfiRootMarker, ctx: *mut c_void) 
     }
 }
 
-extern "C" fn scan_registered_mutable_roots(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void) {
-    let scanners = MUTABLE_ROOT_SCANNERS
+extern "C" fn scan_registered_mutable_root_by_id(
+    scanner_id: usize,
+    visit: PerryFfiMutableRootVisitor,
+    ctx: *mut c_void,
+) {
+    let scanner = MUTABLE_ROOT_SCANNERS
         .lock()
         .expect("perry-ffi mutable root scanner registry poisoned")
-        .clone();
+        .get(scanner_id)
+        .copied();
+    let Some(scanner) = scanner else {
+        return;
+    };
     let mut visitor = GcRootVisitor::new(visit, ctx);
-    for scanner in scanners {
-        scanner(&mut visitor);
-    }
+    (scanner.scanner)(&mut visitor);
 }
 
 #[cfg(test)]

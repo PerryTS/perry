@@ -44,6 +44,7 @@ where
         | Expr::ProcessStdin
         | Expr::ProcessStdout
         | Expr::ProcessStderr
+        | Expr::ProcessAbort
         | Expr::ProcessStdinIsTTY
         | Expr::ProcessStdoutIsTTY
         | Expr::ProcessStderrIsTTY
@@ -101,7 +102,6 @@ where
         | Expr::PropertyUpdate { object: v, .. }
         | Expr::StaticFieldSet { value: v, .. }
         | Expr::EnvGetDynamic(v)
-        | Expr::ProcessNextTick(v)
         | Expr::ProcessChdir(v)
         | Expr::ProcessStdinSetRawMode(v)
         | Expr::TtyIsAtty(v)
@@ -1010,6 +1010,12 @@ where
             f(pid);
             if let Some(s) = signal {
                 f(s);
+            }
+        }
+        Expr::ProcessNextTick { callback, args } => {
+            f(callback);
+            for a in args {
+                f(a);
             }
         }
         Expr::ProcessExit(opt) => {

@@ -2,6 +2,63 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1026 — release sweep: timers epic + perf_hooks fan-out + lazy-tape fixes
+
+Rolls up 22 PRs that merged to `main` post-v0.5.1025 without version
+bumps. Full per-PR history is in `git log v0.5.1025..HEAD`.
+
+**node:timers epic (#1213, 6 PRs):**
+- **#1449** `node:timers/promises` `setTimeout` / `setImmediate` native
+  implementation.
+- **#1450** `clearTimeout` / `clearInterval` accept a numeric id (Node
+  also accepts the Timeout/Immediate handle directly, which already
+  worked).
+- **#1451** `import * as timers from 'node:timers'` namespace resolves.
+- **#1452** `typeof timeout.ref === 'function'` on Timeout / Immediate
+  handles.
+- **#1453** `Symbol.dispose` on Timeout / Immediate handles (explicit
+  resource-management proposal).
+- **#1454 / #1455** global `setImmediate` / `clearImmediate` resolve
+  + timer handle `typeof === 'function'`.
+
+**node:perf_hooks fan-out (10 PRs):**
+- **#1320 / #1445** `typeof PerformanceObserver` instance methods + inline
+  `supportedEntryTypes`.
+- **#1327 / #1443** `globalThis.performance === performance` (named-import
+  singleton identity).
+- **#1337 / #1442** `performance.nodeTiming`.
+- **#1338 / #1428** `performance.toJSON()`.
+- **#1339 / #1430** `clearResourceTimings` + `setResourceTimingBufferSize`.
+- **#1340 / #1440** `mark()` / `measure()` `detail` is structured-cloned.
+- **#1388 / #1436** `new PerformanceObserver()` without a callback throws
+  `TypeError`.
+- **#1389 / #1438** observer callback receives the observer as its 2nd arg.
+- **#1390 / #1441** `observe({ buffered: true })` delivers pre-existing
+  entries.
+- **#1403 / #1437** `measure()` with a nonexistent start/end mark throws.
+
+**node:json lazy-tape (closes #1424):**
+- **#1424 / #1447** `JSON.parse(blob, reviver)` on a lazy-tape top-level
+  array no longer SIGSEGVs (the failure I filed during the v0.5.1025
+  release-prep). `test_json_lazy_reviver` un-skip-listed.
+- **#1448 / #1456** `console.log` / `util.inspect` of a lazy-tape array
+  materialises before formatting instead of dumping internal lazy state.
+
+**Other runtime + codegen:**
+- **#1370 / #1446** drop perry/ui debug `console.log` noise from the web
+  driver.
+- **#1429** GC unsafe-zone handling for server adapters — guards the
+  unsafe-zone window when the runtime hands control to fastify/hyper
+  request handlers.
+- **#1341 / #1439** codegen: `Any`-typed `.includes()` / `.indexOf()`
+  dispatch dynamically, not as `String#includes` / `String#indexOf`
+  (was producing wrong results on arrays held in `any` shapes).
+- **#1427** deps: bump `qs` in `tests/release/packages/nestjs-hello`.
+
+`test_async_local_storage_context` (#1423) remains skip-listed —
+`.enterWith()` / `.exit()` semantics still pending (sibling slice of
+#788 / #789).
+
 ## v0.5.1025 — fix(compile): cross-target geisterhand lib lookup + parity skip-list + memory ceiling restore
 
 Unblocks the v0.5.1024 release-packages run by addressing 3 distinct

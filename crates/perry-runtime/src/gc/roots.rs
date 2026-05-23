@@ -46,6 +46,7 @@ thread_local! {
     pub(super) static MUTABLE_ROOT_SCANNERS: RefCell<Vec<MutableRootScannerEntry>> = RefCell::new(Vec::new());
     pub(super) static FFI_ROOT_SCANNERS: RefCell<Vec<PerryFfiRootScanner>> = RefCell::new(Vec::new());
     pub(super) static FFI_MUTABLE_ROOT_SCANNERS: RefCell<Vec<PerryFfiMutableRootScanner>> = RefCell::new(Vec::new());
+    pub(super) static FFI_NAMED_MUTABLE_ROOT_SCANNERS: RefCell<Vec<(PerryFfiNamedMutableRootScanner, usize)>> = RefCell::new(Vec::new());
     pub(super) static GLOBAL_ROOTS: RefCell<Vec<*mut u64>> = const { RefCell::new(Vec::new()) };
     pub(super) static RUNTIME_HANDLE_STACK: RefCell<Vec<RuntimeHandleSlot>> = const { RefCell::new(Vec::new()) };
     pub(super) static GC_ROOT_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
@@ -210,6 +211,13 @@ pub fn gc_register_mutable_root_scanner(scanner: MutableRootScanner) {
     );
 }
 
+/// Compatibility wrapper for callers that provide a human-readable scanner
+/// name. Current root-source telemetry groups these under runtime mutable
+/// scanners.
+pub fn gc_register_mutable_root_scanner_named(_source: &'static str, scanner: MutableRootScanner) {
+    gc_register_mutable_root_scanner(scanner);
+}
+
 pub(super) fn gc_register_mutable_root_scanner_with_source(
     scanner: MutableRootScanner,
     source: MutableRootScannerSource,
@@ -227,6 +235,8 @@ pub(super) type PerryFfiMutableRootVisitor =
     extern "C" fn(kind: u32, slot: *mut c_void, ctx: *mut c_void) -> bool;
 pub(super) type PerryFfiMutableRootScanner =
     extern "C" fn(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void);
+pub(super) type PerryFfiNamedMutableRootScanner =
+    extern "C" fn(scanner_id: usize, visit: PerryFfiMutableRootVisitor, ctx: *mut c_void);
 
 pub(super) const PERRY_FFI_ROOT_SLOT_I64: u32 = 1;
 pub(super) const PERRY_FFI_ROOT_SLOT_USIZE: u32 = 2;
@@ -259,6 +269,22 @@ pub extern "C" fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanne
 pub extern "C" fn perry_ffi_gc_register_mutable_root_scanner(scanner: PerryFfiMutableRootScanner) {
     FFI_MUTABLE_ROOT_SCANNERS.with(|scanners| {
         scanners.borrow_mut().push(scanner);
+    });
+}
+
+/// Register a native-package mutable scanner with an associated wrapper id.
+///
+/// The `source` bytes are accepted for ABI compatibility with `perry-ffi`;
+/// current root-source telemetry groups these with other FFI mutable scanners.
+#[no_mangle]
+pub extern "C" fn perry_ffi_gc_register_mutable_root_scanner_named(
+    _source_ptr: *const u8,
+    _source_len: usize,
+    scanner_id: usize,
+    scanner: PerryFfiNamedMutableRootScanner,
+) {
+    FFI_NAMED_MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners.borrow_mut().push((scanner, scanner_id));
     });
 }
 
@@ -1737,11 +1763,13 @@ pub(super) fn visit_ffi_mutable_registered_roots_with_sources(
 ) {
     let scanners: Vec<PerryFfiMutableRootScanner> =
         FFI_MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let named_scanners: Vec<(PerryFfiNamedMutableRootScanner, usize)> =
+        FFI_NAMED_MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
     let stats = match &mut root_sources {
         Some(sources) => {
             sources
                 .ffi_mutable_scanners
-                .record_registered_scanners(scanners.len());
+                .record_registered_scanners(scanners.len() + named_scanners.len());
             Some(&mut sources.ffi_mutable_scanners as *mut RootSourceSlotTraceStats)
         }
         None => None,
@@ -1750,6 +1778,9 @@ pub(super) fn visit_ffi_mutable_registered_roots_with_sources(
     let previous = visitor.set_root_source_stats(stats);
     for scanner in scanners {
         scanner(perry_ffi_visit_mutable_root_slot, ctx);
+    }
+    for (scanner, scanner_id) in named_scanners {
+        scanner(scanner_id, perry_ffi_visit_mutable_root_slot, ctx);
     }
     visitor.set_root_source_stats(previous);
 }

@@ -572,6 +572,24 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     if id.sym.as_ref() == "Function" && ctx.lookup_local("Function").is_none() {
                         return Ok(Expr::String("function".to_string()));
                     }
+                    // #1454: global timer builtins (+ fetch) are functions, but
+                    // a bare read lowers to an ExternFuncRef whose typeof reads
+                    // "boolean". Fold to "function" (gc is excluded — it's
+                    // undefined in Node without --expose-gc).
+                    let n = id.sym.as_ref();
+                    if matches!(
+                        n,
+                        "setTimeout"
+                            | "setInterval"
+                            | "setImmediate"
+                            | "clearTimeout"
+                            | "clearInterval"
+                            | "clearImmediate"
+                            | "fetch"
+                    ) && ctx.lookup_local(n).is_none()
+                    {
+                        return Ok(Expr::String("function".to_string()));
+                    }
                 }
                 if let ast::Expr::Member(member) = unary.arg.as_ref() {
                     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
@@ -580,6 +598,18 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             let prop_name = prop_ident.sym.as_ref();
                             if (obj_name == "Object" && is_known_object_static_method(prop_name))
                                 || (obj_name == "Array" && is_known_array_static_method(prop_name))
+                            {
+                                return Ok(Expr::String("function".to_string()));
+                            }
+                            // #1410: `typeof process.ref` / `typeof process.unref`.
+                            // The methods are pure no-op stubs that lower to
+                            // `Expr::Undefined` when called; a bare member
+                            // read still falls through to the generic process
+                            // member path (returns 0 / "number" typeof), so
+                            // fold to "function" here to match Node.
+                            if obj_name == "process"
+                                && matches!(prop_name, "ref" | "unref")
+                                && ctx.lookup_local("process").is_none()
                             {
                                 return Ok(Expr::String("function".to_string()));
                             }
@@ -601,6 +631,20 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                     | "emitDestroy"
                                     | "bind"
                             ) {
+                                return Ok(Expr::String("function".to_string()));
+                            }
+                            // #1320: `typeof obs.observe` on a PerformanceObserver
+                            // instance. A bare member read on a native-class
+                            // instance lowers to a 0-arg NativeMethodCall (getter
+                            // semantics), so `typeof` evaluated `observe()` and
+                            // reported "undefined". These are methods, not
+                            // getters — fold to "function" (the call form
+                            // `obs.observe(...)` is unaffected).
+                            if matches!(
+                                ctx.lookup_native_instance(obj_name),
+                                Some(("perf_hooks", _))
+                            ) && matches!(prop_name, "observe" | "disconnect" | "takeRecords")
+                            {
                                 return Ok(Expr::String("function".to_string()));
                             }
                             // #677: `typeof Function.prototype` → "object".

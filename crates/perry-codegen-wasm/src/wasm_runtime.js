@@ -2637,12 +2637,10 @@ function uiStateSet(h, value) {
 // ---------- Widget creation functions (take JS values, return handle_id) ----------
 
 function perry_ui_app_create(titleOrOpts, width, height) {
-  console.log("app_create:", typeof titleOrOpts, JSON.stringify(titleOrOpts)?.substring(0,100));
   let title = "Perry App", bodyH, w = 800, ht = 600;
   if (typeof titleOrOpts === "object" && titleOrOpts !== null) {
     title = titleOrOpts.title || title; w = titleOrOpts.width || w; ht = titleOrOpts.height || ht;
     bodyH = titleOrOpts.body;
-    console.log("  body handle:", bodyH, "uiGet:", uiGet(bodyH));
   } else { title = titleOrOpts || title; w = width || w; ht = height || ht; }
   document.title = title;
   const root = uiGetRoot();
@@ -2685,7 +2683,6 @@ function perry_ui_text_create(text, id) {
   return h;
 }
 function perry_ui_button_create(label, callback) {
-  console.log("button_create label:", typeof label, label, "callback:", typeof callback, callback);
   const el = document.createElement("button");
   el.textContent = (typeof label === 'string') ? label : String(label ?? "");
   el._perryCallback = callback;

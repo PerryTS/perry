@@ -648,6 +648,28 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
+    // #1213: Timeout/Immediate handles expose `Symbol.dispose` so
+    // `using t = setTimeout(...)` and `t[Symbol.dispose]()` clear the timer.
+    // The handle is a small id NaN-boxed as POINTER; the symbol-keyed read
+    // otherwise misses the side table and returns undefined.
+    if (bits >> 48) == 0x7FFD {
+        let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+        if id > 0 && id < 0x100000 && crate::timer::is_known_timer_id(id) {
+            let dispose = well_known_symbol("dispose");
+            if !dispose.is_null() {
+                let dispose_f64 =
+                    f64::from_bits(crate::value::JSValue::pointer(dispose as *const u8).bits());
+                if sym_key_from_f64(sym_f64) == sym_key_from_f64(dispose_f64) {
+                    let mname = b"@@__perry_wk_dispose";
+                    return crate::object::js_class_method_bind(
+                        obj_f64,
+                        mname.as_ptr(),
+                        mname.len(),
+                    );
+                }
+            }
+        }
+    }
     let obj_key = obj_key_from_f64(obj_f64);
     let sym_key = sym_key_from_f64(sym_f64);
     if obj_key == 0 || sym_key == 0 {

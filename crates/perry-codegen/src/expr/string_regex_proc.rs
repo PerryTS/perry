@@ -124,6 +124,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .call_void("js_process_exit", &[(DOUBLE, &code_val)]);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
+        Expr::ProcessAbort => {
+            // process.abort() — raises SIGABRT immediately. The runtime fn
+            // calls libc::abort(); we still return undefined to satisfy the
+            // expression type even though control never reaches the caller.
+            ctx.block().call_void("js_process_abort", &[]);
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+        }
         Expr::ObjectGetPrototypeOf(o) => {
             // v0.5.751: route through the runtime helper which walks
             // the class registry's parent_class_id chain for INT32-tagged

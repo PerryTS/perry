@@ -51,7 +51,7 @@
 
 use lazy_static::lazy_static;
 use perry_ffi::{
-    alloc_buffer, alloc_string, build_object_shape, gc_register_mutable_root_scanner,
+    alloc_buffer, alloc_string, build_object_shape, gc_register_mutable_root_scanner_named,
     js_array_alloc, js_array_push, js_object_alloc_with_shape, js_object_set_field, ArrayHeader,
     BufferHeader, GcRootVisitor, JsClosure, JsValue, ObjectHeader, Promise, RawClosureHeader,
     StringHeader,
@@ -209,7 +209,7 @@ static GC_REGISTERED: Once = Once::new();
 /// shape as perry-ext-events / perry-ext-http.
 fn ensure_gc_registered() {
     GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner(scan_stream_roots);
+        gc_register_mutable_root_scanner_named("perry-ext-streams", scan_stream_roots);
     });
 }
 
@@ -1537,7 +1537,7 @@ mod tests {
     #[test]
     fn gc_mutable_scanner_rewrites_all_stream_root_surfaces() {
         let _guard = GcTestGuard::new();
-        perry_ffi::gc_register_mutable_root_scanner(scan_stream_roots);
+        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-streams", scan_stream_roots);
 
         let readable_id = usize::MAX - 9_100;
         let readable_start = young_gc_root();

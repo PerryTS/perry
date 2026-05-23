@@ -47,7 +47,7 @@ extern crate perry_ext_http_server as _server_link;
 
 use lazy_static::lazy_static;
 use perry_ffi::{
-    alloc_string, gc_register_mutable_root_scanner, get_handle_mut, iter_handles_of_mut,
+    alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
     json_stringify, notify_main_thread, register_handle,
     spawn_blocking_with_reactor as spawn_blocking, with_handle_mut, ArrayHeader, GcRootVisitor,
     Handle, JsClosure, JsString, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
@@ -97,7 +97,7 @@ static HTTP_GC_REGISTERED: Once = Once::new();
 
 fn ensure_gc_scanner_registered() {
     HTTP_GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner(scan_http_roots);
+        gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_roots);
     });
 }
 
@@ -853,7 +853,7 @@ mod tests {
     #[test]
     fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         let _guard = GcTestGuard::new();
-        perry_ffi::gc_register_mutable_root_scanner(scan_http_roots);
+        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_roots);
 
         let response_callback = young_gc_root();
         let request_listener = young_gc_root();

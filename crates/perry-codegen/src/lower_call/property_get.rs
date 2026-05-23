@@ -255,7 +255,14 @@ pub fn try_lower_property_get_method_call(
             // variant (e.g., slice(0) is ambiguous but slice() with 0
             // args is always array.slice to copy).
             "slice" if !args.is_empty() => true,
-            "indexOf" | "includes" if args.len() == 1 => true,
+            // `indexOf` / `includes` are NOT string-forced here: an
+            // Any-typed receiver may be a runtime array (e.g. a native
+            // module property like `PerformanceObserver.supportedEntryTypes`),
+            // and forcing the string path made `arr.includes(x)` always
+            // return false (string-includes on a non-string). Falling
+            // through routes both to `js_native_call_method`, which
+            // dispatches on the runtime type and handles string + array
+            // (with content-aware element comparison). Refs #1341.
             // startsWith / endsWith only exist on String — both 1-arg
             // and 2-arg (searchString, position) forms route here.
             "startsWith" | "endsWith" if args.len() == 1 || args.len() == 2 => true,

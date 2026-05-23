@@ -332,6 +332,9 @@ pub(super) fn flush_deferred_gc_request() {
         DeferredGcRequest::None => {}
         DeferredGcRequest::CheckTrigger => gc_check_trigger(),
         DeferredGcRequest::DirectMinor => {
+            if gc_blocked_by_unsafe_zone() {
+                return;
+            }
             gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct))
                 .emit_after_current();
         }
@@ -343,9 +346,15 @@ pub(super) fn flush_deferred_gc_request() {
                 .emit_after_current();
         }
         DeferredGcRequest::Collect(kind) => {
+            if gc_blocked_by_unsafe_zone() {
+                return;
+            }
             gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(kind)).emit_after_current();
         }
         DeferredGcRequest::FullCollect(kind) => {
+            if gc_blocked_by_unsafe_zone() {
+                return;
+            }
             gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(kind))
                 .emit_after_current();
         }
@@ -404,6 +413,10 @@ pub fn gc_bump_malloc_trigger() {
             return;
         }
         if use_gen_gc {
+            if gc_blocked_by_unsafe_zone() {
+                GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
+                return;
+            }
             if !defer_gc_request(DeferredGcRequest::Collect(GcTriggerKind::ArenaBytes)) {
                 gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(
                     GcTriggerKind::ArenaBytes,
@@ -436,7 +449,9 @@ pub fn gc_collect_pending_suppressed_parse() {
     if !pending {
         return;
     }
-    if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0 {
+    if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0
+        || gc_blocked_by_unsafe_zone()
+    {
         GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
         return;
     }
@@ -545,6 +560,9 @@ pub(super) fn gc_collect_pending_old_reclaim() -> bool {
     if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0 {
         return false;
     }
+    if gc_blocked_by_unsafe_zone() {
+        return false;
+    }
     if defer_gc_request(DeferredGcRequest::FullCollect(GcTriggerKind::OldGenBytes)) {
         return false;
     }
@@ -638,6 +656,9 @@ pub(super) fn gc_bump_malloc_trigger_with_snapshot(current: usize, bytes_now: us
 pub fn gc_check_trigger() {
     // Issue #62: single TLS access covers both `in_alloc` and `suppressed`.
     if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0 {
+        return;
+    }
+    if gc_blocked_by_unsafe_zone() {
         return;
     }
     if defer_gc_request(DeferredGcRequest::CheckTrigger) {
@@ -851,12 +872,16 @@ pub fn gc_check_trigger() {
     }
 }
 
-/// Counter tracking "worker threads hold JSValue roots we can't scan"
-/// state. Incremented by stdlib entry points that spawn tokio tasks which
-/// invoke user closures on worker threads (WS server, HTTP server, etc.).
-/// When > 0, the conservative main-thread stack scanner can't see all
-/// live roots — collecting would free objects still referenced from
-/// worker-thread stacks and SEGV on next access.
+/// Counter tracking "native work holds JSValue roots we can't scan" state.
+/// This is for narrow FFI sections where a worker thread may temporarily
+/// hold runtime values on a stack the main-thread GC cannot see. Long-lived
+/// server adapters should instead queue plain Rust data, allocate JS values
+/// on the main thread, and register mutable root scanners for stored callback
+/// slots.
+///
+/// When > 0, the conservative main-thread stack scanner can't see all live
+/// roots — collecting could free objects still referenced from worker-thread
+/// stacks and SEGV on next access.
 ///
 /// Issue #31: gc() from setInterval in a Fastify+WebSocket server crashed
 /// within 60s of the first tick because WS worker threads held live refs
@@ -883,12 +908,16 @@ pub extern "C" fn js_gc_collect() {
         .emit_after_current();
 }
 
+pub(super) fn gc_blocked_by_unsafe_zone() -> bool {
+    GC_UNSAFE_ZONES.load(std::sync::atomic::Ordering::Acquire) > 0
+}
+
 pub(super) fn manual_gc_blocked_by_unsafe_zone() -> bool {
-    if GC_UNSAFE_ZONES.load(std::sync::atomic::Ordering::Acquire) <= 0 {
-        return false;
+    if gc_blocked_by_unsafe_zone() {
+        unsafe_zone_manual_gc_warning();
+        return true;
     }
-    unsafe_zone_manual_gc_warning();
-    true
+    false
 }
 
 pub(super) fn unsafe_zone_manual_gc_warning() {
@@ -896,22 +925,21 @@ pub(super) fn unsafe_zone_manual_gc_warning() {
         // One-shot warning — user likely has `setInterval(() => gc(), N)`
         // in a server; we don't want to print every 30s.
         eprintln!(
-            "perry: gc() skipped — a tokio-based server (WebSocket/HTTP) is active \
-             and may hold JSValue refs on worker threads that the main-thread GC \
-             can't see. Manual gc() is a no-op for the rest of this process."
+            "perry: gc() skipped — native work may hold JSValue refs on a \
+             worker thread that the main-thread GC can't see. Manual gc() \
+             is a no-op until that unsafe work exits."
         );
     }
 }
 
-/// Increment GC_UNSAFE_ZONES. Called by stdlib when spawning tokio tasks
-/// that invoke user closures on worker threads.
+/// Increment GC_UNSAFE_ZONES for a narrow FFI section whose worker thread may
+/// hold JSValue roots the main-thread scanner cannot see.
 #[no_mangle]
 pub extern "C" fn js_gc_enter_unsafe_zone() {
     GC_UNSAFE_ZONES.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
 }
 
-/// Decrement GC_UNSAFE_ZONES. Called when a stdlib feature that owns
-/// worker threads shuts down (e.g. ws_server_close).
+/// Decrement GC_UNSAFE_ZONES when the matching unsafe FFI section exits.
 #[no_mangle]
 pub extern "C" fn js_gc_exit_unsafe_zone() {
     GC_UNSAFE_ZONES.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);

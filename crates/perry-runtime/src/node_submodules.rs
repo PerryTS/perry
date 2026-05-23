@@ -42,16 +42,31 @@ use crate::value::JSValue;
 /// One entry per named export of one submodule.
 struct ExportSpec {
     name: &'static str,
-    thunk: *const u8,
-    arity: u32,
+    thunk: ExportThunk,
 }
 
-// SAFETY: `ExportSpec` contains only a `&'static str` and a function pointer
-// (cast to `*const u8`). Both are `Send + Sync`-compatible by construction —
-// the raw pointer is a code-segment address that lives for the process
-// lifetime, never written through, and the `SUBMODULES` table is `const`. The
-// `Sync` impl is needed because raw pointers don't auto-derive it.
-unsafe impl Sync for ExportSpec {}
+enum ExportThunk {
+    Fn1(extern "C" fn(*const ClosureHeader, f64) -> f64),
+    Fn2(extern "C" fn(*const ClosureHeader, f64, f64) -> f64),
+    Fn3(extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64),
+}
+
+impl ExportThunk {
+    fn as_ptr(&self) -> *const u8 {
+        match self {
+            ExportThunk::Fn1(f) => *f as *const u8,
+            ExportThunk::Fn2(f) => *f as *const u8,
+            ExportThunk::Fn3(f) => *f as *const u8,
+        }
+    }
+    fn arity(&self) -> u32 {
+        match self {
+            ExportThunk::Fn1(_) => 1,
+            ExportThunk::Fn2(_) => 2,
+            ExportThunk::Fn3(_) => 3,
+        }
+    }
+}
 
 /// One entry per submodule. `exports` lists every named export the
 /// codegen / parity tests reach for; the codegen's lookup is keyed by
@@ -87,14 +102,65 @@ macro_rules! thunk {
     };
 }
 
-thunk!(
-    thunk_timers_setTimeout,
-    "node:timers/promises.setTimeout is not yet implemented in Perry (tracked by issue #793)."
-);
-thunk!(
-    thunk_timers_setImmediate,
-    "node:timers/promises.setImmediate is not yet implemented in Perry (tracked by issue #793)."
-);
+/// node:timers/promises.setTimeout(delay, value?) — a Promise that resolves
+/// with `value` (or undefined) after `delay` ms. Composes the existing
+/// promise-returning timer primitive; the closure dispatch pads a missing
+/// `value` arg with undefined (arity registered in `ensure_export_singleton`).
+/// Refs #1213.
+extern "C" fn timers_promises_set_timeout(
+    _closure: *const ClosureHeader,
+    delay_ms: f64,
+    value: f64,
+) -> f64 {
+    let promise = crate::timer::js_set_timeout_value(delay_ms, value);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+/// node:timers/promises.setImmediate(value?) — a Promise that resolves with
+/// `value` (or undefined) on a later turn. Refs #1213.
+extern "C" fn timers_promises_set_immediate(_closure: *const ClosureHeader, value: f64) -> f64 {
+    let promise = crate::timer::js_set_timeout_value(0.0, value);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+// ── node:timers namespace (`import * as timers from "node:timers"`) ──────────
+// Route to the SAME global timer runtime fns the bare globals use, so
+// `timers.setTimeout(...)` matches `setTimeout(...)`. NOTE: named imports
+// (`import { setTimeout } from "node:timers"`) deliberately bypass this and
+// keep the codegen global fast-path (which handles `setTimeout(fn, delay,
+// ...args)` varargs) — compile.rs skips registering node:timers named imports
+// as submodule exports. Refs #1213.
+fn callback_arg_to_i64(v: f64) -> i64 {
+    (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
+}
+extern "C" fn timers_ns_set_timeout(_c: *const ClosureHeader, cb: f64, ms: f64) -> f64 {
+    crate::value::js_nanbox_pointer(crate::timer::js_set_timeout_callback(
+        callback_arg_to_i64(cb),
+        ms,
+    ))
+}
+extern "C" fn timers_ns_set_interval(_c: *const ClosureHeader, cb: f64, ms: f64) -> f64 {
+    crate::value::js_nanbox_pointer(crate::timer::setInterval(callback_arg_to_i64(cb), ms))
+}
+extern "C" fn timers_ns_set_immediate(_c: *const ClosureHeader, cb: f64) -> f64 {
+    crate::value::js_nanbox_pointer(crate::timer::js_set_immediate_callback(
+        callback_arg_to_i64(cb),
+    ))
+}
+extern "C" fn timers_ns_clear_timeout(_c: *const ClosureHeader, arg: f64) -> f64 {
+    crate::timer::js_clear_timeout_value(arg);
+    f64::from_bits(TAG_UNDEFINED)
+}
+extern "C" fn timers_ns_clear_interval(_c: *const ClosureHeader, arg: f64) -> f64 {
+    crate::timer::js_clear_interval_value(arg);
+    f64::from_bits(TAG_UNDEFINED)
+}
+// Immediates live in the shared timer pool; clearTimeout retains-out both pools.
+extern "C" fn timers_ns_clear_immediate(_c: *const ClosureHeader, arg: f64) -> f64 {
+    crate::timer::js_clear_timeout_value(arg);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 thunk!(
     thunk_timers_setInterval,
     "node:timers/promises.setInterval is not yet implemented in Perry (tracked by issue #793)."
@@ -1545,27 +1611,54 @@ fn ensure_diag_noop_closure() -> *mut ClosureHeader {
 
 const SUBMODULES: &[SubmoduleSpec] = &[
     SubmoduleSpec {
+        // node:timers namespace object (`import * as timers`). Named imports
+        // bypass this (compile.rs) to keep the global fast-path. (#1213)
+        key: "timers",
+        exports: &[
+            ExportSpec {
+                name: "setTimeout",
+                thunk: ExportThunk::Fn2(timers_ns_set_timeout),
+            },
+            ExportSpec {
+                name: "setInterval",
+                thunk: ExportThunk::Fn2(timers_ns_set_interval),
+            },
+            ExportSpec {
+                name: "setImmediate",
+                thunk: ExportThunk::Fn1(timers_ns_set_immediate),
+            },
+            ExportSpec {
+                name: "clearTimeout",
+                thunk: ExportThunk::Fn1(timers_ns_clear_timeout),
+            },
+            ExportSpec {
+                name: "clearInterval",
+                thunk: ExportThunk::Fn1(timers_ns_clear_interval),
+            },
+            ExportSpec {
+                name: "clearImmediate",
+                thunk: ExportThunk::Fn1(timers_ns_clear_immediate),
+            },
+        ],
+    },
+    SubmoduleSpec {
         key: "timers_promises",
         exports: &[
             ExportSpec {
                 name: "setTimeout",
-                thunk: thunk_timers_setTimeout as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn2(timers_promises_set_timeout),
             },
             ExportSpec {
                 name: "setImmediate",
-                thunk: thunk_timers_setImmediate as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(timers_promises_set_immediate),
             },
             ExportSpec {
                 name: "setInterval",
-                thunk: thunk_timers_setInterval as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_timers_setInterval),
             },
             ExportSpec {
                 name: "scheduler",
-                thunk: thunk_timers_scheduler as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_timers_scheduler),
             },
         ],
     },
@@ -1574,153 +1667,123 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "readFile",
-                thunk: thunk_fs_promises_readFile as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_readFile),
             },
             ExportSpec {
                 name: "open",
-                thunk: thunk_fs_promises_open as *const u8,
-                arity: 3,
+                thunk: ExportThunk::Fn3(thunk_fs_promises_open),
             },
             ExportSpec {
                 name: "writeFile",
-                thunk: thunk_fs_promises_writeFile as *const u8,
-                arity: 3,
+                thunk: ExportThunk::Fn3(thunk_fs_promises_writeFile),
             },
             ExportSpec {
                 name: "appendFile",
-                thunk: thunk_fs_promises_appendFile as *const u8,
-                arity: 3,
+                thunk: ExportThunk::Fn3(thunk_fs_promises_appendFile),
             },
             ExportSpec {
                 name: "chmod",
-                thunk: thunk_fs_promises_chmod as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_chmod),
             },
             ExportSpec {
                 name: "chown",
-                thunk: thunk_fs_promises_chown as *const u8,
-                arity: 3,
+                thunk: ExportThunk::Fn3(thunk_fs_promises_chown),
             },
             ExportSpec {
                 name: "lchown",
-                thunk: thunk_fs_promises_lchown as *const u8,
-                arity: 3,
+                thunk: ExportThunk::Fn3(thunk_fs_promises_lchown),
             },
             ExportSpec {
                 name: "mkdir",
-                thunk: thunk_fs_promises_mkdir as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_mkdir),
             },
             ExportSpec {
                 name: "readdir",
-                thunk: thunk_fs_promises_readdir as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_readdir),
             },
             ExportSpec {
                 name: "stat",
-                thunk: thunk_fs_promises_stat as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_stat),
             },
             ExportSpec {
                 name: "statfs",
-                thunk: thunk_fs_promises_statfs as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_statfs),
             },
             ExportSpec {
                 name: "lstat",
-                thunk: thunk_fs_promises_lstat as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_lstat),
             },
             ExportSpec {
                 name: "rm",
-                thunk: thunk_fs_promises_rm as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_rm),
             },
             ExportSpec {
                 name: "rmdir",
-                thunk: thunk_fs_promises_rmdir as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_rmdir),
             },
             ExportSpec {
                 name: "unlink",
-                thunk: thunk_fs_promises_unlink as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_fs_promises_unlink),
             },
             ExportSpec {
                 name: "rename",
-                thunk: thunk_fs_promises_rename as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_rename),
             },
             ExportSpec {
                 name: "copyFile",
-                thunk: thunk_fs_promises_copyFile as *const u8,
-                arity: 3,
+                thunk: ExportThunk::Fn3(thunk_fs_promises_copyFile),
             },
             ExportSpec {
                 name: "cp",
-                thunk: thunk_fs_promises_cp as *const u8,
-                arity: 3,
+                thunk: ExportThunk::Fn3(thunk_fs_promises_cp),
             },
             ExportSpec {
                 name: "truncate",
-                thunk: thunk_fs_promises_truncate as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_truncate),
             },
             ExportSpec {
                 name: "utimes",
-                thunk: thunk_fs_promises_utimes as *const u8,
-                arity: 3,
+                thunk: ExportThunk::Fn3(thunk_fs_promises_utimes),
             },
             ExportSpec {
                 name: "lutimes",
-                thunk: thunk_fs_promises_lutimes as *const u8,
-                arity: 3,
+                thunk: ExportThunk::Fn3(thunk_fs_promises_lutimes),
             },
             ExportSpec {
                 name: "link",
-                thunk: thunk_fs_promises_link as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_link),
             },
             ExportSpec {
                 name: "symlink",
-                thunk: thunk_fs_promises_symlink as *const u8,
-                arity: 3,
+                thunk: ExportThunk::Fn3(thunk_fs_promises_symlink),
             },
             ExportSpec {
                 name: "readlink",
-                thunk: thunk_fs_promises_readlink as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_readlink),
             },
             ExportSpec {
                 name: "realpath",
-                thunk: thunk_fs_promises_realpath as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_realpath),
             },
             ExportSpec {
                 name: "mkdtemp",
-                thunk: thunk_fs_promises_mkdtemp as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_mkdtemp),
             },
             ExportSpec {
                 name: "opendir",
-                thunk: thunk_fs_promises_opendir as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_fs_promises_opendir),
             },
             ExportSpec {
                 name: "glob",
-                thunk: thunk_fs_promises_glob as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_glob),
             },
             ExportSpec {
                 name: "watch",
-                thunk: thunk_fs_promises_watch as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_watch),
             },
             ExportSpec {
                 name: "access",
-                thunk: thunk_fs_promises_access as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_fs_promises_access),
             },
         ],
     },
@@ -1729,18 +1792,15 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "createInterface",
-                thunk: thunk_readline_createInterface as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_readline_createInterface),
             },
             ExportSpec {
                 name: "Interface",
-                thunk: thunk_readline_Interface as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_readline_Interface),
             },
             ExportSpec {
                 name: "Readline",
-                thunk: thunk_readline_Readline as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_readline_Readline),
             },
         ],
     },
@@ -1749,13 +1809,11 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "pipeline",
-                thunk: thunk_streamP_pipeline as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_streamP_pipeline),
             },
             ExportSpec {
                 name: "finished",
-                thunk: thunk_streamP_finished as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_streamP_finished),
             },
         ],
     },
@@ -1764,33 +1822,27 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "text",
-                thunk: thunk_consumers_text as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_consumers_text),
             },
             ExportSpec {
                 name: "json",
-                thunk: thunk_consumers_json as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_consumers_json),
             },
             ExportSpec {
                 name: "buffer",
-                thunk: thunk_consumers_buffer as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_consumers_buffer),
             },
             ExportSpec {
                 name: "arrayBuffer",
-                thunk: thunk_consumers_arrayBuffer as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_consumers_arrayBuffer),
             },
             ExportSpec {
                 name: "bytes",
-                thunk: thunk_consumers_bytes as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_consumers_bytes),
             },
             ExportSpec {
                 name: "blob",
-                thunk: thunk_consumers_blob as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_consumers_blob),
             },
         ],
     },
@@ -1799,38 +1851,31 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "format",
-                thunk: thunk_sys_format as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_sys_format),
             },
             ExportSpec {
                 name: "inspect",
-                thunk: thunk_sys_inspect as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_sys_inspect),
             },
             ExportSpec {
                 name: "debuglog",
-                thunk: thunk_sys_debuglog as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_sys_debuglog),
             },
             ExportSpec {
                 name: "deprecate",
-                thunk: thunk_sys_deprecate as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_sys_deprecate),
             },
             ExportSpec {
                 name: "promisify",
-                thunk: thunk_sys_promisify as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_sys_promisify),
             },
             ExportSpec {
                 name: "callbackify",
-                thunk: thunk_sys_callbackify as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_sys_callbackify),
             },
             ExportSpec {
                 name: "isArray",
-                thunk: thunk_sys_isArray as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_sys_isArray),
             },
         ],
     },
@@ -1844,38 +1889,31 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "tracingChannel",
-                thunk: thunk_diag_tracing_channel as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_diag_tracing_channel),
             },
             ExportSpec {
                 name: "channel",
-                thunk: thunk_diag_channel as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_diag_channel),
             },
             ExportSpec {
                 name: "subscribe",
-                thunk: thunk_diag_subscribe as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_diag_subscribe),
             },
             ExportSpec {
                 name: "unsubscribe",
-                thunk: thunk_diag_unsubscribe as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn2(thunk_diag_unsubscribe),
             },
             ExportSpec {
                 name: "publish",
-                thunk: thunk_diag_noop as *const u8,
-                arity: 2,
+                thunk: ExportThunk::Fn1(thunk_diag_noop),
             },
             ExportSpec {
                 name: "hasSubscribers",
-                thunk: thunk_diag_has_subscribers as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_diag_has_subscribers),
             },
             ExportSpec {
                 name: "Channel",
-                thunk: thunk_diag_noop as *const u8,
-                arity: 1,
+                thunk: ExportThunk::Fn1(thunk_diag_noop),
             },
         ],
     },
@@ -1923,9 +1961,12 @@ fn ensure_export_singleton(
     if let Some(cached) = EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
         return cached;
     }
-    let thunk = export.thunk;
-    let allocated = js_closure_alloc(thunk, 0);
-    crate::closure::js_register_closure_arity(thunk, export.arity);
+    let thunk_ptr = export.thunk.as_ptr();
+    let allocated = js_closure_alloc(thunk_ptr, 0);
+    // Arity is encoded in the ExportThunk variant, so the closure dispatch
+    // pads missing args with undefined for variadic-friendly thunks. This
+    // replaces the per-submodule arity tables in earlier revisions.
+    crate::closure::js_register_closure_arity(thunk_ptr, export.thunk.arity());
     EXPORT_SINGLETONS.with(|m| {
         m.borrow_mut().insert(key, allocated);
     });

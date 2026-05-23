@@ -35,6 +35,18 @@ pub extern "C" fn js_process_exit(code: f64) {
     std::process::exit(exit_code);
 }
 
+/// process.abort() -> never. Raises SIGABRT (no clean shutdown). Matches
+/// Node's behavior — atexit handlers and other shutdown logic are skipped.
+#[no_mangle]
+pub extern "C" fn js_process_abort() {
+    #[cfg(unix)]
+    unsafe {
+        libc::abort();
+    }
+    #[cfg(not(unix))]
+    std::process::abort();
+}
+
 /// Get an environment variable by name (takes JS string pointer)
 /// Returns a string pointer, or null (0) if not found
 #[no_mangle]

@@ -8,7 +8,7 @@
 //! automatic --help / --version, post-parse query accessors.
 
 use perry_ffi::{
-    alloc_string, gc_register_mutable_root_scanner, get_handle, get_handle_mut,
+    alloc_string, gc_register_mutable_root_scanner_named, get_handle, get_handle_mut,
     iter_handles_of_mut, js_object_alloc_with_shape, js_object_set_field, read_string,
     register_handle, with_handle_mut, GcRootVisitor, Handle, JsClosure, JsString, JsValue,
     RawClosureHeader, StringHeader,
@@ -74,7 +74,7 @@ static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 fn ensure_gc_scanner_registered() {
     GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner(scan_commander_roots);
+        gc_register_mutable_root_scanner_named("perry-ext-commander", scan_commander_roots);
     });
 }
 
@@ -627,7 +627,10 @@ mod tests {
     #[test]
     fn gc_mutable_scanner_rewrites_action_callback_root() {
         let _guard = GcTestGuard::new();
-        perry_ffi::gc_register_mutable_root_scanner(scan_commander_roots);
+        perry_ffi::gc_register_mutable_root_scanner_named(
+            "perry-ext-commander",
+            scan_commander_roots,
+        );
 
         let callback = young_gc_root();
         let mut cmd = CommanderHandle::new();

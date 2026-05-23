@@ -279,6 +279,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::EnvGet(name) => Expr::EnvGet(name.clone()),
         Expr::ProcessUptime => Expr::ProcessUptime,
         Expr::ProcessMemoryUsage => Expr::ProcessMemoryUsage,
+        Expr::ProcessAbort => Expr::ProcessAbort,
 
         // File system
         Expr::FsReadFileSync(path) => {

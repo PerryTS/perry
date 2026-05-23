@@ -1364,11 +1364,20 @@ pub(crate) fn closure_uses_this(body: &[Stmt]) -> bool {
     body.iter().any(uses_this_stmt)
 }
 
-/// Check if a name is a built-in global function provided by the runtime
+/// Check if a name is a built-in global function provided by the runtime.
+/// #1454: setImmediate/clearImmediate recognized too, so bare calls lower to
+/// ExternFuncRef (codegen fast path), not a not-a-function GlobalGet.
 pub(crate) fn is_builtin_function(name: &str) -> bool {
     matches!(
         name,
-        "setTimeout" | "setInterval" | "clearTimeout" | "clearInterval" | "fetch" | "gc"
+        "setTimeout"
+            | "setInterval"
+            | "setImmediate"
+            | "clearTimeout"
+            | "clearInterval"
+            | "clearImmediate"
+            | "fetch"
+            | "gc"
     )
 }
 

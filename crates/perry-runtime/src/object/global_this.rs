@@ -359,6 +359,15 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         };
         js_object_set_field_by_name(singleton, name_key, ns_value);
     }
+    // node:perf_hooks `performance` global — bind it to the same singleton the
+    // named import resolves to, so `globalThis.performance ===
+    // require("perf_hooks").performance` (#1327). typeof stays "object".
+    {
+        let pname = b"performance";
+        let pkey = crate::string::js_string_from_bytes(pname.as_ptr(), pname.len() as u32);
+        let pval = crate::perf_hooks::performance_namespace();
+        js_object_set_field_by_name(singleton, pkey, pval);
+    }
 }
 
 /// Populate well-known method properties on a builtin constructor's

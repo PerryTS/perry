@@ -19,6 +19,9 @@ KNOWN_FALLBACK_REASONS = (
     "copy_only_roots",
     "barriers_inactive",
     "conservative_stack",
+    "conservative_stack_truncated",
+    "conservative_stack_unbounded",
+    "unattributed_root_source",
     "malloc_registry_unavailable",
     "pinned_young_root",
     "pinned_young_dirty_slot",
@@ -99,6 +102,15 @@ def empty_totals() -> dict[str, Any]:
         "cycles": 0,
         "fallback_reason_counts": empty_reason_counts(),
         "conservative_pinned_bytes": 0,
+        "compiled_frame_conservative_pinned_bytes": 0,
+        "runtime_conservative_pinned_bytes": 0,
+        "conservative_stack": {
+            "scan_bytes": 0,
+            "scan_limit_bytes": 0,
+            "truncated_cycles": 0,
+            "unbounded_cycles": 0,
+        },
+        "conservative_sources": {},
         "legacy_copy_only_scanner_pinned": {
             "registered_rust_scanners": 0,
             "registered_ffi_scanners": 0,
@@ -109,6 +121,7 @@ def empty_totals() -> dict[str, Any]:
             "malformed_roots": 0,
             "roots": 0,
             "bytes": 0,
+            "sources": {},
         },
         "copying_nursery": {
             "copied_objects": 0,
@@ -246,6 +259,34 @@ def add_totals(dst: dict[str, Any], src: dict[str, Any]) -> None:
     for reason in KNOWN_FALLBACK_REASONS:
         dst["fallback_reason_counts"][reason] += src["fallback_reason_counts"][reason]
     dst["conservative_pinned_bytes"] += src["conservative_pinned_bytes"]
+    dst["compiled_frame_conservative_pinned_bytes"] += src[
+        "compiled_frame_conservative_pinned_bytes"
+    ]
+    dst["runtime_conservative_pinned_bytes"] += src["runtime_conservative_pinned_bytes"]
+    dst["conservative_stack"]["scan_bytes"] += src["conservative_stack"]["scan_bytes"]
+    dst["conservative_stack"]["scan_limit_bytes"] = max(
+        dst["conservative_stack"]["scan_limit_bytes"],
+        src["conservative_stack"]["scan_limit_bytes"],
+    )
+    dst["conservative_stack"]["truncated_cycles"] += src["conservative_stack"][
+        "truncated_cycles"
+    ]
+    dst["conservative_stack"]["unbounded_cycles"] += src["conservative_stack"][
+        "unbounded_cycles"
+    ]
+    merge_source_totals(
+        dst["conservative_sources"],
+        src["conservative_sources"],
+        (
+            "root_count",
+            "pinned_roots",
+            "pinned_bytes",
+            "scan_bytes",
+            "truncated_cycles",
+            "unbounded_cycles",
+        ),
+        max_fields=("scan_limit_bytes",),
+    )
     for field in (
         "registered_rust_scanners",
         "registered_ffi_scanners",
@@ -260,6 +301,19 @@ def add_totals(dst: dict[str, Any], src: dict[str, Any]) -> None:
         dst["legacy_copy_only_scanner_pinned"][field] += src[
             "legacy_copy_only_scanner_pinned"
         ][field]
+    merge_source_totals(
+        dst["legacy_copy_only_scanner_pinned"]["sources"],
+        src["legacy_copy_only_scanner_pinned"]["sources"],
+        (
+            "emitted_roots",
+            "emitted_young_roots",
+            "emitted_old_roots",
+            "emitted_malloc_roots",
+            "malformed_roots",
+            "roots",
+            "bytes",
+        ),
+    )
     for field in COPYING_NURSERY_TOTALS:
         dst["copying_nursery"][field] += src["copying_nursery"][field]
     dst["copying_nursery"]["ineligible_cycles"] += src["copying_nursery"][
@@ -297,6 +351,26 @@ def add_totals(dst: dict[str, Any], src: dict[str, Any]) -> None:
         "released_original_returned_bytes",
     ):
         dst["old_page_accounting"][field] += src["old_page_accounting"][field]
+
+
+def merge_source_totals(
+    dst: dict[str, dict[str, int]],
+    src: dict[str, dict[str, int]],
+    fields: tuple[str, ...],
+    *,
+    max_fields: tuple[str, ...] = (),
+) -> None:
+    for source, stats in src.items():
+        if not isinstance(stats, dict):
+            continue
+        target = dst.setdefault(
+            source,
+            {field: 0 for field in fields + max_fields},
+        )
+        for field in fields:
+            target[field] = target.get(field, 0) + non_negative_int(stats, field)
+        for field in max_fields:
+            target[field] = max(target.get(field, 0), non_negative_int(stats, field))
 
 
 def target_gates_require_copied_minor(name: str) -> bool:
@@ -467,6 +541,52 @@ def aggregate_workload(
         totals["conservative_pinned_bytes"] += non_negative_int(
             cycle, "conservative_pinned_bytes"
         )
+        totals["compiled_frame_conservative_pinned_bytes"] += non_negative_int(
+            cycle, "compiled_frame_conservative_pinned_bytes"
+        )
+        totals["runtime_conservative_pinned_bytes"] += non_negative_int(
+            cycle, "runtime_conservative_pinned_bytes"
+        )
+        stack_scan_bytes = non_negative_int(cycle, "conservative_stack_scan_bytes")
+        stack_scan_limit = non_negative_int(
+            cycle, "conservative_stack_scan_limit_bytes"
+        )
+        totals["conservative_stack"]["scan_bytes"] += stack_scan_bytes
+        totals["conservative_stack"]["scan_limit_bytes"] = max(
+            totals["conservative_stack"]["scan_limit_bytes"], stack_scan_limit
+        )
+        if cycle.get("conservative_stack_truncated") is True:
+            totals["conservative_stack"]["truncated_cycles"] += 1
+        if cycle.get("conservative_stack_unbounded") is True:
+            totals["conservative_stack"]["unbounded_cycles"] += 1
+
+        conservative_sources = nested_dict(cycle, "conservative_sources")
+        source_totals: dict[str, dict[str, int]] = {}
+        for source, stats in conservative_sources.items():
+            if not isinstance(source, str) or not isinstance(stats, dict):
+                continue
+            source_totals[source] = {
+                "root_count": non_negative_int(stats, "root_count"),
+                "pinned_roots": non_negative_int(stats, "pinned_roots"),
+                "pinned_bytes": non_negative_int(stats, "pinned_bytes"),
+                "scan_bytes": non_negative_int(stats, "scan_bytes"),
+                "scan_limit_bytes": non_negative_int(stats, "scan_limit_bytes"),
+                "truncated_cycles": 1 if stats.get("truncated") is True else 0,
+                "unbounded_cycles": 1 if stats.get("unbounded") is True else 0,
+            }
+        merge_source_totals(
+            totals["conservative_sources"],
+            source_totals,
+            (
+                "root_count",
+                "pinned_roots",
+                "pinned_bytes",
+                "scan_bytes",
+                "truncated_cycles",
+                "unbounded_cycles",
+            ),
+            max_fields=("scan_limit_bytes",),
+        )
 
         legacy_pinned = nested_dict(cycle, "legacy_copy_only_scanner_pinned")
         for field in (
@@ -483,6 +603,33 @@ def aggregate_workload(
             totals["legacy_copy_only_scanner_pinned"][field] += non_negative_int(
                 legacy_pinned, field
             )
+        legacy_sources = nested_dict(legacy_pinned, "sources")
+        source_totals = {}
+        for source, stats in legacy_sources.items():
+            if not isinstance(source, str) or not isinstance(stats, dict):
+                continue
+            source_totals[source] = {
+                "emitted_roots": non_negative_int(stats, "emitted_roots"),
+                "emitted_young_roots": non_negative_int(stats, "emitted_young_roots"),
+                "emitted_old_roots": non_negative_int(stats, "emitted_old_roots"),
+                "emitted_malloc_roots": non_negative_int(stats, "emitted_malloc_roots"),
+                "malformed_roots": non_negative_int(stats, "malformed_roots"),
+                "roots": non_negative_int(stats, "roots"),
+                "bytes": non_negative_int(stats, "bytes"),
+            }
+        merge_source_totals(
+            totals["legacy_copy_only_scanner_pinned"]["sources"],
+            source_totals,
+            (
+                "emitted_roots",
+                "emitted_young_roots",
+                "emitted_old_roots",
+                "emitted_malloc_roots",
+                "malformed_roots",
+                "roots",
+                "bytes",
+            ),
+        )
 
         for field in COPYING_NURSERY_TOTALS:
             totals["copying_nursery"][field] += non_negative_int(copying_nursery, field)
@@ -541,6 +688,54 @@ def write_report(report: dict[str, Any], out: str | None) -> None:
     else:
         json.dump(report, sys.stdout, indent=2)
         sys.stdout.write("\n")
+
+
+def run_mutable_root_contract_gates(
+    name: str,
+    workload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    compiled_pinned = workload["compiled_frame_conservative_pinned_bytes"]
+    if compiled_pinned != 0:
+        errors.append(
+            f"{name}: compiled_frame_conservative_pinned_bytes={compiled_pinned}, want 0"
+        )
+
+    stack = workload["conservative_stack"]
+    if stack["truncated_cycles"] != 0:
+        errors.append(
+            f"{name}: conservative_stack_truncated cycles="
+            f"{stack['truncated_cycles']}, want 0"
+        )
+    if stack["unbounded_cycles"] != 0:
+        errors.append(
+            f"{name}: conservative_stack_unbounded cycles="
+            f"{stack['unbounded_cycles']}, want 0"
+        )
+
+    legacy = workload["legacy_copy_only_scanner_pinned"]
+    if legacy["emitted_young_roots"] != 0:
+        errors.append(
+            f"{name}: legacy_copy_only_scanner_pinned.emitted_young_roots="
+            f"{legacy['emitted_young_roots']}, want 0"
+        )
+    if legacy["emitted_malloc_roots"] != 0:
+        errors.append(
+            f"{name}: legacy_copy_only_scanner_pinned.emitted_malloc_roots="
+            f"{legacy['emitted_malloc_roots']}, want 0"
+        )
+
+    unattributed = legacy.get("sources", {}).get("unattributed", {})
+    unattributed_roots = (
+        non_negative_int(unattributed, "emitted_roots")
+        if isinstance(unattributed, dict)
+        else 0
+    )
+    if unattributed_roots != 0:
+        errors.append(
+            f"{name}: unattributed root scanner emitted roots="
+            f"{unattributed_roots}, want 0"
+        )
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -614,6 +809,7 @@ def run_strict_fallback_evidence_gates(
                 f"{name}: conservative_pinned_bytes="
                 f"{workload['conservative_pinned_bytes']}, want 0"
             )
+        run_mutable_root_contract_gates(name, workload, errors)
         legacy_pinned = workload["legacy_copy_only_scanner_pinned"]["bytes"]
         if legacy_pinned != 0:
             errors.append(
@@ -686,6 +882,7 @@ def run_target_collector_gates(
                 f"{name}: conservative_pinned_bytes="
                 f"{workload['conservative_pinned_bytes']}, want 0"
             )
+        run_mutable_root_contract_gates(name, workload, errors)
         legacy_pinned = workload["legacy_copy_only_scanner_pinned"]["bytes"]
         if legacy_pinned != 0:
             errors.append(

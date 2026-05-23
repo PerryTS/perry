@@ -137,7 +137,8 @@ fn ensure_gc_scanner_registered() {
         if registered.get() {
             return;
         }
-        perry_runtime::gc::gc_register_mutable_root_scanner(
+        perry_runtime::gc::gc_register_mutable_root_scanner_named(
+            "stdlib:async_bridge",
             scan_pending_native_async_resolution_roots_mut,
         );
         registered.set(true);

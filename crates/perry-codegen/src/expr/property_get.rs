@@ -533,6 +533,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ],
                     ));
                 }
+                // node:process — `process.abort` read as a VALUE (not called).
+                // Bare `process` lowers to the GlobalGet(0) sentinel, so the
+                // receiver name is gone here; route by the process-distinctive
+                // property name through the native-module property helper,
+                // which returns a bound-method closure (typeof "function").
+                // The call form `process.abort()` lowers separately via the
+                // dedicated HIR variant. (#1374)
+                if property.as_str() == "abort" {
+                    let mod_idx = ctx.strings.intern("process");
+                    let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
+                    let mod_len_str = "process".len().to_string();
+                    let prop_idx = ctx.strings.intern(property);
+                    let prop_bytes_global =
+                        format!("@{}", ctx.strings.entry(prop_idx).bytes_global);
+                    let prop_len_str = property.len().to_string();
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_native_module_property_by_name",
+                        &[
+                            (PTR, &mod_bytes_global),
+                            (I64, &mod_len_str),
+                            (PTR, &prop_bytes_global),
+                            (I64, &prop_len_str),
+                        ],
+                    ));
+                }
                 // Built-in constructors / namespaces exposed on globalThis
                 // (`Array`, `Object`, `Math`, `JSON`, ...): route the read
                 // through the singleton so `globalThis.Array` (and the

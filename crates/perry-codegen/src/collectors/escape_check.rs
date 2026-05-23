@@ -363,12 +363,17 @@ pub fn check_escapes_in_expr(
         | Expr::FinalizationRegistryNew(operand)
         | Expr::StructuredClone(operand)
         | Expr::QueueMicrotask(operand)
-        | Expr::ProcessNextTick(operand)
         | Expr::ArrayIsArray(operand) => {
             check_escapes_in_expr(operand, candidates, classes, escaped);
         }
         Expr::JsonParseTyped { text, .. } => {
             check_escapes_in_expr(text, candidates, classes, escaped);
+        }
+        Expr::ProcessNextTick { callback, args } => {
+            check_escapes_in_expr(callback, candidates, classes, escaped);
+            for a in args {
+                check_escapes_in_expr(a, candidates, classes, escaped);
+            }
         }
         Expr::Conditional {
             condition,

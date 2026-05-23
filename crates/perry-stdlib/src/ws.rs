@@ -72,7 +72,7 @@ static WS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 #[cfg(not(target_os = "ios"))]
 fn ensure_gc_scanner_registered() {
     WS_GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_mutable_root_scanner(scan_ws_roots_mut);
+        perry_runtime::gc::gc_register_mutable_root_scanner_named("stdlib:ws", scan_ws_roots_mut);
     });
 }
 
@@ -910,10 +910,9 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
         shutdown_tx: Some(shutdown_tx),
     });
     WS_ACTIVE_SERVERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    // WS dispatches message/connection events to user closures from
-    // tokio worker threads, whose stacks the main-thread GC can't scan.
-    // Mark GC-unsafe for as long as the server is running (issue #31).
-    perry_runtime::gc::js_gc_enter_unsafe_zone();
+    // Tokio workers only enqueue raw Rust events here. JS closure dispatch
+    // happens later in `js_ws_process_pending` on the main thread, and the
+    // listener slots are covered by the ws mutable root scanner.
     // Spawn the accept loop
     let handle_id = server_handle;
     spawn(async move {
@@ -1090,7 +1089,6 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_server_close(handle: i64) {
     WS_ACTIVE_SERVERS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    perry_runtime::gc::js_gc_exit_unsafe_zone();
     if let Some(server) = get_handle_mut::<WsServerHandle>(handle) {
         server.is_listening = false;
 

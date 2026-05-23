@@ -6,6 +6,37 @@ use crate::{js_string_from_bytes, JSValue, StringHeader};
 
 // ─── JSON.parse with reviver ────────────────────────────────────────────────
 
+/// Force-materialize a lazy-tape array (`PERRY_JSON_TAPE`) into a real
+/// `ArrayHeader` tree and return a JSValue pointing at it. The reviver walk
+/// below reads `length`/`capacity`/element f64s directly off the pointer — a
+/// `LazyArrayHeader` has a different layout, so without this the walk reads
+/// garbage and SIGSEGVs. Unlike `redirect_lazy_to_materialized` (stringify),
+/// this forces materialization even when nothing has indexed the array yet.
+/// No-op for non-lazy values. Refs #1424.
+unsafe fn force_materialize_if_lazy(value: JSValue) -> JSValue {
+    let bits = value.bits();
+    if (bits >> 48) != 0x7FFD {
+        return value;
+    }
+    let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return value;
+    }
+    let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_LAZY_ARRAY {
+        return value;
+    }
+    let lazy = ptr as *mut crate::json_tape::LazyArrayHeader;
+    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
+        return value;
+    }
+    let materialized = crate::json_tape::force_materialize_lazy(lazy);
+    if materialized.is_null() {
+        return value;
+    }
+    JSValue::object_ptr(materialized as *mut u8)
+}
+
 /// Apply reviver to a parsed JSON value. The reviver is called as reviver(key, value).
 /// For objects, it's called for each property; for the root, key is "".
 pub(crate) unsafe fn apply_reviver(
@@ -13,6 +44,9 @@ pub(crate) unsafe fn apply_reviver(
     key_f64: f64,
     reviver: *const crate::closure::ClosureHeader,
 ) -> JSValue {
+    // A lazy-tape array must be materialized before the in-place element walk
+    // (its header layout differs from ArrayHeader). #1424.
+    let value = force_materialize_if_lazy(value);
     let bits = value.bits();
 
     // If value is an object, recurse into its properties first

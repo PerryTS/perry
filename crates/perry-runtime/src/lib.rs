@@ -8,6 +8,8 @@
 //! - Built-in object implementations
 //! - Console and other global functions
 
+#![recursion_limit = "256"]
+
 /// Issue #62: route every Rust heap allocation through mimalloc instead of
 /// the system `malloc`. `gc_malloc`, arena block allocation, Vec/HashMap
 /// growth inside the runtime, and the compiled-program side of the FFI all

@@ -8,18 +8,6 @@
       "reason": "Free-text explanation. Keep the most-actionable signal first \u2014 what changes the verdict (a fixture, a Perry fix, a Node spec change)."
     }
   },
-  "node-suite/perf_hooks/observer/entry-types": {
-    "issue": "1320",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks granular parity: typeof obs.observe/disconnect/takeRecords reports the wrong type because member reads on a native-class instance lower as a method call (not a PropertyGet). The call forms work (observe-marks PASSES). Flips to PASS when #1320 lands."
-  },
-  "node-suite/perf_hooks/global/performance-identity": {
-    "issue": "1327",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks granular parity: globalThis.performance !== the node:perf_hooks named import. The import resolves to a fresh namespace object per read and the global is a separate path; neither is a cached singleton. Flips to PASS when #1327 lands."
-  },
   "node-suite/perf_hooks/timerify/timerify": {
     "issue": "1335",
     "added": "2026-05-22",
@@ -37,60 +25,6 @@
     "added": "2026-05-22",
     "category": "bug-open",
     "reason": "node:perf_hooks: createHistogram() unimplemented (not a function). Flips to PASS when #1336 lands."
-  },
-  "node-suite/perf_hooks/node-timing/node-timing": {
-    "issue": "1337",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: performance.nodeTiming (PerformanceNodeTiming) unimplemented (not an object). Flips to PASS when #1337 lands."
-  },
-  "node-suite/perf_hooks/mark/detail-structured-clone": {
-    "issue": "1340",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: mark detail is not structured-cloned (m.detail === input instead of a distinct deep-equal copy). Flips to PASS when #1340 lands."
-  },
-  "node-suite/perf_hooks/measure/detail-structured-clone": {
-    "issue": "1340",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: measure detail is not structured-cloned (same root as mark — #1340 covers both). Flips to PASS when #1340 lands."
-  },
-  "node-suite/perf_hooks/observer/supported-entry-types": {
-    "issue": "1341",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: PerformanceObserver.supportedEntryTypes.includes('mark'/'measure') is not usable (static array membership). Flips to PASS when #1341 lands."
-  },
-  "node-suite/perf_hooks/entry/to-json": {
-    "issue": "1387",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: PerformanceEntry#toJSON() is not a function. Flips to PASS when #1387 lands."
-  },
-  "node-suite/perf_hooks/observer/no-callback-throws": {
-    "issue": "1388",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: new PerformanceObserver() without a callback should throw TypeError; Perry does not throw. Flips to PASS when #1388 lands."
-  },
-  "node-suite/perf_hooks/observer/callback-observer-arg": {
-    "issue": "1389",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: the observer callback's 2nd argument should === the observer; Perry passes the wrong/no second arg. Flips to PASS when #1389 lands."
-  },
-  "node-suite/perf_hooks/observer/buffered": {
-    "issue": "1390",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: observe({ buffered: true }) does not deliver pre-existing entries (callback never fires). Flips to PASS when #1390 lands."
-  },
-  "node-suite/perf_hooks/errors/measure-nonexistent-mark": {
-    "issue": "1403",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: measure(name, startMark) with a nonexistent mark should throw; Perry does not throw. Flips to PASS when #1403 lands."
   },
   "node-suite/console/dir/depth-options": {
     "issue": "1199",
@@ -235,12 +169,6 @@
     "added": "2026-05-22",
     "category": "bug-open",
     "reason": "AsyncLocalStorage `.enterWith()` / `.exit()` aren't implemented end-to-end — the test prints the first 10 lines (await/then/catch/nextTick/timer/immediate/interval contexts + nested outer) and then exits silently when `enterWith()` is invoked, missing the last 7 lines covering enterWith semantics + exit/restore mechanics. Sibling slice of #788 #789 (real AsyncLocalStorage tracking across await/microtasks/timers + real `async_hooks.createHook` lifecycle). Surfaced as a NEW failure on v0.5.1024 release-packages parity. Flips to PASS when `.enterWith` / `.exit` land."
-  },
-  "test_json_lazy_reviver": {
-    "issue": "1424",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "`JSON.parse(blob, reviver)` with a lazy-tape top-level array (PERRY_JSON_TAPE=1 path) produces zero output — the reviver dispatch on the materialised lazy array crashes / exits before any of the 4 `console.log` lines fire. Likely fallout from the GC checkpoint + copied-minor work under #1090 / #1146 / #1235 / #1324. Surfaced as a NEW failure on v0.5.1024 release-packages parity. Flips to PASS when the lazy-tape reviver dispatch is fixed."
   },
   "test_jsruntime_mixed_async_ordering_matrix": {
     "issue": null,
@@ -427,18 +355,6 @@
     "added": "2026-05-15",
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:test` (built-in test runner) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
-  "test_parity_timers": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:timers` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
-  "test_parity_timers_promises": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:timers/promises` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_tls": {
     "issue": "793",
