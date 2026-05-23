@@ -439,6 +439,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // #1344: process.env.X = v / delete process.env.X.
     module.declare_function("js_setenv", VOID, &[I64, DOUBLE]);
     module.declare_function("js_removeenv", VOID, &[I64]);
+    // #1350: process.exitCode get/set.
+    module.declare_function("js_process_exit_code_get", DOUBLE, &[]);
+    module.declare_function("js_process_exit_code_set", DOUBLE, &[DOUBLE]);
     module.declare_function("js_console_table", VOID, &[DOUBLE]);
     module.declare_function("js_console_table_with_properties", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_console_trace", VOID, &[DOUBLE]);

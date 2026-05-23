@@ -240,6 +240,24 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                             index: Box::new(Expr::Number(0.0)),
                         });
                     }
+                    // #1350: process.exitCode value-read. Default is
+                    // `undefined` until something assigns to it; after a
+                    // write the previously-stored value round-trips. The
+                    // assignment side intercepts `process.exitCode = v`
+                    // in `lower_expr.rs` and routes to
+                    // `js_process_exit_code_set`. Both helpers share a
+                    // thread-local cell in `perry-runtime/src/process.rs`.
+                    "exitCode" => {
+                        return Ok(Expr::Call {
+                            callee: Box::new(Expr::ExternFuncRef {
+                                name: "js_process_exit_code_get".to_string(),
+                                param_types: vec![],
+                                return_type: Type::Number,
+                            }),
+                            args: vec![],
+                            type_args: vec![],
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -330,6 +348,17 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                         return Ok(Expr::IndexGet {
                             object: Box::new(Expr::ProcessArgv),
                             index: Box::new(Expr::Number(0.0)),
+                        });
+                    }
+                    "exitCode" => {
+                        return Ok(Expr::Call {
+                            callee: Box::new(Expr::ExternFuncRef {
+                                name: "js_process_exit_code_get".to_string(),
+                                param_types: vec![],
+                                return_type: Type::Number,
+                            }),
+                            args: vec![],
+                            type_args: vec![],
                         });
                     }
                     _ => {}
