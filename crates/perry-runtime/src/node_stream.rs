@@ -313,3 +313,32 @@ pub extern "C" fn js_node_stream_is_errored(_stream: f64) -> f64 {
 pub extern "C" fn js_node_stream_add_abort_signal(_signal: f64, stream: f64) -> f64 {
     stream
 }
+
+/// #1539: `stream.compose(...streams)` chains a sequence of streams
+/// into one composite Duplex (data flows through them in order).
+/// Perry's stream stubs don't propagate data through chains, so the
+/// helper returns a fresh Duplex — the typeof / instanceof checks
+/// callers do (`compose(a, b) instanceof Duplex`) hold, and the
+/// reads/writes are stubbed at the Duplex layer same as a bare
+/// `new Duplex()`. The variadic `...streams` arg list is ignored;
+/// real composition is tracked separately.
+#[no_mangle]
+pub extern "C" fn js_node_stream_compose(_streams_array: f64) -> f64 {
+    js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+}
+
+/// #1539: `stream.duplexPair([options])` returns a two-element array
+/// `[Duplex, Duplex]` where writes to one show up as reads on the
+/// other and vice versa. Perry's stubs return a pair of unrelated
+/// Duplex stubs so the shape (`const [a, b] = duplexPair()`,
+/// `a instanceof Duplex`) matches; cross-stream piping is the real
+/// missing piece, tracked separately.
+#[no_mangle]
+pub extern "C" fn js_node_stream_duplex_pair(_opts: f64) -> f64 {
+    let a = js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED));
+    let b = js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED));
+    let arr = crate::array::js_array_alloc(2);
+    crate::array::js_array_push(arr, JSValue::from_bits(a.to_bits()));
+    crate::array::js_array_push(arr, JSValue::from_bits(b.to_bits()));
+    f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+}

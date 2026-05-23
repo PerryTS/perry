@@ -436,6 +436,31 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
+    // #1539: `stream.compose(...streams)` chains streams into a
+    // composite Duplex; `stream.duplexPair([opts])` returns a paired
+    // `[Duplex, Duplex]`. Both return fresh Duplex stubs today
+    // (real composition/pairing isn't propagated yet) so consumers
+    // that branch on `instanceof Duplex` / typeof get the right
+    // shape and don't crash. Variadic args list for `compose` is
+    // accepted and ignored.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "compose",
+        class_filter: None,
+        runtime: "js_node_stream_compose",
+        args: &[NA_VARARGS],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "duplexPair",
+        class_filter: None,
+        runtime: "js_node_stream_duplex_pair",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Events ==========
     NativeModSig {
         module: "events",

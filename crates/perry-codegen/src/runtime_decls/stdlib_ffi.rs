@@ -812,6 +812,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_is_errored", DOUBLE, &[DOUBLE]);
     // #1541: addAbortSignal(signal, stream) — identity-returns the stream.
     module.declare_function("js_node_stream_add_abort_signal", DOUBLE, &[DOUBLE, DOUBLE]);
+    // #1539: compose(...streams) -> new Duplex; duplexPair(opts) -> [Duplex, Duplex].
+    module.declare_function("js_node_stream_compose", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_duplex_pair", DOUBLE, &[DOUBLE]);
 
     // ========== Event emitter ==========
     module.declare_function("js_event_emitter_emit", DOUBLE, &[I64, I64, I64]);

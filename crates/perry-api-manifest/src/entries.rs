@@ -2210,6 +2210,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // ignores the signal and returns the stream verbatim so chain
     // patterns (`r = addAbortSignal(s, r)`) keep working.
     method("stream", "addAbortSignal", false, None),
+    // #1539: `stream.compose(...streams)` chains streams into a
+    // composite Duplex; `stream.duplexPair([opts])` returns a paired
+    // `[Duplex, Duplex]`. Both return fresh Duplex stubs today.
+    method("stream", "compose", false, None),
+    method("stream", "duplexPair", false, None),
     // EventEmitter methods on stream instances. node:stream extends
     // EventEmitter — every Readable/Writable/Duplex/Transform/PassThrough
     // exposes the full `.on('data'|'end'|'error'|'close'|...)` /
