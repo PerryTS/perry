@@ -528,6 +528,9 @@ impl JsEmitter {
                 }
                 self.output.push_str(") : undefined)");
             }
+            Expr::ProcessAbort => {
+                self.output.push_str("(typeof process !== 'undefined' ? process.abort() : undefined)");
+            }
             Expr::ProcessStdin => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.stdin : { write: () => true })");
             }

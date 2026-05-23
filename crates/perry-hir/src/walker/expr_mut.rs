@@ -43,6 +43,7 @@ where
         | Expr::ProcessStdin
         | Expr::ProcessStdout
         | Expr::ProcessStderr
+        | Expr::ProcessAbort
         | Expr::ProcessStdinIsTTY
         | Expr::ProcessStdoutIsTTY
         | Expr::ProcessStderrIsTTY

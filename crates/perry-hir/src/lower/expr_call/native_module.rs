@@ -98,6 +98,11 @@ pub(super) fn try_native_module_methods(
                             };
                             return Ok(Ok(Expr::ProcessExit(code)));
                         }
+                        "abort" => {
+                            // process.abort() — raises SIGABRT, no clean
+                            // shutdown. Maps to libc::abort() at runtime.
+                            return Ok(Ok(Expr::ProcessAbort));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }

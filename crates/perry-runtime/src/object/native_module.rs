@@ -275,7 +275,8 @@ pub(crate) fn set_bound_native_closure_name(
 pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
     matches!(
         (module, prop),
-        ("tty", "isatty")
+        ("process", "abort")
+            | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
             | ("events", "EventEmitter")

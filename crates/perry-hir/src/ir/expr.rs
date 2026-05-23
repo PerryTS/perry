@@ -458,6 +458,8 @@ pub enum Expr {
     // process.exit(code?) -> never. Bare `process.exit()` lowers as
     // `ProcessExit(None)` which the runtime treats as code 0.
     ProcessExit(Option<Box<Expr>>),
+    // process.abort() -> never. Calls SIGABRT to terminate (no clean shutdown).
+    ProcessAbort,
     // process.stdin -> stub object { write: fn }
     ProcessStdin,
     // process.stdout -> stub object { write: fn }

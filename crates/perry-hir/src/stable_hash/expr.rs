@@ -87,6 +87,7 @@ impl SH for Expr {
             Expr::ProcessChdir(e) => { tag(h, 67); e.as_ref().hash(h); }
             Expr::ProcessKill { pid, signal } => { tag(h, 68); pid.as_ref().hash(h); signal.hash(h); }
             Expr::ProcessExit(e) => { tag(h, 69); e.hash(h); }
+            Expr::ProcessAbort => tag(h, 11224),
             Expr::ProcessStdin => tag(h, 70),
             Expr::ProcessStdout => tag(h, 71),
             Expr::ProcessStderr => tag(h, 72),

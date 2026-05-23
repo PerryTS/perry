@@ -458,6 +458,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_chdir", VOID, &[I64]);
     module.declare_function("js_process_kill", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_process_exit", VOID, &[DOUBLE]);
+    module.declare_function("js_process_abort", VOID, &[]);
     module.declare_function("js_process_on", VOID, &[I64, I64]);
     module.declare_function("js_process_once", VOID, &[I64, I64]);
     module.declare_function("js_process_next_tick", VOID, &[I64]);
