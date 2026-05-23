@@ -197,6 +197,19 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                             ("unregister".to_string(), Expr::Undefined),
                         ]));
                     }
+                    // #1379: process.config — object describing build-time
+                    // config (`{ variables, target_defaults }` in Node).
+                    // Perry has no `node-gyp`-style build to surface, but
+                    // consumers feature-detect on `process.config.variables`
+                    // existing (or specific fields like `target_arch`), so
+                    // return the shape with empty sub-objects rather than
+                    // letting the bare read fall through to the 0 sentinel.
+                    "config" => {
+                        return Ok(Expr::Object(vec![
+                            ("variables".to_string(), Expr::Object(Vec::new())),
+                            ("target_defaults".to_string(), Expr::Object(Vec::new())),
+                        ]));
+                    }
                     _ => {}
                 }
             }
@@ -273,6 +286,12 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                             ("register".to_string(), Expr::Undefined),
                             ("registerBeforeExit".to_string(), Expr::Undefined),
                             ("unregister".to_string(), Expr::Undefined),
+                        ]));
+                    }
+                    "config" => {
+                        return Ok(Expr::Object(vec![
+                            ("variables".to_string(), Expr::Object(Vec::new())),
+                            ("target_defaults".to_string(), Expr::Object(Vec::new())),
                         ]));
                     }
                     _ => {}
