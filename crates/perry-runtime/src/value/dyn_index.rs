@@ -221,3 +221,29 @@ pub extern "C" fn js_is_undefined_or_bare_nan(value: f64) -> i32 {
     }
     0
 }
+
+// --- #1561: force-keep the dynamic-index FFI exports under LTO ---
+//
+// `js_dyn_index_get` / `js_dyn_index_set` / `js_is_undefined_or_bare_nan`
+// are `#[no_mangle] pub extern "C"`, but they have **zero internal Rust
+// callers** — they are only ever invoked from generated LLVM IR (codegen
+// emits the calls in `perry-codegen/src/expr/index_get.rs` and
+// `expr/instance_misc1.rs`). The default `.a` staticlib keeps them via
+// staticlib-export semantics, but any build mode that round-trips the
+// runtime through whole-program LLVM bitcode — the `PERRY_LLVM_BITCODE_LINK`
+// path in `optimized_libs.rs`, cross-compile `-Zbuild-std` builds, or a
+// future switch to fat LTO — is free to *internalize* an unreferenced
+// `#[no_mangle]` symbol and dead-strip it, leaving the codegen-emitted call
+// dangling: `Undefined symbols: _js_dyn_index_get` at final link.
+//
+// The `#[used]` statics below take the address of each export, creating a
+// retained reference edge that LTO and the linker's `-dead_strip` must
+// honor (the entries land in `@llvm.used` / a `no_dead_strip` section). This
+// guarantees the symbols survive auto-optimize regardless of feature set or
+// link mode. Function-pointer types are `Sync`, so no wrapper is needed.
+#[used]
+static KEEP_JS_DYN_INDEX_GET: extern "C" fn(f64, f64) -> f64 = js_dyn_index_get;
+#[used]
+static KEEP_JS_DYN_INDEX_SET: extern "C" fn(f64, f64, f64) -> f64 = js_dyn_index_set;
+#[used]
+static KEEP_JS_IS_UNDEFINED_OR_BARE_NAN: extern "C" fn(f64) -> i32 = js_is_undefined_or_bare_nan;
