@@ -424,5 +424,18 @@ pub fn set_on_tap(handle: i64, callback: f64) {
 
             std::mem::forget(target);
         }
+        // Register with geisterhand so e2e harnesses can drive list rows
+        // and any other VStack/HStack/Text that uses widgetSetOnClick.
+        // Widget-type 9 = "clickable region", callback_kind 0 = CB_ON_CLICK
+        // so POST /click/<handle> dispatches this callback.
+        #[cfg(feature = "geisterhand")]
+        {
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
+            unsafe {
+                perry_geisterhand_register(handle, 9, 0, callback, std::ptr::null());
+            }
+        }
     }
 }
