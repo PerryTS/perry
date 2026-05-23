@@ -26,12 +26,6 @@
     "category": "bug-open",
     "reason": "node:perf_hooks: createHistogram() unimplemented (not a function). Flips to PASS when #1336 lands."
   },
-  "node-suite/perf_hooks/entry/to-json": {
-    "issue": "1387",
-    "added": "2026-05-22",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: PerformanceEntry#toJSON() is not a function. Flips to PASS when #1387 lands."
-  },
   "node-suite/console/dir/depth-options": {
     "issue": "1199",
     "added": "2026-05-20",

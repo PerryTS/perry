@@ -17,7 +17,10 @@
 //! hold an arbitrary heap JSValue, so the store is registered as a GC root
 //! scanner (`scan_perf_entries_roots_mut`).
 
-use crate::object::{js_object_alloc_with_shape, js_object_get_field_by_name, js_object_set_field};
+use crate::object::{
+    js_object_alloc_with_shape, js_object_get_field, js_object_get_field_by_name,
+    js_object_set_field,
+};
 use crate::string::StringHeader;
 use crate::value::JSValue;
 use std::cell::{Cell, RefCell};
@@ -31,6 +34,13 @@ const ENTRY_TYPE_MEASURE: u8 = 1;
 /// returned by mark/measure and the getEntries* arrays.
 const PERF_ENTRY_SHAPE: u32 = 0x7FFF_FF40;
 const PERF_ENTRY_KEYS: &[u8] = b"name\0entryType\0startTime\0duration\0detail\0";
+
+/// Distinct shape for the plain object returned by `PerformanceEntry#toJSON()`
+/// (#1387). Same field names as the entry, but a different shape id so its
+/// `keys_array` allocation differs from the entry's — `is_perf_entry_object`
+/// then reports `false` for the toJSON result, matching Node where the
+/// serialized object is a plain object with no `toJSON` method of its own.
+const PERF_ENTRY_JSON_SHAPE: u32 = 0x7FFF_FF42;
 
 /// Shape id for the `{ idle, active, utilization }` eventLoopUtilization object.
 const ELU_SHAPE: u32 = 0x7FFF_FF41;
@@ -60,6 +70,54 @@ thread_local! {
     /// Singleton so the named import and `globalThis.performance` are the same
     /// object (Node identity). GC-rooted in `scan_perf_entries_roots_mut`.
     static PERFORMANCE_NS: Cell<u64> = const { Cell::new(0) };
+
+    /// The `keys_array` pointer shared by every entry object on this thread.
+    /// `js_object_alloc_with_shape` caches one `keys_array` per shape id, so
+    /// all `PERF_ENTRY_SHAPE` objects share the same allocation — recording it
+    /// once lets `is_perf_entry_object` recognize an entry with a single
+    /// pointer compare (no per-key string matching, no GC-tracked registry of
+    /// movable entry pointers). Set on the first `entry_to_object` call.
+    static PERF_ENTRY_KEYS_ARRAY: Cell<usize> = const { Cell::new(0) };
+}
+
+/// True when `obj` is a mark/measure entry object produced by
+/// `entry_to_object` — i.e. its `keys_array` is the recorded shared
+/// `PERF_ENTRY_SHAPE` allocation. The toJSON-result object uses a different
+/// shape, so it deliberately does not match. (#1387)
+pub(crate) unsafe fn is_perf_entry_object(obj: *const crate::object::ObjectHeader) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    let recorded = PERF_ENTRY_KEYS_ARRAY.with(|c| c.get());
+    recorded != 0 && (*obj).keys_array as usize == recorded
+}
+
+/// Build the plain object returned by `PerformanceEntry#toJSON()` — a copy of
+/// the entry's `{ name, entryType, startTime, duration, detail }` fields under
+/// a distinct shape so the result is itself a plain object (no synthesized
+/// `toJSON`). Mirrors Node's serialization. (#1387)
+pub(crate) unsafe fn perf_entry_to_json(this: f64) -> f64 {
+    let jv = JSValue::from_bits(this.to_bits());
+    if !jv.is_pointer() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let src = jv.as_pointer::<crate::object::ObjectHeader>();
+    if src.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    // Snapshot the 5 fields BEFORE allocating `out` — the alloc can trigger a
+    // GC that relocates `src`, invalidating this raw pointer.
+    let fields: [JSValue; 5] = std::array::from_fn(|i| js_object_get_field(src, i as u32));
+    let out = js_object_alloc_with_shape(
+        PERF_ENTRY_JSON_SHAPE,
+        5,
+        PERF_ENTRY_KEYS.as_ptr(),
+        PERF_ENTRY_KEYS.len() as u32,
+    );
+    for (i, v) in fields.iter().enumerate() {
+        js_object_set_field(out, i as u32, *v);
+    }
+    crate::value::js_nanbox_pointer(out as i64)
 }
 
 /// The per-thread singleton `performance` namespace object (perf_hooks-tagged).
@@ -147,6 +205,15 @@ unsafe fn entry_to_object(e: &PerfEntry) -> f64 {
         PERF_ENTRY_KEYS.as_ptr(),
         PERF_ENTRY_KEYS.len() as u32,
     );
+    // Record the shared keys_array so `is_perf_entry_object` can recognize
+    // entries by pointer identity (see PERF_ENTRY_KEYS_ARRAY). All entries on
+    // this thread share it, so a single store on the first call suffices.
+    let keys_ptr = (*obj).keys_array as usize;
+    PERF_ENTRY_KEYS_ARRAY.with(|c| {
+        if c.get() == 0 {
+            c.set(keys_ptr);
+        }
+    });
     let type_str = if e.entry_type == ENTRY_TYPE_MEASURE {
         "measure"
     } else {

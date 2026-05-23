@@ -1332,6 +1332,26 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
 
+        // #1387: `PerformanceEntry#toJSON` is a synthesized (non-enumerable)
+        // method — entry objects are plain shaped objects with no stored
+        // `toJSON` field, so a `entry.toJSON` read (e.g. `typeof entry.toJSON`)
+        // would otherwise miss the keys_array and return undefined. Return a
+        // bound-method closure; the call lands in `js_native_call_method`'s
+        // toJSON arm via `dispatch_bound_method`. Gated on the key bytes first
+        // so non-toJSON reads pay only a length+compare, not the identity
+        // check.
+        if !key.is_null() {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            if key_bytes == b"toJSON" && crate::perf_hooks::is_perf_entry_object(obj) {
+                let this_f64 =
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                let result = js_class_method_bind(this_f64, b"toJSON".as_ptr(), 6);
+                return JSValue::from_bits(result.to_bits());
+            }
+        }
+
         // Issue #649: native-module sub-namespace property access.
         // `fs.constants.F_OK` lowers to `PropertyGet { PropertyGet { fs,
         // "constants" }, "F_OK" }` — the inner expression's runtime value

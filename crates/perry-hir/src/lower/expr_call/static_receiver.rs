@@ -48,6 +48,16 @@ pub(super) fn static_receiver_class(
                 {
                     return Some("Object");
                 }
+                // #1387: `performance.mark(...).toJSON()` /
+                // `performance.measure(...).toJSON()` — the entry is a plain
+                // shaped object, not a Date. Classify as "Object" so the
+                // ambiguous-Date arms are skipped and the call reaches the
+                // synthesized PerformanceEntry#toJSON.
+                if matches!(m.obj.as_ref(), ast::Expr::Ident(o) if o.sym.as_ref() == "performance")
+                    && matches!(&m.prop, ast::MemberProp::Ident(p) if p.sym.as_ref() == "mark" || p.sym.as_ref() == "measure")
+                {
+                    return Some("Object");
+                }
             }
         }
     }

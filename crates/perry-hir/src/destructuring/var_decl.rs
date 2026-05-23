@@ -27,12 +27,24 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     ast::Expr::Object(_) => true,
                     ast::Expr::Call(call) => {
                         if let ast::Callee::Expr(callee) = &call.callee {
-                            matches!(
-                                callee.as_ref(),
-                                ast::Expr::Member(m)
-                                    if matches!(m.obj.as_ref(), ast::Expr::Ident(o) if o.sym.as_ref() == "Object")
-                                        && matches!(&m.prop, ast::MemberProp::Ident(p) if p.sym.as_ref() == "create")
-                            )
+                            if let ast::Expr::Member(m) = callee.as_ref() {
+                                let obj_is = |name: &str| matches!(m.obj.as_ref(), ast::Expr::Ident(o) if o.sym.as_ref() == name);
+                                let prop_is = |name: &str| matches!(&m.prop, ast::MemberProp::Ident(p) if p.sym.as_ref() == name);
+                                // Object.create(...) — #809.
+                                (obj_is("Object") && prop_is("create"))
+                                    // #1387: `performance.mark(...)` /
+                                    // `performance.measure(...)` return a
+                                    // PerformanceEntry — a plain shaped object,
+                                    // never a Date — so `entry.toJSON()` (and
+                                    // `.toString()`/`.valueOf()`) must skip the
+                                    // ambiguous-Date arms and fall through to
+                                    // generic dispatch (which finds the
+                                    // synthesized PerformanceEntry#toJSON).
+                                    || (obj_is("performance")
+                                        && (prop_is("mark") || prop_is("measure")))
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         }
