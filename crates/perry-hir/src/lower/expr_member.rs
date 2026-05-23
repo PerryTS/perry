@@ -220,6 +220,26 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     // all exploded.
                     "allowedNodeEnvironmentFlags" => return Ok(Expr::SetNew),
                     "report" => return Ok(process_report_literal()),
+                    // #1346: process.argv0 / execPath / title — Node
+                    // documents these as strings (program-invocation
+                    // name / resolved-binary path / OS-displayed
+                    // title). Perry was hitting the 0.0 sentinel and
+                    // `typeof process.argv0 === "string"` failed; any
+                    // `.length` / `.endsWith(...)` then crashed.
+                    //
+                    // Lower all three to `process.argv[0]` — Perry's
+                    // own argv[0] is already the binary path / name
+                    // we'd want for argv0 and execPath, and is a
+                    // reasonable default for `title` (Node defaults
+                    // to argv[0] too until something assigns `.title`).
+                    // Settable `process.title` is tracked separately
+                    // (#1401); the shape-only read is what closes #1346.
+                    "argv0" | "execPath" | "title" => {
+                        return Ok(Expr::IndexGet {
+                            object: Box::new(Expr::ProcessArgv),
+                            index: Box::new(Expr::Number(0.0)),
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -306,6 +326,12 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     }
                     "allowedNodeEnvironmentFlags" => return Ok(Expr::SetNew),
                     "report" => return Ok(process_report_literal()),
+                    "argv0" | "execPath" | "title" => {
+                        return Ok(Expr::IndexGet {
+                            object: Box::new(Expr::ProcessArgv),
+                            index: Box::new(Expr::Number(0.0)),
+                        });
+                    }
                     _ => {}
                 }
             }
