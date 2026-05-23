@@ -551,6 +551,13 @@ impl JsEmitter {
                 self.emit_expr(value);
                 self.output.push_str(") : undefined)");
             }
+            Expr::ProcessLoadEnvFile(path) => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.loadEnvFile === 'function' ? process.loadEnvFile(");
+                if let Some(p) = path {
+                    self.emit_expr(p);
+                }
+                self.output.push_str(") : undefined)");
+            }
             Expr::ProcessNextTick { callback, args } => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.nextTick(");
                 self.emit_expr(callback);

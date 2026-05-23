@@ -1870,6 +1870,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "resourceUsage", false, None),
     method("process", "getActiveResourcesInfo", false, None),
     method("process", "hrtime", false, None),
+    method("process", "loadEnvFile", false, None),
     property("process", "argv"),
     property("process", "platform"),
     property("process", "arch"),

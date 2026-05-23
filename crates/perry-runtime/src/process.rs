@@ -100,6 +100,60 @@ pub extern "C" fn js_process_set_title(value: f64) {
     PROCESS_TITLE.with(|c| *c.borrow_mut() = Some(s));
 }
 
+/// process.loadEnvFile(path?) -> undefined. Reads a `.env` file and sets
+/// each KEY=VALUE line via `std::env::set_var`. Default path is `./.env`
+/// (matches Node 20.12+). Lines starting with `#` are comments; matching
+/// leading/trailing single or double quotes on the value are stripped.
+/// On read failure (missing file, permission error) we silently no-op so
+/// library code can call this defensively.
+#[no_mangle]
+pub extern "C" fn js_process_load_env_file(path: f64) {
+    let undef_bits = crate::value::TAG_UNDEFINED;
+    let path_str = if path.to_bits() == undef_bits {
+        ".env".to_string()
+    } else {
+        let ptr = crate::value::js_jsvalue_to_string(path);
+        if ptr.is_null() {
+            ".env".to_string()
+        } else {
+            unsafe {
+                let header = &*ptr;
+                let len = header.byte_len as usize;
+                let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+            }
+        }
+    };
+    let contents = match std::fs::read_to_string(&path_str) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    for raw in contents.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let mut value = raw_value.trim().to_string();
+        // Strip leading/trailing matching quotes.
+        if value.len() >= 2 {
+            let bytes = value.as_bytes();
+            let first = bytes[0];
+            let last = bytes[value.len() - 1];
+            if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+                value = value[1..value.len() - 1].to_string();
+            }
+        }
+        std::env::set_var(key, value);
+    }
+}
+
 /// process.umask() -> number. Returns the current file-mode creation mask
 /// without modifying it. POSIX's `umask` syscall has no read-only form, so
 /// we set the mask to 0, capture the previous value, then restore it.

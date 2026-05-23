@@ -287,6 +287,7 @@ fn specialized_stdlib_call(expr: &Expr) -> Option<(&'static str, &'static str)> 
         Expr::ProcessHrtime(_) => ("process", "hrtime"),
         Expr::ProcessTitle => ("process", "title"),
         Expr::ProcessSetTitle(_) => ("process", "title"),
+        Expr::ProcessLoadEnvFile(_) => ("process", "loadEnvFile"),
         Expr::ProcessStdinIsTTY => ("process", "stdin.isTTY"),
         Expr::ProcessStdoutIsTTY => ("process", "stdout.isTTY"),
         Expr::ProcessStderrIsTTY => ("process", "stderr.isTTY"),

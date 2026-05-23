@@ -100,6 +100,7 @@ impl SH for Expr {
             Expr::ProcessHrtime(e) => { tag(h, 11234); e.hash(h); }
             Expr::ProcessTitle => tag(h, 11235),
             Expr::ProcessSetTitle(e) => { tag(h, 11236); e.as_ref().hash(h); }
+            Expr::ProcessLoadEnvFile(e) => { tag(h, 11237); e.hash(h); }
             Expr::ProcessStdin => tag(h, 70),
             Expr::ProcessStdout => tag(h, 71),
             Expr::ProcessStderr => tag(h, 72),

@@ -1046,6 +1046,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessHrtime(..)
         | Expr::ProcessTitle
         | Expr::ProcessSetTitle(..)
+        | Expr::ProcessLoadEnvFile(..)
         | Expr::RegExpExecIndex
         | Expr::CryptoRandomUUID
         | Expr::CryptoRandomBytes(..)

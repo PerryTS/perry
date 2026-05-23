@@ -131,7 +131,8 @@ impl<'a> FuncEmitCtx<'a> {
             | Expr::ProcessUmask(_)
             | Expr::ProcessEmitWarning(_)
             | Expr::ProcessCpuUsage(_)
-            | Expr::ProcessSetTitle(_) => {
+            | Expr::ProcessSetTitle(_)
+            | Expr::ProcessLoadEnvFile(_) => {
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
             Expr::EnvGet(_) | Expr::EnvGetDynamic(_) => {

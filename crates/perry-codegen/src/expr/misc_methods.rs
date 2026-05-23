@@ -138,6 +138,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(v)
         }
 
+        // -------- process.loadEnvFile(path?) (#1399) --------
+        Expr::ProcessLoadEnvFile(path) => {
+            let path_val = if let Some(e) = path {
+                lower_expr(ctx, e)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            ctx.block()
+                .call_void("js_process_load_env_file", &[(DOUBLE, &path_val)]);
+            Ok(crate::nanbox::double_literal(f64::from_bits(
+                crate::nanbox::TAG_UNDEFINED,
+            )))
+        }
+
         // -------- RegExpExecIndex — reads thread-local from the last exec() call --------
         Expr::RegExpExecIndex => Ok(ctx.block().call(DOUBLE, "js_regexp_exec_get_index", &[])),
 

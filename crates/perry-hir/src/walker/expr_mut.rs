@@ -1070,6 +1070,11 @@ where
             }
         }
         Expr::ProcessSetTitle(v) => f(v),
+        Expr::ProcessLoadEnvFile(opt) => {
+            if let Some(v) = opt {
+                f(v);
+            }
+        }
 
         // ─── Child process ───────────────────────────────────────────────
         Expr::ChildProcessExecSync { command, options } => {

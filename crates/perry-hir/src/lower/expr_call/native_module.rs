@@ -267,6 +267,17 @@ pub(super) fn try_native_module_methods(
                             };
                             return Ok(Ok(Expr::ProcessHrtime(prior)));
                         }
+                        "loadEnvFile" => {
+                            // process.loadEnvFile(path?) — reads a .env file
+                            // and writes each KEY=VAL into the OS environment.
+                            // Default path is './.env'. Returns undefined.
+                            let path = if !args.is_empty() {
+                                Some(Box::new(args.into_iter().next().unwrap()))
+                            } else {
+                                None
+                            };
+                            return Ok(Ok(Expr::ProcessLoadEnvFile(path)));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }
