@@ -79,6 +79,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
                 return Ok(val_double);
             }
+            // #1344: `process.env.X = v` must persist to the real OS
+            // environment, not just a cached ProcessEnv object backing.
+            // Pre-fix the generic `js_object_set_field_by_name` path
+            // stored on the cached dict but `process.env.X` (`EnvGet`)
+            // reads from `std::env::var` directly, so the value never
+            // round-tripped and child processes inherited the
+            // unmodified parent env.
+            //
+            // Route the store through `js_setenv(key, value)` (writes
+            // via `std::env::set_var`, coerces non-string values to
+            // strings via `js_jsvalue_to_string`). Reads still go
+            // through `js_getenv_value`, so the round-trip works.
+            if matches!(object.as_ref(), Expr::ProcessEnv) {
+                let key_idx = ctx.strings.intern(property);
+                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let val_double = lower_expr(ctx, value)?;
+                let blk = ctx.block();
+                let key_box = blk.load(DOUBLE, &key_handle_global);
+                let key_handle = unbox_to_i64(blk, &key_box);
+                blk.call_void("js_setenv", &[(I64, &key_handle), (DOUBLE, &val_double)]);
+                return Ok(val_double);
+            }
             // Scalar replacement fast path: store to the field's alloca.
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(slot) = ctx

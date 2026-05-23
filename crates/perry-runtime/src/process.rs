@@ -446,6 +446,76 @@ pub extern "C" fn js_getenv_value(name_ptr: *const StringHeader) -> f64 {
     f64::from_bits(val.bits())
 }
 
+/// Set an environment variable. Backs `process.env.X = v` (#1344).
+///
+/// Reads via `js_getenv_value` already hit `std::env::var`, so writing
+/// through `std::env::set_var` round-trips with no caching layer to
+/// keep in sync. Non-string values are coerced via the same
+/// `js_jsvalue_to_string` Perry uses for `String(x)` / template
+/// concat — matching Node, which coerces `process.env.PORT = 8080` to
+/// `"8080"` before storing.
+///
+/// On unset (calling code routes `delete process.env.X` here too if
+/// it lowers the delete to `process.env.X = undefined` — the empty
+/// SAFE-EMPTY-STRING vs unset distinction is handled by
+/// `js_removeenv` below, which the delete path can call directly).
+#[no_mangle]
+pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
+    use crate::value::js_jsvalue_to_string;
+    unsafe {
+        if name_ptr.is_null() || (name_ptr as usize) < 0x1000 {
+            return;
+        }
+        let len = (*name_ptr).byte_len as usize;
+        let data_ptr = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let name_bytes = std::slice::from_raw_parts(data_ptr, len);
+        let name = match std::str::from_utf8(name_bytes) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        // Coerce value to string. js_jsvalue_to_string handles
+        // numbers/booleans/null/undefined and returns a *mut StringHeader.
+        let value_str_hdr = js_jsvalue_to_string(value);
+        if value_str_hdr.is_null() {
+            // Defensive: null shouldn't happen for non-undefined inputs,
+            // but if it does we silently no-op rather than crash. The
+            // `= undefined` case is intentionally rare in practice.
+            return;
+        }
+
+        // Read the string bytes back into a Rust &str directly off the
+        // StringHeader payload — same layout as `js_getenv` uses for the
+        // name above.
+        let v_len = (*value_str_hdr).byte_len as usize;
+        let v_data = (value_str_hdr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let v_bytes = std::slice::from_raw_parts(v_data, v_len);
+        let v_str = match std::str::from_utf8(v_bytes) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        std::env::set_var(name, v_str);
+    }
+}
+
+/// Unset an environment variable. Backs `delete process.env.X` (#1344).
+#[no_mangle]
+pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
+    unsafe {
+        if name_ptr.is_null() || (name_ptr as usize) < 0x1000 {
+            return;
+        }
+        let len = (*name_ptr).byte_len as usize;
+        let data_ptr = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let name_bytes = std::slice::from_raw_parts(data_ptr, len);
+        let name = match std::str::from_utf8(name_bytes) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        std::env::remove_var(name);
+    }
+}
+
 /// Get resident set size (RSS) in bytes using platform-specific APIs
 pub(crate) fn get_rss_bytes() -> u64 {
     #[cfg(target_os = "macos")]
