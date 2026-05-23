@@ -114,6 +114,44 @@ extern "C" fn timers_promises_set_immediate(_closure: *const ClosureHeader, valu
     crate::value::js_nanbox_pointer(promise as i64)
 }
 
+// ── node:timers namespace (`import * as timers from "node:timers"`) ──────────
+// Route to the SAME global timer runtime fns the bare globals use, so
+// `timers.setTimeout(...)` matches `setTimeout(...)`. NOTE: named imports
+// (`import { setTimeout } from "node:timers"`) deliberately bypass this and
+// keep the codegen global fast-path (which handles `setTimeout(fn, delay,
+// ...args)` varargs) — compile.rs skips registering node:timers named imports
+// as submodule exports. Refs #1213.
+fn callback_arg_to_i64(v: f64) -> i64 {
+    (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
+}
+extern "C" fn timers_ns_set_timeout(_c: *const ClosureHeader, cb: f64, ms: f64) -> f64 {
+    crate::value::js_nanbox_pointer(crate::timer::js_set_timeout_callback(
+        callback_arg_to_i64(cb),
+        ms,
+    ))
+}
+extern "C" fn timers_ns_set_interval(_c: *const ClosureHeader, cb: f64, ms: f64) -> f64 {
+    crate::value::js_nanbox_pointer(crate::timer::setInterval(callback_arg_to_i64(cb), ms))
+}
+extern "C" fn timers_ns_set_immediate(_c: *const ClosureHeader, cb: f64) -> f64 {
+    crate::value::js_nanbox_pointer(crate::timer::js_set_immediate_callback(
+        callback_arg_to_i64(cb),
+    ))
+}
+extern "C" fn timers_ns_clear_timeout(_c: *const ClosureHeader, arg: f64) -> f64 {
+    crate::timer::js_clear_timeout_value(arg);
+    f64::from_bits(TAG_UNDEFINED)
+}
+extern "C" fn timers_ns_clear_interval(_c: *const ClosureHeader, arg: f64) -> f64 {
+    crate::timer::js_clear_interval_value(arg);
+    f64::from_bits(TAG_UNDEFINED)
+}
+// Immediates live in the shared timer pool; clearTimeout retains-out both pools.
+extern "C" fn timers_ns_clear_immediate(_c: *const ClosureHeader, arg: f64) -> f64 {
+    crate::timer::js_clear_timeout_value(arg);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 thunk!(
     thunk_timers_setInterval,
     "node:timers/promises.setInterval is not yet implemented in Perry (tracked by issue #793)."
@@ -1247,6 +1285,37 @@ fn ensure_diag_noop_closure() -> *mut ClosureHeader {
 
 const SUBMODULES: &[SubmoduleSpec] = &[
     SubmoduleSpec {
+        // node:timers namespace object (`import * as timers`). Named imports
+        // bypass this (compile.rs) to keep the global fast-path. (#1213)
+        key: "timers",
+        exports: &[
+            ExportSpec {
+                name: "setTimeout",
+                thunk: ExportThunk::Fn2(timers_ns_set_timeout),
+            },
+            ExportSpec {
+                name: "setInterval",
+                thunk: ExportThunk::Fn2(timers_ns_set_interval),
+            },
+            ExportSpec {
+                name: "setImmediate",
+                thunk: ExportThunk::Fn1(timers_ns_set_immediate),
+            },
+            ExportSpec {
+                name: "clearTimeout",
+                thunk: ExportThunk::Fn1(timers_ns_clear_timeout),
+            },
+            ExportSpec {
+                name: "clearInterval",
+                thunk: ExportThunk::Fn1(timers_ns_clear_interval),
+            },
+            ExportSpec {
+                name: "clearImmediate",
+                thunk: ExportThunk::Fn1(timers_ns_clear_immediate),
+            },
+        ],
+    },
+    SubmoduleSpec {
         key: "timers_promises",
         exports: &[
             ExportSpec {
@@ -1458,6 +1527,14 @@ fn ensure_export_singleton(
         let arity = match export.name {
             "setTimeout" => 2,
             "setImmediate" => 1,
+            _ => 1,
+        };
+        js_register_closure_arity(thunk_ptr, arity);
+    }
+    // #1213: node:timers namespace — setTimeout/setInterval take (cb, delay).
+    if submod.key == "timers" {
+        let arity = match export.name {
+            "setTimeout" | "setInterval" => 2,
             _ => 1,
         };
         js_register_closure_arity(thunk_ptr, arity);

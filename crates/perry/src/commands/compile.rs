@@ -2771,15 +2771,24 @@ pub fn run_with_parse_cache(
                 for spec in &import.specifiers {
                     match spec {
                         perry_hir::ImportSpecifier::Named { imported, local } => {
-                            import_function_node_submodule.insert(
-                                local.clone(),
-                                (submod_key.clone(), imported.clone()),
-                            );
-                            if local != imported {
+                            // #1213: node:timers named imports (`import {
+                            // setTimeout } from "node:timers"`) keep the global
+                            // timer codegen fast-path (which handles the
+                            // `setTimeout(fn, delay, ...args)` varargs form).
+                            // Routing them through the submodule thunk here
+                            // would drop varargs — only the `import * as`
+                            // namespace shape uses the submodule.
+                            if submod_key != "timers" {
                                 import_function_node_submodule.insert(
-                                    imported.clone(),
+                                    local.clone(),
                                     (submod_key.clone(), imported.clone()),
                                 );
+                                if local != imported {
+                                    import_function_node_submodule.insert(
+                                        imported.clone(),
+                                        (submod_key.clone(), imported.clone()),
+                                    );
+                                }
                             }
                         }
                         perry_hir::ImportSpecifier::Default { local } => {
@@ -2797,7 +2806,11 @@ pub fn run_with_parse_cache(
                             // submodules (`timers/promises` etc.) keep the
                             // function-singleton routing because no real
                             // code reads them as namespace objects.
-                            if submod_key == "diagnostics_channel" {
+                            if submod_key == "diagnostics_channel" || submod_key == "timers" {
+                                // Default import of node:timers is the module
+                                // object — route to the namespace so
+                                // `import timers from "node:timers"` works
+                                // like `import * as timers` (#1213).
                                 namespace_node_submodules
                                     .insert(local.clone(), submod_key.clone());
                                 if !namespace_imports.contains(local) {

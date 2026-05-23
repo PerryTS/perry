@@ -131,6 +131,10 @@ pub(super) fn collect_js_module_imports(file_path: &std::path::Path, source: &st
 pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
     let normalized = source.strip_prefix("node:").unwrap_or(source);
     match normalized {
+        // node:timers — only the `import * as timers` namespace shape routes
+        // through the submodule namespace; named imports keep the global
+        // fast-path (gated in compile.rs). (#1213)
+        "timers" => Some("timers"),
         "timers/promises" => Some("timers_promises"),
         "readline/promises" => Some("readline_promises"),
         "stream/promises" => Some("stream_promises"),
