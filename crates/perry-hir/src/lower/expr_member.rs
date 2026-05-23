@@ -151,6 +151,52 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                             ("headersUrl".to_string(), Expr::String(String::new())),
                         ]));
                     }
+                    // #1378: process.features — object of boolean capability
+                    // flags. Consumers feature-detect on individual fields
+                    // (e.g. `process.features.openssl_is_boringssl`); a bare
+                    // read of `process.features` previously returned a 0
+                    // sentinel, so `.X` on it was always undefined. Lower
+                    // to an inline object literal matching the Node shape.
+                    // All Perry flags are `false` except `ipv6` (the
+                    // runtime's `node:dgram`/network stack handles it) —
+                    // the literal mirrors what we actually link in.
+                    "features" => return Ok(process_features_literal()),
+                    // #1400: process.sourceMapsEnabled — boolean indicating
+                    // whether the runtime's source-map support is on. Perry
+                    // compiles AOT and doesn't ship a source-map resolver,
+                    // so the value is always false. Without this arm the
+                    // bare read returned a 0 sentinel — falsy in a boolean
+                    // context but `typeof` was `"number"`, so libraries
+                    // doing `typeof process.sourceMapsEnabled === "boolean"`
+                    // bailed out (e.g. some Vitest stack-trace formatters).
+                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    // #1412: `process.moduleLoadList` is Node's list of
+                    // built-in modules already loaded into the
+                    // interpreter. Perry AOT-compiles every reachable
+                    // module into the binary — there is no runtime
+                    // module loader and no observable "load list", so
+                    // the spec-compatible value is an empty array. Code
+                    // that probes the shape (Array.isArray, .length,
+                    // .includes(name)) now does the right thing instead
+                    // of crashing on the 0.0 sentinel.
+                    "moduleLoadList" => return Ok(Expr::Array(vec![])),
+                    // #1482: process.finalization — control surface added
+                    // in Node 22 for FinalizationRegistry-like lifecycle
+                    // hooks (register / registerBeforeExit / unregister).
+                    // Perry doesn't have the runtime support yet, but
+                    // shape-only consumers feature-detect on
+                    // `typeof process.finalization === "object"` first;
+                    // returning an Object with the three documented
+                    // method names (currently undefined) closes that
+                    // gap. Real implementations of register / unregister
+                    // are tracked separately.
+                    "finalization" => {
+                        return Ok(Expr::Object(vec![
+                            ("register".to_string(), Expr::Undefined),
+                            ("registerBeforeExit".to_string(), Expr::Undefined),
+                            ("unregister".to_string(), Expr::Undefined),
+                        ]));
+                    }
                     _ => {}
                 }
             }
@@ -217,6 +263,16 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                             ("name".to_string(), Expr::String("node".to_string())),
                             ("sourceUrl".to_string(), Expr::String(String::new())),
                             ("headersUrl".to_string(), Expr::String(String::new())),
+                        ]));
+                    }
+                    "features" => return Ok(process_features_literal()),
+                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    "moduleLoadList" => return Ok(Expr::Array(vec![])),
+                    "finalization" => {
+                        return Ok(Expr::Object(vec![
+                            ("register".to_string(), Expr::Undefined),
+                            ("registerBeforeExit".to_string(), Expr::Undefined),
+                            ("unregister".to_string(), Expr::Undefined),
                         ]));
                     }
                     _ => {}
@@ -1186,4 +1242,37 @@ fn is_stream_api_member(module: &str, prop: &str) -> bool {
         "transform_stream" => matches!(prop, "readable" | "writable"),
         _ => false,
     }
+}
+
+/// #1378: `process.features` literal. Boolean capability flags Node
+/// exposes so libraries can detect what the runtime links in. Perry
+/// links its own networking/TLS stack; the values here reflect what
+/// the runtime *actually* supports, not what Node would say — readers
+/// generally branch on `openssl_is_boringssl` / `quic` / `typescript`
+/// rather than rejecting any unrecognised value, so a Perry-honest
+/// shape is safer than parroting Node's.
+fn process_features_literal() -> Expr {
+    fn b(k: &str, v: bool) -> (String, Expr) {
+        (k.to_string(), Expr::Bool(v))
+    }
+    Expr::Object(vec![
+        b("inspector", false),
+        b("debug", false),
+        b("uv", false),
+        b("ipv6", true),
+        b("tls_alpn", true),
+        b("tls_sni", true),
+        b("tls_ocsp", true),
+        b("tls", true),
+        b("openssl_is_boringssl", false),
+        b("cached_builtins", false),
+        b("require_module", false),
+        b("quic", false),
+        // Perry compiles TypeScript natively (AOT) — surface as
+        // `"transform"` to distinguish from Node's `"strip"` mode.
+        (
+            "typescript".to_string(),
+            Expr::String("transform".to_string()),
+        ),
+    ])
 }

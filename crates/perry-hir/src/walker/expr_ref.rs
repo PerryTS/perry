@@ -45,6 +45,9 @@ where
         | Expr::ProcessStdout
         | Expr::ProcessStderr
         | Expr::ProcessAbort
+        | Expr::ProcessThreadCpuUsage
+        | Expr::ProcessAvailableMemory
+        | Expr::ProcessConstrainedMemory
         | Expr::ProcessStdinIsTTY
         | Expr::ProcessStdoutIsTTY
         | Expr::ProcessStderrIsTTY
@@ -1019,6 +1022,11 @@ where
             }
         }
         Expr::ProcessExit(opt) => {
+            if let Some(v) = opt {
+                f(v);
+            }
+        }
+        Expr::ProcessUmask(opt) => {
             if let Some(v) = opt {
                 f(v);
             }

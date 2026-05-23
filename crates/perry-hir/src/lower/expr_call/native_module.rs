@@ -96,6 +96,16 @@ pub(super) fn try_native_module_methods(
                             // "value is not a function".
                             return Ok(Ok(Expr::Undefined));
                         }
+                        "setSourceMapsEnabled" => {
+                            // #1400: process.setSourceMapsEnabled(bool) —
+                            // toggles runtime source-map resolution in Node.
+                            // Perry compiles AOT and has no resolver to
+                            // toggle, so the call is a no-op returning
+                            // undefined. Without this, framework startup
+                            // code that conditionally enables maps crashes
+                            // on "value is not a function".
+                            return Ok(Ok(Expr::Undefined));
+                        }
                         "exit" => {
                             // process.exit() / process.exit(code) — never
                             // returns, terminates the process. Until now this
@@ -115,6 +125,35 @@ pub(super) fn try_native_module_methods(
                             // process.abort() — raises SIGABRT, no clean
                             // shutdown. Maps to libc::abort() at runtime.
                             return Ok(Ok(Expr::ProcessAbort));
+                        }
+                        "umask" => {
+                            // process.umask(mask?) — returns the current
+                            // file-mode creation mask, optionally setting
+                            // a new one first and returning the previous.
+                            let mask = if !args.is_empty() {
+                                Some(Box::new(args.into_iter().next().unwrap()))
+                            } else {
+                                None
+                            };
+                            return Ok(Ok(Expr::ProcessUmask(mask)));
+                        }
+                        "threadCpuUsage" => {
+                            // process.threadCpuUsage() — CPU time used by
+                            // the current thread, as { user, system } in
+                            // microseconds. Ignores any arguments (Node
+                            // accepts none).
+                            return Ok(Ok(Expr::ProcessThreadCpuUsage));
+                        }
+                        "availableMemory" => {
+                            // process.availableMemory() — free system memory
+                            // available to the process, in bytes.
+                            return Ok(Ok(Expr::ProcessAvailableMemory));
+                        }
+                        "constrainedMemory" => {
+                            // process.constrainedMemory() — OS-imposed memory
+                            // limit (cgroups/container), in bytes. 0 when no
+                            // limit applies.
+                            return Ok(Ok(Expr::ProcessConstrainedMemory));
                         }
                         _ => {} // Fall through to generic handling
                     }

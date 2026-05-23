@@ -476,6 +476,15 @@ impl JsEmitter {
             Expr::ProcessMemoryUsage => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.memoryUsage() : {rss: 0, heapTotal: 0, heapUsed: 0, external: 0, arrayBuffers: 0})");
             }
+            Expr::ProcessThreadCpuUsage => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.threadCpuUsage === 'function' ? process.threadCpuUsage() : {user: 0, system: 0})");
+            }
+            Expr::ProcessAvailableMemory => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.availableMemory === 'function' ? process.availableMemory() : 0)");
+            }
+            Expr::ProcessConstrainedMemory => {
+                self.output.push_str("(typeof process !== 'undefined' && typeof process.constrainedMemory === 'function' ? process.constrainedMemory() : 0)");
+            }
             Expr::ProcessPid => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.pid : 0)");
             }
@@ -534,6 +543,13 @@ impl JsEmitter {
             }
             Expr::ProcessAbort => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.abort() : undefined)");
+            }
+            Expr::ProcessUmask(mask) => {
+                self.output.push_str("(typeof process !== 'undefined' ? process.umask(");
+                if let Some(m) = mask {
+                    self.emit_expr(m);
+                }
+                self.output.push_str(") : 0)");
             }
             Expr::ProcessStdin => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.stdin : { write: () => true })");

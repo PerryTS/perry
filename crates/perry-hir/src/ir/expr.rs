@@ -464,6 +464,10 @@ pub enum Expr {
     ProcessExit(Option<Box<Expr>>),
     // process.abort() -> never. Calls SIGABRT to terminate (no clean shutdown).
     ProcessAbort,
+    ProcessUmask(Option<Box<Expr>>), // process.umask(mask?) -> number; no-arg reads, arg sets and returns previous
+    ProcessThreadCpuUsage, // process.threadCpuUsage() -> { user, system } microseconds (current thread)
+    ProcessAvailableMemory, // process.availableMemory() -> number (free memory bytes)
+    ProcessConstrainedMemory, // process.constrainedMemory() -> number (OS limit, 0 if unconstrained)
     // process.stdin -> stub object { write: fn }
     ProcessStdin,
     // process.stdout -> stub object { write: fn }
