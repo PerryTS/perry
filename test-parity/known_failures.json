@@ -26,6 +26,18 @@
     "category": "bug-open",
     "reason": "node:perf_hooks: createHistogram() unimplemented (not a function). Flips to PASS when #1336 lands."
   },
+  "node-suite/perf_hooks/resource-timing/mark-resource-timing": {
+    "issue": "1478",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:perf_hooks: performance.markResourceTiming is unimplemented (not a function). Flips to PASS when #1478 lands."
+  },
+  "node-suite/perf_hooks/shapes/to-string-tag": {
+    "issue": "1479",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:perf_hooks: Object.prototype.toString.call(performance) yields the generic object tag instead of '[object Performance]'. Flips to PASS when #1479 lands."
+  },
   "node-suite/console/dir/depth-options": {
     "issue": "1199",
     "added": "2026-05-20",
