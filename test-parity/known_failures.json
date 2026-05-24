@@ -1687,5 +1687,23 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/compose/single-stream-arg": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: compose(stream) — single-stream form does not return Duplex wrap. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/readable/unshift-buffer": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: unshift(Buffer) — explicit Buffer not properly added to front of buffer queue. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/writable-empty-object-sink": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: new WritableStream({}) — empty-sink writes don't silently succeed. Flips to PASS when #1545 lands."
   }
 }
