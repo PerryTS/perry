@@ -245,10 +245,9 @@ pub extern "C" fn js_notify_main_thread() {
 //
 // The three functions below collapse the foot-guns into one obvious surface:
 //
-//   * `perry_poll()`           — drains microtasks + stdlib + jsruntime
+//   * `perry_poll()`           — drains microtasks + stdlib
 //   * `perry_has_work()`       — true while anything is pending (microtasks,
-//                                timers across all 3 queues, stdlib handles,
-//                                jsruntime handles)
+//                                timers across all 3 queues, stdlib handles)
 //   * `perry_next_wake_ms()`   — minimum across the 3 timer queues, or -1
 //
 // Pair with `perry_set_wake_callback` for polling-free integration.
@@ -257,22 +256,19 @@ pub extern "C" fn js_notify_main_thread() {
 extern "C" {
     fn js_promise_run_microtasks() -> i32;
     fn js_run_stdlib_pump();
-    fn js_run_jsruntime_pump();
     fn js_microtasks_pending() -> i32;
     fn js_stdlib_has_active_handles() -> i32;
-    fn js_jsruntime_has_active_handles() -> i32;
 }
 
-/// Drain everything Perry is currently holding ready: microtask queue, the
-/// stdlib pump (fetch / fs / ws / fastify / timers), the perry-jsruntime
-/// pump (V8 fallback module evaluations). Returns the number of microtasks
-/// executed by `js_promise_run_microtasks`. Stdlib/jsruntime pumps don't
-/// report task counts, so the return value is a lower-bound proxy for
-/// "did anything observable happen this tick".
+/// Drain everything Perry is currently holding ready: microtask queue and
+/// the stdlib pump (fetch / fs / ws / fastify / timers). Returns the number
+/// of microtasks executed by `js_promise_run_microtasks`. The stdlib pump
+/// doesn't report task counts, so the return value is a lower-bound proxy
+/// for "did anything observable happen this tick".
 ///
 /// Safe to call from the host's event-loop tick. Idempotent at zero cost
-/// when there's no work — the stdlib/jsruntime pump trampolines bail
-/// immediately when nothing is registered.
+/// when there's no work — the stdlib pump trampoline bails immediately
+/// when nothing is registered.
 #[no_mangle]
 pub extern "C" fn perry_poll() -> i32 {
     // SAFETY: every call site below is a Perry C FFI surface declared with
@@ -281,7 +277,6 @@ pub extern "C" fn perry_poll() -> i32 {
     unsafe {
         let microtasks = js_promise_run_microtasks();
         js_run_stdlib_pump();
-        js_run_jsruntime_pump();
         microtasks
     }
 }
@@ -295,7 +290,6 @@ pub extern "C" fn perry_poll() -> i32 {
 ///   * `js_microtasks_pending()`           — promise microtasks
 ///   * any of the 3 timer queues has a deadline ≥ 0
 ///   * `js_stdlib_has_active_handles()`    — fetch / ws / fastify / timers
-///   * `js_jsruntime_has_active_handles()` — V8 fallback adapters
 #[no_mangle]
 pub extern "C" fn perry_has_work() -> i32 {
     // SAFETY: same trampoline surface as `perry_poll`.
@@ -310,9 +304,6 @@ pub extern "C" fn perry_has_work() -> i32 {
         return 1;
     }
     if unsafe { js_stdlib_has_active_handles() } != 0 {
-        return 1;
-    }
-    if unsafe { js_jsruntime_has_active_handles() } != 0 {
         return 1;
     }
     0

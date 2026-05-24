@@ -160,16 +160,6 @@ pub(super) fn compile_module_entry(
             if cross_module.needs_stdlib {
                 blk.call_void("js_stdlib_init_dispatch", &[]);
             }
-            // Issue #248 Phase 2: bootstrap the V8/perry-jsruntime runtime
-            // before any `js_load_module` / `js_call_function` site fires.
-            // Without this, the runtime's per-thread JsRuntimeState is None
-            // and every interop FFI bails with `[js_load_module] no JS
-            // runtime state!` while silently returning undefined. Gated on
-            // `needs_js_runtime` so non-interop builds don't pull in the
-            // V8 init cost.
-            if cross_module.needs_js_runtime {
-                blk.call_void("js_runtime_init", &[]);
-            }
             // Start the Geisterhand HTTP inspector if requested. The
             // port comes from `--geisterhand-port` (default 7676). Calling
             // `perry_geisterhand_start` here also pins the geisterhand
@@ -439,7 +429,6 @@ pub(super) fn compile_module_entry(
                     let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 }
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
-                ctx.block().call_void("js_run_jsruntime_pump", &[]);
                 ctx.block().br(&header_label);
 
                 // loop_header: check if there's any reason to keep running
@@ -448,9 +437,6 @@ pub(super) fn compile_module_entry(
                 let has_callbacks = ctx.block().call(I32, "js_callback_timer_has_pending", &[]);
                 let has_intervals = ctx.block().call(I32, "js_interval_timer_has_pending", &[]);
                 let has_stdlib = ctx.block().call(I32, "js_stdlib_has_active_handles", &[]);
-                let has_jsruntime = ctx
-                    .block()
-                    .call(I32, "js_jsruntime_has_active_handles", &[]);
                 // #591: TASK_QUEUE may carry a pending `.then` continuation
                 // that was queued by `js_run_stdlib_pump`'s resolution path
                 // in the SAME body iteration that already drained the inflight
@@ -460,8 +446,7 @@ pub(super) fn compile_module_entry(
                 let has_microtasks = ctx.block().call(I32, "js_microtasks_pending", &[]);
                 let any1 = ctx.block().or(I32, &has_timers, &has_callbacks);
                 let any2 = ctx.block().or(I32, &has_intervals, &has_stdlib);
-                let any_js = ctx.block().or(I32, &any2, &has_jsruntime);
-                let any3 = ctx.block().or(I32, &any1, &any_js);
+                let any3 = ctx.block().or(I32, &any1, &any2);
                 let any = ctx.block().or(I32, &any3, &has_microtasks);
                 let zero = "0".to_string();
                 let cmp = ctx.block().icmp_ne(I32, &any, &zero);
@@ -474,7 +459,6 @@ pub(super) fn compile_module_entry(
                 let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
-                ctx.block().call_void("js_run_jsruntime_pump", &[]);
                 // Issue #84: condvar-backed wait. Returns immediately when
                 // a tokio worker (net/ws/http/fetch/redis/spawn) notifies
                 // after pushing to its queue; otherwise blocks until the

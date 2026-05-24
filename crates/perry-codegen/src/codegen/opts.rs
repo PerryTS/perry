@@ -210,8 +210,6 @@ pub struct CompileOptions {
     pub needs_geisterhand: bool,
     /// Port the Geisterhand inspector listens on when `needs_geisterhand`.
     pub geisterhand_port: u16,
-    /// Whether the project needs the QuickJS fallback runtime linked in.
-    pub needs_js_runtime: bool,
     /// Cargo feature names enabled for this build, computed by the CLI's
     /// `compute_required_features`. Used by the auto-optimize path to
     /// decide which optional runtime helpers to compile into
@@ -538,12 +536,6 @@ pub(crate) struct CrossModuleCtx {
     pub needs_geisterhand: bool,
     /// Port the Geisterhand inspector listens on when `needs_geisterhand`.
     pub geisterhand_port: u16,
-    /// Whether the project pulls in `libperry_jsruntime.a` because some
-    /// `.ts` module imports from a `.js` file the resolver classified as
-    /// JS-runtime-loaded (issue #248). Threaded through so the entry-module
-    /// init prelude can emit the `js_runtime_init()` call before any
-    /// `js_load_module` / `js_call_function` site fires.
-    pub needs_js_runtime: bool,
     /// Compile-time constant values for module globals. Maps LocalId → f64
     /// for variables like `__platform__` whose value is known at compile time.
     /// Used by `lower_if` to constant-fold platform checks and skip emitting

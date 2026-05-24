@@ -177,7 +177,6 @@ pub(super) fn collect_modules(
     entry_path: &PathBuf,
     ctx: &mut CompilationContext,
     visited: &mut HashSet<PathBuf>,
-    enable_js_runtime: bool,
     format: OutputFormat,
     target: Option<&str>,
     next_class_id: &mut perry_hir::ClassId,
@@ -219,8 +218,7 @@ pub(super) fn collect_modules(
         || (!is_in_node_modules && is_in_perry_native_package(&canonical));
     let should_use_js_runtime = (is_js_file(&canonical) && !is_in_compiled_pkg)
         || is_declaration_file(&canonical)
-        || is_json
-        || (enable_js_runtime && is_in_node_modules && !is_perry_native && !is_in_compiled_pkg);
+        || is_json;
 
     // Skip JSON files — they're data, not code (imported via `with { type: "json" }`)
     if is_json {
@@ -282,15 +280,13 @@ pub(super) fn collect_modules(
                 specifier,
             },
         );
-        // #499: record the file that flipped `needs_js_runtime` on so
-        // the host-opt-in gate (enforced in `compile.rs` after dep
-        // collection) can name the importer(s) in its refusal
-        // diagnostic. De-duplicate by canonical path — many edges may
-        // resolve to the same JS file.
+        // Record the file that reached a runtime-JS module so the
+        // V8-free gate (enforced after dep collection) can name the
+        // importer(s) in its refusal diagnostic. De-duplicate by
+        // canonical path — many edges may resolve to the same JS file.
         if !ctx.js_runtime_importers.iter().any(|p| p == &canonical) {
             ctx.js_runtime_importers.push(canonical.clone());
         }
-        ctx.needs_js_runtime = true;
 
         // Recurse into each resolved sibling. We re-enter
         // `collect_modules`, which re-runs the JS/native classification
@@ -301,7 +297,6 @@ pub(super) fn collect_modules(
                 &next,
                 ctx,
                 visited,
-                enable_js_runtime,
                 format,
                 target,
                 next_class_id,
@@ -795,7 +790,6 @@ pub(super) fn collect_modules(
                         &resolved_path,
                         ctx,
                         visited,
-                        enable_js_runtime,
                         format,
                         target,
                         next_class_id,
@@ -910,7 +904,6 @@ pub(super) fn collect_modules(
                         &resolved_path,
                         ctx,
                         visited,
-                        enable_js_runtime,
                         format,
                         target,
                         next_class_id,
@@ -1067,7 +1060,6 @@ pub(super) fn collect_modules(
                             &resolved_path,
                             ctx,
                             visited,
-                            enable_js_runtime,
                             format,
                             target,
                             next_class_id,
@@ -1076,19 +1068,11 @@ pub(super) fn collect_modules(
                         )?;
                     }
                     ModuleKind::Interpreted => {
-                        if enable_js_runtime {
-                            collect_modules(
-                                &resolved_path,
-                                ctx,
-                                visited,
-                                enable_js_runtime,
-                                format,
-                                target,
-                                next_class_id,
-                                skip_transforms,
-                                parse_cache.as_deref_mut(),
-                            )?;
-                        }
+                        // JS runtime (V8) support was removed, so interpreted
+                        // node_modules dependencies are not followed. A direct
+                        // `.js` import is caught by the `should_use_js_runtime`
+                        // gate at the top of `collect_modules` and surfaced as
+                        // a hard error after collection completes.
                     }
                     ModuleKind::NativeRust => {}
                 }

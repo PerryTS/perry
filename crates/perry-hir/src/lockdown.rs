@@ -1,9 +1,10 @@
 //! #496 — `--lockdown` mode: HIR walk that catches the standard
 //! arbitrary-code-execution surfaces.
 //!
-//! The driver enforces the broader contract (refuse to link
-//! `perry-jsruntime`, refuse any `perry.nativeLibrary` archive
-//! reference) at the build-graph level. This module covers the
+//! The driver enforces the broader contract (refuse any runtime-JS
+//! (V8) imports — that runtime was removed — and refuse any
+//! `perry.nativeLibrary` archive reference) at the build-graph level.
+//! This module covers the
 //! per-module HIR check: does any source module call into
 //! `child_process.*`? In lockdown mode the answer must be no.
 //!
@@ -20,8 +21,9 @@
 //!
 //! ## Out of scope (covered elsewhere in the series)
 //!
-//! - `perry-jsruntime` link gate — `#499` plumbing in the build
-//!   driver. Lockdown reads `ctx.needs_js_runtime` directly.
+//! - Runtime-JS (V8) imports — refused unconditionally by the build
+//!   driver's V8-free gate (`perry-jsruntime` was removed), so
+//!   lockdown needs no separate check here.
 //! - `perry.nativeLibrary` reference gate — `#497` plumbing in the
 //!   build driver. Lockdown reads `ctx.native_libraries.is_empty()`.
 //! - Dynamic stdlib dispatch (`obj[runtimeVar]()`) — `#503`'s HIR

@@ -10,7 +10,7 @@
 //! - **Static library locator** — `find_library_with_candidates` /
 //!   `find_library` / `collect_library_candidates`, plus the per-lib
 //!   wrappers (`find_runtime_library`, `find_stdlib_library`,
-//!   `find_jsruntime_library`, `find_ui_library`).
+//!   `find_ui_library`).
 //! - **Geisterhand integration** — the optional native-bridge crate
 //!   that `find_geisterhand_*` searches for, plus its build helper.
 //!
@@ -872,17 +872,6 @@ pub(super) fn find_stdlib_library(target: Option<&str>) -> Option<PathBuf> {
         #[cfg(target_os = "windows")]
         None => "perry_stdlib.lib",
         _ => "libperry_stdlib.a",
-    };
-    find_library(lib_name, target)
-}
-
-/// Find the V8 jsruntime library for linking (optional - only needed for JS module support)
-pub(super) fn find_jsruntime_library(target: Option<&str>) -> Option<PathBuf> {
-    let lib_name = match target {
-        Some("windows") => "perry_jsruntime.lib",
-        #[cfg(target_os = "windows")]
-        None => "perry_jsruntime.lib",
-        _ => "libperry_jsruntime.a",
     };
     find_library(lib_name, target)
 }

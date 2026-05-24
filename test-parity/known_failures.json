@@ -314,12 +314,6 @@
     "category": "ci-env",
     "reason": "Tracked in #1634 (parity CI environment fixtures). Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental — issue #91 dispatch fix landed in v0.5.581 and is no longer the cause; needs a CI-side fixture."
   },
-  "test_decorators_nest_js_common_canary": {
-    "issue": "1634",
-    "added": "2026-05-18",
-    "category": "ci-env",
-    "reason": "Tracked in #1634 (parity CI environment fixtures). Expected-output mismatch under the Linux CI runner; same failure observed on #1038's CI run pre-merge. Triage tied to the NestJS decorators metadata-inheritance follow-ups; not a regression introduced by recent changes."
-  },
   "test_ramda_sum": {
     "issue": "1634",
     "added": "2026-05-18",

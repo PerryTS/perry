@@ -49,7 +49,7 @@ jobs:
 
       - name: Run coverage
         # Mirrors the `cargo-test` job's exclude list (host-only UI
-        # backends + perry-jsruntime). `--no-fail-fast` keeps the
+        # backends). `--no-fail-fast` keeps the
         # report comprehensive even if one crate's tests fail —
         # this is a visibility job, not a gate.
         run: |
@@ -62,7 +62,6 @@ jobs:
             --exclude perry-ui-gtk4 \
             --exclude perry-ui-android \
             --exclude perry-ui-windows \
-            --exclude perry-jsruntime \
             --html --output-dir target/llvm-cov-html
           cargo llvm-cov report --no-fail-fast \
             --exclude perry-ui-macos \
@@ -73,7 +72,6 @@ jobs:
             --exclude perry-ui-gtk4 \
             --exclude perry-ui-android \
             --exclude perry-ui-windows \
-            --exclude perry-jsruntime \
             --lcov --output-path target/lcov.info
           cargo llvm-cov report --no-fail-fast \
             --exclude perry-ui-macos \
@@ -84,7 +82,6 @@ jobs:
             --exclude perry-ui-gtk4 \
             --exclude perry-ui-android \
             --exclude perry-ui-windows \
-            --exclude perry-jsruntime \
             --summary-only > target/summary.txt
         # Don't fail the workflow on a non-zero exit — the artifacts
         # below are still useful, and a missing test in one crate

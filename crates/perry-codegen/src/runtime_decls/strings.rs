@@ -1409,9 +1409,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // perry-runtime as a thin function-pointer trampoline so it's
     // safe to call even when perry-stdlib is not linked (no-op).
     module.declare_function("js_run_stdlib_pump", VOID, &[]);
-    // Drain perry-jsruntime's V8 promise adapter queue. Also a thin
-    // perry-runtime trampoline, so non-jsruntime builds pay only a no-op.
-    module.declare_function("js_run_jsruntime_pump", VOID, &[]);
     module.declare_function("js_sleep_ms", VOID, &[DOUBLE]);
     // Issue #84: condvar-backed wait for the event loop / await busy-wait.
     // Replaces fixed-quantum `js_sleep_ms(10.0)` / `js_sleep_ms(1.0)`.
@@ -1476,9 +1473,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Stdlib has-active-handles — returns 1 if WS servers, pending
     // HTTP events, etc. need the loop to keep running.
     module.declare_function("js_stdlib_has_active_handles", I32, &[]);
-    // JS runtime has-active-handles — returns 1 if V8 fallback promises are
-    // adapted into native Promises and still pending.
-    module.declare_function("js_jsruntime_has_active_handles", I32, &[]);
     // #591: returns 1 iff perry-runtime's per-thread microtask
     // TASK_QUEUE has a pending entry. The codegen-emitted event-loop
     // header check ORs this in so the loop doesn't exit between the

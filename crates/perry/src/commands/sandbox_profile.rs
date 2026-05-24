@@ -22,8 +22,6 @@
 //! The MVP derives the profile from a handful of high-signal flags
 //! on `CompilationContext`:
 //!
-//! - `needs_js_runtime` — links QuickJS, which JIT-allocates
-//!   executable memory and needs `mmap` write+exec carve-outs.
 //! - `native_module_imports` — the set of imported stdlib modules
 //!   (used to drive allow/deny rules).
 //! - `uses_fetch` / per-module `fetch` use — toggles outbound network.
@@ -55,7 +53,6 @@ pub fn emit_macos_sandbox_profile(
 /// separately from the file write so tests can pin the contents
 /// without touching the filesystem.
 pub fn build_macos_profile(ctx: &CompilationContext) -> String {
-    let needs_jit = ctx.needs_js_runtime;
     let needs_child_process = imports_module(ctx, "child_process");
     let needs_net = imports_module(ctx, "http")
         || imports_module(ctx, "https")
@@ -85,7 +82,7 @@ pub fn build_macos_profile(ctx: &CompilationContext) -> String {
     out.push_str(";;\n");
     out.push_str(";; Tighten or relax this manually — Perry's MVP derives a\n");
     out.push_str(";; conservative starting point from a handful of build-time signals\n");
-    out.push_str(";; (jsruntime linked?  child_process imported?  fs/net imported?).\n");
+    out.push_str(";; (child_process imported?  fs/net imported?).\n");
     out.push_str(";; Issue #506 tracks the per-API HIR-driven refinement.\n\n");
 
     out.push_str("(version 1)\n");
@@ -141,13 +138,6 @@ pub fn build_macos_profile(ctx: &CompilationContext) -> String {
         out.push_str(";; --- process spawn denied (no `child_process` import detected) ---\n");
         out.push_str("(deny process-fork)\n");
         out.push_str("(deny process-exec)\n\n");
-    }
-
-    if needs_jit {
-        out.push_str(";; --- JIT (perry-jsruntime linked) ---\n");
-        out.push_str(";; QuickJS allocates write+exec pages for compiled bytecode.\n");
-        out.push_str("(allow process-info-codesigning-status)\n");
-        out.push_str("(allow dynamic-code-generation)\n\n");
     }
 
     out
@@ -225,17 +215,6 @@ mod tests {
         let profile = build_macos_profile(&ctx);
         assert!(profile.contains("(allow file-write*"));
         assert!(!profile.contains("(deny file-write*)"));
-    }
-
-    #[test]
-    fn jsruntime_unlocks_dynamic_code() {
-        let mut ctx = empty_ctx();
-        ctx.needs_js_runtime = true;
-        let profile = build_macos_profile(&ctx);
-        assert!(
-            profile.contains("(allow dynamic-code-generation)"),
-            "jsruntime must allow W+X mmap:\n{profile}"
-        );
     }
 
     #[test]

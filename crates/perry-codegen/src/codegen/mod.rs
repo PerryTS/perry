@@ -843,7 +843,6 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         needs_stdlib: opts.needs_stdlib,
         needs_geisterhand: opts.needs_geisterhand,
         geisterhand_port: opts.geisterhand_port,
-        needs_js_runtime: opts.needs_js_runtime,
         compile_time_constants,
         app_metadata: opts.app_metadata.clone(),
         clamp3_functions: hir

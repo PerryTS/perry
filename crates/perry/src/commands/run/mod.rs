@@ -62,10 +62,6 @@ pub struct RunArgs {
     #[arg(long)]
     pub device: Option<String>,
 
-    /// Enable V8 JavaScript runtime
-    #[arg(long)]
-    pub enable_js_runtime: bool,
-
     /// Enable WebAssembly host runtime (load .wasm at runtime via wasmi).
     #[arg(long)]
     pub enable_wasm_runtime: bool,
@@ -207,7 +203,6 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         keep_intermediates: false,
         print_hir: false,
         no_link: false,
-        enable_js_runtime: args.enable_js_runtime,
         enable_wasm_runtime: args.enable_wasm_runtime,
         target: target.clone(),
         app_bundle_id: Some(bundle_id),

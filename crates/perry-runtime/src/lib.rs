@@ -269,58 +269,6 @@ mod stdlib_pump {
     }
 }
 
-// JS runtime pump registration — mirrors the stdlib pump trampoline, but is
-// owned separately so V8 fallback work can keep Perry's main event loop alive
-// only when perry-jsruntime is linked and has pending adapters.
-mod jsruntime_pump {
-    use std::ptr::null_mut;
-    use std::sync::atomic::{AtomicPtr, Ordering};
-
-    static JSRUNTIME_PUMP_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());
-
-    /// Register perry-jsruntime's pump function.
-    #[no_mangle]
-    pub extern "C" fn js_register_jsruntime_pump(f: extern "C" fn() -> i32) {
-        JSRUNTIME_PUMP_FN.store(f as *mut (), Ordering::Release);
-    }
-
-    /// Run the registered jsruntime pump if available. Safe when
-    /// perry-jsruntime is not linked.
-    #[no_mangle]
-    pub extern "C" fn js_run_jsruntime_pump() {
-        let f = JSRUNTIME_PUMP_FN.load(Ordering::Acquire);
-        if !f.is_null() {
-            unsafe {
-                let func: extern "C" fn() -> i32 = std::mem::transmute(f);
-                func();
-            }
-        }
-    }
-
-    static JSRUNTIME_HAS_ACTIVE_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());
-
-    /// Register perry-jsruntime's active-handle check.
-    #[no_mangle]
-    pub extern "C" fn js_register_jsruntime_has_active(f: extern "C" fn() -> i32) {
-        JSRUNTIME_HAS_ACTIVE_FN.store(f as *mut (), Ordering::Release);
-    }
-
-    /// Returns 1 when perry-jsruntime has pending work that should keep the
-    /// generated event loop alive.
-    #[no_mangle]
-    pub extern "C" fn js_jsruntime_has_active_handles() -> i32 {
-        let f = JSRUNTIME_HAS_ACTIVE_FN.load(Ordering::Acquire);
-        if !f.is_null() {
-            unsafe {
-                let func: extern "C" fn() -> i32 = std::mem::transmute(f);
-                func()
-            }
-        } else {
-            0
-        }
-    }
-}
-
 // Module init guard for preventing circular dependency stack overflow.
 // Uses a simple bitset in the runtime so the compiler cannot optimize it away.
 mod init_guard {

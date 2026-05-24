@@ -160,29 +160,6 @@ pub(super) fn apply_pkg_and_toml_config(
                         }
                     }
                 }
-                // #499: perry.allowJsRuntime — explicit host opt-in to link
-                // perry-jsruntime (QuickJS-based eval-equivalent). Off by
-                // default: a transitive dep pulling in a `.js` file under
-                // `node_modules/` would otherwise silently link the
-                // JS-eval runtime into the binary, defeating Perry's
-                // structural advantage over Node. With `false` (or absent),
-                // the build fails and names the offending file(s) so the
-                // user can decide whether to opt in.
-                if let Some(allow) = pkg
-                    .get("perry")
-                    .and_then(|p| p.get("allowJsRuntime"))
-                    .and_then(|v| v.as_bool())
-                {
-                    ctx.allow_js_runtime = allow;
-                    if allow {
-                        match format {
-                            OutputFormat::Text => {
-                                println!("  JS runtime: ALLOWED (perry.allowJsRuntime: true)")
-                            }
-                            OutputFormat::Json => {}
-                        }
-                    }
-                }
                 // #501: host's own package name. Used by the capability
                 // walker to identify host code (which gets `*`
                 // unconditionally). Falls back to None if the
@@ -339,20 +316,6 @@ pub(super) fn apply_pkg_and_toml_config(
     // serves as documentation of the source of truth.
     perry_hir::set_refuse_dynamic_stdlib_dispatch(ctx.refuse_dynamic_stdlib_dispatch);
     perry_hir::set_allow_dynamic_stdlib_packages(ctx.allow_dynamic_stdlib_packages.clone());
-
-    // #499: `PERRY_ALLOW_JS_RUNTIME=1` opts in to perry-jsruntime
-    // linkage from the environment (CI-friendly knob without touching
-    // package.json). `=0` keeps the refusal on even if package.json
-    // opted in — useful for an enforcement gate on a CI matrix entry.
-    match std::env::var("PERRY_ALLOW_JS_RUNTIME") {
-        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => {
-            ctx.allow_js_runtime = true;
-        }
-        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => {
-            ctx.allow_js_runtime = false;
-        }
-        _ => {}
-    }
 
     // #497: `PERRY_ALLOW_PERRY_FEATURES=1` opts every name into both
     // host allowlists at once — emergency escape hatch for builds

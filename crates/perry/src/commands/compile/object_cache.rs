@@ -161,7 +161,6 @@ pub fn compute_object_cache_key(
     h.field("stdlib", if opts.needs_stdlib { "1" } else { "0" });
     h.field("ui", if opts.needs_ui { "1" } else { "0" });
     h.field("gh", if opts.needs_geisterhand { "1" } else { "0" });
-    h.field("jsrt", if opts.needs_js_runtime { "1" } else { "0" });
     h.field("gh_port", &opts.geisterhand_port.to_string());
     // Fast-math flag flips per-instruction `reassoc + contract` emission
     // in `perry-codegen`, which produces different LLVM IR (and therefore
@@ -681,7 +680,6 @@ mod object_cache_tests {
             needs_ui: false,
             needs_geisterhand: false,
             geisterhand_port: 7676,
-            needs_js_runtime: false,
             enabled_features: Vec::new(),
             native_module_init_names: Vec::new(),
             js_module_specifiers: Vec::new(),

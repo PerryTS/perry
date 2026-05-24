@@ -60,7 +60,6 @@ fn empty_opts() -> CompileOptions {
         needs_ui: false,
         needs_geisterhand: false,
         geisterhand_port: 7676,
-        needs_js_runtime: false,
         enabled_features: Vec::new(),
         native_module_init_names: Vec::new(),
         js_module_specifiers: Vec::new(),
