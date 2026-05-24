@@ -255,9 +255,9 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
             // surfaced as a number and `req.headers.get(...)` threw
             // "(number).get is not a function", crashing every Hono adapter.
             "headers" => {
-                let out = ctx
-                    .block()
-                    .call(DOUBLE, "js_request_get_headers", &[(DOUBLE, &h_handle)]);
+                let out =
+                    ctx.block()
+                        .call(DOUBLE, "js_request_get_headers", &[(DOUBLE, &h_handle)]);
                 return Ok(Some(out));
             }
             _ => return Ok(None),
