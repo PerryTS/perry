@@ -1891,5 +1891,83 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: 'readable' event ordering relative to 'end' — extra readable before end missing or out-of-order. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/meta/constructor-name": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: constructor.name on stream classes — returns 'Object' or other instead of 'Readable'/'Writable'/etc. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/async-iter/single-iteration-only": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: second for-await on already-iterated Readable yields wrong count (state not drained). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/pipe/source-error-no-propagation": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipe(src,dst) source-error handling — wrong error count on src or dst. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/error-event-arg-shape": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: 'error' event arg — identity / instanceof Error / message wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/pipethrough-preventclose-flag": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: pipeThrough(transform, {preventClose:true}) — transform.writable should remain unlocked. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/events/once-with-symbol-event": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: once() with Symbol event name (e.g. errorMonitor) — fires wrong count or doesn't auto-remove. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/readable-no-sync-iterator": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: Web ReadableStream exposes Symbol.iterator (should be undefined; only Symbol.asyncIterator). Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/promises/finished-returns-promise": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: promises.finished(stream) — return value not a Promise or doesn't resolve. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/cancel-during-pipeto": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: rs.cancel() during pipeTo — should reject (locked stream); resolves or wrong err name. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/iterator/for-of-not-async": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: sync for-of on Readable — Perry does not throw (TypeError expected since Symbol.iterator absent). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/iter-helpers/take-zero": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: take(0) — yields non-empty result (should yield zero items). Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/web/transform-stream-with-strategies": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: TransformStream(t, writableStrategy, readableStrategy) — 3-arg constructor form not honored. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/length-byte-exact": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: readableLength after push('é') — does not count 2 UTF-8 bytes. Flips to PASS when #1532 lands."
   }
 }
