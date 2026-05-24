@@ -884,12 +884,6 @@
     "category": "bug-open",
     "reason": "node:stream: read() with no arg should return the entire buffered chunk. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/from-iterable": {
-    "issue": "1645",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/web: ReadableStream.from(iterable) not implemented. Flips to PASS when #1645 lands."
-  },
   "node-suite/stream/events/get-max-listeners": {
     "issue": "1531",
     "added": "2026-05-23",

@@ -627,13 +627,43 @@ pub unsafe extern "C" fn js_readable_stream_from_response(_resp_id: f64) -> f64 
     alloc_readable_from_bytes(Vec::new()) as f64
 }
 
-// `ReadableStream.from(asyncIterable)` — deferred (issue #237 followup).
+/// `ReadableStream.from(iterable)` (Node 20+, #1645) — build a Web
+/// ReadableStream pre-loaded with the iterable's items, then closed. Today we
+/// handle the synchronous-array case (the overwhelmingly common form: a literal
+/// array, a spread, `[...set]`, etc.); each element becomes one chunk so
+/// `getReader().read()` / `for await` yield them in order, then `done`.
 #[no_mangle]
-pub unsafe extern "C" fn js_readable_stream_from_iterable(_value: f64) -> f64 {
-    let err = make_error_with_message(
-        "ReadableStream.from(asyncIterable) is not yet implemented (issue #237 followup)",
-    );
-    perry_runtime::exception::js_throw(f64::from_bits(err));
+pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
+    ensure_gc_registered();
+    let id = alloc_readable(0, 0, 0, 1.0);
+
+    // Extract the array pointer: array values arrive either NaN-boxed POINTER
+    // (top16 == 0x7FFD) or as a raw heap pointer bit-cast to f64 (top16 == 0).
+    let bits = value.to_bits();
+    let top = bits >> 48;
+    let arr_ptr = if top == 0x7FFD || top == 0x7FFF {
+        (bits & POINTER_MASK) as *const perry_runtime::ArrayHeader
+    } else if top == 0 && bits >= 0x10000 {
+        bits as *const perry_runtime::ArrayHeader
+    } else {
+        std::ptr::null()
+    };
+
+    {
+        let mut g = READABLE_STREAMS.lock().unwrap();
+        if let Some(s) = g.get_mut(&id) {
+            if !arr_ptr.is_null() {
+                let len = perry_runtime::array::js_array_length(arr_ptr);
+                for i in 0..len {
+                    let elem = perry_runtime::array::js_array_get(arr_ptr, i);
+                    s.chunks.push_back(elem.bits());
+                }
+            }
+            s.started = true;
+            s.state = ReadableState::Closed;
+        }
+    }
+    id as f64
 }
 
 // ─────────────────────────────────────────────────────────────────────
