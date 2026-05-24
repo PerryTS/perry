@@ -1687,5 +1687,11 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/static/get-default-hwm-types": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: getDefaultHighWaterMark(false|true) — return type or value mismatches Node (not Number or 0). Flips to PASS when #1532 lands."
   }
 }
