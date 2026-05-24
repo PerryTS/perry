@@ -801,6 +801,7 @@ pub(super) fn lower_builtin_new(
         }
 
         "TransformStream" => {
+            let mut start = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut transform = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut flush = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut hwm = double_literal(1.0);
@@ -808,6 +809,9 @@ pub(super) fn lower_builtin_new(
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
                         match k.as_str() {
+                            "start" => {
+                                start = lower_expr(ctx, vexpr)?;
+                            }
                             "transform" => {
                                 transform = lower_expr(ctx, vexpr)?;
                             }
@@ -835,7 +839,12 @@ pub(super) fn lower_builtin_new(
             let h = ctx.block().call(
                 DOUBLE,
                 "js_transform_stream_new",
-                &[(DOUBLE, &transform), (DOUBLE, &flush), (DOUBLE, &hwm)],
+                &[
+                    (DOUBLE, &start),
+                    (DOUBLE, &transform),
+                    (DOUBLE, &flush),
+                    (DOUBLE, &hwm),
+                ],
             );
             Ok(Some(h))
         }

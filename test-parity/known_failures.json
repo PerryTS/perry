@@ -1232,12 +1232,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(Map) doesn't iterate entries via async iteration. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/controller-terminate": {
-    "issue": "1644",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/web: TransformStreamDefaultController.terminate() not implemented. Flips to PASS when #1644 lands."
-  },
   "node-suite/stream/compose/single-transform": {
     "issue": "1532",
     "added": "2026-05-23",

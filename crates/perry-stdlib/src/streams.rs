@@ -1247,11 +1247,13 @@ pub unsafe extern "C" fn js_writer_desired_size(writer_handle: f64) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_transform_stream_new(
+    start_bits: f64,
     transform_bits: f64,
     flush_bits: f64,
     hwm: f64,
 ) -> f64 {
     ensure_gc_registered();
+    let start_cb = closure_from_bits(start_bits.to_bits());
     let transform_cb = closure_from_bits(transform_bits.to_bits());
     let flush_cb = closure_from_bits(flush_bits.to_bits());
 
@@ -1301,6 +1303,14 @@ pub unsafe extern "C" fn js_transform_stream_new(
         },
     );
     TRANSFORM_PAIRS.lock().unwrap().insert(writable_id, id);
+
+    // #1644: TransformStream `start(controller)` fires synchronously at
+    // construction. The controller is the readable-side handle (same value the
+    // transform/flush callbacks receive), so `controller.enqueue(c)` /
+    // `controller.terminate()` / `controller.error(e)` act on the readable.
+    if start_cb != 0 {
+        js_closure_call1(start_cb as *const ClosureHeader, readable_id as f64);
+    }
     id as f64
 }
 
@@ -1590,6 +1600,14 @@ pub(crate) unsafe fn dispatch_stream_method(
             "cancel" => return Some(box_promise(js_readable_stream_cancel(handle, arg0))),
             "tee" => return Some(js_readable_stream_tee(handle)),
             "pipeTo" => return Some(box_promise(js_readable_stream_pipe_to(handle, arg0))),
+            // #1644: a readable handle is also its own controller. The
+            // start/transform/flush callbacks receive it as `controller`, so
+            // `controller.enqueue/close/error/terminate` dispatch here when the
+            // controller param is generically typed. `terminate()` ends the
+            // readable side (TransformStreamDefaultController.terminate).
+            "enqueue" => return Some(js_readable_stream_controller_enqueue(handle, arg0)),
+            "close" | "terminate" => return Some(js_readable_stream_controller_close(handle)),
+            "error" => return Some(js_readable_stream_controller_error(handle, arg0)),
             _ => return None,
         }
     }
@@ -1663,7 +1681,14 @@ pub unsafe extern "C" fn js_transform_stream_subclass_init(
     flush_bits: f64,
     hwm: f64,
 ) -> f64 {
-    let handle = js_transform_stream_new(transform_bits, flush_bits, hwm);
+    // #1644: subclass `super({...})` doesn't thread a `start` hook through this
+    // path (the #562 subclass shim only forwards transform/flush); pass undefined.
+    let handle = js_transform_stream_new(
+        f64::from_bits(TAG_UNDEFINED),
+        transform_bits,
+        flush_bits,
+        hwm,
+    );
     attach_handle_to_this(this_bits, handle as usize);
     f64::from_bits(TAG_UNDEFINED)
 }

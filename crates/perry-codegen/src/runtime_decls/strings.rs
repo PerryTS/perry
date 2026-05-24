@@ -1706,7 +1706,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_writer_ready", I64, &[DOUBLE]);
     module.declare_function("js_writer_desired_size", DOUBLE, &[DOUBLE]);
     // TransformStream.
-    module.declare_function("js_transform_stream_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    // #1644: leading arg is the `start` hook.
+    module.declare_function(
+        "js_transform_stream_new",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_transform_stream_readable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_transform_stream_writable", DOUBLE, &[DOUBLE]);
     // #1545: node:stream/web QueuingStrategy constructors — take the options
