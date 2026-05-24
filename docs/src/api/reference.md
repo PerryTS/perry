@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1227 entries across 80 modules.
+Total: 1234 entries across 81 modules.
 
 ## Modules
 
@@ -73,6 +73,7 @@ Total: 1227 entries across 80 modules.
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
 - [`stream`](#stream)
+- [`stream/promises`](#stream-promises)
 - [`streams`](#streams)
 - [`string_decoder`](#string-decoder)
 - [`tls`](#tls)
@@ -1626,6 +1627,7 @@ Total: 1227 entries across 80 modules.
 - `compose` — module
 - `duplexPair` — module
 - `emit` — instance
+- `end` — instance
 - `eventNames` — instance
 - `finished` — module
 - `from` — module
@@ -1642,14 +1644,25 @@ Total: 1227 entries across 80 modules.
 - `prependListener` — instance
 - `prependOnceListener` — instance
 - `rawListeners` — instance
+- `read` — instance
 - `removeAllListeners` — instance
 - `removeListener` — instance
+- `resume` — instance
 - `setMaxListeners` — instance
 - `toWeb` — module
+- `write` — instance
 
 ### Properties
 
+- `promises`
 - `prototype`
+
+## `stream/promises`
+
+### Methods
+
+- `finished` — module
+- `pipeline` — module
 
 ## `streams`
 

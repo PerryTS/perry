@@ -178,7 +178,17 @@ jobs:
         #   Linux due to V8/deno_core threading, so excluding here is also
         #   consistent with that earlier finding.
         run: |
+          # #1444: perry-runtime's tests share process-global state — the
+          # per-thread arena/GC, the timer queues, and the `NOTIFIED` flag are
+          # process singletons. Running them across the default test-harness
+          # thread pool lets one test's `js_notify_main_thread` / timer
+          # scheduling perturb another's wait budget (the event_pump timing
+          # flakes) and races the GC/threading tests into intermittent SIGSEGV.
+          # Run perry-runtime single-threaded so the tests can't interfere; the
+          # rest of the workspace still runs in parallel.
+          RUST_TEST_THREADS=1 cargo test -p perry-runtime
           cargo test --workspace \
+            --exclude perry-runtime \
             --exclude perry-ui-macos \
             --exclude perry-ui-ios \
             --exclude perry-ui-visionos \

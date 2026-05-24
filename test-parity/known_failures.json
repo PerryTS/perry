@@ -314,12 +314,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:stream` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_stream_promises": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:stream/promises` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_stream_web": {
     "issue": "793",
     "added": "2026-05-15",
@@ -518,12 +512,6 @@
     "category": "bug-open",
     "reason": "node:stream: Writable does not invoke its write() option callback / finish event. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/imports/promises-ns": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: stream.promises namespace is undefined (used for `await pipeline()` / `await finished()`). Flips to PASS when #1533 lands."
-  },
   "node-suite/stream/static/readable-is-disturbed": {
     "issue": "1534",
     "added": "2026-05-23",
@@ -643,12 +631,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: pipeline with intermediate transform doesn't propagate data → end. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/promises/pipeline-await": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: stream/promises pipeline await doesn't resolve correctly (depends on streams + promises ns). Flips to PASS when #1533 lands."
   },
   "node-suite/stream/webstream/readable-to-web": {
     "issue": "1540",
@@ -1082,12 +1064,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline for already-ended source doesn't invoke callback. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/promises/pipeline-rejects-on-error": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/promises: pipeline doesn't reject with the underlying Error. Flips to PASS when #1533 lands."
-  },
   "node-suite/stream/readable/async-iterator-symbol": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1436,18 +1412,6 @@
     "category": "bug-open",
     "reason": "node:stream: re-piping after unpipe does not flow / sink does not end. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/promises/finished-with-signal": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/promises: finished with signal does not reject on abort. Flips to PASS when #1533 lands."
-  },
-  "node-suite/stream/promises/pipeline-with-signal": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/promises: pipeline with signal does not reject on abort. Flips to PASS when #1533 lands."
-  },
   "node-suite/stream/readable/no-options-defaults": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1687,5 +1651,167 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/dispose/await-using-disposes": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: await using does not trigger Symbol.asyncDispose on the stream. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/push/push-undefined": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: push(undefined) crashes instead of being treated as end-of-stream. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/compose/from-async-iterable": {
+    "issue": "1539",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: stream.compose with async-iterable source does not propagate data. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/promises/pipeline-returns-undefined": {
+    "issue": "1533",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/promises: pipeline resolves with the wrong value. Flips to PASS when #1533 lands."
+  },
+  "node-suite/stream/web/pipe-to-with-options": {
+    "issue": "1545",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/web: pipeTo preventClose option not honored. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/from-null-throws": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(null) / from(undefined) does not throw. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/finished/readable-false-option": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: finished({readable:false}) does not fire callback on writable-only close. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/dispose/sync-dispose": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Symbol.dispose presence on stream instances (Node 21+) misreports. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/web/pipe-to-prevent-cancel": {
+    "issue": "1545",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream/web: pipeTo preventCancel option behavior not implemented. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/duplex-pair/wired-comms": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: duplexPair() — fails to compile (export not yet wired through perry-stdlib stream re-exports). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/finished/error-false-option": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: finished({error:false}) option ignored — callback still fires on destroy(err). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/compose/single-sync-fn": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: compose(readable, asyncGenFn) — fails to compile (single-fn compose form not yet wired). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/duplex/from-readable": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Duplex.from(readable) — wrapping a Readable as a Duplex returns a different shape than Node. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/duplex/from-async-iterable": {
+    "issue": "1532",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Duplex.from(asyncIterable) — async-gen → Duplex form not yet wired. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/iterator-method": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: readable.iterator({destroyOnReturn:false}) — instance method alias for Symbol.asyncIterator not exposed. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/readable-encoding": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: readable.readableEncoding getter — returns wrong value (does not reflect constructor option or setEncoding()). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/readable-aborted": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: readable.readableAborted getter — returns wrong value after destroy(err). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/writable-finished": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: writable.writableFinished getter — does not flip true on 'finish' event. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/compose/instance-method": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.prototype.compose(stream) instance method — not yet exposed (only free compose() works). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/readable-readable": {
+    "issue": "1531",
+    "added": "2026-05-23",
+    "category": "bug-open",
+    "reason": "node:stream: readable.readable boolean — initial value or post-end value mismatches Node. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/writable-corked": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: writable.writableCorked counter not exposed (cork/uncork balance). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/readable-did-read": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: readable.readableDidRead getter (Node 16.7+) — not exposed. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/readable/read-size-passed-to-_read": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: user _read(size) not invoked with the size hint from the read scheduler. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/readable/unshift-with-encoding": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: readable.unshift(chunk, encoding) — second-arg encoding form not honored. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/readable-errored": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: readable.errored getter — stored Error after destroy(err) not exposed. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/writable-errored": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: writable.errored getter — stored Error after destroy(err) not exposed. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flags/writable-lifecycle": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: writable.writable boolean lifecycle — does not flip false after finish/close. Flips to PASS when #1531 lands."
   }
 }
