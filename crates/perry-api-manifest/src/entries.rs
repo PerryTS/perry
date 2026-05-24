@@ -120,6 +120,12 @@ pub const NATIVE_MODULES: &[&str] = &[
     "perry/ads",
 ];
 
+/// Node built-in submodules that Perry routes through the
+/// `node_submodules` runtime table rather than `NATIVE_MODULES`.
+/// Keeping these separate preserves the compiler's submodule import
+/// lowering while still allowing manifest/docs entries for the subpath.
+pub const NODE_SUBMODULES: &[&str] = &["stream/promises"];
+
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
 /// `crates/perry-hir/src/ir.rs::RUNTIME_ONLY_MODULES`.
@@ -2209,6 +2215,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("stream", "PassThrough"),
     method("stream", "pipeline", false, None),
     method("stream", "finished", false, None),
+    property("stream", "promises"),
+    method("stream/promises", "pipeline", false, None),
+    method("stream/promises", "finished", false, None),
     // `require('stream')` returns the legacy `Stream` constructor itself,
     // which has its own `.prototype` (it extends EventEmitter). The
     // `node_modules/send` package (express's static-file backend) does
@@ -2272,6 +2281,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "eventNames", true, None),
     method("stream", "setMaxListeners", true, None),
     method("stream", "getMaxListeners", true, None),
+    // Core stream instance stubs used by stream/promises and the
+    // Readable/Writable/Duplex/Transform/PassThrough constructor surface.
+    method("stream", "read", true, None),
+    method("stream", "resume", true, None),
+    method("stream", "write", true, None),
+    method("stream", "end", true, None),
     // --- child_process (synchronous + async exec surface;
     //     spawn/fork are documented but not yet codegen'd) ---
     method("child_process", "exec", false, None),
