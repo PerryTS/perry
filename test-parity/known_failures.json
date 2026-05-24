@@ -1687,5 +1687,29 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/web/writable-abort-returns-promise": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: WritableStream.abort() — return is not Promise<undefined>. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/pipe/end-true-explicit": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipe(dst, {end:true}) — explicit form behaves differently from default. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/compose/buffer-preserves": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: compose() — Buffer chunks not preserved through pipeline (typed as string?). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/transform/object-mode-default-false": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Transform default objectMode — readableObjectMode/writableObjectMode wrong default. Flips to PASS when #1539 lands."
   }
 }
