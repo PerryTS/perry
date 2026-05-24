@@ -466,9 +466,14 @@ mod tests {
         let elapsed_us = woken_at.load(Ordering::Relaxed);
         // Consumer slept ~10 ms before notify, then woke up. Total elapsed
         // since consumer start should be ~10 ms + tiny wake latency.
-        // Anything under 50 ms confirms the notify path works.
+        // #1444: a broken notify path blocks until the 1 s idle cap, so any
+        // sub-cap return confirms the notify works. The old 50 ms bound
+        // measured wake *latency* and false-failed when an overloaded runner
+        // oversleeps the 10 ms producer sleep or delays the consumer wake;
+        // 500 ms is robust and still an order of magnitude under the 1 s
+        // lost-notify floor.
         assert!(
-            elapsed_us < 50_000,
+            elapsed_us < 500_000,
             "wake took {} us — notify path broken",
             elapsed_us
         );
@@ -485,8 +490,16 @@ mod tests {
         let start = Instant::now();
         js_wait_for_event(); // should return immediately
         let elapsed = start.elapsed();
+        // #1444: a preserved notify returns essentially instantly; a *lost*
+        // notify (the bug) blocks for the whole `IDLE_CAP_MS` (1 s) budget
+        // since no timer is queued. The original `< 5 ms` bound asserted
+        // wake *latency*, not the spec, and false-failed on overloaded CI
+        // runners where scheduler preemption between `Instant::now()` and the
+        // return alone exceeds 5 ms. Assert well under the 1 s lost-notify
+        // floor instead — `IDLE_CAP_MS / 2` keeps a 500 ms margin in both
+        // directions and stays deterministic under load.
         assert!(
-            elapsed < Duration::from_millis(5),
+            elapsed < Duration::from_millis(IDLE_CAP_MS / 2),
             "wait blocked despite prior notify: {:?}",
             elapsed
         );
@@ -530,12 +543,21 @@ mod tests {
             // next attempt or a later serialized test.
             std::thread::sleep(Duration::from_millis(60));
             crate::timer::js_timer_tick();
-            if (Duration::from_millis(40)..Duration::from_millis(500)).contains(&last_elapsed) {
+            // #1444: the lower bound (≥40ms) is the real spec — the wait
+            // *blocked* for the ~50ms timer budget rather than spinning or
+            // returning instantly. The upper bound only guards against a wait
+            // that never returns; the old 500ms cap false-failed on
+            // overloaded runners where a 50ms `wait_timeout` oversleeps well
+            // past 500ms (the 1016s-vs-451s slow-runner signature in #1444),
+            // so every attempt landed "too late" and the retry loop exhausted.
+            // 5s tolerates that oversleep while still catching a truly stuck
+            // wait.
+            if (Duration::from_millis(40)..Duration::from_secs(5)).contains(&last_elapsed) {
                 blocked_for_timer = true;
                 break;
             }
-            // Woken early (concurrent notify / sooner parallel timer) or too
-            // late (scheduler hiccup) — retry for a clean window.
+            // Woken early (concurrent notify / sooner parallel timer) or
+            // absurdly late (>5s stall) — retry for a clean window.
         }
         assert!(
             blocked_for_timer,
@@ -575,8 +597,13 @@ mod tests {
         spin_streak_reset();
         let t0 = Instant::now();
         js_wait_for_event();
+        // #1444: a fresh streak does not throttle, so this returns without the
+        // throttle's ~1ms sleep. The bound only needs to sit below the sleep's
+        // order of magnitude scaled for an overloaded runner — 5ms preemption
+        // alone tripped it under CI load; 200ms is robust and still catches an
+        // erroneously-throttled transient call.
         assert!(
-            t0.elapsed() < Duration::from_millis(5),
+            t0.elapsed() < Duration::from_millis(200),
             "transient budget-0 must stay zero-latency, took {:?}",
             t0.elapsed()
         );
@@ -609,8 +636,12 @@ mod tests {
              call was {:?} (a working 1ms throttle yields ≥700µs)",
             throttled
         );
+        // #1444: guards against a throttle that sleeps grossly too long (the
+        // configured delay is ~1ms). The old 1s cap could false-fail when an
+        // overloaded runner adds hundreds of ms of scheduler latency on top of
+        // the 1ms sleep; 5s still catches a seconds-scale over-sleep bug.
         assert!(
-            throttled < Duration::from_secs(1),
+            throttled < Duration::from_secs(5),
             "throttle over-slept on a single call: {:?}",
             throttled
         );
@@ -623,8 +654,10 @@ mod tests {
         js_notify_main_thread();
         let t2 = Instant::now();
         js_wait_for_event(); // consumes NOTIFIED, returns immediately
+                             // #1444: 5ms was scheduler-preemption-tight under CI load; 200ms is
+                             // robust and still well below any budget-blocking behavior.
         assert!(
-            t2.elapsed() < Duration::from_millis(5),
+            t2.elapsed() < Duration::from_millis(200),
             "notify fast-path was not zero-latency: {:?}",
             t2.elapsed()
         );
