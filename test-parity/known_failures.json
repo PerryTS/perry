@@ -2641,5 +2641,53 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncGen yielding mixed types) — types lost or wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/set-max-listeners-zero": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: setMaxListeners(0) — max not 0 (unlimited) per Node. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/three-stage-mid-error": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipeline 3-stage mid-error — src/sink destroy flags or err wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/destroyed-during-data-flow": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: destroy() inside 'data' listener — emits wrong data count. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/from-array-of-promises": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from([P1, P2, P3]) — does not await each Promise. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/iter-helpers/flat-map-async-gen": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: flatMap(asyncGenFn) — multi-yield per input not flattened. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/events/error-listener-once-cleanup": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: once('error', fn) — listener not auto-removed after fire. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/from-rejected-promise-in-array": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(array with one Promise.reject) — error not emitted at the right point. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/r-t-w-end-to-end": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: simple R→T→W e2e pipe — received chunks wrong (transform/uppercase not applied). Flips to PASS when #1532 lands."
   }
 }
