@@ -108,6 +108,19 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         }
     }
 
+    // #1483: perry/ui widget arrow-params (`(canvas: Canvas) => ...` or, via a
+    // type-only import alias, `(canvas: CanvasType) => ...`) dispatch instance
+    // methods through perry/ui `NativeMethodCall` like a local `const canvas =
+    // Canvas(...)`. Mirrors the fn-decl registration; resolution requires a
+    // real perry/ui import so user classes sharing a widget name aren't tagged.
+    for param in &params {
+        if let Type::Named(type_name) = &param.ty {
+            if let Some(widget) = ctx.resolve_perry_ui_widget_type(type_name) {
+                ctx.register_native_instance(param.name.clone(), "perry/ui".to_string(), widget);
+            }
+        }
+    }
+
     // Generate Let statements for destructuring patterns BEFORE lowering body
     // This ensures the destructured variable names are defined when the body references them
     let mut destructuring_stmts = Vec::new();

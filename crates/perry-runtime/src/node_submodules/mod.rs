@@ -22,12 +22,12 @@
 
 use std::cell::RefCell;
 use std::os::raw::c_int;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicPtr, Ordering};
 
 use crate::closure::{
     js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call_array,
-    js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_register_closure_arity,
-    ClosureHeader,
+    js_closure_get_capture_f64, js_closure_get_capture_ptr, js_closure_set_capture_f64,
+    js_closure_set_capture_ptr, js_register_closure_arity, ClosureHeader,
 };
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
@@ -451,14 +451,208 @@ thunk!(
     "node:readline/promises.Readline is not yet implemented in Perry (tracked by issue #793)."
 );
 
-thunk!(
-    thunk_streamP_pipeline,
-    "node:stream/promises.pipeline is not yet implemented in Perry (tracked by issue #793)."
-);
-thunk!(
-    thunk_streamP_finished,
-    "node:stream/promises.finished is not yet implemented in Perry (tracked by issue #793)."
-);
+#[inline]
+fn undefined_value() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[inline]
+fn value_from_ptr(ptr: *const u8) -> f64 {
+    f64::from_bits(JSValue::pointer(ptr).bits())
+}
+
+#[inline]
+fn raw_ptr_from_value(value: f64) -> usize {
+    let bits = value.to_bits();
+    let jsval = JSValue::from_bits(bits);
+    if jsval.is_pointer() || jsval.is_string() || jsval.is_bigint() {
+        return (bits & crate::value::POINTER_MASK) as usize;
+    }
+    if bits != 0 && bits < 0x0001_0000_0000_0000 {
+        return bits as usize;
+    }
+    0
+}
+
+#[inline]
+unsafe fn gc_type_for_ptr(raw: usize) -> Option<u8> {
+    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let gc_type = (*header).obj_type;
+    if gc_type <= crate::gc::GC_TYPE_MAX {
+        Some(gc_type)
+    } else {
+        None
+    }
+}
+
+fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
+    let raw = raw_ptr_from_value(value);
+    if raw < 0x10000 || crate::buffer::is_registered_buffer(raw) {
+        return None;
+    }
+    unsafe {
+        if gc_type_for_ptr(raw) != Some(crate::gc::GC_TYPE_OBJECT) {
+            return None;
+        }
+    }
+    Some(raw as *mut ObjectHeader)
+}
+
+fn get_object_property(value: f64, name: &[u8]) -> Option<f64> {
+    let obj = object_ptr_from_value(value)?;
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, key);
+    if JSValue::from_bits(value.to_bits()).is_undefined() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn options_signal(options: f64) -> Option<f64> {
+    let jsval = JSValue::from_bits(options.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        return None;
+    }
+    get_object_property(options, b"signal")
+}
+
+fn signal_aborted(signal: f64) -> bool {
+    get_object_property(signal, b"aborted").is_some_and(|v| crate::value::js_is_truthy(v) != 0)
+}
+
+fn abort_error_value() -> f64 {
+    let msg = b"AbortError";
+    let header = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_error_new_with_message(header);
+    value_from_ptr(err as *const u8)
+}
+
+fn signal_reason(signal: f64) -> f64 {
+    match get_object_property(signal, b"reason") {
+        Some(reason) if !JSValue::from_bits(reason.to_bits()).is_undefined() => reason,
+        _ => abort_error_value(),
+    }
+}
+
+extern "C" fn stream_promises_abort_listener(closure: *const ClosureHeader) -> f64 {
+    let promise_value = js_closure_get_capture_f64(closure, 0);
+    let signal = js_closure_get_capture_f64(closure, 1);
+    let promise =
+        crate::value::js_nanbox_get_pointer(promise_value) as *mut crate::promise::Promise;
+    crate::promise::js_promise_reject(promise, signal_reason(signal));
+    undefined_value()
+}
+
+fn promise_value_from_ptr(promise: *mut crate::promise::Promise) -> f64 {
+    value_from_ptr(promise as *const u8)
+}
+
+fn register_abort_listener(signal: f64, promise: *mut crate::promise::Promise) {
+    let Some(signal_obj) = object_ptr_from_value(signal) else {
+        return;
+    };
+    let closure = js_closure_alloc(stream_promises_abort_listener as *const u8, 2);
+    js_closure_set_capture_f64(closure, 0, promise_value_from_ptr(promise));
+    js_closure_set_capture_f64(closure, 1, signal);
+    let event = b"abort";
+    let event_str = js_string_from_bytes(event.as_ptr(), event.len() as u32);
+    let event_value = f64::from_bits(JSValue::string_ptr(event_str).bits());
+    let listener_value = value_from_ptr(closure as *const u8);
+    crate::url::js_abort_signal_add_listener(signal_obj, event_value, listener_value);
+}
+
+fn pending_abortable_promise(signal: f64) -> f64 {
+    let promise = crate::promise::js_promise_new();
+    register_abort_listener(signal, promise);
+    promise_value_from_ptr(promise)
+}
+
+fn invoke_destination_method(destination: f64, method: &[u8], args: &[f64]) -> f64 {
+    let Some(func) = get_object_property(destination, method) else {
+        return undefined_value();
+    };
+    let prev_this = crate::object::js_implicit_this_set(destination);
+    let result = unsafe { crate::closure::js_native_call_value(func, args.as_ptr(), args.len()) };
+    crate::object::js_implicit_this_set(prev_this);
+    result
+}
+
+fn write_chunks_to_destination(destination: f64, chunks: &[f64]) {
+    let undef = undefined_value();
+    for chunk in chunks {
+        let args = [*chunk, undef];
+        let _ = invoke_destination_method(destination, b"write", &args);
+    }
+    let end_args = [undef];
+    let _ = invoke_destination_method(destination, b"end", &end_args);
+}
+
+extern "C" fn thunk_streamP_pipeline(
+    _closure: *const ClosureHeader,
+    source: f64,
+    destination: f64,
+    options: f64,
+) -> f64 {
+    let signal = options_signal(options);
+    if let Some(signal) = signal {
+        if signal_aborted(signal) {
+            return promise_rejected(signal_reason(signal));
+        }
+    }
+
+    match crate::node_stream::js_node_stream_readable_chunks_result(source) {
+        Err(err) => promise_rejected(err),
+        Ok(Some(chunks)) => {
+            write_chunks_to_destination(destination, &chunks);
+            if let Some(signal) = signal {
+                if signal_aborted(signal) {
+                    return promise_rejected(signal_reason(signal));
+                }
+            }
+            promise_undefined()
+        }
+        Ok(None) => {
+            if let Some(signal) = signal {
+                pending_abortable_promise(signal)
+            } else if let Some(err) =
+                crate::node_stream::js_node_stream_hidden_error_after_read(source)
+            {
+                promise_rejected(err)
+            } else {
+                promise_undefined()
+            }
+        }
+    }
+}
+
+extern "C" fn thunk_streamP_finished(
+    _closure: *const ClosureHeader,
+    stream: f64,
+    options: f64,
+) -> f64 {
+    if let Some(signal) = options_signal(options) {
+        if signal_aborted(signal) {
+            return promise_rejected(signal_reason(signal));
+        }
+        if let Some(err) = crate::node_stream::js_node_stream_hidden_error_after_read(stream) {
+            return promise_rejected(err);
+        }
+        if crate::node_stream::js_node_stream_is_stub_ended_after_read(stream) {
+            return promise_undefined();
+        }
+        return pending_abortable_promise(signal);
+    }
+
+    if let Some(err) = crate::node_stream::js_node_stream_hidden_error_after_read(stream) {
+        promise_rejected(err)
+    } else {
+        promise_undefined()
+    }
+}
 
 fn buffer_from_bytes(
     bytes: &[u8],
@@ -506,8 +700,528 @@ fn bytes_to_text_value(bytes: &[u8]) -> f64 {
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
 
-fn stream_consumer_bytes(stream: f64) -> Result<Vec<u8>, f64> {
-    crate::node_stream::js_node_stream_collect_bytes_result(stream)
+#[derive(Clone, Copy)]
+enum ConsumerKind {
+    Text = 0,
+    Json = 1,
+    Buffer = 2,
+    ArrayBuffer = 3,
+    Bytes = 4,
+    Blob = 5,
+}
+
+impl ConsumerKind {
+    fn from_i64(value: i64) -> Self {
+        match value {
+            1 => Self::Json,
+            2 => Self::Buffer,
+            3 => Self::ArrayBuffer,
+            4 => Self::Bytes,
+            5 => Self::Blob,
+            _ => Self::Text,
+        }
+    }
+
+    fn chunk_mode(self) -> ChunkMode {
+        match self {
+            Self::Text | Self::Json => ChunkMode::Text,
+            Self::Buffer | Self::ArrayBuffer | Self::Bytes | Self::Blob => ChunkMode::Binary,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChunkMode {
+    Binary,
+    Text,
+}
+
+#[derive(Clone, Copy)]
+enum CollectMethod {
+    Next = 0,
+    Read = 1,
+}
+
+type StreamGetReaderFn = unsafe extern "C" fn(f64) -> f64;
+type StreamReaderReadFn = unsafe extern "C" fn(f64) -> *mut crate::Promise;
+
+static STREAM_CONSUMER_GET_READER: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+static STREAM_CONSUMER_READER_READ: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+#[no_mangle]
+pub extern "C" fn js_register_stream_consumer_callbacks(
+    get_reader: StreamGetReaderFn,
+    reader_read: StreamReaderReadFn,
+) {
+    STREAM_CONSUMER_GET_READER.store(get_reader as *mut (), Ordering::Release);
+    STREAM_CONSUMER_READER_READ.store(reader_read as *mut (), Ordering::Release);
+}
+
+impl CollectMethod {
+    fn from_i64(value: i64) -> Self {
+        if value == 1 {
+            Self::Read
+        } else {
+            Self::Next
+        }
+    }
+
+    fn name(self) -> &'static [u8] {
+        match self {
+            Self::Next => b"next",
+            Self::Read => b"read",
+        }
+    }
+}
+
+fn boxed_pointer(ptr: *const u8) -> f64 {
+    f64::from_bits(JSValue::pointer(ptr).bits())
+}
+
+fn is_integral_handle_value(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    (jsval.is_int32() && jsval.as_int32() > 0)
+        || (jsval.is_number() && value.is_finite() && value > 0.0 && value.fract() == 0.0)
+}
+
+fn is_undefined_value(value: f64) -> bool {
+    value.to_bits() == crate::value::TAG_UNDEFINED
+        || JSValue::from_bits(value.to_bits()).is_undefined()
+}
+
+fn raw_ptr_from_value(value: f64) -> usize {
+    let bits = value.to_bits();
+    let jsval = JSValue::from_bits(bits);
+    if jsval.is_pointer() || jsval.is_string() || jsval.is_bigint() {
+        return (bits & crate::value::POINTER_MASK) as usize;
+    }
+    if bits != 0 && bits < 0x0001_0000_0000_0000 {
+        return bits as usize;
+    }
+    0
+}
+
+unsafe fn gc_type_for_ptr(raw: usize) -> Option<u8> {
+    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let gc_type = (*header).obj_type;
+    if gc_type <= crate::gc::GC_TYPE_MAX {
+        Some(gc_type)
+    } else {
+        None
+    }
+}
+
+fn object_ptr_from_value(value: f64) -> Option<*const ObjectHeader> {
+    let raw = raw_ptr_from_value(value);
+    if raw < 0x10000 || crate::buffer::is_registered_buffer(raw) {
+        return None;
+    }
+    unsafe {
+        if gc_type_for_ptr(raw) != Some(crate::gc::GC_TYPE_OBJECT) {
+            return None;
+        }
+    }
+    Some(raw as *const ObjectHeader)
+}
+
+fn named_key(bytes: &[u8]) -> *const StringHeader {
+    js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+fn get_named_value(value: f64, name: &[u8]) -> f64 {
+    let Some(obj) = object_ptr_from_value(value) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let key = named_key(name);
+    js_object_get_field_by_name_f64(obj, key)
+}
+
+fn is_callable_value(value: f64) -> bool {
+    let raw = raw_ptr_from_value(value);
+    if raw < 0x10000 || crate::buffer::is_registered_buffer(raw) {
+        return false;
+    }
+    unsafe {
+        gc_type_for_ptr(raw) == Some(crate::gc::GC_TYPE_CLOSURE)
+            && crate::closure::is_closure_ptr(raw)
+    }
+}
+
+fn has_named_callable(value: f64, name: &[u8]) -> bool {
+    is_callable_value(get_named_value(value, name))
+}
+
+fn invalid_chunk_error(value: f64) -> f64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    let (kind, detail) = if jsval.is_int32() {
+        ("number", format!(" ({})", jsval.as_int32()))
+    } else if jsval.is_number() {
+        ("number", format!(" ({})", value))
+    } else if jsval.is_bool() {
+        ("boolean", String::new())
+    } else if jsval.is_undefined() {
+        ("undefined", String::new())
+    } else if jsval.is_null() {
+        ("null", String::new())
+    } else if is_callable_value(value) {
+        ("function", String::new())
+    } else {
+        ("object", String::new())
+    };
+    let msg = format!(
+        "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type {}{}",
+        kind, detail
+    );
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_INVALID_ARG_TYPE");
+    let err = crate::error::js_typeerror_new(msg_ptr);
+    boxed_pointer(err as *const u8)
+}
+
+fn append_string_value_bytes(value: f64, out: &mut Vec<u8>) {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    append_string_ptr_bytes(ptr, out);
+}
+
+fn append_string_ptr_bytes(ptr: *const StringHeader, out: &mut Vec<u8>) {
+    if ptr.is_null() || (ptr as usize) < 0x10000 {
+        return;
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        out.extend_from_slice(std::slice::from_raw_parts(data, len));
+    }
+}
+
+fn append_buffer_value_bytes(raw: usize, out: &mut Vec<u8>) {
+    if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
+        return;
+    }
+    unsafe {
+        let buf = raw as *const crate::buffer::BufferHeader;
+        let len = (*buf).length as usize;
+        let data = crate::buffer::buffer_data(buf);
+        out.extend_from_slice(std::slice::from_raw_parts(data, len));
+    }
+}
+
+fn append_number_chunk(value: f64, jsval: JSValue, out: &mut Vec<u8>) {
+    let text = if jsval.is_int32() {
+        jsval.as_int32().to_string()
+    } else if value.is_finite() && value.fract() == 0.0 {
+        (value as i64).to_string()
+    } else {
+        value.to_string()
+    };
+    out.extend_from_slice(text.as_bytes());
+}
+
+fn append_array_chunk_bytes(
+    raw: usize,
+    out: &mut Vec<u8>,
+    mode: ChunkMode,
+    depth: u8,
+) -> Result<(), f64> {
+    if raw < 0x10000 {
+        return Ok(());
+    }
+    let arr = raw as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(arr);
+    for i in 0..len {
+        let chunk = crate::array::js_array_get_f64(arr, i);
+        append_chunk_bytes_for_consumer(chunk, out, mode, depth + 1)?;
+    }
+    Ok(())
+}
+
+fn append_chunk_bytes_for_consumer(
+    value: f64,
+    out: &mut Vec<u8>,
+    mode: ChunkMode,
+    depth: u8,
+) -> Result<(), f64> {
+    if depth > 16 {
+        return Err(invalid_chunk_error(value));
+    }
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_any_string() {
+        append_string_value_bytes(value, out);
+        return Ok(());
+    }
+    if jsval.is_int32() || (jsval.is_number() && value.is_finite()) {
+        if mode == ChunkMode::Text {
+            return Err(invalid_chunk_error(value));
+        }
+        append_number_chunk(value, jsval, out);
+        return Ok(());
+    }
+
+    let raw = raw_ptr_from_value(value);
+    if raw < 0x10000 {
+        return Err(invalid_chunk_error(value));
+    }
+    if crate::buffer::is_registered_buffer(raw) {
+        append_buffer_value_bytes(raw, out);
+        return Ok(());
+    }
+
+    unsafe {
+        match gc_type_for_ptr(raw) {
+            Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY) => {
+                append_array_chunk_bytes(raw, out, mode, depth)
+            }
+            Some(crate::gc::GC_TYPE_OBJECT) => {
+                if let Some(Ok(chunks)) =
+                    crate::node_stream::js_node_stream_collect_chunks_result(value)
+                {
+                    append_chunk_bytes_for_consumer(chunks, out, mode, depth + 1)
+                } else {
+                    Err(invalid_chunk_error(value))
+                }
+            }
+            Some(crate::gc::GC_TYPE_STRING) => {
+                append_string_ptr_bytes(raw as *const StringHeader, out);
+                Ok(())
+            }
+            _ => Err(invalid_chunk_error(value)),
+        }
+    }
+}
+
+fn chunks_to_bytes(chunks: f64, mode: ChunkMode) -> Result<Vec<u8>, f64> {
+    let mut out = Vec::new();
+    append_chunk_bytes_for_consumer(chunks, &mut out, mode, 0)?;
+    Ok(out)
+}
+
+fn finish_consumer_from_chunks(kind: ConsumerKind, chunks: f64) -> Result<f64, f64> {
+    let bytes = chunks_to_bytes(chunks, kind.chunk_mode())?;
+    match kind {
+        ConsumerKind::Text => Ok(bytes_to_text_value(&bytes)),
+        ConsumerKind::Json => {
+            let text = bytes_to_text_value(&bytes);
+            let text_ptr = crate::value::js_get_string_pointer_unified(text) as *const StringHeader;
+            unsafe { crate::json::js_json_parse_result(text_ptr).map(|v| f64::from_bits(v.bits())) }
+        }
+        ConsumerKind::Buffer => Ok(bytes_to_buffer_value(&bytes)),
+        ConsumerKind::ArrayBuffer => Ok(bytes_to_array_buffer_value(&bytes)),
+        ConsumerKind::Bytes => Ok(bytes_to_uint8_array_value(&bytes)),
+        ConsumerKind::Blob => Ok(blob_value_from_bytes(&bytes)),
+    }
+}
+
+fn promise_from_consumer_chunks(kind: ConsumerKind, chunks: Result<f64, f64>) -> f64 {
+    match chunks.and_then(|chunks| finish_consumer_from_chunks(kind, chunks)) {
+        Ok(value) => promise_value(value),
+        Err(err) => promise_rejected(err),
+    }
+}
+
+fn settle_consumer_from_chunks(promise: *mut crate::Promise, kind: ConsumerKind, chunks: f64) {
+    if promise.is_null() {
+        return;
+    }
+    match finish_consumer_from_chunks(kind, chunks) {
+        Ok(value) => crate::promise::js_promise_resolve(promise, value),
+        Err(err) => crate::promise::js_promise_reject(promise, err),
+    }
+}
+
+fn promise_ptr_from_value(value: f64) -> Option<*mut crate::Promise> {
+    if crate::promise::js_value_is_promise(value) == 0 {
+        return None;
+    }
+    let raw = raw_ptr_from_value(value);
+    if raw < 0x10000 {
+        None
+    } else {
+        Some(raw as *mut crate::Promise)
+    }
+}
+
+fn registered_readable_stream_reader(stream: f64) -> Option<f64> {
+    if !is_integral_handle_value(stream) {
+        return None;
+    }
+    let f = STREAM_CONSUMER_GET_READER.load(Ordering::Acquire);
+    if f.is_null() {
+        return None;
+    }
+    let reader = unsafe {
+        let func: StreamGetReaderFn = std::mem::transmute(f);
+        func(stream)
+    };
+    if is_undefined_value(reader) {
+        None
+    } else {
+        Some(reader)
+    }
+}
+
+fn registered_reader_read_promise(reader: f64) -> Option<*mut crate::Promise> {
+    if !is_integral_handle_value(reader) {
+        return None;
+    }
+    let f = STREAM_CONSUMER_READER_READ.load(Ordering::Acquire);
+    if f.is_null() {
+        return None;
+    }
+    Some(unsafe {
+        let func: StreamReaderReadFn = std::mem::transmute(f);
+        func(reader)
+    })
+}
+
+fn call_collector_method(
+    receiver: f64,
+    method: CollectMethod,
+    step: *const ClosureHeader,
+    reject: *const ClosureHeader,
+) {
+    if let CollectMethod::Read = method {
+        if let Some(promise) = registered_reader_read_promise(receiver) {
+            crate::promise::js_promise_then(promise, step, reject);
+            return;
+        }
+    }
+
+    let name = method.name();
+    let result = unsafe {
+        crate::object::js_native_call_method(
+            receiver,
+            name.as_ptr() as *const i8,
+            name.len(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    if let Some(promise) = promise_ptr_from_value(result) {
+        crate::promise::js_promise_then(promise, step, reject);
+    } else {
+        consumer_collect_step(step, result);
+    }
+}
+
+fn collect_by_method_promise(kind: ConsumerKind, receiver: f64, method: CollectMethod) -> f64 {
+    let result_promise = crate::promise::js_promise_new();
+    let result_arr = crate::array::js_array_alloc(0);
+    let step = js_closure_alloc(consumer_collect_step as *const u8, 6);
+    let reject = js_closure_alloc(consumer_collect_rejected as *const u8, 1);
+    js_closure_set_capture_ptr(step, 0, result_promise as i64);
+    js_closure_set_capture_ptr(step, 1, result_arr as i64);
+    js_closure_set_capture_f64(step, 2, receiver);
+    js_closure_set_capture_ptr(step, 3, reject as i64);
+    js_closure_set_capture_ptr(step, 4, method as i64);
+    js_closure_set_capture_ptr(step, 5, kind as i64);
+    js_closure_set_capture_ptr(reject, 0, result_promise as i64);
+    call_collector_method(receiver, method, step, reject);
+    boxed_pointer(result_promise as *const u8)
+}
+
+fn call_symbol_async_iterator(stream: f64) -> Option<f64> {
+    let sym = crate::symbol::well_known_symbol("asyncIterator");
+    if sym.is_null() {
+        return None;
+    }
+    let sym_f64 = boxed_pointer(sym as *const u8);
+    let method = unsafe { crate::symbol::js_object_get_symbol_property(stream, sym_f64) };
+    if !is_callable_value(method) {
+        return None;
+    }
+    let prev_this = crate::object::js_implicit_this_set(stream);
+    let iterator = unsafe { crate::closure::js_native_call_value(method, std::ptr::null(), 0) };
+    crate::object::js_implicit_this_set(prev_this);
+    if iterator.to_bits() == crate::value::TAG_UNDEFINED {
+        None
+    } else {
+        Some(iterator)
+    }
+}
+
+fn async_consumer_promise(kind: ConsumerKind, stream: f64) -> Option<f64> {
+    if let Some(iterator) = call_symbol_async_iterator(stream) {
+        if has_named_callable(iterator, b"next") {
+            return Some(collect_by_method_promise(
+                kind,
+                iterator,
+                CollectMethod::Next,
+            ));
+        }
+    }
+    if has_named_callable(stream, b"next") {
+        return Some(collect_by_method_promise(kind, stream, CollectMethod::Next));
+    }
+    if has_named_callable(stream, b"getReader") {
+        let reader = unsafe {
+            crate::object::js_native_call_method(
+                stream,
+                b"getReader".as_ptr() as *const i8,
+                b"getReader".len(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        if reader.to_bits() == crate::value::TAG_UNDEFINED {
+            return Some(promise_rejected(invalid_chunk_error(stream)));
+        }
+        return Some(collect_by_method_promise(kind, reader, CollectMethod::Read));
+    }
+    if let Some(reader) = registered_readable_stream_reader(stream) {
+        return Some(collect_by_method_promise(kind, reader, CollectMethod::Read));
+    }
+    None
+}
+
+fn consume_stream(kind: ConsumerKind, stream: f64) -> f64 {
+    if let Some(chunks) = crate::node_stream::js_node_stream_collect_chunks_result(stream) {
+        return promise_from_consumer_chunks(kind, chunks);
+    }
+    if let Some(promise) = async_consumer_promise(kind, stream) {
+        return promise;
+    }
+    let empty = crate::array::js_array_alloc(0);
+    promise_from_consumer_chunks(kind, Ok(boxed_pointer(empty as *const u8)))
+}
+
+extern "C" fn consumer_collect_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+    let promise = js_closure_get_capture_ptr(closure, 0) as *mut crate::Promise;
+    crate::promise::js_promise_reject(promise, reason);
+    0.0
+}
+
+extern "C" fn consumer_collect_step(closure: *const ClosureHeader, iter_result: f64) -> f64 {
+    let promise = js_closure_get_capture_ptr(closure, 0) as *mut crate::Promise;
+    let mut result_arr = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    let receiver = js_closure_get_capture_f64(closure, 2);
+    let reject = js_closure_get_capture_ptr(closure, 3) as *const ClosureHeader;
+    let method = CollectMethod::from_i64(js_closure_get_capture_ptr(closure, 4));
+    let kind = ConsumerKind::from_i64(js_closure_get_capture_ptr(closure, 5));
+    if promise.is_null() || result_arr.is_null() {
+        return 0.0;
+    }
+
+    let Some(result_obj) = object_ptr_from_value(iter_result) else {
+        let arr_value = boxed_pointer(result_arr as *const u8);
+        settle_consumer_from_chunks(promise, kind, arr_value);
+        return 0.0;
+    };
+
+    let done = js_object_get_field_by_name_f64(result_obj, named_key(b"done"));
+    if crate::value::js_is_truthy(done) != 0 {
+        let arr_value = boxed_pointer(result_arr as *const u8);
+        settle_consumer_from_chunks(promise, kind, arr_value);
+        return 0.0;
+    }
+
+    let value = js_object_get_field_by_name_f64(result_obj, named_key(b"value"));
+    result_arr = crate::array::js_array_push_f64(result_arr, value);
+    js_closure_set_capture_ptr(closure as *mut ClosureHeader, 1, result_arr as i64);
+    call_collector_method(receiver, method, closure, reject);
+    0.0
 }
 
 const CLASS_ID_BLOB: u32 = 0xFFFF0026;
@@ -642,50 +1356,27 @@ fn string_from_value(value: f64) -> Option<String> {
 }
 
 extern "C" fn thunk_consumers_text(_closure: *const ClosureHeader, stream: f64) -> f64 {
-    match stream_consumer_bytes(stream) {
-        Ok(bytes) => promise_value(bytes_to_text_value(&bytes)),
-        Err(err) => promise_rejected(err),
-    }
+    consume_stream(ConsumerKind::Text, stream)
 }
 
 extern "C" fn thunk_consumers_json(_closure: *const ClosureHeader, stream: f64) -> f64 {
-    match stream_consumer_bytes(stream) {
-        Ok(bytes) => {
-            let text = bytes_to_text_value(&bytes);
-            let text_ptr = crate::value::js_get_string_pointer_unified(text) as *const StringHeader;
-            let parsed = unsafe { crate::json::js_json_parse(text_ptr) };
-            promise_value(f64::from_bits(parsed.bits()))
-        }
-        Err(err) => promise_rejected(err),
-    }
+    consume_stream(ConsumerKind::Json, stream)
 }
 
 extern "C" fn thunk_consumers_buffer(_closure: *const ClosureHeader, stream: f64) -> f64 {
-    match stream_consumer_bytes(stream) {
-        Ok(bytes) => promise_value(bytes_to_buffer_value(&bytes)),
-        Err(err) => promise_rejected(err),
-    }
+    consume_stream(ConsumerKind::Buffer, stream)
 }
 
 extern "C" fn thunk_consumers_arrayBuffer(_closure: *const ClosureHeader, stream: f64) -> f64 {
-    match stream_consumer_bytes(stream) {
-        Ok(bytes) => promise_value(bytes_to_array_buffer_value(&bytes)),
-        Err(err) => promise_rejected(err),
-    }
+    consume_stream(ConsumerKind::ArrayBuffer, stream)
 }
 
 extern "C" fn thunk_consumers_bytes(_closure: *const ClosureHeader, stream: f64) -> f64 {
-    match stream_consumer_bytes(stream) {
-        Ok(bytes) => promise_value(bytes_to_uint8_array_value(&bytes)),
-        Err(err) => promise_rejected(err),
-    }
+    consume_stream(ConsumerKind::Bytes, stream)
 }
 
 extern "C" fn thunk_consumers_blob(_closure: *const ClosureHeader, stream: f64) -> f64 {
-    match stream_consumer_bytes(stream) {
-        Ok(bytes) => promise_value(blob_value_from_bytes(&bytes)),
-        Err(err) => promise_rejected(err),
-    }
+    consume_stream(ConsumerKind::Blob, stream)
 }
 
 // node:sys is a deprecated alias for node:util — point each export at
@@ -905,11 +1596,11 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "pipeline",
-                thunk: ExportThunk::Fn1(thunk_streamP_pipeline),
+                thunk: ExportThunk::Fn3(thunk_streamP_pipeline),
             },
             ExportSpec {
                 name: "finished",
-                thunk: ExportThunk::Fn1(thunk_streamP_finished),
+                thunk: ExportThunk::Fn2(thunk_streamP_finished),
             },
         ],
     },
@@ -1096,6 +1787,14 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
             crate::object::js_object_set_field_by_name(obj, name_header, value_f64);
         }
     }
+    if submod.key == "stream_promises" {
+        let value = value_from_ptr(obj as *const u8);
+        let name = b"default";
+        let name_header = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        unsafe {
+            crate::object::js_object_set_field_by_name(obj, name_header, value);
+        }
+    }
     NAMESPACE_SINGLETONS.with(|m| {
         m.borrow_mut().insert(key, obj);
     });
@@ -1201,7 +1900,7 @@ pub(crate) fn test_node_submodule_roots() -> (usize, usize, usize) {
 // bytes from emitted IR (already produced as `private constant
 // [N x i8]` arrays via `emit_string_literal`).
 
-/// Returns a NaN-boxed function singleton for the given
+/// Returns a NaN-boxed export singleton for the given
 /// `(submodule, export)` pair. Falls back to NaN-boxed `TAG_TRUE`
 /// (preserving the pre-#841 sentinel) if no matching entry is found —
 /// this keeps any not-yet-listed export's behavior unchanged, so
@@ -1233,6 +1932,10 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
         Some(s) => s,
         None => return f64::from_bits(JSValue::bool(true).bits()),
     };
+    if submod.key == "stream_promises" && name == "default" {
+        let obj = ensure_namespace_singleton(submod);
+        return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    }
     let export = match find_export(submod, name) {
         Some(e) => e,
         None => return f64::from_bits(JSValue::bool(true).bits()),
@@ -1243,7 +1946,7 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
 
 /// Returns a NaN-boxed namespace stub object for the given submodule.
 /// Each known named export of that submodule is exposed as an own
-/// property on the object whose value is the function singleton
+/// property on the object whose value is the export singleton
 /// produced by `js_node_submodule_export_as_function`. Falls back to
 /// `js_unresolved_namespace_stub` (the empty-object stub Perry already
 /// hands out for unknown namespace imports) if `submod_key` doesn't
@@ -1273,6 +1976,7 @@ pub unsafe extern "C" fn js_node_submodule_namespace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     #[test]
     fn known_submodules_have_at_least_one_export() {
@@ -1324,5 +2028,194 @@ mod tests {
                 required
             );
         }
+    }
+
+    fn boxed_ptr(ptr: *const u8) -> f64 {
+        f64::from_bits(JSValue::pointer(ptr).bits())
+    }
+
+    fn promise_ptr(value: f64) -> *mut crate::promise::Promise {
+        crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise
+    }
+
+    fn string_value(s: &str) -> f64 {
+        let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    }
+
+    #[test]
+    fn stream_parent_promises_property_exposes_namespace() {
+        let value = unsafe {
+            crate::object::js_native_module_property_by_name(
+                b"stream".as_ptr(),
+                "stream".len(),
+                b"promises".as_ptr(),
+                "promises".len(),
+            )
+        };
+        let ns = object_ptr_from_value(value).expect("stream.promises should be an object");
+        assert!(get_object_property(boxed_ptr(ns as *const u8), b"pipeline").is_some());
+        assert!(get_object_property(boxed_ptr(ns as *const u8), b"finished").is_some());
+    }
+
+    #[test]
+    fn stream_promises_default_export_exposes_namespace() {
+        let value = unsafe {
+            js_node_submodule_export_as_function(
+                b"stream_promises".as_ptr(),
+                "stream_promises".len() as u32,
+                b"default".as_ptr(),
+                "default".len() as u32,
+            )
+        };
+        let ns = object_ptr_from_value(value).expect("default export should be an object");
+        let ns_value = boxed_ptr(ns as *const u8);
+
+        assert!(get_object_property(ns_value, b"pipeline").is_some());
+        assert!(get_object_property(ns_value, b"finished").is_some());
+        assert_eq!(
+            get_object_property(ns_value, b"default").unwrap().to_bits(),
+            ns_value.to_bits()
+        );
+    }
+
+    #[test]
+    fn stream_promises_finished_resolves_for_clean_stub_stream() {
+        let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 1);
+        assert_eq!(
+            crate::promise::js_promise_value(promise).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+    }
+
+    #[test]
+    fn stream_promises_finished_rejects_hidden_stream_error() {
+        let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+        let err = abort_error_value();
+        crate::node_stream::test_set_hidden_error(stream, err);
+
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 2);
+        assert_eq!(
+            crate::promise::js_promise_reason(promise).to_bits(),
+            err.to_bits()
+        );
+    }
+
+    thread_local! {
+        static PIPELINE_CAPTURED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    extern "C" fn pipeline_write_capture(
+        _closure: *const ClosureHeader,
+        chunk: f64,
+        _enc: f64,
+    ) -> f64 {
+        PIPELINE_CAPTURED.with(|captured| {
+            captured
+                .borrow_mut()
+                .push(string_from_value(chunk).unwrap_or_default());
+        });
+        f64::from_bits(crate::value::TAG_TRUE)
+    }
+
+    extern "C" fn pipeline_end_capture(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+        undefined_value()
+    }
+
+    #[test]
+    fn stream_promises_pipeline_transfers_readable_from_chunks() {
+        PIPELINE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+        crate::closure::js_register_closure_arity(pipeline_write_capture as *const u8, 2);
+        crate::closure::js_register_closure_arity(pipeline_end_capture as *const u8, 1);
+
+        let mut arr = crate::array::js_array_alloc(2);
+        arr = crate::array::js_array_push_f64(arr, string_value("await-"));
+        arr = crate::array::js_array_push_f64(arr, string_value("works"));
+        let source = crate::node_stream::js_node_stream_readable_from(boxed_ptr(arr as *const u8));
+
+        let sink = js_object_alloc(0, 2);
+        let write = js_closure_alloc(pipeline_write_capture as *const u8, 0);
+        let end = js_closure_alloc(pipeline_end_capture as *const u8, 0);
+        js_object_set_field_by_name(
+            sink,
+            js_string_from_bytes(b"write".as_ptr(), 5),
+            boxed_ptr(write as *const u8),
+        );
+        js_object_set_field_by_name(
+            sink,
+            js_string_from_bytes(b"end".as_ptr(), 3),
+            boxed_ptr(end as *const u8),
+        );
+
+        let promise_value = thunk_streamP_pipeline(
+            std::ptr::null(),
+            source,
+            boxed_ptr(sink as *const u8),
+            undefined_value(),
+        );
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 1);
+        PIPELINE_CAPTURED.with(|captured| {
+            assert_eq!(captured.borrow().join(""), "await-works");
+        });
+    }
+
+    #[test]
+    fn stream_promises_finished_rejects_when_signal_aborts() {
+        let controller = crate::url::js_abort_controller_new();
+        let signal = crate::url::js_abort_controller_signal(controller);
+        let opts = js_object_alloc(0, 1);
+        js_object_set_field_by_name(
+            opts,
+            js_string_from_bytes(b"signal".as_ptr(), 6),
+            boxed_ptr(signal as *const u8),
+        );
+        let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+
+        let promise_value =
+            thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));
+        let promise = promise_ptr(promise_value);
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        crate::url::js_abort_controller_abort(controller);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 2);
+    }
+
+    #[test]
+    fn stream_promises_finished_with_signal_resolves_for_ended_stub_stream() {
+        let controller = crate::url::js_abort_controller_new();
+        let signal = crate::url::js_abort_controller_signal(controller);
+        let opts = js_object_alloc(0, 1);
+        js_object_set_field_by_name(
+            opts,
+            js_string_from_bytes(b"signal".as_ptr(), 6),
+            boxed_ptr(signal as *const u8),
+        );
+        let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+        let end = get_object_property(stream, b"end").expect("stream.end should exist");
+        let prev_this = crate::object::js_implicit_this_set(stream);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
+        }
+        crate::object::js_implicit_this_set(prev_this);
+
+        let promise_value =
+            thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 1);
+        assert_eq!(
+            crate::promise::js_promise_value(promise).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
     }
 }
