@@ -1687,5 +1687,17 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/pipe/dest-error-propagates": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipe error semantics — destination error or source close state differs from Node. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/error-before-data-immediate-destroy": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: immediate destroy(err) — event ordering/set ('data'/'end' should NOT fire) wrong. Flips to PASS when #1532 lands."
   }
 }
