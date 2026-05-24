@@ -1337,6 +1337,20 @@ pub(super) fn stdlib_namespace_receiver(
     };
     let name = ident.sym.as_ref();
 
+    // #1701: a LOCAL binding (function param / `let` / `const`) that merely
+    // shares a name with a stdlib namespace is NOT the namespace — it shadows
+    // it. hono's trie-router has `path` (a URL-path string param) and does
+    // `path[0] === "/"`; treating that local as the `node:path` namespace
+    // false-fired the #503 refusal and blocked the whole package from
+    // compiling. A real stdlib namespace is never a local: it's the global
+    // (`process`) or an import, which the alias / namespace-import branches
+    // below resolve. So skip the direct name-match when `name` is shadowed by
+    // a local. (If a package shadows `process` with its own local, that local
+    // is genuinely theirs and likewise shouldn't be refused.)
+    if ctx.lookup_local(name).is_some() {
+        return None;
+    }
+
     // Direct global / module specifier match.
     if let Some(canon) = STDLIB_NAMESPACE_NAMES.iter().find(|n| **n == name) {
         return Some(*canon);
