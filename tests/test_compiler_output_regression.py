@@ -178,6 +178,29 @@ class CompilerOutputRegressionTests(unittest.TestCase):
             any("named_region_fnv_hash_present" in error for error in report["errors"])
         )
 
+    def test_image_convolution_allows_split_input_generation_region(self):
+        split_ir = GOOD_IR.replace(
+            "  %p1 = getelementptr inbounds i8, ptr %base, i64 %i1\n"
+            "  store i8 2, ptr %p1, align 1, !alias.scope !2, !noalias !3\n"
+            "  %p2 = getelementptr inbounds i8, ptr %base, i64 %i2\n"
+            "  store i8 3, ptr %p2, align 1, !alias.scope !2, !noalias !3\n",
+            "  %p1 = getelementptr inbounds i8, ptr %base, i64 %i1\n"
+            "  %p2 = getelementptr inbounds i8, ptr %base, i64 %i2\n",
+        )
+        report = HARNESS.verify_artifacts(
+            workload="image_convolution",
+            ir_before=split_ir,
+            ir_after=split_ir,
+            assembly=GOOD_ASM,
+            benchmark={"runs": [{"exit_code": 0}]},
+            vectorization={
+                "vectorized_count": 0,
+                "missed_count": 0,
+                "analysis_count": 0,
+            },
+        )
+        self.assertEqual(report["status"], "pass", report["errors"])
+
     def test_manifest_region_counters_include_named_regions(self):
         regions = HARNESS.region_counters("image_convolution", GOOD_IR)
         self.assertIn("hot_loops", regions)

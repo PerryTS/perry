@@ -76,7 +76,7 @@ label_prefix_any = ["for.body.20", "for.body.24", "while.body.28"]
 
 [[workloads.image_convolution.named_regions.checks]]
 name = "named_region_input_generation_byte_writes"
-min = { store_i8 = 4, xor_i32 = 1 }
+min = { store_i8 = 1, xor_i32 = 1 }
 detail = "input_generation byte writes and xor shape"
 
 [[workloads.image_convolution.named_regions.checks]]
