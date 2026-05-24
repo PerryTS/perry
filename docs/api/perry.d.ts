@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1242 entries across 81 modules
+// Coverage: 1244 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1800,6 +1800,10 @@ declare module "stream/promises" {
 }
 
 declare module "streams" {
+  /** stdlib */
+  export class ByteLengthQueuingStrategy { [key: string]: any; }
+  /** stdlib */
+  export class CountQueuingStrategy { [key: string]: any; }
   /** stdlib */
   export class DecompressionStream { [key: string]: any; }
   /** stdlib */
