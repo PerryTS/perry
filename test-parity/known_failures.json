@@ -2641,5 +2641,65 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncGen yielding mixed types) — types lost or wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/readable-event-with-objectmode": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: objectMode 'readable' event — read() returns wrong object values. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/emit-with-arg-array": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: emit(event, a, b, c, d) — listeners receive wrong args. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/many-pushes-accumulate": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: many push() — readableLength does not match total bytes. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/iter-helpers/drop-zero-yields-all": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: drop(0) — yields wrong items. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/web/from-async-gen-throws-mid": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: RS.from(asyncGen throws mid) — read() does not reject. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/events/listener-throw-does-not-stop-others": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: listener throw in emit — second listener may or may not fire (Perry differs from Node). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/cancel-during-pull": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: cancel() during pull — read() does not resolve {done:true}. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/iter-with-custom-return": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: for-await break — custom iterator.return() not invoked. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/events/captureRejections-constructor": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable({captureRejections}) — async listener throws not caught as 'error'. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/pipe-error-handler-on-source": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: src.on('error') during pipe — handler receives wrong error / not called. Flips to PASS when #1532 lands."
   }
 }
