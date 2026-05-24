@@ -1687,5 +1687,29 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/pipe/pipe-multiple-destinations": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipe to multiple destinations — data delivered to only one or wrong counts. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/on-returns-this-chained": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: on() chained — return value not the emitter, breaking chained registration. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/flow/pause-resume-cycle": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: readableFlowing — does not track pause→flow→pause transitions correctly. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/writable/cork-returns-undefined": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: cork()/uncork() return values differ from undefined. Flips to PASS when #1539 lands."
   }
 }
