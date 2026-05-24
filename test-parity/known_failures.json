@@ -332,12 +332,6 @@
     "category": "bug-open",
     "reason": "node:stream EventEmitter wiring incomplete — re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS. Real Perry gap (not ci-env); rolled under the open stream-events tracker #1532."
   },
-  "node-suite/process/env/allowed-flags": {
-    "issue": "1380",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:process: process.allowedNodeEnvironmentFlags is a Set, but `typeof aSet.has` reads 'undefined' for every Set (method-value-typeof gap), so `f.has` is not seen as a function. Reopened #1380; the real fix is general Set-method-value typeof."
-  },
   "node-suite/stream/classes/readable-constructor": {
     "issue": "1531",
     "added": "2026-05-23",
