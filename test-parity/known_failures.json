@@ -2719,5 +2719,53 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pause→resume cycle — does not deliver all data events. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/writable/sink-write-rejection-becomes-error": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: sink write cb(err) — does not emit 'error' event. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/empty-pure-end": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pure-end Readable (push(null) only) — 'end' fires with wrong data count or doesn't fire. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/get-events-set-equality": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: removeListener of un-registered listener — eventNames count wrong, or unexpected error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/from-async-generator-function": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: ReadableStream.from(asyncGen()) — iteration wrong or fails. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/pipe/objectmode-pipe": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: objectMode pipe — raw object data not preserved through pipe. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/object-stream-pause-resume": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pause/resume on objectMode Readable — wrong count or first item value. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/writable/_writev-vs-write": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: cork+uncork dispatches to write() instead of writev() when writev is defined. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/readable/unshift-while-flowing": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: unshift() during flowing mode — chunk not re-emitted in order. Flips to PASS when #1532 lands."
   }
 }
