@@ -146,7 +146,7 @@ fn show_media_permission_denied_alert(kind: &str, status: i64) {
         let ns_title = NSString::from_str(title);
         let _: () = msg_send![&*alert, setMessageText: &*ns_title];
         let message = format!(
-            "Perry WebRTC Desktop cannot use the {noun} because macOS reports it as {reason}.\n\nOpen System Settings and enable Perry WebRTC Desktop in {settings_name}, then restart the app."
+            "This app cannot use the {noun} because macOS reports it as {reason}.\n\nOpen System Settings and enable this app in {settings_name}, then restart it."
         );
         let ns_message = NSString::from_str(&message);
         let _: () = msg_send![&*alert, setInformativeText: &*ns_message];

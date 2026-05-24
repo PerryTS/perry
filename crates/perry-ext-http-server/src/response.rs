@@ -61,8 +61,8 @@ pub struct ServerResponse {
     pub status_message: Option<String>,
     /// Lowercase-keyed header map (the lookup table).
     pub headers: HashMap<String, String>,
-    /// Lowercase-keyed trailer map. Used by HTTP/2 protocols such as gRPC
-    /// for status metadata emitted after the response body.
+    /// Lowercase-keyed trailer map for HTTP trailers emitted after the
+    /// response body, per Node's `ServerResponse.addTrailers` contract.
     pub trailers: HashMap<String, String>,
     /// Lowercase → original-case map so `getHeaderNames()` returns
     /// what the user originally set (matches Node behavior).
@@ -170,9 +170,10 @@ impl ServerResponse {
 
     /// Auto-fill `Content-Length` if unset and we know the full body.
     fn ensure_content_length(&mut self) {
-        // A response with trailers must not get a fixed Content-Length:
-        // some clients/proxies treat that as "body is complete, no trailing
-        // metadata follows". gRPC relies on HTTP/2 trailers for status.
+        // A response with trailers must not declare a fixed Content-Length:
+        // the body length alone doesn't bound the response (trailing headers
+        // still follow), and some clients/proxies treat a present
+        // Content-Length as "body complete, no trailers expected".
         if !self.trailers.is_empty() {
             return;
         }
@@ -413,9 +414,9 @@ pub extern "C" fn js_node_http_res_write(handle: i64, chunk: f64) -> i32 {
     1
 }
 
-/// `res.addTrailers(headers)` — store HTTP trailers that are emitted after
-/// the response body. gRPC uses HTTP/2 trailers for `grpc-status` and
-/// `grpc-message`, so the server response needs this in addition to headers.
+/// `res.addTrailers(headers)` — store HTTP trailers emitted after the
+/// response body, per Node's `ServerResponse.addTrailers`. Trailers carry
+/// metadata that isn't known until the body has been produced.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_add_trailers(handle: i64, headers_value: f64) {
     let v = JsValue::from_bits(headers_value.to_bits());

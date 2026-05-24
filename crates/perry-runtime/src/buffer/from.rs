@@ -39,9 +39,10 @@ pub extern "C" fn js_buffer_from_string(
 /// Encode a JS string as Node's `latin1`/`binary` Buffer input encoding.
 ///
 /// Perry strings are stored as UTF-8, while Node's latin1 encoder writes the
-/// low byte of each JS code point.  This keeps high-bit protocol bytes like
-/// gRPC length-prefixed frames from being expanded as UTF-8.  `ascii` uses the
-/// same input encoding behavior in modern Node, so it shares this path.
+/// low byte of each JS code point. This keeps high-bit bytes in binary-over-
+/// string payloads from being expanded into UTF-8 multibyte sequences.
+/// `ascii` uses the same input-encoding behavior in modern Node, so it
+/// shares this path.
 fn latin1_string_to_buffer(str_bytes: &[u8]) -> *mut BufferHeader {
     let decoded = String::from_utf8_lossy(str_bytes);
     let mut out = Vec::with_capacity(decoded.chars().count());
