@@ -514,14 +514,18 @@ export function ImageSymbol(name: string): Widget;
  * ```ts
  * Image("https://example.com/avatar.png");
  * Image({ url: "https://example.com/avatar.png", alt: "Avatar" });
+ * Image({ systemName: "gear" }); // SF Symbol, same as ImageSymbol("gear")
  * ```
  *
- * (#635)
+ * (#635, #1495)
  */
 export function Image(url: string, alt?: string): Widget;
 export function Image(options: {
     url: string;
     alt?: string;
+}): Widget;
+export function Image(options: {
+    systemName: string;
 }): Widget;
 
 /**
