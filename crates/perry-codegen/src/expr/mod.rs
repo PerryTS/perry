@@ -83,8 +83,8 @@ pub(crate) use nanbox_inline::{
 pub(crate) use object_literal::lower_object_literal;
 pub(crate) use range_facts::{
     bounds_for_buffer_access, effective_alias_state_for_access, int_range_expr,
-    record_int_facts_for_let, record_int_facts_for_local_set, record_int_facts_for_update,
-    while_condition_range_fact, IntRange, IntRangeFact,
+    invalidate_local_write_facts, record_int_facts_for_let, record_int_facts_for_local_set,
+    record_int_facts_for_update, while_condition_range_fact, IntRange, IntRangeFact,
 };
 pub(crate) use strings::emit_string_literal_global;
 pub(crate) use url_helpers::lower_url_string_getter;
@@ -495,7 +495,7 @@ pub(crate) struct FnCtx<'a> {
     /// check, and `stmt_preserves_array_length` already proved the
     /// body can't change `arr.length` or reassign `i`, so the
     /// IndexSet site can rely on `i < arr.length` without rechecking.
-    pub bounded_index_pairs: Vec<(u32, u32)>,
+    pub bounded_index_pairs: Vec<BoundedIndexPair>,
 
     /// Parallel i32 counter slots for integer loop counters that are
     /// used as bounded array indices. When a for-loop counter is in
@@ -755,6 +755,10 @@ pub(crate) struct FnCtx<'a> {
     pub int_range_aliases: std::collections::HashMap<u32, perry_hir::Expr>,
     /// Scoped local integer ranges derived from loop/while guards.
     pub int_range_facts: Vec<IntRangeFact>,
+    /// Monotonic source for loop-local proof scopes. Loop exit removes only
+    /// facts created with its exact scope id, so invalidation of older facts
+    /// cannot make newer inner-loop facts survive via shifted vector indices.
+    pub next_loop_proof_scope_id: u32,
     /// Mutable locals known to be non-negative at the current point. While
     /// guards provide the upper bound; this set supplies the lower bound.
     pub nonnegative_integer_locals: std::collections::HashSet<u32>,
@@ -869,7 +873,23 @@ pub struct I18nLowerCtx {
     pub default_locale_idx: usize,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct BoundedIndexPair {
+    pub index_local_id: u32,
+    pub array_local_id: u32,
+    pub scope_id: u32,
+}
+
 impl<'a> FnCtx<'a> {
+    pub fn next_loop_proof_scope_id(&mut self) -> u32 {
+        let id = self.next_loop_proof_scope_id;
+        self.next_loop_proof_scope_id = self
+            .next_loop_proof_scope_id
+            .checked_add(1)
+            .expect("loop proof scope id overflow");
+        id
+    }
+
     pub fn block(&mut self) -> &mut LlBlock {
         self.func
             .block_mut(self.current_block)

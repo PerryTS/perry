@@ -240,48 +240,17 @@ pub(crate) fn can_lower_expr_as_i32(
             op: BinaryOp::BitOr,
             left,
             right,
-        } if matches!(right.as_ref(), Expr::Integer(0)) => {
-            if let Expr::Binary {
-                op: BinaryOp::Div,
-                left: div_l,
-                right: div_r,
-            } = left.as_ref()
-            {
-                can_lower_expr_as_i32(
-                    div_l,
-                    i32_slots,
-                    flat_const_arrays,
-                    array_row_aliases,
-                    integer_locals,
-                    clamp3_fns,
-                    clamp_u8_fns,
-                    integer_returning_fns,
-                    i32_identity_fns,
-                ) && can_lower_expr_as_i32(
-                    div_r,
-                    i32_slots,
-                    flat_const_arrays,
-                    array_row_aliases,
-                    integer_locals,
-                    clamp3_fns,
-                    clamp_u8_fns,
-                    integer_returning_fns,
-                    i32_identity_fns,
-                )
-            } else {
-                can_lower_expr_as_i32(
-                    left,
-                    i32_slots,
-                    flat_const_arrays,
-                    array_row_aliases,
-                    integer_locals,
-                    clamp3_fns,
-                    clamp_u8_fns,
-                    integer_returning_fns,
-                    i32_identity_fns,
-                )
-            }
-        }
+        } if matches!(right.as_ref(), Expr::Integer(0)) => can_lower_expr_as_i32(
+            left,
+            i32_slots,
+            flat_const_arrays,
+            array_row_aliases,
+            integer_locals,
+            clamp3_fns,
+            clamp_u8_fns,
+            integer_returning_fns,
+            i32_identity_fns,
+        ),
         Expr::Binary { op, left, right }
             if matches!(
                 op,
@@ -424,20 +393,7 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
             op: BinaryOp::BitOr,
             left,
             right,
-        } if matches!(right.as_ref(), Expr::Integer(0)) => {
-            if let Expr::Binary {
-                op: BinaryOp::Div,
-                left: div_l,
-                right: div_r,
-            } = left.as_ref()
-            {
-                let a = lower_expr_native_i32(ctx, div_l)?.value;
-                let b = lower_expr_native_i32(ctx, div_r)?.value;
-                ctx.block().sdiv(I32, &a, &b)
-            } else {
-                lower_expr_native_i32(ctx, left)?.value
-            }
-        }
+        } if matches!(right.as_ref(), Expr::Integer(0)) => lower_expr_native_i32(ctx, left)?.value,
         Expr::Binary { op, left, right }
             if matches!(
                 op,

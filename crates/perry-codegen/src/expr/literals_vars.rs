@@ -346,6 +346,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // work into O(n) and is the difference between 700 ms and 200 ms
         // on bench_string_ops.
         Expr::LocalSet(id, value) => {
+            super::invalidate_local_write_facts(ctx, *id);
             // Detect the `x = x + y` self-append pattern.
             // The fast path requires a plain alloca slot in `ctx.locals` —
             // module globals (use `@global` loads), closure captures (use
@@ -512,6 +513,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // prefix returns the NEW value. Closure captures, locals, then
         // module globals.
         Expr::Update { id, op, prefix } => {
+            super::invalidate_local_write_facts(ctx, *id);
             // Closure capture path: runtime get + add/sub + runtime set.
             if let Some(&capture_idx) = ctx.closure_captures.get(id) {
                 let closure_ptr = ctx

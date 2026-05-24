@@ -473,6 +473,8 @@ def native_rep_contract_results(
         length_mismatch_records = records_for_native_region("length_mismatch")
         mutated_for_records = records_for_native_region("mutated_for_index")
         mutated_while_records = records_for_native_region("mutated_while_index")
+        stale_native_alias_records = records_for_native_region("stale_native_alias")
+        stale_allocation_length_records = records_for_native_region("stale_allocation_length")
         array_buffer_view_records = records_for_native_region("array_buffer_views")
         length_mismatch_unchecked_unknown = [
             r for r in length_mismatch_records if _is_unchecked_native_unknown_bounds(r)
@@ -482,6 +484,26 @@ def native_rep_contract_results(
         mutated_while_unchecked_native = unchecked_native_access(mutated_while_records)
         mutated_for_dynamic_fallback_accesses = fallback_buffer_access(mutated_for_records)
         mutated_while_dynamic_fallback_accesses = fallback_buffer_access(mutated_while_records)
+        stale_native_alias_unsafe_native = [
+            r
+            for r in stale_native_alias_records
+            if _access_mode_name(r.get("access_mode")) == "unchecked_native"
+            or r.get("emitted_inbounds")
+            or r.get("emitted_noalias")
+        ]
+        stale_allocation_length_unsafe_native = [
+            r
+            for r in stale_allocation_length_records
+            if _access_mode_name(r.get("access_mode")) == "unchecked_native"
+            or r.get("emitted_inbounds")
+            or r.get("emitted_noalias")
+        ]
+        stale_native_alias_dynamic_fallback_accesses = fallback_buffer_access(
+            stale_native_alias_records
+        )
+        stale_allocation_length_dynamic_fallback_accesses = fallback_buffer_access(
+            stale_allocation_length_records
+        )
         array_buffer_view_unsafe_noalias = [
             r
             for r in array_buffer_view_records
@@ -521,6 +543,10 @@ def native_rep_contract_results(
             and bool(mutated_for_dynamic_fallback_accesses),
             "mutated_while_index": not mutated_while_unchecked_native
             and bool(mutated_while_dynamic_fallback_accesses),
+            "stale_native_alias": not stale_native_alias_unsafe_native
+            and bool(stale_native_alias_dynamic_fallback_accesses),
+            "stale_allocation_length": not stale_allocation_length_unsafe_native
+            and bool(stale_allocation_length_dynamic_fallback_accesses),
             "array_buffer_views": not array_buffer_view_unsafe_noalias
             and (
                 bool(denied_alias(array_buffer_view_records))
@@ -562,6 +588,26 @@ def native_rep_contract_results(
             "native_reps_negative_mutated_while_index_has_dynamic_fallback",
             bool(mutated_while_dynamic_fallback_accesses),
             json.dumps(mutated_while_dynamic_fallback_accesses[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_stale_native_alias_no_unchecked_or_native_claims",
+            not stale_native_alias_unsafe_native,
+            json.dumps(stale_native_alias_unsafe_native[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_stale_native_alias_has_dynamic_fallback",
+            bool(stale_native_alias_dynamic_fallback_accesses),
+            json.dumps(stale_native_alias_dynamic_fallback_accesses[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_stale_allocation_length_no_unchecked_or_native_claims",
+            not stale_allocation_length_unsafe_native,
+            json.dumps(stale_allocation_length_unsafe_native[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_stale_allocation_length_has_dynamic_fallback",
+            bool(stale_allocation_length_dynamic_fallback_accesses),
+            json.dumps(stale_allocation_length_dynamic_fallback_accesses[:5], sort_keys=True),
         )
         add(
             "native_reps_negative_array_buffer_views_denies_noalias",

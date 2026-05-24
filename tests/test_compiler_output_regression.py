@@ -480,6 +480,12 @@ for.body.11:
         mutated_while_region = (
             "h1_buffer_alias_negative_ts.mutatedwhileindex.mutated_while_index"
         )
+        stale_native_alias_region = (
+            "h1_buffer_alias_negative_ts.stalenativealias.stale_native_alias"
+        )
+        stale_allocation_length_region = (
+            "h1_buffer_alias_negative_ts.staleallocationlength.stale_allocation_length"
+        )
         array_buffer_view_region = (
             "h1_buffer_alias_negative_ts.arraybufferviews.array_buffer_views"
         )
@@ -553,6 +559,24 @@ for.body.11:
                 access_mode="dynamic_fallback",
                 expr_kind="Uint8ArrayGet",
                 consumer="Uint8ArrayGet.slow_path_i32",
+            ),
+            native_record(
+                function="staleNativeAlias",
+                rep="i32",
+                region_id=stale_native_alias_region,
+                bounds_state="unknown",
+                access_mode="dynamic_fallback",
+                expr_kind="BufferIndexSet",
+                consumer="BufferIndexSet.slow_path",
+            ),
+            native_record(
+                function="staleAllocationLength",
+                rep="i32",
+                region_id=stale_allocation_length_region,
+                bounds_state="unknown",
+                access_mode="dynamic_fallback",
+                expr_kind="BufferIndexSet",
+                consumer="BufferIndexSet.slow_path",
             ),
             *length_records,
             *mutated_records,
@@ -831,6 +855,112 @@ for.body.11:
         self.assertTrue(
             any(
                 "native_reps_negative_mutated_while_index_no_unchecked_native" in error
+                for error in report["errors"]
+            )
+        )
+
+    def test_stale_native_alias_unchecked_native_fails_gate(self):
+        length_region = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"
+        stale_native_alias_region = (
+            "h1_buffer_alias_negative_ts.stalenativealias.stale_native_alias"
+        )
+        records = self.h1_alias_negative_records(
+            [
+                native_record(
+                    function="lengthMismatch",
+                    rep="i32",
+                    region_id=length_region,
+                    bounds_state="unknown",
+                    access_mode="dynamic_fallback",
+                    expr_kind="BufferIndexSet",
+                    consumer="BufferIndexSet.slow_path",
+                )
+            ]
+        )
+        records = [
+            r
+            for r in records
+            if r.get("region_id") != stale_native_alias_region
+        ]
+        records.append(
+            native_record(
+                function="staleNativeAlias",
+                rep="u8",
+                region_id=stale_native_alias_region,
+                bounds_state={"proven": {"proof": "loop_guard"}},
+                access_mode="unchecked_native",
+                expr_kind="BufferIndexSet",
+                consumer="u8_store_trunc_i32",
+                emitted_inbounds=True,
+            )
+        )
+        report = HARNESS.verify_artifacts(
+            workload="h1_buffer_alias_negative",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any(
+                "native_reps_negative_stale_native_alias_no_unchecked_or_native_claims"
+                in error
+                for error in report["errors"]
+            )
+        )
+
+    def test_stale_allocation_length_inbounds_fails_gate(self):
+        length_region = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"
+        stale_allocation_length_region = (
+            "h1_buffer_alias_negative_ts.staleallocationlength.stale_allocation_length"
+        )
+        records = self.h1_alias_negative_records(
+            [
+                native_record(
+                    function="lengthMismatch",
+                    rep="i32",
+                    region_id=length_region,
+                    bounds_state="unknown",
+                    access_mode="dynamic_fallback",
+                    expr_kind="BufferIndexSet",
+                    consumer="BufferIndexSet.slow_path",
+                )
+            ]
+        )
+        records = [
+            r
+            for r in records
+            if r.get("region_id") != stale_allocation_length_region
+        ]
+        records.append(
+            native_record(
+                function="staleAllocationLength",
+                rep="u8",
+                region_id=stale_allocation_length_region,
+                bounds_state={"proven": {"proof": "loop_guard"}},
+                access_mode="dynamic_fallback",
+                expr_kind="BufferIndexSet",
+                consumer="u8_store_trunc_i32",
+                emitted_inbounds=True,
+            )
+        )
+        report = HARNESS.verify_artifacts(
+            workload="h1_buffer_alias_negative",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any(
+                "native_reps_negative_stale_allocation_length_no_unchecked_or_native_claims"
+                in error
                 for error in report["errors"]
             )
         )

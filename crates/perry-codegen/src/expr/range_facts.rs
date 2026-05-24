@@ -26,6 +26,7 @@ impl IntRange {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct IntRangeFact {
     pub local_id: u32,
+    pub scope_id: u32,
     pub range: IntRange,
 }
 
@@ -38,6 +39,28 @@ fn resolve_native_i32_alias(ctx: &FnCtx<'_>, mut id: u32) -> u32 {
         id = next;
     }
     id
+}
+
+fn native_i32_alias_chain_mentions(
+    aliases: &std::collections::HashMap<u32, u32>,
+    alias_id: u32,
+    target_id: u32,
+) -> bool {
+    if alias_id == target_id {
+        return true;
+    }
+    let mut id = alias_id;
+    let mut seen = std::collections::HashSet::new();
+    while let Some(next) = aliases.get(&id).copied() {
+        if next == target_id {
+            return true;
+        }
+        if !seen.insert(id) {
+            break;
+        }
+        id = next;
+    }
+    false
 }
 
 fn native_index_source_local(ctx: &FnCtx<'_>, expr: &Expr) -> Option<u32> {
@@ -265,6 +288,29 @@ pub(crate) fn record_int_facts_for_local_set(ctx: &mut FnCtx<'_>, id: u32, value
     }
 }
 
+pub(crate) fn invalidate_local_write_facts(ctx: &mut FnCtx<'_>, id: u32) {
+    let aliases = ctx.native_i32_aliases.clone();
+    ctx.native_i32_aliases
+        .retain(|alias_id, _| !native_i32_alias_chain_mentions(&aliases, *alias_id, id));
+
+    ctx.min_length_bounds
+        .retain(|bound_id, buffer_ids| *bound_id != id && !buffer_ids.contains(&id));
+
+    ctx.bounded_buffer_index_pairs
+        .retain(|fact| fact.index_local_id != id && fact.buffer_local_id != id);
+    ctx.bounded_index_pairs
+        .retain(|fact| fact.index_local_id != id && fact.array_local_id != id);
+
+    for view in ctx.buffer_view_slots.values_mut() {
+        if matches!(
+            view.length_source.as_ref(),
+            Some(LengthSource::Local { id: source_id, .. }) if *source_id == id
+        ) {
+            view.length_source = Some(LengthSource::Unknown);
+        }
+    }
+}
+
 pub(crate) fn record_int_facts_for_update(ctx: &mut FnCtx<'_>, id: u32, op: UpdateOp) {
     ctx.int_range_aliases.remove(&id);
     let remains_nonnegative = match op {
@@ -306,6 +352,7 @@ fn index_local_with_addend(expr: &Expr) -> Option<(u32, i64)> {
 pub(crate) fn while_condition_range_fact(
     ctx: &FnCtx<'_>,
     condition: &Expr,
+    scope_id: u32,
 ) -> Option<IntRangeFact> {
     let Expr::Compare { op, left, right } = condition else {
         return None;
@@ -329,6 +376,7 @@ pub(crate) fn while_condition_range_fact(
     if lower <= upper {
         Some(IntRangeFact {
             local_id,
+            scope_id,
             range: IntRange {
                 min: lower.max(0),
                 max: upper,

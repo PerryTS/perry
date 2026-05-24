@@ -472,5 +472,13 @@ name = "mutated_while_index"
 native_region_id = "h1_buffer_alias_negative_ts.mutatedwhileindex.mutated_while_index"
 
 [[workloads.h1_buffer_alias_negative.named_regions]]
+name = "stale_native_alias"
+native_region_id = "h1_buffer_alias_negative_ts.stalenativealias.stale_native_alias"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "stale_allocation_length"
+native_region_id = "h1_buffer_alias_negative_ts.staleallocationlength.stale_allocation_length"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
 name = "array_buffer_views"
 native_region_id = "h1_buffer_alias_negative_ts.arraybufferviews.array_buffer_views"

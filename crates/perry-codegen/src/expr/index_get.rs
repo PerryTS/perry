@@ -186,7 +186,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
                     (object.as_ref(), index.as_ref())
                 {
-                    if ctx.bounded_index_pairs.contains(&(*idx_id, *arr_id)) {
+                    if ctx.bounded_index_pairs.iter().any(|fact| {
+                        fact.index_local_id == *idx_id && fact.array_local_id == *arr_id
+                    }) {
                         let arr_box = lower_expr(ctx, object)?;
                         // Grab i32 slot name before mutably borrowing ctx for block().
                         let i32_slot_opt = ctx.i32_counter_slots.get(idx_id).cloned();

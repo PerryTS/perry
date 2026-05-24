@@ -551,9 +551,8 @@ impl LlBlock {
         r
     }
 
-    /// Signed integer division.  Emitted by the `(int / int) | 0` fast
-    /// path — avoids `scvtf → fdiv → fcvtzs` and lets LLVM replace
-    /// constant divisors with `smulh + asr`.
+    /// Signed integer division. Reserved for future proof-guarded integer
+    /// division paths; JS `/` currently lowers through double division.
     pub fn sdiv(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
         self.emit(format!("{} = sdiv {} {}, {}", r, ty, a, b));

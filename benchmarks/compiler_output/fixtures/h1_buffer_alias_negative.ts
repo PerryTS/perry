@@ -91,6 +91,28 @@ function mutatedWhileIndex(buf: Buffer): number {
   return total;
 }
 
+function staleNativeAlias(): number {
+  const buf = Buffer.alloc(8);
+  stale_native_alias:
+  for (let i = 0; i < buf.length; i++) {
+    let j = i | 0;
+    j = 16;
+    buf[j] = 1;
+  }
+  return 0;
+}
+
+function staleAllocationLength(): number {
+  let n = 8;
+  const buf = Buffer.alloc(n);
+  n = 16;
+  stale_allocation_length:
+  for (let i = 0; i < n; i++) {
+    buf[i] = 1;
+  }
+  return 0;
+}
+
 function arrayBufferViews(): number {
   const ab = new ArrayBuffer(8);
   const a = new Uint8Array(ab);
@@ -120,6 +142,8 @@ console.log(
       lengthMismatch(shortSrc, shortDst) +
       mutatedForIndex(mutationBuf) +
       mutatedWhileIndex(mutationBuf) +
+      staleNativeAlias() +
+      staleAllocationLength() +
       arrayBufferViews()
     ) |
       0),

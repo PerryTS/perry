@@ -256,6 +256,7 @@ pub(super) fn compile_function(
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),
         int_range_facts: Vec::new(),
+        next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: HashSet::new(),
         native_rep_records: Vec::new(),
         known_noalias_buffer_locals: &hir_facts.known_noalias_buffer_locals,

@@ -186,51 +186,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(blk.sitofp(I64, &m, DOUBLE));
             }
 
-            // Fast path: `(a / b) | 0` where both `a` and `b` are
-            // integer-valued — emit `sdiv i32` instead of
-            // `scvtf → fdiv → fcvtzs`.  LLVM replaces constant divisors
-            // with a `smulh + asr` sequence (1 cycle vs ~10 for fdiv).
-            if matches!(op, BinaryOp::BitOr) && matches!(right.as_ref(), Expr::Integer(0)) {
-                if let Expr::Binary {
-                    op: BinaryOp::Div,
-                    left: div_l,
-                    right: div_r,
-                } = left.as_ref()
-                {
-                    let i32_slots = &ctx.i32_counter_slots;
-                    let flat_ca = &ctx.flat_const_arrays;
-                    let ara = &ctx.array_row_aliases;
-                    let int_locals = &ctx.integer_locals;
-                    if can_lower_expr_as_i32(
-                        div_l,
-                        i32_slots,
-                        flat_ca,
-                        ara,
-                        int_locals,
-                        ctx.clamp3_functions,
-                        ctx.clamp_u8_functions,
-                        ctx.integer_returning_functions,
-                        ctx.i32_identity_functions,
-                    ) && can_lower_expr_as_i32(
-                        div_r,
-                        i32_slots,
-                        flat_ca,
-                        ara,
-                        int_locals,
-                        ctx.clamp3_functions,
-                        ctx.clamp_u8_functions,
-                        ctx.integer_returning_functions,
-                        ctx.i32_identity_functions,
-                    ) {
-                        let a = lower_expr_as_i32(ctx, div_l)?;
-                        let b = lower_expr_as_i32(ctx, div_r)?;
-                        let blk = ctx.block();
-                        let q = blk.sdiv(I32, &a, &b);
-                        return Ok(blk.sitofp(I32, &q, DOUBLE));
-                    }
-                }
-            }
-
             let l_raw = lower_expr(ctx, left)?;
             let r_raw = lower_expr(ctx, right)?;
             // Coerce non-numeric operands to numbers for arithmetic.
