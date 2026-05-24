@@ -26,7 +26,7 @@ use crate::ensure_gc_scanner_registered;
 use crate::request::{
     alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, IncomingMessage,
 };
-use crate::response::{alloc_server_response, HyperResponseShape};
+use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody};
 use crate::server::{HttpPendingRequest, HttpServer};
 use crate::tls::{build_server_config, parse_cert_chain, parse_private_key};
 
@@ -268,7 +268,7 @@ async fn handle_https_request(
     peer: SocketAddr,
     req: Request<Incoming>,
     request_tx: Arc<mpsc::Sender<HttpPendingRequest>>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> Result<Response<ResponseBody>, hyper::Error> {
     let method = req.method().to_string();
     let uri = req.uri();
     let url = match uri.query() {
@@ -315,7 +315,7 @@ async fn handle_https_request(
     if request_tx.send(pending).await.is_err() {
         return Ok(Response::builder()
             .status(503)
-            .body(Full::new(Bytes::from("Server unavailable")))
+            .body(Full::new(Bytes::from("Server unavailable")).boxed())
             .unwrap());
     }
     perry_ffi::notify_main_thread();
@@ -323,7 +323,7 @@ async fn handle_https_request(
         Ok(shape) => Ok(shape.into_hyper()),
         Err(_) => Ok(Response::builder()
             .status(500)
-            .body(Full::new(Bytes::from("Handler error")))
+            .body(Full::new(Bytes::from("Handler error")).boxed())
             .unwrap()),
     }
 }

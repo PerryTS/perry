@@ -2759,6 +2759,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "hasHeader", true, Some("ServerResponse")),
     method("http", "writeHead", true, Some("ServerResponse")),
     method("http", "write", true, Some("ServerResponse")),
+    method("http", "addTrailers", true, Some("ServerResponse")),
     method("http", "end", true, Some("ServerResponse")),
     method("http", "flushHeaders", true, Some("ServerResponse")),
     method("http", "writeContinue", true, Some("ServerResponse")),

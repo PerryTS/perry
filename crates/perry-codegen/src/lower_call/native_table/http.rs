@@ -274,6 +274,15 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "http",
         has_receiver: true,
+        method: "addTrailers",
+        class_filter: Some("ServerResponse"),
+        runtime: "js_node_http_res_add_trailers",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
         method: "end",
         class_filter: Some("ServerResponse"),
         runtime: "js_node_http_res_end",
@@ -465,6 +474,15 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_trailers",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_response_trailers",
+        args: &[],
+        ret: NR_F64,
+    },
     // PR #1146 belt-and-braces: bare-name dispatch for the same three
     // client-IncomingMessage properties, for sites where the HIR rewrite
     // to `__get_<prop>` doesn't fire (receiver isn't statically tagged
@@ -494,6 +512,15 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         method: "headers",
         class_filter: Some("IncomingMessage"),
         runtime: "js_http_response_headers",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "trailers",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_response_trailers",
         args: &[],
         ret: NR_F64,
     },

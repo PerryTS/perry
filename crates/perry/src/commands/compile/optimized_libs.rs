@@ -184,6 +184,7 @@ pub(super) fn build_optimized_libs(
     }
     if use_well_known {
         for module in &iteration_set {
+            let module_normalized = module.strip_prefix("node:").unwrap_or(module);
             let Some(binding) = super::well_known::lookup_well_known(module) else {
                 continue;
             };
@@ -193,7 +194,7 @@ pub(super) fn build_optimized_libs(
             let Some(workspace_root) = workspace_root_opt.as_ref() else {
                 continue;
             };
-            let needs_shared_tokio = binding_needs_shared_tokio(module);
+            let needs_shared_tokio = binding_needs_shared_tokio(module_normalized);
             // For CPU-only wrappers we can use the workspace-built
             // copy directly. Skip the binding entirely if no .a
             // exists on disk (partial build / release tarball
@@ -255,7 +256,7 @@ pub(super) fn build_optimized_libs(
             // covering. `module_to_features` is the same table
             // `compute_required_features` consulted above, so we
             // know exactly what to remove.
-            for feat in crate::commands::stdlib_features::module_to_features(module) {
+            for feat in crate::commands::stdlib_features::module_to_features(module_normalized) {
                 // Fix #589: `node:http` / `node:https` / `node:http2`
                 // map to `http-client`, but that feature also covers
                 // the Web Fetch FFIs (`js_headers_new`,
@@ -305,7 +306,8 @@ pub(super) fn build_optimized_libs(
             // references. Detect async wrappers by checking
             // whether the original feature list contained an
             // async feature; if it did, ensure it stays.
-            let original_features = crate::commands::stdlib_features::module_to_features(module);
+            let original_features =
+                crate::commands::stdlib_features::module_to_features(module_normalized);
             if original_features.iter().any(|f| {
                 matches!(
                     *f,
@@ -343,6 +345,17 @@ pub(super) fn build_optimized_libs(
             if original_features.contains(&"bundled-ws") {
                 features.insert("external-ws-pump");
             }
+            // `node:http` / `node:https` / `node:http2` can also create
+            // WebSocket client handles through `server.on("upgrade", ...)`.
+            // The HTTP wrapper registers those upgraded streams in
+            // perry-ext-ws, so stdlib must pump the external WS queue even
+            // when user code does not import `ws` directly. Without this,
+            // `ws.send(...)` from the upgrade callback works for the greeting,
+            // but later browser/client frames remain queued forever and
+            // `ws.on("message", ...)` never fires.
+            if matches!(module_normalized, "http" | "https" | "http2") {
+                features.insert("external-ws-pump");
+            }
             // Same shape for fastify. The compat-sweep fastify fixture
             // hit a hang at `await app.listen(...)` because
             // perry-ext-fastify's `js_fastify_listen` entered a blocking
@@ -372,7 +385,6 @@ pub(super) fn build_optimized_libs(
             // bring perry-ext-axios / perry-ext-fetch which don't define
             // `js_node_http_server_*` symbols. Activating the pump for
             // them would drop unresolved externs at link time.
-            let module_normalized = module.strip_prefix("node:").unwrap_or(module);
             if matches!(module_normalized, "http" | "https" | "http2") {
                 features.insert("external-http-server-pump");
             }
@@ -950,6 +962,7 @@ fn binding_needs_shared_tokio(module: &str) -> bool {
         // HTTP / HTTPS via reqwest/hyper
         | "http"
         | "https"
+        | "http2"
         // HTTP clients (reqwest, hyper)
         | "axios"
         | "node-fetch"
