@@ -332,23 +332,11 @@
     "category": "bug-open",
     "reason": "node:stream EventEmitter wiring incomplete — re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS. Real Perry gap (not ci-env); rolled under the open stream-events tracker #1532."
   },
-  "node-suite/process/env/write": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1344 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1344 is reopened."
-  },
-  "node-suite/process/memory/rss-method": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1395 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1395 is reopened."
-  },
   "node-suite/process/env/allowed-flags": {
-    "issue": "1633",
+    "issue": "1380",
     "added": "2026-05-24",
     "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1380 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1380 is reopened."
+    "reason": "node:process: process.allowedNodeEnvironmentFlags is a Set, but `typeof aSet.has` reads 'undefined' for every Set (method-value-typeof gap), so `f.has` is not seen as a function. Reopened #1380; the real fix is general Set-method-value typeof."
   },
   "node-suite/stream/classes/readable-constructor": {
     "issue": "1531",
@@ -421,12 +409,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: Writable does not invoke its write() option callback / finish event. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/static/readable-is-disturbed": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1534 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1534 is reopened."
   },
   "node-suite/stream/readable/highwater-mark-default": {
     "issue": "1537",
@@ -542,24 +524,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline with intermediate transform doesn't propagate data → end. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/webstream/readable-to-web": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1540 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1540 is reopened."
-  },
-  "node-suite/stream/webstream/readable-from-web": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1540 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1540 is reopened."
-  },
-  "node-suite/stream/abort/add-abort-signal": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1541 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1541 is reopened."
-  },
   "node-suite/stream/events/listener-management": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -608,12 +572,6 @@
     "category": "bug-open",
     "reason": "node:stream: Transform with explicit encoding doesn't deliver transformed chunks. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/compose/instance-compose": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1539 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1539 is reopened."
-  },
   "node-suite/stream/finished/with-options-signal": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -638,29 +596,11 @@
     "category": "bug-open",
     "reason": "node:stream: write() should return false when buffer exceeds highWaterMark. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/imports/has-default-export": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1535 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1535 is reopened."
-  },
   "node-suite/stream/duplex/options-merge": {
     "issue": "1531",
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: Duplex readableObjectMode/writableObjectMode option-split not surfaced on instance. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/static/readable-is-readable": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1534 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1534 is reopened."
-  },
-  "node-suite/stream/static/readable-is-errored": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1534 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1534 is reopened."
   },
   "node-suite/stream/options/construct-callback": {
     "issue": "1531",
@@ -902,24 +842,6 @@
     "category": "bug-open",
     "reason": "node:stream/web.TransformStream + pipeThrough not implemented. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/webstream/writable-to-web": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1540 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1540 is reopened."
-  },
-  "node-suite/stream/webstream/writable-from-web": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1540 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1540 is reopened."
-  },
-  "node-suite/stream/webstream/duplex-to-web": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1540 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1540 is reopened."
-  },
   "node-suite/stream/readable/from-string": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -957,16 +879,16 @@
     "reason": "node:stream: autoDestroy default behavior doesn't fire close after end. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/abort/signal-aborts-stream": {
-    "issue": "1633",
+    "issue": "1541",
     "added": "2026-05-24",
     "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1541 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1541 is reopened."
+    "reason": "node:stream: addAbortSignal wires the signal but aborting doesn't emit 'error' with the AbortError on a later tick. Reopened #1541 for abort->event wiring."
   },
   "node-suite/stream/compose/multiple-transforms": {
-    "issue": "1633",
+    "issue": "1539",
     "added": "2026-05-24",
     "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1539 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1539 is reopened."
+    "reason": "node:stream: stream.compose() composite Duplex doesn't forward data through the chain, so the joined output never arrives. Shape sub-tests pass; reopened #1539 for pipeline execution."
   },
   "node-suite/stream/pipeline/already-ended": {
     "issue": "1532",
@@ -991,12 +913,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: read() with no arg should return the entire buffered chunk. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/static/is-readable-module-level": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1534 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1534 is reopened."
   },
   "node-suite/stream/web/from-iterable": {
     "issue": "1545",
@@ -1233,10 +1149,10 @@
     "reason": "node:stream: two concurrent Symbol.asyncIterator on same Readable should error. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/with-async-fn": {
-    "issue": "1633",
+    "issue": "1539",
     "added": "2026-05-24",
     "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1539 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1539 is reopened."
+    "reason": "node:stream: stream.compose(asyncGenerator) doesn't run the async stage / forward data. Reopened #1539 for pipeline execution."
   },
   "node-suite/stream/destroy/destroy-during-write": {
     "issue": "1532",
@@ -1473,10 +1389,10 @@
     "reason": "node:stream: push(undefined) crashes instead of being treated as end-of-stream. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/from-async-iterable": {
-    "issue": "1633",
+    "issue": "1539",
     "added": "2026-05-24",
     "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1539 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1539 is reopened."
+    "reason": "node:stream: stream.compose(asyncIterable) doesn't drive the source / forward data. Reopened #1539 for pipeline execution."
   },
   "node-suite/stream/web/pipe-to-with-options": {
     "issue": "1545",
@@ -1633,18 +1549,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: second getReader() on locked stream does not throw TypeError. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/transform/separate-hwm": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1539 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1539 is reopened."
-  },
-  "node-suite/stream/push/push-returns-false-on-full": {
-    "issue": "1633",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): #1539 was closed completed but this test still FAILS byte-for-byte vs Node. Consolidated under #1633 until the fix is re-landed or #1539 is reopened."
   },
   "node-suite/stream/events/finish-end-close-order": {
     "issue": "1532",

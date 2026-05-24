@@ -2237,14 +2237,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // through the `Readable.foo` -> `stream.foo` route in
     // `lower_call.rs`, so the gate keys off `stream.from`.
     method("stream", "from", false, None),
-    // #1534: static introspection helpers — `Readable.isDisturbed(s)`
-    // and `Readable.isErrored(s)`. Stub returns `false` (Perry's
-    // stream stubs don't track state yet) — correct for a fresh,
-    // untouched stream. Directional helpers `isReadable`/`isWritable`
-    // are deferred (their answer depends on stream direction which
-    // Perry's stub doesn't carry at runtime yet).
+    // #1534: static introspection helpers — `Readable.isDisturbed(s)`,
+    // `Readable.isErrored(s)`, and `Readable.isReadable(s)` (also
+    // re-exported module-level). Perry now tracks per-stream
+    // disturbed/errored bits and the readable-direction flag, so these
+    // answer per-instance. `isWritable` is still deferred (the writable
+    // direction's null/true distinction isn't fully modelled yet).
     method("stream", "isDisturbed", false, None),
     method("stream", "isErrored", false, None),
+    method("stream", "isReadable", false, None),
     // #1541: `stream.addAbortSignal(signal, stream)` — Node wires
     // the AbortSignal so aborting it destroys the stream. Stub
     // ignores the signal and returns the stream verbatim so chain
@@ -2296,6 +2297,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "resume", true, None),
     method("stream", "write", true, None),
     method("stream", "end", true, None),
+    // #1539: push() backpressure return + readable/writableHighWaterMark
+    // property getters on typed stream instances.
+    method("stream", "push", true, None),
+    method("stream", "readableHighWaterMark", true, None),
+    method("stream", "writableHighWaterMark", true, None),
     // --- child_process (synchronous + async exec surface;
     //     spawn/fork are documented but not yet codegen'd) ---
     method("child_process", "exec", false, None),

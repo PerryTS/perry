@@ -600,10 +600,40 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     // Node exposes as a constructor function. (Other
                     // modules whose default is a non-callable namespace —
                     // `node:os`, `node:path` — stay typeof "object".)
-                    if ctx.lookup_local(n).is_none() {
+                    // Only the DEFAULT import (`import Stream from …`) folds to
+                    // "function". A namespace import (`import * as nsStream …`)
+                    // also registers as a native module with method `None`, but
+                    // it is a module namespace object — `typeof nsStream` must
+                    // stay "object" (#1535). Namespace imports additionally
+                    // register a builtin-module alias; default imports do not,
+                    // so the alias absence is the discriminator.
+                    if ctx.lookup_local(n).is_none() && ctx.lookup_builtin_module_alias(n).is_none()
+                    {
                         if let Some((module_name, None)) = ctx.lookup_native_module(n) {
                             if matches!(module_name, "stream" | "node:stream") {
                                 return Ok(Expr::String("function".to_string()));
+                            }
+                        }
+                    }
+                }
+                // #1395: `typeof process.memoryUsage.rss` is a nested member
+                // (`(process.memoryUsage).rss`) so it bypasses the
+                // ident-receiver fold below. Node exposes `rss` as a fast-path
+                // function hung off `process.memoryUsage`; fold to "function".
+                if let ast::Expr::Member(outer) = unary.arg.as_ref() {
+                    if let ast::MemberProp::Ident(outer_prop) = &outer.prop {
+                        if outer_prop.sym.as_ref() == "rss" {
+                            if let ast::Expr::Member(inner) = outer.obj.as_ref() {
+                                if let (ast::Expr::Ident(root), ast::MemberProp::Ident(mid)) =
+                                    (inner.obj.as_ref(), &inner.prop)
+                                {
+                                    if root.sym.as_ref() == "process"
+                                        && mid.sym.as_ref() == "memoryUsage"
+                                        && ctx.lookup_local("process").is_none()
+                                    {
+                                        return Ok(Expr::String("function".to_string()));
+                                    }
+                                }
                             }
                         }
                     }

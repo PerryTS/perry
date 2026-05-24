@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1238 entries across 81 modules.
+Total: 1242 entries across 81 modules.
 
 ## Modules
 
@@ -1636,6 +1636,7 @@ Total: 1238 entries across 81 modules.
 - `getMaxListeners` — instance
 - `isDisturbed` — module
 - `isErrored` — module
+- `isReadable` — module
 - `listenerCount` — instance
 - `listeners` — instance
 - `off` — instance
@@ -1644,13 +1645,16 @@ Total: 1238 entries across 81 modules.
 - `pipeline` — module
 - `prependListener` — instance
 - `prependOnceListener` — instance
+- `push` — instance
 - `rawListeners` — instance
 - `read` — instance
+- `readableHighWaterMark` — instance
 - `removeAllListeners` — instance
 - `removeListener` — instance
 - `resume` — instance
 - `setMaxListeners` — instance
 - `toWeb` — module
+- `writableHighWaterMark` — instance
 - `write` — instance
 
 ### Properties

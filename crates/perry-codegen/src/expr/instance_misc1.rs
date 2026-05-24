@@ -136,6 +136,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // dynamic key. Anything else is a no-op stub returning true.
         Expr::Delete(operand) => {
             match operand.as_ref() {
+                // #1344: `delete process.env.X` must unset the real OS
+                // environment, not just the cached env dict — reads lower to
+                // `EnvGet` → `js_getenv_value` → `std::env::var`, so a generic
+                // object-field delete would leave the var still readable.
+                // `process.env.X` / `process.env[expr]` lower to
+                // `EnvGet` / `EnvGetDynamic`, so the delete operand is one of
+                // those. Route to `js_removeenv(key)` and yield `true` (delete
+                // of a configurable own property always succeeds in Node).
+                Expr::EnvGet(name) => {
+                    let key_idx = ctx.strings.intern(name);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_handle = unbox_to_i64(blk, &key_box);
+                    blk.call_void("js_removeenv", &[(I64, &key_handle)]);
+                    Ok(blk.bitcast_i64_to_double(crate::nanbox::TAG_TRUE_I64))
+                }
+                Expr::EnvGetDynamic(name_expr) => {
+                    let key_box = lower_expr(ctx, name_expr)?;
+                    let blk = ctx.block();
+                    let key_handle = unbox_str_handle(blk, &key_box);
+                    blk.call_void("js_removeenv", &[(I64, &key_handle)]);
+                    Ok(blk.bitcast_i64_to_double(crate::nanbox::TAG_TRUE_I64))
+                }
                 Expr::PropertyGet { object, property } => {
                     let obj_box = lower_expr(ctx, object)?;
                     let key_idx = ctx.strings.intern(property);

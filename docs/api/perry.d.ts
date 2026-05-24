@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1238 entries across 81 modules
+// Coverage: 1242 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1784,6 +1784,8 @@ declare module "stream" {
   export function isDisturbed(...args: any[]): any;
   /** stdlib */
   export function isErrored(...args: any[]): any;
+  /** stdlib */
+  export function isReadable(...args: any[]): any;
   /** stdlib */
   export function pipeline(...args: any[]): any;
   /** stdlib */
