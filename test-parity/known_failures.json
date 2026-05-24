@@ -1687,5 +1687,29 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/from-buffer-direct": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(Buffer) — Buffer is iterated byte-by-byte instead of emitted as single chunk. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/error-monitor-symbol": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: events.errorMonitor symbol observer not invoked on stream error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/iter-helpers/map-async-rejection": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: readable.map(asyncFn) — rejection in fn does not abort iteration / propagate as throw. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/events/data-listener-auto-resume": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: adding 'data' listener does not flip readableFlowing to true. Flips to PASS when #1532 lands."
   }
 }
