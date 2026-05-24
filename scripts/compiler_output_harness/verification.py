@@ -116,6 +116,9 @@ def _counter_passes(region: dict[str, Any], rule: dict[str, Any]) -> bool:
     for key, expected in (rule.get("equals") or {}).items():
         if int(region.get(key, 0) or 0) != int(expected):
             return False
+    for key, maximum in (rule.get("max") or {}).items():
+        if int(region.get(key, 0) or 0) > int(maximum):
+            return False
     return True
 
 

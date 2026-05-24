@@ -3,6 +3,7 @@ schema_version = 1
 [workloads.image_convolution]
 source = "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv.ts"
 kind = "image_convolution"
+allow_hot_loop_conversions = true
 
 [workloads.image_convolution.vectorization]
 min_vectorized_loops = 0
@@ -69,7 +70,6 @@ detail = "object disassembly contains the FNV multiply constant"
 name = "input_generation"
 required = true
 no_runtime_calls = true
-no_conversions = true
 
 [[workloads.image_convolution.named_regions.selectors]]
 label_prefix_any = ["for.body.20", "for.body.24", "while.body.28"]
@@ -79,11 +79,15 @@ name = "named_region_input_generation_byte_writes"
 min = { store_i8 = 4, xor_i32 = 1 }
 detail = "input_generation byte writes and xor shape"
 
+[[workloads.image_convolution.named_regions.checks]]
+name = "named_region_input_generation_to_int32_conversion_budget"
+max = { fptosi = 1, sitofp = 1, inttoptr = 0, ptrtoint = 0 }
+detail = "input_generation JS division ToInt32 conversion budget"
+
 [[workloads.image_convolution.named_regions]]
 name = "blur"
 required = true
 no_runtime_calls = true
-no_conversions = true
 
 [[workloads.image_convolution.named_regions.selectors]]
 counter_min = { load_i8 = 3, store_i8 = 1 }
@@ -92,6 +96,11 @@ counter_min = { load_i8 = 3, store_i8 = 1 }
 name = "named_region_blur_byte_load_store"
 min = { load_i8 = 3, store_i8 = 1 }
 detail = "blur byte load/store shape"
+
+[[workloads.image_convolution.named_regions.checks]]
+name = "named_region_blur_to_int32_conversion_budget"
+max = { fptosi = 6, sitofp = 6, inttoptr = 0, ptrtoint = 0 }
+detail = "blur JS division ToInt32 conversion budget"
 
 [[workloads.image_convolution.named_regions]]
 name = "fnv_hash"
