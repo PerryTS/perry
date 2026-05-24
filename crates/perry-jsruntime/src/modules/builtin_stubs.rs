@@ -795,11 +795,35 @@ export default { platform, arch, cpus, homedir, tmpdir, hostname, type, release,
 //
 // So we make `Stream` a real class, attach the sub-classes as static
 // properties, and export the *class itself* as default.
-class Stream {
-    constructor() { this._perryError = undefined; }
-    pipe(dest) { return dest; }
-    on() { return this; }
-    once() { return this; }
+	function __perryAbortReason(signal) {
+	    return signal && signal.reason !== undefined ? signal.reason : new Error("AbortError");
+	}
+	function __perryRejectIfAborted(signal) {
+	    if (signal && signal.aborted) throw __perryAbortReason(signal);
+	}
+	function __perryWaitForAbort(signal) {
+	    return new Promise((_resolve, reject) => {
+	        if (!signal || typeof signal.addEventListener !== "function") return;
+	        signal.addEventListener("abort", () => reject(__perryAbortReason(signal)), { once: true });
+	    });
+	}
+	function __perryInvokeRead(stream) {
+	    if (stream && typeof stream._perryRead === "function" && !stream._perryReadInvoked) {
+	        stream._perryReadInvoked = true;
+	        stream._perryRead.call(stream);
+	    }
+	    if (stream && stream._perryError !== undefined) throw stream._perryError;
+	}
+	function __perryStoredChunks(stream) {
+	    __perryInvokeRead(stream);
+	    if (stream && Array.isArray(stream._perryChunks)) return stream._perryChunks.slice();
+	    return null;
+	}
+	class Stream {
+	    constructor() { this._perryError = undefined; this._perryEnded = false; }
+	    pipe(dest) { return dest; }
+	    on() { return this; }
+	    once() { return this; }
     emit(event, arg) {
         if (event === "error") {
             this._perryError = arg;
@@ -808,60 +832,102 @@ class Stream {
         return false;
     }
     off() { return this; }
-    addListener() { return this; }
-    removeListener() { return this; }
-    removeAllListeners() { return this; }
-}
+	    addListener() { return this; }
+	    removeListener() { return this; }
+	    removeAllListeners() { return this; }
+	    pause() { return this; }
+	    resume() { this._perryEnded = true; return this; }
+	}
 export class Readable extends Stream {
     constructor(options = undefined) {
         super();
         if (options && typeof options.read === "function") this._perryRead = options.read;
         this._perryReadInvoked = false;
     }
-    static from(iterable) {
-        const readable = new Readable();
-        if (iterable == null) readable._perryChunks = [];
+	    static from(iterable) {
+	        const readable = new Readable();
+	        if (iterable == null) readable._perryChunks = [];
         else if (Array.isArray(iterable)) readable._perryChunks = iterable.slice();
-        else if (typeof iterable === "string" || iterable instanceof ArrayBuffer || ArrayBuffer.isView(iterable)) readable._perryChunks = [iterable];
+        else if (typeof iterable === "string" || iterable instanceof ArrayBuffer || __PerryBufferCtor.isBuffer?.(iterable)) readable._perryChunks = [iterable];
+        else if (ArrayBuffer.isView(iterable)) readable._perryChunks = Array.from(iterable);
         else if (typeof iterable[Symbol.iterator] === "function") readable._perryChunks = Array.from(iterable);
         else readable._perryChunks = [iterable];
         return readable;
     }
-    read() {
-        if (this._perryChunks && this._perryChunks.length > 0) return this._perryChunks.shift();
-        return null;
-    }
-    pipe(dest) { return dest; }
-    async *[Symbol.asyncIterator]() {
-        const chunks = this._perryChunks || [];
-        for (const chunk of chunks) yield chunk;
-    }
-}
-export class Writable extends Stream {
-    constructor() { super(); }
-    write() { return true; }
-    end() {}
-}
-export class Duplex extends Readable {
-    write() { return true; }
-    end() {}
-}
+	    read() {
+	        if (this._perryChunks && this._perryChunks.length > 0) return this._perryChunks.shift();
+	        this._perryEnded = true;
+	        return null;
+	    }
+	    pipe(dest) { return dest; }
+	    resume() { this._perryEnded = true; return this; }
+	    async *[Symbol.asyncIterator]() {
+	        const chunks = this._perryChunks || [];
+	        for (const chunk of chunks) yield chunk;
+	        this._perryEnded = true;
+	    }
+	}
+	export class Writable extends Stream {
+	    constructor(options = undefined) {
+	        super();
+	        if (options && typeof options.write === "function") this._perryWrite = options.write;
+	    }
+	    write(chunk, enc = undefined) {
+	        if (typeof this._perryWrite === "function") this._perryWrite.call(this, chunk, enc, () => {});
+	        return true;
+	    }
+	    end(chunk = undefined) { if (chunk !== undefined) this.write(chunk); this._perryEnded = true; return this; }
+	}
+	export class Duplex extends Readable {
+	    constructor(options = undefined) {
+	        super(options);
+	        if (options && typeof options.write === "function") this._perryWrite = options.write;
+	    }
+	    write(chunk, enc = undefined) {
+	        if (typeof this._perryWrite === "function") this._perryWrite.call(this, chunk, enc, () => {});
+	        return true;
+	    }
+	    end(chunk = undefined) { if (chunk !== undefined) this.write(chunk); this._perryEnded = true; return this; }
+	}
 export class Transform extends Duplex {}
 export class PassThrough extends Transform {}
 export class ReadableStream {}
 export class WritableStream {}
 export class TransformStream {}
-export function pipeline() {}
-export function finished() {}
+	export async function pipeline(source, destination, options = undefined) {
+	    const signal = options && options.signal;
+	    __perryRejectIfAborted(signal);
+	    const chunks = __perryStoredChunks(source);
+	    if (chunks === null) {
+	        if (signal) await __perryWaitForAbort(signal);
+	        return undefined;
+	    }
+	    for (const chunk of chunks) {
+	        __perryRejectIfAborted(signal);
+	        if (destination && typeof destination.write === "function") destination.write(chunk);
+	    }
+	    if (destination && typeof destination.end === "function") destination.end();
+	    __perryRejectIfAborted(signal);
+	    return undefined;
+	}
+	export async function finished(stream, options = undefined) {
+	    const signal = options && options.signal;
+	    __perryRejectIfAborted(signal);
+	    __perryInvokeRead(stream);
+	    if (signal && !(stream && stream._perryEnded)) await __perryWaitForAbort(signal);
+	    return undefined;
+	}
+	export const promises = { pipeline, finished };
 // Attach sub-classes as static properties so `Stream.Readable`,
 // `Stream.Writable`, etc. resolve the way Node ships them.
 Stream.Readable = Readable;
 Stream.Writable = Writable;
 Stream.Duplex = Duplex;
 Stream.Transform = Transform;
-Stream.PassThrough = PassThrough;
-Stream.pipeline = pipeline;
-Stream.finished = finished;
+	Stream.PassThrough = PassThrough;
+	Stream.pipeline = pipeline;
+	Stream.finished = finished;
+	Stream.promises = promises;
 export { Stream };
 // `__perry_commonjs = true` tells the wrap_commonjs() require() shim in
 // modules.rs to return `module.default` instead of the ESM namespace
@@ -1329,9 +1395,54 @@ export const constants = {};
 export default { readFile, writeFile, appendFile, access, stat, lstat, mkdir, readdir, rmdir, rm, unlink, rename, copyFile, chmod, chown, realpath, symlink, readlink, open, utimes, truncate, cp, constants };
 "#.to_string(),
         "stream/promises" => r#"
-// Stub implementation for Node.js 'stream/promises' module
-export async function pipeline() { throw new Error('stream.promises.pipeline not supported'); }
-export async function finished() { throw new Error('stream.promises.finished not supported'); }
+// Lightweight implementation for Node.js 'stream/promises' module.
+function __perryAbortReason(signal) {
+    return signal && signal.reason !== undefined ? signal.reason : new Error("AbortError");
+}
+function __perryRejectIfAborted(signal) {
+    if (signal && signal.aborted) throw __perryAbortReason(signal);
+}
+function __perryWaitForAbort(signal) {
+    return new Promise((_resolve, reject) => {
+        if (!signal || typeof signal.addEventListener !== "function") return;
+        signal.addEventListener("abort", () => reject(__perryAbortReason(signal)), { once: true });
+    });
+}
+function __perryInvokeRead(stream) {
+    if (stream && typeof stream._perryRead === "function" && !stream._perryReadInvoked) {
+        stream._perryReadInvoked = true;
+        stream._perryRead.call(stream);
+    }
+    if (stream && stream._perryError !== undefined) throw stream._perryError;
+}
+function __perryStoredChunks(stream) {
+    __perryInvokeRead(stream);
+    if (stream && Array.isArray(stream._perryChunks)) return stream._perryChunks.slice();
+    return null;
+}
+export async function pipeline(source, destination, options = undefined) {
+    const signal = options && options.signal;
+    __perryRejectIfAborted(signal);
+    const chunks = __perryStoredChunks(source);
+    if (chunks === null) {
+        if (signal) await __perryWaitForAbort(signal);
+        return undefined;
+    }
+    for (const chunk of chunks) {
+        __perryRejectIfAborted(signal);
+        if (destination && typeof destination.write === "function") destination.write(chunk);
+    }
+    if (destination && typeof destination.end === "function") destination.end();
+    __perryRejectIfAborted(signal);
+    return undefined;
+}
+export async function finished(stream, options = undefined) {
+    const signal = options && options.signal;
+    __perryRejectIfAborted(signal);
+    __perryInvokeRead(stream);
+    if (signal && !(stream && stream._perryEnded)) await __perryWaitForAbort(signal);
+    return undefined;
+}
 export default { pipeline, finished };
 "#.to_string(),
         "stream/consumers" => r#"
@@ -1356,8 +1467,15 @@ function __perryChunkToBytes(chunk) {
     if (typeof chunk === "string") return new TextEncoder().encode(chunk);
     if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
     if (ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-    if (typeof chunk === "number") return new Uint8Array([chunk & 255]);
-    return new Uint8Array(0);
+    if (typeof chunk === "number") return new TextEncoder().encode(String(chunk));
+    throw new TypeError(`The "chunk" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type ${typeof chunk}${typeof chunk === "number" ? ` (${chunk})` : ""}`);
+}
+
+function __perryChunkToTextBytes(chunk) {
+    if (typeof chunk === "number") {
+        throw new TypeError(`The "chunk" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type number (${chunk})`);
+    }
+    return __perryChunkToBytes(chunk);
 }
 
 async function __perryCollectChunks(stream) {
@@ -1436,7 +1554,16 @@ export async function bytes(stream) {
     return new Uint8Array(await arrayBuffer(stream));
 }
 export async function text(stream) {
-    return new TextDecoder().decode(await bytes(stream));
+    const chunks = await __perryCollectChunks(stream);
+    const arrays = chunks.map(__perryChunkToTextBytes);
+    const total = arrays.reduce((n, arr) => n + arr.byteLength, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const arr of arrays) {
+        out.set(arr, offset);
+        offset += arr.byteLength;
+    }
+    return new TextDecoder().decode(out);
 }
 export async function json(stream) {
     return JSON.parse(await text(stream));
