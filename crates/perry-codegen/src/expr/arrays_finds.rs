@@ -21,6 +21,9 @@ use crate::lower_string_method::{
 };
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::native_value::{
+    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
+};
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -31,20 +34,113 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
-    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
+    buffer_access_materialization_reason, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
     emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
     emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
     emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
-    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
-    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
-    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
-    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
-    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
-    I18nLowerCtx,
+    lower_array_literal, lower_buffer_load, lower_buffer_store, lower_channel_reduction,
+    lower_expr, lower_expr_as_i32, lower_index_set_fast, lower_js_args_array, lower_object_literal,
+    lower_stream_super_init, lower_url_string_getter, materialize_js_value, nanbox_bigint_inline,
+    nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
+    try_flat_const_2d_int, try_lower_flat_const_index_get, try_match_channel_reduction,
+    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, BufferAccessSpec,
+    ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx,
 };
+
+fn lower_index_i32(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<String> {
+    if can_lower_expr_as_i32(
+        index,
+        &ctx.i32_counter_slots,
+        ctx.flat_const_arrays,
+        &ctx.array_row_aliases,
+        ctx.integer_locals,
+        ctx.clamp3_functions,
+        ctx.clamp_u8_functions,
+        ctx.integer_returning_functions,
+        ctx.i32_identity_functions,
+    ) {
+        lower_expr_as_i32(ctx, index)
+    } else {
+        let i = lower_expr(ctx, index)?;
+        Ok(ctx.block().fptosi(DOUBLE, &i, I32))
+    }
+}
+
+pub(crate) fn lower_uint8array_get_i32(
+    ctx: &mut FnCtx<'_>,
+    array: &Expr,
+    index: &Expr,
+) -> Result<LoweredValue> {
+    if let Some(value) = lower_buffer_load(ctx, array, index, BufferAccessSpec::uint8array_get())? {
+        return Ok(value);
+    }
+
+    let idx_i32 = lower_index_i32(ctx, index)?;
+    let a = lower_expr(ctx, array)?;
+    let blk = ctx.block();
+    let handle = unbox_to_i64(blk, &a);
+    let byte_i32 = blk.call(I32, "js_buffer_get", &[(I64, &handle), (I32, &idx_i32)]);
+    let slow = LoweredValue {
+        semantic: SemanticKind::JsNumber,
+        rep: NativeRep::I32,
+        llvm_ty: I32,
+        value: byte_i32,
+    };
+    ctx.record_lowered_value_with_access_mode(
+        "Uint8ArrayGet",
+        None,
+        "Uint8ArrayGet.slow_path_i32",
+        &slow,
+        Some(BoundsState::Unknown),
+        None,
+        Some(BufferAccessMode::DynamicFallback),
+        Some(buffer_access_materialization_reason(ctx, array)),
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(slow)
+}
+
+pub(crate) fn lower_buffer_index_get_i32(
+    ctx: &mut FnCtx<'_>,
+    buffer: &Expr,
+    index: &Expr,
+) -> Result<LoweredValue> {
+    if let Some(value) =
+        lower_buffer_load(ctx, buffer, index, BufferAccessSpec::buffer_index_get())?
+    {
+        return Ok(value);
+    }
+
+    let idx_i32 = lower_index_i32(ctx, index)?;
+    let a = lower_expr(ctx, buffer)?;
+    let blk = ctx.block();
+    let handle = unbox_to_i64(blk, &a);
+    let byte_i32 = blk.call(I32, "js_buffer_get", &[(I64, &handle), (I32, &idx_i32)]);
+    let slow = LoweredValue {
+        semantic: SemanticKind::JsNumber,
+        rep: NativeRep::I32,
+        llvm_ty: I32,
+        value: byte_i32,
+    };
+    ctx.record_lowered_value_with_access_mode(
+        "BufferIndexGet",
+        None,
+        "BufferIndexGet.slow_path_i32",
+        &slow,
+        Some(BoundsState::Unknown),
+        None,
+        Some(BufferAccessMode::DynamicFallback),
+        Some(buffer_access_materialization_reason(ctx, buffer)),
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(slow)
+}
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
@@ -445,90 +541,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.sitofp(I32, &len_i32, DOUBLE))
         }
         Expr::Uint8ArrayGet { array, index } => {
-            // Inline `buf[idx]` for statically-typed Buffer / Uint8Array (issue #47).
-            // The bounds check uses `@llvm.assume` instead of a branch: we tell
-            // LLVM the access IS in-bounds (which it always is for the dominant
-            // pattern: clamped indices in image processing / codec loops). This
-            // eliminates the control-flow diamond that blocked the LoopVectorizer.
-            // For truly OOB accesses, the assume is UB — but Perry's Buffer.alloc
-            // always pads to arena-block alignment, so reading 1 byte past the
-            // declared length never faults; the result is just garbage (same as
-            // the branch-based path's "return 0" semantics are rarely observed
-            // in practice).
-            //
-            // Fast path: when `array` is a `LocalGet` whose LocalId has a
-            // pre-computed `ptr`-typed data-base slot (populated by the
-            // `Stmt::Let` lowering for `BufferAlloc` inits), use
-            // `getelementptr inbounds i8, ptr %base, i32 %idx` instead of the
-            // `inttoptr(handle + offset)` chain — LLVM's LoopVectorizer needs
-            // proper pointer provenance to identify array bounds, and per-
-            // buffer alias scope metadata so it can prove src reads don't
-            // alias dst writes.
-            let buffer_slot_info = if let Expr::LocalGet(id) = array.as_ref() {
-                ctx.buffer_data_slots.get(id).cloned()
-            } else {
-                None
-            };
-            // Check upfront whether index is i32-lowerable (no clones —
-            // borrows released before lower_expr_as_i32 borrows mutably).
-            let idx_is_i32 = can_lower_expr_as_i32(
-                index,
-                &ctx.i32_counter_slots,
-                ctx.flat_const_arrays,
-                &ctx.array_row_aliases,
-                ctx.integer_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-            );
-            let idx_i32 = if idx_is_i32 {
-                lower_expr_as_i32(ctx, index)?
-            } else {
-                let i = lower_expr(ctx, index)?;
-                ctx.block().fptosi(DOUBLE, &i, I32)
-            };
-            if let Some((ptr_slot, scope_idx)) = buffer_slot_info {
-                let blk = ctx.block();
-                let data_ptr = blk.load(PTR, &ptr_slot);
-                // Length lives 8 bytes before the data start (BufferHeader).
-                // Loaded with !invariant.load so LICM hoists it out of loops.
-                let header_ptr = blk.gep(I8, &data_ptr, &[(I32, "-8")]);
-                let len_i32 = blk.load_invariant(I32, &header_ptr);
-                let in_bounds = blk.icmp_ult(I32, &idx_i32, &len_i32);
-                blk.emit_raw(format!("call void @llvm.assume(i1 {})", in_bounds));
-                let byte_ptr = blk.gep_inbounds(I8, &data_ptr, &[(I32, &idx_i32)]);
-                let byte_val = blk.fresh_reg();
-                let meta = buffer_alias_metadata_suffix(scope_idx);
-                blk.emit_raw(format!("{} = load i8, ptr {}{}", byte_val, byte_ptr, meta));
-                let result_i32 = blk.zext(I8, &byte_val, I32);
-                return Ok(ctx.block().sitofp(I32, &result_i32, DOUBLE));
-            }
-            // Issue #1205 slow path: route the indexed read through
-            // `js_buffer_get` so a view receiver (registered in the
-            // runtime view registry by `js_buffer_slice`) reads from
-            // the ultimate backing buffer instead of its own
-            // possibly-stale snapshot.  Fast path above stays direct
-            // since `buffer_data_slots` is only populated for
-            // `Buffer.alloc` locals, which are never views.
-            let a = lower_expr(ctx, array)?;
-            let blk = ctx.block();
-            let handle = unbox_to_i64(blk, &a);
-            let byte_i32 = blk.call(I32, "js_buffer_get", &[(I64, &handle), (I32, &idx_i32)]);
-            Ok(ctx.block().sitofp(I32, &byte_i32, DOUBLE))
+            let value = lower_uint8array_get_i32(ctx, array, index)?;
+            let reason = buffer_access_materialization_reason(ctx, array);
+            Ok(materialize_js_value(ctx, value, reason))
+        }
+        Expr::BufferIndexGet { buffer, index } => {
+            let value = lower_buffer_index_get_i32(ctx, buffer, index)?;
+            let reason = buffer_access_materialization_reason(ctx, buffer);
+            Ok(materialize_js_value(ctx, value, reason))
         }
         Expr::Uint8ArraySet {
             array,
             index,
             value,
         } => {
-            // Inline `buf[idx] = v` — branchless via @llvm.assume.
-            // Uses i32 fast path for both index and value when possible,
-            // eliminating double↔int conversions in tight byte-write loops.
-            let buffer_slot_info = if let Expr::LocalGet(id) = array.as_ref() {
-                ctx.buffer_data_slots.get(id).cloned()
-            } else {
-                None
-            };
+            if let Some(store) =
+                lower_buffer_store(ctx, array, index, value, BufferAccessSpec::uint8array_set())?
+            {
+                if ctx.discard_expr_value {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(materialize_js_value(
+                    ctx,
+                    store.result,
+                    MaterializationReason::FunctionAbi,
+                ));
+            }
+
             let idx_is_i32 = can_lower_expr_as_i32(
                 index,
                 &ctx.i32_counter_slots,
@@ -538,6 +577,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.clamp3_functions,
                 ctx.clamp_u8_functions,
                 ctx.integer_returning_functions,
+                ctx.i32_identity_functions,
             );
             let val_is_i32 = can_lower_expr_as_i32(
                 value,
@@ -548,6 +588,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.clamp3_functions,
                 ctx.clamp_u8_functions,
                 ctx.integer_returning_functions,
+                ctx.i32_identity_functions,
             );
             let idx_i32 = if idx_is_i32 {
                 lower_expr_as_i32(ctx, index)?
@@ -561,20 +602,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let v = lower_expr(ctx, value)?;
                 ctx.block().fptosi(DOUBLE, &v, I32)
             };
-            if let Some((ptr_slot, scope_idx)) = buffer_slot_info {
-                let blk = ctx.block();
-                let data_ptr = blk.load(PTR, &ptr_slot);
-                let header_ptr = blk.gep(I8, &data_ptr, &[(I32, "-8")]);
-                let len_i32 = blk.load_invariant(I32, &header_ptr);
-                let in_bounds = blk.icmp_ult(I32, &idx_i32, &len_i32);
-                blk.emit_raw(format!("call void @llvm.assume(i1 {})", in_bounds));
-                let byte_ptr = blk.gep_inbounds(I8, &data_ptr, &[(I32, &idx_i32)]);
-                let byte_val = blk.trunc(I32, &val_i32, I8);
-                let meta = buffer_alias_metadata_suffix(scope_idx);
-                // GC_STORE_AUDIT(POINTER_FREE): inline Buffer byte store writes scalar data only.
-                blk.emit_raw(format!("store i8 {}, ptr {}{}", byte_val, byte_ptr, meta));
-                return Ok(ctx.block().sitofp(I32, &val_i32, DOUBLE));
-            }
             // Issue #1205 slow path: route the indexed store through
             // `js_buffer_set` so a view receiver propagates the write
             // to its backing buffer (and any sister views).  Fast
@@ -587,8 +614,118 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_buffer_set",
                 &[(I64, &handle), (I32, &idx_i32), (I32, &val_i32)],
             );
-            // Return the stored value as a double (for expression contexts).
-            Ok(ctx.block().sitofp(I32, &val_i32, DOUBLE))
+            let reason = buffer_access_materialization_reason(ctx, array);
+            let slow = LoweredValue {
+                semantic: SemanticKind::JsNumber,
+                rep: NativeRep::I32,
+                llvm_ty: I32,
+                value: val_i32.clone(),
+            };
+            ctx.record_lowered_value_with_access_mode(
+                "Uint8ArraySet",
+                None,
+                "Uint8ArraySet.slow_path",
+                &slow,
+                Some(BoundsState::Unknown),
+                None,
+                Some(BufferAccessMode::DynamicFallback),
+                Some(reason.clone()),
+                false,
+                false,
+                Vec::new(),
+            );
+            if ctx.discard_expr_value {
+                return Ok(double_literal(0.0));
+            }
+            Ok(materialize_js_value(ctx, slow, reason))
+        }
+        Expr::BufferIndexSet {
+            buffer,
+            index,
+            value,
+        } => {
+            if let Some(store) = lower_buffer_store(
+                ctx,
+                buffer,
+                index,
+                value,
+                BufferAccessSpec::buffer_index_set(),
+            )? {
+                if ctx.discard_expr_value {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(materialize_js_value(
+                    ctx,
+                    store.result,
+                    MaterializationReason::FunctionAbi,
+                ));
+            }
+
+            let idx_is_i32 = can_lower_expr_as_i32(
+                index,
+                &ctx.i32_counter_slots,
+                ctx.flat_const_arrays,
+                &ctx.array_row_aliases,
+                ctx.integer_locals,
+                ctx.clamp3_functions,
+                ctx.clamp_u8_functions,
+                ctx.integer_returning_functions,
+                ctx.i32_identity_functions,
+            );
+            let val_is_i32 = can_lower_expr_as_i32(
+                value,
+                &ctx.i32_counter_slots,
+                ctx.flat_const_arrays,
+                &ctx.array_row_aliases,
+                ctx.integer_locals,
+                ctx.clamp3_functions,
+                ctx.clamp_u8_functions,
+                ctx.integer_returning_functions,
+                ctx.i32_identity_functions,
+            );
+            let idx_i32 = if idx_is_i32 {
+                lower_expr_as_i32(ctx, index)?
+            } else {
+                let i = lower_expr(ctx, index)?;
+                ctx.block().fptosi(DOUBLE, &i, I32)
+            };
+            let val_i32 = if val_is_i32 {
+                lower_expr_as_i32(ctx, value)?
+            } else {
+                let v = lower_expr(ctx, value)?;
+                ctx.block().fptosi(DOUBLE, &v, I32)
+            };
+            let a = lower_expr(ctx, buffer)?;
+            let blk = ctx.block();
+            let handle = unbox_to_i64(blk, &a);
+            blk.call_void(
+                "js_buffer_set",
+                &[(I64, &handle), (I32, &idx_i32), (I32, &val_i32)],
+            );
+            let reason = buffer_access_materialization_reason(ctx, buffer);
+            let slow = LoweredValue {
+                semantic: SemanticKind::JsNumber,
+                rep: NativeRep::I32,
+                llvm_ty: I32,
+                value: val_i32.clone(),
+            };
+            ctx.record_lowered_value_with_access_mode(
+                "BufferIndexSet",
+                None,
+                "BufferIndexSet.slow_path",
+                &slow,
+                Some(BoundsState::Unknown),
+                None,
+                Some(BufferAccessMode::DynamicFallback),
+                Some(reason.clone()),
+                false,
+                false,
+                Vec::new(),
+            );
+            if ctx.discard_expr_value {
+                return Ok(double_literal(0.0));
+            }
+            Ok(materialize_js_value(ctx, slow, reason))
         }
 
         // `new Int32Array([1,2,3])` etc. — generic typed array constructor.

@@ -2,8 +2,10 @@
 
 use super::*;
 
+use crate::expr::IntRangeFact;
 use crate::loop_purity::body_needs_asm_barrier;
 use crate::lower_conditional::lower_truthy;
+use crate::native_value::{BoundedBufferIndex, BoundsProof, BoundsState, LengthSource};
 use crate::types::I32;
 
 /// For-loop lowering: classic init / cond / body / update / exit CFG.
@@ -82,6 +84,15 @@ pub(crate) fn lower_for(
             // `arr[counter_id]` is statically inbounds for this body, so
             // it can skip the runtime length-load + bound check.
             ctx.bounded_index_pairs.push((counter_id, arr_id));
+            if ctx.buffer_view_slots.contains_key(&arr_id) {
+                ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
+                    index_local_id: counter_id,
+                    buffer_local_id: arr_id,
+                    bounds: BoundsState::Proven {
+                        proof: BoundsProof::LoopGuard,
+                    },
+                });
+            }
 
             // If the counter is provably integer-valued (initialized from
             // an Integer literal, only mutated via Update ++/--), allocate
@@ -182,6 +193,45 @@ pub(crate) fn lower_for(
             local_bound_counter_i32_was_fresh = false;
             None
         };
+    let local_bound_buffer_fact_count = ctx.bounded_buffer_index_pairs.len();
+    if let Some((counter_id, bound_id, _op)) = local_bound_classification {
+        if let Some(buffer_ids) = ctx.min_length_bounds.get(&bound_id).cloned() {
+            for buffer_local_id in buffer_ids {
+                if ctx.buffer_view_slots.contains_key(&buffer_local_id) {
+                    ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
+                        index_local_id: counter_id,
+                        buffer_local_id,
+                        bounds: BoundsState::Proven {
+                            proof: BoundsProof::MinLength,
+                        },
+                    });
+                }
+            }
+        }
+        let alloc_bound_ids: Vec<u32> = ctx
+            .buffer_view_slots
+            .iter()
+            .filter_map(|(buffer_local_id, view)| match &view.length_source {
+                Some(LengthSource::Local { id, addend }) if *id == bound_id && *addend >= 0 => {
+                    Some(*buffer_local_id)
+                }
+                _ => None,
+            })
+            .collect();
+        for buffer_local_id in alloc_bound_ids {
+            ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
+                index_local_id: counter_id,
+                buffer_local_id,
+                bounds: BoundsState::Proven {
+                    proof: BoundsProof::LoopGuard,
+                },
+            });
+        }
+    }
+    let for_range_fact_count = ctx.int_range_facts.len();
+    if let Some(fact) = classify_for_counter_range(init, condition, update, ctx) {
+        ctx.int_range_facts.push(fact);
+    }
 
     let cond_idx = ctx.new_block("for.cond");
     let body_idx = ctx.new_block("for.body");
@@ -251,9 +301,11 @@ pub(crate) fn lower_for(
     // If this for-loop has a pending label (from an enclosing Stmt::Labeled),
     // register it so `break label;` / `continue label;` resolve here.
     let consumed_label = ctx.pending_label.take();
+    let previous_region_id = ctx.active_region_id.clone();
     if let Some(ref lbl) = consumed_label {
         ctx.label_targets
             .insert(lbl.clone(), (update_label.clone(), exit_label.clone()));
+        ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 
     // Body block.
@@ -283,6 +335,7 @@ pub(crate) fn lower_for(
     if !ctx.block().is_terminated() {
         ctx.block().br(&cond_label);
     }
+    ctx.active_region_id = previous_region_id;
 
     ctx.loop_targets.pop();
 
@@ -294,6 +347,9 @@ pub(crate) fn lower_for(
     if let Some(arr_id) = hoisted_length_arr_id {
         ctx.cached_lengths.remove(&arr_id);
         ctx.bounded_index_pairs.pop();
+        if ctx.buffer_view_slots.contains_key(&arr_id) {
+            ctx.bounded_buffer_index_pairs.pop();
+        }
     }
     let _ = hoisted_length_slot;
     // Pop the i32 counter slot we inserted for the `i < n` number-bound
@@ -305,6 +361,9 @@ pub(crate) fn lower_for(
         }
     }
     let _ = i32_local_bound_slot;
+    ctx.bounded_buffer_index_pairs
+        .truncate(local_bound_buffer_fact_count);
+    ctx.int_range_facts.truncate(for_range_fact_count);
 
     // Exit block — subsequent statements continue here.
     ctx.current_block = exit_idx;
@@ -424,6 +483,60 @@ pub(crate) fn classify_for_local_bound(
         return None;
     }
     Some((counter_id, bound_id, op))
+}
+
+fn classify_for_counter_range(
+    init: Option<&perry_hir::Stmt>,
+    cond: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    ctx: &crate::expr::FnCtx<'_>,
+) -> Option<IntRangeFact> {
+    use perry_hir::{CompareOp, Expr, Stmt, UpdateOp};
+    let (counter_id, start) = match init? {
+        Stmt::Let {
+            id,
+            init: Some(Expr::Integer(start)),
+            ..
+        } => (*id, *start),
+        _ => return None,
+    };
+    let Expr::Compare { op, left, right } = cond? else {
+        return None;
+    };
+    if !matches!(op, CompareOp::Lt | CompareOp::Le) {
+        return None;
+    }
+    if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) {
+        return None;
+    }
+    if !matches!(
+        update?,
+        Expr::Update {
+            id,
+            op: UpdateOp::Increment,
+            ..
+        } if *id == counter_id
+    ) {
+        return None;
+    }
+    let bound_range = crate::expr::int_range_expr(ctx, right)?;
+    if bound_range.min != bound_range.max {
+        return None;
+    }
+    let upper = bound_range
+        .max
+        .checked_sub(if matches!(op, CompareOp::Lt) { 1 } else { 0 })?;
+    if start <= upper {
+        Some(IntRangeFact {
+            local_id: counter_id,
+            range: crate::expr::IntRange {
+                min: start,
+                max: upper,
+            },
+        })
+    } else {
+        None
+    }
 }
 
 pub(crate) fn stmt_preserves_array_length(
@@ -736,9 +849,16 @@ pub(crate) fn lower_while(
 
     // Consume pending label (from enclosing Stmt::Labeled).
     let consumed_label = ctx.pending_label.take();
+    let previous_region_id = ctx.active_region_id.clone();
     if let Some(ref lbl) = consumed_label {
         ctx.label_targets
             .insert(lbl.clone(), (cond_label.clone(), exit_label.clone()));
+        ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
+    }
+
+    let while_range_fact_count = ctx.int_range_facts.len();
+    if let Some(fact) = crate::expr::while_condition_range_fact(ctx, condition) {
+        ctx.int_range_facts.push(fact);
     }
 
     ctx.current_block = body_idx;
@@ -751,8 +871,10 @@ pub(crate) fn lower_while(
     if !ctx.block().is_terminated() {
         ctx.block().br(&cond_label);
     }
+    ctx.active_region_id = previous_region_id;
 
     ctx.loop_targets.pop();
+    ctx.int_range_facts.truncate(while_range_fact_count);
 
     ctx.current_block = exit_idx;
     Ok(())
@@ -782,9 +904,11 @@ pub(crate) fn lower_do_while(
 
     // Consume pending label (from enclosing Stmt::Labeled).
     let consumed_label = ctx.pending_label.take();
+    let previous_region_id = ctx.active_region_id.clone();
     if let Some(ref lbl) = consumed_label {
         ctx.label_targets
             .insert(lbl.clone(), (cond_label.clone(), exit_label.clone()));
+        ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 
     ctx.current_block = body_idx;
@@ -802,6 +926,7 @@ pub(crate) fn lower_do_while(
     let cv = lower_expr(ctx, condition)?;
     let i1 = lower_truthy(ctx, &cv, condition);
     ctx.block().cond_br(&i1, &body_label, &exit_label);
+    ctx.active_region_id = previous_region_id;
 
     ctx.loop_targets.pop();
 

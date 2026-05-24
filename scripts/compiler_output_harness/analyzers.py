@@ -18,10 +18,11 @@ from .common import (
 )
 
 
-def parse_kept_paths(log_text: str) -> tuple[list[Path], list[Path], list[Path]]:
+def parse_kept_paths(log_text: str) -> tuple[list[Path], list[Path], list[Path], list[Path]]:
     ir_paths: list[Path] = []
     object_paths: list[Path] = []
     metadata_paths: list[Path] = []
+    native_rep_paths: list[Path] = []
     for line in log_text.splitlines():
         ir_match = re.search(r"kept LLVM IR:\s*(\S+)", line)
         if ir_match:
@@ -32,7 +33,10 @@ def parse_kept_paths(log_text: str) -> tuple[list[Path], list[Path], list[Path]]
         meta_match = re.search(r"kept compile metadata:\s*(\S+)", line)
         if meta_match:
             metadata_paths.append(Path(meta_match.group(1)))
-    return ir_paths, object_paths, metadata_paths
+        native_match = re.search(r"kept native reps:\s*(\S+)", line)
+        if native_match:
+            native_rep_paths.append(Path(native_match.group(1)))
+    return ir_paths, object_paths, metadata_paths, native_rep_paths
 
 
 def parse_target_triple(ir: str) -> str | None:
@@ -56,6 +60,39 @@ def extract_blocks(ir: str) -> list[tuple[str, str]]:
             current_lines.append(line)
     if current_label is not None:
         blocks.append((current_label, "\n".join(current_lines)))
+    return blocks
+
+
+def extract_blocks_with_functions(ir: str) -> list[tuple[str, str, str]]:
+    blocks: list[tuple[str, str, str]] = []
+    current_function = ""
+    current_label: str | None = None
+    current_lines: list[str] = []
+    label_re = re.compile(r"^([A-Za-z0-9_.$-]+):(?:\s|$)")
+    define_re = re.compile(r"^define\b.*@([A-Za-z0-9_.$-]+)\(")
+    for line in ir.splitlines():
+        define_match = define_re.match(line)
+        if define_match:
+            if current_label is not None:
+                blocks.append(
+                    (current_function, current_label, "\n".join(current_lines))
+                )
+            current_function = define_match.group(1)
+            current_label = None
+            current_lines = []
+            continue
+        match = label_re.match(line)
+        if match:
+            if current_label is not None:
+                blocks.append(
+                    (current_function, current_label, "\n".join(current_lines))
+                )
+            current_label = match.group(1)
+            current_lines = [line]
+        elif current_label is not None:
+            current_lines.append(line)
+    if current_label is not None:
+        blocks.append((current_function, current_label, "\n".join(current_lines)))
     return blocks
 
 
@@ -267,9 +304,32 @@ def merge_region_counters(
     return merged
 
 
+def merge_named_region_counters(
+    blocks: list[tuple[str, str, dict[str, Any]]],
+) -> dict[str, Any]:
+    merged = merge_region_counters([(label, counters) for _, label, counters in blocks])
+    merged["functions"] = sorted({function for function, _, _ in blocks if function})
+    merged["block_keys"] = [
+        {"function": function, "label": label} for function, label, _ in blocks
+    ]
+    return merged
+
+
 def _selector_matches(
-    label: str, counters: dict[str, Any], selector: dict[str, Any]
+    function: str, label: str, counters: dict[str, Any], selector: dict[str, Any]
 ) -> bool:
+    function_any = selector.get("function_any")
+    if function_any and function not in set(function_any):
+        return False
+    function_contains = selector.get("function_contains")
+    if function_contains and function_contains not in function:
+        return False
+    function_regex = selector.get("function_regex")
+    if function_regex and not re.search(function_regex, function):
+        return False
+    labels = selector.get("label_any")
+    if labels and label not in set(labels):
+        return False
     prefixes = selector.get("label_prefix_any")
     if prefixes and not any(label.startswith(prefix) for prefix in prefixes):
         return False
@@ -296,23 +356,27 @@ def hot_region_counters(ir_after: str) -> dict[str, Any]:
 
 
 def named_hot_regions(workload_info: dict[str, Any], ir_after: str) -> dict[str, Any]:
-    blocks = [(label, block_counter_summary(body)) for label, body in extract_blocks(ir_after)]
-    selected: dict[str, list[tuple[str, dict[str, Any]]]] = {}
-    assigned: set[str] = set()
+    blocks = [
+        (function, label, block_counter_summary(body))
+        for function, label, body in extract_blocks_with_functions(ir_after)
+    ]
+    selected: dict[str, list[tuple[str, str, dict[str, Any]]]] = {}
+    assigned: set[tuple[str, str]] = set()
     for region in workload_info.get("named_regions", []) or []:
         name = region["name"]
-        for label, counters in blocks:
-            if region.get("exclusive", True) and label in assigned:
+        for function, label, counters in blocks:
+            block_key = (function, label)
+            if region.get("exclusive", True) and block_key in assigned:
                 continue
             if any(
-                _selector_matches(label, counters, selector)
+                _selector_matches(function, label, counters, selector)
                 for selector in region.get("selectors", []) or []
             ):
-                selected.setdefault(name, []).append((label, counters))
+                selected.setdefault(name, []).append((function, label, counters))
                 if region.get("exclusive", True):
-                    assigned.add(label)
+                    assigned.add(block_key)
     return {
-        name: merge_region_counters(region_blocks)
+        name: merge_named_region_counters(region_blocks)
         for name, region_blocks in selected.items()
     }
 

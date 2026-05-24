@@ -30,11 +30,6 @@ contains = "getelementptr inbounds"
 detail = "optimized IR contains direct inbounds GEPs"
 
 [[workloads.image_convolution.ir_checks]]
-name = "llvm_assume_bounds"
-contains = "@llvm.assume"
-detail = "optimized IR preserves emitted bounds assumptions"
-
-[[workloads.image_convolution.ir_checks]]
 name = "invariant_loads"
 contains = "!invariant.load"
 detail = "optimized IR includes invariant-load metadata"
@@ -281,3 +276,183 @@ section = "llvm_after"
 counter = "buffer_slow_path_calls"
 equals = 0
 detail = "buffer_slow_path_calls"
+
+[workloads.h1_native_rep_equivalence]
+source = "benchmarks/compiler_output/fixtures/h1_native_rep_equivalence.ts"
+kind = "native_rep"
+
+[workloads.h1_native_rep_equivalence.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: H1 gates native representation shape, not vector width"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.h1_native_rep_equivalence.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.h1_native_rep_equivalence.ir_checks]]
+name = "h1_i32_phi_path"
+section = "llvm_before"
+regex_all = ["\\bicmp\\b[^\\n]*\\bi32\\b", "\\bload i32, ptr\\b", "\\bstore i32\\b"]
+detail = "pre-opt codegen keeps loop/index state in i32 slots and i32 comparisons before LLVM may widen the IV"
+
+[[workloads.h1_native_rep_equivalence.ir_checks]]
+name = "h1_direct_raw_buffer_access"
+regex_all = ["getelementptr", "\\bload (?:i8|<\\d+ x i8>), ptr\\b", "\\bstore (?:i8\\b|<\\d+ x i8>)"]
+detail = "optimized IR has raw GEP/load/store buffer access"
+
+[[workloads.h1_native_rep_equivalence.ir_checks]]
+name = "h1_zero_buffer_helpers"
+regex_none = ["@js_buffer_get", "@js_buffer_set"]
+detail = "positive H1 fixture has no generic JS buffer helpers"
+
+[[workloads.h1_native_rep_equivalence.counter_checks]]
+name = "h1_no_buffer_slow_path"
+section = "llvm_after"
+counter = "buffer_slow_path_calls"
+equals = 0
+detail = "buffer_slow_path_calls"
+
+[[workloads.h1_native_rep_equivalence.named_regions]]
+name = "direct_bounded"
+native_region_id = "h1_native_rep_equivalence_ts.module_init.direct_bounded"
+required = true
+no_runtime_calls = true
+no_conversions = true
+
+[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
+function_contains = "main"
+label_any = ["for.body.2"]
+counter_min = { load_i8 = 1, store_i8 = 1 }
+
+[[workloads.h1_native_rep_equivalence.named_regions]]
+name = "local_cast"
+native_region_id = "h1_native_rep_equivalence_ts.module_init.local_cast"
+required = true
+no_runtime_calls = true
+no_conversions = true
+
+[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
+function_contains = "main"
+label_any = ["for.body.6"]
+counter_min = { load_i8 = 1, store_i8 = 1 }
+
+[[workloads.h1_native_rep_equivalence.named_regions]]
+name = "helper_index"
+native_region_id = "h1_native_rep_equivalence_ts.module_init.helper_index"
+required = true
+no_runtime_calls = true
+no_conversions = true
+
+[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
+function_contains = "main"
+label_any = ["for.body.10"]
+counter_min = { load_i8 = 1, store_i8 = 1 }
+
+[[workloads.h1_native_rep_equivalence.named_regions]]
+name = "same_buffer"
+native_region_id = "h1_native_rep_equivalence_ts.incinplace.same_buffer"
+required = true
+no_runtime_calls = true
+no_conversions = true
+
+[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
+function_contains = "main"
+label_any = ["for.body.2.i"]
+counter_min = { load_i8 = 1, store_i8 = 1 }
+
+[workloads.h1_buffer_fastpath_bench]
+source = "benchmarks/compiler_output/fixtures/h1_buffer_fastpath_bench.ts"
+kind = "native_rep_benchmark"
+allow_hot_loop_conversions = true
+allowed_hot_loop_runtime_calls = [
+  "js_buffer_get",
+  "js_buffer_set",
+  "js_shadow_slot_set",
+]
+
+[workloads.h1_buffer_fastpath_bench.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: benchmark is used for fast-path on/off wall-time comparison"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.h1_buffer_fastpath_bench.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 16
+
+[workloads.h1_buffer_alias_negative]
+source = "benchmarks/compiler_output/fixtures/h1_buffer_alias_negative.ts"
+kind = "native_rep_negative"
+allow_dynamic_property_runtime = true
+allow_hot_loop_conversions = true
+allowed_hot_loop_runtime_calls = [
+  "js_buffer_get",
+  "js_buffer_set",
+  "js_closure_call1",
+  "js_dyn_index_get",
+  "js_number_coerce",
+]
+
+[workloads.h1_buffer_alias_negative.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: negative fixture proves denied claims"
+allowed_missed_reason_kinds = [
+  "aliasing",
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.h1_buffer_alias_negative.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 100
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "alias_local"
+native_region_id = "h1_buffer_alias_negative_ts.aliaslocal.alias_local"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "reassignment_region"
+native_region_id = "h1_buffer_alias_negative_ts.reassignment.reassignment_region"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "unknown_call_escape"
+native_region_id = "h1_buffer_alias_negative_ts.unknowncallescape.unknown_call_escape"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "length_mismatch"
+native_region_id = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"

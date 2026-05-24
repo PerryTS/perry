@@ -224,6 +224,8 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         no_cache: false,
         fast_math: false,
         fp_contract: None,
+        verify_native_regions: false,
+        disable_buffer_fast_path: false,
         emit_attest: false,
         emit_sandbox: false,
         lockdown: false,

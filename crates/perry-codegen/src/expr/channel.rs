@@ -335,6 +335,7 @@ pub(crate) fn lower_channel_reduction(ctx: &mut FnCtx<'_>, r: &ChannelReduction)
         ctx.clamp3_functions,
         ctx.clamp_u8_functions,
         ctx.integer_returning_functions,
+        ctx.i32_identity_functions,
     );
     let base_idx_i32 = if base_idx_can_i32 {
         lower_expr_as_i32(ctx, &r.base_idx)?
@@ -351,6 +352,7 @@ pub(crate) fn lower_channel_reduction(ctx: &mut FnCtx<'_>, r: &ChannelReduction)
         ctx.clamp3_functions,
         ctx.clamp_u8_functions,
         ctx.integer_returning_functions,
+        ctx.i32_identity_functions,
     );
     let k_i32 = if k_can_i32 {
         lower_expr_as_i32(ctx, &r.k_expr)?

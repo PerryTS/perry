@@ -14,3 +14,5 @@ perry-api-manifest.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 log.workspace = true
+serde.workspace = true
+serde_json.workspace = true

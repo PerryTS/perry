@@ -394,6 +394,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.clamp3_functions,
                         ctx.clamp_u8_functions,
                         ctx.integer_returning_functions,
+                        ctx.i32_identity_functions,
                     )
                 {
                     let v_i32 = lower_expr_as_i32(ctx, value)?;
@@ -410,6 +411,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Some(slot_idx) = ctx.shadow_slot_map.get(id).copied() {
                         emit_shadow_slot_clear(ctx, slot_idx);
                     }
+                    super::record_int_facts_for_local_set(ctx, *id, value);
                     return Ok(v_dbl);
                 }
             }
@@ -482,6 +484,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
                 ctx.block().store(DOUBLE, &v, &g_ref);
             }
+            if ctx.buffer_view_slots.contains_key(id)
+                || matches!(
+                    value.as_ref(),
+                    Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) | Expr::Uint8ArrayNew(_)
+                )
+            {
+                super::update_buffer_view_for_assignment(ctx, *id, value, &v);
+            }
+            super::record_int_facts_for_local_set(ctx, *id, value);
             // Soft fallback: drop the store on the floor for missing
             // locals. See LocalGet for the rationale.
             Ok(v)
@@ -577,6 +588,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let new_i32 = blk.add(I32, &old_i32, delta);
                 blk.store(I32, &new_i32, &i32_slot);
             }
+            super::record_int_facts_for_update(ctx, *id, *op);
             Ok(if *prefix { new } else { old })
         }
 

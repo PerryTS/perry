@@ -2046,12 +2046,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &p), (DOUBLE, &undef), (DOUBLE, &cb)],
                     ))
                 }
-                _ => lower_call(ctx, callee, args),
+                _ => {
+                    for arg in args {
+                        super::downgrade_buffer_aliases_in_expr(
+                            ctx,
+                            arg,
+                            crate::native_value::MaterializationReason::UnknownCallEscape,
+                        );
+                    }
+                    lower_call(ctx, callee, args)
+                }
             }
         }
 
         // -------- Calls --------
-        Expr::Call { callee, args, .. } => lower_call(ctx, callee, args),
+        Expr::Call { callee, args, .. } => {
+            for arg in args {
+                super::downgrade_buffer_aliases_in_expr(
+                    ctx,
+                    arg,
+                    crate::native_value::MaterializationReason::UnknownCallEscape,
+                );
+            }
+            lower_call(ctx, callee, args)
+        }
 
         // -------- Proxy / Reflect (metaprogramming) --------
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),

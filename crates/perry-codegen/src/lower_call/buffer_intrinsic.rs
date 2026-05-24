@@ -8,8 +8,8 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, FnCtx};
-use crate::types::{DOUBLE, I32, I8, PTR};
+use crate::expr::{BufferAccessSpec, FnCtx};
+use crate::types::{DOUBLE, I32};
 
 /// Issue #92: inline Buffer numeric reads (`buf.readInt32BE(offset)` etc.)
 /// as LLVM load + bswap + convert instead of a runtime dispatch through
@@ -132,46 +132,13 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     if args.len() != 1 {
         return Ok(None);
     }
-    // Fast path only when the receiver is a `const buf = Buffer.alloc(N)`-style
-    // local that's been registered in `buffer_data_slots` (see stmt.rs:472).
-    // Arbitrary Buffer values (function args, fields) still go through runtime.
-    let (ptr_slot, scope_idx) = match object {
-        Expr::LocalGet(id) => match ctx.buffer_data_slots.get(id).cloned() {
-            Some(s) => s,
-            None => return Ok(None),
-        },
-        _ => return Ok(None),
+    let access_spec = BufferAccessSpec::buffer_numeric_read(spec.width_bytes);
+    let Some(proof) = crate::expr::lower_buffer_access_proof(ctx, object, &args[0], access_spec)?
+    else {
+        return Ok(None);
     };
-    // Offset as i32 (prefer the existing i32 slot if the expr qualifies,
-    // otherwise fptosi from double).
-    let offset_is_i32 = crate::expr::can_lower_expr_as_i32(
-        &args[0],
-        &ctx.i32_counter_slots,
-        ctx.flat_const_arrays,
-        &ctx.array_row_aliases,
-        ctx.integer_locals,
-        ctx.clamp3_functions,
-        ctx.clamp_u8_functions,
-        ctx.integer_returning_functions,
-    );
-    let offset_i32 = if offset_is_i32 {
-        crate::expr::lower_expr_as_i32(ctx, &args[0])?
-    } else {
-        let d = lower_expr(ctx, &args[0])?;
-        ctx.block().fptosi(DOUBLE, &d, I32)
-    };
+    let emission = crate::expr::emit_buffer_access_pointer(ctx, &proof, access_spec);
     let blk = ctx.block();
-    let data_ptr = blk.load(PTR, &ptr_slot);
-    // BufferHeader {length: u32, capacity: u32} lives 8 bytes before the data.
-    let header_ptr = blk.gep(I8, &data_ptr, &[(I32, "-8")]);
-    let len_i32 = blk.load_invariant(I32, &header_ptr);
-    // Bounds check: offset + width_bytes <= length, via @llvm.assume so the
-    // branch doesn't block the LoopVectorizer (same trick as Uint8ArrayGet).
-    let end_i32 = blk.add(I32, &offset_i32, &spec.width_bytes.to_string());
-    let in_bounds = blk.icmp_ule(I32, &end_i32, &len_i32);
-    blk.emit_raw(format!("call void @llvm.assume(i1 {})", in_bounds));
-    let meta = crate::expr::buffer_alias_metadata_suffix(scope_idx);
-    let elem_ptr = blk.gep_inbounds(I8, &data_ptr, &[(I32, &offset_i32)]);
     // Load raw bytes at the correct width.
     let (load_ty, swap_intrinsic) = match spec.width_bytes {
         1 => ("i8", None),
@@ -183,7 +150,7 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     let raw = blk.fresh_reg();
     blk.emit_raw(format!(
         "{} = load {}, ptr {}{}",
-        raw, load_ty, elem_ptr, meta
+        raw, load_ty, emission.elem_ptr, emission.alias_metadata
     ));
     // Byte-swap for BE on multi-byte widths (swap.i8 doesn't exist; width=1
     // never has `swap=true` in the spec table anyway).
@@ -245,5 +212,24 @@ pub(super) fn try_emit_buffer_read_intrinsic(
             blk.uitofp(I32, &i32_val, DOUBLE)
         }
     };
+    let lowered = crate::expr::buffer_view_lowered_value(
+        &emission.data_ptr,
+        &emission.len_i32,
+        proof.bounds.clone(),
+        proof.alias.clone(),
+    );
+    ctx.record_lowered_value_with_access_mode(
+        "BufferNumericRead",
+        Some(proof.buffer_local_id),
+        "BufferNumericRead.BufferView",
+        &lowered,
+        Some(proof.bounds),
+        Some(proof.alias),
+        Some(proof.access_mode),
+        None,
+        proof.may_emit_inbounds,
+        proof.may_emit_noalias,
+        vec![format!("width_bytes={}", spec.width_bytes)],
+    );
     Ok(Some(result))
 }

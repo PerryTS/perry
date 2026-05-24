@@ -189,6 +189,19 @@ pub struct CompileArgs {
     #[arg(long, value_parser = ["off", "on", "fast"])]
     pub fp_contract: Option<String>,
 
+    /// Verify native-representation lowering records after codegen. Also
+    /// settable via `PERRY_VERIFY_NATIVE_REGIONS=1`. Enables compiler
+    /// invariant checks and disables the per-module object cache for this
+    /// build so lowering always runs.
+    #[arg(long)]
+    pub verify_native_regions: bool,
+
+    /// Disable native Buffer/Uint8Array direct-load/store lowering. Also
+    /// settable via `PERRY_DISABLE_BUFFER_FAST_PATH=1`; useful for A/B
+    /// benchmarking the helper fallback against the native fast path.
+    #[arg(long)]
+    pub disable_buffer_fast_path: bool,
+
     /// #504 — emit `<binary>.attest.json` next to the compiled
     /// executable. The sidecar carries SHA-256 of the binary +
     /// provenance (perry version, git commit, build timestamp) so

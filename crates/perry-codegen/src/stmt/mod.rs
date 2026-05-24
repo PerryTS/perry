@@ -120,7 +120,11 @@ pub(crate) fn emit_shadow_slot_clears(ctx: &mut FnCtx<'_>, slots: &[u32]) {
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
     match stmt {
         Stmt::Expr(e) => {
-            let _ = lower_expr(ctx, e)?;
+            let prev_discard = ctx.discard_expr_value;
+            ctx.discard_expr_value = true;
+            let result = lower_expr(ctx, e);
+            ctx.discard_expr_value = prev_discard;
+            let _ = result?;
             Ok(())
         }
 

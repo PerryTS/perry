@@ -174,6 +174,14 @@ pub struct CompileOptions {
     /// as bytes instead of invoking `clang -c` to produce an object file.
     /// Used by the bitcode-link path (`PERRY_LLVM_BITCODE_LINK=1`).
     pub emit_ir_only: bool,
+    /// Run the native-representation verifier after lowering. This is
+    /// intentionally explicit because it checks compiler invariants and must
+    /// force real lowering rather than accepting cached object bytes.
+    pub verify_native_regions: bool,
+    /// Disable native Buffer/Uint8Array direct-load/store lowering. This is a
+    /// benchmarking/debug switch; callers fall back to the generic buffer
+    /// helpers because buffer access lowering returns `None`.
+    pub disable_buffer_fast_path: bool,
 
     // ── Cross-module import plumbing ──
     /// Locals that are namespace imports (`import * as X from "./mod"`).
@@ -603,6 +611,11 @@ pub(crate) struct CrossModuleCtx {
     pub clamp_u8_functions: std::collections::HashSet<u32>,
     /// Functions that always return integer (all returns end with `| 0` etc).
     pub returns_int_functions: std::collections::HashSet<u32>,
+    /// Single-argument integer helpers that return the argument coerced to i32.
+    pub i32_identity_functions: std::collections::HashSet<u32>,
+    /// Debug/benchmark switch that forces Buffer/Uint8Array accesses through
+    /// the generic helper path.
+    pub disable_buffer_fast_path: bool,
     /// (Issue #50) Module-level `const` 2D int arrays folded into flat
     /// `[N x i32]` LLVM constants. Maps local_id → info. Populated by
     /// scanning `hir.init`; threaded through every FnCtx so the IndexGet

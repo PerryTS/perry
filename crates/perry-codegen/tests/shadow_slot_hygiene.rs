@@ -15,6 +15,8 @@ fn empty_opts() -> CompileOptions {
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
         emit_ir_only: true,
+        verify_native_regions: false,
+        disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),

@@ -90,6 +90,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // creation site and the body lower with consistent slot
             // indices.
             let auto_captures = compute_auto_captures(ctx, params, body, captures);
+            for cap_id in &auto_captures {
+                super::downgrade_buffer_alias(
+                    ctx,
+                    *cap_id,
+                    crate::native_value::MaterializationReason::ClosureCapture,
+                );
+            }
 
             // Lower each captured value from the OUTER scope (this is
             // an outer-scope access, NOT a closure capture access — at

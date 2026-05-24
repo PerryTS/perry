@@ -22,6 +22,11 @@ use crate::lower_string_method::{
     lower_string_concat_chain, lower_string_self_append,
 };
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::native_value::{
+    AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessMode, BufferElem,
+    BufferViewRep, BufferViewSlot, ExpectedNativeRep, LengthSource, LoweredValue,
+    MaterializationReason, NativeRep, NativeRepRecord, SemanticKind,
+};
 use crate::strings::StringPool;
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -35,6 +40,7 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 // remain here. `pub(crate) use` keeps the public surface stable so
 // existing `crate::expr::X` paths resolve unchanged.
 mod array_literal;
+mod buffer_access;
 mod channel;
 mod helpers;
 mod i32_fast_path;
@@ -46,7 +52,12 @@ mod url_helpers;
 mod v8_interop;
 mod write_barrier;
 
+pub(crate) use crate::native_value::materialize_js_value;
 pub(crate) use array_literal::lower_array_literal;
+pub(crate) use buffer_access::{
+    emit_buffer_access_pointer, lower_buffer_access_proof, lower_buffer_load, lower_buffer_store,
+    BufferAccessEmission, BufferAccessSpec, StoreResult,
+};
 #[allow(unused_imports)] // ChannelReduction kept reachable for surface stability
 pub(crate) use channel::{
     extract_array_of_object_shape, lower_channel_reduction, try_match_channel_reduction,
@@ -60,8 +71,8 @@ pub(crate) use helpers::{
     type_has_numeric_pointer_free_array_layout, unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
-    can_lower_expr_as_i32, is_known_finite, lower_expr_as_i32, try_flat_const_2d_int,
-    try_lower_flat_const_index_get,
+    can_lower_expr_as_i32, is_known_finite, lower_expr_as_i32, lower_expr_native,
+    try_flat_const_2d_int, try_lower_flat_const_index_get,
 };
 pub(crate) use index::lower_index_set_fast;
 pub(crate) use nanbox_inline::{
@@ -79,10 +90,43 @@ pub(crate) use write_barrier::{
     emit_write_barrier_slot_on_block, lower_stream_super_init,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IntRange {
+    pub min: i64,
+    pub max: i64,
+}
+
+impl IntRange {
+    pub(crate) fn exact(value: i64) -> Self {
+        Self {
+            min: value,
+            max: value,
+        }
+    }
+
+    fn is_nonnegative(self) -> bool {
+        self.min >= 0
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IntRangeFact {
+    pub local_id: u32,
+    pub range: IntRange,
+}
+
 /// Per-function codegen context. Held briefly during lowering, never stored.
 pub(crate) struct FnCtx<'a> {
     /// Function being built (blocks, params, registers).
     pub func: &'a mut LlFunction,
+    /// Stable slug for native-region ids derived from this module.
+    pub module_slug: String,
+    /// Source-level function name for native-representation records. Top-level
+    /// module code uses `module_init`.
+    pub source_function: String,
+    pub source_function_slug: String,
+    /// Stable id for the labeled loop currently being lowered.
+    pub active_region_id: Option<String>,
     /// Map from HIR LocalId → LLVM alloca pointer (e.g. `%r3`).
     pub locals: std::collections::HashMap<u32, String>,
     /// Map from HIR LocalId → static HIR Type. Used by `is_string_expr` and
@@ -93,6 +137,9 @@ pub(crate) struct FnCtx<'a> {
     /// Index into `func.blocks()` pointing at the block currently receiving
     /// instructions. Lowering fns update this when control flow splits.
     pub current_block: usize,
+    /// True while lowering an expression statement whose resulting JS value
+    /// will be discarded.
+    pub discard_expr_value: bool,
     /// HIR FuncId → LLVM function name. Resolved at the top of
     /// `compile_module` so `FuncRef(id)` calls know what to emit.
     pub func_names: &'a std::collections::HashMap<u32, String>,
@@ -643,6 +690,7 @@ pub(crate) struct FnCtx<'a> {
     pub clamp3_functions: &'a std::collections::HashSet<u32>,
     pub clamp_u8_functions: &'a std::collections::HashSet<u32>,
     pub integer_returning_functions: &'a std::collections::HashSet<u32>,
+    pub i32_identity_functions: &'a std::collections::HashSet<u32>,
 
     /// True if `perry_transform::unroll_static_loops` expanded any
     /// static-trip-count for-loop in the function this FnCtx is lowering
@@ -697,6 +745,34 @@ pub(crate) struct FnCtx<'a> {
     /// different buffers don't alias (fixes the vectorizer's "unsafe
     /// dependent memory operations" remark).
     pub buffer_data_slots: std::collections::HashMap<u32, (String, u32)>,
+    /// Codegen-level native buffer views keyed by LocalId. This is the
+    /// representation model behind `buffer_data_slots`: raw pointer access can
+    /// exist with `AliasState::Unknown`, while noalias metadata requires a
+    /// proven/guarded alias state at the consumer.
+    pub buffer_view_slots: std::collections::HashMap<u32, BufferViewSlot>,
+    /// Benchmark/debug switch that forces tracked buffers through the existing
+    /// helper fallback instead of native GEP/load/store lowering.
+    pub disable_buffer_fast_path: bool,
+    /// LocalId facts of the form `n = min(src.length, dst.length)`.
+    pub min_length_bounds: std::collections::HashMap<u32, Vec<u32>>,
+    /// Loop-local facts proving a buffer index is bounded inside the current
+    /// loop body.
+    pub bounded_buffer_index_pairs: Vec<BoundedBufferIndex>,
+    pub buffer_hazard_reasons: std::collections::HashMap<u32, MaterializationReason>,
+    /// Local aliases that preserve an i32 index, e.g. `const j = i | 0`.
+    pub native_i32_aliases: std::collections::HashMap<u32, u32>,
+    /// Immutable numeric aliases used by the range-based buffer proof. These
+    /// remain HIR expressions so loop-local range facts can be applied at the
+    /// eventual access site.
+    pub int_range_aliases: std::collections::HashMap<u32, perry_hir::Expr>,
+    /// Scoped local integer ranges derived from loop/while guards.
+    pub int_range_facts: Vec<IntRangeFact>,
+    /// Mutable locals known to be non-negative at the current point. While
+    /// guards provide the upper bound; this set supplies the lower bound.
+    pub nonnegative_integer_locals: std::collections::HashSet<u32>,
+    /// Native representation records drained into `LlModule` after this
+    /// function/method/closure/module-init body has been lowered.
+    pub native_rep_records: Vec<NativeRepRecord>,
     /// Immutable locals whose initializer creates a fresh u8 buffer backing
     /// store. Collected once as a HIR fact and consumed by Let lowering to seed
     /// direct data-pointer slots plus noalias metadata.
@@ -828,6 +904,621 @@ impl<'a> FnCtx<'a> {
             .map(|b| b.label.clone())
             .expect("valid block index")
     }
+
+    pub fn current_block_label(&self) -> String {
+        self.block_label(self.current_block)
+    }
+
+    pub fn region_id_for_label(&self, label: &str) -> String {
+        format!(
+            "{}.{}.{}",
+            self.module_slug,
+            self.source_function_slug,
+            native_region_slug(label)
+        )
+    }
+
+    pub fn record_lowered_value(
+        &mut self,
+        expr_kind: impl Into<String>,
+        local_id: Option<u32>,
+        consumer: impl Into<String>,
+        lowered: &LoweredValue,
+        bounds_state: Option<BoundsState>,
+        alias_state: Option<AliasState>,
+        materialization_reason: Option<MaterializationReason>,
+        emitted_inbounds: bool,
+        emitted_noalias: bool,
+        notes: Vec<String>,
+    ) {
+        self.record_lowered_value_with_access_mode(
+            expr_kind,
+            local_id,
+            consumer,
+            lowered,
+            bounds_state,
+            alias_state,
+            None,
+            materialization_reason,
+            emitted_inbounds,
+            emitted_noalias,
+            notes,
+        );
+    }
+
+    pub fn record_lowered_value_with_access_mode(
+        &mut self,
+        expr_kind: impl Into<String>,
+        local_id: Option<u32>,
+        consumer: impl Into<String>,
+        lowered: &LoweredValue,
+        bounds_state: Option<BoundsState>,
+        alias_state: Option<AliasState>,
+        access_mode: Option<BufferAccessMode>,
+        materialization_reason: Option<MaterializationReason>,
+        emitted_inbounds: bool,
+        emitted_noalias: bool,
+        notes: Vec<String>,
+    ) {
+        let block_label = self.current_block_label();
+        self.native_rep_records.push(NativeRepRecord {
+            function: self.func.name.clone(),
+            block_label: block_label.clone(),
+            region_id: self.active_region_id.clone(),
+            source_function: self.source_function.clone(),
+            lowering_block: block_label,
+            local_id,
+            expr_kind: expr_kind.into(),
+            source_key: None,
+            semantic: lowered.semantic.clone(),
+            native_rep: lowered.rep.clone(),
+            native_rep_name: lowered.rep.name().to_string(),
+            llvm_ty: lowered.llvm_ty,
+            llvm_value: lowered.value.clone(),
+            consumer: consumer.into(),
+            bounds_state,
+            alias_state,
+            access_mode,
+            materialization_reason,
+            emitted_inbounds,
+            emitted_noalias,
+            notes,
+        });
+    }
+}
+
+pub(crate) fn native_region_slug(raw: &str) -> String {
+    let mut out = String::new();
+    let mut pending_sep = false;
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() {
+            if pending_sep && !out.is_empty() {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+            pending_sep = false;
+        } else {
+            pending_sep = true;
+        }
+    }
+    if out.is_empty() {
+        "unknown".to_string()
+    } else {
+        out
+    }
+}
+
+fn resolve_native_i32_alias(ctx: &FnCtx<'_>, mut id: u32) -> u32 {
+    let mut seen = std::collections::HashSet::new();
+    while let Some(next) = ctx.native_i32_aliases.get(&id).copied() {
+        if !seen.insert(id) {
+            break;
+        }
+        id = next;
+    }
+    id
+}
+
+pub(crate) fn native_index_source_local(ctx: &FnCtx<'_>, expr: &Expr) -> Option<u32> {
+    match expr {
+        Expr::LocalGet(id) => Some(resolve_native_i32_alias(ctx, *id)),
+        Expr::Binary {
+            op: BinaryOp::BitOr,
+            left,
+            right,
+        } if matches!(right.as_ref(), Expr::Integer(0)) => native_index_source_local(ctx, left),
+        Expr::Call { callee, args, .. } if args.len() == 1 => {
+            let Expr::FuncRef(fid) = callee.as_ref() else {
+                return None;
+            };
+            if ctx.i32_identity_functions.contains(fid) {
+                native_index_source_local(ctx, &args[0])
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn f64_to_i64_constant(value: f64) -> Option<i64> {
+    if value.is_finite() && value.fract() == 0.0 {
+        let min = i64::MIN as f64;
+        let max = i64::MAX as f64;
+        if value >= min && value <= max {
+            return Some(value as i64);
+        }
+    }
+    None
+}
+
+fn checked_range_add(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
+    Some(IntRange {
+        min: lhs.min.checked_add(rhs.min)?,
+        max: lhs.max.checked_add(rhs.max)?,
+    })
+}
+
+fn checked_range_sub(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
+    Some(IntRange {
+        min: lhs.min.checked_sub(rhs.max)?,
+        max: lhs.max.checked_sub(rhs.min)?,
+    })
+}
+
+fn checked_range_mul(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
+    let candidates = [
+        lhs.min.checked_mul(rhs.min)?,
+        lhs.min.checked_mul(rhs.max)?,
+        lhs.max.checked_mul(rhs.min)?,
+        lhs.max.checked_mul(rhs.max)?,
+    ];
+    Some(IntRange {
+        min: *candidates.iter().min()?,
+        max: *candidates.iter().max()?,
+    })
+}
+
+fn int_range_for_local(
+    ctx: &FnCtx<'_>,
+    id: u32,
+    seen: &mut std::collections::HashSet<u32>,
+) -> Option<IntRange> {
+    if let Some(fact) = ctx
+        .int_range_facts
+        .iter()
+        .rev()
+        .find(|fact| fact.local_id == id)
+    {
+        return Some(fact.range);
+    }
+    if !seen.insert(id) {
+        return None;
+    }
+    let result = if let Some(alias) = ctx.int_range_aliases.get(&id) {
+        int_range_expr_inner(ctx, alias, seen)
+    } else {
+        ctx.compile_time_constants
+            .get(&id)
+            .and_then(|value| f64_to_i64_constant(*value))
+            .map(IntRange::exact)
+    };
+    seen.remove(&id);
+    result
+}
+
+fn int_range_expr_inner(
+    ctx: &FnCtx<'_>,
+    expr: &Expr,
+    seen: &mut std::collections::HashSet<u32>,
+) -> Option<IntRange> {
+    match expr {
+        Expr::Integer(n) => Some(IntRange::exact(*n)),
+        Expr::Number(n) => f64_to_i64_constant(*n).map(IntRange::exact),
+        Expr::LocalGet(id) => int_range_for_local(ctx, *id, seen),
+        Expr::Binary { op, left, right } => {
+            let lhs = int_range_expr_inner(ctx, left, seen)?;
+            let rhs = int_range_expr_inner(ctx, right, seen)?;
+            match op {
+                BinaryOp::Add => checked_range_add(lhs, rhs),
+                BinaryOp::Sub => checked_range_sub(lhs, rhs),
+                BinaryOp::Mul => checked_range_mul(lhs, rhs),
+                BinaryOp::BitOr if rhs.min == 0 && rhs.max == 0 => {
+                    if lhs.min >= i32::MIN as i64 && lhs.max <= i32::MAX as i64 {
+                        Some(lhs)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+        Expr::Call { callee, args, .. } if args.len() == 3 => {
+            let Expr::FuncRef(fid) = callee.as_ref() else {
+                return None;
+            };
+            if !ctx.clamp3_functions.contains(fid) {
+                return None;
+            }
+            let lo = int_range_expr_inner(ctx, &args[1], seen)?;
+            let hi = int_range_expr_inner(ctx, &args[2], seen)?;
+            if lo.max <= hi.min {
+                Some(IntRange {
+                    min: lo.min,
+                    max: hi.max,
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn int_range_expr(ctx: &FnCtx<'_>, expr: &Expr) -> Option<IntRange> {
+    int_range_expr_inner(ctx, expr, &mut std::collections::HashSet::new())
+}
+
+fn exact_i64_expr(ctx: &FnCtx<'_>, expr: &Expr) -> Option<i64> {
+    let range = int_range_expr(ctx, expr)?;
+    (range.min == range.max).then_some(range.min)
+}
+
+fn constant_i64_expr(ctx: &FnCtx<'_>, expr: &Expr) -> Option<i64> {
+    match expr {
+        Expr::Integer(n) => Some(*n),
+        Expr::Number(n) => f64_to_i64_constant(*n),
+        Expr::LocalGet(id) => ctx
+            .compile_time_constants
+            .get(id)
+            .and_then(|value| f64_to_i64_constant(*value))
+            .or_else(|| exact_i64_expr(ctx, expr)),
+        Expr::Binary { op, left, right } => {
+            let lhs = constant_i64_expr(ctx, left)?;
+            let rhs = constant_i64_expr(ctx, right)?;
+            match op {
+                BinaryOp::Add => lhs.checked_add(rhs),
+                BinaryOp::Sub => lhs.checked_sub(rhs),
+                BinaryOp::Mul => lhs.checked_mul(rhs),
+                BinaryOp::Div if rhs != 0 && lhs % rhs == 0 => Some(lhs / rhs),
+                BinaryOp::BitOr => Some(lhs | rhs),
+                BinaryOp::BitAnd => Some(lhs & rhs),
+                BinaryOp::BitXor => Some(lhs ^ rhs),
+                BinaryOp::Shl if (0..63).contains(&rhs) => lhs.checked_shl(rhs as u32),
+                BinaryOp::Shr if (0..63).contains(&rhs) => lhs.checked_shr(rhs as u32),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn length_source_range(ctx: &FnCtx<'_>, source: &LengthSource) -> Option<IntRange> {
+    match source {
+        LengthSource::Constant(n) => Some(IntRange::exact(*n)),
+        LengthSource::Local { id, addend } => {
+            let base = int_range_for_local(ctx, *id, &mut std::collections::HashSet::new())?;
+            checked_range_add(base, IntRange::exact(*addend))
+        }
+        LengthSource::Unknown => None,
+    }
+}
+
+fn length_source_constant(ctx: &FnCtx<'_>, source: &LengthSource) -> Option<i64> {
+    let range = length_source_range(ctx, source)?;
+    (range.min == range.max).then_some(range.min)
+}
+
+pub(crate) fn record_int_facts_for_let(
+    ctx: &mut FnCtx<'_>,
+    id: u32,
+    init: Option<&Expr>,
+    mutable: bool,
+) {
+    let Some(init_expr) = init else {
+        ctx.int_range_aliases.remove(&id);
+        ctx.nonnegative_integer_locals.remove(&id);
+        return;
+    };
+    let range = int_range_expr(ctx, init_expr);
+    if !mutable && range.is_some() {
+        ctx.int_range_aliases.insert(id, init_expr.clone());
+    } else {
+        ctx.int_range_aliases.remove(&id);
+    }
+    if range.is_some_and(IntRange::is_nonnegative) {
+        ctx.nonnegative_integer_locals.insert(id);
+    } else {
+        ctx.nonnegative_integer_locals.remove(&id);
+    }
+}
+
+pub(crate) fn record_int_facts_for_local_set(ctx: &mut FnCtx<'_>, id: u32, value: &Expr) {
+    ctx.int_range_aliases.remove(&id);
+    if int_range_expr(ctx, value).is_some_and(IntRange::is_nonnegative) {
+        ctx.nonnegative_integer_locals.insert(id);
+    } else {
+        ctx.nonnegative_integer_locals.remove(&id);
+    }
+}
+
+pub(crate) fn record_int_facts_for_update(ctx: &mut FnCtx<'_>, id: u32, op: UpdateOp) {
+    ctx.int_range_aliases.remove(&id);
+    match op {
+        UpdateOp::Increment => {
+            if ctx.nonnegative_integer_locals.contains(&id) {
+                ctx.nonnegative_integer_locals.insert(id);
+            }
+        }
+        UpdateOp::Decrement => {
+            if int_range_for_local(ctx, id, &mut std::collections::HashSet::new())
+                .is_some_and(|range| range.min >= 1)
+            {
+                ctx.nonnegative_integer_locals.insert(id);
+            } else {
+                ctx.nonnegative_integer_locals.remove(&id);
+            }
+        }
+    }
+}
+
+fn index_local_with_addend(expr: &Expr) -> Option<(u32, i64)> {
+    match expr {
+        Expr::LocalGet(id) => Some((*id, 0)),
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+            match (left.as_ref(), right.as_ref()) {
+                (Expr::LocalGet(id), Expr::Integer(addend)) => {
+                    let addend = if matches!(op, BinaryOp::Sub) {
+                        addend.checked_neg()?
+                    } else {
+                        *addend
+                    };
+                    Some((*id, addend))
+                }
+                (Expr::Integer(addend), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => {
+                    Some((*id, *addend))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn while_condition_range_fact(
+    ctx: &FnCtx<'_>,
+    condition: &Expr,
+) -> Option<IntRangeFact> {
+    let Expr::Compare { op, left, right } = condition else {
+        return None;
+    };
+    if !matches!(op, CompareOp::Lt | CompareOp::Le) {
+        return None;
+    }
+    let (local_id, addend) = index_local_with_addend(left)?;
+    let upper = exact_i64_expr(ctx, right)?
+        .checked_sub(addend)?
+        .checked_sub(if matches!(op, CompareOp::Lt) { 1 } else { 0 })?;
+    let lower = if let Some(range) =
+        int_range_for_local(ctx, local_id, &mut std::collections::HashSet::new())
+    {
+        range.min
+    } else if ctx.nonnegative_integer_locals.contains(&local_id) {
+        0
+    } else {
+        return None;
+    };
+    if lower <= upper {
+        Some(IntRangeFact {
+            local_id,
+            range: IntRange {
+                min: lower.max(0),
+                max: upper,
+            },
+        })
+    } else {
+        None
+    }
+}
+
+pub(crate) fn bounds_for_buffer_access(
+    ctx: &FnCtx<'_>,
+    buffer_local_id: u32,
+    index: &Expr,
+) -> BoundsState {
+    if let Some(index_local_id) = native_index_source_local(ctx, index) {
+        if let Some(bounds) = ctx
+            .bounded_buffer_index_pairs
+            .iter()
+            .rev()
+            .find(|fact| {
+                fact.index_local_id == index_local_id && fact.buffer_local_id == buffer_local_id
+            })
+            .map(|fact| fact.bounds.clone())
+        {
+            return bounds;
+        }
+    }
+    if let Some(index_value) = constant_i64_expr(ctx, index) {
+        let Some(view) = ctx.buffer_view_slots.get(&buffer_local_id) else {
+            return BoundsState::Unknown;
+        };
+        let length = view
+            .length_source
+            .as_ref()
+            .and_then(|source| length_source_constant(ctx, source));
+        if let Some(length) = length {
+            if index_value >= 0 && index_value < length {
+                return BoundsState::Proven {
+                    proof: BoundsProof::ExplicitGuard,
+                };
+            }
+            return BoundsState::Unknown;
+        }
+    }
+    range_bounds_for_buffer_access(ctx, buffer_local_id, index)
+}
+
+fn range_bounds_for_buffer_access(
+    ctx: &FnCtx<'_>,
+    buffer_local_id: u32,
+    index: &Expr,
+) -> BoundsState {
+    let Some(view) = ctx.buffer_view_slots.get(&buffer_local_id) else {
+        return BoundsState::Unknown;
+    };
+    let Some(index_range) = int_range_expr(ctx, index) else {
+        return BoundsState::Unknown;
+    };
+    let Some(length_range) = view
+        .length_source
+        .as_ref()
+        .and_then(|source| length_source_range(ctx, source))
+    else {
+        return BoundsState::Unknown;
+    };
+    if index_range.min >= 0 && index_range.max < length_range.min {
+        BoundsState::Proven {
+            proof: BoundsProof::LoopGuard,
+        }
+    } else {
+        BoundsState::Unknown
+    }
+}
+
+pub(crate) fn effective_alias_state_for_access(
+    ctx: &FnCtx<'_>,
+    view: &BufferViewSlot,
+) -> AliasState {
+    if !view.alias.allows_noalias() || view.scope_idx.is_none() {
+        return view.alias.clone();
+    }
+    let noalias_candidate_count = ctx
+        .buffer_view_slots
+        .values()
+        .filter(|slot| slot.scope_idx.is_some() && slot.alias.allows_noalias())
+        .count();
+    if noalias_candidate_count >= 2 {
+        view.alias.clone()
+    } else {
+        AliasState::MayAlias
+    }
+}
+
+pub(crate) fn buffer_view_lowered_value(
+    data_ptr: &str,
+    length: &str,
+    bounds: BoundsState,
+    alias: AliasState,
+) -> LoweredValue {
+    LoweredValue {
+        semantic: SemanticKind::BufferObject,
+        rep: NativeRep::BufferView(BufferViewRep {
+            data_ptr: data_ptr.to_string(),
+            length: length.to_string(),
+            elem: BufferElem::U8,
+            bounds,
+            alias,
+        }),
+        llvm_ty: PTR,
+        value: data_ptr.to_string(),
+    }
+}
+
+pub(crate) fn downgrade_buffer_alias(ctx: &mut FnCtx<'_>, id: u32, reason: MaterializationReason) {
+    if let Some(view) = ctx.buffer_view_slots.get_mut(&id) {
+        view.alias = AliasState::MayAlias;
+        view.scope_idx = None;
+    }
+    ctx.buffer_hazard_reasons.insert(id, reason);
+}
+
+pub(crate) fn alias_buffer_view_slot(
+    ctx: &mut FnCtx<'_>,
+    alias_id: u32,
+    source_id: u32,
+    reason: MaterializationReason,
+) {
+    let Some(mut view) = ctx.buffer_view_slots.get(&source_id).cloned() else {
+        return;
+    };
+    downgrade_buffer_alias(ctx, source_id, reason.clone());
+    view.alias = AliasState::MayAlias;
+    view.scope_idx = None;
+    ctx.buffer_view_slots.insert(alias_id, view);
+    ctx.buffer_hazard_reasons.insert(alias_id, reason);
+}
+
+pub(crate) fn update_buffer_view_for_assignment(
+    ctx: &mut FnCtx<'_>,
+    id: u32,
+    value: &Expr,
+    lowered_value: &str,
+) {
+    if matches!(
+        value,
+        Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) | Expr::Uint8ArrayNew(_)
+    ) {
+        let blk = ctx.block();
+        let handle = unbox_to_i64(blk, lowered_value);
+        let handle_ptr = blk.inttoptr(I64, &handle);
+        let data_ptr = blk.gep(I8, &handle_ptr, &[(I32, "8")]);
+        let data_slot = ctx
+            .buffer_view_slots
+            .get(&id)
+            .map(|view| view.data_slot.clone())
+            .unwrap_or_else(|| ctx.func.alloca_entry(PTR));
+        ctx.block().store(PTR, &data_ptr, &data_slot);
+        ctx.buffer_view_slots.insert(
+            id,
+            BufferViewSlot {
+                data_slot,
+                scope_idx: None,
+                elem: BufferElem::U8,
+                alias: AliasState::MayAlias,
+                length_source: Some(LengthSource::Unknown),
+            },
+        );
+    } else {
+        ctx.buffer_view_slots.remove(&id);
+    }
+    ctx.buffer_hazard_reasons
+        .insert(id, MaterializationReason::Reassignment);
+}
+
+pub(crate) fn downgrade_buffer_aliases_in_expr(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+    reason: MaterializationReason,
+) {
+    match expr {
+        Expr::LocalGet(id) => downgrade_buffer_alias(ctx, *id, reason),
+        Expr::Binary { left, right, .. } => {
+            downgrade_buffer_aliases_in_expr(ctx, left, reason.clone());
+            downgrade_buffer_aliases_in_expr(ctx, right, reason);
+        }
+        Expr::PropertyGet { object, .. } => downgrade_buffer_aliases_in_expr(ctx, object, reason),
+        Expr::IndexGet { object, index } => {
+            downgrade_buffer_aliases_in_expr(ctx, object, reason.clone());
+            downgrade_buffer_aliases_in_expr(ctx, index, reason);
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn buffer_access_materialization_reason(
+    ctx: &FnCtx<'_>,
+    expr: &Expr,
+) -> MaterializationReason {
+    if let Expr::LocalGet(id) = expr {
+        if let Some(reason) = ctx.buffer_hazard_reasons.get(id) {
+            return reason.clone();
+        }
+        if ctx.closure_captures.contains_key(id) {
+            return MaterializationReason::ClosureCapture;
+        }
+    }
+    MaterializationReason::UnknownBounds
 }
 
 // Issue #1098 phase 2: lower_expr arm-bodies extracted into
@@ -1033,6 +1724,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::Uint8ArrayLength(..)
         | Expr::Uint8ArrayGet { .. }
         | Expr::Uint8ArraySet { .. }
+        | Expr::BufferIndexGet { .. }
+        | Expr::BufferIndexSet { .. }
         | Expr::TypedArrayNew { .. }
         | Expr::ArrayUnshift { .. }
         | Expr::ArrayEntries(..)

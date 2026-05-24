@@ -2,13 +2,14 @@
 //! `codegen/mod.rs`). Behavior is unchanged — this only contains
 //! `compile_function`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Context, Result};
 use perry_hir::Function;
 
 use crate::expr::FnCtx;
 use crate::module::LlModule;
+use crate::native_value::{AliasState, BufferElem, BufferViewSlot, LengthSource};
 use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I32, I64, I8, PTR};
@@ -153,9 +154,14 @@ pub(super) fn compile_function(
 
     let mut ctx = FnCtx {
         func: lf,
+        module_slug: crate::expr::native_region_slug(strings.module_prefix()),
+        source_function: f.name.clone(),
+        source_function_slug: crate::expr::native_region_slug(&f.name),
+        active_region_id: None,
         locals,
         local_types,
         current_block: 0,
+        discard_expr_value: false,
         func_names,
         strings,
         loop_targets: Vec::new(),
@@ -234,12 +240,23 @@ pub(super) fn compile_function(
         clamp3_functions: &cross_module.clamp3_functions,
         clamp_u8_functions: &cross_module.clamp_u8_functions,
         integer_returning_functions: &cross_module.returns_int_functions,
+        i32_identity_functions: &cross_module.i32_identity_functions,
         was_unrolled: f.was_unrolled,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
         typed_parse_rodata: Vec::new(),
         typed_parse_counter: 0,
         buffer_data_slots: HashMap::new(),
+        buffer_view_slots: HashMap::new(),
+        disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
+        min_length_bounds: HashMap::new(),
+        bounded_buffer_index_pairs: Vec::new(),
+        buffer_hazard_reasons: HashMap::new(),
+        native_i32_aliases: HashMap::new(),
+        int_range_aliases: HashMap::new(),
+        int_range_facts: Vec::new(),
+        nonnegative_integer_locals: HashSet::new(),
+        native_rep_records: Vec::new(),
         known_noalias_buffer_locals: &hir_facts.known_noalias_buffer_locals,
         buffer_alias_base,
     };
@@ -283,7 +300,18 @@ pub(super) fn compile_function(
         let buf_slot = ctx.func.alloca_entry(PTR);
         ctx.block().store(PTR, &data_ptr, &buf_slot);
         let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
-        ctx.buffer_data_slots.insert(p.id, (buf_slot, scope_idx));
+        ctx.buffer_data_slots
+            .insert(p.id, (buf_slot.clone(), scope_idx));
+        ctx.buffer_view_slots.insert(
+            p.id,
+            BufferViewSlot {
+                data_slot: buf_slot,
+                scope_idx: Some(scope_idx),
+                elem: BufferElem::U8,
+                alias: AliasState::Unknown,
+                length_source: Some(LengthSource::Unknown),
+            },
+        );
     }
 
     stmt::lower_top_level_stmts(&mut ctx, &f.body)
@@ -312,9 +340,11 @@ pub(super) fn compile_function(
     let ic_end = ctx.ic_site_counter;
     let pending = std::mem::take(&mut ctx.pending_declares);
     let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
+    let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
     drop(ctx); // releases &mut LlFunction borrow on llmod
     llmod.ic_counter = ic_end;
     llmod.buffer_alias_counter += buffer_alias_used;
+    llmod.native_rep_records.extend(native_rep_records);
     for (name, ret, params) in pending {
         llmod.declare_function(&name, ret, &params);
     }

@@ -5,6 +5,7 @@ use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
 
 use super::{lower_expr, FlatConstInfo, FnCtx};
+use crate::native_value::{ExpectedNativeRep, LoweredValue, NativeRep, SemanticKind};
 use crate::types::{DOUBLE, I32};
 
 /// Returns true if `e` is guaranteed to produce a finite double value
@@ -102,6 +103,7 @@ pub(crate) fn try_lower_flat_const_index_get(
         ctx.clamp3_functions,
         ctx.clamp_u8_functions,
         ctx.integer_returning_functions,
+        ctx.i32_identity_functions,
     ) {
         lower_expr_as_i32(ctx, &row_expr)?
     } else {
@@ -117,6 +119,7 @@ pub(crate) fn try_lower_flat_const_index_get(
         ctx.clamp3_functions,
         ctx.clamp_u8_functions,
         ctx.integer_returning_functions,
+        ctx.i32_identity_functions,
     ) {
         lower_expr_as_i32(ctx, &col_expr)?
     } else {
@@ -200,6 +203,7 @@ pub(crate) fn can_lower_expr_as_i32(
     clamp3_fns: &std::collections::HashSet<u32>,
     clamp_u8_fns: &std::collections::HashSet<u32>,
     integer_returning_fns: &std::collections::HashSet<u32>,
+    i32_identity_fns: &std::collections::HashSet<u32>,
 ) -> bool {
     match e {
         Expr::Integer(n) => i32::try_from(*n).is_ok(),
@@ -215,6 +219,7 @@ pub(crate) fn can_lower_expr_as_i32(
                 clamp3_fns,
                 clamp_u8_fns,
                 integer_returning_fns,
+                i32_identity_fns,
             ) && can_lower_expr_as_i32(
                 b,
                 i32_slots,
@@ -224,6 +229,7 @@ pub(crate) fn can_lower_expr_as_i32(
                 clamp3_fns,
                 clamp_u8_fns,
                 integer_returning_fns,
+                i32_identity_fns,
             )
         }
         Expr::Binary {
@@ -246,6 +252,7 @@ pub(crate) fn can_lower_expr_as_i32(
                     clamp3_fns,
                     clamp_u8_fns,
                     integer_returning_fns,
+                    i32_identity_fns,
                 ) && can_lower_expr_as_i32(
                     div_r,
                     i32_slots,
@@ -255,6 +262,7 @@ pub(crate) fn can_lower_expr_as_i32(
                     clamp3_fns,
                     clamp_u8_fns,
                     integer_returning_fns,
+                    i32_identity_fns,
                 )
             } else {
                 can_lower_expr_as_i32(
@@ -266,6 +274,7 @@ pub(crate) fn can_lower_expr_as_i32(
                     clamp3_fns,
                     clamp_u8_fns,
                     integer_returning_fns,
+                    i32_identity_fns,
                 )
             }
         }
@@ -292,6 +301,7 @@ pub(crate) fn can_lower_expr_as_i32(
                 clamp3_fns,
                 clamp_u8_fns,
                 integer_returning_fns,
+                i32_identity_fns,
             ) && can_lower_expr_as_i32(
                 right,
                 i32_slots,
@@ -301,6 +311,7 @@ pub(crate) fn can_lower_expr_as_i32(
                 clamp3_fns,
                 clamp_u8_fns,
                 integer_returning_fns,
+                i32_identity_fns,
             )
         }
         Expr::Call { callee, args, .. } => {
@@ -309,6 +320,13 @@ pub(crate) fn can_lower_expr_as_i32(
                     || (clamp_u8_fns.contains(fid) && args.len() == 1)
                     || integer_returning_fns.contains(fid)
                 {
+                    if integer_returning_fns.contains(fid)
+                        && !clamp3_fns.contains(fid)
+                        && !clamp_u8_fns.contains(fid)
+                        && !i32_identity_fns.contains(fid)
+                    {
+                        return false;
+                    }
                     return args.iter().all(|a| {
                         can_lower_expr_as_i32(
                             a,
@@ -319,6 +337,7 @@ pub(crate) fn can_lower_expr_as_i32(
                             clamp3_fns,
                             clamp_u8_fns,
                             integer_returning_fns,
+                            i32_identity_fns,
                         )
                     });
                 }
@@ -339,24 +358,63 @@ pub(crate) fn can_lower_expr_as_i32(
     }
 }
 
+/// Typed native-expression lowering entry point. It deliberately returns a
+/// `LoweredValue` so callers keep the JS semantic meaning separate from the
+/// LLVM representation chosen for the hot path.
+pub(crate) fn lower_expr_native(
+    ctx: &mut FnCtx<'_>,
+    e: &Expr,
+    expected: ExpectedNativeRep,
+) -> Result<LoweredValue> {
+    match expected {
+        ExpectedNativeRep::I32 => lower_expr_native_i32(ctx, e),
+    }
+}
+
 /// (Issue #49) Lower `e` as an i32 SSA value. Must be called only after
 /// `can_lower_expr_as_i32` returned true for the same expression.
 pub(crate) fn lower_expr_as_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String> {
+    Ok(lower_expr_native(ctx, e, ExpectedNativeRep::I32)?.value)
+}
+
+fn i32_lowered(value: String) -> LoweredValue {
+    LoweredValue {
+        semantic: SemanticKind::JsNumber,
+        rep: NativeRep::I32,
+        llvm_ty: I32,
+        value,
+    }
+}
+
+fn native_expr_kind(e: &Expr) -> &'static str {
     match e {
-        Expr::Integer(n) => Ok((*n as i32).to_string()),
+        Expr::Integer(_) => "Integer",
+        Expr::LocalGet(_) => "LocalGet",
+        Expr::MathImul(_, _) => "MathImul",
+        Expr::Binary { .. } => "Binary",
+        Expr::Call { .. } => "Call",
+        Expr::Uint8ArrayGet { .. } => "Uint8ArrayGet",
+        Expr::BufferIndexGet { .. } => "BufferIndexGet",
+        _ => "Expr",
+    }
+}
+
+fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let value = match e {
+        Expr::Integer(n) => (*n as i32).to_string(),
         Expr::LocalGet(id) => {
             if let Some(slot) = ctx.i32_counter_slots.get(id).cloned() {
-                Ok(ctx.block().load(I32, &slot))
+                ctx.block().load(I32, &slot)
             } else {
                 let d = lower_expr(ctx, e)?;
-                Ok(ctx.block().fptosi(DOUBLE, &d, I32))
+                ctx.block().fptosi(DOUBLE, &d, I32)
             }
         }
         // Math.imul(a, b) → single `mul i32` instruction.
         Expr::MathImul(a, b) => {
-            let l = lower_expr_as_i32(ctx, a)?;
-            let r = lower_expr_as_i32(ctx, b)?;
-            Ok(ctx.block().mul(I32, &l, &r))
+            let l = lower_expr_native_i32(ctx, a)?.value;
+            let r = lower_expr_native_i32(ctx, b)?.value;
+            ctx.block().mul(I32, &l, &r)
         }
         Expr::Binary {
             op: BinaryOp::BitOr,
@@ -369,11 +427,11 @@ pub(crate) fn lower_expr_as_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String>
                 right: div_r,
             } = left.as_ref()
             {
-                let a = lower_expr_as_i32(ctx, div_l)?;
-                let b = lower_expr_as_i32(ctx, div_r)?;
-                Ok(ctx.block().sdiv(I32, &a, &b))
+                let a = lower_expr_native_i32(ctx, div_l)?.value;
+                let b = lower_expr_native_i32(ctx, div_r)?.value;
+                ctx.block().sdiv(I32, &a, &b)
             } else {
-                lower_expr_as_i32(ctx, left)
+                lower_expr_native_i32(ctx, left)?.value
             }
         }
         Expr::Binary { op, left, right }
@@ -390,10 +448,10 @@ pub(crate) fn lower_expr_as_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String>
                     | BinaryOp::UShr
             ) =>
         {
-            let l = lower_expr_as_i32(ctx, left)?;
-            let r = lower_expr_as_i32(ctx, right)?;
+            let l = lower_expr_native_i32(ctx, left)?.value;
+            let r = lower_expr_native_i32(ctx, right)?.value;
             let blk = ctx.block();
-            Ok(match op {
+            match op {
                 BinaryOp::Add => blk.add(I32, &l, &r),
                 BinaryOp::Sub => blk.sub(I32, &l, &r),
                 BinaryOp::Mul => blk.mul(I32, &l, &r),
@@ -404,7 +462,7 @@ pub(crate) fn lower_expr_as_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String>
                 BinaryOp::Shr => blk.ashr(I32, &l, &r),
                 BinaryOp::UShr => blk.lshr(I32, &l, &r),
                 _ => unreachable!(),
-            })
+            }
         }
         // Clamp-pattern calls: emit @llvm.smax.i32 / @llvm.smin.i32 directly
         // in i32, no double round-trip. Produces vectorizable IR.
@@ -415,9 +473,9 @@ pub(crate) fn lower_expr_as_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String>
                 0
             };
             if ctx.clamp3_functions.contains(&fid) && args.len() == 3 {
-                let v = lower_expr_as_i32(ctx, &args[0])?;
-                let lo = lower_expr_as_i32(ctx, &args[1])?;
-                let hi = lower_expr_as_i32(ctx, &args[2])?;
+                let v = lower_expr_native_i32(ctx, &args[0])?.value;
+                let lo = lower_expr_native_i32(ctx, &args[1])?.value;
+                let hi = lower_expr_native_i32(ctx, &args[2])?.value;
                 let blk = ctx.block();
                 let r1 = blk.fresh_reg();
                 blk.emit_raw(format!(
@@ -429,10 +487,9 @@ pub(crate) fn lower_expr_as_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String>
                     "{} = call i32 @llvm.smin.i32(i32 {}, i32 {})",
                     r2, r1, hi
                 ));
-                return Ok(r2);
-            }
-            if ctx.clamp_u8_functions.contains(&fid) && args.len() == 1 {
-                let v = lower_expr_as_i32(ctx, &args[0])?;
+                r2
+            } else if ctx.clamp_u8_functions.contains(&fid) && args.len() == 1 {
+                let v = lower_expr_native_i32(ctx, &args[0])?.value;
                 let blk = ctx.block();
                 let r1 = blk.fresh_reg();
                 blk.emit_raw(format!(
@@ -444,17 +501,41 @@ pub(crate) fn lower_expr_as_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String>
                     "{} = call i32 @llvm.smin.i32(i32 {}, i32 255)",
                     r2, r1
                 ));
-                return Ok(r2);
+                r2
+            } else if ctx.i32_identity_functions.contains(&fid) && args.len() == 1 {
+                lower_expr_native_i32(ctx, &args[0])?.value
+            } else {
+                // Non-clamp integer-returning helpers still route through the
+                // typed lowering decision. The callee is marked alwaysinline
+                // elsewhere, so optimized IR can still collapse this ABI bridge.
+                let d = lower_expr(ctx, e)?;
+                ctx.block().fptosi(DOUBLE, &d, I32)
             }
-            // Non-clamp Call: fall through to default.
-            let d = lower_expr(ctx, e)?;
-            Ok(ctx.block().fptosi(DOUBLE, &d, I32))
         }
-        // Fallback for Uint8ArrayGet / BufferIndexGet and other expressions:
-        // lower via the existing double path and `fptosi` back to i32.
+        Expr::Uint8ArrayGet { array, index } => {
+            super::arrays_finds::lower_uint8array_get_i32(ctx, array, index)?.value
+        }
+        Expr::BufferIndexGet { buffer, index } => {
+            super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?.value
+        }
+        // Fallback for other expressions.
         _ => {
             let d = lower_expr(ctx, e)?;
-            Ok(ctx.block().fptosi(DOUBLE, &d, I32))
+            ctx.block().fptosi(DOUBLE, &d, I32)
         }
-    }
+    };
+    let lowered = i32_lowered(value);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_i32",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
 }

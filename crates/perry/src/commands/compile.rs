@@ -1362,10 +1362,19 @@ pub fn run_with_parse_cache(
 
     // V2.2: Per-module object cache at `.perry-cache/objects/<target>/<key>.o`.
     // Disabled when the user passed `--no-cache`, when `PERRY_NO_CACHE=1`, or
-    // when we're in bitcode-link mode (the artifacts aren't object files).
+    // when we're in bitcode-link mode (the artifacts aren't object files), or
+    // when native-region verification is enabled and lowering must run.
     // Key derivation: `compute_object_cache_key(opts, source_hash, perry_version)`.
     let cache_env_disabled = std::env::var("PERRY_NO_CACHE").ok().as_deref() == Some("1");
-    let cache_enabled = !args.no_cache && !cache_env_disabled && !bitcode_link;
+    let verify_native_regions = args.verify_native_regions
+        || std::env::var("PERRY_VERIFY_NATIVE_REGIONS").ok().as_deref() == Some("1");
+    let disable_buffer_fast_path = args.disable_buffer_fast_path
+        || std::env::var("PERRY_DISABLE_BUFFER_FAST_PATH")
+            .ok()
+            .as_deref()
+            == Some("1");
+    let cache_enabled =
+        !args.no_cache && !cache_env_disabled && !bitcode_link && !verify_native_regions;
     // Target dir name for the cache layout. Using the resolved LLVM triple
     // keeps cross-compile caches from colliding with native-host caches.
     let cache_target_dir = target.as_deref().unwrap_or("host");
@@ -3313,6 +3322,8 @@ pub fn run_with_parse_cache(
                 namespace_v8_specifiers,
                 namespace_member_prefixes,
                 emit_ir_only: bitcode_link,
+                verify_native_regions,
+                disable_buffer_fast_path,
                 namespace_imports,
                 namespace_reexport_named_imports,
                 imported_classes,

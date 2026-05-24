@@ -19,6 +19,7 @@ pub(crate) mod lower_conditional;
 pub(crate) mod lower_string_method;
 pub mod module;
 pub mod nanbox;
+pub(crate) mod native_value;
 pub mod runtime_decls;
 pub(crate) mod stmt;
 pub mod strings;

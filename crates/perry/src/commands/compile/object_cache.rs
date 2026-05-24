@@ -142,6 +142,18 @@ pub fn compute_object_cache_key(
     // doesn't usually move between rebuilds.
     h.field("build_id", &format!("{:016x}", perry_build_id()));
     h.field("ir_only", if opts.emit_ir_only { "1" } else { "0" });
+    h.field(
+        "verify_native_regions",
+        if opts.verify_native_regions { "1" } else { "0" },
+    );
+    h.field(
+        "disable_buffer_fast_path",
+        if opts.disable_buffer_fast_path {
+            "1"
+        } else {
+            "0"
+        },
+    );
 
     // HIR fingerprint (issue #686). Computed by
     // `perry_hir::stable_hash::hash_module` over the post-transform HIR
@@ -670,6 +682,8 @@ mod object_cache_tests {
             namespace_v8_specifiers: std::collections::HashMap::new(),
             namespace_member_prefixes: std::collections::HashMap::new(),
             emit_ir_only: false,
+            verify_native_regions: false,
+            disable_buffer_fast_path: false,
             namespace_imports: Vec::new(),
             namespace_reexport_named_imports: std::collections::HashSet::new(),
             imported_classes: Vec::new(),

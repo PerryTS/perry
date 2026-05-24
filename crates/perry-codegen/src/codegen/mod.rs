@@ -784,6 +784,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     }
 
     // Build the cross-module context bundle from CompileOptions.
+    let disable_buffer_fast_path = opts.disable_buffer_fast_path
+        || std::env::var("PERRY_DISABLE_BUFFER_FAST_PATH")
+            .ok()
+            .as_deref()
+            == Some("1");
     let cross_module = CrossModuleCtx {
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
         namespace_reexport_named_imports: opts.namespace_reexport_named_imports.clone(),
@@ -859,6 +864,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .filter(|f| crate::collectors::returns_integer(f))
             .map(|f| f.id)
             .collect(),
+        i32_identity_functions: hir
+            .functions
+            .iter()
+            .filter(|f| crate::collectors::returns_i32_identity_arg(f))
+            .map(|f| f.id)
+            .collect(),
+        disable_buffer_fast_path,
         flat_const_arrays: {
             // Issue #50: fold module-level `const X: number[][] = [[int, ...], ...]`
             // into a flat `[N x i32]` LLVM constant so `X[i][j]` / `krow[j]` can
@@ -1936,6 +1948,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let total_buffer_scopes = llmod.buffer_alias_counter;
     emit_buffer_alias_metadata(&mut llmod, total_buffer_scopes);
 
+    let verify_native_regions = opts.verify_native_regions
+        || std::env::var("PERRY_VERIFY_NATIVE_REGIONS").ok().as_deref() == Some("1");
+    if verify_native_regions {
+        crate::native_value::verify_native_rep_records(&llmod.native_rep_records)?;
+    }
+
     let ll_text = llmod.to_ir();
     log::debug!(
         "perry-codegen: emitted {} bytes of LLVM IR for '{}' ({} interned strings)",
@@ -1948,6 +1966,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         let filename = format!("{}/{}.ll", save_dir, module_prefix);
         let _ = std::fs::write(&filename, &ll_text);
     }
+    crate::native_value::write_native_rep_artifact_if_enabled(
+        &hir.name,
+        &llmod.native_rep_records,
+    )?;
     if opts.emit_ir_only {
         Ok(ll_text.into_bytes())
     } else {

@@ -276,6 +276,25 @@ jobs:
             --gate \
             --print-summary
 
+      - name: Gate H1 native representation compiler output
+        run: |
+          python3 scripts/compiler_output_regression.py capture \
+            --perry target/debug/perry \
+            --workload h1_native_rep_equivalence \
+            --benchmark-mode smoke \
+            --runs 1 \
+            --perf-counters off \
+            --gate \
+            --print-summary
+          python3 scripts/compiler_output_regression.py capture \
+            --perry target/debug/perry \
+            --workload h1_buffer_alias_negative \
+            --benchmark-mode smoke \
+            --runs 1 \
+            --perf-counters off \
+            --gate \
+            --print-summary
+
       - name: Gate FP contraction modes
         run: |
           python3 scripts/compiler_output_regression.py capture \

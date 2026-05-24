@@ -169,6 +169,35 @@ pub fn returns_integer(f: &Function) -> bool {
     }
     returns_int_stmts(&f.body)
 }
+
+pub fn returns_i32_identity_arg(f: &Function) -> bool {
+    if f.is_async || f.is_generator || f.params.len() != 1 {
+        return false;
+    }
+    if !matches!(f.return_type, perry_types::Type::Number) {
+        return false;
+    }
+    let param_id = f.params[0].id;
+    matches!(
+        f.body.as_slice(),
+        [Stmt::Return(Some(expr))] if returns_i32_identity_expr(expr, param_id)
+    )
+}
+
+fn returns_i32_identity_expr(expr: &Expr, param_id: u32) -> bool {
+    match expr {
+        Expr::LocalGet(id) => *id == param_id,
+        Expr::Binary {
+            op: BinaryOp::BitOr,
+            left,
+            right,
+        } if matches!(right.as_ref(), Expr::Integer(0)) => {
+            returns_i32_identity_expr(left, param_id)
+        }
+        _ => false,
+    }
+}
+
 pub fn returns_int_stmts(ss: &[Stmt]) -> bool {
     for s in ss {
         match s {

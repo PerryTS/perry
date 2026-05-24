@@ -3,6 +3,9 @@
 use super::*;
 
 use crate::expr::lower_expr_with_expected_type;
+use crate::native_value::{
+    AliasState, BufferElem, BufferViewSlot, LengthSource, MaterializationReason,
+};
 use crate::types::{I32, I64, I8, PTR};
 
 pub(crate) fn lower_let(
@@ -25,6 +28,15 @@ pub(crate) fn lower_let(
     // class-alias chain resolution below (and any other site
     // that needs id → name) can use it.
     ctx.local_id_to_name.insert(id, name.to_string());
+    if let Some(init_expr) = init {
+        if let Some(source_id) = native_i32_alias_source(init_expr) {
+            ctx.native_i32_aliases.insert(id, source_id);
+        }
+        if let Some(buffer_ids) = math_min_length_buffer_ids(init_expr) {
+            ctx.min_length_bounds.insert(id, buffer_ids);
+        }
+    }
+    crate::expr::record_int_facts_for_let(ctx, id, init, mutable);
     // Class alias detection. Two shapes:
     //
     //   (a) `let C = SomeClass` — init is `Expr::ClassRef("SomeClass")`
@@ -479,7 +491,25 @@ pub(crate) fn lower_let(
                 let slot = ctx.func.alloca_entry(PTR);
                 ctx.block().store(PTR, &data_ptr, &slot);
                 let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
-                ctx.buffer_data_slots.insert(id, (slot, scope_idx));
+                ctx.buffer_data_slots.insert(id, (slot.clone(), scope_idx));
+                ctx.buffer_view_slots.insert(
+                    id,
+                    BufferViewSlot {
+                        data_slot: slot,
+                        scope_idx: Some(scope_idx),
+                        elem: BufferElem::U8,
+                        alias: AliasState::NoAliasProven,
+                        length_source: Some(buffer_alloc_length_source(init_expr)),
+                    },
+                );
+            }
+            if let Some(source_id) = buffer_local_alias_source(init_expr) {
+                crate::expr::alias_buffer_view_slot(
+                    ctx,
+                    id,
+                    source_id,
+                    MaterializationReason::UnknownAlias,
+                );
             }
         }
         return Ok(());
@@ -669,6 +699,7 @@ pub(crate) fn lower_let(
                 ctx.clamp3_functions,
                 ctx.clamp_u8_functions,
                 ctx.integer_returning_functions,
+                ctx.i32_identity_functions,
             ) {
                 let i32_v = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 let blk = ctx.block();
@@ -758,7 +789,26 @@ pub(crate) fn lower_let(
             let buf_slot = ctx.func.alloca_entry(PTR);
             ctx.block().store(PTR, &data_ptr, &buf_slot);
             let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
-            ctx.buffer_data_slots.insert(id, (buf_slot, scope_idx));
+            ctx.buffer_data_slots
+                .insert(id, (buf_slot.clone(), scope_idx));
+            ctx.buffer_view_slots.insert(
+                id,
+                BufferViewSlot {
+                    data_slot: buf_slot,
+                    scope_idx: Some(scope_idx),
+                    elem: BufferElem::U8,
+                    alias: AliasState::NoAliasProven,
+                    length_source: Some(buffer_alloc_length_source(init_expr)),
+                },
+            );
+        }
+        if let Some(source_id) = buffer_local_alias_source(init_expr) {
+            crate::expr::alias_buffer_view_slot(
+                ctx,
+                id,
+                source_id,
+                MaterializationReason::UnknownAlias,
+            );
         }
     } else if let Some(cv) = ctx.compile_time_constants.get(&id) {
         // Compile-time constants (e.g. `declare const __platform__: number`)
@@ -769,6 +819,99 @@ pub(crate) fn lower_let(
         ctx.block().store(DOUBLE, &lit, &slot);
     }
     Ok(())
+}
+
+fn native_i32_alias_source(expr: &perry_hir::Expr) -> Option<u32> {
+    match expr {
+        perry_hir::Expr::Binary {
+            op: perry_hir::BinaryOp::BitOr,
+            left,
+            right,
+        } if matches!(right.as_ref(), perry_hir::Expr::Integer(0)) => match left.as_ref() {
+            perry_hir::Expr::LocalGet(id) => Some(*id),
+            _ => native_i32_alias_source(left),
+        },
+        perry_hir::Expr::LocalGet(id) => Some(*id),
+        _ => None,
+    }
+}
+
+fn buffer_local_alias_source(expr: &perry_hir::Expr) -> Option<u32> {
+    match expr {
+        perry_hir::Expr::LocalGet(id) => Some(*id),
+        _ => None,
+    }
+}
+
+fn math_min_length_buffer_ids(expr: &perry_hir::Expr) -> Option<Vec<u32>> {
+    let perry_hir::Expr::MathMin(args) = expr else {
+        return None;
+    };
+    if args.len() < 2 {
+        return None;
+    }
+    let mut out = Vec::new();
+    for arg in args {
+        if let Some(id) = length_of_local_buffer_id(arg) {
+            out.push(id);
+        } else {
+            return None;
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    (!out.is_empty()).then_some(out)
+}
+
+fn length_of_local_buffer_id(expr: &perry_hir::Expr) -> Option<u32> {
+    match expr {
+        perry_hir::Expr::Uint8ArrayLength(inner) | perry_hir::Expr::BufferLength(inner) => {
+            match inner.as_ref() {
+                perry_hir::Expr::LocalGet(id) => Some(*id),
+                _ => None,
+            }
+        }
+        perry_hir::Expr::PropertyGet { object, property } if property == "length" => {
+            match object.as_ref() {
+                perry_hir::Expr::LocalGet(id) => Some(*id),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn buffer_alloc_length_source(expr: &perry_hir::Expr) -> LengthSource {
+    let len = match expr {
+        perry_hir::Expr::BufferAlloc { size, .. } => Some(size.as_ref()),
+        perry_hir::Expr::BufferAllocUnsafe(size) => Some(size.as_ref()),
+        perry_hir::Expr::Uint8ArrayNew(Some(size)) => Some(size.as_ref()),
+        _ => None,
+    };
+    len.and_then(length_source_from_expr)
+        .unwrap_or(LengthSource::Unknown)
+}
+
+fn length_source_from_expr(expr: &perry_hir::Expr) -> Option<LengthSource> {
+    match expr {
+        perry_hir::Expr::Integer(n) => Some(LengthSource::Constant(*n)),
+        perry_hir::Expr::LocalGet(id) => Some(LengthSource::Local { id: *id, addend: 0 }),
+        perry_hir::Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left,
+            right,
+        } => match (left.as_ref(), right.as_ref()) {
+            (perry_hir::Expr::LocalGet(id), perry_hir::Expr::Integer(addend))
+            | (perry_hir::Expr::Integer(addend), perry_hir::Expr::LocalGet(id)) => {
+                Some(LengthSource::Local {
+                    id: *id,
+                    addend: *addend,
+                })
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Extract all field names (parent chain + own) and the constructor for

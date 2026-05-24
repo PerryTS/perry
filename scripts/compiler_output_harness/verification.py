@@ -198,6 +198,326 @@ def _counter_check_passes(counters: dict[str, Any], check: dict[str, Any]) -> tu
     return bool(value), value
 
 
+def _flatten_native_records(native_reps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for artifact in native_reps or []:
+        for record in artifact.get("records", []) or []:
+            if isinstance(record, dict):
+                records.append(record)
+    return records
+
+
+def _state_name(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and value:
+        return next(iter(value.keys()))
+    return ""
+
+
+def _bounds_allows_inbounds(value: Any) -> bool:
+    return _state_name(value) in {"proven", "guarded"}
+
+
+def _alias_allows_noalias(value: Any) -> bool:
+    return _state_name(value) in {"no_alias_proven", "no_alias_guarded"}
+
+
+def _access_mode_name(value: Any) -> str:
+    return _state_name(value)
+
+
+def _is_unchecked_native_unknown_bounds(record: dict[str, Any]) -> bool:
+    return (
+        _access_mode_name(record.get("access_mode")) == "unchecked_native"
+        and not _bounds_allows_inbounds(record.get("bounds_state"))
+    )
+
+
+def _is_dynamic_fallback(record: dict[str, Any]) -> bool:
+    return _access_mode_name(record.get("access_mode")) == "dynamic_fallback"
+
+
+def _records_for_region(
+    records: list[dict[str, Any]], named_regions: dict[str, Any], region: str
+) -> list[dict[str, Any]]:
+    region_info = (named_regions.get(region, {}) or {})
+    block_keys = {
+        (entry.get("function") or "", entry.get("label") or "")
+        for entry in region_info.get("block_keys", []) or []
+        if isinstance(entry, dict)
+    }
+    if block_keys:
+        return [
+            record
+            for record in records
+            if (record.get("function") or "", record.get("block_label") or "")
+            in block_keys
+        ]
+    labels = set(region_info.get("labels", []) or [])
+    return [record for record in records if record.get("block_label") in labels]
+
+
+def native_rep_contract_results(
+    workload: str,
+    records: list[dict[str, Any]],
+    named_regions: dict[str, Any],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+
+    def add(name: str, passed: bool, detail: str) -> None:
+        results.append({"name": name, "passed": passed, "detail": detail})
+
+    def expected_region_id(region: str) -> str | None:
+        for region_spec in WORKLOADS.get(workload, {}).get("named_regions", []) or []:
+            if region_spec.get("name") == region:
+                value = region_spec.get("native_region_id")
+                return str(value) if value else None
+        return None
+
+    def records_for_native_region(region: str) -> list[dict[str, Any]]:
+        region_id = expected_region_id(region)
+        if region_id:
+            return [r for r in records if r.get("region_id") == region_id]
+        return _records_for_region(records, named_regions, region)
+
+    unsafe_inbounds = [
+        r
+        for r in records
+        if r.get("emitted_inbounds") and not _bounds_allows_inbounds(r.get("bounds_state"))
+    ]
+    unsafe_noalias = [
+        r
+        for r in records
+        if r.get("emitted_noalias") and not _alias_allows_noalias(r.get("alias_state"))
+    ]
+    unchecked_unknown_bounds = [
+        r for r in records if _is_unchecked_native_unknown_bounds(r)
+    ]
+    if workload.startswith("h1_"):
+        add("native_reps_artifact_present", bool(records), f"records={len(records)}")
+        add(
+            "native_reps_no_unsafe_inbounds_claims",
+            not unsafe_inbounds,
+            json.dumps(unsafe_inbounds[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_no_unsafe_noalias_claims",
+            not unsafe_noalias,
+            json.dumps(unsafe_noalias[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_no_unchecked_unknown_bounds",
+            not unchecked_unknown_bounds,
+            json.dumps(unchecked_unknown_bounds[:5], sort_keys=True),
+        )
+
+    if workload == "h1_native_rep_equivalence":
+        for region in ("direct_bounded", "local_cast", "helper_index"):
+            region_records = records_for_native_region(region)
+            rep_names = {r.get("native_rep_name") for r in region_records}
+            consumers = " ".join(str(r.get("consumer", "")) for r in region_records)
+            materializations = [r for r in region_records if r.get("materialization_reason")]
+            add(
+                f"native_reps_{region}_has_i32_index",
+                "i32" in rep_names,
+                f"{region} reps={sorted(rep_names)}",
+            )
+            add(
+                f"native_reps_{region}_has_buffer_view",
+                "buffer_view" in rep_names,
+                f"{region} reps={sorted(rep_names)}",
+            )
+            add(
+                f"native_reps_{region}_has_u8_conversion",
+                "u8_load_zext_i32" in consumers and "u8_store_trunc_i32" in consumers,
+                f"{region} consumers={consumers}",
+            )
+            add(
+                f"native_reps_{region}_no_materialization",
+                not materializations,
+                f"{region} materializations={json.dumps(materializations[:5], sort_keys=True)}",
+            )
+            bounded = [
+                r
+                for r in region_records
+                if r.get("native_rep_name") in {"buffer_view", "u8"}
+                and _bounds_allows_inbounds(r.get("bounds_state"))
+            ]
+            add(
+                f"native_reps_{region}_bounds_proven_or_guarded",
+                bool(bounded),
+                f"{region} bounded_records={len(bounded)}",
+            )
+
+        same_region_records = records_for_native_region("same_buffer")
+        if not same_region_records:
+            same_region_records = [
+                r
+                for r in records
+                if "incInPlace" in str(r.get("function", ""))
+                and r.get("block_label") == "for.body.2"
+            ]
+        same_records = [
+            r
+            for r in same_region_records
+            if r.get("native_rep_name") in {"buffer_view", "u8"}
+            and _state_name(r.get("alias_state")) in {"unknown", "may_alias", ""}
+            and not r.get("emitted_noalias")
+        ]
+        same_reps = {r.get("native_rep_name") for r in same_records}
+        same_noalias = [r for r in same_region_records if r.get("emitted_noalias")]
+        add(
+            "native_reps_same_buffer_has_raw_buffer_view",
+            "buffer_view" in same_reps and "u8" in same_reps,
+            f"same_buffer reps={sorted(same_reps)}",
+        )
+        add(
+            "native_reps_same_buffer_denies_noalias",
+            not same_noalias,
+            json.dumps(same_noalias[:5], sort_keys=True),
+        )
+
+    if workload == "h1_buffer_alias_negative":
+        def records_in_function(fragment: str) -> list[dict[str, Any]]:
+            return [
+                r
+                for r in records
+                if fragment in str(r.get("function", ""))
+            ]
+
+        def denied_alias(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                r
+                for r in rows
+                if r.get("native_rep_name") in {"buffer_view", "u8"}
+                and _state_name(r.get("alias_state")) in {"unknown", "may_alias", ""}
+                and not r.get("emitted_noalias")
+            ]
+
+        def denied_bounds(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                r
+                for r in rows
+                if r.get("native_rep_name") in {"buffer_view", "u8", "i32", "js_value"}
+                and _state_name(r.get("bounds_state")) in {"unknown", ""}
+                and _is_dynamic_fallback(r)
+            ]
+
+        def fallback_access(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                r
+                for r in rows
+                if r.get("native_rep_name") in {"buffer_view", "u8", "i32", "js_value"}
+                and _is_dynamic_fallback(r)
+            ]
+
+        def unchecked_native_access(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                r
+                for r in rows
+                if _access_mode_name(r.get("access_mode")) == "unchecked_native"
+            ]
+
+        denied_noalias = [
+            r
+            for r in records
+            if r.get("native_rep_name") in {"buffer_view", "u8"}
+            and _state_name(r.get("alias_state")) in {"unknown", "may_alias", ""}
+            and not r.get("emitted_noalias")
+        ]
+        denied_inbounds = [
+            r
+            for r in records
+            if r.get("native_rep_name") in {"buffer_view", "u8", "i32", "js_value"}
+            and _state_name(r.get("bounds_state")) in {"unknown", ""}
+            and _is_dynamic_fallback(r)
+        ]
+        reasons = {
+            _state_name(r.get("materialization_reason"))
+            or str(r.get("materialization_reason") or "")
+            for r in records
+            if r.get("materialization_reason")
+        }
+        add(
+            "native_reps_negative_denies_unsafe_noalias",
+            bool(denied_noalias),
+            f"denied_noalias_records={len(denied_noalias)}",
+        )
+        add(
+            "native_reps_negative_denies_unsafe_inbounds",
+            bool(denied_inbounds),
+            f"denied_inbounds_records={len(denied_inbounds)}",
+        )
+        add(
+            "native_reps_negative_reports_boundary_reason",
+            bool(reasons),
+            f"materialization_reasons={sorted(reasons)}",
+        )
+        alias_local_records = records_for_native_region("alias_local")
+        reassignment_records = records_for_native_region("reassignment_region")
+        unknown_call_escape_records = records_for_native_region("unknown_call_escape")
+        length_mismatch_records = records_for_native_region("length_mismatch")
+        length_mismatch_unchecked_unknown = [
+            r for r in length_mismatch_records if _is_unchecked_native_unknown_bounds(r)
+        ]
+        length_mismatch_dynamic_fallback_accesses = [
+            r
+            for r in length_mismatch_records
+            if _is_dynamic_fallback(r)
+            and (
+                str(r.get("expr_kind", "")).startswith(("BufferIndex", "Uint8Array"))
+                or "slow_path" in str(r.get("consumer", ""))
+            )
+        ]
+        hazard_checks = {
+            "alias_local": bool(denied_alias(alias_local_records))
+            or bool(fallback_access(alias_local_records))
+            or any(
+                _state_name(r.get("materialization_reason")) == "unknown_alias"
+                for r in alias_local_records
+            ),
+            "reassignment": bool(denied_bounds(reassignment_records))
+            or any(
+                _state_name(r.get("materialization_reason")) == "reassignment"
+                for r in records
+            ),
+            "unknown_call_escape": bool(denied_alias(unknown_call_escape_records))
+            or any(
+                _state_name(r.get("materialization_reason")) == "unknown_call_escape"
+                for r in records
+            ),
+            "closure_capture": any(
+                _state_name(r.get("materialization_reason")) == "closure_capture"
+                for r in records
+            ),
+            "shared_backing": bool(denied_bounds(records_in_function("sharedBacking")))
+            or not unchecked_native_access(records_in_function("sharedBacking")),
+            "length_mismatch": not length_mismatch_unchecked_unknown
+            and bool(length_mismatch_dynamic_fallback_accesses),
+        }
+        for hazard, passed in hazard_checks.items():
+            add(
+                f"native_reps_negative_{hazard}_access_denied",
+                passed,
+                json.dumps(hazard_checks, sort_keys=True),
+            )
+        add(
+            "native_reps_negative_length_mismatch_no_unchecked_unknown",
+            not length_mismatch_unchecked_unknown,
+            json.dumps(length_mismatch_unchecked_unknown[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_length_mismatch_has_dynamic_fallback",
+            bool(length_mismatch_dynamic_fallback_accesses),
+            json.dumps(length_mismatch_dynamic_fallback_accesses[:5], sort_keys=True),
+        )
+
+    return results
+
+
 def verify_artifacts(
     *,
     workload: str,
@@ -212,6 +532,7 @@ def verify_artifacts(
     target: str = "",
     clang_args: list[str] | None = None,
     expect_fma: str = "auto",
+    native_reps: list[dict[str, Any]] | None = None,
     workloads: dict[str, Any] = WORKLOADS,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
@@ -219,6 +540,7 @@ def verify_artifacts(
     workload_info = workloads.get(workload, {})
     named_regions = named_hot_regions(workload_info, ir_after)
     counters = counters or {}
+    native_records = _flatten_native_records(native_reps)
 
     def add(name: str, passed: bool, detail: str, severity: str = "error") -> None:
         checks.append(
@@ -239,7 +561,8 @@ def verify_artifacts(
 
     add(
         "no_dynamic_property_runtime",
-        not any(helper in ir_after for helper in DYNAMIC_PROPERTY_HELPERS),
+        bool(workload_info.get("allow_dynamic_property_runtime"))
+        or not any(helper in ir_after for helper in DYNAMIC_PROPERTY_HELPERS),
         "optimized IR has no dynamic property helper calls",
     )
     add(
@@ -282,12 +605,12 @@ def verify_artifacts(
     )
     add(
         "hot_loops_no_repeated_fptosi",
-        not loop_fptosi,
+        bool(workload_info.get("allow_hot_loop_conversions")) or not loop_fptosi,
         "hot loop fptosi counts: " + json.dumps(loop_fptosi, sort_keys=True),
     )
     add(
         "hot_loops_no_sitofp",
-        not loop_sitofp,
+        bool(workload_info.get("allow_hot_loop_conversions")) or not loop_sitofp,
         "hot loop sitofp counts: " + json.dumps(loop_sitofp, sort_keys=True),
     )
 
@@ -304,9 +627,11 @@ def verify_artifacts(
         add(check["name"], passed, f"{check.get('detail', check['name'])}: {observed}")
 
     for check in workload_info.get("ir_checks", []) or []:
+        section = check.get("section", "llvm_after")
+        text = ir_before if section == "llvm_before" else ir_after
         add(
             check["name"],
-            _text_check_passes(ir_after, check),
+            _text_check_passes(text, check),
             check.get("detail", check["name"]),
         )
 
@@ -384,6 +709,9 @@ def verify_artifacts(
     for result in named_region_contract_results(workload, named_regions, workloads):
         add(result["name"], bool(result["passed"]), result["detail"])
 
+    for result in native_rep_contract_results(workload, native_records, named_regions):
+        add(result["name"], bool(result["passed"]), result["detail"])
+
     vector_expectation = vectorization_expectation(workload, vectorization, workloads)
     add(
         "vectorization_expectation",
@@ -402,5 +730,8 @@ def verify_artifacts(
         "named_regions": named_regions,
         "named_region_contract_results": named_region_contract_results(
             workload, named_regions, workloads
+        ),
+        "native_rep_contract_results": native_rep_contract_results(
+            workload, native_records, named_regions
         ),
     }

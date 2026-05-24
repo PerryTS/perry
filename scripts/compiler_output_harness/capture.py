@@ -207,7 +207,7 @@ def capture(args: argparse.Namespace) -> int:
         stderr_path=compile_stderr,
     ).to_json()
 
-    kept_irs, kept_objects, kept_metadata = parse_kept_paths(
+    kept_irs, kept_objects, kept_metadata, kept_native_reps = parse_kept_paths(
         compile_stdout.read_text(encoding="utf-8")
         + "\n"
         + compile_stderr.read_text(encoding="utf-8")
@@ -248,6 +248,25 @@ def capture(args: argparse.Namespace) -> int:
 
     primary_object_artifact = Path(copied_objects[0]["object_artifact"])
     compile_metadata = copied_objects[0]["compile_plan_metadata"]
+
+    copied_native_reps: list[dict[str, Any]] = []
+    for index, path in enumerate(kept_native_reps):
+        if not path.exists():
+            continue
+        artifact = out_dir / f"native-reps-{index}.json"
+        shutil.copyfile(path, artifact)
+        if index == 0:
+            shutil.copyfile(path, out_dir / "native-reps.json")
+        copied_native_reps.append(
+            {
+                "index": index,
+                "retained_native_reps_path": str(path),
+                "native_reps_artifact": str(artifact),
+            }
+        )
+    native_reps = [
+        read_json(Path(row["native_reps_artifact"])) for row in copied_native_reps
+    ]
 
     ir_before = ir_before_path.read_text(encoding="utf-8")
     target = (
@@ -335,6 +354,7 @@ def capture(args: argparse.Namespace) -> int:
         target=str(target),
         clang_args=compile_clang_args,
         expect_fma=args.expect_fma,
+        native_reps=native_reps,
     )
 
     manifest = {
@@ -376,6 +396,7 @@ def capture(args: argparse.Namespace) -> int:
             "vectorization_remarks": str(opt_remarks_path),
             "binary": str(binary),
             "retained_objects": copied_objects,
+            "native_reps": copied_native_reps,
         },
         "benchmark": benchmark,
         "perf_stat": perf_stat,
@@ -446,6 +467,11 @@ def verify_existing(args: argparse.Namespace) -> int:
         target=str(target),
         clang_args=clang_args,
         expect_fma=args.expect_fma,
+        native_reps=(
+            [read_json(root / "native-reps.json")]
+            if (root / "native-reps.json").exists()
+            else []
+        ),
     )
     output = root / "structural-report.json"
     write_text(output, json.dumps(report, indent=2, sort_keys=True) + "\n")

@@ -67,6 +67,56 @@ main:
   retq
 """
 
+H1_MIN_IR = """
+define i32 @main() {
+entry:
+  br label %for.body.2
+for.body.2:
+  %i = load i32, ptr %slot
+  %ok = icmp slt i32 %i, %n
+  %p0 = getelementptr i8, ptr %src, i32 %i
+  %b = load i8, ptr %p0
+  store i8 %b, ptr %p0
+  br label %for.body.6
+for.body.6:
+  %p1 = getelementptr i8, ptr %src, i32 %i
+  %b1 = load i8, ptr %p1
+  store i8 %b1, ptr %p1
+  br label %for.body.10
+for.body.10:
+  %p2 = getelementptr i8, ptr %src, i32 %i
+  %b2 = load i8, ptr %p2
+  store i8 %b2, ptr %p2
+  br label %for.body.2.i
+for.body.2.i:
+  %p3 = getelementptr i8, ptr %src, i32 %i
+  %b3 = load i8, ptr %p3
+  store i8 %b3, ptr %p3
+  ret i32 0
+}
+"""
+
+
+def native_record(function="main", block="for.body.2", rep="i32", **overrides):
+    row = {
+        "function": function,
+        "block_label": block,
+        "region_id": None,
+        "source_function": "module_init",
+        "lowering_block": block,
+        "expr_kind": "test",
+        "native_rep_name": rep,
+        "consumer": "test",
+        "bounds_state": None,
+        "alias_state": None,
+        "access_mode": None,
+        "materialization_reason": None,
+        "emitted_inbounds": False,
+        "emitted_noalias": False,
+    }
+    row.update(overrides)
+    return row
+
 
 class CompilerOutputRegressionTests(unittest.TestCase):
     def test_image_convolution_good_shape_passes(self):
@@ -252,14 +302,16 @@ for.body.11:
             )
 
     def test_parse_kept_paths_includes_compile_metadata(self):
-        irs, objects, metadata = HARNESS.parse_kept_paths(
+        irs, objects, metadata, native_reps = HARNESS.parse_kept_paths(
             "[perry-codegen] kept LLVM IR: /tmp/a.ll\n"
             "[perry-codegen] kept object:  /tmp/a.o\n"
             "[perry-codegen] kept compile metadata: /tmp/a.o.compile-plan.json\n"
+            "[perry-codegen] kept native reps: /tmp/native-reps.json\n"
         )
         self.assertEqual(irs, [Path("/tmp/a.ll")])
         self.assertEqual(objects, [Path("/tmp/a.o")])
         self.assertEqual(metadata, [Path("/tmp/a.o.compile-plan.json")])
+        self.assertEqual(native_reps, [Path("/tmp/native-reps.json")])
 
     def test_runtime_counter_summary_combines_static_and_trace_counts(self):
         counters = HARNESS.structural_counters(
@@ -362,6 +414,204 @@ for.body.11:
                 "hir_fact_rewrite_no_buffer_slow_path" in error
                 for error in slow_report["errors"]
             )
+        )
+
+    def test_native_rep_unsafe_inbounds_fails_gate(self):
+        report = HARNESS.verify_artifacts(
+            workload="h1_native_rep_synthetic",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[
+                {
+                    "records": [
+                        native_record(
+                            rep="u8",
+                            bounds_state="unknown",
+                            emitted_inbounds=True,
+                        )
+                    ]
+                }
+            ],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any("native_reps_no_unsafe_inbounds_claims" in error for error in report["errors"])
+        )
+
+    def test_native_rep_unchecked_unknown_bounds_fails_gate(self):
+        report = HARNESS.verify_artifacts(
+            workload="h1_native_rep_synthetic",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[
+                {
+                    "records": [
+                        native_record(
+                            rep="u8",
+                            bounds_state="unknown",
+                            access_mode="unchecked_native",
+                        )
+                    ]
+                }
+            ],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any("native_reps_no_unchecked_unknown_bounds" in error for error in report["errors"])
+        )
+
+    def h1_alias_negative_records(self, length_records):
+        alias_region = "h1_buffer_alias_negative_ts.aliaslocal.alias_local"
+        reassignment_region = (
+            "h1_buffer_alias_negative_ts.reassignment.reassignment_region"
+        )
+        unknown_call_region = (
+            "h1_buffer_alias_negative_ts.unknowncallescape.unknown_call_escape"
+        )
+        return [
+            native_record(
+                function="aliasLocal",
+                rep="buffer_view",
+                region_id=alias_region,
+                bounds_state={"proven": {"proof": "loop_guard"}},
+                alias_state="may_alias",
+                access_mode="unchecked_native",
+            ),
+            native_record(
+                function="reassignment",
+                rep="i32",
+                region_id=reassignment_region,
+                bounds_state="unknown",
+                access_mode="dynamic_fallback",
+                expr_kind="BufferIndexGet",
+                consumer="BufferIndexGet.slow_path_i32",
+                materialization_reason="reassignment",
+            ),
+            native_record(
+                function="unknownCallEscape",
+                rep="buffer_view",
+                region_id=unknown_call_region,
+                bounds_state={"proven": {"proof": "loop_guard"}},
+                alias_state="may_alias",
+                access_mode="unchecked_native",
+                materialization_reason="unknown_call_escape",
+            ),
+            native_record(
+                function="closureCapture",
+                rep="js_value",
+                materialization_reason="closure_capture",
+            ),
+            native_record(
+                function="sharedBacking",
+                rep="i32",
+                bounds_state="unknown",
+                access_mode="dynamic_fallback",
+                expr_kind="BufferIndexGet",
+                consumer="BufferIndexGet.slow_path_i32",
+            ),
+            *length_records,
+        ]
+
+    def test_length_mismatch_unchecked_unknown_bounds_fails_gate(self):
+        length_region = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"
+        records = self.h1_alias_negative_records(
+            [
+                native_record(
+                    function="lengthMismatch",
+                    rep="u8",
+                    region_id=length_region,
+                    bounds_state="unknown",
+                    access_mode="unchecked_native",
+                    expr_kind="BufferIndexSet",
+                    consumer="u8_store_trunc_i32",
+                )
+            ]
+        )
+        report = HARNESS.verify_artifacts(
+            workload="h1_buffer_alias_negative",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any(
+                "native_reps_negative_length_mismatch_no_unchecked_unknown" in error
+                for error in report["errors"]
+            )
+        )
+
+    def test_length_mismatch_dynamic_fallback_passes_gate(self):
+        length_region = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"
+        records = self.h1_alias_negative_records(
+            [
+                native_record(
+                    function="lengthMismatch",
+                    rep="i32",
+                    region_id=length_region,
+                    bounds_state="unknown",
+                    access_mode="dynamic_fallback",
+                    expr_kind="BufferIndexSet",
+                    consumer="BufferIndexSet.slow_path",
+                )
+            ]
+        )
+        report = HARNESS.verify_artifacts(
+            workload="h1_buffer_alias_negative",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "pass", report["errors"])
+
+    def test_native_region_materialization_fails_gate(self):
+        direct_region = (
+            "h1_native_rep_equivalence_ts.module_init.direct_bounded"
+        )
+        records = [
+            native_record(rep="i32", region_id=direct_region),
+            native_record(
+                rep="buffer_view",
+                region_id=direct_region,
+                bounds_state={"proven": {"proof": "min_length"}},
+            ),
+            native_record(
+                rep="u8",
+                region_id=direct_region,
+                consumer="u8_load_zext_i32",
+                bounds_state={"proven": {"proof": "min_length"}},
+            ),
+            native_record(
+                rep="js_value",
+                region_id=direct_region,
+                consumer="materialize_js_value",
+                materialization_reason="function_abi",
+            ),
+        ]
+        report = HARNESS.verify_artifacts(
+            workload="h1_native_rep_equivalence",
+            ir_before=H1_MIN_IR,
+            ir_after=H1_MIN_IR,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any("native_reps_direct_bounded_no_materialization" in error for error in report["errors"])
         )
 
     def test_benchmark_summary_reports_p95_and_stddev(self):

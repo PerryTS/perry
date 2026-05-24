@@ -1,7 +1,7 @@
 //! Closure-body compilation. Split out of `codegen.rs` (now
 //! `codegen/mod.rs`). Only contains `compile_closure`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Context, Result};
 
@@ -219,9 +219,14 @@ pub(super) fn compile_closure(
 
     let mut ctx = FnCtx {
         func: lf,
+        module_slug: crate::expr::native_region_slug(strings.module_prefix()),
+        source_function: format!("closure_{}", func_id),
+        source_function_slug: crate::expr::native_region_slug(&format!("closure_{}", func_id)),
+        active_region_id: None,
         locals,
         local_types,
         current_block: 0,
+        discard_expr_value: false,
         func_names,
         strings,
         loop_targets: Vec::new(),
@@ -307,12 +312,23 @@ pub(super) fn compile_closure(
         clamp3_functions: &cross_module.clamp3_functions,
         clamp_u8_functions: &cross_module.clamp_u8_functions,
         integer_returning_functions: &cross_module.returns_int_functions,
+        i32_identity_functions: &cross_module.i32_identity_functions,
         was_unrolled: false,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
         typed_parse_rodata: Vec::new(),
         typed_parse_counter: 0,
         buffer_data_slots: HashMap::new(),
+        buffer_view_slots: HashMap::new(),
+        disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
+        min_length_bounds: HashMap::new(),
+        bounded_buffer_index_pairs: Vec::new(),
+        buffer_hazard_reasons: HashMap::new(),
+        native_i32_aliases: HashMap::new(),
+        int_range_aliases: HashMap::new(),
+        int_range_facts: Vec::new(),
+        nonnegative_integer_locals: HashSet::new(),
+        native_rep_records: Vec::new(),
         known_noalias_buffer_locals: &hir_facts.known_noalias_buffer_locals,
         buffer_alias_base,
     };
@@ -337,9 +353,11 @@ pub(super) fn compile_closure(
     let ic_end = ctx.ic_site_counter;
     let pending = std::mem::take(&mut ctx.pending_declares);
     let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
+    let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
     drop(ctx);
     llmod.ic_counter = ic_end;
     llmod.buffer_alias_counter += buffer_alias_used;
+    llmod.native_rep_records.extend(native_rep_records);
     for (name, ret, params) in pending {
         llmod.declare_function(&name, ret, &params);
     }

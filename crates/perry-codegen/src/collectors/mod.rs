@@ -25,7 +25,10 @@ mod shadow_slots;
 mod this_as_value;
 
 // Public re-exports for the visible API (`pub fn emit_i64_function` etc.).
-pub use clamp_detect::{detect_clamp3, detect_clamp_u8, is_integer_specializable, returns_integer};
+pub use clamp_detect::{
+    detect_clamp3, detect_clamp_u8, is_integer_specializable, returns_i32_identity_arg,
+    returns_integer,
+};
 pub use i64_emit::emit_i64_function;
 
 // Internal-to-crate re-exports — explicit names because globs don't
