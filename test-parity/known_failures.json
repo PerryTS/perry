@@ -2587,5 +2587,65 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: unshift() during flowing mode — chunk not re-emitted in order. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/writable-stream-bytes-type": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: WritableStream({type:'bytes'}) — handling differs from Node (accept-and-ignore or throw). Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/events/emit-after-destroy-still-works": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: custom emit() on destroyed stream — listener does not fire or fires multiple times. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/pause-sets-flowing-false": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pause() doesn't flip readableFlowing to false synchronously. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/destroy/destroy-during-flow": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: destroy() during flowing — extra 'data' emitted or 'close' wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/flow/data-after-end-not-fired": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: push() after end-emit — extra 'data' event fired. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/from-array-with-undefined": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from([1,undefined,3]) — undefined value handling differs. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/cleanup-state-after-end": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: post-pipe-end destroyed flags wrong on source or destination. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/writable/cork-empty": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: cork()+uncork() with no writes — 'finish' doesn't fire. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/readable/destroyed-after-error": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: destroyed flag false after 'error' event handler fires. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/pipe-after-pause": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipe() doesn't resume a paused source stream. Flips to PASS when #1532 lands."
   }
 }
