@@ -126,6 +126,28 @@ The `node:http` server FFIs and the Web Fetch `Headers` / `Request` /
 turnkey adapter, prefer [perry's Fastify binding](#fastify-server) with a
 single catch-all route delegating to `app.fetch`.
 
+### `@hono/perry-server`
+
+`@hono/perry-server` (in-tree at `packages/hono-perry-server`) packages that
+catch-all-over-Fastify shim as Hono's standard `serve({ fetch, port })`
+contract — the Perry counterpart to `@hono/node-server` / `@hono/bun`:
+
+```typescript,no-test
+import { Hono } from "hono"
+import { serve } from "@hono/perry-server"
+
+const app = new Hono()
+app.get("/", (c) => c.json({ ok: true }))
+
+serve({ fetch: app.fetch, port: 3000 }, (info) => {
+  console.log(`listening on :${info.port}`)
+})
+```
+
+It translates each Fastify request into a Web `Request`, awaits `app.fetch`,
+and copies the `Response`'s status / headers / body back onto the reply.
+Requires Perry ≥ 0.5.1027 (`Request.headers`, #1649). Tracked at #1654.
+
 ## Fastify Server
 
 ```typescript,no-test

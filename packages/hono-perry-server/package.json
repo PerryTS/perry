@@ -1,0 +1,28 @@
+{
+  "name": "@hono/perry-server",
+  "version": "0.1.0",
+  "description": "Hono server adapter for Perry-native compile — serve({ fetch, port }) over Perry's bundled Fastify",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": {
+      "perry": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": ["src"],
+  "peerDependencies": {
+    "hono": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "hono": { "optional": true }
+  },
+  "keywords": ["perry", "hono", "server", "adapter", "fastify", "fetch"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PerryTS/perry",
+    "directory": "packages/hono-perry-server"
+  }
+}
