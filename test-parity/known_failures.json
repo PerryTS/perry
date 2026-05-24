@@ -3109,5 +3109,47 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: user _destroy(err, cb) — not invoked or receives wrong error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/transform-stream-instanceof-check": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: TransformStream instance — fails instanceof checks vs RS/WS for readable/writable sides. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/from-arguments-object": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(arguments) — Array-like iteration fails. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/setMaxListeners-stays-applied": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: setMaxListeners(50) — value not preserved across operations. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/iter-helpers/reduce-with-initial": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: reduce(fn, initial) — initial value not used or wrong sum. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/iter-helpers/for-each-empty-stream": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: forEach() on empty — calls non-zero or result not undefined. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/events/set-max-listeners-chainable": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: setMaxListeners returns wrong value (should return emitter). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/readable-stream-id-properties": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: distinct Readable instances — same identity or wrong prototype shared. Flips to PASS when #1532 lands."
   }
 }
