@@ -480,6 +480,9 @@ for.body.11:
         mutated_while_region = (
             "h1_buffer_alias_negative_ts.mutatedwhileindex.mutated_while_index"
         )
+        array_buffer_view_region = (
+            "h1_buffer_alias_negative_ts.arraybufferviews.array_buffer_views"
+        )
         if mutated_records is None:
             mutated_records = [
                 native_record(
@@ -542,6 +545,15 @@ for.body.11:
                 expr_kind="BufferIndexGet",
                 consumer="BufferIndexGet.slow_path_i32",
             ),
+            native_record(
+                function="arrayBufferViews",
+                rep="i32",
+                region_id=array_buffer_view_region,
+                bounds_state="unknown",
+                access_mode="dynamic_fallback",
+                expr_kind="Uint8ArrayGet",
+                consumer="Uint8ArrayGet.slow_path_i32",
+            ),
             *length_records,
             *mutated_records,
         ]
@@ -593,6 +605,115 @@ for.body.11:
                 )
             ]
         )
+        report = HARNESS.verify_artifacts(
+            workload="h1_buffer_alias_negative",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "pass", report["errors"])
+
+    def test_array_buffer_view_noalias_fails_gate(self):
+        length_region = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"
+        array_buffer_view_region = (
+            "h1_buffer_alias_negative_ts.arraybufferviews.array_buffer_views"
+        )
+        records = self.h1_alias_negative_records(
+            [
+                native_record(
+                    function="lengthMismatch",
+                    rep="i32",
+                    region_id=length_region,
+                    bounds_state="unknown",
+                    access_mode="dynamic_fallback",
+                    expr_kind="BufferIndexSet",
+                    consumer="BufferIndexSet.slow_path",
+                )
+            ]
+        )
+        records = [
+            r
+            for r in records
+            if r.get("region_id") != array_buffer_view_region
+        ]
+        records.append(
+            native_record(
+                function="arrayBufferViews",
+                rep="buffer_view",
+                region_id=array_buffer_view_region,
+                bounds_state={"proven": {"proof": "loop_guard"}},
+                alias_state="no_alias_proven",
+                access_mode="unchecked_native",
+                emitted_noalias=True,
+            )
+        )
+
+        report = HARNESS.verify_artifacts(
+            workload="h1_buffer_alias_negative",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any(
+                "native_reps_negative_array_buffer_views_denies_noalias" in error
+                for error in report["errors"]
+            )
+        )
+
+    def test_array_buffer_view_raw_may_alias_passes_gate(self):
+        length_region = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"
+        array_buffer_view_region = (
+            "h1_buffer_alias_negative_ts.arraybufferviews.array_buffer_views"
+        )
+        records = self.h1_alias_negative_records(
+            [
+                native_record(
+                    function="lengthMismatch",
+                    rep="i32",
+                    region_id=length_region,
+                    bounds_state="unknown",
+                    access_mode="dynamic_fallback",
+                    expr_kind="BufferIndexSet",
+                    consumer="BufferIndexSet.slow_path",
+                )
+            ]
+        )
+        records = [
+            r
+            for r in records
+            if r.get("region_id") != array_buffer_view_region
+        ]
+        records.extend(
+            [
+                native_record(
+                    function="arrayBufferViews",
+                    rep="buffer_view",
+                    region_id=array_buffer_view_region,
+                    bounds_state={"proven": {"proof": "loop_guard"}},
+                    alias_state="may_alias",
+                    access_mode="unchecked_native",
+                ),
+                native_record(
+                    function="arrayBufferViews",
+                    rep="u8",
+                    region_id=array_buffer_view_region,
+                    bounds_state={"proven": {"proof": "loop_guard"}},
+                    alias_state="may_alias",
+                    access_mode="unchecked_native",
+                    expr_kind="Uint8ArrayGet",
+                    consumer="u8_load_zext_i32",
+                ),
+            ]
+        )
+
         report = HARNESS.verify_artifacts(
             workload="h1_buffer_alias_negative",
             ir_before=GOOD_IR,

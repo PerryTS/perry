@@ -13,7 +13,7 @@
 const W = 3840;
 const H = 2160;
 const N = W * H * 3;
-const SEED = 0x9E3779B9 | 0;
+const SEED = 0x9E3779B9 >>> 0;
 
 const KERNEL: number[][] = [
   [1, 4, 7, 4, 1],
@@ -55,12 +55,12 @@ for (let y = 0; y < H; y++) {
     src[off + 2] = (((x + y) * 255) / (W + H)) | 0;
   }
 }
-let s = SEED | 0;
+let s = SEED >>> 0;
 let ni = 0;
 while (ni + 4 <= N) {
-  s = (s ^ (s << 13)) | 0;
-  s = (s ^ (s >>> 17)) | 0;
-  s = (s ^ (s << 5)) | 0;
+  s = (s ^ ((s << 13) >>> 0)) >>> 0;
+  s = (s ^ (s >>> 17)) >>> 0;
+  s = (s ^ ((s << 5) >>> 0)) >>> 0;
   src[ni] = (src[ni] + (s & 0xff)) & 0xff;
   src[ni + 1] = (src[ni + 1] + ((s >>> 8) & 0xff)) & 0xff;
   src[ni + 2] = (src[ni + 2] + ((s >>> 16) & 0xff)) & 0xff;
@@ -68,9 +68,9 @@ while (ni + 4 <= N) {
   ni += 4;
 }
 while (ni < N) {
-  s = (s ^ (s << 13)) | 0;
-  s = (s ^ (s >>> 17)) | 0;
-  s = (s ^ (s << 5)) | 0;
+  s = (s ^ ((s << 13) >>> 0)) >>> 0;
+  s = (s ^ (s >>> 17)) >>> 0;
+  s = (s ^ ((s << 5) >>> 0)) >>> 0;
   src[ni] = (src[ni] + (s & 0xff)) & 0xff;
   ni += 1;
 }

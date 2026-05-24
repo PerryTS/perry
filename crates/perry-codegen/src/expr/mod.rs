@@ -426,6 +426,13 @@ pub(crate) struct FnCtx<'a> {
     /// LLVM's SCEV hoists the conversions. Turned factorial
     /// (`sum += i % 1000` in a 100M loop) from 1550ms → ~150ms on ARM.
     pub integer_locals: &'a std::collections::HashSet<u32>,
+
+    /// LocalIds whose writes are all explicit `>>> 0` u32 casts. These locals
+    /// can use the same i32 bit-pattern slot as signed integer locals for
+    /// bitwise consumers, but ordinary JS reads must convert with `uitofp` so
+    /// values above INT32_MAX remain observable as unsigned numbers.
+    pub unsigned_i32_locals: &'a std::collections::HashSet<u32>,
+
     /// Gen-GC Phase A sub-phase 3a: pointer-typed local → shadow-
     /// frame slot index. Empty when `PERRY_SHADOW_STACK` is off.
     /// Sub-phase 3b uses this map at `Stmt::Let` / `LocalSet`

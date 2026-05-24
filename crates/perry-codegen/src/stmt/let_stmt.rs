@@ -559,6 +559,7 @@ pub(crate) fn lower_let(
         // Step 2: register BEFORE lowering init.
         ctx.locals.insert(id, slot);
         ctx.local_types.insert(id, refined_ty.clone());
+        crate::expr::emit_shadow_slot_bind_for_local(ctx, id);
         // Step 3: lower init and store into the box.
         if let Some(init_expr) = init {
             let init_val = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
@@ -637,18 +638,21 @@ pub(crate) fn lower_let(
     // saturation concern in the original v0.5.164 comment was
     // about `const SEED = 0x9E3779B9 >>> 0` whose value
     // exceeds INT32_MAX — but that's a u32 (`>>> 0`), and
-    // `>>> 0` is intentionally not seeded into integer_locals
-    // (see collect_integer_let_ids), so SEED never ends up
-    // in this code path.
+    // `>>> 0` is intentionally not seeded into signed integer_locals
+    // (see collect_integer_let_ids). Mutable u32 recurrences are handled
+    // separately through unsigned_i32_locals so ordinary JS reads use
+    // `uitofp` instead of signed `sitofp`.
     // (Issue #436) Allow the i32 fast path when the local is
     // either index-used (existing #435 path) OR
     // strictly-i32-bounded by every write (new path that
     // recovers the FNV-1a `h` accumulator and similar
     // explicit-i32-coerce shapes without reintroducing #435's
     // accumulator overflow).
-    let i32_safe_local =
-        ctx.index_used_locals.contains(&id) || ctx.strictly_i32_bounded_locals.contains(&id);
-    let needs_i32_slot = ctx.integer_locals.contains(&id)
+    let is_unsigned_i32_local = ctx.unsigned_i32_locals.contains(&id);
+    let i32_safe_local = ctx.index_used_locals.contains(&id)
+        || ctx.strictly_i32_bounded_locals.contains(&id)
+        || is_unsigned_i32_local;
+    let needs_i32_slot = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
         && i32_safe_local
         && init_in_i32_range
         && !ctx.boxed_vars.contains(&id)
@@ -702,9 +706,14 @@ pub(crate) fn lower_let(
                 ctx.i32_identity_functions,
             ) {
                 let i32_v = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
+                let unsigned_i32 = ctx.unsigned_i32_locals.contains(&id);
                 let blk = ctx.block();
                 blk.store(I32, &i32_v, &i32_slot);
-                let v = blk.sitofp(I32, &i32_v, DOUBLE);
+                let v = if unsigned_i32 {
+                    blk.uitofp(I32, &i32_v, DOUBLE)
+                } else {
+                    blk.sitofp(I32, &i32_v, DOUBLE)
+                };
                 blk.store(DOUBLE, &v, &slot);
                 true
             } else {

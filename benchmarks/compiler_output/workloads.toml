@@ -464,3 +464,7 @@ native_region_id = "h1_buffer_alias_negative_ts.mutatedforindex.mutated_for_inde
 [[workloads.h1_buffer_alias_negative.named_regions]]
 name = "mutated_while_index"
 native_region_id = "h1_buffer_alias_negative_ts.mutatedwhileindex.mutated_while_index"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "array_buffer_views"
+native_region_id = "h1_buffer_alias_negative_ts.arraybufferviews.array_buffer_views"

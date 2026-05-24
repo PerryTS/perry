@@ -22,8 +22,12 @@ pub(crate) fn is_known_finite(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // (which downstream code interpreted as a NaN-boxed string with
         // STRING_TAG bits, leading to garbled `console.log` output).
         Expr::Number(n) => n.is_finite(),
-        Expr::LocalGet(id) => ctx.integer_locals.contains(id),
-        Expr::Update { id, .. } => ctx.integer_locals.contains(id),
+        Expr::LocalGet(id) => {
+            ctx.integer_locals.contains(id) || ctx.unsigned_i32_locals.contains(id)
+        }
+        Expr::Update { id, .. } => {
+            ctx.integer_locals.contains(id) || ctx.unsigned_i32_locals.contains(id)
+        }
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
         Expr::MathImul(_, _) => true, // Math.imul returns i32 → always finite
         Expr::Call { callee, .. } => {

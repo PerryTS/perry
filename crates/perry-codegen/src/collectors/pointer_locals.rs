@@ -210,6 +210,100 @@ pub fn collect_pointer_typed_locals(
             .is_some_and(|ty| is_definitely_non_pointer_type(&ty))
     }
 
+    fn collect_expr_writes_in_closure_stmts(
+        stmts: &[Stmt],
+        writes: &mut HashMap<u32, Vec<LocalWrite>>,
+    ) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Let { init, .. } => {
+                    if let Some(init) = init {
+                        collect_expr_writes(init, writes);
+                    }
+                }
+                Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+                    collect_expr_writes(expr, writes);
+                }
+                Stmt::Return(None)
+                | Stmt::Break
+                | Stmt::Continue
+                | Stmt::LabeledBreak(_)
+                | Stmt::LabeledContinue(_)
+                | Stmt::PreallocateBoxes(_) => {}
+                Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    collect_expr_writes(condition, writes);
+                    collect_expr_writes_in_closure_stmts(then_branch, writes);
+                    if let Some(else_branch) = else_branch {
+                        collect_expr_writes_in_closure_stmts(else_branch, writes);
+                    }
+                }
+                Stmt::While { condition, body } => {
+                    collect_expr_writes(condition, writes);
+                    collect_expr_writes_in_closure_stmts(body, writes);
+                }
+                Stmt::DoWhile { body, condition } => {
+                    collect_expr_writes_in_closure_stmts(body, writes);
+                    collect_expr_writes(condition, writes);
+                }
+                Stmt::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                } => {
+                    if let Some(init) = init {
+                        collect_expr_writes_in_closure_stmts(
+                            std::slice::from_ref(init.as_ref()),
+                            writes,
+                        );
+                    }
+                    if let Some(condition) = condition {
+                        collect_expr_writes(condition, writes);
+                    }
+                    if let Some(update) = update {
+                        collect_expr_writes(update, writes);
+                    }
+                    collect_expr_writes_in_closure_stmts(body, writes);
+                }
+                Stmt::Labeled { body, .. } => {
+                    collect_expr_writes_in_closure_stmts(
+                        std::slice::from_ref(body.as_ref()),
+                        writes,
+                    );
+                }
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    collect_expr_writes_in_closure_stmts(body, writes);
+                    if let Some(catch) = catch {
+                        collect_expr_writes_in_closure_stmts(&catch.body, writes);
+                    }
+                    if let Some(finally) = finally {
+                        collect_expr_writes_in_closure_stmts(finally, writes);
+                    }
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                } => {
+                    collect_expr_writes(discriminant, writes);
+                    for case in cases {
+                        if let Some(test) = &case.test {
+                            collect_expr_writes(test, writes);
+                        }
+                        collect_expr_writes_in_closure_stmts(&case.body, writes);
+                    }
+                }
+            }
+        }
+    }
+
     fn collect_expr_writes(expr: &Expr, writes: &mut HashMap<u32, Vec<LocalWrite>>) {
         match expr {
             Expr::LocalSet(id, rhs) => {
@@ -221,6 +315,14 @@ pub fn collect_pointer_typed_locals(
             }
             Expr::Update { id, .. } => {
                 writes.entry(*id).or_default().push(LocalWrite::NonPointer);
+            }
+            Expr::Closure { params, body, .. } => {
+                for param in params {
+                    if let Some(default) = &param.default {
+                        collect_expr_writes(default, writes);
+                    }
+                }
+                collect_expr_writes_in_closure_stmts(body, writes);
             }
             _ => {
                 perry_hir::walker::walk_expr_children(expr, &mut |child| {
@@ -329,78 +431,6 @@ pub fn collect_pointer_typed_locals(
         }
     }
 
-    fn collect_flat_row_aliases(
-        stmts: &[Stmt],
-        flat_const_ids: &HashSet<u32>,
-        out: &mut HashSet<u32>,
-    ) {
-        for stmt in stmts {
-            match stmt {
-                Stmt::Let {
-                    id,
-                    mutable: false,
-                    init: Some(Expr::IndexGet { object, .. }),
-                    ..
-                } => {
-                    if let Expr::LocalGet(const_id) = object.as_ref() {
-                        if flat_const_ids.contains(const_id) {
-                            out.insert(*id);
-                        }
-                    }
-                }
-                Stmt::If {
-                    then_branch,
-                    else_branch,
-                    ..
-                } => {
-                    collect_flat_row_aliases(then_branch, flat_const_ids, out);
-                    if let Some(else_branch) = else_branch {
-                        collect_flat_row_aliases(else_branch, flat_const_ids, out);
-                    }
-                }
-                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                    collect_flat_row_aliases(body, flat_const_ids, out);
-                }
-                Stmt::For { init, body, .. } => {
-                    if let Some(init) = init {
-                        collect_flat_row_aliases(
-                            std::slice::from_ref(init.as_ref()),
-                            flat_const_ids,
-                            out,
-                        );
-                    }
-                    collect_flat_row_aliases(body, flat_const_ids, out);
-                }
-                Stmt::Labeled { body, .. } => {
-                    collect_flat_row_aliases(
-                        std::slice::from_ref(body.as_ref()),
-                        flat_const_ids,
-                        out,
-                    );
-                }
-                Stmt::Try {
-                    body,
-                    catch,
-                    finally,
-                } => {
-                    collect_flat_row_aliases(body, flat_const_ids, out);
-                    if let Some(catch) = catch {
-                        collect_flat_row_aliases(&catch.body, flat_const_ids, out);
-                    }
-                    if let Some(finally) = finally {
-                        collect_flat_row_aliases(finally, flat_const_ids, out);
-                    }
-                }
-                Stmt::Switch { cases, .. } => {
-                    for case in cases {
-                        collect_flat_row_aliases(&case.body, flat_const_ids, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
     let mut local_types: HashMap<u32, Type> = HashMap::new();
     let mut writes: HashMap<u32, Vec<LocalWrite>> = HashMap::new();
     let mut flat_row_alias_ids: HashSet<u32> = HashSet::new();
@@ -408,7 +438,7 @@ pub fn collect_pointer_typed_locals(
         local_types.insert(p.id, p.ty.clone());
     }
     collect_facts(stmts, &mut local_types, &mut writes);
-    collect_flat_row_aliases(stmts, flat_const_ids, &mut flat_row_alias_ids);
+    super::integer_locals::collect_flat_row_aliases(stmts, flat_const_ids, &mut flat_row_alias_ids);
 
     let mut local_value_types: HashMap<u32, Type> = local_types
         .iter()

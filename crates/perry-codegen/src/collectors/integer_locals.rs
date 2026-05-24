@@ -264,6 +264,27 @@ pub fn collect_flat_row_aliases(
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 collect_flat_row_aliases(body, flat_const_ids, out);
             }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_flat_row_aliases(body, flat_const_ids, out);
+                if let Some(catch) = catch {
+                    collect_flat_row_aliases(&catch.body, flat_const_ids, out);
+                }
+                if let Some(finally) = finally {
+                    collect_flat_row_aliases(finally, flat_const_ids, out);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_flat_row_aliases(&case.body, flat_const_ids, out);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_flat_row_aliases(std::slice::from_ref(body.as_ref()), flat_const_ids, out);
+            }
             _ => {}
         }
     }

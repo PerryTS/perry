@@ -311,7 +311,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // it when the i32 path covers every read.
                 if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
                     let i = ctx.block().load(I32, &i32_slot);
-                    return Ok(ctx.block().sitofp(I32, &i, DOUBLE));
+                    let v = if ctx.unsigned_i32_locals.contains(id) {
+                        ctx.block().uitofp(I32, &i, DOUBLE)
+                    } else {
+                        ctx.block().sitofp(I32, &i, DOUBLE)
+                    };
+                    return Ok(v);
                 }
                 Ok(ctx.block().load(DOUBLE, &slot))
             } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
@@ -398,9 +403,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     )
                 {
                     let v_i32 = lower_expr_as_i32(ctx, value)?;
+                    let unsigned_i32 = ctx.unsigned_i32_locals.contains(id);
                     let blk = ctx.block();
                     blk.store(I32, &v_i32, &i32_slot);
-                    let v_dbl = blk.sitofp(I32, &v_i32, DOUBLE);
+                    let v_dbl = if unsigned_i32 {
+                        blk.uitofp(I32, &v_i32, DOUBLE)
+                    } else {
+                        blk.sitofp(I32, &v_i32, DOUBLE)
+                    };
                     if let Some(slot) = ctx.locals.get(id).cloned() {
                         ctx.block().store(DOUBLE, &v_dbl, &slot);
                     } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {

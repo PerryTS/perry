@@ -211,6 +211,7 @@ pub(super) fn compile_function(
         try_depth: 0,
         pending_declares: Vec::new(),
         integer_locals: &hir_facts.integer_locals,
+        unsigned_i32_locals: &hir_facts.unsigned_i32_locals,
         shadow_slot_map,
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,

@@ -412,6 +412,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 ctx.locals.insert(*id, slot);
                 ctx.prealloc_boxes.insert(*id);
                 ctx.boxed_vars.insert(*id);
+                crate::expr::emit_shadow_slot_bind_for_local(ctx, *id);
             }
             Ok(())
         }

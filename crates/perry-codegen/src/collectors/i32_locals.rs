@@ -93,6 +93,151 @@ pub fn collect_strictly_i32_bounded_locals(
         .collect()
 }
 
+/// Mutable locals whose observable value is always produced by a top-level
+/// `>>> 0` cast. They cannot join signed `integer_locals` because normal
+/// reads must see a u32-as-double value, not a signed i32. Codegen still keeps
+/// a parallel i32 bit-pattern slot for hot bitwise consumers, and converts
+/// that slot back with `uitofp` for ordinary JS reads.
+pub fn collect_unsigned_i32_locals(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
+    let mut saw_any: HashSet<u32> = HashSet::new();
+    let mut disqualified: HashSet<u32> = HashSet::new();
+    walk_writes_for_unsigned_i32(stmts, &mut saw_any, &mut disqualified);
+    saw_any
+        .into_iter()
+        .filter(|id| !disqualified.contains(id))
+        .collect()
+}
+
+fn walk_writes_for_unsigned_i32(
+    stmts: &[perry_hir::Stmt],
+    saw_any: &mut HashSet<u32>,
+    disqualified: &mut HashSet<u32>,
+) {
+    use perry_hir::Stmt;
+    for s in stmts {
+        match s {
+            Stmt::Let {
+                id,
+                init: Some(init),
+                mutable,
+                ..
+            } => {
+                if *mutable {
+                    saw_any.insert(*id);
+                    if !is_ushr_zero(init) {
+                        disqualified.insert(*id);
+                    }
+                }
+                walk_writes_in_expr_for_unsigned_i32(init, saw_any, disqualified);
+            }
+            Stmt::Let { init: None, .. } => {}
+            Stmt::Expr(e) | Stmt::Throw(e) => {
+                walk_writes_in_expr_for_unsigned_i32(e, saw_any, disqualified);
+            }
+            Stmt::Return(opt) => {
+                if let Some(e) = opt {
+                    walk_writes_in_expr_for_unsigned_i32(e, saw_any, disqualified);
+                }
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                walk_writes_in_expr_for_unsigned_i32(condition, saw_any, disqualified);
+                walk_writes_for_unsigned_i32(then_branch, saw_any, disqualified);
+                if let Some(eb) = else_branch {
+                    walk_writes_for_unsigned_i32(eb, saw_any, disqualified);
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                walk_writes_in_expr_for_unsigned_i32(condition, saw_any, disqualified);
+                walk_writes_for_unsigned_i32(body, saw_any, disqualified);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init_stmt) = init {
+                    walk_writes_for_unsigned_i32(
+                        std::slice::from_ref(init_stmt),
+                        saw_any,
+                        disqualified,
+                    );
+                }
+                if let Some(cond) = condition {
+                    walk_writes_in_expr_for_unsigned_i32(cond, saw_any, disqualified);
+                }
+                if let Some(upd) = update {
+                    walk_writes_in_expr_for_unsigned_i32(upd, saw_any, disqualified);
+                }
+                walk_writes_for_unsigned_i32(body, saw_any, disqualified);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                walk_writes_for_unsigned_i32(body, saw_any, disqualified);
+                if let Some(c) = catch {
+                    walk_writes_for_unsigned_i32(&c.body, saw_any, disqualified);
+                }
+                if let Some(f) = finally {
+                    walk_writes_for_unsigned_i32(f, saw_any, disqualified);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                walk_writes_in_expr_for_unsigned_i32(discriminant, saw_any, disqualified);
+                for c in cases {
+                    if let Some(t) = &c.test {
+                        walk_writes_in_expr_for_unsigned_i32(t, saw_any, disqualified);
+                    }
+                    walk_writes_for_unsigned_i32(&c.body, saw_any, disqualified);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                walk_writes_for_unsigned_i32(
+                    std::slice::from_ref(body.as_ref()),
+                    saw_any,
+                    disqualified,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+fn walk_writes_in_expr_for_unsigned_i32(
+    e: &perry_hir::Expr,
+    saw_any: &mut HashSet<u32>,
+    disqualified: &mut HashSet<u32>,
+) {
+    use perry_hir::Expr;
+    match e {
+        Expr::LocalSet(id, value) => {
+            saw_any.insert(*id);
+            if !is_ushr_zero(value) {
+                disqualified.insert(*id);
+            }
+            walk_writes_in_expr_for_unsigned_i32(value, saw_any, disqualified);
+        }
+        Expr::Update { id, .. } => {
+            saw_any.insert(*id);
+            disqualified.insert(*id);
+        }
+        _ => {
+            perry_hir::walker::walk_expr_children(e, &mut |child| {
+                walk_writes_in_expr_for_unsigned_i32(child, saw_any, disqualified);
+            });
+        }
+    }
+}
+
 pub fn walk_writes_for_strict(
     stmts: &[perry_hir::Stmt],
     integer_locals: &HashSet<u32>,

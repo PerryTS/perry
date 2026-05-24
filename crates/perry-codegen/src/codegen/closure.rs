@@ -283,6 +283,7 @@ pub(super) fn compile_closure(
         try_depth: 0,
         pending_declares: Vec::new(),
         integer_locals: &hir_facts.integer_locals,
+        unsigned_i32_locals: &hir_facts.unsigned_i32_locals,
         shadow_slot_map: std::collections::HashMap::new(),
         shadow_slot_clears_after_stmt: std::collections::HashMap::new(),
         arena_state_slot: None,

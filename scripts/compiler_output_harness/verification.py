@@ -473,6 +473,7 @@ def native_rep_contract_results(
         length_mismatch_records = records_for_native_region("length_mismatch")
         mutated_for_records = records_for_native_region("mutated_for_index")
         mutated_while_records = records_for_native_region("mutated_while_index")
+        array_buffer_view_records = records_for_native_region("array_buffer_views")
         length_mismatch_unchecked_unknown = [
             r for r in length_mismatch_records if _is_unchecked_native_unknown_bounds(r)
         ]
@@ -481,6 +482,16 @@ def native_rep_contract_results(
         mutated_while_unchecked_native = unchecked_native_access(mutated_while_records)
         mutated_for_dynamic_fallback_accesses = fallback_buffer_access(mutated_for_records)
         mutated_while_dynamic_fallback_accesses = fallback_buffer_access(mutated_while_records)
+        array_buffer_view_unsafe_noalias = [
+            r
+            for r in array_buffer_view_records
+            if r.get("native_rep_name") in {"buffer_view", "u8"}
+            and (
+                r.get("emitted_noalias")
+                or _state_name(r.get("alias_state"))
+                in {"no_alias_proven", "no_alias_guarded"}
+            )
+        ]
         hazard_checks = {
             "alias_local": bool(denied_alias(alias_local_records))
             or bool(fallback_access(alias_local_records))
@@ -510,6 +521,11 @@ def native_rep_contract_results(
             and bool(mutated_for_dynamic_fallback_accesses),
             "mutated_while_index": not mutated_while_unchecked_native
             and bool(mutated_while_dynamic_fallback_accesses),
+            "array_buffer_views": not array_buffer_view_unsafe_noalias
+            and (
+                bool(denied_alias(array_buffer_view_records))
+                or bool(fallback_buffer_access(array_buffer_view_records))
+            ),
         }
         for hazard, passed in hazard_checks.items():
             add(
@@ -546,6 +562,17 @@ def native_rep_contract_results(
             "native_reps_negative_mutated_while_index_has_dynamic_fallback",
             bool(mutated_while_dynamic_fallback_accesses),
             json.dumps(mutated_while_dynamic_fallback_accesses[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_array_buffer_views_denies_noalias",
+            not array_buffer_view_unsafe_noalias,
+            json.dumps(array_buffer_view_unsafe_noalias[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_array_buffer_views_has_safe_access",
+            bool(denied_alias(array_buffer_view_records))
+            or bool(fallback_buffer_access(array_buffer_view_records)),
+            json.dumps(array_buffer_view_records[:5], sort_keys=True),
         )
 
     return results

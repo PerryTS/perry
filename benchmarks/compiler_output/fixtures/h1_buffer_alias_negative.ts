@@ -91,6 +91,20 @@ function mutatedWhileIndex(buf: Buffer): number {
   return total;
 }
 
+function arrayBufferViews(): number {
+  const ab = new ArrayBuffer(8);
+  const a = new Uint8Array(ab);
+  const b = new Uint8Array(ab);
+  let total = 0;
+  array_buffer_views:
+  for (let i = 0; i < a.length; i++) {
+    a[i] = (i + 1) & 255;
+    b[i] = (b[i] + a[i]) & 255;
+    total = (total + b[i]) | 0;
+  }
+  return total;
+}
+
 const shortSrc = Buffer.alloc(SIZE / 2);
 const shortDst = Buffer.alloc(SIZE / 4);
 const mutationBuf = Buffer.alloc(8);
@@ -105,7 +119,8 @@ console.log(
       sharedBacking() +
       lengthMismatch(shortSrc, shortDst) +
       mutatedForIndex(mutationBuf) +
-      mutatedWhileIndex(mutationBuf)
+      mutatedWhileIndex(mutationBuf) +
+      arrayBufferViews()
     ) |
       0),
 );
