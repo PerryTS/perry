@@ -30,6 +30,7 @@ packet = json.loads((root / "gc-1090-packet.json").read_text(encoding="utf-8"))
 assert metadata["base_sha"] == metadata["head_sha"], metadata
 assert (root / "gc-1090-packet.md").exists()
 assert (root / "gc-1090-packet.json").exists()
+assert (root / "old-page-policy.json").exists()
 assert (root / "perf-frontier" / "perf-frontier-packet.json").exists()
 if status == 0:
     assert packet["status"] == "pass", packet["errors"]
@@ -42,4 +43,8 @@ for name in ("bench_json_roundtrip", "bench_gc_pressure", "07_object_create", "1
 head = packet["copied_minor"]["head"]["summary"]
 assert "fallback_reason_counts" in head
 assert "conservative_pinned_bytes" in head
+assert "compiled_frame_conservative_pinned_bytes" in head
+assert "conservative_stack_truncated_cycles" in head
+assert "old_page_policy" in packet
+assert "bench_json_roundtrip" in packet["old_page_policy"]
 PY
