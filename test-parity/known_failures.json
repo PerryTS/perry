@@ -1687,5 +1687,17 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/read-with-undefined-size": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: read(undefined) — not equivalent to read() no-arg form. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/destroy/destroy-twice-idempotent": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: destroy() called twice — fires duplicate 'close' or errors. Flips to PASS when #1532 lands."
   }
 }
