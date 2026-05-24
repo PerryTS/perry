@@ -487,6 +487,56 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // Narrow node:stream instance-method wiring used by the current
+    // stream/promises stubs. These keep Perry's hidden stream state in sync
+    // when typed `new PassThrough()` / `new Writable()` instances call the
+    // methods directly; full stream event/backpressure behavior remains
+    // deferred to #1532.
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "emit",
+        class_filter: None,
+        runtime: "js_node_stream_method_emit",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "read",
+        class_filter: None,
+        runtime: "js_node_stream_method_read",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "resume",
+        class_filter: None,
+        runtime: "js_node_stream_method_resume",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "write",
+        class_filter: None,
+        runtime: "js_node_stream_method_write",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "end",
+        class_filter: None,
+        runtime: "js_node_stream_method_end",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Events ==========
     NativeModSig {
         module: "events",

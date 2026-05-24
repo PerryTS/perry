@@ -1454,6 +1454,15 @@ pub(crate) unsafe fn get_native_module_constant(
             "strict" => Some(create_sub_namespace("assert/strict")),
             _ => None,
         },
+        "stream" => match property {
+            "promises" => Some(unsafe {
+                crate::node_submodules::js_node_submodule_namespace(
+                    b"stream_promises".as_ptr(),
+                    "stream_promises".len() as u32,
+                )
+            }),
+            _ => None,
+        },
         "crypto" => match property {
             "constants" => Some(create_sub_namespace("crypto.constants")),
             // #1366: `crypto.subtle` is the WebCrypto SubtleCrypto
