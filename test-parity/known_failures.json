@@ -3109,5 +3109,41 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: user _destroy(err, cb) — not invoked or receives wrong error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/from-string-as-iterable-single-chunk": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from('text') — chunk shape/count wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/eventNames-with-symbols": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: eventNames does not include Symbol event keys. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/iter-helpers/map-async-with-concurrency": {
+    "issue": "1558",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: map(asyncFn, {concurrency}) — toArray output wrong. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/readable/from-set-deduplicates": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(Set with duplicates) — count or order wrong (Set should dedup). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/get-event-listeners-count": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: getEventListeners(emitter, event) — wrong count/array shape. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/readable-flag-after-end": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: readable boolean — wrong value before/after end. Flips to PASS when #1532 lands."
   }
 }
