@@ -145,6 +145,10 @@ fn ensure_gc_registered() {
             "stdlib:streams",
             scan_stream_roots_mut,
         );
+        perry_runtime::node_submodules::js_register_stream_consumer_callbacks(
+            js_readable_stream_get_reader,
+            js_reader_read,
+        );
     });
 }
 

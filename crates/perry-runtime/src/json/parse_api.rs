@@ -44,6 +44,81 @@ pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JS
     result
 }
 
+fn syntax_error_value(message: &str) -> f64 {
+    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_syntaxerror_new(msg_ptr);
+    f64::from_bits(JSValue::pointer(err as *const u8).bits())
+}
+
+fn is_json_null_literal(bytes: &[u8]) -> bool {
+    let Some(start) = bytes
+        .iter()
+        .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+    else {
+        return false;
+    };
+    let end = bytes
+        .iter()
+        .rposition(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+        .map(|idx| idx + 1)
+        .unwrap_or(start);
+    &bytes[start..end] == b"null"
+}
+
+/// Non-throwing JSON parse entry for APIs that must reject a Promise rather than
+/// synchronously throwing through `JSON.parse`'s FFI boundary.
+///
+/// # Safety
+///
+/// `text_ptr` must be null or a Perry-runtime `StringHeader`.
+pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSValue, f64> {
+    if text_ptr.is_null() {
+        return Err(syntax_error_value("Unexpected end of JSON input"));
+    }
+    let len = (*text_ptr).byte_len as usize;
+    let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data_ptr, len);
+
+    if len == 0 {
+        return Err(syntax_error_value("Unexpected end of JSON input"));
+    }
+
+    if let Err(err) = serde_json::from_slice::<serde_json::Value>(bytes) {
+        return Err(syntax_error_value(&format!("JSON parse error: {}", err)));
+    }
+
+    crate::gc::gc_collect_pending_suppressed_parse();
+    crate::gc::gc_check_trigger();
+    crate::gc::gc_suppress();
+
+    let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
+    let mut parser = DirectParser::new(bytes);
+    let result = parser.parse_value();
+    parse_root_push(result);
+    crate::gc::gc_unsuppress();
+    crate::gc::gc_bump_malloc_trigger();
+    crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
+    parse_root_restore(text_root);
+
+    PARSE_KEY_CACHE.with(|c| {
+        let cache = c.borrow();
+        if cache.len() > 4096 {
+            drop(cache);
+            c.borrow_mut().clear();
+            clear_parse_key_ring();
+        }
+    });
+
+    if result.is_null() && !is_json_null_literal(bytes) {
+        let preview_len = len.min(50);
+        let preview = std::str::from_utf8(&bytes[..preview_len]).unwrap_or("???");
+        let msg = format!("JSON parse error: Unexpected token: {}", preview);
+        return Err(syntax_error_value(&msg));
+    }
+
+    Ok(result)
+}
+
 /// JSON.parse(text) -> any
 ///
 /// Uses a direct recursive-descent parser that constructs Perry JSValues
