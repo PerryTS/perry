@@ -102,18 +102,29 @@ export default app  // for CF Workers / similar runtimes
 }
 ```
 
-### Long-lived HTTP server (port-listening) — currently blocked
+### Long-lived HTTP server (port-listening)
 
 The canonical "deploy a hono app as a native binary on a Linux VM"
-pattern — `serve({ fetch: app.fetch, port: 3000 })` via
-`@hono/node-server`, or a hand-rolled `node:http` adapter that drives
-`app.fetch` — currently fails to link because the Web Fetch FFIs
-(`Headers` / `Response` constructors) aren't pulled in alongside
-perry-ext-http-server. Tracked at [issue #589](https://github.com/PerryTS/perry/issues/589).
+pattern compiles and links on a stock Perry binary. A hand-rolled
+`node:http` adapter that drives `app.fetch` works directly:
 
-Workaround until #589 lands: deploy as an edge-runtime worker (CF
-Workers / Vercel Edge), or use [perry's Fastify binding](#fastify-server)
-with a single catch-all route delegating to `app.fetch`.
+```typescript,no-test
+import { createServer } from "node:http";
+
+const server = createServer((req, res) => {
+  const headers = new Headers();
+  headers.set("content-type", "text/plain");
+  const fetchReq = new Request(`http://localhost${req.url}`, { method: req.method });
+  // ... await app.fetch(fetchReq), then copy status/headers/body onto `res`.
+  res.end("ok");
+});
+server.listen(3000);
+```
+
+The `node:http` server FFIs and the Web Fetch `Headers` / `Request` /
+`Response` constructors now link together (issues #589, #1652). For a
+turnkey adapter, prefer [perry's Fastify binding](#fastify-server) with a
+single catch-all route delegating to `app.fetch`.
 
 ## Fastify Server
 
