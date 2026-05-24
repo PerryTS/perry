@@ -2641,5 +2641,65 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncGen yielding mixed types) — types lost or wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/readable-locked-after-pipe-through": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: rs.locked false after pipeThrough (should be true). Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/from-string-array-yields-each": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(['a','b','c']) — each string not a separate chunk. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/emit-returns-false-no-listeners": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: emit() — no-listener returns wrong value (not false). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/tee-after-getReader-throws": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: tee() on locked stream does not throw TypeError. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/events/remove-all-listeners-error-event": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: removeAllListeners('error') — does not zero the count. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/flow/paused-no-data-flow": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: paused source still emits data after push. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/sync-iterator-not-exposed": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Symbol.iterator exposed on Readable (should be undefined). Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/readable/read-returns-buffer-default": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: read() in non-encoded mode — does not return Buffer instance. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/error-arg-is-error-instance": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: 'error' listener arg — wrong instance / message. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/pipe-autodestroy-default": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipe() autoDestroy default — src or dst not destroyed after pipe. Flips to PASS when #1532 lands."
   }
 }
