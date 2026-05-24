@@ -32,7 +32,7 @@ use crate::closure::{
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
 };
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
 
 mod diagnostics;
@@ -90,603 +90,54 @@ struct SubmoduleSpec {
 
 macro_rules! thunk {
     ($name:ident, $msg:expr) => {
-        extern "C" fn $name(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+        pub(crate) extern "C" fn $name(
+            _closure: *const crate::closure::ClosureHeader,
+            _arg: f64,
+        ) -> f64 {
             let msg: &'static str = $msg;
             let bytes = msg.as_bytes();
-            let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            let header = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
             let err = crate::error::js_error_new_with_message(header);
-            let bits = JSValue::pointer(err as *const u8).bits();
+            let bits = crate::value::JSValue::pointer(err as *const u8).bits();
             crate::exception::js_throw(f64::from_bits(bits))
         }
     };
 }
 
-/// node:timers/promises.setTimeout(delay, value?) — a Promise that resolves
-/// with `value` (or undefined) after `delay` ms. Composes the existing
-/// promise-returning timer primitive; the closure dispatch pads a missing
-/// `value` arg with undefined (arity registered in `ensure_export_singleton`).
-/// Refs #1213.
-extern "C" fn timers_promises_set_timeout(
-    _closure: *const ClosureHeader,
-    delay_ms: f64,
-    value: f64,
-) -> f64 {
-    let promise = crate::timer::js_set_timeout_value(delay_ms, value);
-    crate::value::js_nanbox_pointer(promise as i64)
-}
+mod blob;
+mod consumers;
+mod fs_promises;
+mod stream_promises;
+mod timers;
 
-/// node:timers/promises.setImmediate(value?) — a Promise that resolves with
-/// `value` (or undefined) on a later turn. Refs #1213.
-extern "C" fn timers_promises_set_immediate(_closure: *const ClosureHeader, value: f64) -> f64 {
-    let promise = crate::timer::js_set_timeout_value(0.0, value);
-    crate::value::js_nanbox_pointer(promise as i64)
-}
-
-// ── node:timers namespace (`import * as timers from "node:timers"`) ──────────
-// Route to the SAME global timer runtime fns the bare globals use, so
-// `timers.setTimeout(...)` matches `setTimeout(...)`. NOTE: named imports
-// (`import { setTimeout } from "node:timers"`) deliberately bypass this and
-// keep the codegen global fast-path (which handles `setTimeout(fn, delay,
-// ...args)` varargs) — compile.rs skips registering node:timers named imports
-// as submodule exports. Refs #1213.
-fn callback_arg_to_i64(v: f64) -> i64 {
-    (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
-}
-extern "C" fn timers_ns_set_timeout(_c: *const ClosureHeader, cb: f64, ms: f64) -> f64 {
-    crate::value::js_nanbox_pointer(crate::timer::js_set_timeout_callback(
-        callback_arg_to_i64(cb),
-        ms,
-    ))
-}
-extern "C" fn timers_ns_set_interval(_c: *const ClosureHeader, cb: f64, ms: f64) -> f64 {
-    crate::value::js_nanbox_pointer(crate::timer::setInterval(callback_arg_to_i64(cb), ms))
-}
-extern "C" fn timers_ns_set_immediate(_c: *const ClosureHeader, cb: f64) -> f64 {
-    crate::value::js_nanbox_pointer(crate::timer::js_set_immediate_callback(
-        callback_arg_to_i64(cb),
-    ))
-}
-extern "C" fn timers_ns_clear_timeout(_c: *const ClosureHeader, arg: f64) -> f64 {
-    crate::timer::js_clear_timeout_value(arg);
-    f64::from_bits(TAG_UNDEFINED)
-}
-extern "C" fn timers_ns_clear_interval(_c: *const ClosureHeader, arg: f64) -> f64 {
-    crate::timer::js_clear_interval_value(arg);
-    f64::from_bits(TAG_UNDEFINED)
-}
-// Immediates live in the shared timer pool; clearTimeout retains-out both pools.
-extern "C" fn timers_ns_clear_immediate(_c: *const ClosureHeader, arg: f64) -> f64 {
-    crate::timer::js_clear_timeout_value(arg);
-    f64::from_bits(TAG_UNDEFINED)
-}
-
-thunk!(
-    thunk_timers_setInterval,
-    "node:timers/promises.setInterval is not yet implemented in Perry (tracked by issue #793)."
-);
-thunk!(
-    thunk_timers_scheduler,
-    "node:timers/promises.scheduler is not yet implemented in Perry (tracked by issue #793)."
-);
-
-fn promise_value(value: f64) -> f64 {
-    let promise = crate::promise::js_promise_new();
-    crate::promise::js_promise_resolve(promise, value);
-    f64::from_bits(JSValue::pointer(promise as *const u8).bits())
-}
-
-fn promise_rejected(reason: f64) -> f64 {
-    let promise = crate::promise::js_promise_rejected(reason);
-    f64::from_bits(JSValue::pointer(promise as *const u8).bits())
-}
-
-fn promise_undefined() -> f64 {
-    promise_value(f64::from_bits(crate::value::TAG_UNDEFINED))
-}
-
-extern "C" fn thunk_fs_promises_readFile(
-    _closure: *const ClosureHeader,
-    path: f64,
-    encoding: f64,
-) -> f64 {
-    promise_value(crate::fs::js_fs_read_file_dispatch(path, encoding))
-}
-
-extern "C" fn thunk_fs_promises_open(
-    _closure: *const ClosureHeader,
-    path: f64,
-    flags: f64,
-    _mode: f64,
-) -> f64 {
-    // Probe before opening so a missing path rejects the Promise instead of
-    // resolving with a FileHandle whose `fd === -1`. Matches Node's behavior
-    // for `fs/promises.open(path)` on ENOENT/EACCES.
-    if let Some(err_val) = unsafe { crate::fs::fs_promises_open_probe_error(path, flags) } {
-        let promise = crate::promise::js_promise_rejected(err_val);
-        return f64::from_bits(JSValue::pointer(promise as *const u8).bits());
-    }
-    promise_value(crate::fs::js_fs_filehandle_open(path, flags))
-}
-
-extern "C" fn thunk_fs_promises_writeFile(
-    _closure: *const ClosureHeader,
-    path: f64,
-    data: f64,
-    options: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_write_file_sync_options(path, data, options);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_appendFile(
-    _closure: *const ClosureHeader,
-    path: f64,
-    data: f64,
-    options: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_append_file_sync_options(path, data, options);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_chmod(_closure: *const ClosureHeader, path: f64, mode: f64) -> f64 {
-    let _ = crate::fs::js_fs_chmod_sync(path, mode);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_chown(
-    _closure: *const ClosureHeader,
-    path: f64,
-    uid: f64,
-    gid: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_chown_sync(path, uid, gid);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_lchown(
-    _closure: *const ClosureHeader,
-    path: f64,
-    uid: f64,
-    gid: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_lchown_sync(path, uid, gid);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_mkdir(
-    _closure: *const ClosureHeader,
-    path: f64,
-    options: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_mkdir_sync_options(path, options);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_readdir(
-    _closure: *const ClosureHeader,
-    path: f64,
-    options: f64,
-) -> f64 {
-    let raw = crate::fs::js_fs_readdir_sync(path, options);
-    promise_value(f64::from_bits(
-        JSValue::pointer(raw.to_bits() as *const u8).bits(),
-    ))
-}
-
-extern "C" fn thunk_fs_promises_stat(
-    _closure: *const ClosureHeader,
-    path: f64,
-    options: f64,
-) -> f64 {
-    promise_value(crate::fs::js_fs_stat_sync_options(path, options))
-}
-
-extern "C" fn thunk_fs_promises_statfs(
-    _closure: *const ClosureHeader,
-    path: f64,
-    options: f64,
-) -> f64 {
-    promise_value(crate::fs::js_fs_statfs_sync_options(path, options))
-}
-
-extern "C" fn thunk_fs_promises_lstat(
-    _closure: *const ClosureHeader,
-    path: f64,
-    options: f64,
-) -> f64 {
-    promise_value(crate::fs::js_fs_lstat_sync_options(path, options))
-}
-
-extern "C" fn thunk_fs_promises_rm(_closure: *const ClosureHeader, path: f64, options: f64) -> f64 {
-    let _ = crate::fs::js_fs_rm_recursive_options(path, options);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_rmdir(
-    _closure: *const ClosureHeader,
-    path: f64,
-    options: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_rmdir_sync_options(path, options);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_unlink(_closure: *const ClosureHeader, path: f64) -> f64 {
-    let _ = crate::fs::js_fs_unlink_sync(path);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_rename(_closure: *const ClosureHeader, from: f64, to: f64) -> f64 {
-    let _ = crate::fs::js_fs_rename_sync(from, to);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_copyFile(
-    _closure: *const ClosureHeader,
-    from: f64,
-    to: f64,
-    flags: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_copy_file_sync_flags(from, to, flags);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_cp(
-    _closure: *const ClosureHeader,
-    from: f64,
-    to: f64,
-    options: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_cp_sync_options(from, to, options);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_truncate(
-    _closure: *const ClosureHeader,
-    path: f64,
-    len: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_truncate_sync(path, len);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_utimes(
-    _closure: *const ClosureHeader,
-    path: f64,
-    atime: f64,
-    mtime: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_utimes_sync(path, atime, mtime);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_lutimes(
-    _closure: *const ClosureHeader,
-    path: f64,
-    atime: f64,
-    mtime: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_lutimes_sync(path, atime, mtime);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_link(_closure: *const ClosureHeader, from: f64, to: f64) -> f64 {
-    let _ = crate::fs::js_fs_link_sync(from, to);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_symlink(
-    _closure: *const ClosureHeader,
-    target: f64,
-    path: f64,
-    _type: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_symlink_sync(target, path);
-    promise_undefined()
-}
-
-extern "C" fn thunk_fs_promises_readlink(
-    _closure: *const ClosureHeader,
-    path: f64,
-    options: f64,
-) -> f64 {
-    promise_value(crate::fs::js_fs_readlink_dispatch(path, options))
-}
-
-extern "C" fn thunk_fs_promises_realpath(
-    _closure: *const ClosureHeader,
-    path: f64,
-    options: f64,
-) -> f64 {
-    promise_value(crate::fs::js_fs_realpath_dispatch(path, options))
-}
-
-extern "C" fn thunk_fs_promises_mkdtemp(
-    _closure: *const ClosureHeader,
-    prefix: f64,
-    options: f64,
-) -> f64 {
-    promise_value(crate::fs::js_fs_mkdtemp_dispatch(prefix, options))
-}
-
-extern "C" fn thunk_fs_promises_opendir(_closure: *const ClosureHeader, path: f64) -> f64 {
-    promise_value(crate::fs::js_fs_opendir_sync(path))
-}
-
-extern "C" fn thunk_fs_promises_glob(
-    _closure: *const ClosureHeader,
-    pattern: f64,
-    options: f64,
-) -> f64 {
-    let raw = crate::fs::js_fs_glob_sync_options(pattern, options);
-    promise_value(f64::from_bits(
-        JSValue::pointer(raw.to_bits() as *const u8).bits(),
-    ))
-}
-
-extern "C" fn thunk_fs_promises_watch(
-    _closure: *const ClosureHeader,
-    path: f64,
-    options: f64,
-) -> f64 {
-    crate::fs::js_fs_watch(path, options, f64::from_bits(crate::value::TAG_UNDEFINED))
-}
-
-extern "C" fn thunk_fs_promises_access(
-    _closure: *const ClosureHeader,
-    path: f64,
-    mode: f64,
-) -> f64 {
-    let _ = crate::fs::js_fs_access_sync_mode(path, mode);
-    promise_undefined()
-}
-
-thunk!(thunk_readline_createInterface, "node:readline/promises.createInterface is not yet implemented in Perry (tracked by issue #793).");
-thunk!(
-    thunk_readline_Interface,
-    "node:readline/promises.Interface is not yet implemented in Perry (tracked by issue #793)."
-);
-thunk!(
-    thunk_readline_Readline,
-    "node:readline/promises.Readline is not yet implemented in Perry (tracked by issue #793)."
-);
-
-thunk!(
-    thunk_streamP_pipeline,
-    "node:stream/promises.pipeline is not yet implemented in Perry (tracked by issue #793)."
-);
-thunk!(
-    thunk_streamP_finished,
-    "node:stream/promises.finished is not yet implemented in Perry (tracked by issue #793)."
-);
-
-fn buffer_from_bytes(
-    bytes: &[u8],
-    mark_array_buffer: bool,
-    mark_uint8_array: bool,
-) -> *mut crate::buffer::BufferHeader {
-    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
-    unsafe {
-        (*buf).length = bytes.len() as u32;
-        if !bytes.is_empty() {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                crate::buffer::buffer_data_mut(buf),
-                bytes.len(),
-            );
-        }
-    }
-    if mark_array_buffer {
-        crate::buffer::mark_as_array_buffer(buf as usize);
-    }
-    if mark_uint8_array {
-        crate::buffer::mark_as_uint8array(buf as usize);
-    }
-    buf
-}
-
-fn bytes_to_buffer_value(bytes: &[u8]) -> f64 {
-    let buf = buffer_from_bytes(bytes, false, false);
-    f64::from_bits(JSValue::pointer(buf as *const u8).bits())
-}
-
-fn bytes_to_array_buffer_value(bytes: &[u8]) -> f64 {
-    let buf = buffer_from_bytes(bytes, true, false);
-    f64::from_bits(JSValue::pointer(buf as *const u8).bits())
-}
-
-fn bytes_to_uint8_array_value(bytes: &[u8]) -> f64 {
-    let buf = buffer_from_bytes(bytes, false, true);
-    f64::from_bits(JSValue::pointer(buf as *const u8).bits())
-}
-
-fn bytes_to_text_value(bytes: &[u8]) -> f64 {
-    let cow = String::from_utf8_lossy(bytes);
-    let ptr = js_string_from_bytes(cow.as_bytes().as_ptr(), cow.len() as u32);
-    f64::from_bits(JSValue::string_ptr(ptr).bits())
-}
-
-fn stream_consumer_bytes(stream: f64) -> Result<Vec<u8>, f64> {
-    crate::node_stream::js_node_stream_collect_bytes_result(stream)
-}
-
-const CLASS_ID_BLOB: u32 = 0xFFFF0026;
-
-extern "C" fn blob_text_method(closure: *const ClosureHeader) -> f64 {
-    let bytes = captured_blob_bytes(closure);
-    promise_value(bytes_to_text_value(&bytes))
-}
-
-extern "C" fn blob_array_buffer_method(closure: *const ClosureHeader) -> f64 {
-    let bytes = captured_blob_bytes(closure);
-    promise_value(bytes_to_array_buffer_value(&bytes))
-}
-
-extern "C" fn blob_bytes_method(closure: *const ClosureHeader) -> f64 {
-    let bytes = captured_blob_bytes(closure);
-    promise_value(bytes_to_uint8_array_value(&bytes))
-}
-
-extern "C" fn blob_slice_method(
-    closure: *const ClosureHeader,
-    start: f64,
-    end: f64,
-    content_type: f64,
-) -> f64 {
-    let bytes = captured_blob_bytes(closure);
-    let len = bytes.len() as i64;
-    let normalize = |value: f64, default: i64| -> i64 {
-        if value.is_nan() || value.to_bits() == crate::value::TAG_UNDEFINED {
-            return default;
-        }
-        let n = value as i64;
-        if n < 0 {
-            (len + n).max(0)
-        } else {
-            n.min(len)
-        }
-    };
-    let lo = normalize(start, 0);
-    let hi = normalize(end, len);
-    let (lo, hi) = if hi < lo { (lo, lo) } else { (lo, hi) };
-    let content_type = string_from_value(content_type).unwrap_or_default();
-    blob_value_from_bytes_and_type(&bytes[lo as usize..hi as usize], &content_type)
-}
-
-extern "C" fn blob_stream_method(closure: *const ClosureHeader) -> f64 {
-    let bytes = captured_blob_bytes(closure);
-    crate::node_stream::js_node_stream_readable_from(bytes_to_uint8_array_value(&bytes))
-}
-
-fn captured_blob_bytes(closure: *const ClosureHeader) -> Vec<u8> {
-    let raw = js_closure_get_capture_ptr(closure, 0) as usize;
-    if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
-        return Vec::new();
-    }
-    unsafe {
-        let buf = raw as *const crate::buffer::BufferHeader;
-        let len = (*buf).length as usize;
-        let data = crate::buffer::buffer_data(buf);
-        std::slice::from_raw_parts(data, len).to_vec()
-    }
-}
-
-fn set_named_value(obj: *mut ObjectHeader, name: &[u8], value: f64) {
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(obj, key, value);
-}
-
-#[allow(clippy::missing_transmute_annotations)]
-fn blob_method_value(
-    func: *const u8,
-    arity: u32,
-    backing: *mut crate::buffer::BufferHeader,
-) -> f64 {
-    js_register_closure_arity(func, arity);
-    let closure = js_closure_alloc(func, 1);
-    js_closure_set_capture_ptr(closure, 0, backing as i64);
-    f64::from_bits(JSValue::pointer(closure as *const u8).bits())
-}
-
-fn blob_value_from_bytes(bytes: &[u8]) -> f64 {
-    blob_value_from_bytes_and_type(bytes, "")
-}
-
-fn blob_value_from_bytes_and_type(bytes: &[u8], content_type: &str) -> f64 {
-    let backing = buffer_from_bytes(bytes, false, false);
-    let obj = js_object_alloc(CLASS_ID_BLOB, 7);
-    set_named_value(obj, b"size", bytes.len() as f64);
-    set_named_value(obj, b"type", bytes_to_text_value(content_type.as_bytes()));
-    set_named_value(
-        obj,
-        b"text",
-        blob_method_value(blob_text_method as *const u8, 0, backing),
-    );
-    set_named_value(
-        obj,
-        b"arrayBuffer",
-        blob_method_value(blob_array_buffer_method as *const u8, 0, backing),
-    );
-    set_named_value(
-        obj,
-        b"bytes",
-        blob_method_value(blob_bytes_method as *const u8, 0, backing),
-    );
-    set_named_value(
-        obj,
-        b"slice",
-        blob_method_value(blob_slice_method as *const u8, 3, backing),
-    );
-    set_named_value(
-        obj,
-        b"stream",
-        blob_method_value(blob_stream_method as *const u8, 0, backing),
-    );
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
-}
-
-fn string_from_value(value: f64) -> Option<String> {
-    let jsval = JSValue::from_bits(value.to_bits());
-    if !jsval.is_any_string() {
-        return None;
-    }
-    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
-    if ptr.is_null() || (ptr as usize) < 0x10000 {
-        return None;
-    }
-    unsafe {
-        let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned())
-    }
-}
-
-extern "C" fn thunk_consumers_text(_closure: *const ClosureHeader, stream: f64) -> f64 {
-    match stream_consumer_bytes(stream) {
-        Ok(bytes) => promise_value(bytes_to_text_value(&bytes)),
-        Err(err) => promise_rejected(err),
-    }
-}
-
-extern "C" fn thunk_consumers_json(_closure: *const ClosureHeader, stream: f64) -> f64 {
-    match stream_consumer_bytes(stream) {
-        Ok(bytes) => {
-            let text = bytes_to_text_value(&bytes);
-            let text_ptr = crate::value::js_get_string_pointer_unified(text) as *const StringHeader;
-            let parsed = unsafe { crate::json::js_json_parse(text_ptr) };
-            promise_value(f64::from_bits(parsed.bits()))
-        }
-        Err(err) => promise_rejected(err),
-    }
-}
-
-extern "C" fn thunk_consumers_buffer(_closure: *const ClosureHeader, stream: f64) -> f64 {
-    match stream_consumer_bytes(stream) {
-        Ok(bytes) => promise_value(bytes_to_buffer_value(&bytes)),
-        Err(err) => promise_rejected(err),
-    }
-}
-
-extern "C" fn thunk_consumers_arrayBuffer(_closure: *const ClosureHeader, stream: f64) -> f64 {
-    match stream_consumer_bytes(stream) {
-        Ok(bytes) => promise_value(bytes_to_array_buffer_value(&bytes)),
-        Err(err) => promise_rejected(err),
-    }
-}
-
-extern "C" fn thunk_consumers_bytes(_closure: *const ClosureHeader, stream: f64) -> f64 {
-    match stream_consumer_bytes(stream) {
-        Ok(bytes) => promise_value(bytes_to_uint8_array_value(&bytes)),
-        Err(err) => promise_rejected(err),
-    }
-}
-
-extern "C" fn thunk_consumers_blob(_closure: *const ClosureHeader, stream: f64) -> f64 {
-    match stream_consumer_bytes(stream) {
-        Ok(bytes) => promise_value(blob_value_from_bytes(&bytes)),
-        Err(err) => promise_rejected(err),
-    }
-}
+use consumers::{
+    thunk_consumers_arrayBuffer, thunk_consumers_blob, thunk_consumers_buffer,
+    thunk_consumers_bytes, thunk_consumers_json, thunk_consumers_text,
+};
+// Re-export at the `node_submodules` root so perry-stdlib's
+// `perry_runtime::node_submodules::js_register_stream_consumer_callbacks`
+// call site keeps resolving after the consumers split.
+pub use consumers::js_register_stream_consumer_callbacks;
+use fs_promises::{
+    thunk_fs_promises_access, thunk_fs_promises_appendFile, thunk_fs_promises_chmod,
+    thunk_fs_promises_chown, thunk_fs_promises_copyFile, thunk_fs_promises_cp,
+    thunk_fs_promises_glob, thunk_fs_promises_lchown, thunk_fs_promises_link,
+    thunk_fs_promises_lstat, thunk_fs_promises_lutimes, thunk_fs_promises_mkdir,
+    thunk_fs_promises_mkdtemp, thunk_fs_promises_open, thunk_fs_promises_opendir,
+    thunk_fs_promises_readFile, thunk_fs_promises_readdir, thunk_fs_promises_readlink,
+    thunk_fs_promises_realpath, thunk_fs_promises_rename, thunk_fs_promises_rm,
+    thunk_fs_promises_rmdir, thunk_fs_promises_stat, thunk_fs_promises_statfs,
+    thunk_fs_promises_symlink, thunk_fs_promises_truncate, thunk_fs_promises_unlink,
+    thunk_fs_promises_utimes, thunk_fs_promises_watch, thunk_fs_promises_writeFile,
+    thunk_readline_Interface, thunk_readline_Readline, thunk_readline_createInterface,
+};
+use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from_ptr};
+use timers::{
+    thunk_timers_scheduler, thunk_timers_setInterval, timers_ns_clear_immediate,
+    timers_ns_clear_interval, timers_ns_clear_timeout, timers_ns_set_immediate,
+    timers_ns_set_interval, timers_ns_set_timeout, timers_promises_set_immediate,
+    timers_promises_set_timeout,
+};
 
 // node:sys is a deprecated alias for node:util — point each export at
 // the same thunks until util's named-export surface is wired up. The
@@ -905,11 +356,11 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "pipeline",
-                thunk: ExportThunk::Fn1(thunk_streamP_pipeline),
+                thunk: ExportThunk::Fn3(thunk_streamP_pipeline),
             },
             ExportSpec {
                 name: "finished",
-                thunk: ExportThunk::Fn1(thunk_streamP_finished),
+                thunk: ExportThunk::Fn2(thunk_streamP_finished),
             },
         ],
     },
@@ -1096,6 +547,14 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
             crate::object::js_object_set_field_by_name(obj, name_header, value_f64);
         }
     }
+    if submod.key == "stream_promises" {
+        let value = value_from_ptr(obj as *const u8);
+        let name = b"default";
+        let name_header = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        unsafe {
+            crate::object::js_object_set_field_by_name(obj, name_header, value);
+        }
+    }
     NAMESPACE_SINGLETONS.with(|m| {
         m.borrow_mut().insert(key, obj);
     });
@@ -1201,7 +660,7 @@ pub(crate) fn test_node_submodule_roots() -> (usize, usize, usize) {
 // bytes from emitted IR (already produced as `private constant
 // [N x i8]` arrays via `emit_string_literal`).
 
-/// Returns a NaN-boxed function singleton for the given
+/// Returns a NaN-boxed export singleton for the given
 /// `(submodule, export)` pair. Falls back to NaN-boxed `TAG_TRUE`
 /// (preserving the pre-#841 sentinel) if no matching entry is found —
 /// this keeps any not-yet-listed export's behavior unchanged, so
@@ -1233,6 +692,10 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
         Some(s) => s,
         None => return f64::from_bits(JSValue::bool(true).bits()),
     };
+    if submod.key == "stream_promises" && name == "default" {
+        let obj = ensure_namespace_singleton(submod);
+        return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    }
     let export = match find_export(submod, name) {
         Some(e) => e,
         None => return f64::from_bits(JSValue::bool(true).bits()),
@@ -1243,7 +706,7 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
 
 /// Returns a NaN-boxed namespace stub object for the given submodule.
 /// Each known named export of that submodule is exposed as an own
-/// property on the object whose value is the function singleton
+/// property on the object whose value is the export singleton
 /// produced by `js_node_submodule_export_as_function`. Falls back to
 /// `js_unresolved_namespace_stub` (the empty-object stub Perry already
 /// hands out for unknown namespace imports) if `submod_key` doesn't
@@ -1272,7 +735,12 @@ pub unsafe extern "C" fn js_node_submodule_namespace(
 
 #[cfg(test)]
 mod tests {
+    use super::blob::string_from_value;
+    use super::stream_promises::{
+        abort_error_value, get_object_property, object_ptr_from_value, undefined_value,
+    };
     use super::*;
+    use std::cell::RefCell;
 
     #[test]
     fn known_submodules_have_at_least_one_export() {
@@ -1324,5 +792,194 @@ mod tests {
                 required
             );
         }
+    }
+
+    fn boxed_ptr(ptr: *const u8) -> f64 {
+        f64::from_bits(JSValue::pointer(ptr).bits())
+    }
+
+    fn promise_ptr(value: f64) -> *mut crate::promise::Promise {
+        crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise
+    }
+
+    fn string_value(s: &str) -> f64 {
+        let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    }
+
+    #[test]
+    fn stream_parent_promises_property_exposes_namespace() {
+        let value = unsafe {
+            crate::object::js_native_module_property_by_name(
+                b"stream".as_ptr(),
+                "stream".len(),
+                b"promises".as_ptr(),
+                "promises".len(),
+            )
+        };
+        let ns = object_ptr_from_value(value).expect("stream.promises should be an object");
+        assert!(get_object_property(boxed_ptr(ns as *const u8), b"pipeline").is_some());
+        assert!(get_object_property(boxed_ptr(ns as *const u8), b"finished").is_some());
+    }
+
+    #[test]
+    fn stream_promises_default_export_exposes_namespace() {
+        let value = unsafe {
+            js_node_submodule_export_as_function(
+                b"stream_promises".as_ptr(),
+                "stream_promises".len() as u32,
+                b"default".as_ptr(),
+                "default".len() as u32,
+            )
+        };
+        let ns = object_ptr_from_value(value).expect("default export should be an object");
+        let ns_value = boxed_ptr(ns as *const u8);
+
+        assert!(get_object_property(ns_value, b"pipeline").is_some());
+        assert!(get_object_property(ns_value, b"finished").is_some());
+        assert_eq!(
+            get_object_property(ns_value, b"default").unwrap().to_bits(),
+            ns_value.to_bits()
+        );
+    }
+
+    #[test]
+    fn stream_promises_finished_resolves_for_clean_stub_stream() {
+        let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 1);
+        assert_eq!(
+            crate::promise::js_promise_value(promise).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+    }
+
+    #[test]
+    fn stream_promises_finished_rejects_hidden_stream_error() {
+        let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+        let err = abort_error_value();
+        crate::node_stream::test_set_hidden_error(stream, err);
+
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 2);
+        assert_eq!(
+            crate::promise::js_promise_reason(promise).to_bits(),
+            err.to_bits()
+        );
+    }
+
+    thread_local! {
+        static PIPELINE_CAPTURED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    extern "C" fn pipeline_write_capture(
+        _closure: *const ClosureHeader,
+        chunk: f64,
+        _enc: f64,
+    ) -> f64 {
+        PIPELINE_CAPTURED.with(|captured| {
+            captured
+                .borrow_mut()
+                .push(string_from_value(chunk).unwrap_or_default());
+        });
+        f64::from_bits(crate::value::TAG_TRUE)
+    }
+
+    extern "C" fn pipeline_end_capture(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+        undefined_value()
+    }
+
+    #[test]
+    fn stream_promises_pipeline_transfers_readable_from_chunks() {
+        PIPELINE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+        crate::closure::js_register_closure_arity(pipeline_write_capture as *const u8, 2);
+        crate::closure::js_register_closure_arity(pipeline_end_capture as *const u8, 1);
+
+        let mut arr = crate::array::js_array_alloc(2);
+        arr = crate::array::js_array_push_f64(arr, string_value("await-"));
+        arr = crate::array::js_array_push_f64(arr, string_value("works"));
+        let source = crate::node_stream::js_node_stream_readable_from(boxed_ptr(arr as *const u8));
+
+        let sink = js_object_alloc(0, 2);
+        let write = js_closure_alloc(pipeline_write_capture as *const u8, 0);
+        let end = js_closure_alloc(pipeline_end_capture as *const u8, 0);
+        js_object_set_field_by_name(
+            sink,
+            js_string_from_bytes(b"write".as_ptr(), 5),
+            boxed_ptr(write as *const u8),
+        );
+        js_object_set_field_by_name(
+            sink,
+            js_string_from_bytes(b"end".as_ptr(), 3),
+            boxed_ptr(end as *const u8),
+        );
+
+        let promise_value = thunk_streamP_pipeline(
+            std::ptr::null(),
+            source,
+            boxed_ptr(sink as *const u8),
+            undefined_value(),
+        );
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 1);
+        PIPELINE_CAPTURED.with(|captured| {
+            assert_eq!(captured.borrow().join(""), "await-works");
+        });
+    }
+
+    #[test]
+    fn stream_promises_finished_rejects_when_signal_aborts() {
+        let controller = crate::url::js_abort_controller_new();
+        let signal = crate::url::js_abort_controller_signal(controller);
+        let opts = js_object_alloc(0, 1);
+        js_object_set_field_by_name(
+            opts,
+            js_string_from_bytes(b"signal".as_ptr(), 6),
+            boxed_ptr(signal as *const u8),
+        );
+        let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+
+        let promise_value =
+            thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));
+        let promise = promise_ptr(promise_value);
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        crate::url::js_abort_controller_abort(controller);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 2);
+    }
+
+    #[test]
+    fn stream_promises_finished_with_signal_resolves_for_ended_stub_stream() {
+        let controller = crate::url::js_abort_controller_new();
+        let signal = crate::url::js_abort_controller_signal(controller);
+        let opts = js_object_alloc(0, 1);
+        js_object_set_field_by_name(
+            opts,
+            js_string_from_bytes(b"signal".as_ptr(), 6),
+            boxed_ptr(signal as *const u8),
+        );
+        let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+        let end = get_object_property(stream, b"end").expect("stream.end should exist");
+        let prev_this = crate::object::js_implicit_this_set(stream);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
+        }
+        crate::object::js_implicit_this_set(prev_this);
+
+        let promise_value =
+            thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 1);
+        assert_eq!(
+            crate::promise::js_promise_value(promise).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
     }
 }

@@ -44,6 +44,8 @@ const READABLE_CHUNKS_KEY: &[u8] = b"__perryReadableChunks";
 const READABLE_ERROR_KEY: &[u8] = b"__perryReadableError";
 const READABLE_READ_KEY: &[u8] = b"__perryReadableRead";
 const READABLE_READ_INVOKED_KEY: &[u8] = b"__perryReadableReadInvoked";
+const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
+const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
 
 // ─────────────────────────────────────────────────────────────────
 // Stub method bodies. Each receives the closure pointer (slot 0
@@ -57,8 +59,11 @@ const READABLE_READ_INVOKED_KEY: &[u8] = b"__perryReadableReadInvoked";
 fn this_value(closure: *const ClosureHeader) -> f64 {
     // Slot 0 was set by `build_object` to the NaN-boxed bits of the
     // host object value cast to i64; reverse the cast.
-    let bits = js_closure_get_capture_ptr(closure, 0) as u64;
-    f64::from_bits(bits)
+    if !closure.is_null() {
+        let bits = js_closure_get_capture_ptr(closure, 0) as u64;
+        return f64::from_bits(bits);
+    }
+    crate::object::js_implicit_this_get()
 }
 
 extern "C" fn ns_chain0(closure: *const ClosureHeader) -> f64 {
@@ -81,15 +86,108 @@ extern "C" fn ns_emit2(closure: *const ClosureHeader, event: f64, arg: f64) -> f
     }
     f64::from_bits(TAG_FALSE)
 }
-extern "C" fn ns_read1(_closure: *const ClosureHeader, _n: f64) -> f64 {
+extern "C" fn ns_resume0(closure: *const ClosureHeader) -> f64 {
+    let stream = this_value(closure);
+    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    stream
+}
+
+extern "C" fn ns_read1(closure: *const ClosureHeader, _n: f64) -> f64 {
+    set_hidden_value(
+        this_value(closure),
+        hidden_ended_key(),
+        f64::from_bits(TAG_TRUE),
+    );
     f64::from_bits(TAG_NULL)
 }
 extern "C" fn ns_pipe1(_closure: *const ClosureHeader, dest: f64) -> f64 {
     // Node's `Readable.pipe(dest)` returns `dest` to allow `r.pipe(a).pipe(b)`.
     dest
 }
-extern "C" fn ns_write2(_closure: *const ClosureHeader, _chunk: f64, _enc: f64) -> f64 {
+extern "C" fn writable_write_callback_noop(_closure: *const ClosureHeader) -> f64 {
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_write2(closure: *const ClosureHeader, chunk: f64, enc: f64) -> f64 {
+    let stream = this_value(closure);
+    if let Some(write) = writable_hidden_write(stream) {
+        let cb = js_closure_alloc(writable_write_callback_noop as *const u8, 0);
+        let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+        let args = [chunk, enc, cb_value];
+        let prev_this = crate::object::js_implicit_this_set(stream);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(write, args.as_ptr(), args.len());
+        }
+        crate::object::js_implicit_this_set(prev_this);
+    }
     f64::from_bits(TAG_TRUE)
+}
+extern "C" fn ns_end1(closure: *const ClosureHeader, chunk: f64) -> f64 {
+    if !JSValue::from_bits(chunk.to_bits()).is_undefined() {
+        let _ = ns_write2(closure, chunk, f64::from_bits(TAG_UNDEFINED));
+    }
+    let stream = this_value(closure);
+    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    stream
+}
+
+fn stream_value_from_handle(stream_handle: i64) -> f64 {
+    if stream_handle == 0 {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        f64::from_bits(JSValue::pointer(stream_handle as *const u8).bits())
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_emit(stream_handle: i64, event: f64, arg: f64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if string_value_eq(event, b"error") {
+        set_hidden_value(stream, hidden_error_key(), arg);
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_FALSE)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    f64::from_bits(TAG_NULL)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    stream
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_write(stream_handle: i64, chunk: f64, enc: f64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if let Some(write) = writable_hidden_write(stream) {
+        let cb = js_closure_alloc(writable_write_callback_noop as *const u8, 0);
+        let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+        let args = [chunk, enc, cb_value];
+        let prev_this = crate::object::js_implicit_this_set(stream);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(write, args.as_ptr(), args.len());
+        }
+        crate::object::js_implicit_this_set(prev_this);
+    }
+    f64::from_bits(TAG_TRUE)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if !JSValue::from_bits(chunk.to_bits()).is_undefined() {
+        let _ = js_node_stream_method_write(stream_handle, chunk, f64::from_bits(TAG_UNDEFINED));
+    }
+    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    stream
 }
 extern "C" fn ns_listener_count(_closure: *const ClosureHeader, _e: f64) -> f64 {
     0.0
@@ -128,6 +226,8 @@ fn cast3(f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64) -> StubFn
 // ─────────────────────────────────────────────────────────────────
 
 fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut ObjectHeader {
+    register_stub_arities();
+
     // Pack the method names as a NUL-separated byte sequence, matching
     // the layout `js_object_alloc_with_shape` parses for shape keys.
     let mut packed: Vec<u8> = Vec::new();
@@ -153,6 +253,26 @@ fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut ObjectHeader 
         js_object_set_field(obj, i as u32, val);
     }
     obj
+}
+
+fn register_stub_arities() {
+    let register = |func: *const u8, arity: u32| {
+        crate::closure::js_register_closure_arity(func, arity);
+    };
+    register(ns_chain0 as *const u8, 0);
+    register(ns_chain1 as *const u8, 1);
+    register(ns_chain2 as *const u8, 2);
+    register(ns_chain3 as *const u8, 3);
+    register(ns_emit2 as *const u8, 2);
+    register(ns_resume0 as *const u8, 0);
+    register(ns_read1 as *const u8, 1);
+    register(ns_pipe1 as *const u8, 1);
+    register(writable_write_callback_noop as *const u8, 0);
+    register(ns_write2 as *const u8, 2);
+    register(ns_end1 as *const u8, 1);
+    register(ns_listener_count as *const u8, 1);
+    register(ns_listeners as *const u8, 1);
+    register(ns_undefined0 as *const u8, 0);
 }
 
 #[inline]
@@ -211,6 +331,16 @@ fn hidden_read_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_read_invoked_key() -> *mut crate::string::StringHeader {
     hidden_key(READABLE_READ_INVOKED_KEY)
+}
+
+#[inline]
+fn hidden_ended_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_ENDED_KEY)
+}
+
+#[inline]
+fn hidden_write_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_WRITE_KEY)
 }
 
 fn hidden_key(bytes: &[u8]) -> *mut crate::string::StringHeader {
@@ -286,8 +416,27 @@ fn readable_hidden_error(value: f64) -> Option<f64> {
     get_hidden_value(value, hidden_error_key())
 }
 
+fn stream_hidden_ended(value: f64) -> bool {
+    get_hidden_value(value, hidden_ended_key()).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
+}
+
+fn writable_hidden_write(value: f64) -> Option<f64> {
+    get_hidden_value(value, hidden_write_key())
+}
+
+fn rebind_callback_this(callback: f64, stream: f64) -> f64 {
+    f64::from_bits(crate::closure::clone_closure_rebind_this(
+        callback.to_bits(),
+        stream,
+    ))
+}
+
 fn read_callback_from_options(opts: f64) -> Option<f64> {
     get_hidden_value(opts, hidden_key(b"read"))
+}
+
+fn write_callback_from_options(opts: f64) -> Option<f64> {
+    get_hidden_value(opts, hidden_key(b"write"))
 }
 
 fn invoke_read_once(stream: f64) {
@@ -314,9 +463,34 @@ fn is_single_chunk_value(value: f64) -> bool {
     raw >= 0x10000 && crate::buffer::is_registered_buffer(raw)
 }
 
+fn uint8array_byte_chunks(raw: usize) -> f64 {
+    let arr = crate::array::js_array_alloc(0);
+    if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
+        return box_pointer(arr as *const u8);
+    }
+    unsafe {
+        let buf = raw as *const crate::buffer::BufferHeader;
+        let len = (*buf).length as usize;
+        let data = crate::buffer::buffer_data(buf);
+        let mut out = arr;
+        for i in 0..len {
+            out = crate::array::js_array_push_f64(out, *data.add(i) as f64);
+        }
+        box_pointer(out as *const u8)
+    }
+}
+
 fn normalize_readable_from_input(iterable: f64) -> f64 {
     if let Some(chunks) = readable_hidden_chunks(iterable) {
         return chunks;
+    }
+    let raw = raw_ptr_from_value(iterable);
+    if raw >= 0x10000
+        && crate::buffer::is_registered_buffer(raw)
+        && crate::buffer::is_uint8array_buffer(raw)
+        && !crate::buffer::is_array_buffer(raw)
+    {
+        return uint8array_byte_chunks(raw);
     }
     if is_array_like_value(iterable) {
         return iterable;
@@ -379,6 +553,19 @@ fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
         append_string_bytes(value, out);
         return;
     }
+    if jsval.is_int32() {
+        out.extend_from_slice(jsval.as_int32().to_string().as_bytes());
+        return;
+    }
+    if jsval.is_number() && value.is_finite() {
+        let text = if value.fract() == 0.0 {
+            (value as i64).to_string()
+        } else {
+            value.to_string()
+        };
+        out.extend_from_slice(text.as_bytes());
+        return;
+    }
 
     let raw = raw_ptr_from_value(value);
     if raw < 0x10000 {
@@ -407,6 +594,31 @@ fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
     }
 }
 
+fn push_chunk_values(value: f64, out: &mut Vec<f64>, depth: u8) {
+    if depth > 8 {
+        return;
+    }
+    if let Some(chunks) = readable_hidden_chunks(value) {
+        push_chunk_values(chunks, out, depth + 1);
+        return;
+    }
+    if is_array_like_value(value) {
+        let raw = raw_ptr_from_value(value);
+        if raw < 0x10000 {
+            return;
+        }
+        let arr = raw as *const crate::array::ArrayHeader;
+        let len = crate::array::js_array_length(arr);
+        for i in 0..len {
+            out.push(crate::array::js_array_get_f64(arr, i));
+        }
+        return;
+    }
+    if is_single_chunk_value(value) {
+        out.push(value);
+    }
+}
+
 /// Drain the chunk storage Perry attaches in `Readable.from(iterable)`.
 ///
 /// This intentionally handles only the current stream stub's concrete shapes:
@@ -415,6 +627,29 @@ fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
 /// pretending Perry has a full Node stream pump yet.
 pub fn js_node_stream_collect_bytes(stream: f64) -> Vec<u8> {
     js_node_stream_collect_bytes_result(stream).unwrap_or_default()
+}
+
+pub fn js_node_stream_collect_chunks_result(stream: f64) -> Option<Result<f64, f64>> {
+    invoke_read_once(stream);
+    if let Some(err) = readable_hidden_error(stream) {
+        return Some(Err(err));
+    }
+    if let Some(chunks) = readable_hidden_chunks(stream) {
+        return Some(Ok(chunks));
+    }
+    if is_array_like_value(stream) {
+        return Some(Ok(stream));
+    }
+    if is_single_chunk_value(stream) {
+        let mut arr = crate::array::js_array_alloc(1);
+        arr = crate::array::js_array_push_f64(arr, stream);
+        return Some(Ok(box_pointer(arr as *const u8)));
+    }
+    if get_hidden_value(stream, hidden_read_key()).is_some() {
+        let arr = crate::array::js_array_alloc(0);
+        return Some(Ok(box_pointer(arr as *const u8)));
+    }
+    None
 }
 
 pub fn js_node_stream_collect_bytes_result(stream: f64) -> Result<Vec<u8>, f64> {
@@ -428,6 +663,37 @@ pub fn js_node_stream_collect_bytes_result(stream: f64) -> Result<Vec<u8>, f64> 
         return Err(err);
     }
     Ok(out)
+}
+
+pub(crate) fn js_node_stream_hidden_error_after_read(stream: f64) -> Option<f64> {
+    invoke_read_once(stream);
+    readable_hidden_error(stream)
+}
+
+pub(crate) fn js_node_stream_is_stub_ended_after_read(stream: f64) -> bool {
+    invoke_read_once(stream);
+    stream_hidden_ended(stream)
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_hidden_error(stream: f64, err: f64) {
+    set_hidden_value(stream, hidden_error_key(), err);
+}
+
+pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Option<Vec<f64>>, f64> {
+    invoke_read_once(stream);
+    if let Some(err) = readable_hidden_error(stream) {
+        return Err(err);
+    }
+    let Some(chunks) = readable_hidden_chunks(stream) else {
+        return Ok(None);
+    };
+    let mut out = Vec::new();
+    push_chunk_values(chunks, &mut out, 0);
+    if let Some(err) = readable_hidden_error(stream) {
+        return Err(err);
+    }
+    Ok(Some(out))
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -453,7 +719,7 @@ fn readable_methods() -> [(&'static str, StubFn); 17] {
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_chain1)),
         ("pause", cast0(ns_chain0)),
-        ("resume", cast0(ns_chain0)),
+        ("resume", cast0(ns_resume0)),
         ("destroy", cast1(ns_chain1)),
         ("setEncoding", cast1(ns_chain1)),
         ("isPaused", cast0(ns_undefined0)),
@@ -472,7 +738,7 @@ fn writable_methods() -> [(&'static str, StubFn); 16] {
         ("listenerCount", cast1(ns_listener_count)),
         ("listeners", cast1(ns_listeners)),
         ("write", cast2(ns_write2)),
-        ("end", cast1(ns_chain1)),
+        ("end", cast1(ns_end1)),
         ("cork", cast0(ns_chain0)),
         ("uncork", cast0(ns_chain0)),
         ("destroy", cast1(ns_chain1)),
@@ -499,11 +765,11 @@ fn duplex_methods() -> [(&'static str, StubFn); 22] {
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_chain1)),
         ("pause", cast0(ns_chain0)),
-        ("resume", cast0(ns_chain0)),
+        ("resume", cast0(ns_resume0)),
         ("setEncoding", cast1(ns_chain1)),
         ("isPaused", cast0(ns_undefined0)),
         ("write", cast2(ns_write2)),
-        ("end", cast1(ns_chain1)),
+        ("end", cast1(ns_end1)),
         ("cork", cast0(ns_chain0)),
         ("uncork", cast0(ns_chain0)),
         ("destroy", cast1(ns_chain1)),
@@ -518,9 +784,9 @@ fn duplex_methods() -> [(&'static str, StubFn); 22] {
 // `Readable.from(iterable)`.
 //
 // Each takes a single `_opts` argument (NaN-boxed) for ABI parity
-// with Node's constructor signature; the stub doesn't read fields
-// off it (the `read` / `write` callback bodies aren't wired through),
-// it's just kept around to avoid breaking the codegen's call shape.
+// with Node's constructor signature. The stub reads only the small
+// option callbacks Perry can honor today (`read` and `write`), keeping
+// the wider stream state machine out of this compatibility layer.
 // ─────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -529,26 +795,35 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     let obj = build_object(&methods, READABLE_SHAPE_ID + methods.len() as u32);
     let readable = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     if let Some(read) = read_callback_from_options(opts) {
-        js_object_set_field_by_name(obj, hidden_read_key(), read);
-        let emit_key = hidden_key(b"emit");
-        let emit = js_object_get_field_by_name_f64(obj as *const ObjectHeader, emit_key);
-        set_hidden_value(opts, emit_key, emit);
+        js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, readable));
     }
     readable
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_stream_writable_new(_opts: f64) -> f64 {
+pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
     let methods = writable_methods();
     let obj = build_object(&methods, WRITABLE_SHAPE_ID + methods.len() as u32);
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    let writable = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    if let Some(write) = write_callback_from_options(opts) {
+        js_object_set_field_by_name(
+            obj,
+            hidden_write_key(),
+            rebind_callback_this(write, writable),
+        );
+    }
+    writable
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_stream_duplex_new(_opts: f64) -> f64 {
+pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     let methods = duplex_methods();
     let obj = build_object(&methods, DUPLEX_SHAPE_ID + methods.len() as u32);
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    let duplex = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    if let Some(write) = write_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, duplex));
+    }
+    duplex
 }
 
 /// Transform / PassThrough share Duplex's surface for the stub — the
@@ -682,6 +957,11 @@ pub extern "C" fn js_node_stream_from_web(_web_stream: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static WRITE_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    }
 
     fn string_value(s: &str) -> f64 {
         let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -699,6 +979,27 @@ mod tests {
             );
         }
         box_pointer(buf as *const u8)
+    }
+
+    extern "C" fn write_capture(
+        _closure: *const ClosureHeader,
+        chunk: f64,
+        _enc: f64,
+        cb: f64,
+    ) -> f64 {
+        let readable = js_node_stream_readable_from(chunk);
+        let bytes = js_node_stream_collect_bytes(readable);
+        WRITE_CAPTURED.with(|captured| captured.borrow_mut().push(bytes));
+        unsafe {
+            let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
+        }
+        f64::from_bits(TAG_UNDEFINED)
+    }
+
+    extern "C" fn read_records_this(closure: *const ClosureHeader) -> f64 {
+        let stream = crate::closure::js_closure_get_capture_f64(closure, 0);
+        set_hidden_value(stream, hidden_error_key(), string_value("from-read"));
+        f64::from_bits(TAG_UNDEFINED)
     }
 
     #[test]
@@ -721,5 +1022,140 @@ mod tests {
         let readable = js_node_stream_readable_from(box_pointer(arr as *const u8));
 
         assert_eq!(js_node_stream_collect_bytes(readable), b"abcd");
+    }
+
+    #[test]
+    fn writable_options_write_callback_is_invoked_by_stub_write() {
+        WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+        let opts = crate::object::js_object_alloc(0, 1);
+        let closure = js_closure_alloc(write_capture as *const u8, 0);
+        crate::closure::js_register_closure_arity(write_capture as *const u8, 3);
+        js_object_set_field_by_name(
+            opts,
+            hidden_key(b"write"),
+            f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
+        );
+
+        let writable = js_node_stream_writable_new(box_pointer(opts as *const u8));
+        let write = js_object_get_field_by_name_f64(
+            raw_ptr_from_value(writable) as *const ObjectHeader,
+            hidden_key(b"write"),
+        );
+        let args = [string_value("chunk"), f64::from_bits(TAG_UNDEFINED)];
+        unsafe {
+            let _ = crate::closure::js_native_call_value(write, args.as_ptr(), args.len());
+        }
+
+        WRITE_CAPTURED.with(|captured| {
+            assert_eq!(captured.borrow().as_slice(), &[b"chunk".to_vec()]);
+        });
+    }
+
+    #[test]
+    fn readable_options_read_callback_this_is_rebound_to_stream() {
+        let opts = crate::object::js_object_alloc(0, 1);
+        let closure = js_closure_alloc(
+            read_records_this as *const u8,
+            crate::closure::CAPTURES_THIS_FLAG | 1,
+        );
+        crate::closure::js_register_closure_arity(read_records_this as *const u8, 0);
+        crate::closure::js_closure_set_capture_f64(closure, 0, box_pointer(opts as *const u8));
+        js_object_set_field_by_name(
+            opts,
+            hidden_key(b"read"),
+            f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
+        );
+
+        let readable = js_node_stream_readable_new(box_pointer(opts as *const u8));
+
+        let err = js_node_stream_hidden_error_after_read(readable).expect("stream error");
+        assert!(string_value_eq(err, b"from-read"));
+        assert!(readable_hidden_error(box_pointer(opts as *const u8)).is_none());
+    }
+
+    #[test]
+    fn stream_methods_use_implicit_this_without_closure_capture() {
+        let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+        let prev_this = crate::object::js_implicit_this_set(stream);
+        let _ = ns_end1(std::ptr::null(), f64::from_bits(TAG_UNDEFINED));
+        crate::object::js_implicit_this_set(prev_this);
+
+        assert!(js_node_stream_is_stub_ended_after_read(stream));
+    }
+
+    #[test]
+    fn stream_method_closure_capture_wins_over_stale_implicit_this() {
+        let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+        let other = box_pointer(crate::object::js_object_alloc(0, 0) as *const u8);
+        let end = js_object_get_field_by_name_f64(
+            raw_ptr_from_value(stream) as *const ObjectHeader,
+            hidden_key(b"end"),
+        );
+
+        let prev_this = crate::object::js_implicit_this_set(other);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
+        }
+        crate::object::js_implicit_this_set(prev_this);
+
+        assert!(js_node_stream_is_stub_ended_after_read(stream));
+        assert!(!stream_hidden_ended(other));
+    }
+
+    #[test]
+    fn stream_methods_dispatch_through_dynamic_method_call() {
+        let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+        unsafe {
+            let _ = crate::object::js_native_call_method(
+                stream,
+                b"end".as_ptr() as *const i8,
+                3,
+                std::ptr::null(),
+                0,
+            );
+        }
+
+        assert!(js_node_stream_is_stub_ended_after_read(stream));
+    }
+
+    #[test]
+    fn stream_native_receiver_methods_update_hidden_state() {
+        let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+        let handle = raw_ptr_from_value(stream) as i64;
+        let err = string_value("boom");
+
+        assert_eq!(
+            js_node_stream_method_emit(handle, string_value("error"), err).to_bits(),
+            TAG_TRUE
+        );
+        assert!(js_node_stream_hidden_error_after_read(stream).is_some());
+
+        let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+        let handle = raw_ptr_from_value(stream) as i64;
+        let _ = js_node_stream_method_end(handle, f64::from_bits(TAG_UNDEFINED));
+        assert!(js_node_stream_is_stub_ended_after_read(stream));
+    }
+
+    #[test]
+    fn stream_stub_arities_are_registered_per_thread() {
+        let _ = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+        assert_eq!(
+            crate::closure::lookup_closure_arity(ns_end1 as *const u8),
+            Some(1)
+        );
+
+        std::thread::spawn(|| {
+            let _ = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+            assert_eq!(
+                crate::closure::lookup_closure_arity(ns_end1 as *const u8),
+                Some(1)
+            );
+            assert_eq!(
+                crate::closure::lookup_closure_arity(ns_write2 as *const u8),
+                Some(2)
+            );
+        })
+        .join()
+        .expect("stream arity registration thread should not panic");
     }
 }
