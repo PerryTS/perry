@@ -75,7 +75,7 @@ TypeScript (.ts) → Parse (SWC) → AST → Lower → HIR → Transform → Cod
 | **perry-runtime** | Runtime: value.rs, object.rs, array.rs, string.rs, gc.rs, arena.rs, thread.rs |
 | **perry-stdlib** | Node.js API support (mysql2, redis, fetch, fastify, ws, etc.) |
 | **perry-ui** / **perry-ui-macos** / **perry-ui-ios** / **perry-ui-tvos** | Native UI (AppKit/UIKit) |
-| **perry-jsruntime** | JavaScript interop via QuickJS |
+| **perry-jsruntime** | JavaScript interop via V8 (embedded through deno_core) |
 
 ## NaN-Boxing
 
