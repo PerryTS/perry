@@ -1687,5 +1687,23 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/writable/end-twice-noop": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: end() called twice — second call fires duplicate 'finish' or errors. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/readable/iterate-after-toarray": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: iteration after toArray() yields wrong count (state not drained). Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/web/transform-cancel-propagates": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: TransformStream readable.cancel() does not propagate to writable — writes still succeed after cancel. Flips to PASS when #1545 lands."
   }
 }
