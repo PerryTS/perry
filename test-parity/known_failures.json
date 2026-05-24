@@ -1687,5 +1687,23 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/events/get-event-listeners-static": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: events.getEventListeners(emitter, event) — wrong listener array. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/compose/async-iter-handler-rejection": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: compose() async-gen handler throw — composite does not emit 'error'. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/flow/pause-during-async-iter": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pause() inside for-await — affects iteration count incorrectly. Flips to PASS when #1532 lands."
   }
 }
