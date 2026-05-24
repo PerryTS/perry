@@ -51,6 +51,7 @@ impl LoweringContext {
             builtin_module_aliases: Vec::new(),
             type_param_scopes: Vec::new(),
             native_instances: Vec::new(),
+            ui_widget_type_aliases: HashMap::new(),
             current_class: None,
             extern_func_types: Vec::new(),
             source_file_path: source_file_path.into(),
@@ -917,6 +918,25 @@ impl LoweringContext {
             .push((local_name, module_name, class_name));
     }
 
+    /// #1483: resolve a parameter's declared type name to a perry/ui widget
+    /// class that uses handle-based instance dispatch (Canvas, State, ...).
+    /// Returns the canonical widget name (e.g. "Canvas") when `type_name`
+    /// refers to a perry/ui widget — whether via its value-import name
+    /// (`canvas: Canvas`) or a type-only import alias (`type Canvas as
+    /// CanvasType` → `canvas: CanvasType`). Returns `None` otherwise, so a
+    /// user class that merely shares a name with a widget isn't mis-tagged
+    /// (resolution requires an actual perry/ui import).
+    pub(crate) fn resolve_perry_ui_widget_type(&self, type_name: &str) -> Option<String> {
+        // Value import: `import { Canvas } from "perry/ui"`.
+        if let Some(("perry/ui", Some(widget))) = self.lookup_native_module(type_name) {
+            if perry_ui_handle_widget(widget) {
+                return Some(widget.to_string());
+            }
+        }
+        // Type-only import, possibly aliased: `import { type Canvas as CanvasType }`.
+        self.ui_widget_type_aliases.get(type_name).cloned()
+    }
+
     pub(crate) fn lookup_native_instance(&self, name: &str) -> Option<(&str, &str)> {
         // Issue #1132 — walk the scoped instances back-to-front so a
         // later (inner-scope) registration shadows an earlier
@@ -1100,4 +1120,24 @@ impl LoweringContext {
         }
         self.functions.truncate(functions_mark);
     }
+}
+
+/// perry/ui named imports that return an opaque widget handle and dispatch
+/// instance methods through `NativeMethodCall` (handle-based dispatch). The
+/// set mirrors the local-init registration in `module_decl.rs`; keep the two
+/// in sync. Used to tag widget-typed function parameters (#1483).
+pub(crate) fn perry_ui_handle_widget(name: &str) -> bool {
+    matches!(
+        name,
+        "Canvas"
+            | "State"
+            | "Sheet"
+            | "Toolbar"
+            | "Window"
+            | "LazyVStack"
+            | "NavigationStack"
+            | "Picker"
+            | "Table"
+            | "TabBar"
+    )
 }
