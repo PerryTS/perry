@@ -117,6 +117,13 @@ pub struct LoweringContext {
     /// Native class instances: local_name -> (module_name, class_name)
     /// Tracks variables that hold instances of native module classes (e.g., EventEmitter)
     pub(crate) native_instances: Vec<(String, String, String)>,
+    /// #1483: type-only perry/ui widget import aliases — local_name ->
+    /// canonical widget name. `import { type Canvas as CanvasType }` records
+    /// `CanvasType -> Canvas` so a `canvas: CanvasType` parameter can be
+    /// tagged as a perry/ui native instance (handle-based method dispatch),
+    /// exactly like a `canvas: Canvas` param or a `const canvas = Canvas(...)`
+    /// local. Type-only native specifiers are otherwise dropped at import.
+    pub(crate) ui_widget_type_aliases: HashMap<String, String>,
     /// Current class being lowered (for arrow function `this` capture)
     pub(crate) current_class: Option<String>,
     /// Extern function types: name -> (param_types, return_type)
