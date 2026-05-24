@@ -120,15 +120,22 @@ unsafe impl Send for WriterData {}
 
 lazy_static::lazy_static! {
     static ref READABLE_STREAMS: Mutex<HashMap<usize, ReadableStreamData>> = Mutex::new(HashMap::new());
-    static ref NEXT_RS_ID: Mutex<usize> = Mutex::new(1);
     static ref WRITABLE_STREAMS: Mutex<HashMap<usize, WritableStreamData>> = Mutex::new(HashMap::new());
-    static ref NEXT_WS_ID: Mutex<usize> = Mutex::new(1);
     static ref TRANSFORM_STREAMS: Mutex<HashMap<usize, TransformStreamData>> = Mutex::new(HashMap::new());
-    static ref NEXT_TS_ID: Mutex<usize> = Mutex::new(1);
     static ref READERS: Mutex<HashMap<usize, ReaderData>> = Mutex::new(HashMap::new());
-    static ref NEXT_READER_ID: Mutex<usize> = Mutex::new(1);
     static ref WRITERS: Mutex<HashMap<usize, WriterData>> = Mutex::new(HashMap::new());
-    static ref NEXT_WRITER_ID: Mutex<usize> = Mutex::new(1);
+    // #1545: ONE id counter shared across all five Web Streams registries.
+    // Two reasons: (1) ids are globally unique across readable/writable/
+    // transform/reader/writer, so the runtime handle dispatcher can tell which
+    // registry a handle belongs to unambiguously; (2) the high base (0x40000)
+    // puts stream handles well above every other handle subsystem's id range
+    // (commander/fastify/net/... all start at 1 and never approach it), so a
+    // stream handle never collides with another subsystem's handle while still
+    // staying under the 0x100000 small-handle detection threshold. This is what
+    // lets `js_handle_method_dispatch` safely route stream methods at runtime
+    // for receivers whose static type the codegen lost (e.g.
+    // `src.pipeThrough(ts).getReader()`, `ts.readable.getReader()`).
+    static ref NEXT_STREAM_ID: Mutex<usize> = Mutex::new(0x40000);
 }
 
 static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -291,7 +298,7 @@ unsafe fn make_error_with_message(msg: &str) -> u64 {
 }
 
 fn alloc_readable(start_cb: i64, pull_cb: i64, cancel_cb: i64, hwm: f64) -> usize {
-    let id = next_id(&NEXT_RS_ID);
+    let id = next_id(&NEXT_STREAM_ID);
     READABLE_STREAMS.lock().unwrap().insert(
         id,
         ReadableStreamData {
@@ -313,7 +320,7 @@ fn alloc_readable(start_cb: i64, pull_cb: i64, cancel_cb: i64, hwm: f64) -> usiz
 }
 
 fn alloc_writable(write_cb: i64, close_cb: i64, abort_cb: i64, hwm: f64) -> usize {
-    let id = next_id(&NEXT_WS_ID);
+    let id = next_id(&NEXT_STREAM_ID);
     let ready = js_promise_new();
     let closed = js_promise_new();
     js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
@@ -431,6 +438,73 @@ pub unsafe extern "C" fn js_readable_stream_new(
     id as f64
 }
 
+// ── #1545: node:stream/web QueuingStrategy classes ──────────────────────
+//
+// `new CountQueuingStrategy({ highWaterMark })` and
+// `new ByteLengthQueuingStrategy({ highWaterMark })` produce plain objects
+// with a numeric `highWaterMark` field and a `size` method, matching the
+// WHATWG built-ins. CountQueuingStrategy.size always returns 1 (chunks are
+// counted one-by-one); ByteLengthQueuingStrategy.size returns
+// `chunk.byteLength`. Both are surfaced through codegen's builtin-`new`
+// dispatch (lower_call/builtin.rs); the import binding lives in
+// node_submodules.
+
+/// `CountQueuingStrategy.prototype.size` — every chunk counts as 1.
+extern "C" fn count_queuing_strategy_size(_c: *const ClosureHeader, _chunk: f64) -> f64 {
+    1.0
+}
+
+/// `ByteLengthQueuingStrategy.prototype.size` — `chunk.byteLength`.
+extern "C" fn byte_length_queuing_strategy_size(_c: *const ClosureHeader, chunk: f64) -> f64 {
+    // Mirror Node's `return chunk.byteLength`: the generic property getter
+    // resolves `.byteLength` for both registered buffers/typed arrays and
+    // plain `{ byteLength }` objects.
+    unsafe { perry_runtime::value::js_get_property(chunk, b"byteLength".as_ptr() as i64, 10) }
+}
+
+/// Build a `{ highWaterMark, size }` object for a queuing strategy. `hwm_bits`
+/// is the raw JSValue bits read from the caller's options object.
+unsafe fn build_queuing_strategy(
+    hwm_bits: u64,
+    size_fn: extern "C" fn(*const ClosureHeader, f64) -> f64,
+) -> f64 {
+    let obj = js_object_alloc(0, 2);
+    let keys = js_array_alloc(2);
+    let k_hwm = js_string_from_bytes(b"highWaterMark".as_ptr(), 13);
+    let k_size = js_string_from_bytes(b"size".as_ptr(), 4);
+    js_array_push(keys, JSValue::string_ptr(k_hwm));
+    js_array_push(keys, JSValue::string_ptr(k_size));
+    js_object_set_field(obj, 0, JSValue::from_bits(hwm_bits));
+    // `size` is a 1-arg native function value. Register the arity so closure
+    // dispatch pads/forwards the single `chunk` argument correctly.
+    let fn_ptr = size_fn as *const u8;
+    perry_runtime::closure::js_register_closure_arity(fn_ptr, 1);
+    let closure = perry_runtime::closure::js_closure_alloc(fn_ptr, 0);
+    js_object_set_field(obj, 1, JSValue::pointer(closure as *const u8));
+    js_object_set_keys(obj, keys);
+    f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
+}
+
+/// Read `opts.highWaterMark` (raw JSValue bits) from a strategy's options
+/// object; undefined when absent (matches `new CountQueuingStrategy({})`).
+unsafe fn read_high_water_mark(opts: f64) -> u64 {
+    perry_runtime::value::js_get_property(opts, b"highWaterMark".as_ptr() as i64, 13).to_bits()
+}
+
+/// `new CountQueuingStrategy({ highWaterMark })`.
+#[no_mangle]
+pub unsafe extern "C" fn js_count_queuing_strategy_new(opts: f64) -> f64 {
+    let hwm = read_high_water_mark(opts);
+    build_queuing_strategy(hwm, count_queuing_strategy_size)
+}
+
+/// `new ByteLengthQueuingStrategy({ highWaterMark })`.
+#[no_mangle]
+pub unsafe extern "C" fn js_byte_length_queuing_strategy_new(opts: f64) -> f64 {
+    let hwm = read_high_water_mark(opts);
+    build_queuing_strategy(hwm, byte_length_queuing_strategy_size)
+}
+
 /// Internal helper: build a single-chunk readable stream from an owned
 /// byte buffer. Used by `blob.stream()` and `response.body`.
 pub fn alloc_readable_from_bytes(bytes: Vec<u8>) -> usize {
@@ -463,7 +537,7 @@ pub unsafe extern "C" fn js_readable_stream_get_reader(stream_handle: f64) -> f6
         if s.reader_handle.is_some() {
             return f64::from_bits(TAG_UNDEFINED);
         }
-        let reader_id = next_id(&NEXT_READER_ID);
+        let reader_id = next_id(&NEXT_STREAM_ID);
         let closed_p = js_promise_new();
         if s.state == ReadableState::Closed {
             js_promise_resolve(closed_p, f64::from_bits(TAG_UNDEFINED));
@@ -553,13 +627,58 @@ pub unsafe extern "C" fn js_readable_stream_from_response(_resp_id: f64) -> f64 
     alloc_readable_from_bytes(Vec::new()) as f64
 }
 
-// `ReadableStream.from(asyncIterable)` — deferred (issue #237 followup).
+/// `ReadableStream.from(iterable)` (Node 20+, #1645) — build a Web
+/// ReadableStream pre-loaded with the iterable's items, then closed. Today we
+/// handle the synchronous-array case (the overwhelmingly common form: a literal
+/// array, a spread, `[...set]`, etc.); each element becomes one chunk so
+/// `getReader().read()` / `for await` yield them in order, then `done`.
 #[no_mangle]
-pub unsafe extern "C" fn js_readable_stream_from_iterable(_value: f64) -> f64 {
-    let err = make_error_with_message(
-        "ReadableStream.from(asyncIterable) is not yet implemented (issue #237 followup)",
-    );
-    perry_runtime::exception::js_throw(f64::from_bits(err));
+pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
+    ensure_gc_registered();
+    let id = alloc_readable(0, 0, 0, 1.0);
+
+    // Extract the array pointer: array values arrive either NaN-boxed POINTER
+    // (top16 == 0x7FFD) or as a raw heap pointer bit-cast to f64 (top16 == 0).
+    let bits = value.to_bits();
+    let top = bits >> 48;
+    let arr_ptr = if top == 0x7FFD || top == 0x7FFF {
+        (bits & POINTER_MASK) as *const perry_runtime::ArrayHeader
+    } else if top == 0 && bits >= 0x10000 {
+        bits as *const perry_runtime::ArrayHeader
+    } else {
+        std::ptr::null()
+    };
+
+    {
+        let mut g = READABLE_STREAMS.lock().unwrap();
+        if let Some(s) = g.get_mut(&id) {
+            if !arr_ptr.is_null() {
+                let len = perry_runtime::array::js_array_length(arr_ptr);
+                for i in 0..len {
+                    let elem = perry_runtime::array::js_array_get(arr_ptr, i);
+                    s.chunks.push_back(elem.bits());
+                }
+            }
+            s.started = true;
+            s.state = ReadableState::Closed;
+        }
+    }
+    id as f64
+}
+
+/// #1671: `renderToReadableStream` stream backend. Builds a closed
+/// single-chunk readable stream carrying the already-rendered HTML string, so
+/// hono's `renderToReadableStream(<App/>)` returns a real Web stream that
+/// `getReader()` / `for await` can drain. Registered into the runtime via
+/// `js_register_jsx_render_stream` from `js_stdlib_init_dispatch` when
+/// `bundled-streams` is linked; absent that, the runtime thunk returns the
+/// rendered HTML node directly (degraded but usable).
+#[no_mangle]
+pub unsafe extern "C" fn js_jsx_render_stream_from_value(html_value: f64) -> f64 {
+    let mut arr = perry_runtime::array::js_array_alloc(1);
+    arr = perry_runtime::array::js_array_push_f64(arr, html_value);
+    let arr_f64 = f64::from_bits(perry_runtime::JSValue::pointer(arr as *const u8).bits());
+    js_readable_stream_from_iterable(arr_f64)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -793,8 +912,8 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
         }
     };
 
-    let id_a = next_id(&NEXT_RS_ID);
-    let id_b = next_id(&NEXT_RS_ID);
+    let id_a = next_id(&NEXT_STREAM_ID);
+    let id_b = next_id(&NEXT_STREAM_ID);
     {
         let mut g = READABLE_STREAMS.lock().unwrap();
         for new_id in [id_a, id_b] {
@@ -924,6 +1043,7 @@ pub unsafe extern "C" fn js_readable_stream_pipe_through(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_new(
+    start_bits: f64,
     write_bits: f64,
     close_bits: f64,
     abort_bits: f64,
@@ -936,6 +1056,13 @@ pub unsafe extern "C" fn js_writable_stream_new(
         closure_from_bits(abort_bits.to_bits()),
         hwm,
     );
+    // #1545: WritableStream `start(controller)` fires synchronously at
+    // construction (before any write), matching the WHATWG order
+    // start → write → close. The controller arg is the stream handle.
+    let start_cb = closure_from_bits(start_bits.to_bits());
+    if start_cb != 0 {
+        js_closure_call1(start_cb as *const ClosureHeader, id as f64);
+    }
     id as f64
 }
 
@@ -951,7 +1078,7 @@ pub unsafe extern "C" fn js_writable_stream_get_writer(stream_handle: f64) -> f6
     if s.writer_handle.is_some() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let writer_id = next_id(&NEXT_WRITER_ID);
+    let writer_id = next_id(&NEXT_STREAM_ID);
     s.writer_handle = Some(writer_id);
     let closed_p = s.closed_promise;
     let ready_p = s.ready_promise;
@@ -1165,11 +1292,13 @@ pub unsafe extern "C" fn js_writer_desired_size(writer_handle: f64) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_transform_stream_new(
+    start_bits: f64,
     transform_bits: f64,
     flush_bits: f64,
     hwm: f64,
 ) -> f64 {
     ensure_gc_registered();
+    let start_cb = closure_from_bits(start_bits.to_bits());
     let transform_cb = closure_from_bits(transform_bits.to_bits());
     let flush_cb = closure_from_bits(flush_bits.to_bits());
 
@@ -1184,7 +1313,7 @@ pub unsafe extern "C" fn js_transform_stream_new(
 
     // Allocate writable side; its write_cb is synthesized via the
     // dispatcher table below to invoke transform(chunk, controller).
-    let writable_id = next_id(&NEXT_WS_ID);
+    let writable_id = next_id(&NEXT_STREAM_ID);
     let ready = js_promise_new();
     let closed = js_promise_new();
     js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
@@ -1208,7 +1337,7 @@ pub unsafe extern "C" fn js_transform_stream_new(
         },
     );
 
-    let id = next_id(&NEXT_TS_ID);
+    let id = next_id(&NEXT_STREAM_ID);
     TRANSFORM_STREAMS.lock().unwrap().insert(
         id,
         TransformStreamData {
@@ -1219,6 +1348,14 @@ pub unsafe extern "C" fn js_transform_stream_new(
         },
     );
     TRANSFORM_PAIRS.lock().unwrap().insert(writable_id, id);
+
+    // #1644: TransformStream `start(controller)` fires synchronously at
+    // construction. The controller is the readable-side handle (same value the
+    // transform/flush callbacks receive), so `controller.enqueue(c)` /
+    // `controller.terminate()` / `controller.error(e)` act on the readable.
+    if start_cb != 0 {
+        js_closure_call1(start_cb as *const ClosureHeader, readable_id as f64);
+    }
     id as f64
 }
 
@@ -1406,6 +1543,191 @@ pub unsafe extern "C" fn js_stream_unwrap_handle(value: f64) -> f64 {
     f64::from_bits(result_bits)
 }
 
+#[inline]
+fn box_promise(p: *mut Promise) -> f64 {
+    f64::from_bits(JSValue::pointer(p as *const u8).bits())
+}
+
+/// #1545: probe used by `js_native_call_method` to recognise a numeric receiver
+/// as a live Web Streams handle (readable/writable/reader/writer). Only ids in
+/// the reserved stream range that are present in a registry qualify.
+#[no_mangle]
+pub extern "C" fn js_stream_handle_is_registered(id: usize) -> bool {
+    js_stream_handle_kind(id) != 0
+}
+
+/// #1545: classify a numeric Web Streams handle for `instanceof` and dispatch.
+/// 0 = not a stream, 1 = ReadableStream, 2 = WritableStream, 3 = reader,
+/// 4 = writer.
+#[no_mangle]
+pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
+    if !(0x40000..0x100000).contains(&id) {
+        return 0;
+    }
+    if READABLE_STREAMS
+        .lock()
+        .map(|m| m.contains_key(&id))
+        .unwrap_or(false)
+    {
+        return 1;
+    }
+    if WRITABLE_STREAMS
+        .lock()
+        .map(|m| m.contains_key(&id))
+        .unwrap_or(false)
+    {
+        return 2;
+    }
+    if READERS.lock().map(|m| m.contains_key(&id)).unwrap_or(false) {
+        return 3;
+    }
+    if WRITERS.lock().map(|m| m.contains_key(&id)).unwrap_or(false) {
+        return 4;
+    }
+    0
+}
+
+/// #1545: runtime method dispatch for Web Streams handles whose static type
+/// the codegen could not track. The static `module == "readable_stream"` /
+/// `"reader"` / … NativeMethodCall arms only fire when the receiver is a local
+/// whose inferred type is the stream class. Chained / member results lose that
+/// type — e.g. `src.pipeThrough(ts).getReader()`, `ts.readable.getReader()`,
+/// `rs.tee()[0].getReader()`, `const r = rs.getReader(); r.read()` — and lower
+/// to a generic method call that reaches `js_native_call_method` →
+/// `js_handle_method_dispatch` with a bare numeric handle.
+///
+/// Because every Web Streams handle now lives in one shared id space based at
+/// `0x40000` (see `NEXT_STREAM_ID`), the handle is (a) recognisable by range
+/// and (b) present in exactly one of the five registries, so routing by
+/// `(registry-membership, method-name)` is unambiguous and can never collide
+/// with another handle subsystem. Returns `None` when the handle isn't a stream
+/// handle or the method isn't a stream method, so the generic dispatcher falls
+/// through to the next arm unchanged.
+pub(crate) unsafe fn dispatch_stream_method(
+    handle: f64,
+    method: &str,
+    args: &[f64],
+) -> Option<f64> {
+    let id = handle as usize;
+    if !(0x40000..0x100000).contains(&id) {
+        return None;
+    }
+    let arg0 = args
+        .first()
+        .copied()
+        .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+
+    // Probe each registry for membership first (dropping the guard before we
+    // call the FFI, which re-locks the same registry).
+    let is_reader = READERS.lock().unwrap().contains_key(&id);
+    if is_reader {
+        match method {
+            "read" => return Some(box_promise(js_reader_read(handle))),
+            "releaseLock" => return Some(js_reader_release_lock(handle)),
+            "cancel" => return Some(box_promise(js_reader_cancel(handle, arg0))),
+            _ => return None,
+        }
+    }
+    let is_writer = WRITERS.lock().unwrap().contains_key(&id);
+    if is_writer {
+        match method {
+            "write" => return Some(box_promise(js_writer_write(handle, arg0))),
+            "close" => return Some(box_promise(js_writer_close(handle))),
+            "abort" => return Some(box_promise(js_writer_abort(handle, arg0))),
+            "releaseLock" => return Some(js_writer_release_lock(handle)),
+            _ => return None,
+        }
+    }
+    let is_readable = READABLE_STREAMS.lock().unwrap().contains_key(&id);
+    if is_readable {
+        match method {
+            "getReader" => return Some(js_readable_stream_get_reader(handle)),
+            "cancel" => return Some(box_promise(js_readable_stream_cancel(handle, arg0))),
+            "tee" => return Some(js_readable_stream_tee(handle)),
+            "pipeTo" => return Some(box_promise(js_readable_stream_pipe_to(handle, arg0))),
+            // #1644: a readable handle is also its own controller. The
+            // start/transform/flush callbacks receive it as `controller`, so
+            // `controller.enqueue/close/error/terminate` dispatch here when the
+            // controller param is generically typed. `terminate()` ends the
+            // readable side (TransformStreamDefaultController.terminate).
+            "enqueue" => return Some(js_readable_stream_controller_enqueue(handle, arg0)),
+            "close" | "terminate" => return Some(js_readable_stream_controller_close(handle)),
+            "error" => return Some(js_readable_stream_controller_error(handle, arg0)),
+            _ => return None,
+        }
+    }
+    let is_writable = WRITABLE_STREAMS.lock().unwrap().contains_key(&id);
+    if is_writable {
+        match method {
+            "getWriter" => return Some(js_writable_stream_get_writer(handle)),
+            "abort" => return Some(box_promise(js_writable_stream_abort(handle, arg0))),
+            "close" => return Some(box_promise(js_writable_stream_close(handle))),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// #1670: property reads on a numeric Web Streams handle that reached the
+/// generic field-get path (e.g. inline `res.body.locked`, where the
+/// intermediate stream id never became a typed local). Returns the WHATWG
+/// getter property value, a bound-method closure for callable members (so
+/// `typeof rs.getReader === "function"` and a subsequent call routes back
+/// through `js_native_call_method`'s #1545 stream branch → `dispatch_stream_method`),
+/// or `undefined` for any other property. Crucially this NEVER dereferences
+/// the float id as a pointer — the pre-#1670 generic field-get segfaulted on
+/// `res.body.locked`. Gated by the caller on stream-registry membership.
+pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    let id = handle as usize;
+    // Kind: 1=ReadableStream, 2=WritableStream, 3=reader, 4=writer.
+    let kind = js_stream_handle_kind(id);
+    if kind == 0 {
+        return undefined;
+    }
+    // WHATWG getter properties (the rest fall through to bound-method /
+    // undefined). `locked` is the one #1670 exercises (`res.body.locked`).
+    match (kind, name) {
+        (1, "locked") => return js_readable_stream_locked(handle),
+        (2, "locked") => return js_writable_stream_locked(handle),
+        _ => {}
+    }
+    // Callable members → bound-method closure so `typeof` reports
+    // "function". The name must be a `&'static [u8]` because
+    // `js_class_method_bind` stores the raw pointer in the closure.
+    // The receiver is the raw float handle (not NaN-boxed) so that when the
+    // bound method is called, `js_native_call_method`'s stream branch fires.
+    let method: Option<&'static [u8]> = match (kind, name) {
+        (1, "getReader") => Some(b"getReader"),
+        (1, "cancel") => Some(b"cancel"),
+        (1, "tee") => Some(b"tee"),
+        (1, "pipeTo") => Some(b"pipeTo"),
+        (1, "pipeThrough") => Some(b"pipeThrough"),
+        (2, "getWriter") => Some(b"getWriter"),
+        (2, "abort") => Some(b"abort"),
+        (2, "close") => Some(b"close"),
+        (3, "read") => Some(b"read"),
+        (3, "releaseLock") => Some(b"releaseLock"),
+        (3, "cancel") => Some(b"cancel"),
+        (4, "write") => Some(b"write"),
+        (4, "close") => Some(b"close"),
+        (4, "abort") => Some(b"abort"),
+        (4, "releaseLock") => Some(b"releaseLock"),
+        _ => None,
+    };
+    if let Some(name_bytes) = method {
+        extern "C" {
+            fn js_class_method_bind(
+                instance: f64,
+                method_name_ptr: *const u8,
+                method_name_len: usize,
+            ) -> f64;
+        }
+        return js_class_method_bind(handle, name_bytes.as_ptr(), name_bytes.len());
+    }
+    undefined
+}
+
 /// `super({ start, pull, cancel })` dispatch for `class X extends ReadableStream`.
 /// Allocates the underlying readable handle, stashes it on `this`, runs
 /// the user `start` callback synchronously (mirrors `js_readable_stream_new`).
@@ -1464,7 +1786,14 @@ pub unsafe extern "C" fn js_transform_stream_subclass_init(
     flush_bits: f64,
     hwm: f64,
 ) -> f64 {
-    let handle = js_transform_stream_new(transform_bits, flush_bits, hwm);
+    // #1644: subclass `super({...})` doesn't thread a `start` hook through this
+    // path (the #562 subclass shim only forwards transform/flush); pass undefined.
+    let handle = js_transform_stream_new(
+        f64::from_bits(TAG_UNDEFINED),
+        transform_bits,
+        flush_bits,
+        hwm,
+    );
     attach_handle_to_this(this_bits, handle as usize);
     f64::from_bits(TAG_UNDEFINED)
 }

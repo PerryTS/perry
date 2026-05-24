@@ -297,6 +297,25 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
         return f64::from_bits(TAG_UNDEFINED);
     }
 
+    // #1545: Promise `then`/`catch`/`finally` value-reads return a bound
+    // function (so `typeof p.then === "function"` and `const f = p.then`
+    // work). Call-form `p.then(cb)` is lowered separately by codegen; this
+    // covers the value-read path the generic getter previously dropped to
+    // `undefined`.
+    {
+        let gc_header = (ptr as usize - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE
+            && matches!(property_name, "then" | "catch" | "finally")
+        {
+            if let Some(v) = crate::promise::js_promise_bound_method(
+                ptr as *mut crate::promise::Promise,
+                property_name,
+            ) {
+                return v;
+            }
+        }
+    }
+
     // Check the object type tag (first u32 field of both ObjectHeader and ErrorHeader)
     let object_type = *(ptr as *const u32);
 

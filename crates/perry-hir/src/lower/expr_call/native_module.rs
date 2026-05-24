@@ -17,6 +17,25 @@ use super::super::{
     resolve_typed_parse_ty, LoweringContext,
 };
 
+/// Peel runtime-transparent TypeScript wrappers (`as`, `as const`, `!`,
+/// `satisfies`, angle-bracket assertions, parens) off an expression so a
+/// cast receiver like `(Readable as any).toWeb(...)` still matches the
+/// bare-identifier module/class shape the dispatch arms below expect.
+fn unwrap_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
+    let mut cur = e;
+    loop {
+        match cur {
+            ast::Expr::TsAs(x) => cur = &x.expr,
+            ast::Expr::TsNonNull(x) => cur = &x.expr,
+            ast::Expr::TsSatisfies(x) => cur = &x.expr,
+            ast::Expr::TsTypeAssertion(x) => cur = &x.expr,
+            ast::Expr::TsConstAssertion(x) => cur = &x.expr,
+            ast::Expr::Paren(x) => cur = &x.expr,
+            _ => return cur,
+        }
+    }
+}
+
 pub(super) fn try_native_module_methods(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -25,7 +44,14 @@ pub(super) fn try_native_module_methods(
 ) -> Result<Result<Expr, Vec<Expr>>> {
     // Check for native module method calls (e.g., mysql.createConnection())
     if let ast::Expr::Member(member) = expr {
-        if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+        // #1534/#1540/#1541: the stream acceptance tests deliberately cast
+        // the class / namespace before a static call —
+        // `(Readable as any).isErrored(r)`, `(Readable as any).toWeb(r)`,
+        // `(stream as any).addAbortSignal(sig, r)`. The cast is a runtime
+        // no-op, so peel TS-only wrappers off the receiver before matching
+        // it as the module/class identifier; otherwise the call falls
+        // through to generic dispatch and the static reads as `undefined`.
+        if let ast::Expr::Ident(obj_ident) = unwrap_ts_wrappers(member.obj.as_ref()) {
             let obj_name = obj_ident.sym.to_string();
 
             // Check for process module methods

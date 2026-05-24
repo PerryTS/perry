@@ -42,9 +42,9 @@ pub use microtasks::js_promise_run_microtasks;
 pub use scanners::{js_promise_with_resolvers, scan_promise_roots, scan_promise_roots_mut};
 pub(crate) use then::js_promise_attach_handlers;
 pub use then::{
-    js_promise_catch, js_promise_finally, js_promise_free, js_promise_new, js_promise_reason,
-    js_promise_reject, js_promise_resolve, js_promise_resolve_with_promise, js_promise_result,
-    js_promise_state, js_promise_then, js_promise_value,
+    js_promise_bound_method, js_promise_catch, js_promise_finally, js_promise_free, js_promise_new,
+    js_promise_reason, js_promise_reject, js_promise_resolve, js_promise_resolve_with_promise,
+    js_promise_result, js_promise_state, js_promise_then, js_promise_value,
 };
 
 #[cfg(test)]

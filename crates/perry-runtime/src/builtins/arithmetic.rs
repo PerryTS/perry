@@ -256,6 +256,20 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
         if crate::date::is_registered_date_bits(bits) {
             return get_cached(&TYPEOF_OBJECT, "object");
         }
+        // #1650: Web Streams handles (ReadableStream / WritableStream /
+        // reader / writer) are returned as a raw `id as f64` whole number in
+        // a high id range (#1545), so they reach this fallthrough and would
+        // otherwise report "number". Consult the stdlib kind-probe — the same
+        // side-channel `instanceof ReadableStream` uses — so `typeof
+        // res.body === "object"` matches the spec (Response.body is a
+        // ReadableStream object).
+        if value.is_finite() && value > 0.0 && value.fract() == 0.0 {
+            if let Some(probe) = crate::object::stream_handle_kind_probe() {
+                if unsafe { probe(value as usize) } != 0 {
+                    return get_cached(&TYPEOF_OBJECT, "object");
+                }
+            }
+        }
         // Regular f64 number
         get_cached(&TYPEOF_NUMBER, "number")
     }

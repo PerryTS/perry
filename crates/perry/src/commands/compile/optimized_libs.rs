@@ -31,7 +31,7 @@ pub struct OptimizedLibs {
     pub runtime_bc: Option<PathBuf>,
     /// LLVM bitcode (`.bc`) for perry-stdlib (Phase J).
     pub stdlib_bc: Option<PathBuf>,
-    /// LLVM bitcode (`.bc`) for additional crates (UI, jsruntime, geisterhand).
+    /// LLVM bitcode (`.bc`) for additional crates (UI, geisterhand).
     pub extra_bc: Vec<PathBuf>,
     /// Extra `.a` archives to add to the link line — one per
     /// well-known native binding (#466 Phase 4) that the compile
@@ -862,7 +862,7 @@ pub(super) fn build_optimized_libs(
         let rt_bc = emit_bc("perry-runtime");
         let sl_bc = emit_bc("perry-stdlib");
 
-        // Emit .bc for additional crates (UI, jsruntime, geisterhand).
+        // Emit .bc for additional crates (UI, geisterhand).
         // HarmonyOS has no `perry-ui-harmonyos` crate by design — UI is
         // emitted as ArkUI source via the codegen-arkts harvest, and
         // any `perry_ui_*` / `perry_system_*` / `perry_updater_*` symbols
@@ -899,11 +899,6 @@ pub(super) fn build_optimized_libs(
         }
         if ctx.needs_geisterhand {
             if let Some(bc) = emit_bc("perry-ui-geisterhand") {
-                extra.push(bc);
-            }
-        }
-        if ctx.needs_js_runtime {
-            if let Some(bc) = emit_bc("perry-jsruntime") {
                 extra.push(bc);
             }
         }

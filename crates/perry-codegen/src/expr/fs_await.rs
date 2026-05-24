@@ -193,7 +193,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // results via queue_promise_resolution and need this pump
             // to actually resolve the promises on the main thread.
             ctx.block().call_void("js_run_stdlib_pump", &[]);
-            ctx.block().call_void("js_run_jsruntime_pump", &[]);
             let _ = ctx.block().call(I32, "js_timer_tick", &[]);
             let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
             let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);

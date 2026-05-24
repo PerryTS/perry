@@ -71,6 +71,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let _ = lower_expr(ctx, arg)?;
                 let path = &paths[0];
                 let target_prefix = ctx.dynamic_import_path_to_prefix.get(path).cloned();
+                // #1671: a dynamic import of a known node-submodule
+                // (`await import('hono/jsx/server')`) carries the sentinel
+                // prefix `__node_submod__<key>` instead of a compiled-module
+                // prefix. Build its namespace via `js_node_submodule_namespace`
+                // and resolve the promise with it (mirrors the static
+                // namespace-import path).
+                if let Some(prefix) = &target_prefix {
+                    if let Some(key) = prefix.strip_prefix("__node_submod__") {
+                        let key = key.to_string();
+                        let submod_label = emit_string_literal_global(ctx, &key);
+                        let submod_len = key.len();
+                        let blk = ctx.block();
+                        let ns_val = blk.call(
+                            DOUBLE,
+                            "js_node_submodule_namespace",
+                            &[(PTR, &submod_label), (I32, &submod_len.to_string())],
+                        );
+                        let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
+                        return Ok(nanbox_pointer_inline(blk, &promise));
+                    }
+                }
                 let blk = ctx.block();
                 let ns_val = match target_prefix {
                     Some(prefix) => {
@@ -160,9 +181,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // guard short-circuits.
                 ctx.current_block = match_block_idx;
                 let join_label = ctx.block_label(join_block_idx);
+                // #1671: known node-submodule target (sentinel prefix) →
+                // build its namespace via the runtime helper rather than a
+                // compiled-module init + namespace global.
+                let ns_val = if let Some(key) = target_prefix.strip_prefix("__node_submod__") {
+                    let key = key.to_string();
+                    let submod_label = emit_string_literal_global(ctx, &key);
+                    let submod_len = key.len();
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_node_submodule_namespace",
+                        &[(PTR, &submod_label), (I32, &submod_len.to_string())],
+                    )
+                } else {
+                    let blk = ctx.block();
+                    blk.call_void(&format!("{}__init", target_prefix), &[]);
+                    blk.load(DOUBLE, &format!("@__perry_ns_{}", target_prefix))
+                };
                 let blk = ctx.block();
-                blk.call_void(&format!("{}__init", target_prefix), &[]);
-                let ns_val = blk.load(DOUBLE, &format!("@__perry_ns_{}", target_prefix));
                 let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
                 let boxed = nanbox_pointer_inline(blk, &promise);
                 blk.store(DOUBLE, &boxed, &result_slot);

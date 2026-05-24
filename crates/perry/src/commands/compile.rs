@@ -61,9 +61,9 @@ pub use library_search::find_library;
 pub(crate) use library_search::host_target_triple;
 use library_search::{
     build_geisterhand_libs, find_geisterhand_library, find_geisterhand_runtime,
-    find_geisterhand_ui, find_harmonyos_sdk, find_jsruntime_library, find_lld_link, find_llvm_tool,
-    find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_runtime_library,
-    find_stdlib_library, find_ui_library, find_wasm_host_library, windows_pe_subsystem_flag,
+    find_geisterhand_ui, find_harmonyos_sdk, find_lld_link, find_llvm_tool, find_msvc_lib_paths,
+    find_msvc_link_exe, find_perry_windows_sdk, find_runtime_library, find_stdlib_library,
+    find_ui_library, find_wasm_host_library, windows_pe_subsystem_flag,
 };
 use link::build_and_run_link;
 pub use lock_scan::collect_native_archives_for_lock;
@@ -129,6 +129,22 @@ pub fn run_with_parse_cache(
     // bleed into this build's auto-link decisions.
     let _ = perry_codegen::ext_registry::take_used_providers();
 
+    // #1663: make `--debug-symbols` retain a symbol table on every native
+    // target, not just emit a PDB on Windows. Previously the flag was a no-op
+    // on Linux/macOS, so a SIGSEGV in a compiled service (e.g. the Fastify +
+    // @perryts/mysql crash reported in #1663) symbolized to an unreadable wall
+    // of `??`, making runtime crashes nearly impossible to report. The
+    // canonical knob for "keep symbols" is the PERRY_DEBUG_SYMBOLS env var,
+    // which the codegen (`-g`/DWARF), the object-cache key, and the final
+    // `strip` step already all honor. Promote the flag to that env var here —
+    // single-threaded, before module codegen spawns rayon workers — so every
+    // layer observes it uniformly. Only set (never unset): the flag is an
+    // explicit opt-in, and a `perry dev` session that asked for symbols once
+    // wants them for the rest of the session.
+    if args.debug_symbols && std::env::var_os("PERRY_DEBUG_SYMBOLS").is_none() {
+        std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
+    }
+
     match format {
         OutputFormat::Text => println!("Collecting modules..."),
         OutputFormat::Json => {}
@@ -176,7 +192,6 @@ pub fn run_with_parse_cache(
         &args.input,
         &mut ctx,
         &mut visited,
-        args.enable_js_runtime,
         format,
         args.target.as_deref(),
         &mut next_class_id,
@@ -1329,7 +1344,6 @@ pub fn run_with_parse_cache(
 
     // Pre-compute JS module specifiers
     let js_module_specifiers: Vec<String> = ctx.js_modules.keys().cloned().collect();
-    let needs_js_runtime = ctx.needs_js_runtime || args.enable_js_runtime;
 
     // Compile native modules in parallel using rayon
 
@@ -1596,7 +1610,19 @@ pub fn run_with_parse_cache(
             }
             let rp = match &import.resolved_path {
                 Some(p) => PathBuf::from(p),
-                None => continue,
+                None => {
+                    // #1671: a dynamic `import('hono/jsx/server')` resolves to a
+                    // known node-submodule with no compiled-source backing — the
+                    // runtime ships its namespace. Record a sentinel prefix the
+                    // dynamic-import codegen recognises and routes to
+                    // `js_node_submodule_namespace` (instead of rejecting).
+                    if let Some(key) =
+                        self::collect_modules::known_node_submodule_key(&import.source)
+                    {
+                        local_map.insert(import.source.clone(), format!("__node_submod__{}", key));
+                    }
+                    continue;
+                }
             };
             let target_name = match path_to_module_name.get(&rp) {
                 Some(n) => n.clone(),
@@ -3304,11 +3330,7 @@ pub fn run_with_parse_cache(
             } else {
                 Vec::new()
             };
-            let js_module_specifiers_vec: Vec<String> = if needs_js_runtime {
-                js_module_specifiers.clone()
-            } else {
-                Vec::new()
-            };
+            let js_module_specifiers_vec: Vec<String> = js_module_specifiers.clone();
 
             let opts = perry_codegen::CompileOptions {
                 target: resolved_triple,
@@ -3341,7 +3363,6 @@ pub fn run_with_parse_cache(
                 needs_ui: ctx.needs_ui,
                 needs_geisterhand: ctx.needs_geisterhand,
                 geisterhand_port: ctx.geisterhand_port,
-                needs_js_runtime,
                 enabled_features: compiled_features.clone(),
                 native_module_init_names: native_module_init_names_vec,
                 js_module_specifiers: js_module_specifiers_vec,
@@ -3705,18 +3726,11 @@ pub fn run_with_parse_cache(
             .clone()
             .or_else(|| find_runtime_library(target.as_deref()).ok());
         let stdlib_lib_path = stdlib_lib_resolved.clone();
-        // Check if jsruntime will be used - if so, don't generate stubs for its symbols
-        let use_jsruntime = ctx.needs_js_runtime || args.enable_js_runtime;
         // Check if stdlib will be linked - if so, it provides perry_runtime symbols (no stubs needed)
         let target_is_windows = matches!(target.as_deref(), Some("windows"))
             || (cfg!(target_os = "windows") && target.is_none());
         let will_link_stdlib = (ctx.needs_stdlib || target_is_windows) && stdlib_lib_path.is_some();
-        let jsruntime_lib_path = if use_jsruntime {
-            find_jsruntime_library(target.as_deref())
-        } else {
-            None
-        };
-        // Issue #76 — same logic as jsruntime above: when the wasm host is
+        // Issue #76 — when the wasm host is
         // being linked, scan its archive so the `perry_wasm_host_*` symbols
         // are recognised as defined and we don't synthesise empty stubs that
         // would shadow the real implementations.
@@ -3734,9 +3748,6 @@ pub fn run_with_parse_cache(
             if let Some(ref p) = stdlib_lib_path {
                 all_scan_paths.push(p.clone());
             }
-        }
-        if let Some(ref p) = jsruntime_lib_path {
-            all_scan_paths.push(p.clone());
         }
         if let Some(ref p) = wasm_host_lib_path {
             all_scan_paths.push(p.clone());
@@ -3825,8 +3836,7 @@ pub fn run_with_parse_cache(
                             if st == "U" {
                                 if cn.starts_with("__export_") || cn.starts_with("__wrapper_") {
                                     local_undef.insert(cn.to_string());
-                                } else if !use_jsruntime
-                                    && !will_link_stdlib
+                                } else if !will_link_stdlib
                                     && (cn == "js_call_function"
                                         || cn == "js_load_module"
                                         || cn == "js_new_from_handle"
@@ -3983,7 +3993,7 @@ pub fn run_with_parse_cache(
     };
 
     // Generate JS bundle if needed
-    let _js_bundle_path = if ctx.needs_js_runtime && !ctx.js_modules.is_empty() {
+    let _js_bundle_path = if !ctx.js_modules.is_empty() {
         let bundle_path = generate_js_bundle(&ctx, Path::new("."))?;
         match format {
             OutputFormat::Text => println!("Generated JS bundle: {}", bundle_path.display()),
@@ -4269,7 +4279,7 @@ pub fn run_with_parse_cache(
         || (target.is_none() && cfg!(target_os = "linux"));
     let _is_windows = matches!(target.as_deref(), Some("windows"))
         || (target.is_none() && cfg!(target_os = "windows"));
-    // is_watchos / is_tvos are defined below (near jsruntime_lib).
+    // is_watchos / is_tvos are defined below (near the per-platform link step).
     // The is_cross_* bindings used to live here, but they're now derived
     // inside `link::build_and_run_link` which is the only consumer.
 
@@ -4343,11 +4353,6 @@ pub fn run_with_parse_cache(
         }
         if let Some(p) = &stdlib_lib_resolved {
             push_archive(&mut link_archives, "stdlib", p);
-        }
-        if ctx.needs_js_runtime || args.enable_js_runtime {
-            if let Some(p) = find_jsruntime_library(target.as_deref()) {
-                push_archive(&mut link_archives, "jsruntime", &p);
-            }
         }
         if ctx.needs_wasm_runtime || args.enable_wasm_runtime {
             if let Some(p) = find_wasm_host_library(target.as_deref()) {
@@ -4512,39 +4517,9 @@ pub fn run_with_parse_cache(
         Some("watchos") | Some("watchos-simulator")
     );
     let is_tvos = matches!(target.as_deref(), Some("tvos") | Some("tvos-simulator"));
-    let jsruntime_lib = if !is_ios
-        && !is_visionos
-        && !is_android
-        && !is_harmonyos
-        && !is_watchos
-        && !is_tvos
-        && (ctx.needs_js_runtime || args.enable_js_runtime)
-    {
-        match find_jsruntime_library(target.as_deref()) {
-            Some(lib) => {
-                match format {
-                    OutputFormat::Text => {
-                        println!("Using V8 JavaScript runtime for JS module support")
-                    }
-                    OutputFormat::Json => {}
-                }
-                Some(lib)
-            }
-            None => {
-                if ctx.needs_js_runtime {
-                    return Err(anyhow!(
-                        "JavaScript modules found but libperry_jsruntime.a not found. Build it with: cargo build --release -p perry-jsruntime"
-                    ));
-                }
-                None
-            }
-        }
-    } else {
-        None
-    };
 
     // Issue #76 — locate the wasmi-based host library when WebAssembly runtime
-    // support is requested. Mirrors the jsruntime resolution above; absence is
+    // support is requested. Absence is
     // a hard error when codegen detected `WebAssembly.*` usage, otherwise the
     // flag-only case silently degrades to None (the user will hit a link
     // error on first use, with the symbol name as the breadcrumb).
@@ -4580,7 +4555,6 @@ pub fn run_with_parse_cache(
         &runtime_lib,
         &stdlib_lib,
         &optimized_libs.well_known_libs,
-        &jsruntime_lib,
         &wasm_host_lib,
         &exe_path,
         format,

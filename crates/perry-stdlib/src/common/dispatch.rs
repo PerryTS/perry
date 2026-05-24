@@ -40,6 +40,16 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     let _ = args;
     let _ = handle;
 
+    // #1545: Web Streams handles (readable/writable/transform/reader/writer)
+    // live in a dedicated high id range, so this never claims another
+    // subsystem's handle. Routes method calls on receivers whose static stream
+    // type the codegen lost (`src.pipeThrough(ts).getReader()`, `ts.readable
+    // .getReader()`, `const r = rs.getReader(); r.read()`, …).
+    #[cfg(feature = "bundled-streams")]
+    if let Some(v) = crate::streams::dispatch_stream_method(handle as f64, method_name, &args) {
+        return v;
+    }
+
     // Each dispatcher below is gated on TWO conditions: (a) its registry
     // currently holds this handle id, AND (b) the method name is one this
     // dispatcher actually handles. Both are required because handle id
@@ -311,6 +321,16 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // "not us, try the next dispatcher or return undefined".
     #[cfg(feature = "http-client")]
     {
+        // #1698: Request body methods (`req.json()`/`.text()`/`.arrayBuffer()`)
+        // on an any-typed / computed-key receiver. Hono's `HonoRequest.#cachedBody`
+        // does `raw[key]()` (computed key) on the underlying Request, which loses
+        // the static type and lands here. Fetch-family ids are unified, so the
+        // registry-membership gate inside cleanly distinguishes a Request from a
+        // Response with the (formerly colliding) same id.
+        if let Some(v) = crate::fetch::dispatch_request_method(handle as usize, method_name, &args)
+        {
+            return v;
+        }
         if let Some(v) = crate::fetch::dispatch_response_method(handle as usize, method_name, &args)
         {
             return v;
@@ -750,6 +770,20 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     };
     let _ = property_name;
     let _ = handle;
+
+    // #1670: Web Streams handle property reads. A numeric stream id reaches
+    // here via `js_object_get_field_by_name`'s stream probe (inline
+    // `res.body.locked`). Route getter properties to their accessors, return
+    // a bound-method closure for callable members, and undefined for anything
+    // else — never a deref of the float id as a pointer. Gated on stream
+    // id-range + registry membership so unrelated small-handle reads are
+    // untouched.
+    #[cfg(feature = "bundled-streams")]
+    if (0x40000..0x100000).contains(&(handle as usize))
+        && crate::streams::js_stream_handle_is_registered(handle as usize)
+    {
+        return crate::streams::dispatch_stream_property(handle as f64, property_name);
+    }
 
     // #1113: `app.server` — return the FastifyApp handle pointer-tagged
     // so `typeof app.server === "object"` and `.on("upgrade", …)`
@@ -1331,4 +1365,28 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);
+
+    // #1545: register the Web Streams numeric-handle probe so method calls on
+    // stream handles whose static type the codegen lost route to the stream
+    // dispatch arms in `js_handle_method_dispatch`.
+    #[cfg(feature = "bundled-streams")]
+    {
+        extern "C" {
+            fn js_register_stream_handle_probe(f: unsafe extern "C" fn(usize) -> bool);
+            fn js_register_stream_handle_kind_probe(f: unsafe extern "C" fn(usize) -> u8);
+        }
+        unsafe extern "C" fn stream_probe(id: usize) -> bool {
+            crate::streams::js_stream_handle_is_registered(id)
+        }
+        unsafe extern "C" fn stream_kind_probe(id: usize) -> u8 {
+            crate::streams::js_stream_handle_kind(id)
+        }
+        js_register_stream_handle_probe(stream_probe);
+        js_register_stream_handle_kind_probe(stream_kind_probe);
+        // #1671: back `hono/jsx/streaming`'s `renderToReadableStream` with a
+        // real single-chunk Web stream when streams are linked.
+        perry_runtime::node_submodules::js_register_jsx_render_stream(
+            crate::streams::js_jsx_render_stream_from_value,
+        );
+    }
 }

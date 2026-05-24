@@ -420,6 +420,19 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // #1534: `Readable.isReadable(s)` / module-level `isReadable(s)`.
+    // Now backed by a per-stream readable-direction flag (set at
+    // construction) plus the ended/errored bits, so a fresh Readable
+    // answers `true` and a Writable answers `false`.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "isReadable",
+        class_filter: None,
+        runtime: "js_node_stream_is_readable",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // #1541: `stream.addAbortSignal(signal, stream)` wires the
     // AbortSignal so that aborting it destroys the stream — and
     // returns the stream for chaining. Perry's stream stubs don't
@@ -508,6 +521,38 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_stream_method_read",
         args: &[NA_F64],
+        ret: NR_F64,
+    },
+    // #1539: readable.push(chunk) returns the backpressure signal
+    // (`true` below highWaterMark, `false` at/above it).
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "push",
+        class_filter: None,
+        runtime: "js_node_stream_method_push",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    // #1539: readableHighWaterMark / writableHighWaterMark property
+    // getters (no-arg, lowered as a property read on the instance).
+    // Transform can carry distinct readable/writable marks.
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "readableHighWaterMark",
+        class_filter: None,
+        runtime: "js_node_stream_method_readable_hwm",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "writableHighWaterMark",
+        class_filter: None,
+        runtime: "js_node_stream_method_writable_hwm",
+        args: &[],
         ret: NR_F64,
     },
     NativeModSig {

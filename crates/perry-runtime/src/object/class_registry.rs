@@ -798,6 +798,22 @@ pub type HandlePropertySetDispatchFn = unsafe extern "C" fn(
     value: f64,
 );
 
+/// #1545: probe for whether a numeric receiver is a live Web Streams handle.
+/// Web Streams handles are returned as `id as f64` (a normal float), not the
+/// subnormal bit-cast other handle subsystems use, so `js_native_call_method`
+/// can't recognise them by bit pattern. This probe (registered by the stdlib)
+/// lets it confirm a numeric whole-number receiver really is a stream handle
+/// before routing the call to `handle_method_dispatch` — non-stream numbers
+/// fall through to the normal `(number).x is not a function` TypeError.
+pub type StreamHandleProbeFn = unsafe extern "C" fn(id: usize) -> bool;
+
+/// #1545: classify a numeric Web Streams handle for `instanceof`.
+/// Returns 0 = not a stream, 1 = ReadableStream, 2 = WritableStream,
+/// 3 = reader, 4 = writer. Lets `x instanceof ReadableStream` /
+/// `instanceof WritableStream` resolve for numeric stream handles
+/// (`ts.readable`, `rs.pipeThrough(ts)`, …).
+pub type StreamHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
+
 // Dispatch tables are written once at startup (by `js_register_handle_*_dispatch`)
 // and read from many threads thereafter (perry/thread workers run user code that
 // hits these). Stored as AtomicPtr to make reads/writes data-race-free; the
@@ -808,6 +824,10 @@ static HANDLE_METHOD_DISPATCH_PTR: std::sync::atomic::AtomicPtr<()> =
 static HANDLE_PROPERTY_DISPATCH_PTR: std::sync::atomic::AtomicPtr<()> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 static HANDLE_PROPERTY_SET_DISPATCH_PTR: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static STREAM_HANDLE_PROBE_PTR: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static STREAM_HANDLE_KIND_PROBE_PTR: std::sync::atomic::AtomicPtr<()> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
 #[inline]
@@ -844,6 +864,40 @@ pub fn handle_property_set_dispatch() -> Option<HandlePropertySetDispatchFn> {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_handle_method_dispatch(f: HandleMethodDispatchFn) {
     HANDLE_METHOD_DISPATCH_PTR.store(f as *mut (), std::sync::atomic::Ordering::Release);
+}
+
+/// #1545: probe getter — see `StreamHandleProbeFn`.
+#[inline]
+pub fn stream_handle_probe() -> Option<StreamHandleProbeFn> {
+    let p = STREAM_HANDLE_PROBE_PTR.load(std::sync::atomic::Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), StreamHandleProbeFn>(p) })
+    }
+}
+
+/// #1545: register the Web Streams handle probe (called by the stdlib at init).
+#[no_mangle]
+pub unsafe extern "C" fn js_register_stream_handle_probe(f: StreamHandleProbeFn) {
+    STREAM_HANDLE_PROBE_PTR.store(f as *mut (), std::sync::atomic::Ordering::Release);
+}
+
+/// #1545: kind-probe getter — see `StreamHandleKindProbeFn`.
+#[inline]
+pub fn stream_handle_kind_probe() -> Option<StreamHandleKindProbeFn> {
+    let p = STREAM_HANDLE_KIND_PROBE_PTR.load(std::sync::atomic::Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), StreamHandleKindProbeFn>(p) })
+    }
+}
+
+/// #1545: register the Web Streams kind probe (called by the stdlib at init).
+#[no_mangle]
+pub unsafe extern "C" fn js_register_stream_handle_kind_probe(f: StreamHandleKindProbeFn) {
+    STREAM_HANDLE_KIND_PROBE_PTR.store(f as *mut (), std::sync::atomic::Ordering::Release);
 }
 
 /// Register a function to handle property access on handle-based objects

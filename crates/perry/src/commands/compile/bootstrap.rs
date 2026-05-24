@@ -121,7 +121,6 @@ pub(super) fn bundle_extensions_into_ctx(
             entry_path,
             ctx,
             visited,
-            args.enable_js_runtime,
             format,
             args.target.as_deref(),
             next_class_id,
@@ -180,7 +179,6 @@ pub(super) fn rerun_collect_with_class_field_types(
         &args.input,
         ctx,
         visited,
-        args.enable_js_runtime,
         format,
         args.target.as_deref(),
         next_class_id,
@@ -194,7 +192,6 @@ pub(super) fn rerun_collect_with_class_field_types(
                 entry_path,
                 ctx,
                 visited,
-                args.enable_js_runtime,
                 format,
                 args.target.as_deref(),
                 next_class_id,
@@ -224,51 +221,41 @@ pub(super) fn apply_geisterhand_args(args: &CompileArgs, ctx: &mut CompilationCo
 // Group B: post-collect preflight (audit / lockdown / SBOM / windows-version)
 // ============================================================================
 
-/// #499: gate `perry-jsruntime` linkage on explicit host opt-in.
-/// The runtime is the one remaining vector in a Perry-compiled
-/// binary for executing arbitrary JS — defeating Perry's primary
-/// structural advantage over Node. Without the gate, any transitive
-/// dep that ships a `.js` file under `node_modules/` would silently
-/// pull QuickJS into the binary and the host author would never
-/// know. The check fires after dep collection so the diagnostic
-/// can name every file that introduced the dependency.
-///
-/// Treats `--enable-js-runtime` CLI as an explicit opt-in
-/// (semantically equivalent to setting `perry.allowJsRuntime: true`
-/// for this one build) so we don't regress that workflow.
-pub(super) fn enforce_js_runtime_gate(ctx: &CompilationContext, args: &CompileArgs) -> Result<()> {
-    if ctx.needs_js_runtime && !ctx.allow_js_runtime && !args.enable_js_runtime {
-        let importers = &ctx.js_runtime_importers;
-        let mut detail = String::new();
-        // Cap the printed list at the first eight importers — pathological
-        // builds can pull in dozens of node_modules JS files and we'd
-        // rather show the head of the list than a 60-line error.
-        let limit = 8usize;
-        for path in importers.iter().take(limit) {
-            let pkg = super::audit_manifest::package_name_for_path(&path.to_string_lossy())
-                .map(|s| format!(" [{}]", s))
-                .unwrap_or_default();
-            detail.push_str(&format!("\n  - {}{}", path.display(), pkg));
-        }
-        if importers.len() > limit {
-            detail.push_str(&format!("\n  ... and {} more", importers.len() - limit));
-        }
-        anyhow::bail!(
-            "build pulled in `perry-jsruntime` (QuickJS-based eval-equivalent \
-             runtime) via the following file(s):{detail}\n\
-             \n\
-             `perry-jsruntime` is treated as a privileged dependency on par \
-             with adding a JIT to the binary — it re-introduces arbitrary \
-             runtime code execution and defeats Perry's structural advantage \
-             over Node. Refusing to link by default. (#499)\n\
-             \n\
-             To enable, set `perry.allowJsRuntime: true` in the host \
-             package.json, or pass `--enable-js-runtime` on the CLI for a \
-             one-off build. (Falls under `--lockdown` deny set when that \
-             flag ships — see #496.)"
-        );
+/// Refuse any build that reaches a JavaScript module the resolver can
+/// only evaluate through a runtime JS engine. Perry no longer ships a
+/// runtime JS runtime (`perry-jsruntime`, V8 via `deno_core`, was
+/// removed) — these binaries are V8-free and compile TypeScript
+/// ahead-of-time only. The check fires after dep collection so the
+/// diagnostic can name every file that introduced the dependency.
+pub(super) fn enforce_js_runtime_gate(ctx: &CompilationContext) -> Result<()> {
+    let importers = &ctx.js_runtime_importers;
+    if importers.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    let mut detail = String::new();
+    // Cap the printed list at the first eight importers — pathological
+    // builds can pull in dozens of node_modules JS files and we'd
+    // rather show the head of the list than a 60-line error.
+    let limit = 8usize;
+    for path in importers.iter().take(limit) {
+        let pkg = super::audit_manifest::package_name_for_path(&path.to_string_lossy())
+            .map(|s| format!(" [{}]", s))
+            .unwrap_or_default();
+        detail.push_str(&format!("\n  - {}{}", path.display(), pkg));
+    }
+    if importers.len() > limit {
+        detail.push_str(&format!("\n  ... and {} more", importers.len() - limit));
+    }
+    anyhow::bail!(
+        "JavaScript runtime (V8) support has been removed. This build of \
+         Perry compiles TypeScript ahead-of-time only and cannot evaluate \
+         JavaScript modules at runtime. The build pulled in a JS runtime \
+         via the following file(s):{detail}\n\
+         \n\
+         Port the offending module(s) to TypeScript, add the owning package \
+         to `perry.compilePackages` so it is compiled natively, or replace \
+         it with a native Perry stdlib equivalent."
+    );
 }
 
 /// Recompute project_root as the common ancestor of all module paths.
@@ -470,13 +457,6 @@ pub(super) fn enforce_lockdown_policy(ctx: &CompilationContext) -> Result<()> {
     }
     let mut reasons: Vec<String> = Vec::new();
 
-    if ctx.needs_js_runtime {
-        reasons.push(
-            "perry-jsruntime (QuickJS-based eval-equivalent) is reachable from the \
-             module graph — see #499 docs for the matching opt-in gate"
-                .to_string(),
-        );
-    }
     if !ctx.native_libraries.is_empty() {
         let mut names: Vec<&str> = ctx
             .native_libraries
@@ -577,7 +557,7 @@ pub(super) fn run_post_collect_preflight(
     ctx: &mut CompilationContext,
     format: OutputFormat,
 ) -> Result<()> {
-    enforce_js_runtime_gate(ctx, args)?;
+    enforce_js_runtime_gate(ctx)?;
     recompute_common_project_root(ctx);
 
     let total_modules = ctx.native_modules.len() + ctx.js_modules.len();
@@ -616,23 +596,15 @@ pub(super) fn run_post_collect_preflight(
 // Group C: native-instance fixups + HarmonyOS harvest + i18n + print_hir
 // ============================================================================
 
-/// Transform JS imports + fix local native instances (parallel,
-/// fused per-module). Tier 4.2 (v0.5.335): pre-fix this was two
-/// separate `par_iter_mut().for_each(...)` passes back-to-back.
-/// The two operations are independent within a single module, so
-/// running them inside one rayon job per module amortizes the
-/// scheduler cost. The js_imports step is gated on
-/// `needs_js_runtime`; modules that don't need it pay only the
-/// cheap branch.
+/// Fix local native instances (parallel, per-module). Earlier revisions
+/// also ran a `transform_js_imports` pass here, gated on
+/// `needs_js_runtime`; that step went away when runtime JS (V8) support
+/// was removed, leaving only the native-instance fixup.
 pub(super) fn run_native_instance_fixups(ctx: &mut CompilationContext) {
     use rayon::prelude::*;
-    let needs_js_runtime = ctx.needs_js_runtime;
     ctx.native_modules
         .par_iter_mut()
         .for_each(|(_, hir_module)| {
-            if needs_js_runtime {
-                perry_hir::transform_js_imports(hir_module);
-            }
             perry_hir::fix_local_native_instances(hir_module);
         });
 

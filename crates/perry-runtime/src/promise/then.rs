@@ -483,6 +483,83 @@ pub extern "C" fn js_promise_finally(
     next
 }
 
+// ── #1545: bound then/catch/finally for promise *value-reads* ────────────────
+//
+// `promise.then(cb)` as a call is lowered specially by codegen
+// (lower_call/property_get.rs), but a *value-read* — `typeof p.then`,
+// `const f = p.then`, passing `p.then` as a callback — fell through to the
+// generic property getter and returned `undefined`. These thunks let the
+// generic getter (`js_dynamic_object_get_property`) hand back a real bound
+// function that forwards to `js_promise_then` / `catch` / `finally`, so
+// `typeof p.then === "function"` and a deferred `p.then(cb)` both behave.
+
+#[inline]
+fn arg_to_closure(v: f64) -> ClosurePtr {
+    let bits = v.to_bits();
+    let top = bits >> 48;
+    // Pointer- or string-tagged values carry a heap pointer in the low 48 bits;
+    // closures are pointer-tagged. Anything else (undefined/null/number) → null.
+    if top == 0x7FFD || top == 0x7FFF {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader
+    } else {
+        ptr::null()
+    }
+}
+
+#[inline]
+fn box_promise_ptr(p: *mut Promise) -> f64 {
+    f64::from_bits(crate::value::JSValue::pointer(p as *const u8).bits())
+}
+
+extern "C" fn promise_then_bound(
+    closure: *const crate::closure::ClosureHeader,
+    on_fulfilled: f64,
+    on_rejected: f64,
+) -> f64 {
+    let p = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    box_promise_ptr(js_promise_then(
+        p,
+        arg_to_closure(on_fulfilled),
+        arg_to_closure(on_rejected),
+    ))
+}
+
+extern "C" fn promise_catch_bound(
+    closure: *const crate::closure::ClosureHeader,
+    on_rejected: f64,
+) -> f64 {
+    let p = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    box_promise_ptr(js_promise_catch(p, arg_to_closure(on_rejected)))
+}
+
+extern "C" fn promise_finally_bound(
+    closure: *const crate::closure::ClosureHeader,
+    on_finally: f64,
+) -> f64 {
+    let p = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    box_promise_ptr(js_promise_finally(p, arg_to_closure(on_finally)))
+}
+
+/// Return a NaN-boxed bound function for a promise's `then`/`catch`/`finally`
+/// value-read, or `None` for any other property. The returned closure captures
+/// the promise (slot 0) so the GC keeps it alive and updates the pointer on
+/// move, exactly like the existing forward wrappers above.
+pub unsafe fn js_promise_bound_method(promise: *mut Promise, property: &str) -> Option<f64> {
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr, js_register_closure_arity};
+    let (thunk, arity): (*const u8, u32) = match property {
+        "then" => (promise_then_bound as *const u8, 2),
+        "catch" => (promise_catch_bound as *const u8, 1),
+        "finally" => (promise_finally_bound as *const u8, 1),
+        _ => return None,
+    };
+    js_register_closure_arity(thunk, arity);
+    let closure = js_closure_alloc(thunk, 1);
+    js_closure_set_capture_ptr(closure, 0, promise as i64);
+    Some(f64::from_bits(
+        crate::value::JSValue::pointer(closure as *const u8).bits(),
+    ))
+}
+
 /// Fulfilled-path wrapper for `.finally()`.
 /// Captures [on_finally, next_promise].
 /// Called with the upstream fulfilled `value`.

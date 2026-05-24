@@ -1465,12 +1465,11 @@ pub(super) fn resolve_import(
                         return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
                     }
                     // For other node_modules packages, classify by file
-                    // extension. `.ts` / `.tsx` sources are compiled natively
-                    // (matches what `collect_modules` already does for the
-                    // recursive walk when `enable_js_runtime` is off — the
-                    // default). `.js` / `.mjs` / `.cjs` and other shapes
-                    // stay Interpreted so V8 / QuickJS handles them at
-                    // runtime.
+                    // extension. `.ts` / `.tsx` sources are compiled natively.
+                    // `.js` / `.mjs` / `.cjs` and other shapes stay Interpreted;
+                    // since runtime-JS (V8) support was removed, reaching one of
+                    // these is a hard error surfaced by the V8-free gate after
+                    // module collection.
                     let canonical = entry.canonicalize().ok()?;
                     let kind = if is_ts_file(&canonical) {
                         ModuleKind::NativeCompiled

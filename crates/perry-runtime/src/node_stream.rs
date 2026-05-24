@@ -43,6 +43,10 @@ const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const READABLE_SHAPE_ID: u32 = 0x7FFF_FE60;
 const WRITABLE_SHAPE_ID: u32 = 0x7FFF_FEA0;
 const DUPLEX_SHAPE_ID: u32 = 0x7FFF_FEE0;
+// #1540: shape band for the WHATWG web-stream interop stubs returned by
+// `Readable/Writable/Duplex.toWeb`. Placed above the Duplex band so it
+// can't collide as method sets grow.
+const WEB_STREAM_SHAPE_ID: u32 = 0x7FFF_FF20;
 const READABLE_CHUNKS_KEY: &[u8] = b"__perryReadableChunks";
 const READABLE_ERROR_KEY: &[u8] = b"__perryReadableError";
 const READABLE_SIGNAL_KEY: &[u8] = b"__perryReadableSignal";
@@ -50,6 +54,16 @@ const READABLE_READ_KEY: &[u8] = b"__perryReadableRead";
 const READABLE_READ_INVOKED_KEY: &[u8] = b"__perryReadableReadInvoked";
 const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
 const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
+// #1534: direction + disturbed bits so the static introspection helpers
+// (`Readable.isReadable` / `isDisturbed` / `isErrored`) answer per-stream
+// instead of with a uniform stub. Set at construction / on first read.
+const READABLE_FLAG_KEY: &[u8] = b"__perryIsReadable";
+const WRITABLE_FLAG_KEY: &[u8] = b"__perryIsWritable";
+const STREAM_DISTURBED_KEY: &[u8] = b"__perryStreamDisturbed";
+// #1539: bytes currently buffered (for `push()`'s highWaterMark return) and
+// the effective readable highWaterMark.
+const READABLE_BUFFERED_KEY: &[u8] = b"__perryReadableBuffered";
+const READABLE_HWM_KEY: &[u8] = b"__perryReadableHwm";
 
 // ─────────────────────────────────────────────────────────────────
 // Stub method bodies. Each receives the closure pointer (slot 0
@@ -93,16 +107,68 @@ extern "C" fn ns_emit2(closure: *const ClosureHeader, event: f64, arg: f64) -> f
 extern "C" fn ns_resume0(closure: *const ClosureHeader) -> f64 {
     let stream = this_value(closure);
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    mark_disturbed(stream);
     stream
 }
 
 extern "C" fn ns_read1(closure: *const ClosureHeader, _n: f64) -> f64 {
-    set_hidden_value(
-        this_value(closure),
-        hidden_ended_key(),
-        f64::from_bits(TAG_TRUE),
-    );
+    let stream = this_value(closure);
+    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    mark_disturbed(stream);
     f64::from_bits(TAG_NULL)
+}
+
+/// Shared `push(chunk)` accounting (#1539): track the buffered byte count and
+/// return `true` while it stays below `highWaterMark`, `false` once it
+/// reaches/exceeds it — matching Node's backpressure signal. Pushing
+/// `null`/`undefined` (EOF) returns `false`.
+fn push_chunk(stream: f64, chunk: f64) -> f64 {
+    let jsval = JSValue::from_bits(chunk.to_bits());
+    if jsval.is_null() || jsval.is_undefined() {
+        return f64::from_bits(TAG_FALSE);
+    }
+    let added = chunk_byte_len(chunk) as f64;
+    let prev = get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0);
+    let total = prev + added;
+    set_hidden_value(stream, hidden_buffered_key(), total);
+    let hwm = get_hidden_value(stream, hidden_hwm_key()).unwrap_or(16384.0);
+    if total < hwm {
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_FALSE)
+    }
+}
+
+/// `readable.push(chunk)` for the untyped/`as any` object-method path.
+extern "C" fn ns_push1(closure: *const ClosureHeader, chunk: f64) -> f64 {
+    push_chunk(this_value(closure), chunk)
+}
+
+/// `readable.compose(stream)` (#1539): the instance-method form of
+/// `stream.compose`. Returns a fresh Duplex stub so shape checks
+/// (`typeof composed.on === "function"`) hold; real data composition is
+/// tracked separately.
+extern "C" fn ns_compose1(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+    js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+}
+
+/// Byte length of a stream chunk for `push()`'s highWaterMark accounting:
+/// the UTF-8 length for strings, the byte length for buffers, and `1`
+/// (object-mode count) for anything else.
+fn chunk_byte_len(chunk: f64) -> usize {
+    let jsval = JSValue::from_bits(chunk.to_bits());
+    if jsval.is_any_string() {
+        let ptr = crate::value::js_get_string_pointer_unified(chunk) as *const crate::StringHeader;
+        if !ptr.is_null() && (ptr as usize) >= 0x10000 {
+            return unsafe { (*ptr).byte_len as usize };
+        }
+        return 0;
+    }
+    let raw = raw_ptr_from_value(chunk);
+    if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
+        return unsafe { (*(raw as *const crate::buffer::BufferHeader)).length as usize };
+    }
+    1
 }
 extern "C" fn ns_pipe1(_closure: *const ClosureHeader, dest: f64) -> f64 {
     // Node's `Readable.pipe(dest)` returns `dest` to allow `r.pipe(a).pipe(b)`.
@@ -154,10 +220,38 @@ pub extern "C" fn js_node_stream_method_emit(stream_handle: i64, event: f64, arg
     }
 }
 
+/// `readable.push(chunk)` on a typed stream instance (#1539). Tracks the
+/// buffered byte count and returns `true` while it stays below the stream's
+/// highWaterMark, `false` once it reaches/exceeds it — Node's backpressure
+/// signal. The hidden buffered/hwm fields are seeded by `init_readable_state`
+/// at construction. Pushing `null`/`undefined` (EOF) returns `false`.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_push(stream_handle: i64, chunk: f64) -> f64 {
+    push_chunk(stream_value_from_handle(stream_handle), chunk)
+}
+
+/// `stream.readableHighWaterMark` property getter on a typed instance
+/// (#1539). Returns the effective readable highWaterMark stored at
+/// construction (default 16384).
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_hwm(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    get_hidden_value(stream, hidden_key(b"readableHighWaterMark")).unwrap_or(16384.0)
+}
+
+/// `stream.writableHighWaterMark` property getter on a typed instance
+/// (#1539).
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_writable_hwm(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    get_hidden_value(stream, hidden_key(b"writableHighWaterMark")).unwrap_or(16384.0)
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    mark_disturbed(stream);
     f64::from_bits(TAG_NULL)
 }
 
@@ -165,6 +259,7 @@ pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64
 pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    mark_disturbed(stream);
     stream
 }
 
@@ -743,6 +838,8 @@ fn register_stub_arities() {
     register(ns_listener_count as *const u8, 1);
     register(ns_listeners as *const u8, 1);
     register(ns_undefined0 as *const u8, 0);
+    register(ns_push1 as *const u8, 1);
+    register(ns_compose1 as *const u8, 1);
 }
 
 #[inline]
@@ -811,6 +908,37 @@ fn hidden_ended_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_write_key() -> *mut crate::string::StringHeader {
     hidden_key(WRITABLE_WRITE_KEY)
+}
+
+#[inline]
+fn hidden_readable_flag_key() -> *mut crate::string::StringHeader {
+    hidden_key(READABLE_FLAG_KEY)
+}
+
+#[inline]
+fn hidden_writable_flag_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_FLAG_KEY)
+}
+
+#[inline]
+fn hidden_disturbed_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_DISTURBED_KEY)
+}
+
+#[inline]
+fn hidden_buffered_key() -> *mut crate::string::StringHeader {
+    hidden_key(READABLE_BUFFERED_KEY)
+}
+
+#[inline]
+fn hidden_hwm_key() -> *mut crate::string::StringHeader {
+    hidden_key(READABLE_HWM_KEY)
+}
+
+/// Mark a stream as disturbed (it has been read from / resumed). Backs
+/// `Readable.isDisturbed(s)` (#1534).
+fn mark_disturbed(stream: f64) {
+    set_hidden_value(stream, hidden_disturbed_key(), f64::from_bits(TAG_TRUE));
 }
 
 fn hidden_key(bytes: &[u8]) -> *mut crate::string::StringHeader {
@@ -1174,7 +1302,7 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
 // WRITABLE_SHAPE_ID.
 // ─────────────────────────────────────────────────────────────────
 
-fn readable_methods() -> [(&'static str, StubFn); 28] {
+fn readable_methods() -> [(&'static str, StubFn); 30] {
     [
         ("on", cast2(ns_chain2)),
         ("once", cast2(ns_chain2)),
@@ -1209,6 +1337,9 @@ fn readable_methods() -> [(&'static str, StubFn); 28] {
         ("flatMap", cast2(ns_iter_flat_map)),
         ("take", cast1(ns_iter_take)),
         ("drop", cast1(ns_iter_drop)),
+        // #1539 — push() backpressure return + readable.compose() instance form.
+        ("push", cast1(ns_push1)),
+        ("compose", cast1(ns_compose1)),
     ]
 }
 
@@ -1308,6 +1439,53 @@ fn register_iter_helper_arities() {
     }
 }
 
+/// Coerce a NaN-boxed value to an `f64` if it is numeric (handling both the
+/// int32-boxed and double representations). Returns `None` for non-numbers.
+fn jsvalue_as_f64(v: f64) -> Option<f64> {
+    let jsval = JSValue::from_bits(v.to_bits());
+    if jsval.is_int32() {
+        Some(jsval.as_int32() as f64)
+    } else if jsval.is_number() {
+        Some(jsval.as_number())
+    } else {
+        None
+    }
+}
+
+/// Read a numeric constructor option (e.g. `highWaterMark`) off the opts
+/// object, returning `None` when absent or non-numeric.
+fn opt_number(opts: f64, key: &[u8]) -> Option<f64> {
+    jsvalue_as_f64(get_hidden_value(opts, hidden_key(key))?)
+}
+
+/// Resolve an effective highWaterMark: the direction-specific option
+/// (`readableHighWaterMark` / `writableHighWaterMark`) falls back to the
+/// generic `highWaterMark`, then Node's default of 16384 for byte streams.
+fn resolve_hwm(opts: f64, specific: &[u8]) -> f64 {
+    opt_number(opts, specific)
+        .or_else(|| opt_number(opts, b"highWaterMark"))
+        .unwrap_or(16384.0)
+}
+
+/// Initialize the readable side of a stream: direction flag, buffered byte
+/// counter, effective readable highWaterMark, and the visible
+/// `readableHighWaterMark` property (#1534/#1539).
+fn init_readable_state(stream: f64, opts: f64) {
+    set_hidden_value(stream, hidden_readable_flag_key(), f64::from_bits(TAG_TRUE));
+    set_hidden_value(stream, hidden_buffered_key(), 0.0);
+    let r_hwm = resolve_hwm(opts, b"readableHighWaterMark");
+    set_hidden_value(stream, hidden_hwm_key(), r_hwm);
+    set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
+}
+
+/// Initialize the writable side: direction flag and the visible
+/// `writableHighWaterMark` property (#1534/#1539).
+fn init_writable_state(stream: f64, opts: f64) {
+    set_hidden_value(stream, hidden_writable_flag_key(), f64::from_bits(TAG_TRUE));
+    let w_hwm = resolve_hwm(opts, b"writableHighWaterMark");
+    set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     register_iter_helper_arities();
@@ -1317,6 +1495,7 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     if let Some(read) = read_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, readable));
     }
+    init_readable_state(readable, opts);
     readable
 }
 
@@ -1332,6 +1511,7 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
             rebind_callback_this(write, writable),
         );
     }
+    init_writable_state(writable, opts);
     writable
 }
 
@@ -1343,6 +1523,8 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     if let Some(write) = write_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, duplex));
     }
+    init_readable_state(duplex, opts);
+    init_writable_state(duplex, opts);
     duplex
 }
 
@@ -1386,13 +1568,39 @@ pub extern "C" fn js_node_stream_readable_from(iterable: f64) -> f64 {
 // ─────────────────────────────────────────────────────────────────
 
 #[no_mangle]
-pub extern "C" fn js_node_stream_is_disturbed(_stream: f64) -> f64 {
-    f64::from_bits(TAG_FALSE)
+pub extern "C" fn js_node_stream_is_disturbed(stream: f64) -> f64 {
+    if get_hidden_value(stream, hidden_disturbed_key())
+        .is_some_and(|v| crate::value::js_is_truthy(v) != 0)
+    {
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_FALSE)
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_is_errored(stream: f64) -> f64 {
     if readable_hidden_error(stream).is_some() {
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_FALSE)
+    }
+}
+
+/// #1534: `Readable.isReadable(s)` / module-level `isReadable(s)`. Node
+/// returns `true` while a readable-side stream is still readable —
+/// i.e. it has the readable direction and hasn't ended, errored, or
+/// been destroyed. Perry tracks the readable-direction flag at
+/// construction and the ended/errored bits as methods run, so a
+/// freshly-constructed Readable answers `true` and a Writable answers
+/// `false` (no readable flag).
+#[no_mangle]
+pub extern "C" fn js_node_stream_is_readable(stream: f64) -> f64 {
+    let is_readable_dir = get_hidden_value(stream, hidden_readable_flag_key())
+        .is_some_and(|v| crate::value::js_is_truthy(v) != 0);
+    let ended = stream_hidden_ended(stream);
+    let errored = readable_hidden_error(stream).is_some();
+    if is_readable_dir && !ended && !errored {
         f64::from_bits(TAG_TRUE)
     } else {
         f64::from_bits(TAG_FALSE)
@@ -1457,13 +1665,34 @@ pub extern "C" fn js_node_stream_duplex_pair(_opts: f64) -> f64 {
 // don't crash. Real bidirectional adapters are tracked separately.
 // ─────────────────────────────────────────────────────────────────
 
-/// `Readable.toWeb` / `Writable.toWeb` — Perry returns a fresh
-/// Duplex stub for either direction. It's not a real WHATWG
-/// ReadableStream / WritableStream, but typeof / truthy / method
-/// existence checks (`.pipeTo`, etc. via duplex_methods) pass.
+/// A WHATWG-stream-shaped stub: an object carrying both `getReader` and
+/// `getWriter` method stubs. A real `ReadableStream` only has `getReader`
+/// and a `WritableStream` only `getWriter`, but the single `js_node_stream_to_web`
+/// entry can't tell which class `.toWeb` was called on (the NativeMethodCall
+/// drops the class), so the union shape lets `Readable.toWeb`,
+/// `Writable.toWeb`, and the `{ readable, writable }` pair from
+/// `Duplex.toWeb` all satisfy their `typeof x.getReader/getWriter === "function"`
+/// existence checks. Data isn't forwarded between the Node and WHATWG
+/// universes — that's the remaining #1540 gap.
+fn build_web_stream_stub() -> f64 {
+    let methods: [(&str, StubFn); 2] = [
+        ("getReader", cast0(ns_undefined0)),
+        ("getWriter", cast0(ns_undefined0)),
+    ];
+    let obj = build_object(&methods, WEB_STREAM_SHAPE_ID + methods.len() as u32);
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+/// `Readable.toWeb` / `Writable.toWeb` / `Duplex.toWeb` — returns a
+/// web-stream-shaped stub (#1540). For Duplex the result also exposes
+/// `readable` / `writable` web-stream stubs so `pair.readable.getReader`
+/// / `pair.writable.getWriter` resolve.
 #[no_mangle]
 pub extern "C" fn js_node_stream_to_web(_node_stream: f64) -> f64 {
-    js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+    let top = build_web_stream_stub();
+    set_hidden_value(top, hidden_key(b"readable"), build_web_stream_stub());
+    set_hidden_value(top, hidden_key(b"writable"), build_web_stream_stub());
+    top
 }
 
 /// `Readable.fromWeb` / `Writable.fromWeb` — Perry returns a fresh
@@ -1473,6 +1702,65 @@ pub extern "C" fn js_node_stream_to_web(_node_stream: f64) -> f64 {
 pub extern "C" fn js_node_stream_from_web(_web_stream: f64) -> f64 {
     js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
 }
+
+// ─────────────────────────────────────────────────────────────────
+// #1534/#1539/#1540/#1541: symbol retention.
+//
+// These `#[no_mangle]` entry points are emitted by codegen's stream
+// dispatch (native_table/net_events.rs) but several are never referenced
+// by any Rust code in the crate graph. The default `.a` staticlib keeps
+// them via staticlib-export semantics, but the auto-optimize build round-
+// trips the runtime through whole-program LLVM bitcode and is free to
+// internalize + dead-strip an unreferenced symbol — which is exactly why
+// `Readable.isDisturbed(s)` / `r.read()` failed with
+// `Undefined symbols: _js_node_stream_is_disturbed` at final link even
+// though the feature was wired. The `#[used]` statics below pin a retained
+// reference edge so every entry point survives all link modes. See the
+// same pattern in `value/dyn_index.rs` and `process.rs` (#1344).
+#[used]
+static KEEP_NS_METHOD_EMIT: extern "C" fn(i64, f64, f64) -> f64 = js_node_stream_method_emit;
+#[used]
+static KEEP_NS_METHOD_READ: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_read;
+#[used]
+static KEEP_NS_METHOD_PUSH: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_push;
+#[used]
+static KEEP_NS_READABLE_HWM: extern "C" fn(i64) -> f64 = js_node_stream_method_readable_hwm;
+#[used]
+static KEEP_NS_WRITABLE_HWM: extern "C" fn(i64) -> f64 = js_node_stream_method_writable_hwm;
+#[used]
+static KEEP_NS_METHOD_RESUME: extern "C" fn(i64) -> f64 = js_node_stream_method_resume;
+#[used]
+static KEEP_NS_METHOD_WRITE: extern "C" fn(i64, f64, f64) -> f64 = js_node_stream_method_write;
+#[used]
+static KEEP_NS_METHOD_END: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_end;
+#[used]
+static KEEP_NS_READABLE_NEW: extern "C" fn(f64) -> f64 = js_node_stream_readable_new;
+#[used]
+static KEEP_NS_WRITABLE_NEW: extern "C" fn(f64) -> f64 = js_node_stream_writable_new;
+#[used]
+static KEEP_NS_DUPLEX_NEW: extern "C" fn(f64) -> f64 = js_node_stream_duplex_new;
+#[used]
+static KEEP_NS_TRANSFORM_NEW: extern "C" fn(f64) -> f64 = js_node_stream_transform_new;
+#[used]
+static KEEP_NS_PASSTHROUGH_NEW: extern "C" fn(f64) -> f64 = js_node_stream_passthrough_new;
+#[used]
+static KEEP_NS_READABLE_FROM: extern "C" fn(f64) -> f64 = js_node_stream_readable_from;
+#[used]
+static KEEP_NS_IS_DISTURBED: extern "C" fn(f64) -> f64 = js_node_stream_is_disturbed;
+#[used]
+static KEEP_NS_IS_ERRORED: extern "C" fn(f64) -> f64 = js_node_stream_is_errored;
+#[used]
+static KEEP_NS_IS_READABLE: extern "C" fn(f64) -> f64 = js_node_stream_is_readable;
+#[used]
+static KEEP_NS_ADD_ABORT_SIGNAL: extern "C" fn(f64, f64) -> f64 = js_node_stream_add_abort_signal;
+#[used]
+static KEEP_NS_COMPOSE: extern "C" fn(f64) -> f64 = js_node_stream_compose;
+#[used]
+static KEEP_NS_DUPLEX_PAIR: extern "C" fn(f64) -> f64 = js_node_stream_duplex_pair;
+#[used]
+static KEEP_NS_TO_WEB: extern "C" fn(f64) -> f64 = js_node_stream_to_web;
+#[used]
+static KEEP_NS_FROM_WEB: extern "C" fn(f64) -> f64 = js_node_stream_from_web;
 
 #[cfg(test)]
 mod tests {

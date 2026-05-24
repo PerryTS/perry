@@ -56,6 +56,26 @@ pub fn try_lower_extern_func_call(
         return Ok(None);
     }
     match name.as_str() {
+        // #1671: `setTimeout(fn)` with no explicit delay. Node treats a
+        // missing/undefined delay as 0 (fires on the next timer tick).
+        // Without this arm a 1-arg `setTimeout` falls through to the
+        // catch-all below, which emits a bare LLVM call to `@setTimeout`
+        // and the linker fails with `Undefined symbols: _setTimeout`
+        // (hit by hono/jsx's `hooks/index.js`, which schedules a re-render
+        // via `setTimeout(() => { … })`). Route it to the same runtime
+        // entry as the 2-arg form with a zero delay.
+        "setTimeout" if args.len() == 1 => {
+            let cb_box = lower_expr(ctx, &args[0])?;
+            let blk = ctx.block();
+            let cb_handle = unbox_to_i64(blk, &cb_box);
+            let zero = double_literal(0.0);
+            let id = blk.call(
+                I64,
+                "js_set_timeout_callback",
+                &[(I64, &cb_handle), (DOUBLE, &zero)],
+            );
+            return Ok(Some(nanbox_pointer_inline(blk, &id)));
+        }
         "setTimeout" if args.len() == 2 => {
             let cb_box = lower_expr(ctx, &args[0])?;
             let delay_box = lower_expr(ctx, &args[1])?;

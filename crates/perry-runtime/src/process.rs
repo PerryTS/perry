@@ -587,6 +587,21 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
     }
 }
 
+// #1344: `js_setenv` / `js_removeenv` are emitted by codegen for
+// `process.env.X = v` and `delete process.env.X`, but nothing in the Rust
+// crate graph references them. The default `.a` staticlib keeps `#[no_mangle]`
+// exports via staticlib-export semantics, but the auto-optimize build round-
+// trips the runtime through whole-program LLVM bitcode and is free to
+// internalize + dead-strip an unreferenced symbol — leaving the codegen call
+// dangling (`Undefined symbols: _js_setenv` at final link, which is exactly
+// how #1344's acceptance test still failed on main). The `#[used]` statics
+// below pin a retained reference edge so both survive every link mode. See
+// the same pattern in `value/dyn_index.rs`.
+#[used]
+static KEEP_JS_SETENV: extern "C" fn(*const StringHeader, f64) = js_setenv;
+#[used]
+static KEEP_JS_REMOVEENV: extern "C" fn(*const StringHeader) = js_removeenv;
+
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]
 pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {

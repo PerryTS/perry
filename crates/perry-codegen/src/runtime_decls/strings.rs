@@ -1409,9 +1409,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // perry-runtime as a thin function-pointer trampoline so it's
     // safe to call even when perry-stdlib is not linked (no-op).
     module.declare_function("js_run_stdlib_pump", VOID, &[]);
-    // Drain perry-jsruntime's V8 promise adapter queue. Also a thin
-    // perry-runtime trampoline, so non-jsruntime builds pay only a no-op.
-    module.declare_function("js_run_jsruntime_pump", VOID, &[]);
     module.declare_function("js_sleep_ms", VOID, &[DOUBLE]);
     // Issue #84: condvar-backed wait for the event loop / await busy-wait.
     // Replaces fixed-quantum `js_sleep_ms(10.0)` / `js_sleep_ms(1.0)`.
@@ -1476,9 +1473,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Stdlib has-active-handles — returns 1 if WS servers, pending
     // HTTP events, etc. need the loop to keep running.
     module.declare_function("js_stdlib_has_active_handles", I32, &[]);
-    // JS runtime has-active-handles — returns 1 if V8 fallback promises are
-    // adapted into native Promises and still pending.
-    module.declare_function("js_jsruntime_has_active_handles", I32, &[]);
     // #591: returns 1 iff perry-runtime's per-thread microtask
     // TASK_QUEUE has a pending entry. The codegen-emitted event-loop
     // header check ORs this in so the loop doesn't exit between the
@@ -1606,6 +1600,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_request_get_url", I64, &[DOUBLE]);
     module.declare_function("js_request_get_method", I64, &[DOUBLE]);
     module.declare_function("js_request_get_body", DOUBLE, &[DOUBLE]);
+    // #1649: `req.headers` → NaN-boxed Headers handle.
+    module.declare_function("js_request_get_headers", DOUBLE, &[DOUBLE]);
+    // #1688: request body-consuming methods. text/json/arrayBuffer return a
+    // Promise pointer (i64); codegen NaN-boxes it as POINTER_TAG.
+    module.declare_function("js_request_text", I64, &[DOUBLE]);
+    module.declare_function("js_request_json", I64, &[DOUBLE]);
+    module.declare_function("js_request_array_buffer", I64, &[DOUBLE]);
 
     // Response body getters — handles flow as NaN-boxed POINTER_TAG f64
     // (Phase 1 unification, refs #421). Accessors call `handle_id` to
@@ -1658,6 +1659,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function("js_readable_stream_get_reader", DOUBLE, &[DOUBLE]);
+    // #1645: ReadableStream.from(iterable) — builds a pre-loaded stream.
+    module.declare_function("js_readable_stream_from_iterable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_readable_stream_locked", DOUBLE, &[DOUBLE]);
     module.declare_function("js_readable_stream_cancel", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_readable_stream_tee", DOUBLE, &[DOUBLE]);
@@ -1688,11 +1691,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_reader_release_lock", DOUBLE, &[DOUBLE]);
     module.declare_function("js_reader_closed", I64, &[DOUBLE]);
     module.declare_function("js_reader_cancel", I64, &[DOUBLE, DOUBLE]);
-    // WritableStream + Writer.
+    // WritableStream + Writer. #1545: leading arg is the `start` hook.
     module.declare_function(
         "js_writable_stream_new",
         DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function("js_writable_stream_get_writer", DOUBLE, &[DOUBLE]);
     module.declare_function("js_writable_stream_locked", DOUBLE, &[DOUBLE]);
@@ -1706,9 +1709,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_writer_ready", I64, &[DOUBLE]);
     module.declare_function("js_writer_desired_size", DOUBLE, &[DOUBLE]);
     // TransformStream.
-    module.declare_function("js_transform_stream_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    // #1644: leading arg is the `start` hook.
+    module.declare_function(
+        "js_transform_stream_new",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_transform_stream_readable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_transform_stream_writable", DOUBLE, &[DOUBLE]);
+    // #1545: node:stream/web QueuingStrategy constructors — take the options
+    // object, return a `{ highWaterMark, size }` object.
+    module.declare_function("js_count_queuing_strategy_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_byte_length_queuing_strategy_new", DOUBLE, &[DOUBLE]);
     // Issue #562: stream subclassing (`class X extends WritableStream` etc.).
     // The unwrap helper is wrapped around every stream-FFI receiver so a
     // subclass instance (NaN-boxed object pointer with the registry id

@@ -46,6 +46,40 @@ use super::{
     I18nLowerCtx,
 };
 
+/// #1380: method names addressable on a `Set` instance, used by the
+/// `typeof set.<name>` fold to report "function" (Set method values are
+/// not materialized as real function objects). Includes the ES2024
+/// composition methods.
+fn is_set_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "has"
+            | "add"
+            | "delete"
+            | "clear"
+            | "forEach"
+            | "entries"
+            | "values"
+            | "keys"
+            | "union"
+            | "intersection"
+            | "difference"
+            | "symmetricDifference"
+            | "isSubsetOf"
+            | "isSupersetOf"
+            | "isDisjointFrom"
+    )
+}
+
+/// #1380: method names addressable on a `Map` instance, used by the
+/// `typeof map.<name>` fold (same rationale as `is_set_method_name`).
+fn is_map_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "has" | "get" | "set" | "delete" | "clear" | "forEach" | "entries" | "values" | "keys"
+    )
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Integer(i) => Ok(double_literal(*i as f64)),
@@ -108,7 +142,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // misclassification.
                 Expr::GlobalGet(_) => Some("object"),
                 Expr::PropertyGet { object, property } => {
-                    if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+                    // #1380: `typeof set.has` / `typeof map.get` → "function".
+                    // Set/Map methods aren't materialized as real function
+                    // objects — a bare `set.has` read returns the (absent)
+                    // data property, so `js_value_typeof` would report
+                    // "undefined". The receiver type is known here via
+                    // `is_set_expr`/`is_map_expr` (the same routing that makes
+                    // `set.size` resolve to a number), so fold known method
+                    // names to "function". Covers
+                    // `process.allowedNodeEnvironmentFlags` (lowered to a Set)
+                    // whose `.has`/`.size` callers feature-detect with typeof.
+                    if (is_set_expr(ctx, object) && is_set_method_name(property))
+                        || (is_map_expr(ctx, object) && is_map_method_name(property))
+                    {
+                        Some("function")
+                    } else if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
                         if ctx.namespace_imports.contains(name)
                             && ctx.class_ids.contains_key(property)
                         {

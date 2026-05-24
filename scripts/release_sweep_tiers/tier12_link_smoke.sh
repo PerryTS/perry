@@ -173,6 +173,47 @@ for entry in "${TARGETS[@]}"; do
     fi
 done
 
+# --- #1652 / #589: node:http + Web Fetch link+run smoke (host only) ---
+# Guards against perry-ext-http-server's `js_node_http_*` FFI symbols, or the
+# Web Fetch Headers/Request/Response constructors, silently dropping out of
+# the default link. node:http server only links on the host (perry-ext-http
+# isn't cross-compiled to the mobile targets), so this is host-only. The
+# fixture exits immediately (never `.listen()`s), so we compile AND run it.
+NH_FIXTURE="$REPO_ROOT/tests/release/link_smoke/node_http_webfetch.ts"
+if [[ -f "$NH_FIXTURE" ]]; then
+    nh_artifact="$TIER_DIR/node_http_webfetch"
+    rm -f "$nh_artifact"
+    set +e
+    nh_log="$("$PERRY_BIN" "$NH_FIXTURE" -o "$nh_artifact" 2>&1)"
+    nh_rc=$?
+    nh_run=""
+    if [[ "$nh_rc" -eq 0 && -x "$nh_artifact" ]]; then
+        nh_run="$("$nh_artifact" 2>&1)"
+        nh_run_rc=$?
+    else
+        nh_run_rc=1
+    fi
+    set -e
+    {
+        echo
+        echo "=== node:http + Web Fetch smoke (host, #1652) ==="
+        echo "  fixture: $NH_FIXTURE"
+        echo "  compile exit=$nh_rc  run exit=$nh_run_rc"
+        echo "$nh_log" | tail -8 | sed 's/^/    compile: /'
+        echo "    run: $nh_run"
+    } >> "$LOG"
+    if [[ "$nh_rc" -eq 0 && "$nh_run_rc" -eq 0 ]] && echo "$nh_run" | grep -q "node-http-webfetch ok"; then
+        echo "  PASS (node:http + Web Fetch linked and ran)" >> "$LOG"
+        passed+=1
+        passed_targets+=("host-node-http-webfetch")
+    else
+        echo "  FAIL (node:http / Web Fetch link regression — #1652)" >> "$LOG"
+        failed+=1
+        failed_targets+=("host-node-http-webfetch")
+    fi
+    rm -f "$nh_artifact"
+fi
+
 end="$(date +%s)"
 dur="$((end - start))"
 

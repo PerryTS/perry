@@ -47,7 +47,6 @@ members = [
     "crates/perry-ext-fastify",
     "crates/perry-ext-pdf",
     "crates/perry-ext-ads",
-    "crates/perry-jsruntime",
     "crates/perry-wasm-host",
     "crates/perry-stdlib",
     "crates/perry-diagnostics",
@@ -123,7 +122,6 @@ default-members = [
     "crates/perry-ext-fastify",
     "crates/perry-ext-pdf",
     "crates/perry-ext-ads",
-    "crates/perry-jsruntime",
     "crates/perry-wasm-host",
     "crates/perry-stdlib",
     "crates/perry-diagnostics",
@@ -189,9 +187,6 @@ codegen-units = 16
 
 [profile.release.package.perry-stdlib]
 opt-level = "s"       # Optimize for size in stdlib
-
-[profile.release.package.perry-jsruntime]
-opt-level = 3
 
 [workspace.package]
 version = "0.5.1026"
@@ -313,7 +308,6 @@ perry-ext-pdf = { path = "crates/perry-ext-pdf" }
 perry-ext-ads = { path = "crates/perry-ext-ads" }
 perry-stdlib = { path = "crates/perry-stdlib" }
 perry-diagnostics = { path = "crates/perry-diagnostics" }
-perry-jsruntime = { path = "crates/perry-jsruntime" }
 perry-wasm-host = { path = "crates/perry-wasm-host" }
 perry-codegen-js = { path = "crates/perry-codegen-js" }
 perry-codegen-swiftui = { path = "crates/perry-codegen-swiftui" }

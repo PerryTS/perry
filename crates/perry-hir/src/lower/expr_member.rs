@@ -815,6 +815,33 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                 {
                     // Fall through — let the regular member access path
                     // below handle the user-declared subclass field.
+                } else if matches!(
+                    module_name.as_str(),
+                    "readable_stream"
+                        | "writable_stream"
+                        | "transform_stream"
+                        | "readable_stream_reader"
+                        | "writable_stream_writer"
+                ) && !matches!(
+                    property_name.as_str(),
+                    // Getter properties keep the 0-arg NativeMethodCall below
+                    // (they really are getters); everything else here is a
+                    // callable method.
+                    "locked" | "desiredSize" | "closed" | "ready" | "readable" | "writable"
+                ) {
+                    // #1642: a value-read of a Web Streams *method* (not a
+                    // getter) must yield a callable bound-method reference, not
+                    // a 0-arg getter call. `lower_member` is reached only for
+                    // value-reads (the call form `rs.getReader()` is handled by
+                    // `expr_call::lower_call`), so emit a plain `PropertyGet`;
+                    // the codegen binds it via `js_class_method_bind` so
+                    // `typeof rs.getReader === "function"` and `const f =
+                    // rs.getReader; f()` both work.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else {
                     // Issue #577 — `req.method` / `res.statusCode` etc.
                     // get rewritten to `__get_<name>` so the property
@@ -1309,6 +1336,20 @@ pub(super) fn stdlib_namespace_receiver(
         _ => return None,
     };
     let name = ident.sym.as_ref();
+
+    // #1701: a LOCAL binding (function param / `let` / `const`) that merely
+    // shares a name with a stdlib namespace is NOT the namespace — it shadows
+    // it. hono's trie-router has `path` (a URL-path string param) and does
+    // `path[0] === "/"`; treating that local as the `node:path` namespace
+    // false-fired the #503 refusal and blocked the whole package from
+    // compiling. A real stdlib namespace is never a local: it's the global
+    // (`process`) or an import, which the alias / namespace-import branches
+    // below resolve. So skip the direct name-match when `name` is shadowed by
+    // a local. (If a package shadows `process` with its own local, that local
+    // is genuinely theirs and likewise shouldn't be refused.)
+    if ctx.lookup_local(name).is_some() {
+        return None;
+    }
 
     // Direct global / module specifier match.
     if let Some(canon) = STDLIB_NAMESPACE_NAMES.iter().find(|n| **n == name) {

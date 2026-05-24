@@ -139,6 +139,9 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_transform_stream_readable",                OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_transform_stream_writable",                OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_stream_unwrap_handle",                     OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    // #1545: node:stream/web QueuingStrategy constructors.
+    ("js_count_queuing_strategy_new",               OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_byte_length_queuing_strategy_new",         OwnerKind::Stdlib { feature: Some("bundled-streams") }),
 
     // ── #846: node:http server ───────────────────────────────────────
     // `perry-ext-http-server` defines `js_node_http_*`. It's pulled in

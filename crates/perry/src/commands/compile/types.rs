@@ -64,12 +64,6 @@ pub struct CompileArgs {
     #[arg(long)]
     pub no_link: bool,
 
-    /// Enable V8 JavaScript runtime for importing pure JS modules from node_modules.
-    /// This is a fallback option when native compilation is not possible.
-    /// WARNING: This significantly increases binary size (~10-15MB).
-    #[arg(long)]
-    pub enable_js_runtime: bool,
-
     /// Enable WebAssembly host runtime so the produced binary can load .wasm
     /// modules at runtime via `WebAssembly.instantiate(bytes)`. Engine: wasmi
     /// (pure-Rust interpreter). Adds ~1MB to the binary. Issue #76.
@@ -155,7 +149,13 @@ pub struct CompileArgs {
     /// otherwise an unreadable wall of `<unknown>`. Also skips `/OPT:ICF`
     /// (identical-COMDAT folding) so distinct functions don't collapse
     /// to one symbol in the backtrace. Larger binary; off by default.
-    /// (Non-Windows targets: reserved — no behavior change today.)
+    ///
+    /// On Linux/macOS (#1663) this now skips the final `strip` and emits
+    /// `-g` DWARF, so a SIGSEGV in a compiled service backtraces to real
+    /// `js_*`/user function names + `file:line` under lldb/gdb instead of
+    /// `??`. Implemented by promoting the flag to the `PERRY_DEBUG_SYMBOLS`
+    /// env var in the compile driver, which codegen, the object-cache key,
+    /// and the strip step already honor.
     #[arg(long)]
     pub debug_symbols: bool,
 
@@ -320,8 +320,6 @@ pub struct CompilationContext {
     pub js_modules: BTreeMap<String, JsModule>,
     /// Mapping from import specifiers to resolved paths
     pub import_map: BTreeMap<String, PathBuf>,
-    /// Whether JS runtime is needed
-    pub needs_js_runtime: bool,
     /// Whether the WebAssembly host runtime is needed (codegen detected
     /// `WebAssembly.*` usage OR the user passed `--enable-wasm-runtime`).
     /// Issue #76.
@@ -448,18 +446,12 @@ pub struct CompilationContext {
     /// Consulted per-module during HIR lowering; ignored when
     /// `refuse_dynamic_stdlib_dispatch` is false.
     pub allow_dynamic_stdlib_packages: HashSet<String>,
-    /// #499: explicit host opt-in to link `perry-jsruntime` (QuickJS-based
-    /// eval-equivalent runtime). Default false. Sources, last wins:
-    /// `perry.allowJsRuntime: true` in host package.json → CLI flag
-    /// `--enable-js-runtime` implicitly opts in. Without the opt-in,
-    /// any transitive dep that introduces a `.js` file under
-    /// `node_modules/` fails the build with a diagnostic that names
-    /// the offending file(s).
-    pub allow_js_runtime: bool,
-    /// #499: source files that flipped `needs_js_runtime` to true.
-    /// Used to name the offending importer(s) in the refusal
-    /// diagnostic. Records canonical path; the package name (if the
-    /// file lives under `node_modules/<pkg>/...`) is derived at
+    /// Source files that imported a JavaScript module the resolver can
+    /// only evaluate through a runtime JS engine. This Perry build is
+    /// V8-free — the `perry-jsruntime` runtime was removed — so a
+    /// non-empty list fails the build with a diagnostic naming the
+    /// offending file(s). Records canonical paths; the owning package
+    /// name (for `node_modules/<pkg>/...` files) is derived at
     /// diagnostic-emission time. Empty until `collect_modules` runs.
     pub js_runtime_importers: Vec<PathBuf>,
     /// #501: host-controlled per-package capability policy. Map of
@@ -556,7 +548,6 @@ impl CompilationContext {
             native_modules: BTreeMap::new(),
             js_modules: BTreeMap::new(),
             import_map: BTreeMap::new(),
-            needs_js_runtime: false,
             needs_wasm_runtime: false,
             needs_ui: false,
             harmonyos_index_ets: None,
@@ -585,7 +576,6 @@ impl CompilationContext {
             extra_stdlib_features: BTreeSet::new(),
             refuse_dynamic_stdlib_dispatch: true,
             allow_dynamic_stdlib_packages: HashSet::new(),
-            allow_js_runtime: false,
             js_runtime_importers: Vec::new(),
             permissions: std::collections::BTreeMap::new(),
             host_package_name: None,

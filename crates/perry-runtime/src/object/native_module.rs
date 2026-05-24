@@ -1351,6 +1351,83 @@ pub(crate) unsafe fn get_native_module_constant(
         Some(v as f64)
     };
 
+    // `http2.constants` — the subset of Node's `require('node:http2').constants`
+    // that real code reads: the `:`-prefixed pseudo-header names, the common
+    // header-name string constants, the NGHTTP2 error/session codes, and the
+    // HTTP_STATUS_* numbers. `@hono/node-server` reaches for these by name
+    // (#1651). Mixed string/number values, so this closure returns the f64
+    // directly rather than going through the `i64 as f64` shape used above.
+    let http2_const = |prop: &str| -> Option<f64> {
+        Some(match prop {
+            // Pseudo-headers (HTTP/2 request/response framing).
+            "HTTP2_HEADER_STATUS" => str_val(":status"),
+            "HTTP2_HEADER_METHOD" => str_val(":method"),
+            "HTTP2_HEADER_AUTHORITY" => str_val(":authority"),
+            "HTTP2_HEADER_SCHEME" => str_val(":scheme"),
+            "HTTP2_HEADER_PATH" => str_val(":path"),
+            "HTTP2_HEADER_PROTOCOL" => str_val(":protocol"),
+            // Common header-name constants.
+            "HTTP2_HEADER_ACCEPT" => str_val("accept"),
+            "HTTP2_HEADER_ACCEPT_ENCODING" => str_val("accept-encoding"),
+            "HTTP2_HEADER_AUTHORIZATION" => str_val("authorization"),
+            "HTTP2_HEADER_CACHE_CONTROL" => str_val("cache-control"),
+            "HTTP2_HEADER_CONNECTION" => str_val("connection"),
+            "HTTP2_HEADER_CONTENT_ENCODING" => str_val("content-encoding"),
+            "HTTP2_HEADER_CONTENT_LENGTH" => str_val("content-length"),
+            "HTTP2_HEADER_CONTENT_TYPE" => str_val("content-type"),
+            "HTTP2_HEADER_COOKIE" => str_val("cookie"),
+            "HTTP2_HEADER_DATE" => str_val("date"),
+            "HTTP2_HEADER_ETAG" => str_val("etag"),
+            "HTTP2_HEADER_HOST" => str_val("host"),
+            "HTTP2_HEADER_LOCATION" => str_val("location"),
+            "HTTP2_HEADER_SET_COOKIE" => str_val("set-cookie"),
+            "HTTP2_HEADER_USER_AGENT" => str_val("user-agent"),
+            // Default HPACK dynamic-table / frame sizes.
+            "DEFAULT_SETTINGS_HEADER_TABLE_SIZE" => 4096.0,
+            "DEFAULT_SETTINGS_ENABLE_PUSH" => 1.0,
+            "DEFAULT_SETTINGS_INITIAL_WINDOW_SIZE" => 65535.0,
+            "DEFAULT_SETTINGS_MAX_FRAME_SIZE" => 16384.0,
+            // NGHTTP2 error codes (RST_STREAM / GOAWAY).
+            "NGHTTP2_NO_ERROR" => 0.0,
+            "NGHTTP2_PROTOCOL_ERROR" => 1.0,
+            "NGHTTP2_INTERNAL_ERROR" => 2.0,
+            "NGHTTP2_FLOW_CONTROL_ERROR" => 3.0,
+            "NGHTTP2_SETTINGS_TIMEOUT" => 4.0,
+            "NGHTTP2_STREAM_CLOSED" => 5.0,
+            "NGHTTP2_FRAME_SIZE_ERROR" => 6.0,
+            "NGHTTP2_REFUSED_STREAM" => 7.0,
+            "NGHTTP2_CANCEL" => 8.0,
+            "NGHTTP2_COMPRESSION_ERROR" => 9.0,
+            "NGHTTP2_CONNECT_ERROR" => 10.0,
+            "NGHTTP2_ENHANCE_YOUR_CALM" => 11.0,
+            "NGHTTP2_INADEQUATE_SECURITY" => 12.0,
+            "NGHTTP2_HTTP_1_1_REQUIRED" => 13.0,
+            // Session/flag constants.
+            "NGHTTP2_SESSION_SERVER" => 0.0,
+            "NGHTTP2_SESSION_CLIENT" => 1.0,
+            "NGHTTP2_FLAG_NONE" => 0.0,
+            "NGHTTP2_FLAG_END_STREAM" => 1.0,
+            "NGHTTP2_FLAG_END_HEADERS" => 4.0,
+            "NGHTTP2_FLAG_ACK" => 1.0,
+            // The HTTP_STATUS_* numbers code commonly branches on.
+            "HTTP_STATUS_OK" => 200.0,
+            "HTTP_STATUS_CREATED" => 201.0,
+            "HTTP_STATUS_ACCEPTED" => 202.0,
+            "HTTP_STATUS_NO_CONTENT" => 204.0,
+            "HTTP_STATUS_NOT_MODIFIED" => 304.0,
+            "HTTP_STATUS_BAD_REQUEST" => 400.0,
+            "HTTP_STATUS_UNAUTHORIZED" => 401.0,
+            "HTTP_STATUS_FORBIDDEN" => 403.0,
+            "HTTP_STATUS_NOT_FOUND" => 404.0,
+            "HTTP_STATUS_METHOD_NOT_ALLOWED" => 405.0,
+            "HTTP_STATUS_INTERNAL_SERVER_ERROR" => 500.0,
+            "HTTP_STATUS_NOT_IMPLEMENTED" => 501.0,
+            "HTTP_STATUS_BAD_GATEWAY" => 502.0,
+            "HTTP_STATUS_SERVICE_UNAVAILABLE" => 503.0,
+            _ => return None,
+        })
+    };
+
     match module_name {
         // node:perf_hooks — `performance.timeOrigin` (ms since epoch at start)
         // and the `constants.NODE_PERFORMANCE_GC_*` numeric table. Both the
@@ -1518,6 +1595,17 @@ pub(crate) unsafe fn get_native_module_constant(
             "METHODS" => Some(unsafe { http_methods_array() }),
             _ => None,
         },
+        // node:http2 — `constants` is a sub-namespace object (the spec exposes
+        // it as a single frozen object, not loose top-level constants), so
+        // `import { constants } from 'node:http2'` binds to a real object and
+        // `constants.HTTP2_HEADER_PATH` resolves through `http2.constants`
+        // below. The `Http2ServerRequest` / `Http2ServerResponse` /
+        // `createSecureServer` exports are handled elsewhere (#1651).
+        "http2" => match property {
+            "constants" => Some(create_sub_namespace("http2.constants")),
+            _ => None,
+        },
+        "http2.constants" => http2_const(property),
         // node:cluster — all property reads are static constants on the
         // primary process. The test fixture only exercises shape, never
         // forks a worker; the `fork` / `disconnect` / `setupPrimary` /

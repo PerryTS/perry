@@ -107,8 +107,17 @@ macro_rules! thunk {
 mod blob;
 mod consumers;
 mod fs_promises;
+mod hono_jsx;
 mod stream_promises;
 mod timers;
+
+// #1671: hono/jsx/server + hono/jsx/streaming. Re-export the stream-creation
+// registration so perry-stdlib's `bundled-streams` init can wire it up.
+pub use hono_jsx::js_register_jsx_render_stream;
+use hono_jsx::{
+    thunk_hono_fragment, thunk_hono_jsx, thunk_hono_jsxnode, thunk_hono_jsxs,
+    thunk_hono_render_to_readable_stream, thunk_hono_suspense,
+};
 
 use consumers::{
     thunk_consumers_arrayBuffer, thunk_consumers_blob, thunk_consumers_buffer,
@@ -153,6 +162,19 @@ thunk!(thunk_sys_deprecate, "node:sys.deprecate is not yet implemented in Perry 
 thunk!(thunk_sys_promisify, "node:sys.promisify is not yet implemented in Perry (use node:util.promisify; node:sys is deprecated).");
 thunk!(thunk_sys_callbackify, "node:sys.callbackify is not yet implemented in Perry (use node:util.callbackify; node:sys is deprecated).");
 thunk!(thunk_sys_isArray, "node:sys.isArray is not yet implemented in Perry (use node:util.isArray; node:sys is deprecated).");
+
+// #1545: node:stream/web (WHATWG Web Streams). The named-export bindings
+// exist so `typeof ReadableStream === "function"` and `import * as web from
+// "node:stream/web"` work. Construction (`new ReadableStream(...)`,
+// `new CountQueuingStrategy(...)`, …) is handled in codegen's
+// builtin-constructor dispatch (lower_call/builtin.rs), which routes by the
+// textual class name regardless of how it was imported — so this thunk only
+// runs when a Web Streams class is *called* without `new`, which throws a
+// TypeError in Node too. One shared thunk covers all 17 exported classes.
+thunk!(
+    thunk_stream_web_ctor,
+    "Web Streams constructors (node:stream/web) require the 'new' operator."
+);
 
 // ----- submodule table -----
 
@@ -390,6 +412,123 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             ExportSpec {
                 name: "blob",
                 thunk: ExportThunk::Fn1(thunk_consumers_blob),
+            },
+        ],
+    },
+    // #1545: node:stream/web exports the full WHATWG Web Streams class set.
+    // Every entry maps to the same throwing thunk — its sole purpose is to
+    // give each name `typeof === "function"` and a namespace slot; real
+    // construction goes through codegen's builtin `new` dispatch.
+    SubmoduleSpec {
+        key: "stream_web",
+        exports: &[
+            ExportSpec {
+                name: "ReadableStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "ReadableStreamDefaultReader",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "ReadableStreamBYOBReader",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "ReadableStreamDefaultController",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "ReadableByteStreamController",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "ReadableStreamBYOBRequest",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "WritableStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "WritableStreamDefaultWriter",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "WritableStreamDefaultController",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "TransformStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "TransformStreamDefaultController",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "ByteLengthQueuingStrategy",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "CountQueuingStrategy",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "TextEncoderStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "TextDecoderStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "CompressionStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "DecompressionStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+        ],
+    },
+    // #1671: hono/jsx/server — the JSX runtime helpers. `jsx`/`jsxs` forward
+    // to the built-in `js_jsx` renderer; `Fragment` renders its children;
+    // `JSXNode` is an exposed stub (Perry boxes nodes internally).
+    SubmoduleSpec {
+        key: "hono_jsx_server",
+        exports: &[
+            ExportSpec {
+                name: "jsx",
+                thunk: ExportThunk::Fn2(thunk_hono_jsx),
+            },
+            ExportSpec {
+                name: "jsxs",
+                thunk: ExportThunk::Fn2(thunk_hono_jsxs),
+            },
+            ExportSpec {
+                name: "Fragment",
+                thunk: ExportThunk::Fn1(thunk_hono_fragment),
+            },
+            ExportSpec {
+                name: "JSXNode",
+                thunk: ExportThunk::Fn1(thunk_hono_jsxnode),
+            },
+        ],
+    },
+    // #1671: hono/jsx/streaming — server-side streaming helpers.
+    // `renderToReadableStream` renders eagerly to a single-chunk ReadableStream;
+    // `Suspense` renders its children (Perry has no streaming-suspension point).
+    SubmoduleSpec {
+        key: "hono_jsx_streaming",
+        exports: &[
+            ExportSpec {
+                name: "renderToReadableStream",
+                thunk: ExportThunk::Fn2(thunk_hono_render_to_readable_stream),
+            },
+            ExportSpec {
+                name: "Suspense",
+                thunk: ExportThunk::Fn1(thunk_hono_suspense),
             },
         ],
     },

@@ -62,11 +62,10 @@ pub(super) fn build_and_run_link(
     // optimize rebuild, so the resulting link contains exactly one
     // copy of each `_js_<package>_*` symbol — no duplicates.
     well_known_libs: &[PathBuf],
-    jsruntime_lib: &Option<PathBuf>,
     // Issue #76 — `libperry_wasm_host.a` (wasmi-backed WebAssembly host
     // runtime). Only `Some(...)` when the user passed `--enable-wasm-runtime`
     // and the archive was located. Appended to the link command after the
-    // jsruntime/stdlib block so the linker resolves `perry_wasm_host_*`
+    // stdlib block so the linker resolves `perry_wasm_host_*`
     // symbols referenced by `js_webassembly_*` shims in `perry-runtime`.
     wasm_host_lib: &Option<PathBuf>,
     exe_path: &Path,
@@ -272,8 +271,8 @@ pub(super) fn build_and_run_link(
         }
     }
 
-    // Link libraries - jsruntime bundles V8 + stdlib; runtime provides base FFI symbols.
-    // Note: libperry_jsruntime.a omits some runtime symbols (js_register_class_method,
+    // Link libraries - stdlib bundles perry-runtime; runtime provides base FFI symbols.
+    // Note: libperry_stdlib.a may omit some runtime symbols (js_register_class_method,
     // js_register_class_getter, etc.) due to Rust DCE on rlib dependencies. We always
     // link libperry_runtime.a as a fallback to fill these gaps. On macOS/Linux/ELF the
     // linker uses first-definition-wins for archives, so no duplicate symbol errors arise.
@@ -292,71 +291,7 @@ pub(super) fn build_and_run_link(
         && (ctx.needs_ui || is_watchos)
         && find_ui_library(target).is_some();
     if !skip_runtime {
-        if let Some(ref jsruntime) = jsruntime_lib {
-            // Issue #257: when user code only references V8 FFIs that have stubs in
-            // perry-runtime (`js_load_module` + `js_call_function` + …, but NOT
-            // `js_call_method`), Mach-O lazy archive resolution satisfies those
-            // symbols against the (now-weak) closure.rs stubs and never pulls
-            // `interop.o` from libperry_jsruntime.a — yielding a binary that
-            // silently links V8 nowhere even though the driver thought it linked
-            // jsruntime. Force-keep `js_runtime_shutdown` (a no_mangle symbol that
-            // exists ONLY in jsruntime/interop.rs, never stubbed in runtime) via
-            // `-Wl,-u`, which tells the linker to treat it as undefined. The
-            // resolver then has to pull `interop.o` from jsruntime.a, which
-            // cascades V8/deno_core deps and gives strong defs of all V8 FFIs that
-            // override the weak runtime stubs. ELF gets `--undefined=` (same
-            // semantics, different syntax). Windows links jsruntime via standard
-            // archive scan and doesn't have the same weak-shadow issue.
-            if !is_windows {
-                let undef_flag = if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
-                    "-Wl,-u,_js_runtime_shutdown"
-                } else {
-                    "-Wl,--undefined=js_runtime_shutdown"
-                };
-                cmd.arg(undef_flag);
-            }
-            cmd.arg(jsruntime);
-            // Also link runtime to supply symbols DCE'd from jsruntime (e.g. js_register_class_method)
-            if !is_android && !is_windows {
-                cmd.arg(runtime_lib);
-            }
-            // Issue #886 — express (or any compilePackages program that
-            // mixes V8-fallback JS modules with natively-compiled TS that
-            // emits a `perry-ext-*` FFI) reaches this branch. Pre-fix:
-            // jsruntime bundles perry-stdlib at default features but NO
-            // `perry-ext-*` staticlib, so a `js_node_http_create_server`
-            // (or `js_node_http_res_end`, …) reference from express's
-            // compiled `application.js` link-failed even though
-            // `auto-optimize: built …/libperry_ext_http.a` had just run.
-            // The codegen-side FFI provenance registry
-            // (`crates/perry-codegen/src/ext_registry.rs`) drains
-            // `OwnerKind::WellKnown("http")` into
-            // `ctx.native_module_imports`, the auto-optimize layer builds
-            // perry-ext-http.a + puts it into `well_known_libs`, but the
-            // OLD jsruntime arm here completely skipped both `stdlib_lib`
-            // and `well_known_libs`. Mirror the parallel `else if
-            // ctx.needs_stdlib` branch by appending both after jsruntime
-            // + runtime: archive scan is first-definition-wins on Mach-O
-            // and ELF, so jsruntime's bundled-stdlib copies still win for
-            // duplicate `js_*` symbols (yielding the expected
-            // "ld: warning: duplicate symbol" lines this is documented
-            // to produce), and the perry-ext-* libs cover the gaps that
-            // neither jsruntime nor its bundled stdlib carries.
-            //
-            // The auto-optimize stdlib is included alongside well-known
-            // libs because the well-known flip strips features from it
-            // (e.g. `http-client` when routing to perry-ext-http) — the
-            // auto-built stdlib still carries the OTHER stdlib FFIs the
-            // program needs, so including both is safe and necessary.
-            if ctx.needs_stdlib {
-                if let Some(ref stdlib) = stdlib_lib {
-                    cmd.arg(stdlib);
-                }
-                for wk in well_known_libs {
-                    cmd.arg(wk);
-                }
-            }
-        } else if ctx.needs_stdlib || is_windows {
+        if ctx.needs_stdlib || is_windows {
             // On Windows/MSVC, always try to link stdlib because codegen unconditionally
             // declares all stdlib extern functions, creating import references that MSVC
             // won't dead-strip. On macOS/Linux, the linker ignores unreferenced archives.
@@ -426,7 +361,7 @@ pub(super) fn build_and_run_link(
     }
 
     // Issue #76 — wasmi host runtime, opt-in via `--enable-wasm-runtime`.
-    // Append after stdlib/jsruntime so the linker can resolve `perry_wasm_host_*`
+    // Append after stdlib so the linker can resolve `perry_wasm_host_*`
     // symbols referenced by the always-present `js_webassembly_*` FFIs in
     // perry-runtime.
     if let Some(ref wasm_host) = wasm_host_lib {
@@ -435,12 +370,6 @@ pub(super) fn build_and_run_link(
 
     if is_windows {
         cmd.arg(format!("/OUT:{}", exe_path.display()));
-        // V8/deno_core needs additional Windows system libraries
-        if jsruntime_lib.is_some() {
-            cmd.arg("winmm.lib");
-            cmd.arg("dbghelp.lib");
-            cmd.arg("msvcprt.lib"); // C++ runtime for exception_ptr
-        }
     } else {
         cmd.arg("-o").arg(exe_path).arg("-lc");
     }
@@ -723,20 +652,16 @@ pub(super) fn build_and_run_link(
         }
     } else if is_linux {
         // Linux system libraries (cross-compile target)
-        // Allow multiple definitions: perry-jsruntime embeds perry-runtime symbols,
-        // and we also link perry-runtime directly for symbols DCE'd from jsruntime.
+        // Allow multiple definitions: stdlib bundles perry-runtime symbols,
+        // and we also link perry-runtime directly for symbols DCE'd from stdlib.
         // macOS Mach-O uses first-definition-wins natively; ELF linkers need this flag.
         cmd.arg("-Wl,--allow-multiple-definition")
             .arg("-lm")
             .arg("-lpthread")
             .arg("-ldl");
 
-        if ctx.needs_stdlib || jsruntime_lib.is_some() {
+        if ctx.needs_stdlib {
             cmd.arg("-lssl").arg("-lcrypto");
-        }
-
-        if jsruntime_lib.is_some() {
-            cmd.arg("-lstdc++");
         }
     } else if is_windows {
         // Windows system libraries
@@ -793,22 +718,14 @@ pub(super) fn build_and_run_link(
                 .arg("-liconv")
                 .arg("-lresolv")
                 .arg("-lobjc");
-
-            if jsruntime_lib.is_some() {
-                cmd.arg("-lc++");
-            }
         }
 
         // On Linux (native, not cross-compiling to macOS), link against system libraries
         if cfg!(target_os = "linux") && !is_cross_macos {
             cmd.arg("-lm").arg("-lpthread").arg("-ldl");
 
-            if ctx.needs_stdlib || jsruntime_lib.is_some() {
+            if ctx.needs_stdlib {
                 cmd.arg("-lssl").arg("-lcrypto");
-            }
-
-            if jsruntime_lib.is_some() {
-                cmd.arg("-lstdc++");
             }
         }
     }

@@ -2237,14 +2237,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // through the `Readable.foo` -> `stream.foo` route in
     // `lower_call.rs`, so the gate keys off `stream.from`.
     method("stream", "from", false, None),
-    // #1534: static introspection helpers — `Readable.isDisturbed(s)`
-    // and `Readable.isErrored(s)`. Stub returns `false` (Perry's
-    // stream stubs don't track state yet) — correct for a fresh,
-    // untouched stream. Directional helpers `isReadable`/`isWritable`
-    // are deferred (their answer depends on stream direction which
-    // Perry's stub doesn't carry at runtime yet).
+    // #1534: static introspection helpers — `Readable.isDisturbed(s)`,
+    // `Readable.isErrored(s)`, and `Readable.isReadable(s)` (also
+    // re-exported module-level). Perry now tracks per-stream
+    // disturbed/errored bits and the readable-direction flag, so these
+    // answer per-instance. `isWritable` is still deferred (the writable
+    // direction's null/true distinction isn't fully modelled yet).
     method("stream", "isDisturbed", false, None),
     method("stream", "isErrored", false, None),
+    method("stream", "isReadable", false, None),
     // #1541: `stream.addAbortSignal(signal, stream)` — Node wires
     // the AbortSignal so aborting it destroys the stream. Stub
     // ignores the signal and returns the stream verbatim so chain
@@ -2296,6 +2297,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "resume", true, None),
     method("stream", "write", true, None),
     method("stream", "end", true, None),
+    // #1539: push() backpressure return + readable/writableHighWaterMark
+    // property getters on typed stream instances.
+    method("stream", "push", true, None),
+    method("stream", "readableHighWaterMark", true, None),
+    method("stream", "writableHighWaterMark", true, None),
     // --- child_process (synchronous + async exec surface;
     //     spawn/fork are documented but not yet codegen'd) ---
     method("child_process", "exec", false, None),
@@ -2725,6 +2731,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("streams", "TextEncoder"),
     class("streams", "TextDecoder"),
     class("streams", "DecompressionStream"),
+    // node:stream/web QueuingStrategy classes (#1545).
+    class("streams", "ByteLengthQueuingStrategy"),
+    class("streams", "CountQueuingStrategy"),
     // --- node:http server (issue #577) ---
     method("http", "createServer", false, None),
     method("http", "listen", true, Some("HttpServer")),
@@ -2801,6 +2810,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),
+    // `http2.constants` — the frozen object of HTTP2_HEADER_* / NGHTTP2_* /
+    // HTTP_STATUS_* values. `@hono/node-server` imports it by name (#1651).
+    property("http2", "constants"),
     // `@perryts/google-auth` no longer ships in the bundled manifest —
     // since v0.5.1015 it lives at https://github.com/PerryTS/google-auth
     // and is installed via `npm install @perryts/google-auth`. The

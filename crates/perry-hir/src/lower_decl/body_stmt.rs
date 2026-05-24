@@ -695,13 +695,61 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             // instance type. Falls through to the generic async-iterator
             // path if not a ReadableStream.
             if for_of_stmt.is_await {
-                let is_readable_stream = if let ast::Expr::Ident(ident) = &*for_of_stmt.right {
-                    matches!(
-                        ctx.lookup_native_instance(ident.sym.as_ref()),
-                        Some((_, "ReadableStream"))
-                    )
-                } else {
-                    false
+                // #1646: peel `as T` / `!` / `as const` / parens so
+                // `for await (const v of rs as any)` (a common Web-Streams
+                // idiom — the WHATWG ReadableStream async-iterator isn't in
+                // the lib.dom.d.ts types Perry sees) is still recognised as a
+                // ReadableStream and lowered to the getReader/read loop below.
+                let mut iter_inner: &ast::Expr = &for_of_stmt.right;
+                loop {
+                    iter_inner = match iter_inner {
+                        ast::Expr::TsAs(x) => &x.expr,
+                        ast::Expr::TsNonNull(x) => &x.expr,
+                        ast::Expr::TsConstAssertion(x) => &x.expr,
+                        ast::Expr::Paren(x) => &x.expr,
+                        _ => break,
+                    };
+                }
+                let is_readable_stream = match iter_inner {
+                    ast::Expr::Ident(ident) => {
+                        let name = ident.sym.as_ref();
+                        // A `new ReadableStream(...)` local is tracked by its
+                        // inferred `Named("ReadableStream")` type, not the
+                        // native-instance registry (that's only populated for
+                        // `response.body` / `blob.stream()` factories). Accept
+                        // either so a directly-constructed Web stream iterates too.
+                        matches!(
+                            ctx.lookup_native_instance(name),
+                            Some((_, "ReadableStream"))
+                        ) || matches!(
+                            ctx.lookup_local_type(name),
+                            Some(Type::Named(n)) if n == "ReadableStream"
+                        )
+                    }
+                    // #1670: `for await (const c of res.body)` — the stream
+                    // arrives as a bare `Member` (Any-typed). Recognise
+                    // `<obj>.body` on a Response/Request and `<ts>.readable` on
+                    // a TransformStream, mirroring `var_decl`'s native-instance
+                    // property mapping for typed-local binds.
+                    ast::Expr::Member(member) => {
+                        if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(prop_ident)) =
+                            (member.obj.as_ref(), &member.prop)
+                        {
+                            let prop = prop_ident.sym.as_ref();
+                            let class = ctx
+                                .lookup_native_instance(obj_ident.sym.as_ref())
+                                .map(|(_, c)| c);
+                            matches!(
+                                (prop, class),
+                                ("body", Some("Response"))
+                                    | ("body", Some("Request"))
+                                    | ("readable", Some("TransformStream"))
+                            )
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
                 };
 
                 if is_readable_stream {
