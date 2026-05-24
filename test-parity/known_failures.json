@@ -1687,5 +1687,23 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/async-iter/iterator-next-direct": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: r[Symbol.asyncIterator]().next() — direct call doesn't yield correct {value, done} shape. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/writable/end-three-arg": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: end(chunk, encoding, callback) 3-arg form — cb does not fire after finish. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/iter-helpers/reduce-no-initial": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: reduce(fn) without initial — first item not used as accumulator. Flips to PASS when #1558 lands."
   }
 }
