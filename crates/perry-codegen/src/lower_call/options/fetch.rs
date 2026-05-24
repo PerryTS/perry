@@ -260,6 +260,25 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                         .call(DOUBLE, "js_request_get_headers", &[(DOUBLE, &h_handle)]);
                 return Ok(Some(out));
             }
+            // #1688: body-consuming methods. `js_request_get_body` already
+            // stores the body string; mirror the Response `.text()`/`.json()`/
+            // `.arrayBuffer()` path (each returns a Promise pointer NaN-boxed
+            // as POINTER_TAG).
+            "text" => {
+                let blk = ctx.block();
+                let promise = blk.call(I64, "js_request_text", &[(DOUBLE, &h_handle)]);
+                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+            }
+            "json" => {
+                let blk = ctx.block();
+                let promise = blk.call(I64, "js_request_json", &[(DOUBLE, &h_handle)]);
+                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+            }
+            "arrayBuffer" => {
+                let blk = ctx.block();
+                let promise = blk.call(I64, "js_request_array_buffer", &[(DOUBLE, &h_handle)]);
+                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+            }
             _ => return Ok(None),
         }
     }

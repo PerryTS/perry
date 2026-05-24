@@ -16,6 +16,9 @@
 // request method: POST
 // request url: http://example.com/api
 // request body present: true
+// request text: raw body
+// request json data: true
+// request arrayBuffer byteLength: 5
 // clone text: cloned body
 // arrayBuffer byteLength: 5
 // blob size: 5
@@ -83,6 +86,18 @@ async function main(): Promise<void> {
   console.log("request method: " + req.method);
   console.log("request url: " + req.url);
   console.log("request body present: " + (req.body !== null));
+
+  // --- Request.text() / .json() / .arrayBuffer() (#1688) ---
+  // A body is read-once per the spec, so use a fresh Request for each.
+  const reqText = new Request("http://example.com/api", { method: "POST", body: "raw body" });
+  console.log("request text: " + await reqText.text());
+  const reqJson = new Request("http://example.com/api", {
+    method: "POST",
+    body: JSON.stringify({ data: true })
+  });
+  console.log("request json data: " + (await reqJson.json()).data);
+  const reqAb = new Request("http://example.com/api", { method: "POST", body: "hello" });
+  console.log("request arrayBuffer byteLength: " + (await reqAb.arrayBuffer()).byteLength);
 
   // --- Response.clone() ---
   const r5 = new Response("cloned body");
@@ -155,10 +170,13 @@ crates/perry-stdlib/src/fetch.rs:
   - js_headers_new
   - js_headers_set
   - js_headers_values
+  - js_request_array_buffer
   - js_request_get_body
   - js_request_get_method
   - js_request_get_url
+  - js_request_json
   - js_request_new
+  - js_request_text
   - js_response_array_buffer
   - js_response_blob
   - js_response_body

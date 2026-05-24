@@ -1608,6 +1608,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_request_get_body", DOUBLE, &[DOUBLE]);
     // #1649: `req.headers` → NaN-boxed Headers handle.
     module.declare_function("js_request_get_headers", DOUBLE, &[DOUBLE]);
+    // #1688: request body-consuming methods. text/json/arrayBuffer return a
+    // Promise pointer (i64); codegen NaN-boxes it as POINTER_TAG.
+    module.declare_function("js_request_text", I64, &[DOUBLE]);
+    module.declare_function("js_request_json", I64, &[DOUBLE]);
+    module.declare_function("js_request_array_buffer", I64, &[DOUBLE]);
 
     // Response body getters — handles flow as NaN-boxed POINTER_TAG f64
     // (Phase 1 unification, refs #421). Accessors call `handle_id` to

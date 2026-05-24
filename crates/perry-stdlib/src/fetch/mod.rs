@@ -1877,3 +1877,90 @@ pub extern "C" fn js_request_get_body(handle: f64) -> f64 {
         None => f64::from_bits(TAG_NULL),
     }
 }
+
+/// Read a request's stored body (or empty for a bodiless request). Returns
+/// `None` only for an invalid handle, so callers can reject the promise.
+fn request_body_bytes(handle: f64) -> Option<Vec<u8>> {
+    let id = handle_id(handle);
+    REQUEST_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|req| req.body.clone().unwrap_or_default().into_bytes())
+}
+
+/// request.text() -> Promise<string>. Mirrors `js_fetch_response_text`: the
+/// body is in-memory, so resolve the promise synchronously (the LLVM await
+/// loop doesn't drain the deferred pump). A bodiless request resolves to "".
+/// (#1688)
+#[no_mangle]
+pub unsafe extern "C" fn js_request_text(handle: f64) -> *mut perry_runtime::Promise {
+    let promise = perry_runtime::js_promise_new();
+    match request_body_bytes(handle) {
+        Some(body) => {
+            let text = String::from_utf8_lossy(&body).to_string();
+            let result_str = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+            let result_nan = f64::from_bits(JSValue::string_ptr(result_str).bits());
+            perry_runtime::js_promise_resolve(promise, result_nan);
+        }
+        None => {
+            let err_nan = f64::from_bits(fetch_error_bits("Invalid request handle"));
+            perry_runtime::js_promise_reject(promise, err_nan);
+        }
+    }
+    promise
+}
+
+/// request.json() -> Promise<object>. Parses the stored body as JSON, mirroring
+/// `js_fetch_response_json`. (#1688)
+#[no_mangle]
+pub unsafe extern "C" fn js_request_json(handle: f64) -> *mut perry_runtime::Promise {
+    let promise = perry_runtime::js_promise_new();
+    let body = match request_body_bytes(handle) {
+        Some(b) => b,
+        None => {
+            let err_nan = f64::from_bits(fetch_error_bits("Invalid request handle"));
+            perry_runtime::js_promise_reject(promise, err_nan);
+            return promise;
+        }
+    };
+    let text = String::from_utf8_lossy(&body).to_string();
+    match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(json_value) => {
+            let js_value = json_value_to_jsvalue(&json_value);
+            perry_runtime::js_promise_resolve(promise, f64::from_bits(js_value.bits()));
+        }
+        Err(e) => {
+            let err_nan = f64::from_bits(fetch_error_bits(&format!("JSON parse error: {}", e)));
+            perry_runtime::js_promise_reject(promise, err_nan);
+        }
+    }
+    promise
+}
+
+/// request.arrayBuffer() -> Promise<ArrayBuffer>. Resolves with a real
+/// BufferHeader over the body bytes, mirroring `js_response_array_buffer`. (#1688)
+#[no_mangle]
+pub unsafe extern "C" fn js_request_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
+    let promise = perry_runtime::js_promise_new();
+    let body = match request_body_bytes(handle) {
+        Some(b) => b,
+        None => {
+            let err_nan = f64::from_bits(fetch_error_bits("Invalid request handle"));
+            perry_runtime::js_promise_reject(promise, err_nan);
+            return promise;
+        }
+    };
+    let buf = perry_runtime::buffer::buffer_alloc(body.len() as u32);
+    (*buf).length = body.len() as u32;
+    if !body.is_empty() {
+        std::ptr::copy_nonoverlapping(
+            body.as_ptr(),
+            perry_runtime::buffer::buffer_data_mut(buf),
+            body.len(),
+        );
+    }
+    let val = JSValue::object_ptr(buf as *mut u8);
+    perry_runtime::js_promise_resolve(promise, f64::from_bits(val.bits()));
+    promise
+}

@@ -1118,6 +1118,64 @@ pub extern "C" fn js_request_get_body(handle: f64) -> f64 {
     }
 }
 
+/// Read a request's stored body (empty string for a bodiless request),
+/// or `None` for an invalid handle. (#1688)
+fn request_body_string(handle: f64) -> Option<String> {
+    let id = handle_id(handle);
+    REQUEST_HANDLES
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|r| r.body.clone().unwrap_or_default())
+}
+
+/// request.text() -> Promise<string>. Mirrors `js_fetch_response_text`. (#1688)
+///
+/// # Safety
+/// `handle` must come from a previous `js_request_new`.
+#[no_mangle]
+pub unsafe extern "C" fn js_request_text(handle: f64) -> *mut Promise {
+    let promise = JsPromise::new();
+    let raw = promise.as_raw();
+    match request_body_string(handle) {
+        Some(s) => promise.resolve(JsValue::from_string_ptr(alloc_string(&s).as_raw())),
+        None => promise.reject_string("Invalid request handle"),
+    }
+    raw
+}
+
+/// request.json() -> Promise<string>. Returns the body as a JSON string —
+/// callers JSON.parse on the JS side, matching `js_fetch_response_json`. (#1688)
+///
+/// # Safety
+/// `handle` must come from a previous `js_request_new`.
+#[no_mangle]
+pub unsafe extern "C" fn js_request_json(handle: f64) -> *mut Promise {
+    let promise = JsPromise::new();
+    let raw = promise.as_raw();
+    match request_body_string(handle) {
+        Some(s) => promise.resolve(JsValue::from_string_ptr(alloc_string(&s).as_raw())),
+        None => promise.reject_string("Invalid request handle"),
+    }
+    raw
+}
+
+/// request.arrayBuffer() -> Promise. Resolves with the body bytes as a string
+/// (caller wraps in Uint8Array), matching `js_response_array_buffer`. (#1688)
+///
+/// # Safety
+/// `handle` must come from a previous `js_request_new`.
+#[no_mangle]
+pub unsafe extern "C" fn js_request_array_buffer(handle: f64) -> *mut Promise {
+    let promise = JsPromise::new();
+    let raw = promise.as_raw();
+    match request_body_string(handle) {
+        Some(s) => promise.resolve(JsValue::from_string_ptr(alloc_string(&s).as_raw())),
+        None => promise.reject_string("Invalid request handle"),
+    }
+    raw
+}
+
 // `get_handle` / `register_handle` referenced for future surface;
 // silence unused-import warnings without dropping them.
 #[allow(dead_code)]
@@ -1198,5 +1256,28 @@ mod tests {
         assert!(resp > 0.0);
         let status = js_fetch_response_status(resp);
         assert_eq!(status, 200.0);
+    }
+
+    // #1688: request.text()/.json()/.arrayBuffer() were unimplemented. The
+    // FFIs build a JsPromise (runtime symbols unavailable in the unittest
+    // binary, as with every other promise-returning fetch FFI), so this
+    // exercises the shared body data path they consume: a stored body
+    // round-trips, a bodiless request reads as "", and an invalid handle is
+    // None (→ the FFI rejects).
+    #[test]
+    fn request_body_data_path() {
+        let url = alloc_string("https://example.com");
+        let method = alloc_string("POST");
+        let body = alloc_string(r#"{"x":1}"#);
+        let h = unsafe { js_request_new(url.as_raw(), method.as_raw(), body.as_raw(), 0.0) };
+        assert!(h > 0.0);
+        assert_eq!(request_body_string(h).as_deref(), Some(r#"{"x":1}"#));
+
+        let url2 = alloc_string("https://example.com/empty");
+        let null = std::ptr::null::<StringHeader>();
+        let h2 = unsafe { js_request_new(url2.as_raw(), null, null, 0.0) };
+        assert_eq!(request_body_string(h2).as_deref(), Some(""));
+
+        assert_eq!(request_body_string(99_999_999.0), None);
     }
 }
