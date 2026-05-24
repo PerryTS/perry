@@ -269,17 +269,37 @@ pub(crate) fn lower_jsx_child(
     }
 }
 
-/// Normalize JSX text content following React's whitespace rules:
-/// - Split by newlines, trim each line, filter empty lines, join with a space.
+/// Normalize JSX text content following React/Babel's whitespace rules
+/// (`cleanJSXElementLiteralChild`): leading whitespace is trimmed only on
+/// non-first lines, trailing only on non-last lines, tabs become spaces, and
+/// non-empty lines are joined with a single space. Crucially a single-line
+/// text node is preserved verbatim — so the trailing space in
+/// `<h1>hello, {name}</h1>` and the gap in `{"x"} {"y"}` survive (a blanket
+/// `trim()` used to drop them, giving `hello,Perry` / `xy`) — #1653.
 pub(crate) fn normalize_jsx_text(text: &str) -> String {
-    let lines: Vec<&str> = text.split('\n').collect();
-    if lines.len() == 1 {
-        return text.trim().to_string();
-    }
-    lines
+    let lines: Vec<&str> = text.split(['\r', '\n']).collect();
+    // Index of the last line containing a non-whitespace char (Babel seeds
+    // this at 0, so an all-whitespace single space stays a single space).
+    let last_non_empty = lines
         .iter()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
+        .rposition(|l| l.contains(|c: char| c != ' ' && c != '\t'))
+        .unwrap_or(0);
+    let n = lines.len();
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        let mut seg = line.replace('\t', " ");
+        if i != 0 {
+            seg = seg.trim_start_matches(' ').to_string();
+        }
+        if i != n - 1 {
+            seg = seg.trim_end_matches(' ').to_string();
+        }
+        if !seg.is_empty() {
+            if i != last_non_empty {
+                seg.push(' ');
+            }
+            out.push_str(&seg);
+        }
+    }
+    out
 }

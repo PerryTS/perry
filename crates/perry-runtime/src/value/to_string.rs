@@ -90,6 +90,14 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                         sep as *const crate::string::StringHeader,
                     );
                 }
+                // #1653: a boxed server-rendered JSX node stringifies to its
+                // stored HTML (field 0), so `String(<div/>)` / `c.html(<X/>)`
+                // emit real markup instead of "[object Object]".
+                let obj = ptr as *const crate::object::ObjectHeader;
+                if (*obj).class_id == crate::jsx::JSX_NODE_CLASS_ID {
+                    let html = crate::object::js_object_get_field(obj, 0);
+                    return js_jsvalue_to_string(f64::from_bits(html.bits()));
+                }
             }
         }
         crate::string::js_string_from_bytes(b"[object Object]".as_ptr(), 15)
