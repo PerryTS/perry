@@ -25,6 +25,9 @@ pub(crate) fn is_known_finite(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Update { id, .. } => ctx.integer_locals.contains(id),
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
         Expr::MathImul(_, _) => true, // Math.imul returns i32 → always finite
+        Expr::Call { callee, .. } => {
+            matches!(callee.as_ref(), Expr::FuncRef(fid) if ctx.integer_returning_functions.contains(fid))
+        }
         Expr::Binary { op, left, right } => match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
                 is_known_finite(ctx, left) && is_known_finite(ctx, right)
@@ -98,6 +101,7 @@ pub(crate) fn try_lower_flat_const_index_get(
         &int_locals,
         ctx.clamp3_functions,
         ctx.clamp_u8_functions,
+        ctx.integer_returning_functions,
     ) {
         lower_expr_as_i32(ctx, &row_expr)?
     } else {
@@ -112,6 +116,7 @@ pub(crate) fn try_lower_flat_const_index_get(
         &int_locals,
         ctx.clamp3_functions,
         ctx.clamp_u8_functions,
+        ctx.integer_returning_functions,
     ) {
         lower_expr_as_i32(ctx, &col_expr)?
     } else {
@@ -194,6 +199,7 @@ pub(crate) fn can_lower_expr_as_i32(
     integer_locals: &std::collections::HashSet<u32>,
     clamp3_fns: &std::collections::HashSet<u32>,
     clamp_u8_fns: &std::collections::HashSet<u32>,
+    integer_returning_fns: &std::collections::HashSet<u32>,
 ) -> bool {
     match e {
         Expr::Integer(n) => i32::try_from(*n).is_ok(),
@@ -208,6 +214,7 @@ pub(crate) fn can_lower_expr_as_i32(
                 integer_locals,
                 clamp3_fns,
                 clamp_u8_fns,
+                integer_returning_fns,
             ) && can_lower_expr_as_i32(
                 b,
                 i32_slots,
@@ -216,7 +223,51 @@ pub(crate) fn can_lower_expr_as_i32(
                 integer_locals,
                 clamp3_fns,
                 clamp_u8_fns,
+                integer_returning_fns,
             )
+        }
+        Expr::Binary {
+            op: BinaryOp::BitOr,
+            left,
+            right,
+        } if matches!(right.as_ref(), Expr::Integer(0)) => {
+            if let Expr::Binary {
+                op: BinaryOp::Div,
+                left: div_l,
+                right: div_r,
+            } = left.as_ref()
+            {
+                can_lower_expr_as_i32(
+                    div_l,
+                    i32_slots,
+                    flat_const_arrays,
+                    array_row_aliases,
+                    integer_locals,
+                    clamp3_fns,
+                    clamp_u8_fns,
+                    integer_returning_fns,
+                ) && can_lower_expr_as_i32(
+                    div_r,
+                    i32_slots,
+                    flat_const_arrays,
+                    array_row_aliases,
+                    integer_locals,
+                    clamp3_fns,
+                    clamp_u8_fns,
+                    integer_returning_fns,
+                )
+            } else {
+                can_lower_expr_as_i32(
+                    left,
+                    i32_slots,
+                    flat_const_arrays,
+                    array_row_aliases,
+                    integer_locals,
+                    clamp3_fns,
+                    clamp_u8_fns,
+                    integer_returning_fns,
+                )
+            }
         }
         Expr::Binary { op, left, right }
             if matches!(
@@ -240,6 +291,7 @@ pub(crate) fn can_lower_expr_as_i32(
                 integer_locals,
                 clamp3_fns,
                 clamp_u8_fns,
+                integer_returning_fns,
             ) && can_lower_expr_as_i32(
                 right,
                 i32_slots,
@@ -248,12 +300,14 @@ pub(crate) fn can_lower_expr_as_i32(
                 integer_locals,
                 clamp3_fns,
                 clamp_u8_fns,
+                integer_returning_fns,
             )
         }
         Expr::Call { callee, args, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 if (clamp3_fns.contains(fid) && args.len() == 3)
                     || (clamp_u8_fns.contains(fid) && args.len() == 1)
+                    || integer_returning_fns.contains(fid)
                 {
                     return args.iter().all(|a| {
                         can_lower_expr_as_i32(
@@ -264,6 +318,7 @@ pub(crate) fn can_lower_expr_as_i32(
                             integer_locals,
                             clamp3_fns,
                             clamp_u8_fns,
+                            integer_returning_fns,
                         )
                     });
                 }
@@ -302,6 +357,24 @@ pub(crate) fn lower_expr_as_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String>
             let l = lower_expr_as_i32(ctx, a)?;
             let r = lower_expr_as_i32(ctx, b)?;
             Ok(ctx.block().mul(I32, &l, &r))
+        }
+        Expr::Binary {
+            op: BinaryOp::BitOr,
+            left,
+            right,
+        } if matches!(right.as_ref(), Expr::Integer(0)) => {
+            if let Expr::Binary {
+                op: BinaryOp::Div,
+                left: div_l,
+                right: div_r,
+            } = left.as_ref()
+            {
+                let a = lower_expr_as_i32(ctx, div_l)?;
+                let b = lower_expr_as_i32(ctx, div_r)?;
+                Ok(ctx.block().sdiv(I32, &a, &b))
+            } else {
+                lower_expr_as_i32(ctx, left)
+            }
         }
         Expr::Binary { op, left, right }
             if matches!(

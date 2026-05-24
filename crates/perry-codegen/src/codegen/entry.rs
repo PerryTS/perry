@@ -218,8 +218,10 @@ pub(super) fn compile_module_entry(
         // on every freshly allocated object and field-by-name lookup
         // returns undefined.
         main.mark_entry_init_boundary();
+        let flat_const_ids: std::collections::HashSet<u32> =
+            cross_module.flat_const_arrays.keys().copied().collect();
         let (main_shadow_slot_map, main_shadow_slot_clears_after_stmt) =
-            enable_module_init_shadow_frame(main, &hir.init);
+            enable_module_init_shadow_frame(main, &hir.init, &flat_const_ids);
 
         let main_boxed_vars = module_boxed_vars.clone();
         let clamp_fn_ids: std::collections::HashSet<u32> = cross_module
@@ -228,19 +230,8 @@ pub(super) fn compile_module_entry(
             .chain(cross_module.returns_int_functions.iter())
             .copied()
             .collect();
-        let main_integer_locals = crate::collectors::collect_integer_locals(
-            &hir.init,
-            &cross_module.flat_const_arrays.keys().copied().collect(),
-            &clamp_fn_ids,
-        );
-        let main_index_used_locals = crate::collectors::collect_index_used_locals(&hir.init);
-        let main_strictly_i32_bounded_locals =
-            crate::collectors::collect_strictly_i32_bounded_locals(
-                &hir.init,
-                &main_integer_locals,
-                &cross_module.flat_const_arrays.keys().copied().collect(),
-                &clamp_fn_ids,
-            );
+        let main_hir_facts =
+            crate::collectors::collect_hir_facts(&hir.init, &flat_const_ids, &clamp_fn_ids);
         let main_non_escaping_news = crate::collectors::collect_non_escaping_news(
             &hir.init,
             &main_boxed_vars,
@@ -318,7 +309,7 @@ pub(super) fn compile_module_entry(
             interfaces: &cross_module.interfaces,
             try_depth: 0,
             pending_declares: Vec::new(),
-            integer_locals: &main_integer_locals,
+            integer_locals: &main_hir_facts.integer_locals,
             shadow_slot_map: main_shadow_slot_map,
             shadow_slot_clears_after_stmt: main_shadow_slot_clears_after_stmt,
             arena_state_slot: None,
@@ -326,8 +317,8 @@ pub(super) fn compile_module_entry(
             cached_lengths: HashMap::new(),
             bounded_index_pairs: Vec::new(),
             i32_counter_slots: HashMap::new(),
-            index_used_locals: &main_index_used_locals,
-            strictly_i32_bounded_locals: &main_strictly_i32_bounded_locals,
+            index_used_locals: &main_hir_facts.index_used_locals,
+            strictly_i32_bounded_locals: &main_hir_facts.strictly_i32_bounded_locals,
             i18n: &cross_module.i18n,
             dynamic_import_path_to_prefix: &cross_module.dynamic_import_path_to_prefix,
             local_class_aliases: HashMap::new(),
@@ -347,12 +338,14 @@ pub(super) fn compile_module_entry(
             array_row_aliases: HashMap::new(),
             clamp3_functions: &cross_module.clamp3_functions,
             clamp_u8_functions: &cross_module.clamp_u8_functions,
+            integer_returning_functions: &cross_module.returns_int_functions,
             was_unrolled: hir.init_was_unrolled,
             ic_site_counter: ic_base,
             ic_globals: Vec::new(),
             typed_parse_rodata: Vec::new(),
             typed_parse_counter: 0,
             buffer_data_slots: HashMap::new(),
+            known_noalias_buffer_locals: &main_hir_facts.known_noalias_buffer_locals,
             buffer_alias_base,
         };
         // Register every module-level global's ADDRESS as a GC root so
@@ -614,8 +607,10 @@ pub(super) fn compile_module_entry(
         // setup must run AFTER the strings init populates module
         // globals like `@perry_class_keys_*`.
         init_fn.mark_entry_init_boundary();
+        let flat_const_ids: std::collections::HashSet<u32> =
+            cross_module.flat_const_arrays.keys().copied().collect();
         let (init_shadow_slot_map, init_shadow_slot_clears_after_stmt) =
-            enable_module_init_shadow_frame(init_fn, &hir.init);
+            enable_module_init_shadow_frame(init_fn, &hir.init, &flat_const_ids);
 
         let init_boxed_vars = module_boxed_vars.clone();
         let clamp_fn_ids: std::collections::HashSet<u32> = cross_module
@@ -624,19 +619,8 @@ pub(super) fn compile_module_entry(
             .chain(cross_module.returns_int_functions.iter())
             .copied()
             .collect();
-        let init_integer_locals = crate::collectors::collect_integer_locals(
-            &hir.init,
-            &cross_module.flat_const_arrays.keys().copied().collect(),
-            &clamp_fn_ids,
-        );
-        let init_index_used_locals = crate::collectors::collect_index_used_locals(&hir.init);
-        let init_strictly_i32_bounded_locals =
-            crate::collectors::collect_strictly_i32_bounded_locals(
-                &hir.init,
-                &init_integer_locals,
-                &cross_module.flat_const_arrays.keys().copied().collect(),
-                &clamp_fn_ids,
-            );
+        let init_hir_facts =
+            crate::collectors::collect_hir_facts(&hir.init, &flat_const_ids, &clamp_fn_ids);
         let init_non_escaping_news = crate::collectors::collect_non_escaping_news(
             &hir.init,
             &init_boxed_vars,
@@ -712,7 +696,7 @@ pub(super) fn compile_module_entry(
             interfaces: &cross_module.interfaces,
             try_depth: 0,
             pending_declares: Vec::new(),
-            integer_locals: &init_integer_locals,
+            integer_locals: &init_hir_facts.integer_locals,
             shadow_slot_map: init_shadow_slot_map,
             shadow_slot_clears_after_stmt: init_shadow_slot_clears_after_stmt,
             arena_state_slot: None,
@@ -720,8 +704,8 @@ pub(super) fn compile_module_entry(
             cached_lengths: HashMap::new(),
             bounded_index_pairs: Vec::new(),
             i32_counter_slots: HashMap::new(),
-            index_used_locals: &init_index_used_locals,
-            strictly_i32_bounded_locals: &init_strictly_i32_bounded_locals,
+            index_used_locals: &init_hir_facts.index_used_locals,
+            strictly_i32_bounded_locals: &init_hir_facts.strictly_i32_bounded_locals,
             i18n: &cross_module.i18n,
             dynamic_import_path_to_prefix: &cross_module.dynamic_import_path_to_prefix,
             local_class_aliases: HashMap::new(),
@@ -741,12 +725,14 @@ pub(super) fn compile_module_entry(
             array_row_aliases: HashMap::new(),
             clamp3_functions: &cross_module.clamp3_functions,
             clamp_u8_functions: &cross_module.clamp_u8_functions,
+            integer_returning_functions: &cross_module.returns_int_functions,
             was_unrolled: hir.init_was_unrolled,
             ic_site_counter: ic_base,
             ic_globals: Vec::new(),
             typed_parse_rodata: Vec::new(),
             typed_parse_counter: 0,
             buffer_data_slots: HashMap::new(),
+            known_noalias_buffer_locals: &init_hir_facts.known_noalias_buffer_locals,
             buffer_alias_base,
         };
         // Register every module-level global's ADDRESS as a GC root —

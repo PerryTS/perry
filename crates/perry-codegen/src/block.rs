@@ -11,19 +11,20 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+use crate::codegen::FpContractMode;
 use crate::types::LlvmType;
 
-/// Global toggle for emitting LLVM `reassoc contract` per-instruction
-/// fast-math flags on f64 ops. Set by `compile_module` from
-/// `CompileOptions::fast_math` before any IR is emitted; read by
-/// `fmf_prefix()` on every fadd/fsub/fmul/fdiv/frem/fneg.
+/// Global toggle for emitting LLVM `reassoc` per-instruction fast-math
+/// flags on f64 ops. Set by `compile_module` from `CompileOptions::fast_math`
+/// before any IR is emitted; read by `fmf_prefix()` on every
+/// fadd/fsub/fmul/fdiv/frem/fneg.
 ///
 /// Default OFF. Bit-exact f64 semantics with Node by default. `--fast-math`
 /// (or `PERRY_FAST_MATH=1`, or `perry.fastMath: true` in package.json)
 /// flips it ON for the build, allowing the optimizer to vectorize tight
-/// reductions and fuse FMA at the cost of ~30% bit-divergence from Node.
+/// reductions at the cost of greater bit-divergence from Node.
 ///
 /// All modules in a single program build share the same setting; rayon
 /// parallel module codegen is safe because the value is set once before
@@ -31,14 +32,30 @@ use crate::types::LlvmType;
 /// build.
 pub static FAST_MATH: AtomicBool = AtomicBool::new(false);
 
-/// Returns `"reassoc contract "` when `FAST_MATH` is on, `""` otherwise.
-/// Inserted between the opcode and the type in fp instructions:
+/// Global FP contraction mode. Stored as a u8 so the mode can be updated
+/// from `compile_module` before any IR is emitted without plumbing it
+/// through every arithmetic helper.
+pub static FP_CONTRACT_MODE: AtomicU8 = AtomicU8::new(FpContractMode::Off as u8);
+
+fn fp_contract_mode() -> FpContractMode {
+    match FP_CONTRACT_MODE.load(Ordering::Relaxed) {
+        1 => FpContractMode::On,
+        2 => FpContractMode::Fast,
+        _ => FpContractMode::Off,
+    }
+}
+
+/// Inserted between the opcode and type in fp instructions:
 /// `fadd reassoc contract double …` vs `fadd double …`.
 fn fmf_prefix() -> &'static str {
-    if FAST_MATH.load(Ordering::Relaxed) {
-        "reassoc contract "
-    } else {
-        ""
+    match (
+        FAST_MATH.load(Ordering::Relaxed),
+        fp_contract_mode().permits_contract(),
+    ) {
+        (false, false) => "",
+        (false, true) => "contract ",
+        (true, false) => "reassoc ",
+        (true, true) => "reassoc contract ",
     }
 }
 
@@ -143,9 +160,10 @@ impl LlBlock {
     // FP ops are emitted with no LLVM fast-math flags by default. Setting
     // `FAST_MATH = true` (driven by the `--fast-math` CLI flag,
     // `PERRY_FAST_MATH=1` env var, or `perry.fastMath` in package.json)
-    // adds `reassoc contract` to every fadd/fsub/fmul/fdiv/frem/fneg.
+    // adds `reassoc`; setting `FP_CONTRACT_MODE` to `on` or `fast`
+    // adds `contract` to every fadd/fsub/fmul/fdiv/frem/fneg.
     //
-    // What the two flags actually buy:
+    // What the two independent flags actually buy:
     //   - `reassoc`: lets LLVM reorder `(a + b) + c → a + (b + c)`, which
     //     is what the loop-vectorizer needs to break a serial accumulator
     //     chain into 4 parallel accumulators. The win is real (and large)
@@ -160,7 +178,7 @@ impl LlBlock {
     //     fmul+fadd here; Node also emits FMA where it can).
     //
     // What the two flags break: ECMAScript bit-exact f64 semantics. With
-    // them on, ~30% of randomly-generated FP programs diverge from Node
+    // both on, ~30% of randomly-generated FP programs diverge from Node
     // by 1 ULP. Examples: `(a/b) * b` gets rewritten to `(a*b) / b`, and
     // `a*b + c` becomes a fused FMA. Without them, ~6% still diverge
     // (residual from the LLVM SLP vectorizer at -O3, not gated by these
@@ -178,7 +196,7 @@ impl LlBlock {
     // `-ffast-math`) made LLVM replace TAG_NULL / TAG_UNDEFINED
     // constants with 0.0 at codegen time. The clang step passes
     // `-fno-math-errno` only — every fast-math effect in Perry comes
-    // from the per-instruction FMFs emitted here when FAST_MATH is on.
+    // from the per-instruction FMFs emitted here.
 
     pub fn fadd(&mut self, a: &str, b: &str) -> String {
         let r = self.reg();
@@ -726,6 +744,7 @@ mod tests {
         // scripts/fp_fuzz.mjs rather than here, since the FAST_MATH
         // global would race with parallel test runs if toggled.
         FAST_MATH.store(false, Ordering::Relaxed);
+        FP_CONTRACT_MODE.store(FpContractMode::Off as u8, Ordering::Relaxed);
         let mut b = fresh();
         let r = b.fadd("1.0", "2.0");
         assert_eq!(r, "%r1");

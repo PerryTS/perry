@@ -466,13 +466,12 @@ pub(crate) fn lower_let(
             let g_ref = format!("@{}", global_name);
             ctx.block().store(DOUBLE, &v, &g_ref);
 
-            // Buffer data-pointer slot: when init is BufferAlloc on an
-            // immutable module global, pre-compute the data base pointer
-            // (handle + 8, past BufferHeader) and store it in a ptr
-            // alloca. Uint8ArrayGet/Set then uses `getelementptr inbounds`
-            // from this pointer instead of the inttoptr chain — giving
-            // LLVM proper pointer provenance for auto-vectorization.
-            if !mutable && matches!(init_expr, perry_hir::Expr::BufferAlloc { .. }) {
+            // Buffer data-pointer slot: when the HIR facts identify a fresh
+            // immutable u8 buffer, pre-compute the data base pointer (handle +
+            // 8, past BufferHeader) and store it in a ptr alloca.
+            // Uint8ArrayGet/Set then uses `getelementptr inbounds` from this
+            // pointer instead of the inttoptr chain.
+            if ctx.known_noalias_buffer_locals.contains(&id) {
                 let blk = ctx.block();
                 let handle = crate::expr::unbox_to_i64(blk, &v);
                 let handle_ptr = blk.inttoptr(I64, &handle);
@@ -669,6 +668,7 @@ pub(crate) fn lower_let(
                 &int_locals,
                 ctx.clamp3_functions,
                 ctx.clamp_u8_functions,
+                ctx.integer_returning_functions,
             ) {
                 let i32_v = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 let blk = ctx.block();
@@ -742,17 +742,15 @@ pub(crate) fn lower_let(
                 ctx.block().store(I32, &v_i32, &i32_slot);
             }
         }
-        // Buffer data-pointer slot for local (non-global) const buffers.
-        // `const src = Buffer.alloc(N)` at module-level lives here when
-        // `src` doesn't escape to functions — same pattern as the
-        // image_conv blur kernel. The pre-computed ptr slot lets
-        // Uint8ArrayGet/Set emit `getelementptr inbounds` from a
-        // proper `ptr` base instead of an `inttoptr` chain.
+        // Buffer data-pointer slot for local (non-global) const buffers. The
+        // HIR fact layer owns the source-shape decision; lowering only consumes
+        // the stable local-id fact and emits the ptr slot used by
+        // Uint8ArrayGet/Set.
         //
         // Only relevant on the f64-init path (BufferAlloc isn't
         // i32-able, so used_i32_init is always false here, but
         // gate explicitly to keep the invariant readable).
-        if !used_i32_init && !mutable && matches!(init_expr, perry_hir::Expr::BufferAlloc { .. }) {
+        if !used_i32_init && ctx.known_noalias_buffer_locals.contains(&id) {
             let blk = ctx.block();
             let handle = crate::expr::unbox_to_i64(blk, &v);
             let handle_ptr = blk.inttoptr(I64, &handle);

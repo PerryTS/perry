@@ -114,10 +114,10 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
         // NaN never happens — catastrophic for NaN-boxing. Tried at
         // commit 083ce16, reverted in b5a8c83f.)
         //
-        // Per-instruction fast-math flags (`reassoc + contract`) are
-        // emitted by perry-codegen `block.rs` only when the build is
-        // run with `--fast-math` (or `PERRY_FAST_MATH=1`, or
-        // `perry.fastMath: true` in package.json). Default OFF — see
+        // Per-instruction fast-math flags (`reassoc`, and separately
+        // `contract`) are emitted by perry-codegen `block.rs` only when
+        // the build opts in through `--fast-math` / `--fp-contract` (or
+        // their env/package equivalents). Default OFF — see
         // `docs/src/cli/fast-math.md` for the behavior contract and
         // benchmark numbers.
         .arg("-fno-math-errno");

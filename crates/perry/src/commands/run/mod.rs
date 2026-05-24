@@ -223,6 +223,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         debug_symbols: false,
         no_cache: false,
         fast_math: false,
+        fp_contract: None,
         emit_attest: false,
         emit_sandbox: false,
         lockdown: false,

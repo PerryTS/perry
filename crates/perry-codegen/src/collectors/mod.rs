@@ -12,6 +12,7 @@ mod escape_arrays;
 mod escape_check;
 mod escape_news;
 mod escape_objects;
+mod hir_facts;
 mod i32_locals;
 mod i64_emit;
 mod index_uses;
@@ -44,6 +45,7 @@ pub(crate) use escape_objects::{
     check_object_literal_escapes_in_expr, check_object_literal_escapes_in_stmts,
     collect_non_escaping_object_literals, find_object_literal_candidates,
 };
+pub(crate) use hir_facts::collect_hir_facts;
 pub(crate) use i32_locals::{
     collect_integer_let_ids, collect_localset_ids_in_expr_filtered, collect_localset_ids_in_stmts,
     collect_localset_ids_in_stmts_filtered, collect_non_int_localset_ids_in_stmts,

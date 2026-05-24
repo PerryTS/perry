@@ -48,12 +48,14 @@ pub(super) fn shadow_stack_enabled() -> bool {
 pub(super) fn enable_module_init_shadow_frame(
     func: &mut crate::function::LlFunction,
     stmts: &[perry_hir::Stmt],
+    flat_const_ids: &std::collections::HashSet<u32>,
 ) -> (HashMap<u32, u32>, HashMap<usize, Vec<u32>>) {
     if !shadow_stack_enabled() {
         return (HashMap::new(), HashMap::new());
     }
 
-    let shadow_slot_map = crate::collectors::collect_pointer_typed_locals(&[], stmts);
+    let shadow_slot_map =
+        crate::collectors::collect_pointer_typed_locals(&[], stmts, flat_const_ids);
     func.enable_post_init_shadow_frame(shadow_slot_map.len() as u32);
     let shadow_slot_clears_after_stmt =
         crate::collectors::collect_shadow_slot_clear_points(stmts, &shadow_slot_map);

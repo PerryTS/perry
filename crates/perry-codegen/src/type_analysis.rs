@@ -589,6 +589,10 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) => true,
+        Expr::Uint8ArrayGet { .. }
+        | Expr::BufferIndexGet { .. }
+        | Expr::Uint8ArrayLength(_)
+        | Expr::BufferLength(_) => true,
         Expr::LocalGet(id) => matches!(
             ctx.local_types.get(id),
             Some(HirType::Number) | Some(HirType::Int32)
@@ -692,6 +696,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 pub(crate) fn is_integer_valued_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_) => true,
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
         Expr::LocalGet(id) => ctx.integer_locals.contains(id),
         Expr::Update { id, .. } => ctx.integer_locals.contains(id),
         Expr::Binary { op, left, right } => match op {

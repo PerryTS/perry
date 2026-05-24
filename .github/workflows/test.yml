@@ -190,6 +190,116 @@ jobs:
             --exclude perry-jsruntime
 
   # ---------------------------------------------------------------------------
+  # Compiler-output regression gate
+  #
+  # Retains HIR, pre/post-opt LLVM IR, assembly, benchmark output, runtime
+  # counters, vectorization remarks, benchmark timing summaries, and FP
+  # contraction evidence for the primary CPU benchmark plus numeric fixtures.
+  # Fails when hot-loop structural contracts regress.
+  # ---------------------------------------------------------------------------
+  compiler-output-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Build compiler
+        run: cargo build -p perry
+
+      - name: Run harness unit tests
+        run: python3 -m unittest tests.test_compiler_output_regression
+
+      - name: Gate image_convolution compiler output
+        run: |
+          python3 scripts/compiler_output_regression.py capture \
+            --perry target/debug/perry \
+            --workload image_convolution \
+            --benchmark-mode smoke \
+            --runs 1 \
+            --perf-counters off \
+            --gate \
+            --print-summary
+
+      - name: Gate numeric loop compiler output
+        run: |
+          python3 scripts/compiler_output_regression.py capture \
+            --perry target/debug/perry \
+            --workload loop_data_dependent \
+            --benchmark-mode smoke \
+            --runs 1 \
+            --perf-counters off \
+            --gate \
+            --print-summary
+
+      - name: Gate positive vectorization compiler output
+        run: |
+          python3 scripts/compiler_output_regression.py capture \
+            --perry target/debug/perry \
+            --workload vectorized_buffer_transform \
+            --benchmark-mode smoke \
+            --runs 1 \
+            --perf-counters off \
+            --gate \
+            --print-summary
+
+      - name: Gate HIR fact rewrite compiler output
+        run: |
+          python3 scripts/compiler_output_regression.py capture \
+            --perry target/debug/perry \
+            --workload hir_fact_rewrite \
+            --benchmark-mode smoke \
+            --runs 1 \
+            --perf-counters off \
+            --gate \
+            --print-summary
+
+      - name: Gate FP contraction modes
+        run: |
+          python3 scripts/compiler_output_regression.py capture \
+            --perry target/debug/perry \
+            --workload fma_contract \
+            --benchmark-mode smoke \
+            --runs 1 \
+            --perf-counters off \
+            --gate \
+            --fp-contract=on \
+            --clang-arg=-march=haswell \
+            --expect-fma=on \
+            --out-dir target/compiler-output-regression/fma_contract-fp-contract-on
+          python3 scripts/compiler_output_regression.py capture \
+            --perry target/debug/perry \
+            --workload fma_contract \
+            --benchmark-mode smoke \
+            --runs 1 \
+            --perf-counters off \
+            --gate \
+            --fast-math \
+            --fp-contract=off \
+            --clang-arg=-march=haswell \
+            --expect-fma=off \
+            --out-dir target/compiler-output-regression/fma_contract-fast-no-contract
+
+      - name: Upload compiler-output artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compiler-output-regression
+          path: target/compiler-output-regression/
+
+  # ---------------------------------------------------------------------------
   # Parity tests (Perry output vs Node.js)
   # ---------------------------------------------------------------------------
   parity:

@@ -479,6 +479,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.integer_locals,
                 ctx.clamp3_functions,
                 ctx.clamp_u8_functions,
+                ctx.integer_returning_functions,
             );
             let idx_i32 = if idx_is_i32 {
                 lower_expr_as_i32(ctx, index)?
@@ -536,6 +537,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.integer_locals,
                 ctx.clamp3_functions,
                 ctx.clamp_u8_functions,
+                ctx.integer_returning_functions,
             );
             let val_is_i32 = can_lower_expr_as_i32(
                 value,
@@ -545,6 +547,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.integer_locals,
                 ctx.clamp3_functions,
                 ctx.clamp_u8_functions,
+                ctx.integer_returning_functions,
             );
             let idx_i32 = if idx_is_i32 {
                 lower_expr_as_i32(ctx, index)?

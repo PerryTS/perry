@@ -393,6 +393,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.integer_locals,
                         ctx.clamp3_functions,
                         ctx.clamp_u8_functions,
+                        ctx.integer_returning_functions,
                     )
                 {
                     let v_i32 = lower_expr_as_i32(ctx, value)?;

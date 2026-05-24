@@ -38,6 +38,7 @@ fn empty_opts() -> CompileOptions {
         native_library_functions: Vec::new(),
         i18n_table: None,
         fast_math: false,
+        fp_contract_mode: perry_codegen::FpContractMode::Off,
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
@@ -188,6 +189,65 @@ fn top_level_loop_shadow_module() -> Module {
     module
 }
 
+fn flat_const_row_alias_shadow_module() -> Module {
+    Module {
+        name: "entry_flat_const_shadow.ts".to_string(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        classes: Vec::new(),
+        interfaces: Vec::new(),
+        type_aliases: Vec::new(),
+        enums: Vec::new(),
+        globals: Vec::new(),
+        functions: Vec::new(),
+        init: vec![
+            Stmt::Let {
+                id: 30,
+                name: "kernel".to_string(),
+                ty: Type::Array(Box::new(Type::Array(Box::new(Type::Number)))),
+                mutable: false,
+                init: Some(Expr::Array(vec![
+                    Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)]),
+                    Expr::Array(vec![Expr::Integer(3), Expr::Integer(4)]),
+                ])),
+            },
+            Stmt::Let {
+                id: 31,
+                name: "krow".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(30)),
+                    index: Box::new(Expr::Integer(0)),
+                }),
+            },
+            Stmt::Let {
+                id: 32,
+                name: "k".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(31)),
+                    index: Box::new(Expr::Integer(1)),
+                }),
+            },
+            Stmt::Expr(Expr::LocalGet(32)),
+        ],
+        exported_native_instances: Vec::new(),
+        exported_func_return_native_instances: Vec::new(),
+        exported_objects: Vec::new(),
+        exported_functions: Vec::new(),
+        widgets: Vec::new(),
+        uses_fetch: false,
+        uses_webassembly: false,
+        extern_funcs: Vec::new(),
+        init_was_unrolled: false,
+        has_top_level_await: false,
+        init_kind: ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
+    }
+}
+
 fn function_slice<'a>(ir: &'a str, name: &str) -> &'a str {
     let define_marker = format!("@{}(", name);
     let define_start = ir
@@ -221,6 +281,11 @@ fn function_shadow_slots_clear_dead_values_and_skip_numeric_roots() {
     let ir = String::from_utf8(compile_module(&shadow_hygiene_module(), empty_opts()).unwrap())
         .expect("LLVM IR should be UTF-8");
 
+    assert!(
+        ir.contains("call i64 @js_shadow_frame_push(i32 2)"),
+        "known numeric Any local must not reserve a shadow slot"
+    );
+
     let dead_write = ir
         .find("call void @js_shadow_slot_set(i32 0, i64 %")
         .expect("dead array let should write its pointer to shadow slot 0");
@@ -236,12 +301,8 @@ fn function_shadow_slots_clear_dead_values_and_skip_numeric_roots() {
     assert!(dead_write < dead_clear);
     assert!(dead_clear < live_alloc);
     assert!(
-        !ir.contains("call void @js_shadow_slot_set(i32 1, i64 %"),
-        "known numeric Any local must not be mirrored as a shadow root"
-    );
-    assert!(
-        ir.contains("call void @js_shadow_slot_set(i32 1, i64 0)"),
-        "numeric Any local's shadow slot should stay clear"
+        !ir.contains("call void @js_shadow_slot_set(i32 2"),
+        "known numeric Any local must not shift later pointer roots into a third slot"
     );
 }
 
@@ -260,7 +321,7 @@ fn entry_module_top_level_shadow_frame_starts_after_init_prelude() {
         .find("__perry_init_strings_")
         .expect("entry main should initialize module strings before user code");
     let frame_push = main_ir
-        .find("call i64 @js_shadow_frame_push(i32 3)")
+        .find("call i64 @js_shadow_frame_push(i32 2)")
         .expect("entry main should push a top-level shadow frame");
     let user_alloc = main_ir
         .find("call i64 @js_map_alloc")
@@ -287,6 +348,11 @@ fn entry_module_top_level_shadow_slots_update_and_clear() {
     .expect("LLVM IR should be UTF-8");
     let main_ir = function_slice(&ir, "main");
 
+    assert!(
+        main_ir.contains("call i64 @js_shadow_frame_push(i32 2)"),
+        "known numeric top-level Any local must not reserve a shadow slot"
+    );
+
     let dead_write = main_ir
         .find("call void @js_shadow_slot_set(i32 0, i64 %")
         .expect("top-level pointer let should write its pointer to shadow slot 0");
@@ -302,12 +368,8 @@ fn entry_module_top_level_shadow_slots_update_and_clear() {
     assert!(dead_write < dead_clear);
     assert!(dead_clear < later_alloc);
     assert!(
-        !main_ir.contains("call void @js_shadow_slot_set(i32 1, i64 %"),
-        "known numeric top-level Any local must not be mirrored as a shadow root"
-    );
-    assert!(
-        main_ir.contains("call void @js_shadow_slot_set(i32 1, i64 0)"),
-        "numeric top-level Any local's shadow slot should stay clear"
+        !main_ir.contains("call void @js_shadow_slot_set(i32 2"),
+        "known numeric top-level Any local must not shift later pointer roots into a third slot"
     );
 }
 
@@ -328,7 +390,7 @@ fn non_entry_module_init_body_gets_post_init_shadow_frame() {
         .find("__perry_init_strings_")
         .expect("non-entry init body should initialize strings before user code");
     let frame_push = init_ir
-        .find("call i64 @js_shadow_frame_push(i32 3)")
+        .find("call i64 @js_shadow_frame_push(i32 2)")
         .expect("non-entry init body should push a top-level shadow frame");
     let user_alloc = init_ir
         .find("call i64 @js_map_alloc")
@@ -367,4 +429,22 @@ fn top_level_loop_body_shadow_slots_clear_each_iteration() {
 
     assert!(body_write < body_clear);
     assert!(body_clear < loop_backedge);
+}
+
+#[test]
+fn flat_const_row_aliases_do_not_reserve_shadow_slots() {
+    let ir = String::from_utf8(
+        compile_module(&flat_const_row_alias_shadow_module(), entry_opts()).unwrap(),
+    )
+    .expect("LLVM IR should be UTF-8");
+    let main_ir = function_slice(&ir, "main");
+
+    assert!(
+        main_ir.contains("call i64 @js_shadow_frame_push(i32 1)"),
+        "only the flat-const table root should reserve a shadow slot"
+    );
+    assert!(
+        !main_ir.contains("call void @js_shadow_slot_set(i32 1"),
+        "row aliases of flat-const tables must not touch shadow slots"
+    );
 }

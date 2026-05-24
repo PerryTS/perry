@@ -33,6 +33,47 @@ impl Default for AppMetadata {
     }
 }
 
+/// Controls LLVM floating-point contraction independently from broad
+/// fast-math reassociation. LLVM IR has a single `contract` FMF bit, so
+/// `On` and `Fast` currently emit the same per-instruction flag while
+/// remaining distinct user-facing/cache-key modes.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FpContractMode {
+    Off,
+    On,
+    Fast,
+}
+
+impl FpContractMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+            Self::Fast => "fast",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Off),
+            "on" => Some(Self::On),
+            "fast" => Some(Self::Fast),
+            _ => None,
+        }
+    }
+
+    pub fn permits_contract(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+}
+
+impl Default for FpContractMode {
+    fn default() -> Self {
+        Self::Off
+    }
+}
+
 /// Options controlling code generation for a single module.
 #[derive(Debug, Clone, Default)]
 pub struct CompileOptions {
@@ -243,18 +284,21 @@ pub struct CompileOptions {
     /// downstream destructure at `compile_module` line 597.
     pub i18n_table: Option<std::sync::Arc<(Vec<String>, usize, usize, Vec<String>, usize)>>,
 
-    /// When true, emit LLVM `reassoc contract` per-instruction fast-math
-    /// flags on every f64 op. Off by default — Perry produces bit-exact
-    /// output with Node's f64 arithmetic. On (via `--fast-math`,
+    /// When true, emit LLVM `reassoc` per-instruction fast-math flags on
+    /// every f64 op. Off by default — Perry produces bit-exact output
+    /// with Node's f64 arithmetic. On (via `--fast-math`,
     /// `PERRY_FAST_MATH=1`, or `perry.fastMath: true` in package.json),
-    /// the optimizer is permitted to reassociate FP chains and fuse
-    /// multiply-adds, producing observable 1-ULP differences from Node
-    /// in ~30% of randomly-generated FP programs in exchange for a ~7x
-    /// speedup on tight `sum += constant` loops (and ~0% on most other
-    /// FP-heavy code, per benchmarks). See `docs/src/cli/fast-math.md`.
-    /// Drives `crate::block::FAST_MATH`; included in the object cache
-    /// key so toggling it invalidates cached `.o` bytes.
+    /// the optimizer is permitted to reassociate FP chains, producing
+    /// observable 1-ULP differences from Node in exchange for better
+    /// vectorization of tight reductions. See `fp_contract_mode` for the
+    /// independent FMA contraction knob. Included in the object cache key.
     pub fast_math: bool,
+    /// Explicit floating-point contraction mode from `--fp-contract`.
+    /// Off preserves independent multiply/add rounding. On/Fast permit
+    /// LLVM `contract` on f64 instructions so FMA-shaped code may lower
+    /// to fused multiply-add instructions without also enabling
+    /// reassociation. Included in the object cache key.
+    pub fp_contract_mode: FpContractMode,
     /// App metadata backing `perry/system` compile-time introspection APIs.
     pub app_metadata: AppMetadata,
 

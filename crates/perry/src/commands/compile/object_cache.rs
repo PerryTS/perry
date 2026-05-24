@@ -163,13 +163,17 @@ pub fn compute_object_cache_key(
     h.field("gh", if opts.needs_geisterhand { "1" } else { "0" });
     h.field("jsrt", if opts.needs_js_runtime { "1" } else { "0" });
     h.field("gh_port", &opts.geisterhand_port.to_string());
-    // Fast-math flag flips per-instruction `reassoc + contract` emission
+    // Fast-math flag flips per-instruction `reassoc` emission
     // in `perry-codegen`, which produces different LLVM IR (and therefore
     // different `.o` bytes) for the same TS source. Without this in the
     // key, `perry --fast-math foo.ts` after a default `perry foo.ts` would
     // serve the previously-cached non-fast-math `.o` and the flag would
     // appear to do nothing.
     h.field("fmath", if opts.fast_math { "1" } else { "0" });
+    // Floating-point contraction is intentionally separate from broad
+    // fast-math reassociation; toggling it changes emitted FMFs and must
+    // invalidate cached objects independently.
+    h.field("fpctr", opts.fp_contract_mode.as_str());
     h.field("app_version", &opts.app_metadata.version);
     h.field(
         "app_build_number",
@@ -689,6 +693,7 @@ mod object_cache_tests {
             native_library_functions: Vec::new(),
             i18n_table: None,
             fast_math: false,
+            fp_contract_mode: perry_codegen::FpContractMode::Off,
             app_metadata: perry_codegen::AppMetadata::default(),
             namespace_entries: Vec::new(),
             dynamic_import_path_to_prefix: std::collections::HashMap::new(),
@@ -775,6 +780,18 @@ mod object_cache_tests {
         let mut b = empty_opts();
         a.fast_math = false;
         b.fast_math = true;
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.569"),
+            compute_object_cache_key(&b, 1, "0.5.569")
+        );
+    }
+
+    #[test]
+    fn key_changes_with_fp_contract_mode() {
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        a.fp_contract_mode = perry_codegen::FpContractMode::Off;
+        b.fp_contract_mode = perry_codegen::FpContractMode::On;
         assert_ne!(
             compute_object_cache_key(&a, 1, "0.5.569"),
             compute_object_cache_key(&b, 1, "0.5.569")

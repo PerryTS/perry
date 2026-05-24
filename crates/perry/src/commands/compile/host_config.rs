@@ -17,6 +17,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
+use perry_codegen::FpContractMode;
 
 use crate::OutputFormat;
 
@@ -32,6 +33,8 @@ pub(super) fn apply_pkg_and_toml_config(
     Option<perry_transform::i18n::I18nConfig>,
     BTreeMap<String, BTreeMap<String, String>>,
 )> {
+    let mut fp_contract_explicit = false;
+
     // Read perry.packageAliases from the project's package.json (if present)
     // This allows mapping npm package imports to native Perry packages at compile time.
     // Example: { "@parse/node-apn": "perry-push", "@prisma/client": "perry-prisma" }
@@ -116,15 +119,24 @@ pub(super) fn apply_pkg_and_toml_config(
                         }
                     }
                 }
-                // perry.fastMath: opt in to LLVM `reassoc + contract` per-instruction
-                // FMF flags on f64 ops. Off by default — Perry produces bit-exact
-                // f64 with Node. See `docs/src/cli/fast-math.md`.
+                // perry.fastMath: opt in to LLVM `reassoc` per-instruction
+                // FMF flags on f64 ops. Off by default — Perry produces
+                // bit-exact f64 with Node. See `docs/src/cli/fast-math.md`.
                 if let Some(fm) = pkg
                     .get("perry")
                     .and_then(|p| p.get("fastMath"))
                     .and_then(|v| v.as_bool())
                 {
                     ctx.fast_math = fm;
+                }
+                // perry.fpContract: explicit contraction mode, separated
+                // from broad fast-math reassociation.
+                if let Some(v) = pkg.get("perry").and_then(|p| p.get("fpContract")) {
+                    let s = v
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("perry.fpContract must be a string"))?;
+                    ctx.fp_contract_mode = parse_fp_contract_mode(s, "perry.fpContract")?;
+                    fp_contract_explicit = true;
                 }
                 // #503: perry.allowDynamicStdlibDispatch — either a boolean
                 // (`true` disables the refusal globally) or an array of
@@ -318,6 +330,21 @@ pub(super) fn apply_pkg_and_toml_config(
     // CLI flag overrides everything (last wins).
     if args.fast_math {
         ctx.fast_math = true;
+    }
+    match std::env::var("PERRY_FP_CONTRACT") {
+        Ok(v) => {
+            ctx.fp_contract_mode = parse_fp_contract_mode(&v, "PERRY_FP_CONTRACT")?;
+            fp_contract_explicit = true;
+        }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(e) => return Err(e.into()),
+    }
+    if let Some(mode) = args.fp_contract.as_deref() {
+        ctx.fp_contract_mode = parse_fp_contract_mode(mode, "--fp-contract")?;
+        fp_contract_explicit = true;
+    }
+    if !fp_contract_explicit && ctx.fast_math {
+        ctx.fp_contract_mode = FpContractMode::Fast;
     }
 
     // #503: `PERRY_ALLOW_DYNAMIC_STDLIB=1` disables the dynamic-dispatch
@@ -637,4 +664,14 @@ pub(super) fn apply_pkg_and_toml_config(
 
     let _ = (perry_toml, toml_root);
     Ok((i18n_config, i18n_translations))
+}
+
+fn parse_fp_contract_mode(value: &str, source: &str) -> Result<FpContractMode> {
+    FpContractMode::from_str(value.trim()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} must be one of `off`, `on`, or `fast` (got `{}`)",
+            source,
+            value
+        )
+    })
 }

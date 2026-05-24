@@ -2,6 +2,8 @@
 target/
 *.o
 *.app/
+__pycache__/
+*.py[cod]
 
 # Android Gradle: caches and build outputs are regenerable. Source under
 # android-build/ that we DO track: build.gradle.kts files, gradle wrapper,
@@ -56,6 +58,7 @@ tests/test-*
 !tests/test_*.sh
 !tests/test-*.sh
 !tests/test_copied_minor_fallback_report.py
+!tests/test_compiler_output_regression.py
 !tests/test_gc_1090_evidence_report.py
 !tests/test_perf_frontier_report.py
 !tests/test_perf_frontier_gate_smoke.sh

@@ -1,4 +1,4 @@
-# Fast-math (`--fast-math`)
+# Fast-math and FP contraction
 
 Off by default. Opt in to permit LLVM optimizations on f64 arithmetic
 that produce observably different results from Node's V8 in exchange for
@@ -9,7 +9,8 @@ faster code on a narrow class of numeric workloads.
 | Mode | Bit-exact with Node | Speed |
 | --- | --- | --- |
 | Default | Yes (~94% of random FP programs match Node bit-for-bit; the residual ~6% comes from the LLVM SLP vectorizer at `-O3`, not from fast-math) | Same as Node within noise on realistic FP code |
-| `--fast-math` | No (~70%; ~30% of random FP programs diverge by 1 ULP) | ~7x faster on tight `sum += constant` loops; ~0% difference on dot products, array reductions, or any data-dependent FP-heavy code (M-series ARM64 numbers; x86_64 may differ) |
+| `--fp-contract=on` or `fast` | No where FMA fusion changes rounding | Can emit FMA for multiply-add shapes without enabling reassociation |
+| `--fast-math` | No (~70%; ~30% of random FP programs diverge by 1 ULP). Implies `--fp-contract=fast` unless explicitly overridden. | ~7x faster on tight `sum += constant` loops; ~0% difference on dot products, array reductions, or any data-dependent FP-heavy code (M-series ARM64 numbers; x86_64 may differ) |
 
 If your program does scientific computing, signal processing, or any
 hand-tuned numeric kernel that benefits from autovectorization or FMA
@@ -36,10 +37,30 @@ PERRY_FAST_MATH=1 perry myapp.ts
 }
 ```
 
+## Floating-point contraction
+
+Contraction is separate from reassociation:
+
+```bash
+# Permit FMA contraction only.
+perry --fp-contract=on myapp.ts
+
+# Permit the frontend's most aggressive contraction mode without reassociation.
+perry --fp-contract=fast myapp.ts
+
+# Keep reassociation from --fast-math but block FMA contraction.
+perry --fast-math --fp-contract=off myapp.ts
+```
+
+The same setting is available through `PERRY_FP_CONTRACT=off|on|fast`
+or `"perry": { "fpContract": "on" }` in package.json. Explicit package,
+env, or CLI `fpContract` values override the `--fast-math` implied
+default.
+
 ## What it actually changes
 
-Exactly two LLVM per-instruction fast-math flags become emitted on
-every `fadd` / `fsub` / `fmul` / `fdiv` / `frem` / `fneg`:
+Two LLVM per-instruction fast-math flags can be emitted on every
+`fadd` / `fsub` / `fmul` / `fdiv` / `frem` / `fneg`:
 
 - **`reassoc`** — permits the optimizer to reorder associative chains.
   `(a + b) + c` may become `a + (b + c)`. This is what the loop-vectorizer
@@ -49,7 +70,8 @@ every `fadd` / `fsub` / `fmul` / `fdiv` / `frem` / `fneg`:
   magnitudes; rewrites like `(a / b) * b → (a * b) / b` (algebraically
   equal, IEEE-different).
 
-- **`contract`** — permits fused multiply-add. `a * b + c` may become a
+- **`contract`** — controlled by `--fp-contract`; permits fused multiply-add.
+  `a * b + c` may become a
   single FMA instruction with one rounding step instead of two. ARM and
   modern x86 both have hardware FMA. Worst-case observable behavior:
   intermediate `a * b` no longer rounds independently, so code that
@@ -118,10 +140,11 @@ flag.
 ## Object-cache interaction
 
 Perry's per-module `.o` cache (in `.perry-cache/objects/`) keys on the
-`fast_math` setting alongside source hash and other compile options.
-Toggling the flag invalidates affected cache entries — `perry --fast-math`
-right after `perry` does a clean recompile of every module that contains
-f64 arithmetic. No `--no-cache` necessary.
+`fast_math` and `fp_contract` settings alongside source hash and other
+compile options. Toggling either invalidates affected cache entries —
+`perry --fast-math` or `perry --fp-contract=on` right after `perry`
+does a clean recompile of every module that contains f64 arithmetic. No
+`--no-cache` necessary.
 
 (This is a deliberate fix. During the original investigation, an early
 version of the flag forgot to enter the cache key, and the result was

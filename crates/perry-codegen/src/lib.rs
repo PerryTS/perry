@@ -28,8 +28,8 @@ pub(crate) mod typed_shape;
 pub mod types;
 
 pub use codegen::{
-    compile_module, resolve_target_triple, AppMetadata, CompileOptions, ImportedClass,
-    NamespaceEntry, NamespaceEntryKind,
+    compile_module, resolve_target_triple, AppMetadata, CompileOptions, FpContractMode,
+    ImportedClass, NamespaceEntry, NamespaceEntryKind,
 };
 
 /// One row of the native-module dispatch table, projected to just

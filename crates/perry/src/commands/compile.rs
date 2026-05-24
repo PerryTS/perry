@@ -3338,6 +3338,7 @@ pub fn run_with_parse_cache(
                 native_library_functions: ffi_functions.clone(),
                 i18n_table: i18n_snapshot.clone(),
                 fast_math: ctx.fast_math,
+                fp_contract_mode: ctx.fp_contract_mode,
                 app_metadata: ctx.app_metadata.clone(),
                 // Issue #100: namespace_entries empty unless this
                 // module is a dynamic-import target; the consumer-side

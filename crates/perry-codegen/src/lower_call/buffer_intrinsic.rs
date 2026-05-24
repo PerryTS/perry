@@ -152,6 +152,7 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         ctx.integer_locals,
         ctx.clamp3_functions,
         ctx.clamp_u8_functions,
+        ctx.integer_returning_functions,
     );
     let offset_i32 = if offset_is_i32 {
         crate::expr::lower_expr_as_i32(ctx, &args[0])?

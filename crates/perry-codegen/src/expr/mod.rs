@@ -642,6 +642,7 @@ pub(crate) struct FnCtx<'a> {
     /// Clamp-pattern function IDs. Call sites emit smin/smax inline.
     pub clamp3_functions: &'a std::collections::HashSet<u32>,
     pub clamp_u8_functions: &'a std::collections::HashSet<u32>,
+    pub integer_returning_functions: &'a std::collections::HashSet<u32>,
 
     /// True if `perry_transform::unroll_static_loops` expanded any
     /// static-trip-count for-loop in the function this FnCtx is lowering
@@ -682,9 +683,9 @@ pub(crate) struct FnCtx<'a> {
     pub array_row_aliases: std::collections::HashMap<u32, (u32, Box<perry_hir::Expr>)>,
 
     /// Pre-computed `ptr`-typed data-base-pointer slots for Buffer/Uint8Array
-    /// locals. When a `Stmt::Let` initializes a non-mutable local from
-    /// `Expr::BufferAlloc`, the lowering computes the data pointer
-    /// (handle + 8, past the BufferHeader) once and stores it in a
+    /// locals. When HIR facts prove a non-mutable local owns a fresh u8 buffer,
+    /// the lowering computes the data pointer (handle + 8, past the
+    /// BufferHeader) once and stores it in a
     /// `ptr`-typed alloca. `Uint8ArrayGet/Set` then emits
     /// `getelementptr inbounds i8, ptr %base, i32 %idx` instead of the
     /// `inttoptr(handle + offset)` chain — giving LLVM proper pointer
@@ -696,6 +697,10 @@ pub(crate) struct FnCtx<'a> {
     /// different buffers don't alias (fixes the vectorizer's "unsafe
     /// dependent memory operations" remark).
     pub buffer_data_slots: std::collections::HashMap<u32, (String, u32)>,
+    /// Immutable locals whose initializer creates a fresh u8 buffer backing
+    /// store. Collected once as a HIR fact and consumed by Let lowering to seed
+    /// direct data-pointer slots plus noalias metadata.
+    pub known_noalias_buffer_locals: &'a std::collections::HashSet<u32>,
     /// Starting alias-scope id for buffers registered in this function.
     /// Seeded from `LlModule::buffer_alias_counter` at FnCtx creation so
     /// scope ids don't collide across functions in the same LLVM module.

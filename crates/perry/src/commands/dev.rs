@@ -298,6 +298,7 @@ fn build_once(
         debug_symbols: false,
         no_cache: false,
         fast_math: false,
+        fp_contract: None,
         emit_attest: false,
         emit_sandbox: false,
         lockdown: false,

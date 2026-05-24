@@ -68,6 +68,7 @@ fn empty_opts() -> CompileOptions {
         native_library_functions: Vec::new(),
         i18n_table: None,
         fast_math: false,
+        fp_contract_mode: perry_codegen::FpContractMode::Off,
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),

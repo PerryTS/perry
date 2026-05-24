@@ -51,7 +51,9 @@ mod string_pool;
 pub use helpers::resolve_target_triple;
 pub(crate) use helpers::{default_target_triple, write_barriers_enabled};
 pub(crate) use opts::CrossModuleCtx;
-pub use opts::{AppMetadata, CompileOptions, ImportedClass, NamespaceEntry, NamespaceEntryKind};
+pub use opts::{
+    AppMetadata, CompileOptions, FpContractMode, ImportedClass, NamespaceEntry, NamespaceEntryKind,
+};
 
 use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
 use function::compile_function;
@@ -74,12 +76,16 @@ use crate::collectors::{collect_closures_in_stmts, collect_let_ids, collect_ref_
 /// guarantee — do not change to `&mut` without also moving the cache
 /// hash to AFTER codegen.
 pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> {
-    // Set the per-instruction FMF emission mode for this build before
+    // Set the per-instruction FMF emission modes for this build before
     // any LlBlock methods run. All modules in a single program build
-    // share the same `fast_math` setting, so writing the AtomicBool
-    // here (potentially redundantly when rayon parallelizes module
-    // compiles) is safe — every store writes the same value.
+    // share the same FP settings, so writing the atomics here
+    // (potentially redundantly when rayon parallelizes module compiles)
+    // is safe — every store writes the same values.
     crate::block::FAST_MATH.store(opts.fast_math, std::sync::atomic::Ordering::Relaxed);
+    crate::block::FP_CONTRACT_MODE.store(
+        opts.fp_contract_mode as u8,
+        std::sync::atomic::Ordering::Relaxed,
+    );
 
     let triple = opts.target.clone().unwrap_or_else(default_target_triple);
 
