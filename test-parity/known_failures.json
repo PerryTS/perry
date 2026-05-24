@@ -3115,5 +3115,59 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: user _destroy(err, cb) — not invoked or receives wrong error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/destroyed-after-finish": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Writable destroyed false after 'finish' (autoDestroy default true). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/multiple-events-event-names": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: eventNames does not include all registered event names. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/writable/end-cb-fires-after-flush": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: end(cb) — cb fires before write callbacks or before finish. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/events/event-names-empty-array": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: fresh stream eventNames not empty array. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/writable-end-on-source-end": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipe(dst) — dst not ended after src ends. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/encoding-via-constructor": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: encoding option in ctor — readableEncoding wrong or data not string. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/new-listener-fires-before-add": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: 'newListener' fires after the listener is added (should be before). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/pipe-to-plain-writable": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipe() to plain Writable — collected wrong / empty. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/destroy-without-error": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: destroy() no arg — destroyed flag wrong or error event fires. Flips to PASS when #1532 lands."
   }
 }
