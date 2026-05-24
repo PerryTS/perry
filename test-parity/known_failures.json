@@ -3109,5 +3109,53 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: user _destroy(err, cb) — not invoked or receives wrong error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/writable-side-getters": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Duplex writable-side getters — wrong types or undefined. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/transform-piped-twice": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: pipeThrough().pipeThrough() — second transform output wrong. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/pipe/pipe-many-data-events": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipe with 20 chunks — order or count wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/emit-error-multi-listener": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: emit('error') multi-listener — wrong call counts. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/strategy-size-non-number": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: strategy.size returning non-number — doesn't throw on enqueue. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/events/constructor-is-function": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: constructor.name / typeof not 'function' on stream classes. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/from-string-chunk-buffer": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from('hello') — chunk type/shape doesn't match Node. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/compose/just-source-only": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: compose(src) — only source given, Duplex output empty. Flips to PASS when #1531 lands."
   }
 }
