@@ -2551,5 +2551,71 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: unshift() during flowing mode — chunk not re-emitted in order. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/from-iterable-of-buffers": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: ReadableStream.from(arrayOfBuffers) — chunk count or type wrong. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/method-typeof-function": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: some instance method reports wrong typeof (not 'function'). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/error-via-pipe": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: src.emit('error') during pipe — src or dst error tracking wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/flow/registration-order-emission": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: multi-'data' listeners — fire in wrong order. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/from-iterator-throws": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(iter that throws on next) — 'error' event not emitted. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/iter-helpers/some-async-rejection": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: some(asyncFn) — rejection in fn does not propagate. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/events/get-listeners-instance-method": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: listeners(event) — wrong array shape or count. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/transform-readable-cancel-propagates": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: TS readable.cancel — writable.write does not reject after. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/promises/finished-stream-already-ended": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: finished(alreadyEnded) — does not resolve immediately. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/error-emit-sync": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: emit('error') — listener does not fire synchronously. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/readable-property-shape": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: stream instance methods — some typeof not 'function' (or missing). Flips to PASS when #1532 lands."
   }
 }
