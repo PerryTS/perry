@@ -1687,5 +1687,23 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/iterator/destroy-on-return-true-default": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: default destroyOnReturn:true — early break does not destroy stream. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/readable/read-zero-probe": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: read(0) probe — does not return null/trigger 'readable' without consuming. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/read-larger-than-buffered": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: read(N>buffered) — does not return remaining buffered bytes at EOF. Flips to PASS when #1532 lands."
   }
 }
