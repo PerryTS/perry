@@ -155,7 +155,13 @@ pub struct CompileArgs {
     /// otherwise an unreadable wall of `<unknown>`. Also skips `/OPT:ICF`
     /// (identical-COMDAT folding) so distinct functions don't collapse
     /// to one symbol in the backtrace. Larger binary; off by default.
-    /// (Non-Windows targets: reserved — no behavior change today.)
+    ///
+    /// On Linux/macOS (#1663) this now skips the final `strip` and emits
+    /// `-g` DWARF, so a SIGSEGV in a compiled service backtraces to real
+    /// `js_*`/user function names + `file:line` under lldb/gdb instead of
+    /// `??`. Implemented by promoting the flag to the `PERRY_DEBUG_SYMBOLS`
+    /// env var in the compile driver, which codegen, the object-cache key,
+    /// and the strip step already honor.
     #[arg(long)]
     pub debug_symbols: bool,
 

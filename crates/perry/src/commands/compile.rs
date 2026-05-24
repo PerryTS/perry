@@ -129,6 +129,22 @@ pub fn run_with_parse_cache(
     // bleed into this build's auto-link decisions.
     let _ = perry_codegen::ext_registry::take_used_providers();
 
+    // #1663: make `--debug-symbols` retain a symbol table on every native
+    // target, not just emit a PDB on Windows. Previously the flag was a no-op
+    // on Linux/macOS, so a SIGSEGV in a compiled service (e.g. the Fastify +
+    // @perryts/mysql crash reported in #1663) symbolized to an unreadable wall
+    // of `??`, making runtime crashes nearly impossible to report. The
+    // canonical knob for "keep symbols" is the PERRY_DEBUG_SYMBOLS env var,
+    // which the codegen (`-g`/DWARF), the object-cache key, and the final
+    // `strip` step already all honor. Promote the flag to that env var here —
+    // single-threaded, before module codegen spawns rayon workers — so every
+    // layer observes it uniformly. Only set (never unset): the flag is an
+    // explicit opt-in, and a `perry dev` session that asked for symbols once
+    // wants them for the rest of the session.
+    if args.debug_symbols && std::env::var_os("PERRY_DEBUG_SYMBOLS").is_none() {
+        std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
+    }
+
     match format {
         OutputFormat::Text => println!("Collecting modules..."),
         OutputFormat::Json => {}

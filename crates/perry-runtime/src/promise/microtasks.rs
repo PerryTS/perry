@@ -218,16 +218,28 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     } else {
                         None
                     };
-                    crate::async_hooks::before((*promise).async_id, (*promise).trigger_async_id);
+                    // #1663: capture async_id + trigger as plain values BEFORE
+                    // the callback. They are immutable for the promise's life,
+                    // and the callback can re-entrantly drain microtasks (which
+                    // can move the promise via GC or realloc the GC-root handle
+                    // stack). Reading `(*promise).async_id` AFTER the callback
+                    // to feed `after()` was the exact deref that segfaulted; use
+                    // the captured value so `after()` needs no live promise.
+                    let async_id = (*promise).async_id;
+                    let trigger_async_id = (*promise).trigger_async_id;
+                    crate::async_hooks::before(async_id, trigger_async_id);
                     let result = crate::closure::js_closure_call1(callback, value);
                     // Keep the callback result rooted across `after()` (which
                     // can run JS when async_hooks are active) via the value
                     // cell, then reload promise/next from our handles — never
                     // the TLS cells, which a re-entrant drain may have nulled.
+                    // The reload goes through the out-of-line `get_raw_mut_ptr`
+                    // (#1663) so it re-resolves the handle stack after the
+                    // callback instead of reading a stale cached slot address.
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                     let promise = promise_handle.get_raw_mut_ptr::<Promise>();
                     let next = next_handle.get_raw_mut_ptr::<Promise>();
-                    crate::async_hooks::after((*promise).async_id);
+                    crate::async_hooks::after(async_id);
                     if let Some(t) = t1 {
                         MT_TIME_NS_CALLBACK
                             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);

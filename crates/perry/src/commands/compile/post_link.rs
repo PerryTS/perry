@@ -16,7 +16,9 @@ use super::{CompilationContext, ObjectCache};
 /// compilation target whose host `strip` can't parse foreign object
 /// formats (iOS/visionOS/tvOS/watchOS/HarmonyOS/Android), and when
 /// `PERRY_DEBUG_SYMBOLS=1` is set so crash backtraces stay
-/// symbolicated.
+/// symbolicated. `--debug-symbols` (#1663) promotes itself to that env
+/// var in the compile driver, so passing the flag also takes this skip
+/// path on Linux/macOS.
 ///
 /// When `ctx.needs_plugins` is true the build uses `strip -x` to
 /// retain exported symbols — `dlopen`'d plugins resolve
