@@ -812,6 +812,24 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(JSValue::undefined().bits())
         }
 
+        // #1577: captured-then-called crypto methods (`const f =
+        // crypto.createHash; f(...)`). The impls live in perry-stdlib (which
+        // depends on this crate), so route through the dispatcher stdlib
+        // registers at startup via `js_set_native_crypto_dispatch`. Null when
+        // stdlib isn't linked (e.g. runtime-only tests) → undefined. The
+        // `randomFillSync` arm above is handled inline and never reaches here.
+        ("crypto", _) => {
+            let ptr =
+                crate::value::JS_NATIVE_CRYPTO_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                    std::mem::transmute(ptr);
+                dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+            }
+        }
+
         _ => {
             // Method not found on native module — return undefined
             f64::from_bits(JSValue::undefined().bits())

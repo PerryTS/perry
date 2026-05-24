@@ -1087,6 +1087,63 @@ pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
     rand::thread_rng().gen_range(min..max) as f64
 }
 
+/// #1577: dispatcher for captured-then-called `crypto.*` methods
+/// (`const f = crypto.createHash; f("sha256")`). The runtime's native-module
+/// dispatch (`dispatch_native_module_method`) routes `("crypto", method)`
+/// here once it's registered in `js_stdlib_init_dispatch` — the runtime can't
+/// call these stdlib impls directly (perry-stdlib depends on perry-runtime).
+/// Args arrive as NaN-boxed f64s; string args are unboxed SSO-safely the same
+/// way the direct-call lowering does. Unhandled methods return undefined.
+///
+/// # Safety
+/// `method_ptr`/`args_ptr` must be valid for their stated lengths (the runtime
+/// passes the live method name and call-arg buffer).
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_native_dispatch(
+    method_ptr: *const u8,
+    method_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let undefined = f64::from_bits(JSValue::undefined().bits());
+    let method = if method_ptr.is_null() || method_len == 0 {
+        ""
+    } else {
+        std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len)).unwrap_or("")
+    };
+    let arg = |n: usize| -> f64 {
+        if n < args_len && !args_ptr.is_null() {
+            *args_ptr.add(n)
+        } else {
+            undefined
+        }
+    };
+    // SSO-safe StringHeader pointer (matches `unbox_to_i64` on the direct path).
+    let str_ptr = |n: usize| -> i64 { perry_runtime::js_get_string_pointer_unified(arg(n)) as i64 };
+    // A buffer-or-string arg's raw pointer (bytes_from_ptr handles both).
+    let bytes_ptr = |n: usize| -> i64 {
+        let v = arg(n);
+        if JSValue::from_bits(v.to_bits()).is_any_string() {
+            perry_runtime::js_get_string_pointer_unified(v) as i64
+        } else {
+            perry_runtime::js_nanbox_get_pointer(v)
+        }
+    };
+    match method {
+        "createHash" => js_crypto_create_hash(str_ptr(0)),
+        "createHmac" => js_crypto_create_hmac(str_ptr(0), bytes_ptr(1)),
+        "randomUUID" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuid()).bits()),
+        "randomBytes" => {
+            let buf = js_crypto_random_bytes_buffer(arg(0));
+            f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+        }
+        // Node: randomInt(max) → [0,max); randomInt(min,max) → [min,max).
+        "randomInt" if args_len >= 2 => js_crypto_random_int(arg(0), arg(1)),
+        "randomInt" => js_crypto_random_int(0.0, arg(0)),
+        _ => undefined,
+    }
+}
+
 /// `crypto.randomInt(min, max, callback)` callback form. The random value is
 /// generated through the synchronous helper and delivered as `(err, n)`.
 #[no_mangle]
@@ -2033,6 +2090,210 @@ pub struct DiffieHellmanHandle {
     generator: Vec<u8>,
     private_key: std::sync::Mutex<Option<Vec<u8>>>,
     public_key: std::sync::Mutex<Option<Vec<u8>>>,
+}
+
+// ───────────────────────────────────────────────────────────────────
+// #1367: node:crypto X509Certificate. `new X509Certificate(pem|der)`
+// parses the cert and exposes Node's read-only properties. Parsing uses
+// RustCrypto's `x509-cert` (the der/spki/const-oid already in the lock).
+// ───────────────────────────────────────────────────────────────────
+
+pub struct X509Handle {
+    der: Vec<u8>,
+    cert: x509_cert::Certificate,
+}
+
+/// Short attribute name for an X.500 DN OID, matching Node's subject /
+/// issuer formatting (`CN`, `O`, `C`, …); falls back to the dotted OID.
+fn x509_attr_short_name(oid: &str) -> String {
+    match oid {
+        "2.5.4.3" => "CN",
+        "2.5.4.6" => "C",
+        "2.5.4.7" => "L",
+        "2.5.4.8" => "ST",
+        "2.5.4.10" => "O",
+        "2.5.4.11" => "OU",
+        "2.5.4.4" => "SN",
+        "2.5.4.42" => "GN",
+        "2.5.4.5" => "serialNumber",
+        "2.5.4.9" => "STREET",
+        "0.9.2342.19200300.100.1.25" => "DC",
+        "1.2.840.113549.1.9.1" => "emailAddress",
+        other => return other.to_string(),
+    }
+    .to_string()
+}
+
+/// Format an X.500 `Name` the way Node's `cert.subject` / `cert.issuer`
+/// do: one `TYPE=value` per line, newline-joined, in encoding order.
+fn x509_format_name(name: &x509_cert::name::Name) -> String {
+    use x509_cert::der::Encode;
+    let mut lines: Vec<String> = Vec::new();
+    for rdn in name.0.iter() {
+        for atv in rdn.0.iter() {
+            let oid = atv.oid.to_string();
+            // The value is an AttributeValue (ASN.1 Any); decode common
+            // string forms. Fall back to its UTF-8 lossy DER tail.
+            let value = atv
+                .value
+                .decode_as::<x509_cert::der::asn1::Utf8StringRef>()
+                .map(|s| s.as_str().to_string())
+                .or_else(|_| {
+                    atv.value
+                        .decode_as::<x509_cert::der::asn1::PrintableStringRef>()
+                        .map(|s| s.as_str().to_string())
+                })
+                .or_else(|_| {
+                    atv.value
+                        .decode_as::<x509_cert::der::asn1::Ia5StringRef>()
+                        .map(|s| s.as_str().to_string())
+                })
+                .unwrap_or_else(|_| {
+                    let bytes = atv.value.to_der().unwrap_or_default();
+                    // Skip the 2-byte tag+len header when present.
+                    let tail = if bytes.len() > 2 {
+                        &bytes[2..]
+                    } else {
+                        &bytes[..]
+                    };
+                    String::from_utf8_lossy(tail).to_string()
+                });
+            lines.push(format!("{}={}", x509_attr_short_name(&oid), value));
+        }
+    }
+    lines.join("\n")
+}
+
+/// Format an X.509 validity `Time` as Node does — `MMM D HH:MM:SS YYYY GMT`
+/// with a space-padded day (e.g. `Jan  1 00:00:00 2020 GMT`).
+fn x509_format_time(time: &x509_cert::time::Time) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let dt = time.to_date_time();
+    let month = MONTHS
+        .get((dt.month() as usize).saturating_sub(1))
+        .copied()
+        .unwrap_or("Jan");
+    format!(
+        "{} {:>2} {:02}:{:02}:{:02} {} GMT",
+        month,
+        dt.day(),
+        dt.hour(),
+        dt.minutes(),
+        dt.seconds(),
+        dt.year(),
+    )
+}
+
+/// Uppercase colon-separated hex of a digest, matching Node's
+/// `cert.fingerprint` / `.fingerprint256`.
+fn x509_colon_hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// `new crypto.X509Certificate(pem | der)` — parse and register a handle.
+/// Accepts a PEM string or a DER Buffer/Uint8Array. Returns `undefined`
+/// on a parse failure (Node throws; the stub degrades to undefined).
+///
+/// # Safety
+/// `input_ptr` must be a valid string/buffer pointer (the codegen-unboxed
+/// constructor argument).
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_x509_new(input_ptr: i64) -> f64 {
+    use x509_cert::der::{Decode, DecodePem, Encode};
+    let bytes = bytes_from_ptr(input_ptr);
+    let cert = if bytes.starts_with(b"-----BEGIN") {
+        match x509_cert::Certificate::from_pem(&bytes) {
+            Ok(c) => c,
+            Err(_) => return nanbox_undefined(),
+        }
+    } else {
+        match x509_cert::Certificate::from_der(&bytes) {
+            Ok(c) => c,
+            Err(_) => return nanbox_undefined(),
+        }
+    };
+    let der = match cert.to_der() {
+        Ok(d) => d,
+        Err(_) => return nanbox_undefined(),
+    };
+    let handle: Handle = register_handle(X509Handle { der, cert });
+    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
+}
+
+/// Read-only property dispatch for an X509Certificate handle.
+pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
+    use sha1::Sha1;
+    use sha2::{Digest, Sha256};
+    let h = match get_handle_mut::<X509Handle>(handle) {
+        Some(h) => h,
+        None => return nanbox_undefined(),
+    };
+    let string_f64 = |s: &str| -> f64 {
+        let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    };
+    let tbs = &h.cert.tbs_certificate;
+    match property {
+        "subject" => string_f64(&x509_format_name(&tbs.subject)),
+        "issuer" => string_f64(&x509_format_name(&tbs.issuer)),
+        "validFrom" => string_f64(&x509_format_time(&tbs.validity.not_before)),
+        "validTo" => string_f64(&x509_format_time(&tbs.validity.not_after)),
+        "serialNumber" => {
+            let hex_str: String = tbs
+                .serial_number
+                .as_bytes()
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect();
+            string_f64(&hex_str)
+        }
+        "fingerprint" => {
+            let digest = Sha1::digest(&h.der);
+            string_f64(&x509_colon_hex(&digest))
+        }
+        "fingerprint256" => {
+            let digest = Sha256::digest(&h.der);
+            string_f64(&x509_colon_hex(&digest))
+        }
+        "ca" => {
+            // BasicConstraints (id-ce 2.5.29.19) cA flag.
+            let is_ca = x509_basic_constraints_ca(&h.cert);
+            f64::from_bits(if is_ca {
+                0x7FFC_0000_0000_0004
+            } else {
+                0x7FFC_0000_0000_0003
+            })
+        }
+        "raw" => {
+            let buf = alloc_buffer_from_slice(&h.der);
+            f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
+        }
+        _ => nanbox_undefined(),
+    }
+}
+
+/// Extract the BasicConstraints `cA` flag (default false when absent).
+fn x509_basic_constraints_ca(cert: &x509_cert::Certificate) -> bool {
+    use x509_cert::der::Decode;
+    let Some(exts) = cert.tbs_certificate.extensions.as_ref() else {
+        return false;
+    };
+    for ext in exts.iter() {
+        if ext.extn_id.to_string() == "2.5.29.19" {
+            if let Ok(bc) =
+                x509_cert::ext::pkix::BasicConstraints::from_der(ext.extn_value.as_bytes())
+            {
+                return bc.ca;
+            }
+        }
+    }
+    false
 }
 
 const DH_DEFAULT_PRIME_HEX: &str = concat!(

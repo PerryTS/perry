@@ -1780,6 +1780,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createSign", false, None),
     method("crypto", "createVerify", false, None),
     class("crypto", "ECDH"),
+    // #1367: X509Certificate — `new X509Certificate(pem|der)` + read-only
+    // subject/issuer/validFrom/validTo/serialNumber/fingerprint/ca props.
+    class("crypto", "X509Certificate"),
     method("crypto", "createECDH", false, None),
     method("crypto", "createDiffieHellman", false, None),
     method("crypto", "createDiffieHellmanGroup", false, None),
@@ -2224,6 +2227,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `util.inherits(SendStream, require('stream'))`, which reads
     // `Stream.prototype` — the gate rejects the access without this entry.
     property("stream", "prototype"),
+    // #1533: `stream.promises` namespace (`await pipeline(...)` /
+    // `finished(...)`). The read resolves to a `stream/promises`-tagged
+    // namespace object; its members are gated under that submodule name.
+    property("stream", "promises"),
+    method("stream/promises", "pipeline", false, None),
+    method("stream/promises", "finished", false, None),
     // `Readable.from(iterable)` — Node's static factory. Resolves
     // through the `Readable.foo` -> `stream.foo` route in
     // `lower_call.rs`, so the gate keys off `stream.from`.

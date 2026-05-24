@@ -355,6 +355,25 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_async_local_storage_new", &[]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        // #1367: `new crypto.X509Certificate(pem | der)` — parse the cert
+        // into a handle exposing subject/issuer/validFrom/validTo/
+        // serialNumber/fingerprint/fingerprint256/ca/raw. The arg is a PEM
+        // string or DER Buffer; unbox to its raw pointer for the runtime
+        // parser (`js_crypto_x509_new` returns an already-NaN-boxed handle).
+        "X509Certificate" => {
+            let input = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let input_handle = unbox_to_i64(blk, &input);
+            Ok(Some(blk.call(
+                DOUBLE,
+                "js_crypto_x509_new",
+                &[(I64, &input_handle)],
+            )))
+        }
         "AsyncResource" => {
             let type_value = if let Some(arg) = args.first() {
                 lower_expr(ctx, arg)?
