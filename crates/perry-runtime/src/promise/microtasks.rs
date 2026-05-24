@@ -183,6 +183,31 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
 
                     // Record the running promise so the trap (above)
                     // can reject its `next` if the callback throws.
+                    //
+                    // #1663: the callback can re-entrantly drain the
+                    // microtask queue — a non-transformed async closure's
+                    // `await` busy-waits on `js_promise_run_microtasks`, and
+                    // each nested `Task::Promise` dispatch overwrites these
+                    // same TLS cells (and clears them on exit). Reloading
+                    // `promise` / `next` from the cells after the callback
+                    // would then observe a stale or NULL pointer; the very
+                    // next line dereferences `(*promise).async_id` (offset
+                    // 0x30) and segfaults. Root our promise + next in a
+                    // handle scope so we reload the GC-updated pointers from
+                    // there, and save/restore the previous cell values so a
+                    // nested drain leaves the enclosing arm — and its
+                    // exception-trap routing — intact. This mirrors the
+                    // INLINE_TRAP save/restore in the Inline/AsyncStep arms.
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let promise_handle = scope.root_raw_mut_ptr(promise);
+                    let next_handle = scope.root_raw_mut_ptr((*promise).next);
+                    let prev_promise = CURRENT_MICROTASK_PROMISE.with(|c| c.get());
+                    let prev_callback = CURRENT_MICROTASK_CALLBACK.with(|c| c.get());
+                    let prev_value = CURRENT_MICROTASK_VALUE.with(|c| c.get());
+                    let prev_next = CURRENT_MICROTASK_NEXT.with(|c| c.get());
+                    let prev_promise_handle = scope.root_raw_mut_ptr(prev_promise);
+                    let prev_next_handle = scope.root_raw_mut_ptr(prev_next);
+
                     CURRENT_MICROTASK_PROMISE.with(|c| c.set(promise));
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(callback));
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
@@ -195,37 +220,44 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     };
                     crate::async_hooks::before((*promise).async_id, (*promise).trigger_async_id);
                     let result = crate::closure::js_closure_call1(callback, value);
+                    // Keep the callback result rooted across `after()` (which
+                    // can run JS when async_hooks are active) via the value
+                    // cell, then reload promise/next from our handles — never
+                    // the TLS cells, which a re-entrant drain may have nulled.
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
-                    let promise = CURRENT_MICROTASK_PROMISE.with(|c| c.get());
+                    let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+                    let next = next_handle.get_raw_mut_ptr::<Promise>();
                     crate::async_hooks::after((*promise).async_id);
                     if let Some(t) = t1 {
                         MT_TIME_NS_CALLBACK
                             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     }
 
-                    // Callback returned normally; clear the running
-                    // marker so a stray longjmp from a later (nested)
-                    // microtask doesn't misattribute its rejection.
-                    CURRENT_MICROTASK_PROMISE.with(|c| c.set(std::ptr::null_mut()));
-                    CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
-
                     let t2 = if prof {
                         Some(std::time::Instant::now())
                     } else {
                         None
                     };
-                    let next = CURRENT_MICROTASK_NEXT.with(|c| c.replace(std::ptr::null_mut()));
                     if !next.is_null() {
-                        let result = CURRENT_MICROTASK_VALUE.with(|c| c.replace(0.0));
+                        let result = CURRENT_MICROTASK_VALUE.with(|c| c.get());
                         propagate_callback_result(result, next);
-                    } else {
-                        CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
                     }
                     clear_promise_context(promise);
                     if let Some(t) = t2 {
                         MT_TIME_NS_RESOLVE
                             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     }
+
+                    // Restore the previous CURRENT_MICROTASK_* cells so an
+                    // enclosing (re-entrant) dispatch resumes with its own
+                    // promise/next/value for settlement and trap routing,
+                    // instead of the NULLs this arm would otherwise leave.
+                    CURRENT_MICROTASK_PROMISE
+                        .with(|c| c.set(prev_promise_handle.get_raw_mut_ptr::<Promise>()));
+                    CURRENT_MICROTASK_CALLBACK.with(|c| c.set(prev_callback));
+                    CURRENT_MICROTASK_VALUE.with(|c| c.set(prev_value));
+                    CURRENT_MICROTASK_NEXT
+                        .with(|c| c.set(prev_next_handle.get_raw_mut_ptr::<Promise>()));
                 }
                 restore_microtask_context();
                 ran += 1;
