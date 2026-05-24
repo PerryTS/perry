@@ -944,12 +944,6 @@
     "category": "bug-open",
     "reason": "node:stream: class extends Writable + _write doesn't deliver finish. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/readable-stream-async-iterator": {
-    "issue": "1646",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/web: Web ReadableStream for-await iteration not supported. Flips to PASS when #1646 lands."
-  },
   "node-suite/stream/web/readable-stream-no-args": {
     "issue": "1642",
     "added": "2026-05-23",

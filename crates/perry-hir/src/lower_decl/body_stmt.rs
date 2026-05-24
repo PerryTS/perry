@@ -695,10 +695,34 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             // instance type. Falls through to the generic async-iterator
             // path if not a ReadableStream.
             if for_of_stmt.is_await {
-                let is_readable_stream = if let ast::Expr::Ident(ident) = &*for_of_stmt.right {
+                // #1646: peel `as T` / `!` / `as const` / parens so
+                // `for await (const v of rs as any)` (a common Web-Streams
+                // idiom — the WHATWG ReadableStream async-iterator isn't in
+                // the lib.dom.d.ts types Perry sees) is still recognised as a
+                // ReadableStream and lowered to the getReader/read loop below.
+                let mut iter_inner: &ast::Expr = &for_of_stmt.right;
+                loop {
+                    iter_inner = match iter_inner {
+                        ast::Expr::TsAs(x) => &x.expr,
+                        ast::Expr::TsNonNull(x) => &x.expr,
+                        ast::Expr::TsConstAssertion(x) => &x.expr,
+                        ast::Expr::Paren(x) => &x.expr,
+                        _ => break,
+                    };
+                }
+                let is_readable_stream = if let ast::Expr::Ident(ident) = iter_inner {
+                    let name = ident.sym.as_ref();
+                    // A `new ReadableStream(...)` local is tracked by its
+                    // inferred `Named("ReadableStream")` type, not the
+                    // native-instance registry (that's only populated for
+                    // `response.body` / `blob.stream()` factories). Accept
+                    // either so a directly-constructed Web stream iterates too.
                     matches!(
-                        ctx.lookup_native_instance(ident.sym.as_ref()),
+                        ctx.lookup_native_instance(name),
                         Some((_, "ReadableStream"))
+                    ) || matches!(
+                        ctx.lookup_local_type(name),
+                        Some(Type::Named(n)) if n == "ReadableStream"
                     )
                 } else {
                     false
