@@ -708,6 +708,25 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             {
                                 return Ok(Expr::String("function".to_string()));
                             }
+                            // #1698: `typeof req.json` on a Web Fetch Request /
+                            // Response instance. The body methods are real
+                            // functions in Node, but a bare LITERAL member read
+                            // (`req.json`) takes the typed Web-Fetch codegen path,
+                            // which returns the numeric handle (typeof "object")
+                            // rather than routing to `dispatch_request_property`'s
+                            // bound-method value (the COMPUTED `req[key]` form
+                            // already does). Fold the literal-read typeof to
+                            // "function" to match Node. The call form
+                            // (`req.json()`) is unaffected.
+                            if matches!(
+                                ctx.lookup_native_instance(obj_name),
+                                Some(("Request", "Request")) | Some(("fetch", "Response"))
+                            ) && matches!(
+                                prop_name,
+                                "json" | "text" | "arrayBuffer" | "blob" | "formData" | "clone"
+                            ) {
+                                return Ok(Expr::String("function".to_string()));
+                            }
                             // #677: `typeof Function.prototype` → "object".
                             // `Function.prototype` is the (immutable) prototype
                             // chain root for all functions; in Node typeof is

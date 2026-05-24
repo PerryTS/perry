@@ -321,6 +321,16 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // "not us, try the next dispatcher or return undefined".
     #[cfg(feature = "http-client")]
     {
+        // #1698: Request body methods (`req.json()`/`.text()`/`.arrayBuffer()`)
+        // on an any-typed / computed-key receiver. Hono's `HonoRequest.#cachedBody`
+        // does `raw[key]()` (computed key) on the underlying Request, which loses
+        // the static type and lands here. Fetch-family ids are unified, so the
+        // registry-membership gate inside cleanly distinguishes a Request from a
+        // Response with the (formerly colliding) same id.
+        if let Some(v) = crate::fetch::dispatch_request_method(handle as usize, method_name, &args)
+        {
+            return v;
+        }
         if let Some(v) = crate::fetch::dispatch_response_method(handle as usize, method_name, &args)
         {
             return v;
