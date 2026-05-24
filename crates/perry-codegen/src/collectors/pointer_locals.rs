@@ -466,6 +466,7 @@ pub fn collect_pointer_typed_locals(
         changed = false;
         for (id, local_writes) in &writes {
             let mut inferred_ty: Option<Type> = None;
+            let mut precise_inference = true;
             let mut all_non_pointer = !local_writes.is_empty();
             for write in local_writes {
                 let write_ty = match write {
@@ -475,26 +476,43 @@ pub fn collect_pointer_typed_locals(
                     }
                 };
                 match write_ty {
+                    Some(Type::Any | Type::Unknown) => {
+                        all_non_pointer = false;
+                        inferred_ty = None;
+                        precise_inference = false;
+                    }
                     Some(ty) => {
                         all_non_pointer &=
                             is_definitely_non_pointer_type(&ty) || non_pointer_locals.contains(id);
-                        match &inferred_ty {
-                            None => inferred_ty = Some(ty),
-                            Some(existing) if existing == &ty => {}
-                            Some(_) => inferred_ty = None,
+                        if precise_inference {
+                            match &inferred_ty {
+                                None => inferred_ty = Some(ty),
+                                Some(existing) if existing == &ty => {}
+                                Some(_) => {
+                                    inferred_ty = None;
+                                    precise_inference = false;
+                                }
+                            }
                         }
                     }
                     None => {
                         all_non_pointer = false;
                         inferred_ty = None;
+                        precise_inference = false;
                     }
                 }
             }
-            if let Some(ty) = inferred_ty {
-                if matches!(local_types.get(id), Some(Type::Any | Type::Unknown))
-                    && local_value_types.get(id) != Some(&ty)
-                {
-                    local_value_types.insert(*id, ty);
+            if matches!(local_types.get(id), Some(Type::Any | Type::Unknown)) {
+                if precise_inference {
+                    if let Some(ty) = inferred_ty {
+                        if local_value_types.get(id) != Some(&ty) {
+                            local_value_types.insert(*id, ty);
+                            changed = true;
+                        }
+                    } else if local_value_types.remove(id).is_some() {
+                        changed = true;
+                    }
+                } else if local_value_types.remove(id).is_some() {
                     changed = true;
                 }
             }

@@ -300,6 +300,72 @@ fn reassigned_any_shadow_module() -> Module {
     }
 }
 
+fn mixed_any_alias_shadow_module() -> Module {
+    Module {
+        name: "mixed_any_alias_shadow.ts".to_string(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        classes: Vec::new(),
+        interfaces: Vec::new(),
+        type_aliases: Vec::new(),
+        enums: Vec::new(),
+        globals: Vec::new(),
+        functions: vec![Function {
+            id: 4,
+            name: "probe_mixed_any_alias".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![
+                Stmt::Let {
+                    id: 60,
+                    name: "source".to_string(),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Number(1.0)),
+                },
+                Stmt::Expr(Expr::LocalSet(60, Box::new(Expr::Array(Vec::new())))),
+                Stmt::Let {
+                    id: 61,
+                    name: "alias".to_string(),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::LocalGet(60)),
+                },
+                Stmt::Expr(Expr::LocalSet(60, Box::new(Expr::Number(2.0)))),
+                Stmt::Let {
+                    id: 62,
+                    name: "later".to_string(),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Array(Vec::new())),
+                },
+                Stmt::Return(Some(Expr::LocalGet(61))),
+            ],
+            is_async: false,
+            is_generator: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }],
+        init: Vec::new(),
+        exported_native_instances: Vec::new(),
+        exported_func_return_native_instances: Vec::new(),
+        exported_objects: Vec::new(),
+        exported_functions: Vec::new(),
+        widgets: Vec::new(),
+        uses_fetch: false,
+        uses_webassembly: false,
+        extern_funcs: Vec::new(),
+        init_was_unrolled: false,
+        has_top_level_await: false,
+        init_kind: ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
+    }
+}
+
 fn closure_captured_write_shadow_module() -> Module {
     Module {
         name: "closure_captured_write_shadow.ts".to_string(),
@@ -590,6 +656,28 @@ fn reassigned_any_from_number_to_pointer_reserves_and_updates_shadow_slot() {
         .map(|offset| array_alloc + offset)
         .expect("pointer reassignment should update the reserved shadow slot");
     assert!(array_alloc < slot_update);
+}
+
+#[test]
+fn mixed_any_writes_keep_alias_shadow_slots_precise() {
+    let ir =
+        String::from_utf8(compile_module(&mixed_any_alias_shadow_module(), empty_opts()).unwrap())
+            .expect("LLVM IR should be UTF-8");
+    let fn_ir = function_slice(
+        &ir,
+        "perry_fn_mixed_any_alias_shadow_ts__probe_mixed_any_alias",
+    );
+
+    assert!(
+        fn_ir.contains("call i64 @js_shadow_frame_push(i32 3)"),
+        "mixed Any writes must keep source, alias, and later reserved as shadow slots"
+    );
+    for slot_idx in 0..3 {
+        assert!(
+            fn_ir.contains(&format!("call void @js_shadow_slot_set(i32 {slot_idx}")),
+            "expected writes or clears for shadow slot {slot_idx}:\n{fn_ir}"
+        );
+    }
 }
 
 #[test]

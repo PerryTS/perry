@@ -66,11 +66,15 @@ pub(crate) fn lower_for(
     // Saves ~25-30% on `for (let i = 0; i < arr.length; i++) arr[i] = i`
     // and `for (let i = 0; i < arr.length; i++) for (let j = 0; j <
     // arr.length; j++) ...` patterns.
-    let hoist_classification: Option<(u32, u32)> =
+    let hoist_classification: Option<(u32, u32, perry_hir::CompareOp)> =
         condition.and_then(|cond| classify_for_length_hoist(cond, body));
-    let hoisted_length_arr_id: Option<u32> = hoist_classification.map(|(arr, _)| arr);
+    let hoisted_length_arr_id: Option<u32> = hoist_classification.map(|(arr, _, _)| arr);
+    let hoisted_index_bounds_are_safe = hoist_classification.is_some_and(|(_, counter_id, op)| {
+        matches!(op, perry_hir::CompareOp::Lt)
+            && loop_counter_bounds_are_safe(ctx, counter_id, update, body)
+    });
     let hoisted_length_slot: Option<String> =
-        if let Some((arr_id, counter_id)) = hoist_classification {
+        if let Some((arr_id, counter_id, _op)) = hoist_classification {
             let arr_box_loaded = lower_expr(
                 ctx,
                 &perry_hir::Expr::PropertyGet {
@@ -84,20 +88,22 @@ pub(crate) fn lower_for(
             // Also tell `lower_index_set_fast` (and similar sites) that
             // `arr[counter_id]` is statically inbounds for this body, so
             // it can skip the runtime length-load + bound check.
-            ctx.bounded_index_pairs.push(BoundedIndexPair {
-                index_local_id: counter_id,
-                array_local_id: arr_id,
-                scope_id: loop_proof_scope_id,
-            });
-            if ctx.buffer_view_slots.contains_key(&arr_id) {
-                ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
+            if hoisted_index_bounds_are_safe {
+                ctx.bounded_index_pairs.push(BoundedIndexPair {
                     index_local_id: counter_id,
-                    buffer_local_id: arr_id,
+                    array_local_id: arr_id,
                     scope_id: loop_proof_scope_id,
-                    bounds: BoundsState::Proven {
-                        proof: BoundsProof::LoopGuard,
-                    },
                 });
+                if ctx.buffer_view_slots.contains_key(&arr_id) {
+                    ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
+                        index_local_id: counter_id,
+                        buffer_local_id: arr_id,
+                        scope_id: loop_proof_scope_id,
+                        bounds: BoundsState::Proven {
+                            proof: BoundsProof::LoopGuard,
+                        },
+                    });
+                }
             }
 
             // If the counter is provably integer-valued (initialized from
@@ -122,11 +128,11 @@ pub(crate) fn lower_for(
         };
 
     // If we have an i32 counter AND a hoisted length, pre-compute the
-    // length as i32 so the loop condition can use `icmp slt i32` instead
-    // of `fcmp olt double`. This eliminates the float counter fadd +
+    // length as i32 so the loop condition can use `icmp slt/sle i32`
+    // instead of `fcmp olt/ole double`. This eliminates the float counter fadd +
     // fcmp per iteration — saves ~2 instructions on the inner loop of
     // nested_loops and similar patterns.
-    let i32_length_slot: Option<String> = if let Some((_, counter_id)) = hoist_classification {
+    let i32_length_slot: Option<String> = if let Some((_, counter_id, _op)) = hoist_classification {
         if let (Some(_), Some(len_dbl_slot)) = (
             ctx.i32_counter_slots.get(&counter_id).cloned(),
             hoisted_length_slot.as_ref(),
@@ -199,40 +205,47 @@ pub(crate) fn lower_for(
             local_bound_counter_i32_was_fresh = false;
             None
         };
+    let local_bound_index_bounds_are_safe =
+        local_bound_classification.is_some_and(|(counter_id, _, op)| {
+            matches!(op, perry_hir::CompareOp::Lt)
+                && loop_counter_bounds_are_safe(ctx, counter_id, update, body)
+        });
     if let Some((counter_id, bound_id, _op)) = local_bound_classification {
-        if let Some(buffer_ids) = ctx.min_length_bounds.get(&bound_id).cloned() {
-            for buffer_local_id in buffer_ids {
-                if ctx.buffer_view_slots.contains_key(&buffer_local_id) {
-                    ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
-                        index_local_id: counter_id,
-                        buffer_local_id,
-                        scope_id: loop_proof_scope_id,
-                        bounds: BoundsState::Proven {
-                            proof: BoundsProof::MinLength,
-                        },
-                    });
+        if local_bound_index_bounds_are_safe {
+            if let Some(buffer_ids) = ctx.min_length_bounds.get(&bound_id).cloned() {
+                for buffer_local_id in buffer_ids {
+                    if ctx.buffer_view_slots.contains_key(&buffer_local_id) {
+                        ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
+                            index_local_id: counter_id,
+                            buffer_local_id,
+                            scope_id: loop_proof_scope_id,
+                            bounds: BoundsState::Proven {
+                                proof: BoundsProof::MinLength,
+                            },
+                        });
+                    }
                 }
             }
-        }
-        let alloc_bound_ids: Vec<u32> = ctx
-            .buffer_view_slots
-            .iter()
-            .filter_map(|(buffer_local_id, view)| match &view.length_source {
-                Some(LengthSource::Local { id, addend }) if *id == bound_id && *addend >= 0 => {
-                    Some(*buffer_local_id)
-                }
-                _ => None,
-            })
-            .collect();
-        for buffer_local_id in alloc_bound_ids {
-            ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
-                index_local_id: counter_id,
-                buffer_local_id,
-                scope_id: loop_proof_scope_id,
-                bounds: BoundsState::Proven {
-                    proof: BoundsProof::LoopGuard,
-                },
-            });
+            let alloc_bound_ids: Vec<u32> = ctx
+                .buffer_view_slots
+                .iter()
+                .filter_map(|(buffer_local_id, view)| match &view.length_source {
+                    Some(LengthSource::Local { id, addend }) if *id == bound_id && *addend >= 0 => {
+                        Some(*buffer_local_id)
+                    }
+                    _ => None,
+                })
+                .collect();
+            for buffer_local_id in alloc_bound_ids {
+                ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
+                    index_local_id: counter_id,
+                    buffer_local_id,
+                    scope_id: loop_proof_scope_id,
+                    bounds: BoundsState::Proven {
+                        proof: BoundsProof::LoopGuard,
+                    },
+                });
+            }
         }
     }
     if let Some(fact) =
@@ -256,14 +269,18 @@ pub(crate) fn lower_for(
 
     // Cond block — fast i32 path when both counter and length are i32.
     ctx.current_block = cond_idx;
-    let used_i32_cond = if let (Some((_, counter_id)), Some(ref len_i32_slot)) =
+    let used_i32_cond = if let (Some((_, counter_id, op)), Some(ref len_i32_slot)) =
         (hoist_classification, &i32_length_slot)
     {
-        // Existing path: `i < arr.length` with hoisted i32 length.
+        // Existing path: `i < arr.length` / `i <= arr.length` with
+        // hoisted i32 length.
         if let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&counter_id).cloned() {
             let ctr = ctx.block().load(I32, &ctr_i32_slot);
             let len = ctx.block().load(I32, len_i32_slot);
-            let cmp = ctx.block().icmp_slt(I32, &ctr, &len);
+            let cmp = match op {
+                perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &len),
+                _ => ctx.block().icmp_slt(I32, &ctr, &len),
+            };
             ctx.block().cond_br(&cmp, &body_label, &exit_label);
             true
         } else {
@@ -349,7 +366,7 @@ pub(crate) fn lower_for(
 
     // Pop the hoisted-length entry so nested loops or sibling loops
     // don't see a stale slot.
-    if let Some((_, counter_id)) = hoist_classification {
+    if let Some((_, counter_id, _op)) = hoist_classification {
         ctx.i32_counter_slots.remove(&counter_id);
     }
     if let Some(arr_id) = hoisted_length_arr_id {
@@ -390,23 +407,23 @@ pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
 }
 
 /// Inspect a `for` loop's condition expression and body, and return
-/// `Some(arr_local_id)` if the loop is the well-known shape
-/// `for (let i = ...; i < <arr>.length; ...) { body }` AND the body
-/// is provably free of operations that can change `arr.length`.
+/// `Some((arr_local_id, counter_local_id, op))` if the loop is the
+/// well-known shape `for (let i = ...; i < <arr>.length; ...) { body }`
+/// (or `<=`) AND the body is provably free of operations that can change
+/// `arr.length`.
 ///
 /// The walker also accepts `arr[i] = expr` IndexSets where `i` is the
-/// loop counter from the condition — those are guaranteed inbounds
-/// (since `i < arr.length`) and therefore can't trigger the realloc
-/// slow path that would extend `arr.length`. Without that exception
-/// we'd reject the very common `for (let i = 0; i < arr.length; i++)
-/// arr[i] = expr` shape, which is the canonical write-array pattern.
+/// loop counter from a strict `<` condition — those are guaranteed
+/// inbounds and therefore can't trigger the realloc slow path that would
+/// extend `arr.length`. Under `<=`, `i == arr.length` is reachable, so
+/// array writes must go through the normal extension-capable path.
 pub(crate) fn classify_for_length_hoist(
     cond: &perry_hir::Expr,
     body: &[perry_hir::Stmt],
-) -> Option<(u32, u32)> {
+) -> Option<(u32, u32, perry_hir::CompareOp)> {
     use perry_hir::{CompareOp, Expr};
     let (op, left, right) = match cond {
-        Expr::Compare { op, left, right } => (op, left.as_ref(), right.as_ref()),
+        Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
         _ => return None,
     };
     if !matches!(op, CompareOp::Lt | CompareOp::Le) {
@@ -423,13 +440,14 @@ pub(crate) fn classify_for_length_hoist(
         Expr::LocalGet(id) => *id,
         _ => return None,
     };
+    let has_strict_bound = matches!(op, CompareOp::Lt);
     if !body
         .iter()
-        .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
+        .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound))
     {
         return None;
     }
-    Some((arr_id, bounded_idx_id))
+    Some((arr_id, bounded_idx_id, op))
 }
 
 /// Inspect a `for` loop's condition and return `Some((counter_id, bound_id,
@@ -492,6 +510,146 @@ pub(crate) fn classify_for_local_bound(
     Some((counter_id, bound_id, op))
 }
 
+fn loop_counter_bounds_are_safe(
+    ctx: &crate::expr::FnCtx<'_>,
+    counter_id: u32,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
+) -> bool {
+    loop_counter_is_nonnegative_at_entry(ctx, counter_id)
+        && update_is_absent_or_counter_increment(update, counter_id)
+        && !stmts_mutate_local(body, counter_id)
+}
+
+fn loop_counter_is_nonnegative_at_entry(ctx: &crate::expr::FnCtx<'_>, counter_id: u32) -> bool {
+    ctx.nonnegative_integer_locals.contains(&counter_id)
+        || crate::expr::int_range_expr(ctx, &perry_hir::Expr::LocalGet(counter_id))
+            .is_some_and(|range| range.min >= 0)
+}
+
+fn update_is_absent_or_counter_increment(
+    update: Option<&perry_hir::Expr>,
+    counter_id: u32,
+) -> bool {
+    use perry_hir::{Expr, UpdateOp};
+    update.is_none_or(|expr| {
+        matches!(
+            expr,
+            Expr::Update {
+                id,
+                op: UpdateOp::Increment,
+                ..
+            } if *id == counter_id
+        )
+    })
+}
+
+fn stmts_mutate_local(stmts: &[perry_hir::Stmt], local_id: u32) -> bool {
+    stmts.iter().any(|stmt| stmt_mutates_local(stmt, local_id))
+}
+
+fn stmt_mutates_local(stmt: &perry_hir::Stmt, local_id: u32) -> bool {
+    use perry_hir::Stmt;
+    match stmt {
+        Stmt::Let { init, .. } => init
+            .as_ref()
+            .is_some_and(|expr| expr_mutates_local(expr, local_id)),
+        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            expr_mutates_local(expr, local_id)
+        }
+        Stmt::Return(None)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => false,
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_mutates_local(condition, local_id)
+                || stmts_mutate_local(then_branch, local_id)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|body| stmts_mutate_local(body, local_id))
+        }
+        Stmt::While { condition, body } => {
+            expr_mutates_local(condition, local_id) || stmts_mutate_local(body, local_id)
+        }
+        Stmt::DoWhile { body, condition } => {
+            stmts_mutate_local(body, local_id) || expr_mutates_local(condition, local_id)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref()
+                .is_some_and(|stmt| stmt_mutates_local(stmt.as_ref(), local_id))
+                || condition
+                    .as_ref()
+                    .is_some_and(|expr| expr_mutates_local(expr, local_id))
+                || update
+                    .as_ref()
+                    .is_some_and(|expr| expr_mutates_local(expr, local_id))
+                || stmts_mutate_local(body, local_id)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            stmts_mutate_local(body, local_id)
+                || catch
+                    .as_ref()
+                    .is_some_and(|catch| stmts_mutate_local(&catch.body, local_id))
+                || finally
+                    .as_ref()
+                    .is_some_and(|body| stmts_mutate_local(body, local_id))
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            expr_mutates_local(discriminant, local_id)
+                || cases.iter().any(|case| {
+                    case.test
+                        .as_ref()
+                        .is_some_and(|expr| expr_mutates_local(expr, local_id))
+                        || stmts_mutate_local(&case.body, local_id)
+                })
+        }
+        Stmt::Labeled { body, .. } => stmt_mutates_local(body.as_ref(), local_id),
+    }
+}
+
+fn expr_mutates_local(expr: &perry_hir::Expr, local_id: u32) -> bool {
+    use perry_hir::Expr;
+    match expr {
+        Expr::LocalSet(id, value) => *id == local_id || expr_mutates_local(value, local_id),
+        Expr::Update { id, .. } => *id == local_id,
+        Expr::Closure { params, body, .. } => {
+            params.iter().any(|param| {
+                param
+                    .default
+                    .as_ref()
+                    .is_some_and(|expr| expr_mutates_local(expr, local_id))
+            }) || stmts_mutate_local(body, local_id)
+        }
+        _ => {
+            let mut found = false;
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                if !found && expr_mutates_local(child, local_id) {
+                    found = true;
+                }
+            });
+            found
+        }
+    }
+}
+
 fn classify_for_counter_range(
     init: Option<&perry_hir::Stmt>,
     cond: Option<&perry_hir::Expr>,
@@ -552,35 +710,39 @@ pub(crate) fn stmt_preserves_array_length(
     s: &perry_hir::Stmt,
     arr_id: u32,
     bounded_idx_id: u32,
+    has_strict_bound: bool,
 ) -> bool {
     use perry_hir::Stmt;
     match s {
-        Stmt::Expr(e) | Stmt::Throw(e) => expr_preserves_array_length(e, arr_id, bounded_idx_id),
-        Stmt::Return(opt) => opt
-            .as_ref()
-            .is_none_or(|e| expr_preserves_array_length(e, arr_id, bounded_idx_id)),
-        Stmt::Let { init, .. } => init
-            .as_ref()
-            .is_none_or(|e| expr_preserves_array_length(e, arr_id, bounded_idx_id)),
+        Stmt::Expr(e) | Stmt::Throw(e) => {
+            expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+        }
+        Stmt::Return(opt) => opt.as_ref().is_none_or(|e| {
+            expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+        }),
+        Stmt::Let { init, .. } => init.as_ref().is_none_or(|e| {
+            expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+        }),
         Stmt::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            expr_preserves_array_length(condition, arr_id, bounded_idx_id)
-                && then_branch
-                    .iter()
-                    .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
+            expr_preserves_array_length(condition, arr_id, bounded_idx_id, has_strict_bound)
+                && then_branch.iter().all(|s| {
+                    stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+                })
                 && else_branch.as_ref().is_none_or(|b| {
-                    b.iter()
-                        .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
+                    b.iter().all(|s| {
+                        stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+                    })
                 })
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            expr_preserves_array_length(condition, arr_id, bounded_idx_id)
-                && body
-                    .iter()
-                    .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
+            expr_preserves_array_length(condition, arr_id, bounded_idx_id, has_strict_bound)
+                && body.iter().all(|s| {
+                    stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+                })
         }
         Stmt::For {
             init,
@@ -588,17 +750,15 @@ pub(crate) fn stmt_preserves_array_length(
             update,
             body,
         } => {
-            init.as_ref()
-                .is_none_or(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
-                && condition
-                    .as_ref()
-                    .is_none_or(|e| expr_preserves_array_length(e, arr_id, bounded_idx_id))
-                && update
-                    .as_ref()
-                    .is_none_or(|e| expr_preserves_array_length(e, arr_id, bounded_idx_id))
-                && body
-                    .iter()
-                    .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
+            init.as_ref().is_none_or(|s| {
+                stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+            }) && condition.as_ref().is_none_or(|e| {
+                expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+            }) && update.as_ref().is_none_or(|e| {
+                expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+            }) && body
+                .iter()
+                .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound))
         }
         Stmt::Try {
             body,
@@ -606,33 +766,33 @@ pub(crate) fn stmt_preserves_array_length(
             finally,
         } => {
             body.iter()
-                .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
+                .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound))
                 && catch.as_ref().is_none_or(|c| {
-                    c.body
-                        .iter()
-                        .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
+                    c.body.iter().all(|s| {
+                        stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+                    })
                 })
                 && finally.as_ref().is_none_or(|b| {
-                    b.iter()
-                        .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
+                    b.iter().all(|s| {
+                        stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+                    })
                 })
         }
         Stmt::Switch {
             discriminant,
             cases,
         } => {
-            expr_preserves_array_length(discriminant, arr_id, bounded_idx_id)
+            expr_preserves_array_length(discriminant, arr_id, bounded_idx_id, has_strict_bound)
                 && cases.iter().all(|c| {
-                    c.test
-                        .as_ref()
-                        .is_none_or(|e| expr_preserves_array_length(e, arr_id, bounded_idx_id))
-                        && c.body
-                            .iter()
-                            .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
+                    c.test.as_ref().is_none_or(|e| {
+                        expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+                    }) && c.body.iter().all(|s| {
+                        stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+                    })
                 })
         }
         Stmt::Labeled { body, .. } => {
-            stmt_preserves_array_length(body.as_ref(), arr_id, bounded_idx_id)
+            stmt_preserves_array_length(body.as_ref(), arr_id, bounded_idx_id, has_strict_bound)
         }
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
         Stmt::PreallocateBoxes(_) => true,
@@ -643,9 +803,11 @@ pub(crate) fn expr_preserves_array_length(
     e: &perry_hir::Expr,
     arr_id: u32,
     bounded_idx_id: u32,
+    has_strict_bound: bool,
 ) -> bool {
     use perry_hir::{ArrayElement, CallArg, Expr};
-    let walk = |sub: &Expr| expr_preserves_array_length(sub, arr_id, bounded_idx_id);
+    let walk =
+        |sub: &Expr| expr_preserves_array_length(sub, arr_id, bounded_idx_id, has_strict_bound);
     match e {
         Expr::ArrayPush { array_id, value } => *array_id != arr_id && walk(value),
         Expr::ArrayPop(id) | Expr::ArrayShift(id) => *id != arr_id,
@@ -666,14 +828,16 @@ pub(crate) fn expr_preserves_array_length(
             value,
         } => {
             // `arr[bounded_i] = expr` is the only IndexSet on `arr`
-            // we accept — it's guaranteed inbounds because the loop
-            // condition `i < arr.length` is invariant in this body,
-            // and the IndexSet inbounds path doesn't extend the array.
+            // we accept, and only under a strict `i < arr.length`
+            // guard. With `i <= arr.length`, `i == length` can extend
+            // the array and invalidate a hoisted length.
             if let Expr::LocalGet(id) = object.as_ref() {
                 if *id == arr_id {
-                    if let Expr::LocalGet(idx_id) = index.as_ref() {
-                        if *idx_id == bounded_idx_id {
-                            return walk(value);
+                    if has_strict_bound {
+                        if let Expr::LocalGet(idx_id) = index.as_ref() {
+                            if *idx_id == bounded_idx_id {
+                                return walk(value);
+                            }
                         }
                     }
                     return false;
@@ -685,12 +849,10 @@ pub(crate) fn expr_preserves_array_length(
         // Reassigning the array variable would also invalidate (we'd
         // be tracking the wrong array).
         Expr::LocalSet(id, value) => *id != arr_id && *id != bounded_idx_id && walk(value),
-        // `i++` / `i--` are fine — `i` stays integer-valued and the
-        // for-loop's standard counter pattern depends on this. (We
-        // don't try to verify the update direction; if `i--` ever
-        // pushes `i` negative the IndexSet's runtime check still
-        // catches it via the realloc fallback.)
-        Expr::Update { id, .. } => *id != arr_id,
+        // Mutating either the array binding or the bounded index invalidates
+        // the loop-local inbounds proof. The normal `for` update expression is
+        // outside the body and is checked separately before facts are emitted.
+        Expr::Update { id, .. } => *id != arr_id && *id != bounded_idx_id,
         Expr::NativeMethodCall { object, args, .. } => {
             if let Some(o) = object {
                 if let Expr::LocalGet(id) = o.as_ref() {

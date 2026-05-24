@@ -126,6 +126,16 @@ fn buffer_let(id: u32, name: &str, size: Expr) -> Stmt {
     }
 }
 
+fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Array(Box::new(Type::Number)),
+        mutable: true,
+        init: Some(Expr::Array(values.into_iter().map(int).collect())),
+    }
+}
+
 fn bit_or_zero(value: Expr) -> Expr {
     Expr::Binary {
         op: BinaryOp::BitOr,
@@ -165,6 +175,14 @@ fn buffer_set(buffer_id: u32, index: Expr) -> Stmt {
     })
 }
 
+fn array_set(array_id: u32, index: Expr, value: Expr) -> Stmt {
+    Stmt::Expr(Expr::IndexSet {
+        object: Box::new(local(array_id)),
+        index: Box::new(index),
+        value: Box::new(value),
+    })
+}
+
 fn increment(id: u32) -> Expr {
     Expr::Update {
         id,
@@ -173,17 +191,46 @@ fn increment(id: u32) -> Expr {
     }
 }
 
-fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
+fn decrement(id: u32) -> Expr {
+    Expr::Update {
+        id,
+        op: UpdateOp::Decrement,
+        prefix: false,
+    }
+}
+
+fn for_loop_with_start_and_update(
+    counter_id: u32,
+    start: Expr,
+    bound: Expr,
+    update: Option<Expr>,
+    body: Vec<Stmt>,
+) -> Stmt {
+    for_loop_with_op_start_and_update(counter_id, start, CompareOp::Lt, bound, update, body)
+}
+
+fn for_loop_with_op_start_and_update(
+    counter_id: u32,
+    start: Expr,
+    op: CompareOp,
+    bound: Expr,
+    update: Option<Expr>,
+    body: Vec<Stmt>,
+) -> Stmt {
     Stmt::For {
-        init: Some(Box::new(number_let(counter_id, "i", true, int(0)))),
+        init: Some(Box::new(number_let(counter_id, "i", true, start))),
         condition: Some(Expr::Compare {
-            op: CompareOp::Lt,
+            op,
             left: Box::new(local(counter_id)),
             right: Box::new(bound),
         }),
-        update: Some(increment(counter_id)),
+        update,
         body,
     }
+}
+
+fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
+    for_loop_with_start_and_update(counter_id, int(0), bound, Some(increment(counter_id)), body)
 }
 
 fn assert_buffer_store_uses_dynamic_fallback(ir: &str) {
@@ -195,6 +242,17 @@ fn assert_buffer_store_uses_dynamic_fallback(ir: &str) {
         !ir.contains("getelementptr inbounds i8"),
         "stale-proof case must not emit an inbounds native buffer GEP:\n{ir}"
     );
+}
+
+fn block_between<'a>(ir: &'a str, start: &str, end: &str) -> &'a str {
+    let start_pos = ir.find(start).unwrap_or_else(|| {
+        panic!("missing block start marker {start:?} in IR:\n{ir}");
+    });
+    let after_start = &ir[start_pos + 1..];
+    let end_pos = after_start.find(end).unwrap_or_else(|| {
+        panic!("missing block end marker {end:?} after {start:?} in IR:\n{ir}");
+    });
+    &after_start[..end_pos]
 }
 
 #[test]
@@ -322,6 +380,175 @@ fn update_invalidates_buffer_view_local_length_sources() {
     ];
 
     let ir = compile_ir("buffer_length_source_update_invalidation.ts", body);
+    assert_buffer_store_uses_dynamic_fallback(&ir);
+}
+
+#[test]
+fn negative_loop_counter_does_not_emit_inbounds_buffer_gep() {
+    let body = vec![
+        buffer_let(1, "buf", int(8)),
+        for_loop_with_start_and_update(
+            2,
+            int(-1),
+            length(1),
+            Some(increment(2)),
+            vec![buffer_set(1, local(2))],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("negative_loop_counter_buffer_bounds.ts", body);
+    assert_buffer_store_uses_dynamic_fallback(&ir);
+}
+
+#[test]
+fn decrementing_loop_update_does_not_emit_inbounds_buffer_gep() {
+    let body = vec![
+        buffer_let(1, "buf", int(8)),
+        for_loop_with_start_and_update(
+            2,
+            int(0),
+            length(1),
+            Some(decrement(2)),
+            vec![buffer_set(1, local(2))],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("decrementing_loop_update_buffer_bounds.ts", body);
+    assert_buffer_store_uses_dynamic_fallback(&ir);
+}
+
+#[test]
+fn body_counter_mutation_does_not_emit_inbounds_buffer_gep() {
+    let body = vec![
+        buffer_let(1, "buf", int(8)),
+        for_loop(
+            2,
+            length(1),
+            vec![Stmt::Expr(decrement(2)), buffer_set(1, local(2))],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("body_counter_mutation_buffer_bounds.ts", body);
+    assert_buffer_store_uses_dynamic_fallback(&ir);
+}
+
+#[test]
+fn inclusive_length_loop_does_not_emit_inbounds_buffer_gep() {
+    let body = vec![
+        buffer_let(1, "buf", int(8)),
+        for_loop_with_op_start_and_update(
+            2,
+            int(0),
+            CompareOp::Le,
+            length(1),
+            Some(increment(2)),
+            vec![buffer_set(1, local(2))],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("inclusive_length_loop_buffer_bounds.ts", body);
+    assert_buffer_store_uses_dynamic_fallback(&ir);
+    let cond_ir = block_between(&ir, "\nfor.cond.", "\nfor.body.");
+    assert!(
+        cond_ir.contains("icmp sle i32"),
+        "`i <= buf.length` with hoisted i32 length must lower as signed <=:\n{cond_ir}"
+    );
+    assert!(
+        !cond_ir.contains("icmp slt i32"),
+        "`i <= buf.length` must not be narrowed to signed <:\n{cond_ir}"
+    );
+}
+
+#[test]
+fn inclusive_array_length_write_uses_extension_capable_index_set_path() {
+    let body = vec![
+        number_array_let(1, "arr", vec![0, 0, 0]),
+        for_loop_with_op_start_and_update(
+            2,
+            int(0),
+            CompareOp::Le,
+            length(1),
+            Some(increment(2)),
+            vec![array_set(1, local(2), local(2))],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("inclusive_array_length_write.ts", body);
+    assert!(
+        ir.contains("\nidxset.check_cap."),
+        "`arr[i]` under `i <= arr.length` must keep the capacity check path:\n{ir}"
+    );
+    assert!(
+        ir.contains("\nidxset.extend_inline."),
+        "`arr[i]` under `i <= arr.length` must keep the inline length-extension path:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i64 @js_array_set_f64_extend"),
+        "`arr[i]` under `i <= arr.length` must keep the realloc-capable fallback:\n{ir}"
+    );
+}
+
+#[test]
+fn inclusive_local_length_bound_does_not_use_local_length_bound_fact() {
+    let body = vec![
+        number_let(1, "n", false, int(8)),
+        buffer_let(2, "buf", local(1)),
+        for_loop_with_op_start_and_update(
+            3,
+            int(0),
+            CompareOp::Le,
+            local(1),
+            Some(increment(3)),
+            vec![buffer_set(2, local(3))],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("inclusive_local_length_bound.ts", body);
+    assert_buffer_store_uses_dynamic_fallback(&ir);
+}
+
+#[test]
+fn negative_loop_counter_does_not_use_local_length_bound_fact() {
+    let body = vec![
+        number_let(1, "n", false, int(8)),
+        buffer_let(2, "buf", local(1)),
+        for_loop_with_start_and_update(
+            3,
+            int(-1),
+            local(1),
+            Some(increment(3)),
+            vec![buffer_set(2, local(3))],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("negative_counter_local_length_bound.ts", body);
+    assert_buffer_store_uses_dynamic_fallback(&ir);
+}
+
+#[test]
+fn negative_loop_counter_does_not_use_min_length_bound_fact() {
+    let body = vec![
+        buffer_let(1, "src", int(8)),
+        buffer_let(2, "dst", int(8)),
+        number_let(3, "n", false, Expr::MathMin(vec![length(1), length(2)])),
+        for_loop_with_start_and_update(
+            4,
+            int(-1),
+            local(3),
+            Some(increment(4)),
+            vec![buffer_set(2, local(4))],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("negative_counter_min_length_bound.ts", body);
     assert_buffer_store_uses_dynamic_fallback(&ir);
 }
 

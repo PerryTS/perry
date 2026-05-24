@@ -781,18 +781,23 @@ pub(crate) struct FnCtx<'a> {
 pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
         Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Integer(_) => true,
-        Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
-            Some(
-                HirType::Number
-                    | HirType::Int32
-                    | HirType::Boolean
-                    | HirType::Null
-                    | HirType::Void
-                    | HirType::Never
-                    | HirType::Symbol
-            )
-        ),
+        Expr::LocalGet(id) => {
+            // A reserved shadow slot means the local is pointer-possible even
+            // if its initializer refined `local_types` to a scalar.
+            !ctx.shadow_slot_map.contains_key(id)
+                && matches!(
+                    ctx.local_types.get(id),
+                    Some(
+                        HirType::Number
+                            | HirType::Int32
+                            | HirType::Boolean
+                            | HirType::Null
+                            | HirType::Void
+                            | HirType::Never
+                            | HirType::Symbol
+                    )
+                )
+        }
         Expr::Compare { .. } | Expr::Void(_) => true,
         Expr::Unary { .. } => true,
         Expr::Binary { op, .. } => !matches!(op, BinaryOp::Add),
