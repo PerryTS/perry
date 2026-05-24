@@ -137,6 +137,61 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 }
             }
 
+            // #1642/#1643: a `const x = <stream>.getReader(...)` / `.getWriter(...)`
+            // / `ReadableStream.from(...)` binding is typed Any by inference, but
+            // the result is a Web Streams native instance. Type it as the stream
+            // class so codegen `receiver_class_name` resolves value-read method
+            // binds (`typeof reader.read === "function"`) for the Any-typed
+            // local. Safe: the call path (lower/expr_call/static_and_instance.rs)
+            // dispatches via the native-instance registry, not this declared type.
+            if matches!(ty, Type::Any) {
+                if let Some(init_expr) = &decl.init {
+                    if let ast::Expr::Call(call) = init_expr.as_ref() {
+                        if let ast::Callee::Expr(callee) = &call.callee {
+                            if let ast::Expr::Member(m) = callee.as_ref() {
+                                if let ast::MemberProp::Ident(prop) = &m.prop {
+                                    // Peel `as T` / `!` / `as const` / parens on
+                                    // the receiver (`(rs as any).getReader(...)`).
+                                    let mut obj_inner: &ast::Expr = m.obj.as_ref();
+                                    loop {
+                                        obj_inner = match obj_inner {
+                                            ast::Expr::TsAs(x) => &x.expr,
+                                            ast::Expr::TsNonNull(x) => &x.expr,
+                                            ast::Expr::TsConstAssertion(x) => &x.expr,
+                                            ast::Expr::Paren(x) => &x.expr,
+                                            _ => break,
+                                        };
+                                    }
+                                    if let ast::Expr::Ident(obj_id) = obj_inner {
+                                        let method = prop.sym.as_ref();
+                                        let recv_class = ctx
+                                            .lookup_native_instance(obj_id.sym.as_ref())
+                                            .map(|(_, c)| c.to_string());
+                                        if method == "getReader"
+                                            && recv_class.as_deref() == Some("ReadableStream")
+                                        {
+                                            ty = Type::Named(
+                                                "ReadableStreamDefaultReader".to_string(),
+                                            );
+                                        } else if method == "getWriter"
+                                            && recv_class.as_deref() == Some("WritableStream")
+                                        {
+                                            ty = Type::Named(
+                                                "WritableStreamDefaultWriter".to_string(),
+                                            );
+                                        } else if method == "from"
+                                            && obj_id.sym.as_ref() == "ReadableStream"
+                                        {
+                                            ty = Type::Named("ReadableStream".to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Check if this is a native class instantiation and register it
             if let Some(init_expr) = &decl.init {
                 if let ast::Expr::New(new_expr) = init_expr.as_ref() {

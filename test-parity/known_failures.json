@@ -944,12 +944,6 @@
     "category": "bug-open",
     "reason": "node:stream: newListener/removeListener inherited EE events don't fire on streams. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/writer-release-lock": {
-    "issue": "1642",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/web: `typeof w2.write` after releaseLock is wrong (stream-method value-read lowered as a call). Flips to PASS when #1642 lands."
-  },
   "node-suite/stream/ee/listener-count-no-arg": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1057,12 +1051,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: new Writable({signal}) constructor option not honored. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/web/byob-reader": {
-    "issue": "1643",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/web: BYOB readers (getReader({mode:'byob'})) not implemented. Flips to PASS when #1643 lands."
   },
   "node-suite/stream/async-iter/two-iterators-error": {
     "issue": "1532",
