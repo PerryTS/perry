@@ -2487,7 +2487,8 @@ pub unsafe fn dispatch_ecdh(handle: i64, method: &str, args: &[f64]) -> f64 {
                 Err(_) => f64::from_bits(0x7FFC_0000_0000_0001),
             }
         }
-        "setPublicKey" => f64::from_bits(JSValue::undefined().bits()),
+        // "deprecated" is the bound-method alias for setPublicKey (#1368).
+        "setPublicKey" | "deprecated" => f64::from_bits(JSValue::undefined().bits()),
         "computeSecret" | "dhComputeSecret" if !args.is_empty() => {
             let guard = h.private_key.lock().unwrap();
             let key = match guard.as_ref() {
@@ -2517,7 +2518,12 @@ pub unsafe fn dispatch_ecdh_property(handle: i64, property: &str) -> f64 {
         "getPublicKey" => b"getPublicKey",
         "getPrivateKey" => b"dhGetPrivateKey",
         "setPrivateKey" => b"setPrivateKey",
-        "setPublicKey" => b"setPublicKey",
+        // #1368: Node deprecated ECDH.setPublicKey (DEP0031) and exposes it
+        // via a `deprecate()` wrapper, so its `.name` is "deprecated".
+        // `dispatch_ecdh` accepts "deprecated" as a setPublicKey alias so a
+        // captured-then-called `const f = ecdh.setPublicKey; f(...)` still
+        // dispatches. (DH's setPublicKey is NOT deprecated — keeps its name.)
+        "setPublicKey" => b"deprecated",
         "computeSecret" => b"dhComputeSecret",
         _ => return nanbox_undefined(),
     };

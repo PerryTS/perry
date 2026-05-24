@@ -78,6 +78,28 @@ pub(crate) fn lower_module_decl(
                         // returned undefined. ECS demo-simple repro.
                         let spec_type_only = named.is_type_only || whole_decl_type_only;
                         if spec_type_only && is_native {
+                            // #1483: a type-only perry/ui widget import — e.g.
+                            // `import { type Canvas as CanvasType }` — carries no
+                            // value binding and is otherwise dropped here, but a
+                            // `canvas: CanvasType` parameter still needs handle
+                            // method dispatch. Record alias → canonical widget so
+                            // fn_decl's param registration can resolve it.
+                            if source == "perry/ui" {
+                                let local = named.local.sym.to_string();
+                                let imported = named
+                                    .imported
+                                    .as_ref()
+                                    .map(|i| match i {
+                                        ast::ModuleExportName::Ident(id) => id.sym.to_string(),
+                                        ast::ModuleExportName::Str(s) => {
+                                            s.value.as_str().unwrap_or("").to_string()
+                                        }
+                                    })
+                                    .unwrap_or_else(|| local.clone());
+                                if super::context::perry_ui_handle_widget(&imported) {
+                                    ctx.ui_widget_type_aliases.insert(local, imported);
+                                }
+                            }
                             continue;
                         }
                         let local = named.local.sym.to_string();
