@@ -1687,5 +1687,23 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/events/listener-count-by-event": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: listenerCount(event) — returns wrong count per event name. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/raw-listeners-once-wrapped": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: rawListeners() — once-wrapper does not expose .listener pointing at original fn. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/emit-multiple-args-stream": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: emit(event, a, b, c) — listeners receive wrong number of args (variadic args lost). Flips to PASS when #1532 lands."
   }
 }
