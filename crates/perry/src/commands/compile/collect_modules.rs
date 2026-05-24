@@ -140,6 +140,13 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
         "readline/promises" => Some("readline_promises"),
         "stream/promises" => Some("stream_promises"),
         "stream/consumers" => Some("stream_consumers"),
+        // #1545: node:stream/web (WHATWG Web Streams). Named imports bind to
+        // function singletons so `typeof ReadableStream === "function"`;
+        // `new ReadableStream(...)` / `new CountQueuingStrategy(...)` are lowered
+        // through the builtin-constructor dispatch in codegen regardless of the
+        // import binding (see lower_call/builtin.rs), so these thunks only ever
+        // run if the class is called *without* `new`.
+        "stream/web" => Some("stream_web"),
         "sys" => Some("sys"),
         // Pino downstream (#906 follow-up): `require('node:diagnostics_channel')`
         // returns the module exports object. The CJS-wrap rewrites this as

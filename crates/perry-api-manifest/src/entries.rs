@@ -2731,6 +2731,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("streams", "TextEncoder"),
     class("streams", "TextDecoder"),
     class("streams", "DecompressionStream"),
+    // node:stream/web QueuingStrategy classes (#1545).
+    class("streams", "ByteLengthQueuingStrategy"),
+    class("streams", "CountQueuingStrategy"),
     // --- node:http server (issue #577) ---
     method("http", "createServer", false, None),
     method("http", "listen", true, Some("HttpServer")),

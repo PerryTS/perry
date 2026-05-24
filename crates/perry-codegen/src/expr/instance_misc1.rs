@@ -99,6 +99,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `Blob` — stream consumers allocate a scoped Blob-shaped
                 // ObjectHeader tagged with this reserved class id.
                 "Blob" => 0xFFFF0026u32,
+                // #1545: Web Streams. Handles are numeric ids; the runtime
+                // resolves these via the stdlib stream-kind probe rather than
+                // the class chain (`ts.readable instanceof ReadableStream`,
+                // `rs.pipeThrough(ts) instanceof ReadableStream`, …).
+                "ReadableStream" => 0xFFFF0060u32,
+                "WritableStream" => 0xFFFF0061u32,
                 // `Object` — every non-primitive matches per ECMAScript;
                 // reserved id mapped in the runtime. Pre-#585 this fell
                 // into the `cid = 0` fallback and matched accidentally

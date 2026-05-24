@@ -877,6 +877,48 @@ pub extern "C" fn js_object_get_field_by_name(
             return JSValue::undefined();
         }
     }
+    // #1545: Promise `then`/`catch`/`finally` value-reads return a bound
+    // function so `typeof p.then === "function"`, `const f = p.then`, and
+    // passing `p.then` as a deferred callback all work. (The call form
+    // `p.then(cb)` is lowered directly to `js_promise_then` by codegen.)
+    // `obj` arrives NaN-boxed POINTER-tagged here; mask to the raw promise
+    // pointer and confirm via the GC header before treating it as a promise.
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        // Callers reach this helper with either a NaN-boxed POINTER-tagged
+        // value (0x7FFD, e.g. the `_f64` wrapper) or an already-masked raw
+        // heap pointer (top16 == 0, e.g. the PIC miss handler), so accept both.
+        let raw = if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            bits as usize
+        } else {
+            0
+        };
+        if raw >= 0x10000 && !key.is_null() {
+            {
+                unsafe {
+                    let gc_header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                    if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE {
+                        let name_ptr =
+                            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let name_len = (*key).byte_len as usize;
+                        let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                        if matches!(name_bytes, b"then" | b"catch" | b"finally") {
+                            let prop = std::str::from_utf8_unchecked(name_bytes);
+                            if let Some(v) = crate::promise::js_promise_bound_method(
+                                raw as *mut crate::promise::Promise,
+                                prop,
+                            ) {
+                                return JSValue::from_bits(v.to_bits());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     // SSO property access (v0.5.213 Step 1 gate). The codegen inline
     // `.length` path routes SHORT_STRING_TAG receivers here because
     // it doesn't yet know about the SSO tag. Handle `.length` by

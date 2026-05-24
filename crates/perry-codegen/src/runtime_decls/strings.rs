@@ -1688,11 +1688,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_reader_release_lock", DOUBLE, &[DOUBLE]);
     module.declare_function("js_reader_closed", I64, &[DOUBLE]);
     module.declare_function("js_reader_cancel", I64, &[DOUBLE, DOUBLE]);
-    // WritableStream + Writer.
+    // WritableStream + Writer. #1545: leading arg is the `start` hook.
     module.declare_function(
         "js_writable_stream_new",
         DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function("js_writable_stream_get_writer", DOUBLE, &[DOUBLE]);
     module.declare_function("js_writable_stream_locked", DOUBLE, &[DOUBLE]);
@@ -1709,6 +1709,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_transform_stream_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_transform_stream_readable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_transform_stream_writable", DOUBLE, &[DOUBLE]);
+    // #1545: node:stream/web QueuingStrategy constructors — take the options
+    // object, return a `{ highWaterMark, size }` object.
+    module.declare_function("js_count_queuing_strategy_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_byte_length_queuing_strategy_new", DOUBLE, &[DOUBLE]);
     // Issue #562: stream subclassing (`class X extends WritableStream` etc.).
     // The unwrap helper is wrapped around every stream-FFI receiver so a
     // subclass instance (NaN-boxed object pointer with the registry id

@@ -40,6 +40,16 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     let _ = args;
     let _ = handle;
 
+    // #1545: Web Streams handles (readable/writable/transform/reader/writer)
+    // live in a dedicated high id range, so this never claims another
+    // subsystem's handle. Routes method calls on receivers whose static stream
+    // type the codegen lost (`src.pipeThrough(ts).getReader()`, `ts.readable
+    // .getReader()`, `const r = rs.getReader(); r.read()`, …).
+    #[cfg(feature = "bundled-streams")]
+    if let Some(v) = crate::streams::dispatch_stream_method(handle as f64, method_name, &args) {
+        return v;
+    }
+
     // Each dispatcher below is gated on TWO conditions: (a) its registry
     // currently holds this handle id, AND (b) the method name is one this
     // dispatcher actually handles. Both are required because handle id
@@ -1331,4 +1341,23 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);
+
+    // #1545: register the Web Streams numeric-handle probe so method calls on
+    // stream handles whose static type the codegen lost route to the stream
+    // dispatch arms in `js_handle_method_dispatch`.
+    #[cfg(feature = "bundled-streams")]
+    {
+        extern "C" {
+            fn js_register_stream_handle_probe(f: unsafe extern "C" fn(usize) -> bool);
+            fn js_register_stream_handle_kind_probe(f: unsafe extern "C" fn(usize) -> u8);
+        }
+        unsafe extern "C" fn stream_probe(id: usize) -> bool {
+            crate::streams::js_stream_handle_is_registered(id)
+        }
+        unsafe extern "C" fn stream_kind_probe(id: usize) -> u8 {
+            crate::streams::js_stream_handle_kind(id)
+        }
+        js_register_stream_handle_probe(stream_probe);
+        js_register_stream_handle_kind_probe(stream_kind_probe);
+    }
 }

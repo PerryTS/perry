@@ -747,6 +747,7 @@ pub(super) fn lower_builtin_new(
         }
 
         "WritableStream" => {
+            let mut start = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut write = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut close = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut abort = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
@@ -755,6 +756,9 @@ pub(super) fn lower_builtin_new(
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
                         match k.as_str() {
+                            "start" => {
+                                start = lower_expr(ctx, vexpr)?;
+                            }
                             "write" => {
                                 write = lower_expr(ctx, vexpr)?;
                             }
@@ -786,6 +790,7 @@ pub(super) fn lower_builtin_new(
                 DOUBLE,
                 "js_writable_stream_new",
                 &[
+                    (DOUBLE, &start),
                     (DOUBLE, &write),
                     (DOUBLE, &close),
                     (DOUBLE, &abort),
@@ -832,6 +837,30 @@ pub(super) fn lower_builtin_new(
                 "js_transform_stream_new",
                 &[(DOUBLE, &transform), (DOUBLE, &flush), (DOUBLE, &hwm)],
             );
+            Ok(Some(h))
+        }
+
+        // node:stream/web QueuingStrategy classes (#1545). Both take a single
+        // `{ highWaterMark }` options object; the runtime reads
+        // `opts.highWaterMark` and builds a `{ highWaterMark, size }` object.
+        // CountQueuingStrategy.size() returns 1, ByteLengthQueuingStrategy.size(chunk)
+        // returns chunk.byteLength. Pass the whole options expression through so
+        // both literal (`{ highWaterMark: 5 }`) and dynamic option objects work.
+        "CountQueuingStrategy" | "ByteLengthQueuingStrategy" => {
+            let opts = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let func = if class_name == "CountQueuingStrategy" {
+                "js_count_queuing_strategy_new"
+            } else {
+                "js_byte_length_queuing_strategy_new"
+            };
+            let h = ctx.block().call(DOUBLE, func, &[(DOUBLE, &opts)]);
             Ok(Some(h))
         }
 

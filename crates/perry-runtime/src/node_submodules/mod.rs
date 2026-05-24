@@ -154,6 +154,19 @@ thunk!(thunk_sys_promisify, "node:sys.promisify is not yet implemented in Perry 
 thunk!(thunk_sys_callbackify, "node:sys.callbackify is not yet implemented in Perry (use node:util.callbackify; node:sys is deprecated).");
 thunk!(thunk_sys_isArray, "node:sys.isArray is not yet implemented in Perry (use node:util.isArray; node:sys is deprecated).");
 
+// #1545: node:stream/web (WHATWG Web Streams). The named-export bindings
+// exist so `typeof ReadableStream === "function"` and `import * as web from
+// "node:stream/web"` work. Construction (`new ReadableStream(...)`,
+// `new CountQueuingStrategy(...)`, …) is handled in codegen's
+// builtin-constructor dispatch (lower_call/builtin.rs), which routes by the
+// textual class name regardless of how it was imported — so this thunk only
+// runs when a Web Streams class is *called* without `new`, which throws a
+// TypeError in Node too. One shared thunk covers all 17 exported classes.
+thunk!(
+    thunk_stream_web_ctor,
+    "Web Streams constructors (node:stream/web) require the 'new' operator."
+);
+
 // ----- submodule table -----
 
 const SUBMODULES: &[SubmoduleSpec] = &[
@@ -390,6 +403,83 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             ExportSpec {
                 name: "blob",
                 thunk: ExportThunk::Fn1(thunk_consumers_blob),
+            },
+        ],
+    },
+    // #1545: node:stream/web exports the full WHATWG Web Streams class set.
+    // Every entry maps to the same throwing thunk — its sole purpose is to
+    // give each name `typeof === "function"` and a namespace slot; real
+    // construction goes through codegen's builtin `new` dispatch.
+    SubmoduleSpec {
+        key: "stream_web",
+        exports: &[
+            ExportSpec {
+                name: "ReadableStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "ReadableStreamDefaultReader",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "ReadableStreamBYOBReader",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "ReadableStreamDefaultController",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "ReadableByteStreamController",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "ReadableStreamBYOBRequest",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "WritableStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "WritableStreamDefaultWriter",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "WritableStreamDefaultController",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "TransformStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "TransformStreamDefaultController",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "ByteLengthQueuingStrategy",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "CountQueuingStrategy",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "TextEncoderStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "TextDecoderStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "CompressionStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+            ExportSpec {
+                name: "DecompressionStream",
+                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
             },
         ],
     },
