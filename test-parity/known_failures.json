@@ -1687,5 +1687,23 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/transform/multi-output-per-input": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Transform pushing multiple outputs per single input — only first push consumed. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/readable/read-before-push": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: read() before any push — should return null, returns wrong value. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/event-names-order-insertion": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: eventNames() — order does not match listener-insertion order. Flips to PASS when #1532 lands."
   }
 }
