@@ -1606,6 +1606,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_request_get_url", I64, &[DOUBLE]);
     module.declare_function("js_request_get_method", I64, &[DOUBLE]);
     module.declare_function("js_request_get_body", DOUBLE, &[DOUBLE]);
+    // #1649: `req.headers` → NaN-boxed Headers handle.
+    module.declare_function("js_request_get_headers", DOUBLE, &[DOUBLE]);
 
     // Response body getters — handles flow as NaN-boxed POINTER_TAG f64
     // (Phase 1 unification, refs #421). Accessors call `handle_id` to
