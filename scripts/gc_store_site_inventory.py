@@ -9,6 +9,8 @@ and requires a nearby `GC_STORE_AUDIT(...)` marker with a reason.
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
 import sys
 from dataclasses import dataclass
@@ -511,21 +513,66 @@ def run_self_tests() -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    argv = sys.argv[1:] if argv is None else argv
-    if argv == ["--self-test"]:
-        return run_self_tests()
-    if argv:
-        print("usage: gc_store_site_inventory.py [--self-test]", file=sys.stderr)
-        return 2
-
+def collect_inventory() -> tuple[list[Finding], int, int]:
     findings: list[Finding] = []
+    marker_count = 0
     seen: set[Path] = set()
     for path in iter_scan_roots():
         if path in seen:
             continue
         seen.add(path)
+        try:
+            marker_count += sum(
+                1
+                for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+                if MARKER_RE.search(line)
+            )
+        except OSError:
+            pass
         findings.extend(scan_file(path))
+    return findings, len(seen), marker_count
+
+
+def write_inventory_json(path: Path, findings: list[Finding], files_scanned: int, marker_count: int) -> None:
+    packet = {
+        "schema_version": 1,
+        "status": "fail" if findings else "pass",
+        "errors": [finding.render() for finding in findings],
+        "summary": {
+            "files_scanned": files_scanned,
+            "audited_sites": marker_count,
+            "unaudited_sites": len(findings),
+        },
+        "unaudited_sites": [
+            {
+                "path": str(finding.path.relative_to(REPO_ROOT)),
+                "line": finding.line_no,
+                "reason": finding.reason,
+                "text": finding.text.strip(),
+            }
+            for finding in findings
+        ],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv == ["--self-test"]:
+        return run_self_tests()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--json-out", type=Path)
+    parser.add_argument("--gate", action="store_true")
+    args = parser.parse_args(argv)
+    if args.self_test:
+        return run_self_tests()
+
+    findings, files_scanned, marker_count = collect_inventory()
+    if args.json_out:
+        write_inventory_json(args.json_out, findings, files_scanned, marker_count)
 
     if findings:
         print("GC store-site inventory failed; add nearby GC_STORE_AUDIT markers:")
@@ -538,7 +585,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    print(f"GC store-site inventory passed ({len(seen)} files scanned).")
+    print(f"GC store-site inventory passed ({files_scanned} files scanned).")
     return 0
 
 
