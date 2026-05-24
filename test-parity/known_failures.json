@@ -3109,5 +3109,35 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: user _destroy(err, cb) — not invoked or receives wrong error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/from-set-of-strings": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(Set) — iteration order or count wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/emit-different-events-isolated": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: emit different events — count interference across event keys. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/cancel-with-undefined-reason": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: cancel(undefined) explicit — fails to compile or reason isn't undefined. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/pipe/end-true-explicit-still-ends": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipe(dst,{end:true}) — dst not ended after source ends. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipeline/sync-iterable-source": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipeline(array, dst, cb) — sync iterable source not wired. Flips to PASS when #1532 lands."
   }
 }
