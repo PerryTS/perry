@@ -1,7 +1,7 @@
 const SIZE = 65536;
 
-const src = new Uint8Array(SIZE + 1);
-const dst = new Uint8Array(SIZE + 1);
+const src = new Uint8Array(65537);
+const dst = new Uint8Array(65537);
 
 function bumpIndex(i: number): number {
   return (i + 1) | 0;
