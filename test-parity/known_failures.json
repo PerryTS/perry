@@ -1687,5 +1687,17 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/chain/destroy-pause-resume-return-this": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pause()/resume()/destroy() don't all return `this` — chainability broken on one or more. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/setmaxlisteners-effective": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: setMaxListeners(n) — cap not actually raised, or listenerCount mismatches. Flips to PASS when #1532 lands."
   }
 }
