@@ -1687,5 +1687,29 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/web/tostring-tag-web-classes": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: ReadableStream/WritableStream/TransformStream lack Symbol.toStringTag — Object.prototype.toString.call() returns '[object Object]'. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/events/emit-return-value": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: emit() return value — does not return false for no-listener case or true for present-listener case. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/iter-helpers/to-array-erroring": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: toArray() on an erroring stream does not reject its Promise with the error. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/readable/read-after-end": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: read() after end — does not consistently return null. Flips to PASS when #1532 lands."
   }
 }
