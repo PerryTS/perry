@@ -115,6 +115,7 @@ detail = "fnv hash i32 xor/mul shape"
 [workloads.loop_data_dependent]
 source = "benchmarks/suite/17_loop_data_dependent.ts"
 kind = "numeric_loop"
+allow_hot_loop_conversions = true
 
 [workloads.loop_data_dependent.vectorization]
 min_vectorized_loops = 0
@@ -149,6 +150,11 @@ no_runtime_calls = true
 
 [[workloads.loop_data_dependent.named_regions.selectors]]
 label_prefix_any = ["for.body.11", "arr.merge.16", "arr.merge.21"]
+
+[[workloads.loop_data_dependent.named_regions.checks]]
+name = "named_region_numeric_loop_no_fp_int_conversions"
+equals = { fptosi = 0, sitofp = 0 }
+detail = "numeric loop FP/int conversion shape"
 
 [[workloads.loop_data_dependent.named_regions.checks]]
 name = "named_region_numeric_loop_has_fp_ops"

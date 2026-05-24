@@ -987,6 +987,45 @@ middle.block:
         self.assertEqual(report["status"], "pass", report["errors"])
         self.assertIn("numeric_loop_body", report["named_regions"])
 
+    def test_loop_data_dependent_allows_setup_conversion_only(self):
+        ir = """
+define double @main() {
+entry:
+  br label %for.body.2
+for.body.2:
+  %setup = sitofp i32 %seed to double
+  br label %for.body.11
+for.body.11:
+  %mul = fmul double %sum, %x
+  %add = fadd double %mul, %y
+  br label %exit
+exit:
+  ret double %add
+}
+"""
+        report = HARNESS.verify_artifacts(
+            workload="loop_data_dependent",
+            ir_before=ir,
+            ir_after=ir,
+            assembly="main:\n  retq\n",
+            benchmark=None,
+            vectorization={
+                "vectorized_count": 0,
+                "missed_count": 0,
+                "analysis_count": 0,
+                "missed_reason_kinds": {},
+            },
+            target="x86_64-unknown-linux-gnu",
+        )
+        self.assertEqual(report["status"], "pass", report["errors"])
+        self.assertTrue(
+            any(
+                check["name"] == "named_region_numeric_loop_no_fp_int_conversions"
+                and check["status"] == "pass"
+                for check in report["checks"]
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
