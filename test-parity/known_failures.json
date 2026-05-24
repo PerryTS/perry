@@ -2623,5 +2623,59 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pause→resume cycle — does not deliver all data events. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/writable/writable-length-tracker": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: writableLength does not track buffered bytes in the writable queue. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/readable/options-autoDestroy-explicit": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: autoDestroy: false — stream still destroyed after 'end' or 'close' fires when it shouldn't. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/sink-all-four-methods": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: sink with start+write+close+abort — methods not invoked in correct order or some skipped. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/pipeline/error-middle-aborts-all": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipeline middle-stream error — does not destroy source AND sink. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/iter-helpers/take-then-filter": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: chained take(N).filter(fn) — wrong output. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/web/from-promise-iterable": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: ReadableStream.from(customIterable) — value or done wrong. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/events/on-non-function-throws": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: on(event, non-function) — does not throw TypeError as expected. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/iterator-empty-after-consumed": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: second [Symbol.asyncIterator]() call — does not return immediately-done iterator. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/readable/from-typed-array": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(Uint8Array) — iteration count or first-byte value wrong. Flips to PASS when #1532 lands."
   }
 }
