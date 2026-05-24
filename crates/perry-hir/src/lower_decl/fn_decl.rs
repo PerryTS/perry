@@ -136,6 +136,21 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         }
     }
 
+    // #1483: perry/ui widget parameters (e.g. `canvas: Canvas` or, via a
+    // type-only import alias, `canvas: CanvasType`) must dispatch instance
+    // methods through perry/ui `NativeMethodCall` exactly like a local
+    // `const canvas = Canvas(...)`. The match above only covers non-UI
+    // native types; resolve the (possibly import-aliased) widget type here.
+    // Resolution requires an actual perry/ui import, so a user class that
+    // happens to be named `Canvas`/`Table`/`Picker` is not mis-tagged.
+    for param in &params {
+        if let Type::Named(type_name) = &param.ty {
+            if let Some(widget) = ctx.resolve_perry_ui_widget_type(type_name) {
+                ctx.register_native_instance(param.name.clone(), "perry/ui".to_string(), widget);
+            }
+        }
+    }
+
     // Extract return type from function's type annotation (with context).
     // Body-based inference for unannotated functions is filled in after body
     // lowering below, once parameters and body locals are visible to
