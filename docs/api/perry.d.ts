@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1244 entries across 81 modules
+// Coverage: 1245 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -720,6 +720,8 @@ declare module "http2" {
   export class Http2ServerRequest { [key: string]: any; }
   /** stdlib */
   export class Http2ServerResponse { [key: string]: any; }
+  /** stdlib */
+  export const constants: any;
   /** stdlib */
   export function createSecureServer(...args: any[]): any;
 }
