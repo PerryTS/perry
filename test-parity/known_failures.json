@@ -2581,5 +2581,41 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: unshift() during flowing mode — chunk not re-emitted in order. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/compose-with-passthrough": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: compose(src, PassThrough) — data not preserved through PT in composite. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/events/end-fires-once-multi-listener": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: 'end' event listeners — fire wrong number of times with multi-listener registration. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/writable/uncork-without-cork": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: uncork() with no prior cork() — error or breaks finish. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/web/byte-stream-non-buffer-throws": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: bytes-typed RS — enqueue(string) does not throw TypeError. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/from-empty-iter-immediately-done": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(immediately-done iter) — wrong data count or end not firing. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/finish-then-close-writable": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Writable 'finish' / 'close' event order — wrong sequence. Flips to PASS when #1532 lands."
   }
 }
