@@ -2641,5 +2641,83 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: readableLength after push('é') — does not count 2 UTF-8 bytes. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/compose-multi-async-fn": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: r.compose(t1).compose(t2) chained — output stream produces wrong chunks. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/events/emit-error-with-capture": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: captureRejections — async listener throws not caught into 'error' event. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/writable/uncork-flushes-buffered": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: cork/uncork sequence — fails to compile in test harness (write callback signature). Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/web/abort-during-pipeto": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: ws.abort() during active pipeTo — pipeTo Promise doesn't reject. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/wrap-pipe-chain": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: wrap(EE) + pipe(dst) — piped output empty or wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/async-iter/return-method-explicit": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: asyncIterator.return() — does not destroy/end properly or returns wrong shape. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/destroy/destroy-during-read": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: destroy() inside _read() — readCalls count or close-event behavior wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/transform/flush-called-once": {
+    "issue": "1539",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Transform._flush — not called exactly once after end. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/readable/symbol-async-iter-returns-iterator": {
+    "issue": "1531",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: [Symbol.asyncIterator]() — missing next/return method or not self-iterable. Flips to PASS when #1531 lands."
+  },
+  "node-suite/stream/promises/finished-rejects-on-error": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: promises.finished() — does not reject when stream errors. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/text-encoder-stream-exists": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: TextEncoderStream/TextDecoderStream globals — not exposed or wrong shape. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/read-multibyte-boundary": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: read(1) on multibyte UTF-8 chunk — fails to compile (Buffer-length access). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/flow/data-after-pause-resume": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pause→resume cycle — does not deliver all data events. Flips to PASS when #1532 lands."
   }
 }
