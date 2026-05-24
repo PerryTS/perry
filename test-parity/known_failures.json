@@ -891,10 +891,10 @@
     "reason": "node:stream: read() with no arg should return the entire buffered chunk. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/from-iterable": {
-    "issue": "1545",
+    "issue": "1645",
     "added": "2026-05-23",
     "category": "bug-open",
-    "reason": "node:stream/web: ReadableStream.from(iterable) (Node 20+) not implemented. Flips to PASS when #1545 lands."
+    "reason": "node:stream/web: ReadableStream.from(iterable) not implemented. Flips to PASS when #1645 lands."
   },
   "node-suite/stream/events/get-max-listeners": {
     "issue": "1531",
@@ -945,16 +945,16 @@
     "reason": "node:stream: class extends Writable + _write doesn't deliver finish. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/readable-stream-async-iterator": {
-    "issue": "1545",
+    "issue": "1646",
     "added": "2026-05-23",
     "category": "bug-open",
-    "reason": "node:stream/web: Web ReadableStream for-await iteration not supported. Flips to PASS when #1545 lands."
+    "reason": "node:stream/web: Web ReadableStream for-await iteration not supported. Flips to PASS when #1646 lands."
   },
   "node-suite/stream/web/readable-stream-no-args": {
-    "issue": "1545",
+    "issue": "1642",
     "added": "2026-05-23",
     "category": "bug-open",
-    "reason": "node:stream/web: new ReadableStream() no-args doesn't produce a usable instance. Flips to PASS when #1545 lands."
+    "reason": "node:stream/web: `typeof rs.getReader` is wrong (HIR lowers stream-method value-read as a 0-arg call). Flips to PASS when #1642 lands."
   },
   "node-suite/stream/ee/new-listener-event": {
     "issue": "1532",
@@ -963,10 +963,10 @@
     "reason": "node:stream: newListener/removeListener inherited EE events don't fire on streams. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/writer-release-lock": {
-    "issue": "1545",
+    "issue": "1642",
     "added": "2026-05-23",
     "category": "bug-open",
-    "reason": "node:stream/web: writer.releaseLock() + ws.locked transitions not tracked. Flips to PASS when #1545 lands."
+    "reason": "node:stream/web: `typeof w2.write` after releaseLock is wrong (stream-method value-read lowered as a call). Flips to PASS when #1642 lands."
   },
   "node-suite/stream/ee/listener-count-no-arg": {
     "issue": "1531",
@@ -1077,10 +1077,10 @@
     "reason": "node:stream: new Writable({signal}) constructor option not honored. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/web/byob-reader": {
-    "issue": "1545",
+    "issue": "1643",
     "added": "2026-05-23",
     "category": "bug-open",
-    "reason": "node:stream/web: getReader({mode:byob}) BYOB reader not implemented. Flips to PASS when #1545 lands."
+    "reason": "node:stream/web: BYOB readers (getReader({mode:'byob'})) not implemented. Flips to PASS when #1643 lands."
   },
   "node-suite/stream/async-iter/two-iterators-error": {
     "issue": "1532",
@@ -1245,10 +1245,10 @@
     "reason": "node:stream: Readable.from(Map) doesn't iterate entries via async iteration. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/controller-terminate": {
-    "issue": "1545",
+    "issue": "1644",
     "added": "2026-05-23",
     "category": "bug-open",
-    "reason": "node:stream/web: TransformStreamDefaultController.terminate not implemented. Flips to PASS when #1545 lands."
+    "reason": "node:stream/web: TransformStreamDefaultController.terminate() not implemented. Flips to PASS when #1644 lands."
   },
   "node-suite/stream/compose/single-transform": {
     "issue": "1532",
