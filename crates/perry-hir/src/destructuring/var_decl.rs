@@ -222,6 +222,46 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 }
             }
 
+            // #1645: `const rs = ReadableStream.from(iterable)` — the `.from`
+            // Call result is typed Any, so register the binding as a
+            // ReadableStream native instance (mirroring `new ReadableStream`'s
+            // typing). Without this, `rs.getReader()` / `for await (const c of
+            // rs)` fall to generic dispatch on the numeric stream handle and
+            // fail. The Call itself is routed to `js_readable_stream_from_iterable`
+            // in codegen (expr/calls.rs).
+            if let Some(init_expr) = &decl.init {
+                if let ast::Expr::Call(call) = init_expr.as_ref() {
+                    if let ast::Callee::Expr(callee) = &call.callee {
+                        if let ast::Expr::Member(m) = callee.as_ref() {
+                            if let ast::MemberProp::Ident(prop) = &m.prop {
+                                if prop.sym.as_ref() == "from" {
+                                    let mut obj_inner: &ast::Expr = m.obj.as_ref();
+                                    loop {
+                                        obj_inner = match obj_inner {
+                                            ast::Expr::TsAs(x) => &x.expr,
+                                            ast::Expr::TsNonNull(x) => &x.expr,
+                                            ast::Expr::TsConstAssertion(x) => &x.expr,
+                                            ast::Expr::Paren(x) => &x.expr,
+                                            _ => break,
+                                        };
+                                    }
+                                    if matches!(
+                                        obj_inner,
+                                        ast::Expr::Ident(i) if i.sym.as_ref() == "ReadableStream"
+                                    ) {
+                                        ctx.register_native_instance(
+                                            name.clone(),
+                                            "readable_stream".to_string(),
+                                            "ReadableStream".to_string(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Check if this is an awaited native class instantiation (e.g., await new Redis())
             if let Some(init_expr) = &decl.init {
                 if let ast::Expr::Await(await_expr) = init_expr.as_ref() {

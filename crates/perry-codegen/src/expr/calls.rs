@@ -111,6 +111,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             args,
         ),
 
+        // #1645: `ReadableStream.from(iterable)` (Node 20+). The HIR lowers
+        // `(ReadableStream as any).from(x)` to a Call whose callee is
+        // `PropertyGet { ExternFuncRef("ReadableStream"), "from" }`; route it to
+        // the runtime factory. The result is a numeric stream handle, so
+        // downstream `rs.getReader()` dispatches through the #1545 runtime
+        // stream-handle probe.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property }
+                    if property == "from"
+                        && matches!(
+                            object.as_ref(),
+                            Expr::ExternFuncRef { name, .. } if name == "ReadableStream"
+                        )
+            ) =>
+        {
+            let arg_box = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_readable_stream_from_iterable",
+                &[(DOUBLE, &arg_box)],
+            ))
+        }
+
         // Phase H crypto: collapse `crypto.createHash(alg).update(data).digest(enc)`
         // into a single runtime call. The HIR shape is a triple-nested
         // Call whose innermost callee is `NativeModuleRef("crypto")`.
