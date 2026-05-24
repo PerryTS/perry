@@ -3109,5 +3109,47 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: user _destroy(err, cb) — not invoked or receives wrong error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/from-bigint-throws": {
+    "issue": "1545",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream/web: RS.from(bigint) — should throw TypeError. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/readable/push-empty-string-no-end": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: push('') — treats empty string as end signal. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/writable/write-encoded-buffer": {
+    "issue": "1539",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: write(Buffer) — encoding arg not 'buffer'. Flips to PASS when #1539 lands."
+  },
+  "node-suite/stream/events/listener-fires-with-this-emitter": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: 'data' listener `this` not bound to emitter (non-arrow fn). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/from-gen-with-early-return": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: generator with explicit return — values yielded after return statement aren't reached. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/listener-closure-counter": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: listener with closure counter — count wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/four-stage-chain-v2": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: 4-stage pipe — wrong output. Flips to PASS when #1532 lands."
   }
 }
