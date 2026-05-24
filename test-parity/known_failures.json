@@ -938,12 +938,6 @@
     "category": "bug-open",
     "reason": "node:stream: class extends Writable + _write doesn't deliver finish. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/readable-stream-no-args": {
-    "issue": "1642",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/web: `typeof rs.getReader` is wrong (HIR lowers stream-method value-read as a 0-arg call). Flips to PASS when #1642 lands."
-  },
   "node-suite/stream/ee/new-listener-event": {
     "issue": "1532",
     "added": "2026-05-23",

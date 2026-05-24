@@ -834,6 +834,42 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let recv_box = lower_expr(ctx, object)?;
                     return Ok(ctx.block().call(DOUBLE, &fn_name, &[(DOUBLE, &recv_box)]));
                 }
+                // #1642: bound-method reference for Web Streams instance methods
+                // (`typeof rs.getReader === "function"`, `const f = rs.getReader;
+                // f()`). Stream instances are numeric handles, not class objects,
+                // so the `ctx.methods` path below never matches — bind explicitly
+                // via `js_class_method_bind`, whose closure routes calls through
+                // `js_native_call_method` → the #1545 stream-handle dispatch. The
+                // HIR only routes a stream *method* value-read here (getters keep
+                // their 0-arg getter call), so a match here is always a method.
+                let is_web_stream_method = matches!(
+                    (class_name.as_str(), property.as_str()),
+                    (
+                        "ReadableStream",
+                        "getReader" | "cancel" | "tee" | "pipeTo" | "pipeThrough"
+                    ) | (
+                        "ReadableStreamDefaultReader",
+                        "read" | "releaseLock" | "cancel"
+                    ) | ("WritableStream", "getWriter" | "abort" | "close")
+                        | (
+                            "WritableStreamDefaultWriter",
+                            "write" | "close" | "abort" | "releaseLock"
+                        )
+                );
+                if is_web_stream_method {
+                    let recv_box = lower_expr(ctx, object)?;
+                    let key_idx = ctx.strings.intern(property);
+                    let entry = ctx.strings.entry(key_idx);
+                    let bytes_global = format!("@{}", entry.bytes_global);
+                    let len_str = entry.byte_len.to_string();
+                    let blk = ctx.block();
+                    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_class_method_bind",
+                        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
+                    ));
+                }
                 // Fast path: known class instance + plain instance field
                 // (no getter/setter shadowing). Inline a direct GEP+load
                 // at the field's slot offset, bypassing the
