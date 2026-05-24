@@ -265,6 +265,30 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     }
                     _ => {}
                 }
+                // #1343: a `process.<method>` read used as a VALUE. The
+                // call form (`process.cwd()`) is intercepted in expr_call
+                // and lowered to its dedicated `ProcessCwd`/etc. variant
+                // before reaching here, so this only fires for bare reads
+                // (`typeof process.cwd`, `const f = process.cwd`). The arms
+                // above cover process *properties* (argv/env/pid/…); anything
+                // the API manifest classifies as a process *method* is a
+                // callable function value in Node. Lower it to a
+                // `NativeModuleRef("process")` property read so the codegen
+                // typeof short-circuit (which consults `module_has_symbol`)
+                // reports "function" — exactly the already-working
+                // `crypto.<method>` namespace path. Without this, `process`
+                // lowers to a `GlobalGet` and `typeof process.cwd` read
+                // "undefined" even though `process.cwd()` works.
+                let prop = prop_ident.sym.as_ref();
+                if matches!(
+                    perry_api_manifest::module_has_symbol("process", prop).map(|e| &e.kind),
+                    Some(perry_api_manifest::ApiKind::Method { .. })
+                ) {
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef("process".to_string())),
+                        property: prop.to_string(),
+                    });
+                }
             }
         }
         // `globalThis.process` returns an object whose `.env`/`.argv`/
