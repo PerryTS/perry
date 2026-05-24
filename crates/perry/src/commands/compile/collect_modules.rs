@@ -160,6 +160,14 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
         // `asJsonChan.hasSubscribers === false` and take the fast path
         // without ever entering the tracing-instrumentation branch.
         "diagnostics_channel" => Some("diagnostics_channel"),
+        // #1671: hono JSX runtime/streaming helpers. Perry renders JSX with the
+        // built-in `js_jsx` runtime, so these submodules have no compiled-source
+        // backing — they expose function singletons (jsx/jsxs/Fragment/JSXNode,
+        // renderToReadableStream/Suspense) for code that imports the helpers
+        // directly. Note these are NOT `node:`-prefixed; the strip above is a
+        // no-op and they match verbatim.
+        "hono/jsx/server" => Some("hono_jsx_server"),
+        "hono/jsx/streaming" => Some("hono_jsx_streaming"),
         _ => None,
     }
 }

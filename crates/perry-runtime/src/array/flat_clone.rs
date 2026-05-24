@@ -259,32 +259,19 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
             (*hdr).obj_type
         };
         if obj_type == crate::gc::GC_TYPE_OBJECT {
-            let obj = raw_addr as *const crate::ObjectHeader;
-            unsafe {
-                let keys_arr = (*obj).keys_array;
-                if !keys_arr.is_null() && (*keys_arr).length == 1 {
-                    let key0 = js_array_get_f64(keys_arr, 0);
-                    let key_val = crate::value::JSValue::from_bits(key0.to_bits());
-                    let is_entries_key = if key_val.is_string() {
-                        let ptr = key_val.as_string_ptr();
-                        let len = (*ptr).byte_len as usize;
-                        let data =
-                            (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                        std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
-                            == "_entries"
-                    } else {
-                        false
-                    };
-                    if is_entries_key {
-                        let boxed = crate::url::js_url_search_params_entries_arr(
-                            obj as *mut crate::ObjectHeader,
-                        );
-                        let bits = boxed.to_bits();
-                        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-                        if !ptr.is_null() {
-                            return ptr;
-                        }
-                    }
+            let obj = raw_addr as *mut crate::ObjectHeader;
+            // #1668: `[...searchParams]` / `Array.from(searchParams)` yield the
+            // `[key, value]` entry pairs. Detect a URLSearchParams by its shape
+            // (`_entries` leads the keys array) and return its entries array.
+            // The previous heuristic required `keys_array.length == 1`, but a
+            // URL-adopted URLSearchParams also carries a `_owner` key (2 keys),
+            // so spread fell through to the array-like path and produced `[]`.
+            if crate::url::try_read_as_search_params(obj).is_some() {
+                let boxed = crate::url::js_url_search_params_entries_arr(obj);
+                let bits = boxed.to_bits();
+                let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
+                if !ptr.is_null() {
+                    return ptr;
                 }
             }
             return unsafe { js_array_from_arraylike(raw_addr as *const crate::ObjectHeader) };

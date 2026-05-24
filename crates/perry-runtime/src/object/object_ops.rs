@@ -38,6 +38,21 @@ pub extern "C" fn js_object_from_entries(entries_value: f64) -> f64 {
             return js_object_from_entries(arr_boxed);
         }
 
+        // #1668: URLSearchParams is iterable (yields [key, value] pairs) but
+        // arrives here as a plain class_id-0 ObjectHeader (GC_TYPE_OBJECT),
+        // NOT an array — so reading it as an ArrayHeader below picks up a
+        // bogus `.length` and crashes (`Object.fromEntries(url.searchParams)`,
+        // the #1655 hono `/api/echo` blocker). Detect the URLSearchParams
+        // shape and recurse through its proper [k,v] entries array. Any other
+        // object falls through unchanged.
+        if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT {
+            let obj_ptr = raw_ptr as *mut ObjectHeader;
+            if crate::url::try_read_as_search_params(obj_ptr).is_some() {
+                let entries_arr = crate::url::js_url_search_params_entries_arr(obj_ptr);
+                return js_object_from_entries(entries_arr);
+            }
+        }
+
         // It's an array of [key, value] pairs
         let arr_ptr = raw_ptr as *const ArrayHeader;
         let length = (*arr_ptr).length as usize;

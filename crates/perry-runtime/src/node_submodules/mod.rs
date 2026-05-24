@@ -107,8 +107,17 @@ macro_rules! thunk {
 mod blob;
 mod consumers;
 mod fs_promises;
+mod hono_jsx;
 mod stream_promises;
 mod timers;
+
+// #1671: hono/jsx/server + hono/jsx/streaming. Re-export the stream-creation
+// registration so perry-stdlib's `bundled-streams` init can wire it up.
+pub use hono_jsx::js_register_jsx_render_stream;
+use hono_jsx::{
+    thunk_hono_fragment, thunk_hono_jsx, thunk_hono_jsxnode, thunk_hono_jsxs,
+    thunk_hono_render_to_readable_stream, thunk_hono_suspense,
+};
 
 use consumers::{
     thunk_consumers_arrayBuffer, thunk_consumers_blob, thunk_consumers_buffer,
@@ -480,6 +489,46 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             ExportSpec {
                 name: "DecompressionStream",
                 thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            },
+        ],
+    },
+    // #1671: hono/jsx/server — the JSX runtime helpers. `jsx`/`jsxs` forward
+    // to the built-in `js_jsx` renderer; `Fragment` renders its children;
+    // `JSXNode` is an exposed stub (Perry boxes nodes internally).
+    SubmoduleSpec {
+        key: "hono_jsx_server",
+        exports: &[
+            ExportSpec {
+                name: "jsx",
+                thunk: ExportThunk::Fn2(thunk_hono_jsx),
+            },
+            ExportSpec {
+                name: "jsxs",
+                thunk: ExportThunk::Fn2(thunk_hono_jsxs),
+            },
+            ExportSpec {
+                name: "Fragment",
+                thunk: ExportThunk::Fn1(thunk_hono_fragment),
+            },
+            ExportSpec {
+                name: "JSXNode",
+                thunk: ExportThunk::Fn1(thunk_hono_jsxnode),
+            },
+        ],
+    },
+    // #1671: hono/jsx/streaming — server-side streaming helpers.
+    // `renderToReadableStream` renders eagerly to a single-chunk ReadableStream;
+    // `Suspense` renders its children (Perry has no streaming-suspension point).
+    SubmoduleSpec {
+        key: "hono_jsx_streaming",
+        exports: &[
+            ExportSpec {
+                name: "renderToReadableStream",
+                thunk: ExportThunk::Fn2(thunk_hono_render_to_readable_stream),
+            },
+            ExportSpec {
+                name: "Suspense",
+                thunk: ExportThunk::Fn1(thunk_hono_suspense),
             },
         ],
     },

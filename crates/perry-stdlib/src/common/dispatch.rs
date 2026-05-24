@@ -761,6 +761,20 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     let _ = property_name;
     let _ = handle;
 
+    // #1670: Web Streams handle property reads. A numeric stream id reaches
+    // here via `js_object_get_field_by_name`'s stream probe (inline
+    // `res.body.locked`). Route getter properties to their accessors, return
+    // a bound-method closure for callable members, and undefined for anything
+    // else — never a deref of the float id as a pointer. Gated on stream
+    // id-range + registry membership so unrelated small-handle reads are
+    // untouched.
+    #[cfg(feature = "bundled-streams")]
+    if (0x40000..0x100000).contains(&(handle as usize))
+        && crate::streams::js_stream_handle_is_registered(handle as usize)
+    {
+        return crate::streams::dispatch_stream_property(handle as f64, property_name);
+    }
+
     // #1113: `app.server` — return the FastifyApp handle pointer-tagged
     // so `typeof app.server === "object"` and `.on("upgrade", …)`
     // routes through HANDLE_METHOD_DISPATCH back into the FastifyApp
@@ -1359,5 +1373,10 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         }
         js_register_stream_handle_probe(stream_probe);
         js_register_stream_handle_kind_probe(stream_kind_probe);
+        // #1671: back `hono/jsx/streaming`'s `renderToReadableStream` with a
+        // real single-chunk Web stream when streams are linked.
+        perry_runtime::node_submodules::js_register_jsx_render_stream(
+            crate::streams::js_jsx_render_stream_from_value,
+        );
     }
 }

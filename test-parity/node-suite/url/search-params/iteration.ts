@@ -10,3 +10,7 @@ console.log("forEach:", collected.join(","));
 const iterated: string[] = [];
 for (const [k, v] of sp) iterated.push(`${k}=${v}`);
 console.log("for-of:", iterated.join(","));
+
+// #1668: Object.fromEntries / spread over a URLSearchParams.
+console.log("fromEntries:", JSON.stringify(Object.fromEntries(sp)));
+console.log("spread:", JSON.stringify([...sp].map(([k, v]) => `${k}=${v}`)));

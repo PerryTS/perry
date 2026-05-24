@@ -1587,7 +1587,19 @@ pub fn run_with_parse_cache(
             }
             let rp = match &import.resolved_path {
                 Some(p) => PathBuf::from(p),
-                None => continue,
+                None => {
+                    // #1671: a dynamic `import('hono/jsx/server')` resolves to a
+                    // known node-submodule with no compiled-source backing — the
+                    // runtime ships its namespace. Record a sentinel prefix the
+                    // dynamic-import codegen recognises and routes to
+                    // `js_node_submodule_namespace` (instead of rejecting).
+                    if let Some(key) =
+                        self::collect_modules::known_node_submodule_key(&import.source)
+                    {
+                        local_map.insert(import.source.clone(), format!("__node_submod__{}", key));
+                    }
+                    continue;
+                }
             };
             let target_name = match path_to_module_name.get(&rp) {
                 Some(n) => n.clone(),

@@ -666,6 +666,21 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
     id as f64
 }
 
+/// #1671: `renderToReadableStream` stream backend. Builds a closed
+/// single-chunk readable stream carrying the already-rendered HTML string, so
+/// hono's `renderToReadableStream(<App/>)` returns a real Web stream that
+/// `getReader()` / `for await` can drain. Registered into the runtime via
+/// `js_register_jsx_render_stream` from `js_stdlib_init_dispatch` when
+/// `bundled-streams` is linked; absent that, the runtime thunk returns the
+/// rendered HTML node directly (degraded but usable).
+#[no_mangle]
+pub unsafe extern "C" fn js_jsx_render_stream_from_value(html_value: f64) -> f64 {
+    let mut arr = perry_runtime::array::js_array_alloc(1);
+    arr = perry_runtime::array::js_array_push_f64(arr, html_value);
+    let arr_f64 = f64::from_bits(perry_runtime::JSValue::pointer(arr as *const u8).bits());
+    js_readable_stream_from_iterable(arr_f64)
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // ReadableStreamDefaultController FFI (controller is the stream handle)
 // ─────────────────────────────────────────────────────────────────────
@@ -1651,6 +1666,66 @@ pub(crate) unsafe fn dispatch_stream_method(
         }
     }
     None
+}
+
+/// #1670: property reads on a numeric Web Streams handle that reached the
+/// generic field-get path (e.g. inline `res.body.locked`, where the
+/// intermediate stream id never became a typed local). Returns the WHATWG
+/// getter property value, a bound-method closure for callable members (so
+/// `typeof rs.getReader === "function"` and a subsequent call routes back
+/// through `js_native_call_method`'s #1545 stream branch → `dispatch_stream_method`),
+/// or `undefined` for any other property. Crucially this NEVER dereferences
+/// the float id as a pointer — the pre-#1670 generic field-get segfaulted on
+/// `res.body.locked`. Gated by the caller on stream-registry membership.
+pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    let id = handle as usize;
+    // Kind: 1=ReadableStream, 2=WritableStream, 3=reader, 4=writer.
+    let kind = js_stream_handle_kind(id);
+    if kind == 0 {
+        return undefined;
+    }
+    // WHATWG getter properties (the rest fall through to bound-method /
+    // undefined). `locked` is the one #1670 exercises (`res.body.locked`).
+    match (kind, name) {
+        (1, "locked") => return js_readable_stream_locked(handle),
+        (2, "locked") => return js_writable_stream_locked(handle),
+        _ => {}
+    }
+    // Callable members → bound-method closure so `typeof` reports
+    // "function". The name must be a `&'static [u8]` because
+    // `js_class_method_bind` stores the raw pointer in the closure.
+    // The receiver is the raw float handle (not NaN-boxed) so that when the
+    // bound method is called, `js_native_call_method`'s stream branch fires.
+    let method: Option<&'static [u8]> = match (kind, name) {
+        (1, "getReader") => Some(b"getReader"),
+        (1, "cancel") => Some(b"cancel"),
+        (1, "tee") => Some(b"tee"),
+        (1, "pipeTo") => Some(b"pipeTo"),
+        (1, "pipeThrough") => Some(b"pipeThrough"),
+        (2, "getWriter") => Some(b"getWriter"),
+        (2, "abort") => Some(b"abort"),
+        (2, "close") => Some(b"close"),
+        (3, "read") => Some(b"read"),
+        (3, "releaseLock") => Some(b"releaseLock"),
+        (3, "cancel") => Some(b"cancel"),
+        (4, "write") => Some(b"write"),
+        (4, "close") => Some(b"close"),
+        (4, "abort") => Some(b"abort"),
+        (4, "releaseLock") => Some(b"releaseLock"),
+        _ => None,
+    };
+    if let Some(name_bytes) = method {
+        extern "C" {
+            fn js_class_method_bind(
+                instance: f64,
+                method_name_ptr: *const u8,
+                method_name_len: usize,
+            ) -> f64;
+        }
+        return js_class_method_bind(handle, name_bytes.as_ptr(), name_bytes.len());
+    }
+    undefined
 }
 
 /// `super({ start, pull, cancel })` dispatch for `class X extends ReadableStream`.
