@@ -963,6 +963,16 @@ fn _force_link() -> Option<*mut ArrayHeader> {
 // ever used to take the function's address, never to call it, so they need
 // not match the real definitions — the linker keys off the `#[no_mangle]`
 // symbol name alone.
+//
+// `cfg(not(test))`: the anchor must NOT fire in `cargo test -p perry-ext-http`.
+// Forcing the server functions into the unit-test binary drags in their
+// transitive `perry_ffi_spawn_blocking*` references, which only the host
+// (perry-stdlib) provides at the final perry-compile link — the test binary
+// has no host, so it fails with `undefined symbol: perry_ffi_spawn_blocking`.
+// The staticlib (the real perry-compile artifact) is built without `test`,
+// so retention there is unaffected. Nothing cargo-depends on this crate, so
+// gating on `test` is sufficient.
+#[cfg(not(test))]
 #[allow(dead_code)]
 mod force_link_http_server {
     extern "C" {
@@ -1028,6 +1038,9 @@ mod force_link_http_server {
 
 /// `#[used]` anchor table referencing every server FFI entry point so the
 /// linker keeps them in `libperry_ext_http.a`. See the module above (#1652).
+/// Gated with the module on `not(test)` so the unit-test binary doesn't drag
+/// in the server's host-provided `perry_ffi_*` symbols.
+#[cfg(not(test))]
 #[used]
 static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
     use force_link_http_server::*;
