@@ -76,20 +76,10 @@ use crate::collectors::{collect_closures_in_stmts, collect_let_ids, collect_ref_
 /// guarantee — do not change to `&mut` without also moving the cache
 /// hash to AFTER codegen.
 pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> {
-    // Set the per-instruction FMF emission modes for this build before
-    // any LlBlock methods run. All modules in a single program build
-    // share the same FP settings, so writing the atomics here
-    // (potentially redundantly when rayon parallelizes module compiles)
-    // is safe — every store writes the same values.
-    crate::block::FAST_MATH.store(opts.fast_math, std::sync::atomic::Ordering::Relaxed);
-    crate::block::FP_CONTRACT_MODE.store(
-        opts.fp_contract_mode as u8,
-        std::sync::atomic::Ordering::Relaxed,
-    );
-
     let triple = opts.target.clone().unwrap_or_else(default_target_triple);
+    let fp_flags = crate::block::FpFlags::new(opts.fast_math, opts.fp_contract_mode);
 
-    let mut llmod = LlModule::new(&triple);
+    let mut llmod = LlModule::new_with_fp_flags(&triple, fp_flags);
     // Null guard global: a zeroed i32 used as a safe dereference target
     // when a NaN-unboxed pointer is null/invalid. Prevents segfaults from
     // uninitialized locals or unhandled expressions producing 0.0/TAG_UNDEFINED.

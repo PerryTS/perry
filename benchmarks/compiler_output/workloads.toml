@@ -1,0 +1,283 @@
+schema_version = 1
+
+[workloads.image_convolution]
+source = "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv.ts"
+kind = "image_convolution"
+
+[workloads.image_convolution.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: current image fixture still has scalar loops"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_reduction",
+]
+
+[workloads.image_convolution.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.image_convolution.ir_checks]]
+name = "direct_gep_inbounds"
+contains = "getelementptr inbounds"
+detail = "optimized IR contains direct inbounds GEPs"
+
+[[workloads.image_convolution.ir_checks]]
+name = "llvm_assume_bounds"
+contains = "@llvm.assume"
+detail = "optimized IR preserves emitted bounds assumptions"
+
+[[workloads.image_convolution.ir_checks]]
+name = "invariant_loads"
+contains = "!invariant.load"
+detail = "optimized IR includes invariant-load metadata"
+
+[[workloads.image_convolution.ir_checks]]
+name = "alias_metadata"
+contains_all = ["!alias.scope", "!noalias"]
+detail = "optimized IR includes alias.scope and noalias metadata"
+
+[[workloads.image_convolution.ir_checks]]
+name = "fnv_imul_stays_i32"
+regex_all = ["\\bmul i32\\b[^\\n]*16777619", "\\bxor i32\\b"]
+detail = "FNV checksum lowers to i32 xor/mul by 16777619"
+
+[[workloads.image_convolution.ir_checks]]
+name = "byte_load_store_fast_path"
+regex_all = ["\\bload (?:i8|<\\d+ x i8>), ptr\\b", "\\bstore (?:i8\\b|<\\d+ x i8>)"]
+detail = "image loops use byte loads and stores"
+
+[[workloads.image_convolution.ir_checks]]
+name = "kernel_coefficients_constant_folded"
+regex_none = ["\\bload double\\b[^\\n]*KERNEL", "@js_array_get|@js_handle_array_get"]
+detail = "blur kernel coefficients are not loaded through dynamic array helpers"
+
+[[workloads.image_convolution.hot_loop_checks]]
+name = "hot_loops_no_inttoptr_buffer_fallback"
+counter = "inttoptr"
+equals = 0
+detail = "hot loop inttoptr counts"
+
+[[workloads.image_convolution.assembly_checks]]
+name = "assembly_contains_imul_constant"
+contains_any = ["16777619", "01000193", "0x1000193"]
+detail = "object disassembly contains the FNV multiply constant"
+
+[[workloads.image_convolution.named_regions]]
+name = "input_generation"
+required = true
+no_runtime_calls = true
+no_conversions = true
+
+[[workloads.image_convolution.named_regions.selectors]]
+label_prefix_any = ["for.body.20", "for.body.24", "while.body.28"]
+
+[[workloads.image_convolution.named_regions.checks]]
+name = "named_region_input_generation_byte_writes"
+min = { store_i8 = 4, xor_i32 = 1 }
+detail = "input_generation byte writes and xor shape"
+
+[[workloads.image_convolution.named_regions]]
+name = "blur"
+required = true
+no_runtime_calls = true
+no_conversions = true
+
+[[workloads.image_convolution.named_regions.selectors]]
+counter_min = { load_i8 = 3, store_i8 = 1 }
+
+[[workloads.image_convolution.named_regions.checks]]
+name = "named_region_blur_byte_load_store"
+min = { load_i8 = 3, store_i8 = 1 }
+detail = "blur byte load/store shape"
+
+[[workloads.image_convolution.named_regions]]
+name = "fnv_hash"
+required = true
+no_runtime_calls = true
+no_conversions = true
+
+[[workloads.image_convolution.named_regions.selectors]]
+label_prefix_any = ["for.body.42"]
+
+[[workloads.image_convolution.named_regions.selectors]]
+counter_min = { load_i8 = 1, xor_i32 = 1, mul_i32 = 1 }
+counter_equals = { store_i8 = 0 }
+
+[[workloads.image_convolution.named_regions.checks]]
+name = "named_region_fnv_i32_hash_shape"
+min = { load_i8 = 1, xor_i32 = 1, mul_i32 = 1 }
+equals = { store_i8 = 0 }
+detail = "fnv hash i32 xor/mul shape"
+
+[workloads.loop_data_dependent]
+source = "benchmarks/suite/17_loop_data_dependent.ts"
+kind = "numeric_loop"
+
+[workloads.loop_data_dependent.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: data-dependent control flow is intentionally scalar"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.loop_data_dependent.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 1
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.loop_data_dependent.ir_checks]]
+name = "numeric_loop_has_fp_ops"
+contains_any = [" fmul ", " fadd "]
+detail = "numeric loop optimized IR still contains FP arithmetic"
+
+[[workloads.loop_data_dependent.named_regions]]
+name = "numeric_loop_body"
+required = true
+no_runtime_calls = true
+
+[[workloads.loop_data_dependent.named_regions.selectors]]
+label_prefix_any = ["for.body.11", "arr.merge.16", "arr.merge.21"]
+
+[[workloads.loop_data_dependent.named_regions.checks]]
+name = "named_region_numeric_loop_has_fp_ops"
+min = { fmul = 1, fadd = 1 }
+detail = "numeric loop FP multiply/add shape"
+
+[workloads.fma_contract]
+source = "benchmarks/compiler_output/fixtures/fma_contract.ts"
+kind = "fma_contract"
+
+[workloads.fma_contract.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: this fixture exists to prove scalar FP contraction"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.fma_contract.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[workloads.fma_contract.fma_gate]
+enabled = true
+expected_check_name = "fma_instruction_when_contraction_expected"
+forbidden_check_name = "no_fma_instruction_when_fp_contract_off"
+
+[[workloads.fma_contract.ir_checks]]
+name = "numeric_loop_has_fp_ops"
+contains_any = [" fmul ", " fadd "]
+detail = "FMA fixture optimized IR still contains FP arithmetic"
+
+[[workloads.fma_contract.named_regions]]
+name = "numeric_loop_body"
+required = true
+no_runtime_calls = true
+
+[[workloads.fma_contract.named_regions.selectors]]
+label_prefix_any = ["for.body", "vector.body"]
+counter_any_min = { fmul = 1, fadd = 1 }
+
+[[workloads.fma_contract.named_regions.checks]]
+name = "named_region_numeric_loop_has_fp_ops"
+min = { fmul = 1, fadd = 1 }
+detail = "numeric loop FP multiply/add shape"
+
+[workloads.vectorized_buffer_transform]
+source = "benchmarks/compiler_output/fixtures/vectorized_buffer_transform.ts"
+kind = "vectorized_buffer_transform"
+
+[workloads.vectorized_buffer_transform.vectorization]
+min_vectorized_loops = 1
+scalar_baseline = ""
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.vectorized_buffer_transform.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[workloads.hir_fact_rewrite]
+source = "benchmarks/compiler_output/fixtures/hir_fact_rewrite.ts"
+kind = "hir_fact_rewrite"
+
+[workloads.hir_fact_rewrite.vectorization]
+min_vectorized_loops = 1
+scalar_baseline = ""
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.hir_fact_rewrite.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.hir_fact_rewrite.ir_checks]]
+name = "hir_fact_rewrite_direct_gep_inbounds"
+contains = "getelementptr inbounds"
+detail = "rewrite-insensitive buffer index lowering uses direct inbounds GEPs"
+
+[[workloads.hir_fact_rewrite.ir_checks]]
+name = "hir_fact_rewrite_assume_bounds"
+contains = "@llvm.assume"
+detail = "rewrite-insensitive buffer index lowering preserves bounds assumptions"
+
+[[workloads.hir_fact_rewrite.ir_checks]]
+name = "hir_fact_rewrite_alias_metadata"
+contains_all = ["!alias.scope", "!noalias"]
+detail = "rewrite-insensitive buffer index lowering keeps buffer alias metadata"
+
+[[workloads.hir_fact_rewrite.counter_checks]]
+name = "hir_fact_rewrite_no_buffer_slow_path"
+section = "llvm_after"
+counter = "buffer_slow_path_calls"
+equals = 0
+detail = "buffer_slow_path_calls"

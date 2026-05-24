@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use crate::block::{LlBlock, RegCounter};
+use crate::block::{FpFlags, LlBlock, RegCounter};
 use crate::types::LlvmType;
 
 pub struct LlFunction {
@@ -30,6 +30,7 @@ pub struct LlFunction {
     blocks: Vec<LlBlock>,
     block_counter: u32,
     reg_counter: Rc<RegCounter>,
+    fp_flags: FpFlags,
     /// Allocas hoisted to the function entry block. These are emitted at
     /// the very top of block 0 at IR-serialization time, so they dominate
     /// every use everywhere in the function.
@@ -89,6 +90,15 @@ impl LlFunction {
         return_type: LlvmType,
         params: Vec<(LlvmType, String)>,
     ) -> Self {
+        Self::new_with_fp_flags(name, return_type, params, FpFlags::default())
+    }
+
+    pub fn new_with_fp_flags(
+        name: impl Into<String>,
+        return_type: LlvmType,
+        params: Vec<(LlvmType, String)>,
+        fp_flags: FpFlags,
+    ) -> Self {
         Self {
             name: name.into(),
             return_type,
@@ -99,6 +109,7 @@ impl LlFunction {
             blocks: Vec::new(),
             block_counter: 0,
             reg_counter: Rc::new(RegCounter::new()),
+            fp_flags,
             entry_allocas: Vec::new(),
             entry_post_init_setup: Vec::new(),
             entry_init_boundary: None,
@@ -283,7 +294,7 @@ impl LlFunction {
     pub fn create_block(&mut self, name: &str) -> &mut LlBlock {
         let label = format!("{}.{}", name, self.block_counter);
         self.block_counter += 1;
-        let block = LlBlock::new(label, self.reg_counter.clone());
+        let block = LlBlock::new_with_fp_flags(label, self.reg_counter.clone(), self.fp_flags);
         self.blocks.push(block);
         // Safe unwrap: we just pushed.
         self.blocks.last_mut().unwrap()

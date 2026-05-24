@@ -30,6 +30,73 @@ static CLANG_PROBE: OnceLock<Option<String>> = OnceLock::new();
 /// module's symbols stamped onto the other's filename. (Closes #509.)
 static TEMP_NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Debug, Clone)]
+struct ClangCompilePlan {
+    clang: PathBuf,
+    effective_target: String,
+    clang_args: Vec<String>,
+    analysis_clang_args: Vec<String>,
+    native_tuning_arg: Option<String>,
+    ll_path: PathBuf,
+    obj_path: PathBuf,
+    stderr_remarks_path: PathBuf,
+}
+
+fn native_tuning_arg_for_host() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "-mcpu=native"
+    } else {
+        "-march=native"
+    }
+}
+
+fn build_clang_compile_plan(
+    clang: PathBuf,
+    ll_path: PathBuf,
+    obj_path: PathBuf,
+    target_triple: Option<&str>,
+) -> ClangCompilePlan {
+    let effective_target = target_triple
+        .map(|s| s.to_string())
+        .unwrap_or_else(crate::codegen::default_target_triple);
+    let native_tuning_arg = target_triple
+        .is_none()
+        .then(|| native_tuning_arg_for_host().to_string());
+    let stderr_remarks_path = PathBuf::from(format!("{}.clang-stderr", obj_path.display()));
+
+    let mut clang_args = vec!["-c".to_string(), "-O3".to_string()];
+    if std::env::var("PERRY_DEBUG_SYMBOLS").is_ok() {
+        clang_args.push("-g".to_string());
+    }
+    clang_args.push("-fno-math-errno".to_string());
+    if let Some(arg) = &native_tuning_arg {
+        clang_args.push(arg.clone());
+    }
+    clang_args.push(ll_path.display().to_string());
+    clang_args.push("-o".to_string());
+    clang_args.push(obj_path.display().to_string());
+    clang_args.push("-target".to_string());
+    clang_args.push(effective_target.clone());
+
+    let mut analysis_clang_args = vec!["-O3".to_string(), "-fno-math-errno".to_string()];
+    if let Some(arg) = &native_tuning_arg {
+        analysis_clang_args.push(arg.clone());
+    }
+    analysis_clang_args.push("-target".to_string());
+    analysis_clang_args.push(effective_target.clone());
+
+    ClangCompilePlan {
+        clang,
+        effective_target,
+        clang_args,
+        analysis_clang_args,
+        native_tuning_arg,
+        ll_path,
+        obj_path,
+        stderr_remarks_path,
+    }
+}
+
 /// Compile LLVM IR text to an object file using the system `clang`, returning
 /// the object file bytes.
 ///
@@ -79,64 +146,21 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
          PERRY_LLVM_CLANG to the path of clang. Run `perry doctor` to verify the install."
     })?;
 
+    let plan = build_clang_compile_plan(
+        clang.clone(),
+        ll_path.clone(),
+        obj_path.clone(),
+        target_triple,
+    );
+
     // Pre-flight probe: capture clang's default Target: line once per process,
     // so we can warn early if it disagrees with the IR's triple in a way that
     // historically broke Windows builds. The actual build still succeeds via
     // the explicit -target pin below — the probe is purely informational.
-    let effective_triple_for_probe = target_triple
-        .map(|s| s.to_string())
-        .unwrap_or_else(crate::codegen::default_target_triple);
-    probe_clang_default_triple(&clang, &effective_triple_for_probe);
+    probe_clang_default_triple(&plan.clang, &plan.effective_target);
 
-    let mut cmd = Command::new(&clang);
-    cmd.arg("-c")
-        // -O3 unlocks LLVM's auto-vectorizer, aggressive inlining, and
-        // better SLP / loop unrolling. The compile-time cost vs -O2 is
-        // small for typical user programs (<1s of overhead) compared
-        // to the runtime perf wins on tight loops.
-        .arg("-O3")
-        // Include DWARF debug info so crash symbolicators can map
-        // addresses back to function names. Only enabled when
-        // PERRY_DEBUG_SYMBOLS=1 is set — otherwise omitted to keep
-        // binaries small.
-        .args(if std::env::var("PERRY_DEBUG_SYMBOLS").is_ok() {
-            vec!["-g"]
-        } else {
-            vec![]
-        })
-        // We pass `-fno-math-errno` to skip errno set/check around libm
-        // calls (no observable JS semantics depend on errno). Everything
-        // else is left at clang defaults: precise FP, no reassociation,
-        // no FMA contraction beyond the C/C++ within-statement default.
-        //
-        // (We do NOT pass `-ffast-math` or `-funsafe-math-optimizations`
-        // here. -ffast-math implies -ffinite-math-only which tells LLVM
-        // NaN never happens — catastrophic for NaN-boxing. Tried at
-        // commit 083ce16, reverted in b5a8c83f.)
-        //
-        // Per-instruction fast-math flags (`reassoc`, and separately
-        // `contract`) are emitted by perry-codegen `block.rs` only when
-        // the build opts in through `--fast-math` / `--fp-contract` (or
-        // their env/package equivalents). Default OFF — see
-        // `docs/src/cli/fast-math.md` for the behavior contract and
-        // benchmark numbers.
-        .arg("-fno-math-errno");
-    // Native CPU tuning: only when building for the host. The flag name
-    // (`-mcpu` vs `-march`) is also arch-specific, and clang rejects
-    // `-mcpu=` for x86 targets and `-march=` for arm targets — so when
-    // cross-compiling we skip it entirely and let clang's `-target`
-    // default suffice. (Without this guard, an aarch64 macOS host
-    // cross-building for `x86_64-unknown-linux-gnu` would pass
-    // `-mcpu=native` to a clang invocation aimed at x86, which fails
-    // with `unsupported option '-mcpu='`.)
-    if target_triple.is_none() {
-        cmd.arg(if cfg!(target_arch = "aarch64") {
-            "-mcpu=native"
-        } else {
-            "-march=native"
-        });
-    }
-    cmd.arg(&ll_path).arg("-o").arg(&obj_path);
+    let mut cmd = Command::new(&plan.clang);
+    cmd.args(&plan.clang_args);
     // Always pass -target. Clang's behavior on a `.ll` file is "use my own
     // default target, override the module's stated triple if it differs"
     // (you can see the `warning: overriding the module target triple` log
@@ -152,10 +176,9 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
     // function main`. Pinning -target to the IR's actual triple (or the
     // host default when target is None) makes clang trust the IR and
     // skips the override path.
-    let effective_triple = target_triple
-        .map(|s| s.to_string())
-        .unwrap_or_else(crate::codegen::default_target_triple);
-    cmd.arg("-target").arg(&effective_triple);
+    //
+    // Native CPU tuning remains part of the same plan when no explicit target
+    // is supplied: only host builds receive `-mcpu=native` / `-march=native`.
 
     log::debug!("perry-codegen: {:?}", cmd);
     let output = cmd
@@ -175,7 +198,7 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| "(unable to query --version)".to_string());
-        let hint = build_clang_failure_hint(&stderr, &clang_version, &effective_triple);
+        let hint = build_clang_failure_hint(&stderr, &clang_version, &plan.effective_target);
         return Err(anyhow!(
             "clang -c failed (status={}).\n\
              clang:           {}\n\
@@ -186,10 +209,10 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
              stderr:\n{}\n\
              {}",
             output.status,
-            clang.display(),
+            plan.clang.display(),
             clang_version.lines().next().unwrap_or("?"),
-            effective_triple,
-            ll_path.display(),
+            plan.effective_target,
+            plan.ll_path.display(),
             stderr,
             hint
         ));
@@ -202,14 +225,87 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
     // which case we leave the .ll around for debugging and print the path.
     let keep = env::var_os("PERRY_LLVM_KEEP_IR").is_some();
     if keep {
-        eprintln!("[perry-codegen] kept LLVM IR: {}", ll_path.display());
-        eprintln!("[perry-codegen] kept object:  {}", obj_path.display());
+        let _ = fs::write(&plan.stderr_remarks_path, &output.stderr);
+        let metadata_path = PathBuf::from(format!("{}.compile-plan.json", plan.obj_path.display()));
+        write_compile_plan_metadata(&plan, &metadata_path)?;
+        eprintln!("[perry-codegen] kept LLVM IR: {}", plan.ll_path.display());
+        eprintln!("[perry-codegen] kept object:  {}", plan.obj_path.display());
+        eprintln!(
+            "[perry-codegen] kept compile metadata: {}",
+            metadata_path.display()
+        );
     } else {
-        let _ = fs::remove_file(&ll_path);
-        let _ = fs::remove_file(&obj_path);
+        let _ = fs::remove_file(&plan.ll_path);
+        let _ = fs::remove_file(&plan.obj_path);
     }
 
     Ok(bytes)
+}
+
+fn json_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn json_string_array(values: &[String]) -> String {
+    let mut out = String::from("[");
+    for (idx, value) in values.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&json_string(value));
+    }
+    out.push(']');
+    out
+}
+
+fn json_optional_string(value: Option<&str>) -> String {
+    value.map(json_string).unwrap_or_else(|| "null".to_string())
+}
+
+fn write_compile_plan_metadata(plan: &ClangCompilePlan, path: &Path) -> Result<()> {
+    let text = format!(
+        concat!(
+            "{{\n",
+            "  \"schema_version\": 1,\n",
+            "  \"clang_path\": {},\n",
+            "  \"effective_target\": {},\n",
+            "  \"clang_args\": {},\n",
+            "  \"analysis_clang_args\": {},\n",
+            "  \"native_tuning_arg\": {},\n",
+            "  \"llvm_ir_path\": {},\n",
+            "  \"object_path\": {},\n",
+            "  \"stderr_remarks_path\": {}\n",
+            "}}\n"
+        ),
+        json_string(&plan.clang.display().to_string()),
+        json_string(&plan.effective_target),
+        json_string_array(&plan.clang_args),
+        json_string_array(&plan.analysis_clang_args),
+        json_optional_string(plan.native_tuning_arg.as_deref()),
+        json_string(&plan.ll_path.display().to_string()),
+        json_string(&plan.obj_path.display().to_string()),
+        json_string(&plan.stderr_remarks_path.display().to_string()),
+    );
+    fs::write(path, text).with_context(|| {
+        format!(
+            "Failed to write compile-plan metadata at {}",
+            path.display()
+        )
+    })
 }
 
 /// Once-per-process probe of clang's default `Target:` line. When the
@@ -717,6 +813,62 @@ mod tests {
             hint
         );
         assert!(hint.contains("arm64-apple-macosx15.0.0"));
+    }
+
+    #[test]
+    fn compile_plan_records_effective_target_and_native_tuning() {
+        let plan = build_clang_compile_plan(
+            PathBuf::from("clang"),
+            PathBuf::from("/tmp/input.ll"),
+            PathBuf::from("/tmp/output.o"),
+            None,
+        );
+        assert!(plan.clang_args.contains(&"-fno-math-errno".to_string()));
+        assert!(plan.clang_args.contains(&"-target".to_string()));
+        assert!(plan.analysis_clang_args.contains(&"-target".to_string()));
+        assert_eq!(
+            plan.native_tuning_arg.as_deref(),
+            Some(native_tuning_arg_for_host())
+        );
+        assert!(!plan.effective_target.is_empty());
+    }
+
+    #[test]
+    fn compile_plan_skips_native_tuning_for_explicit_target() {
+        let plan = build_clang_compile_plan(
+            PathBuf::from("clang"),
+            PathBuf::from("/tmp/input.ll"),
+            PathBuf::from("/tmp/output.o"),
+            Some("x86_64-unknown-linux-gnu"),
+        );
+        assert_eq!(plan.effective_target, "x86_64-unknown-linux-gnu");
+        assert_eq!(plan.native_tuning_arg, None);
+        assert!(!plan
+            .clang_args
+            .iter()
+            .any(|arg| arg == "-march=native" || arg == "-mcpu=native"));
+    }
+
+    #[test]
+    fn compile_plan_metadata_json_contains_object_source() {
+        let temp = env::temp_dir().join(format!(
+            "perry_compile_plan_test_{}_{}.json",
+            std::process::id(),
+            TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let plan = build_clang_compile_plan(
+            PathBuf::from("clang"),
+            PathBuf::from("/tmp/input.ll"),
+            PathBuf::from("/tmp/output.o"),
+            Some("x86_64-unknown-linux-gnu"),
+        );
+        write_compile_plan_metadata(&plan, &temp).unwrap();
+        let text = fs::read_to_string(&temp).unwrap();
+        let _ = fs::remove_file(&temp);
+        assert!(text.contains("\"clang_path\": \"clang\""));
+        assert!(text.contains("\"effective_target\": \"x86_64-unknown-linux-gnu\""));
+        assert!(text.contains("\"object_path\": \"/tmp/output.o\""));
+        assert!(text.contains("\"stderr_remarks_path\": \"/tmp/output.o.clang-stderr\""));
     }
 
     #[test]

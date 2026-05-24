@@ -1,9 +1,9 @@
 # Compiler Output Regression Harness
 
-This harness records the full evidence chain for CPU-sensitive Perry benchmarks:
+This harness records the evidence chain for CPU-sensitive Perry benchmarks:
 
 ```text
-HIR -> LLVM IR before opt -> LLVM IR after opt -> assembly -> benchmark result
+HIR -> LLVM IR before opt -> retained object -> object disassembly -> benchmark result
 ```
 
 Run the primary image convolution gate:
@@ -16,9 +16,12 @@ python3 scripts/compiler_output_regression.py capture \
 ```
 
 Artifacts are written under `target/compiler-output-regression/<workload>/` by
-default, including `hir.txt`, `llvm-before-opt.ll`, `llvm-after-opt.ll`,
-`assembly.s`, `llvm-vectorization-remarks.stderr`, `manifest.json`, and
-`structural-report.json`.
+default, including `hir.txt`, `llvm-before-opt.ll`, retained `object-*.o`
+files, `object-*.compile-plan.json`, `object-disassembly.s`,
+`llvm-after-opt.analysis.ll`, `llvm-vectorization-remarks.stderr`,
+`manifest.json`, and `structural-report.json`. The optimized IR file is an
+analysis-only artifact; assembly and FMA gates are counted from the retained
+object disassembly.
 
 The structural gate checks that hot loop blocks keep native-shaped buffer and
 numeric code: direct `getelementptr inbounds`, `llvm.assume`, invariant-load
@@ -30,11 +33,12 @@ Runtime/GC isolation is enforced through per-workload budgets in
 regions still fail on allocations, GC, write barriers, boxed numbers, and
 buffer slow paths.
 
-Vectorization is also workload-policy driven. `structural-report.json` records
+Vectorization and workload contracts are policy driven by
+`benchmarks/compiler_output/workloads.toml`. `structural-report.json` records
 the observed missed-vectorization reason kinds and fails if a workload loses a
 required vectorized loop or starts reporting an unapproved reason such as
 aliasing. Scalar baselines, including `loop_data_dependent`, are explicit in
-the harness policy instead of implicit `vectorized_count: 0` passes. The
+the spec instead of implicit `vectorized_count: 0` passes. The
 `vectorized_buffer_transform` fixture is the positive gate: it requires at
 least one LLVM loop-vectorizer success remark.
 
@@ -52,9 +56,12 @@ The harness also captures best-effort explanation counters:
   accesses summarized for each benchmark capture.
 - Benchmark timing stats: median, mean, min, max, p95, standard deviation, run
   count, and whether the capture is a CI smoke run or timing-quality run.
+- The real Perry object compile plan: clang path, effective target, clang
+  arguments, native tuning flag, retained object path, and clang stderr path.
 - Hot-loop region counters under `regions.hot_loops` plus semantic
   `regions.named` entries for image input generation, blur, FNV hashing, and
-  numeric loop bodies. Each named region has its own structural contract.
+  numeric loop bodies. Each named region has its own structural contract in
+  the TOML spec.
 - Hardware counters from `perf stat` when available on Linux.
 
 The `hir_fact_rewrite` fixture is the rewrite-insensitivity gate for the HIR
@@ -94,6 +101,11 @@ python3 scripts/compiler_output_regression.py capture \
   --expect-fma=on \
   --gate
 ```
+
+`--clang-arg` is kept for compatibility and only affects the analysis-only
+optimized IR emission. FMA instruction gates read the retained Perry object
+compile plan from `manifest.json`; host captures use native CPU tuning unless
+an explicit target triple is supplied.
 
 The no-contraction case remains a separate gate even when fast math is enabled:
 

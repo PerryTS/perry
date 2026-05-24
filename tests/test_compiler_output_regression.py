@@ -184,9 +184,82 @@ for.body.11:
             self.assertEqual(HARNESS.verify_existing(args), 0)
             self.assertTrue((root / "structural-report.json").exists())
 
+    def test_verify_existing_uses_analysis_ir_object_disassembly_and_manifest_plan(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "llvm-before-opt.ll").write_text(GOOD_IR, encoding="utf-8")
+            (root / "llvm-after-opt.analysis.ll").write_text(GOOD_IR, encoding="utf-8")
+            (root / "object-disassembly.s").write_text(GOOD_ASM, encoding="utf-8")
+            (root / "manifest.json").write_text(
+                """
+{
+  "compile_plan": {
+    "effective_target": "x86_64-unknown-linux-gnu",
+    "clang_args": ["-c", "-O3", "-fno-math-errno", "-march=native"]
+  }
+}
+""",
+                encoding="utf-8",
+            )
+            args = type(
+                "Args",
+                (),
+                {
+                    "artifact_dir": str(root),
+                    "workload": "image_convolution",
+                    "gate": True,
+                    "print_summary": False,
+                    "target": None,
+                    "clang_arg": None,
+                    "fp_contract": None,
+                    "expect_fma": "auto",
+                },
+            )()
+            self.assertEqual(HARNESS.verify_existing(args), 0)
+            report = (root / "structural-report.json").read_text(encoding="utf-8")
+            self.assertIn("object_disassembly_present", report)
+
     def test_explicit_perry_path_is_repo_relative(self):
         resolved = HARNESS.resolve_perry("target/debug/perry")
         self.assertEqual(resolved, [str(REPO_ROOT / "target/debug/perry")])
+
+    def test_workload_spec_loads_current_workloads(self):
+        spec = HARNESS.load_workload_spec(HARNESS.DEFAULT_SPEC_PATH)
+        self.assertIn("image_convolution", spec["workloads"])
+        self.assertIn("fma_contract", spec["workloads"])
+        self.assertTrue(spec["workloads"]["fma_contract"]["fma_gate"]["enabled"])
+        for name, workload in spec["workloads"].items():
+            self.assertIn("source", workload, name)
+            self.assertIn("vectorization", workload, name)
+            self.assertIn("runtime_budgets", workload, name)
+
+    def test_workload_spec_rejects_missing_required_fields(self):
+        with self.assertRaises(HARNESS.HarnessError):
+            HARNESS.validate_workload_spec(
+                {
+                    "schema_version": 1,
+                    "workloads": {
+                        "bad": {
+                            "kind": "numeric_loop",
+                            "vectorization": {
+                                "min_vectorized_loops": 0,
+                                "allowed_missed_reason_kinds": [],
+                            },
+                            "runtime_budgets": {},
+                        }
+                    },
+                }
+            )
+
+    def test_parse_kept_paths_includes_compile_metadata(self):
+        irs, objects, metadata = HARNESS.parse_kept_paths(
+            "[perry-codegen] kept LLVM IR: /tmp/a.ll\n"
+            "[perry-codegen] kept object:  /tmp/a.o\n"
+            "[perry-codegen] kept compile metadata: /tmp/a.o.compile-plan.json\n"
+        )
+        self.assertEqual(irs, [Path("/tmp/a.ll")])
+        self.assertEqual(objects, [Path("/tmp/a.o")])
+        self.assertEqual(metadata, [Path("/tmp/a.o.compile-plan.json")])
 
     def test_runtime_counter_summary_combines_static_and_trace_counts(self):
         counters = HARNESS.structural_counters(
