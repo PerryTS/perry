@@ -1076,7 +1076,6 @@ mod tests {
             method: "GET".to_string(),
             url: "http://localhost/".to_string(),
             headers: HashMap::new(),
-            trailers: HashMap::new(),
             body: Vec::new(),
             response_callback,
             listeners: request_listeners,
