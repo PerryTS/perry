@@ -10,6 +10,8 @@ RUNS=5
 OUT=""
 SKIP_PERF_COMPREHENSIVE=0
 KEEP_WORKTREES=0
+GATE=0
+PERF_MATH_SLICE_ROWS=()
 
 usage() {
   cat <<'EOF'
@@ -20,6 +22,8 @@ Options:
   --head-ref REF                 Head/PR ref (default: HEAD)
   --runs N                       Benchmark samples per benchmark (default: 5)
   --out PATH                     Output root (default: tmp/gc-1090-evidence-<utc>)
+  --gate                         Fail on missing strict evidence
+  --perf-math-slice-row NAME     Limit nested perf-frontier math slices
   --skip-perf-comprehensive      Skip optional perf-comprehensive probe
   --keep-worktrees               Keep detached worktrees after the run
   -h, --help                     Show this help
@@ -32,6 +36,8 @@ while [[ $# -gt 0 ]]; do
     --head-ref) HEAD_REF="$2"; shift 2 ;;
     --runs) RUNS="$2"; shift 2 ;;
     --out) OUT="$2"; shift 2 ;;
+    --gate) GATE=1; shift ;;
+    --perf-math-slice-row) PERF_MATH_SLICE_ROWS+=("$2"); shift 2 ;;
     --skip-perf-comprehensive) SKIP_PERF_COMPREHENSIVE=1; shift ;;
     --keep-worktrees) KEEP_WORKTREES=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -52,6 +58,14 @@ cd "$ROOT"
 
 BASE_SHA="$(git rev-parse --verify "$BASE_REF^{commit}")"
 HEAD_SHA="$(git rev-parse --verify "$HEAD_REF^{commit}")"
+if ! [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "base ref did not resolve to an exact 40-char SHA: $BASE_REF -> $BASE_SHA" >&2
+  exit 2
+fi
+if ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "head ref did not resolve to an exact 40-char SHA: $HEAD_REF -> $HEAD_SHA" >&2
+  exit 2
+fi
 OUT_ABS="$(python3 - "$ROOT" "$OUT" <<'PY'
 import os
 import sys
@@ -103,7 +117,7 @@ cleanup() {
 trap cleanup EXIT
 
 write_metadata() {
-  python3 - "$METADATA" "$BASE_REF" "$HEAD_REF" "$BASE_SHA" "$HEAD_SHA" "$RUNS" "$SKIP_PERF_COMPREHENSIVE" <<'PY'
+  python3 - "$METADATA" "$BASE_REF" "$HEAD_REF" "$BASE_SHA" "$HEAD_SHA" "$RUNS" "$SKIP_PERF_COMPREHENSIVE" "$GATE" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
@@ -122,10 +136,50 @@ existing.update({
     "head_sha": sys.argv[5],
     "runs": int(sys.argv[6]),
     "skip_perf_comprehensive": sys.argv[7] == "1",
+    "gate": sys.argv[8] == "1",
     "commands": existing.get("commands", {}),
+    "tool_versions": existing.get("tool_versions", {}),
 })
 path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+capture_tool_versions() {
+  python3 - "$METADATA" "$ROOT" <<'PY'
+import json
+import platform
+import subprocess
+import sys
+from pathlib import Path
+
+metadata = Path(sys.argv[1])
+root = Path(sys.argv[2])
+
+def run(cmd):
+    try:
+        completed = subprocess.run(cmd, cwd=root, text=True, capture_output=True, timeout=15)
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+    return {
+        "available": completed.returncode == 0,
+        "exit_code": completed.returncode,
+        "stdout": completed.stdout.strip().splitlines()[:3],
+        "stderr": completed.stderr.strip().splitlines()[:3],
+    }
+
+data = json.loads(metadata.read_text(encoding="utf-8"))
+data["tool_versions"] = {
+    "platform": platform.platform(),
+    "python": sys.version.split()[0],
+    "git": run(["git", "--version"]),
+    "cargo": run(["cargo", "--version"]),
+    "rustc": run(["rustc", "--version"]),
+    "node": run(["node", "--version"]),
+    "sample": run(["/usr/bin/sample", "-h"]) if Path("/usr/bin/sample").exists() else {"available": False},
+    "perf": run(["perf", "--version"]),
+}
+metadata.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 }
 
@@ -162,6 +216,7 @@ PY
 }
 
 write_metadata
+capture_tool_versions
 
 echo "=== #1090 exact-head GC evidence packet ==="
 echo "base: $BASE_REF -> $BASE_SHA"
@@ -264,14 +319,57 @@ run_perf_comprehensive() {
   run_logged "$label" "perf_comprehensive" "$worktree" "$log" "$cmd"
 }
 
+run_perf_frontier() {
+  local perf_out="$OUT_ABS/perf-frontier"
+  local log="$OUT_ABS/logs/perf-frontier.command.log"
+  local baseline="$ROOT/tmp/perf-frontier-baseline.json"
+  local code=0
+  local args=(
+    --base-ref "$BASE_SHA"
+    --head-ref "$HEAD_SHA"
+    --runs "$RUNS"
+    --out "$perf_out"
+  )
+  if [[ -f "$baseline" ]]; then
+    args+=(--baseline-in "$baseline")
+  else
+    args+=(--update-baseline "$baseline")
+  fi
+  if [[ "$GATE" -eq 1 ]]; then
+    args+=(--gate)
+  fi
+  local row
+  for row in "${PERF_MATH_SLICE_ROWS[@]}"; do
+    args+=(--math-slice-row "$row")
+  done
+  mkdir -p "$(dirname "$log")"
+  echo "=== packet: perf_frontier ==="
+  set +e
+  "$ROOT/scripts/perf_frontier_gate.sh" "${args[@]}" >"$log" 2>&1
+  code=$?
+  set -e
+  local status="pass"
+  if [[ "$code" -ne 0 ]]; then
+    status="fail"
+  fi
+  record_command "packet" "perf_frontier" "$status" "$code" "$log" ""
+  echo "  $status (exit=$code, log=$log)"
+}
+
 run_for_label "base" "$BASE_WT"
 run_for_label "head" "$HEAD_WT"
+run_perf_frontier
 
 set +e
-python3 "$ROOT/scripts/gc_1090_evidence_report.py" \
-  --root "$OUT_ABS" \
-  --json-out "$OUT_ABS/gc-1090-packet.json" \
+REPORT_ARGS=(
+  --root "$OUT_ABS"
+  --json-out "$OUT_ABS/gc-1090-packet.json"
   --md-out "$OUT_ABS/gc-1090-packet.md"
+)
+if [[ "$GATE" -eq 1 ]]; then
+  REPORT_ARGS+=(--gate)
+fi
+python3 "$ROOT/scripts/gc_1090_evidence_report.py" "${REPORT_ARGS[@]}"
 REPORT_EXIT=$?
 set -e
 

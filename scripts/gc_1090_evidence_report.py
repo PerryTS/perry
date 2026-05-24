@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+
+EXACT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 REQUIRED_BENCHMARKS = (
     "bench_json_roundtrip",
@@ -106,6 +109,10 @@ def command_status(metadata: dict[str, Any], label: str, command: str) -> str:
     return "pass" if exit_code == 0 else "fail"
 
 
+def exact_sha(value: Any) -> bool:
+    return isinstance(value, str) and EXACT_SHA_RE.fullmatch(value) is not None
+
+
 def label_paths(root: Path, label: str) -> dict[str, Path]:
     base = root / label
     return {
@@ -138,6 +145,8 @@ def benchmark_matrix(
     head_label: str,
     errors: list[str],
     warnings: list[str],
+    *,
+    gate: bool = False,
 ) -> dict[str, Any]:
     base = load_json(label_paths(root, base_label)["benchmarks"], {})
     head = load_json(label_paths(root, head_label)["benchmarks"], {})
@@ -150,7 +159,11 @@ def benchmark_matrix(
         for name, entry in nested(report, "benchmarks", default={}).items():
             correctness = entry.get("correctness", {})
             status = correctness.get("status")
-            if status == "fail":
+            if gate and not isinstance(correctness, dict):
+                errors.append(f"{report_label}:{name}: correctness output missing")
+            elif gate and status != "pass":
+                errors.append(f"{report_label}:{name}: correctness status is {status}")
+            elif status == "fail":
                 errors.append(
                     f"{report_label}:{name}: correctness failed: "
                     f"{correctness.get('reason', 'semantic output mismatch')}"
@@ -357,10 +370,53 @@ def perf_summary(metadata: dict[str, Any], base_label: str, head_label: str) -> 
     return result
 
 
-def collect_report(root: Path, base_label: str, head_label: str) -> dict[str, Any]:
+def perf_frontier_summary(root: Path, metadata: dict[str, Any], errors: list[str], warnings: list[str], *, gate: bool) -> dict[str, Any]:
+    path = root / "perf-frontier" / "perf-frontier-packet.json"
+    packet = load_json(path, {})
+    command = nested(metadata, "commands", "packet", "perf_frontier", default={})
+    summary = {
+        "present": bool(packet),
+        "path": str(path),
+        "command": command if isinstance(command, dict) else {},
+        "status": packet.get("status") if isinstance(packet, dict) else "missing",
+        "errors": packet.get("errors", []) if isinstance(packet, dict) else [],
+        "warnings": packet.get("warnings", []) if isinstance(packet, dict) else [],
+        "classification": packet.get("classification", {}) if isinstance(packet, dict) else {},
+        "profile_summary": packet.get("profile_summary", {}) if isinstance(packet, dict) else {},
+        "baseline": packet.get("baseline", {}) if isinstance(packet, dict) else {},
+    }
+    command_status_value = command.get("status") if isinstance(command, dict) else "missing"
+    if gate and command_status_value != "pass":
+        errors.append(f"packet: perf_frontier command status is {command_status_value}")
+    elif command_status_value not in ("pass", "skipped"):
+        warnings.append(f"packet: perf_frontier command status is {command_status_value}")
+    if gate and not packet:
+        errors.append("perf frontier packet is missing")
+    elif not packet:
+        warnings.append("perf frontier packet is missing")
+    elif packet.get("status") != "pass":
+        errors.append(f"perf frontier packet status is {packet.get('status')}")
+    if gate and isinstance(packet, dict):
+        profile = packet.get("profile_summary", {})
+        if not isinstance(profile, dict) or not profile.get("top_non_gc_costs"):
+            errors.append("perf frontier profiler attribution is missing")
+        classification = packet.get("classification", {})
+        for name in REQUIRED_BENCHMARKS:
+            if not isinstance(classification, dict) or name not in classification:
+                errors.append(f"perf frontier classification missing for {name}")
+    return summary
+
+
+def collect_report(root: Path, base_label: str, head_label: str, *, gate: bool = False) -> dict[str, Any]:
     metadata = load_json(root / "metadata.json", {})
     errors: list[str] = []
     warnings: list[str] = []
+
+    for key in ("base_sha", "head_sha"):
+        if not exact_sha(metadata.get(key)):
+            (errors if gate else warnings).append(
+                f"metadata {key} is not an exact 40-char SHA"
+            )
 
     for label in (base_label, head_label):
         if command_exit(metadata, label, "build") not in (0, None):
@@ -385,7 +441,7 @@ def collect_report(root: Path, base_label: str, head_label: str) -> dict[str, An
         if summary["failed"] != 0:
             errors.append(f"{label}: memory stability failed={summary['failed']}")
 
-    benchmarks = benchmark_matrix(root, base_label, head_label, errors, warnings)
+    benchmarks = benchmark_matrix(root, base_label, head_label, errors, warnings, gate=gate)
     copied_minor = {
         base_label: copied_report_summary(root, base_label),
         head_label: copied_report_summary(root, head_label),
@@ -397,6 +453,7 @@ def collect_report(root: Path, base_label: str, head_label: str) -> dict[str, An
     strict_workloads = gate_copied_minor(copied_minor[head_label], errors, warnings)
 
     perf = perf_summary(metadata, base_label, head_label)
+    perf_frontier = perf_frontier_summary(root, metadata, errors, warnings, gate=gate)
 
     packet = {
         "schema_version": 1,
@@ -416,6 +473,7 @@ def collect_report(root: Path, base_label: str, head_label: str) -> dict[str, An
                 "sha": metadata.get("head_sha"),
             },
         },
+        "tool_versions": metadata.get("tool_versions", {}),
         "commands": metadata.get("commands", {}),
         "memory_stability": memory,
         "benchmarks": benchmarks,
@@ -423,6 +481,7 @@ def collect_report(root: Path, base_label: str, head_label: str) -> dict[str, An
         "strict_head_workloads": strict_workloads,
         "target_collector": target_collector,
         "perf_comprehensive": perf,
+        "perf_frontier": perf_frontier,
     }
     return packet
 
@@ -540,6 +599,27 @@ def render_markdown(packet: dict[str, Any]) -> str:
         for outlier in perf.get("outlier_lines", []) if isinstance(perf, dict) else []:
             lines.append(f"  - `{outlier}`")
 
+    frontier = packet.get("perf_frontier", {})
+    lines.extend(["", "## Perf Frontier", ""])
+    if isinstance(frontier, dict):
+        lines.append(
+            f"- Status: `{frontier.get('status', 'missing')}` packet: `{frontier.get('path', '')}`"
+        )
+        baseline = frontier.get("baseline", {})
+        if isinstance(baseline, dict) and baseline:
+            lines.append(
+                f"- Baseline reference: `{baseline.get('input_path')}` "
+                f"sha=`{baseline.get('baseline_sha', 'missing')}`"
+            )
+        profile = frontier.get("profile_summary", {})
+        if isinstance(profile, dict):
+            lines.append(
+                f"- Profiled typed row: `{profile.get('row', 'missing')}`"
+            )
+            for row in profile.get("top_non_gc_costs", [])[:3]:
+                if isinstance(row, dict):
+                    lines.append(f"  - `{row.get('symbol')}` samples={row.get('samples')}")
+
     lines.append("")
     return "\n".join(lines)
 
@@ -551,10 +631,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--head-label", default="head")
     parser.add_argument("--json-out", help="Packet JSON path")
     parser.add_argument("--md-out", help="Packet Markdown path")
+    parser.add_argument("--gate", action="store_true", help="Enable strict evidence gates")
     args = parser.parse_args(argv)
 
     root = Path(args.root)
-    packet = collect_report(root, args.base_label, args.head_label)
+    packet = collect_report(root, args.base_label, args.head_label, gate=args.gate)
 
     json_out = Path(args.json_out) if args.json_out else root / "gc-1090-packet.json"
     md_out = Path(args.md_out) if args.md_out else root / "gc-1090-packet.md"
