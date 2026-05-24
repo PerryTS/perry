@@ -235,6 +235,31 @@ pub(crate) fn lower_stmt_for_of(
                 new_expr.callee.as_ref(),
                 ast::Expr::Ident(c) if c.sym.as_ref() == "ReadableStream"
             ),
+            // #1670: `for await (const c of res.body)` — `res.body` is a
+            // `ReadableStream` but arrives as a bare `Member` (Any-typed), so
+            // the Ident arm above misses it. Recognise `<obj>.body` on a
+            // Response/Request and `<ts>.readable` on a TransformStream, the
+            // same native-instance property mapping `var_decl` uses when those
+            // reads are bound to a typed local. Without this the loop falls
+            // through to the array-index desugar and iterates zero times.
+            ast::Expr::Member(member) => {
+                if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(prop_ident)) =
+                    (member.obj.as_ref(), &member.prop)
+                {
+                    let prop = prop_ident.sym.as_ref();
+                    let class = ctx
+                        .lookup_native_instance(obj_ident.sym.as_ref())
+                        .map(|(_, c)| c);
+                    matches!(
+                        (prop, class),
+                        ("body", Some("Response"))
+                            | ("body", Some("Request"))
+                            | ("readable", Some("TransformStream"))
+                    )
+                } else {
+                    false
+                }
+            }
             _ => false,
         };
 
