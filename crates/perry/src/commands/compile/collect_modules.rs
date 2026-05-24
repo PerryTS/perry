@@ -216,9 +216,19 @@ pub(super) fn collect_modules(
         // node_modules/ioredis, node_modules/ethers etc. paths that already have their
         // own handling (is_perry_native above).
         || (!is_in_node_modules && is_in_perry_native_package(&canonical));
-    let should_use_js_runtime = (is_js_file(&canonical) && !is_in_compiled_pkg)
-        || is_declaration_file(&canonical)
-        || is_json;
+    // #668 / node-core (#800): a *user* `.js`/`.cjs`/`.mjs` file (entry or a
+    // project source, i.e. NOT under node_modules) is fed through the native
+    // AOT pipeline like a `.ts` file rather than treated as a JS module. The
+    // extension is not the signal — content is: most plain `.js` is valid
+    // TypeScript-subset, and CommonJS shapes (`require(...)`, `module.exports`)
+    // are rewritten to ESM by `cjs_wrap` just below, the same translation
+    // already trusted for `compilePackages` targets. node_modules `.js` keeps
+    // the JS-module classification (post-#1696 there is no V8 fallback, so it
+    // surfaces as an unsupported-module error rather than silently running).
+    let should_use_js_runtime =
+        (is_js_file(&canonical) && !is_in_compiled_pkg && is_in_node_modules)
+            || is_declaration_file(&canonical)
+            || is_json;
 
     // Skip JSON files — they're data, not code (imported via `with { type: "json" }`)
     if is_json {
@@ -316,7 +326,16 @@ pub(super) fn collect_modules(
     // rewrite the source as ESM before SWC parses it. Only fires for files
     // inside a `compilePackages` target — user TypeScript and ESM-shaped
     // packages skip the wrap. See `cjs_wrap.rs` for the wrap shape.
-    let was_cjs_wrapped = is_in_compiled_pkg && super::cjs_wrap::is_commonjs(&raw_source);
+    // Fire for `compilePackages` targets (the original #348 case) AND for any
+    // user file outside node_modules (#668 / #800): a user `.js` or `.ts`
+    // written in CommonJS — `require(...)` / `module.exports` with no
+    // top-level ESM — is rewritten to ESM here so `require("literal")` lands
+    // as a static namespace import and flows through the normal resolution +
+    // init-order + codegen path. A file that already has top-level
+    // `import`/`export` is not CommonJS (`is_commonjs` returns false) and is
+    // left untouched.
+    let was_cjs_wrapped =
+        (is_in_compiled_pkg || !is_in_node_modules) && super::cjs_wrap::is_commonjs(&raw_source);
     let source = if was_cjs_wrapped {
         super::cjs_wrap::wrap_commonjs(&raw_source, &canonical)
     } else {
