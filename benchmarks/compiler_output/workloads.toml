@@ -456,3 +456,11 @@ native_region_id = "h1_buffer_alias_negative_ts.unknowncallescape.unknown_call_e
 [[workloads.h1_buffer_alias_negative.named_regions]]
 name = "length_mismatch"
 native_region_id = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "mutated_for_index"
+native_region_id = "h1_buffer_alias_negative_ts.mutatedforindex.mutated_for_index"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "mutated_while_index"
+native_region_id = "h1_buffer_alias_negative_ts.mutatedwhileindex.mutated_while_index"

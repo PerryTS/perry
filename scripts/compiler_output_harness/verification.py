@@ -421,6 +421,17 @@ def native_rep_contract_results(
                 if _access_mode_name(r.get("access_mode")) == "unchecked_native"
             ]
 
+        def fallback_buffer_access(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                r
+                for r in rows
+                if _is_dynamic_fallback(r)
+                and (
+                    str(r.get("expr_kind", "")).startswith(("BufferIndex", "Uint8Array"))
+                    or "slow_path" in str(r.get("consumer", ""))
+                )
+            ]
+
         denied_noalias = [
             r
             for r in records
@@ -460,18 +471,16 @@ def native_rep_contract_results(
         reassignment_records = records_for_native_region("reassignment_region")
         unknown_call_escape_records = records_for_native_region("unknown_call_escape")
         length_mismatch_records = records_for_native_region("length_mismatch")
+        mutated_for_records = records_for_native_region("mutated_for_index")
+        mutated_while_records = records_for_native_region("mutated_while_index")
         length_mismatch_unchecked_unknown = [
             r for r in length_mismatch_records if _is_unchecked_native_unknown_bounds(r)
         ]
-        length_mismatch_dynamic_fallback_accesses = [
-            r
-            for r in length_mismatch_records
-            if _is_dynamic_fallback(r)
-            and (
-                str(r.get("expr_kind", "")).startswith(("BufferIndex", "Uint8Array"))
-                or "slow_path" in str(r.get("consumer", ""))
-            )
-        ]
+        length_mismatch_dynamic_fallback_accesses = fallback_buffer_access(length_mismatch_records)
+        mutated_for_unchecked_native = unchecked_native_access(mutated_for_records)
+        mutated_while_unchecked_native = unchecked_native_access(mutated_while_records)
+        mutated_for_dynamic_fallback_accesses = fallback_buffer_access(mutated_for_records)
+        mutated_while_dynamic_fallback_accesses = fallback_buffer_access(mutated_while_records)
         hazard_checks = {
             "alias_local": bool(denied_alias(alias_local_records))
             or bool(fallback_access(alias_local_records))
@@ -497,6 +506,10 @@ def native_rep_contract_results(
             or not unchecked_native_access(records_in_function("sharedBacking")),
             "length_mismatch": not length_mismatch_unchecked_unknown
             and bool(length_mismatch_dynamic_fallback_accesses),
+            "mutated_for_index": not mutated_for_unchecked_native
+            and bool(mutated_for_dynamic_fallback_accesses),
+            "mutated_while_index": not mutated_while_unchecked_native
+            and bool(mutated_while_dynamic_fallback_accesses),
         }
         for hazard, passed in hazard_checks.items():
             add(
@@ -513,6 +526,26 @@ def native_rep_contract_results(
             "native_reps_negative_length_mismatch_has_dynamic_fallback",
             bool(length_mismatch_dynamic_fallback_accesses),
             json.dumps(length_mismatch_dynamic_fallback_accesses[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_mutated_for_index_no_unchecked_native",
+            not mutated_for_unchecked_native,
+            json.dumps(mutated_for_unchecked_native[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_mutated_for_index_has_dynamic_fallback",
+            bool(mutated_for_dynamic_fallback_accesses),
+            json.dumps(mutated_for_dynamic_fallback_accesses[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_mutated_while_index_no_unchecked_native",
+            not mutated_while_unchecked_native,
+            json.dumps(mutated_while_unchecked_native[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_mutated_while_index_has_dynamic_fallback",
+            bool(mutated_while_dynamic_fallback_accesses),
+            json.dumps(mutated_while_dynamic_fallback_accesses[:5], sort_keys=True),
         )
 
     return results

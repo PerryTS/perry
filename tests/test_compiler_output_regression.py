@@ -466,7 +466,7 @@ for.body.11:
             any("native_reps_no_unchecked_unknown_bounds" in error for error in report["errors"])
         )
 
-    def h1_alias_negative_records(self, length_records):
+    def h1_alias_negative_records(self, length_records, mutated_records=None):
         alias_region = "h1_buffer_alias_negative_ts.aliaslocal.alias_local"
         reassignment_region = (
             "h1_buffer_alias_negative_ts.reassignment.reassignment_region"
@@ -474,6 +474,33 @@ for.body.11:
         unknown_call_region = (
             "h1_buffer_alias_negative_ts.unknowncallescape.unknown_call_escape"
         )
+        mutated_for_region = (
+            "h1_buffer_alias_negative_ts.mutatedforindex.mutated_for_index"
+        )
+        mutated_while_region = (
+            "h1_buffer_alias_negative_ts.mutatedwhileindex.mutated_while_index"
+        )
+        if mutated_records is None:
+            mutated_records = [
+                native_record(
+                    function="mutatedForIndex",
+                    rep="i32",
+                    region_id=mutated_for_region,
+                    bounds_state="unknown",
+                    access_mode="dynamic_fallback",
+                    expr_kind="BufferIndexGet",
+                    consumer="BufferIndexGet.slow_path_i32",
+                ),
+                native_record(
+                    function="mutatedWhileIndex",
+                    rep="i32",
+                    region_id=mutated_while_region,
+                    bounds_state="unknown",
+                    access_mode="dynamic_fallback",
+                    expr_kind="BufferIndexGet",
+                    consumer="BufferIndexGet.slow_path_i32",
+                ),
+            ]
         return [
             native_record(
                 function="aliasLocal",
@@ -516,6 +543,7 @@ for.body.11:
                 consumer="BufferIndexGet.slow_path_i32",
             ),
             *length_records,
+            *mutated_records,
         ]
 
     def test_length_mismatch_unchecked_unknown_bounds_fails_gate(self):
@@ -575,6 +603,116 @@ for.body.11:
             native_reps=[{"records": records}],
         )
         self.assertEqual(report["status"], "pass", report["errors"])
+
+    def test_mutated_for_index_unchecked_native_fails_gate(self):
+        length_region = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"
+        mutated_for_region = (
+            "h1_buffer_alias_negative_ts.mutatedforindex.mutated_for_index"
+        )
+        records = self.h1_alias_negative_records(
+            [
+                native_record(
+                    function="lengthMismatch",
+                    rep="i32",
+                    region_id=length_region,
+                    bounds_state="unknown",
+                    access_mode="dynamic_fallback",
+                    expr_kind="BufferIndexSet",
+                    consumer="BufferIndexSet.slow_path",
+                )
+            ],
+            mutated_records=[
+                native_record(
+                    function="mutatedForIndex",
+                    rep="u8",
+                    region_id=mutated_for_region,
+                    bounds_state={"proven": {"proof": "loop_guard"}},
+                    access_mode="unchecked_native",
+                    expr_kind="BufferIndexGet",
+                    consumer="u8_load_zext_i32",
+                ),
+                native_record(
+                    function="mutatedWhileIndex",
+                    rep="i32",
+                    region_id="h1_buffer_alias_negative_ts.mutatedwhileindex.mutated_while_index",
+                    bounds_state="unknown",
+                    access_mode="dynamic_fallback",
+                    expr_kind="BufferIndexGet",
+                    consumer="BufferIndexGet.slow_path_i32",
+                ),
+            ],
+        )
+        report = HARNESS.verify_artifacts(
+            workload="h1_buffer_alias_negative",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any(
+                "native_reps_negative_mutated_for_index_no_unchecked_native" in error
+                for error in report["errors"]
+            )
+        )
+
+    def test_mutated_while_index_unchecked_native_fails_gate(self):
+        length_region = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"
+        mutated_while_region = (
+            "h1_buffer_alias_negative_ts.mutatedwhileindex.mutated_while_index"
+        )
+        records = self.h1_alias_negative_records(
+            [
+                native_record(
+                    function="lengthMismatch",
+                    rep="i32",
+                    region_id=length_region,
+                    bounds_state="unknown",
+                    access_mode="dynamic_fallback",
+                    expr_kind="BufferIndexSet",
+                    consumer="BufferIndexSet.slow_path",
+                )
+            ],
+            mutated_records=[
+                native_record(
+                    function="mutatedForIndex",
+                    rep="i32",
+                    region_id="h1_buffer_alias_negative_ts.mutatedforindex.mutated_for_index",
+                    bounds_state="unknown",
+                    access_mode="dynamic_fallback",
+                    expr_kind="BufferIndexGet",
+                    consumer="BufferIndexGet.slow_path_i32",
+                ),
+                native_record(
+                    function="mutatedWhileIndex",
+                    rep="u8",
+                    region_id=mutated_while_region,
+                    bounds_state={"proven": {"proof": "loop_guard"}},
+                    access_mode="unchecked_native",
+                    expr_kind="BufferIndexGet",
+                    consumer="u8_load_zext_i32",
+                ),
+            ],
+        )
+        report = HARNESS.verify_artifacts(
+            workload="h1_buffer_alias_negative",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any(
+                "native_reps_negative_mutated_while_index_no_unchecked_native" in error
+                for error in report["errors"]
+            )
+        )
 
     def test_native_region_materialization_fails_gate(self):
         direct_region = (

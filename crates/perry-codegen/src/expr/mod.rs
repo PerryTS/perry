@@ -1235,7 +1235,9 @@ pub(crate) fn record_int_facts_for_let(
 
 pub(crate) fn record_int_facts_for_local_set(ctx: &mut FnCtx<'_>, id: u32, value: &Expr) {
     ctx.int_range_aliases.remove(&id);
-    if int_range_expr(ctx, value).is_some_and(IntRange::is_nonnegative) {
+    let remains_nonnegative = int_range_expr(ctx, value).is_some_and(IntRange::is_nonnegative);
+    ctx.int_range_facts.retain(|fact| fact.local_id != id);
+    if remains_nonnegative {
         ctx.nonnegative_integer_locals.insert(id);
     } else {
         ctx.nonnegative_integer_locals.remove(&id);
@@ -1244,21 +1246,16 @@ pub(crate) fn record_int_facts_for_local_set(ctx: &mut FnCtx<'_>, id: u32, value
 
 pub(crate) fn record_int_facts_for_update(ctx: &mut FnCtx<'_>, id: u32, op: UpdateOp) {
     ctx.int_range_aliases.remove(&id);
-    match op {
-        UpdateOp::Increment => {
-            if ctx.nonnegative_integer_locals.contains(&id) {
-                ctx.nonnegative_integer_locals.insert(id);
-            }
-        }
-        UpdateOp::Decrement => {
-            if int_range_for_local(ctx, id, &mut std::collections::HashSet::new())
-                .is_some_and(|range| range.min >= 1)
-            {
-                ctx.nonnegative_integer_locals.insert(id);
-            } else {
-                ctx.nonnegative_integer_locals.remove(&id);
-            }
-        }
+    let remains_nonnegative = match op {
+        UpdateOp::Increment => ctx.nonnegative_integer_locals.contains(&id),
+        UpdateOp::Decrement => int_range_for_local(ctx, id, &mut std::collections::HashSet::new())
+            .is_some_and(|range| range.min >= 1),
+    };
+    ctx.int_range_facts.retain(|fact| fact.local_id != id);
+    if remains_nonnegative {
+        ctx.nonnegative_integer_locals.insert(id);
+    } else {
+        ctx.nonnegative_integer_locals.remove(&id);
     }
 }
 

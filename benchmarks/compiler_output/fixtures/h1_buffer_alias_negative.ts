@@ -69,8 +69,31 @@ function lengthMismatch(src: Buffer, dst: Buffer): number {
   return total;
 }
 
+function mutatedForIndex(buf: Buffer): number {
+  let total = 0;
+  mutated_for_index:
+  for (let i = 0; i < 8; i++) {
+    i = 16;
+    total = (total + buf[i]) | 0;
+  }
+  return total;
+}
+
+function mutatedWhileIndex(buf: Buffer): number {
+  let total = 0;
+  let i = 0;
+  mutated_while_index:
+  while (i < 8) {
+    i = 16;
+    total = (total + buf[i]) | 0;
+    i++;
+  }
+  return total;
+}
+
 const shortSrc = Buffer.alloc(SIZE / 2);
 const shortDst = Buffer.alloc(SIZE / 4);
+const mutationBuf = Buffer.alloc(8);
 
 console.log(
   "h1_buffer_alias_negative:" +
@@ -80,7 +103,9 @@ console.log(
       unknownCallEscape() +
       closureCapture() +
       sharedBacking() +
-      lengthMismatch(shortSrc, shortDst)
+      lengthMismatch(shortSrc, shortDst) +
+      mutatedForIndex(mutationBuf) +
+      mutatedWhileIndex(mutationBuf)
     ) |
       0),
 );
