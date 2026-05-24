@@ -26,7 +26,7 @@ use crate::ensure_gc_scanner_registered;
 use crate::request::{
     alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, IncomingMessage,
 };
-use crate::response::{alloc_server_response, HyperResponseShape, ServerResponse};
+use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody, ServerResponse};
 use crate::types::{
     extract_host, extract_port, js_promise_run_microtasks, js_promise_state,
     jsvalue_to_owned_string, read_string_header, Promise, POINTER_TAG, PTR_MASK, TAG_NULL,
@@ -318,7 +318,7 @@ async fn handle_request(
     req: Request<Incoming>,
     request_tx: Arc<mpsc::Sender<HttpPendingRequest>>,
     upgrade_tx: Arc<mpsc::Sender<HttpPendingUpgrade>>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> Result<Response<ResponseBody>, hyper::Error> {
     let method = req.method().to_string();
     let uri = req.uri();
     let url = match uri.query() {
@@ -394,7 +394,7 @@ async fn handle_request(
         // Channel closed — return 503 directly.
         return Ok(Response::builder()
             .status(503)
-            .body(Full::new(Bytes::from("Server unavailable")))
+            .body(Full::new(Bytes::from("Server unavailable")).boxed())
             .unwrap());
     }
 
@@ -404,7 +404,7 @@ async fn handle_request(
         Ok(shape) => Ok(shape.into_hyper()),
         Err(_) => Ok(Response::builder()
             .status(500)
-            .body(Full::new(Bytes::from("Handler error")))
+            .body(Full::new(Bytes::from("Handler error")).boxed())
             .unwrap()),
     }
 }
@@ -428,7 +428,7 @@ async fn handle_websocket_upgrade(
     headers_lower: HashMap<String, String>,
     raw_headers: Vec<(String, String)>,
     upgrade_tx: Arc<mpsc::Sender<HttpPendingUpgrade>>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> Result<Response<ResponseBody>, hyper::Error> {
     // Compute the Sec-WebSocket-Accept value before consuming req.
     let accept_value = req
         .headers()
@@ -481,7 +481,7 @@ async fn handle_websocket_upgrade(
         .header("upgrade", "websocket")
         .header("connection", "Upgrade")
         .header("sec-websocket-accept", accept_value)
-        .body(Full::new(Bytes::new()))
+        .body(Full::new(Bytes::new()).boxed())
         .unwrap())
 }
 
@@ -748,6 +748,7 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
                 status: sr.status_code,
                 status_message: sr.status_message.clone(),
                 headers,
+                trailers: Vec::new(),
                 body,
             };
             if let Some(tx) = sr.response_tx.take() {

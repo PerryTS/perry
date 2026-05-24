@@ -43,6 +43,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[I64, DOUBLE, I64, I64],
     );
     module.declare_function("js_http_response_headers", DOUBLE, &[I64]);
+    module.declare_function("js_http_response_trailers", DOUBLE, &[I64]);
     module.declare_function("js_http_server_accept_v2", I64, &[I64]);
     module.declare_function("js_http_server_close", DOUBLE, &[I64]);
     module.declare_function("js_http_server_create", I64, &[DOUBLE]);
@@ -104,6 +105,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[I64, DOUBLE, I64, I64],
     );
     module.declare_function("js_node_http_res_write", I32, &[I64, DOUBLE]);
+    module.declare_function("js_node_http_res_add_trailers", VOID, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_end", VOID, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_flush_headers", VOID, &[I64]);
     module.declare_function("js_node_http_res_write_continue", VOID, &[I64]);

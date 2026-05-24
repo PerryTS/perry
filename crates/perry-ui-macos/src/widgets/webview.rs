@@ -88,6 +88,144 @@ fn nanbox_str(s: &str) -> f64 {
     }
 }
 
+// AVFoundation represents media types as four-character codes:
+// `vide` = AVMediaTypeVideo, `soun` = AVMediaTypeAudio.
+fn open_system_settings(kind: &str) {
+    unsafe {
+        let pane = if kind == "vide" {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
+        } else {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        };
+        let ns_url_str = NSString::from_str(pane);
+        let Some(url_cls) = AnyClass::get(c"NSURL") else {
+            return;
+        };
+        let url: *mut AnyObject = msg_send![url_cls, URLWithString: &*ns_url_str];
+        if url.is_null() {
+            return;
+        }
+        let Some(workspace_cls) = AnyClass::get(c"NSWorkspace") else {
+            return;
+        };
+        let workspace: *mut AnyObject = msg_send![workspace_cls, sharedWorkspace];
+        if !workspace.is_null() {
+            let _: bool = msg_send![workspace, openURL: url];
+        }
+    }
+}
+
+fn show_media_permission_denied_alert(kind: &str, status: i64) {
+    let (title, noun, settings_name) = if kind == "vide" {
+        (
+            "Camera access is disabled",
+            "camera",
+            "Privacy & Security → Camera",
+        )
+    } else {
+        (
+            "Microphone access is disabled",
+            "microphone",
+            "Privacy & Security → Microphone",
+        )
+    };
+    let reason = if status == 1 { "restricted" } else { "denied" };
+    unsafe {
+        // Bring the app to the front before showing the modal. Otherwise the
+        // Settings helper can be created behind the WebView window.
+        if let Some(app_cls) = AnyClass::get(c"NSApplication") {
+            let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
+            if !app.is_null() {
+                let _: () = msg_send![app, activateIgnoringOtherApps: true];
+            }
+        }
+        let Some(alert_cls) = AnyClass::get(c"NSAlert") else {
+            return;
+        };
+        let alert: Retained<AnyObject> = msg_send![alert_cls, new];
+        let ns_title = NSString::from_str(title);
+        let _: () = msg_send![&*alert, setMessageText: &*ns_title];
+        let message = format!(
+            "This app cannot use the {noun} because macOS reports it as {reason}.\n\nOpen System Settings and enable this app in {settings_name}, then restart it."
+        );
+        let ns_message = NSString::from_str(&message);
+        let _: () = msg_send![&*alert, setInformativeText: &*ns_message];
+        let ns_open = NSString::from_str("Open System Settings");
+        let ns_cancel = NSString::from_str("Cancel");
+        let _: Retained<AnyObject> = msg_send![&*alert, addButtonWithTitle: &*ns_open];
+        let _: Retained<AnyObject> = msg_send![&*alert, addButtonWithTitle: &*ns_cancel];
+        let response: isize = msg_send![&*alert, runModal];
+        // NSAlertFirstButtonReturn = 1000.
+        if response == 1000 {
+            open_system_settings(kind);
+        }
+    }
+}
+
+fn request_av_capture_access_once() {
+    unsafe {
+        let Some(device_cls) = AnyClass::get(c"AVCaptureDevice") else {
+            return;
+        };
+        for media in ["vide", "soun"] {
+            let media_type = NSString::from_str(media);
+            let status: i64 = msg_send![device_cls, authorizationStatusForMediaType: &*media_type];
+            // 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized.
+            if status == 0 {
+                let media_label = media.to_string();
+                let permission_block =
+                    block2::RcBlock::new(move |granted: objc2::runtime::Bool| {
+                        eprintln!(
+                            "[webview] AV capture permission {}: {}",
+                            media_label,
+                            if granted.as_bool() {
+                                "granted"
+                            } else {
+                                "denied"
+                            }
+                        );
+                    });
+                let _: () = msg_send![device_cls, requestAccessForMediaType: &*media_type completionHandler: &*permission_block];
+            } else {
+                // Do not show the Settings alert here: WebView widgets are
+                // constructed while building the App body, before the window is
+                // guaranteed to be visible. The actual getUserMedia permission
+                // callback below shows the actionable alert at click time.
+                eprintln!(
+                    "[webview] AV capture permission {} status: {}",
+                    media, status
+                );
+            }
+        }
+    }
+}
+
+fn av_capture_status(media: &str) -> i64 {
+    unsafe {
+        let Some(device_cls) = AnyClass::get(c"AVCaptureDevice") else {
+            return 3;
+        };
+        let media_type = NSString::from_str(media);
+        msg_send![device_cls, authorizationStatusForMediaType: &*media_type]
+    }
+}
+
+fn show_denied_alerts_for_media_request() {
+    // WKMediaCaptureType can be camera, microphone, or camera+microphone. The
+    // raw values are platform-owned, so checking both AVFoundation statuses is
+    // safer and keeps the UX correct for combined getUserMedia requests.
+    for media in ["vide", "soun"] {
+        let status = av_capture_status(media);
+        if status == 1 || status == 2 {
+            eprintln!(
+                "[webview] showing Settings alert for AV capture permission {} status: {}",
+                media, status
+            );
+            show_media_permission_denied_alert(media, status);
+        }
+    }
+}
+
 /// Return the URL string from a WKNavigationAction.
 unsafe fn url_from_action(action: *mut AnyObject) -> String {
     if action.is_null() {
@@ -231,6 +369,28 @@ define_class!(
             }
         }
 
+        /// `webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:`
+        ///
+        /// WKWebView delegates camera/microphone decisions to `WKUIDelegate`.
+        /// Without this method `getUserMedia()` rejects in embedded desktop
+        /// WebViews even for localhost pages. Grant here; macOS TCC still owns
+        /// the OS-level camera/microphone prompt/deny decision.
+        #[unsafe(method(webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:))]
+        fn request_media_capture_permission(
+            &self,
+            _webview: *mut AnyObject,
+            _origin: *mut AnyObject,
+            _frame: *mut AnyObject,
+            _capture_type: i64,
+            decision_handler: *const block2::Block<dyn Fn(i64)>,
+        ) {
+            const WK_PERMISSION_DECISION_GRANT: i64 = 1;
+            show_denied_alerts_for_media_request();
+            if !decision_handler.is_null() {
+                unsafe { (*decision_handler).call((WK_PERMISSION_DECISION_GRANT,)); }
+            }
+        }
+
         /// `webView:didFinishNavigation:` — page finished loading. Reads the
         /// current URL and invokes `onLoaded(url)`.
         #[unsafe(method(webView:didFinishNavigation:))]
@@ -342,6 +502,10 @@ pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) 
     let url = str_from_header(url_ptr).to_string();
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
+    // Preflight macOS TCC for camera + microphone. WKUIDelegate grants the
+    // web-origin permission later, but the process still needs OS-level access.
+    request_av_capture_access_once();
+
     unsafe {
         let frame = objc2_core_foundation::CGRect::new(
             objc2_core_foundation::CGPoint::new(0.0, 0.0),
@@ -377,6 +541,7 @@ pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) 
         let key = Retained::as_ptr(&delegate) as usize;
         delegate.ivars().callback_key.set(key);
         let _: () = msg_send![wv, setNavigationDelegate: &*delegate];
+        let _: () = msg_send![wv, setUIDelegate: &*delegate];
 
         // 4. Initial load.
         if !url.is_empty() {

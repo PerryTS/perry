@@ -899,12 +899,16 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // `external-http-client-pump` because that feature is the marker
     // for "perry-ext-http is linked and exports these symbols".
     #[cfg(feature = "external-http-client-pump")]
-    if matches!(property_name, "statusCode" | "statusMessage" | "headers") {
+    if matches!(
+        property_name,
+        "statusCode" | "statusMessage" | "headers" | "trailers"
+    ) {
         extern "C" {
             fn js_http_is_incoming_message(handle: i64) -> i32;
             fn js_http_status_code(handle: i64) -> f64;
             fn js_http_status_message(handle: i64) -> *mut perry_runtime::StringHeader;
             fn js_http_response_headers(handle: i64) -> f64;
+            fn js_http_response_trailers(handle: i64) -> f64;
         }
         if unsafe { js_http_is_incoming_message(handle) } != 0 {
             use perry_runtime::JSValue;
@@ -919,6 +923,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                     }
                 }
                 "headers" => unsafe { js_http_response_headers(handle) },
+                "trailers" => unsafe { js_http_response_trailers(handle) },
                 _ => f64::from_bits(0x7FFC_0000_0000_0001),
             };
         }

@@ -120,10 +120,12 @@ pub fn try_lower_property_get_method_call(
             let enc_tag_i32 = if let Expr::String(s) = &args[0] {
                 let lower = s.to_ascii_lowercase();
                 let tag: i32 = match lower.as_str() {
-                    "utf8" | "utf-8" | "ascii" | "latin1" | "binary" => 0,
+                    "utf8" | "utf-8" => 0,
                     "hex" => 1,
                     "base64" => 2,
                     "base64url" => 3,
+                    "latin1" | "binary" => 4,
+                    "ascii" => 5,
                     _ => 0,
                 };
                 tag.to_string()

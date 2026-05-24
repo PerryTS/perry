@@ -4,14 +4,19 @@
 //! the per-request oneshot channel.
 
 use std::collections::HashMap;
+use std::convert::Infallible;
 
 use bytes::Bytes;
-use http_body_util::Full;
-use hyper::{Response, StatusCode};
+use http_body_util::{combinators::BoxBody, BodyExt, Full};
+use hyper::body::{Body, Frame, SizeHint};
+use hyper::header::{HeaderName, HeaderValue};
+use hyper::{HeaderMap, Response, StatusCode};
 use perry_ffi::{
     alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
     RawClosureHeader, StringHeader,
 };
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use tokio::sync::oneshot;
 
 use crate::request::{emit_no_arg_to_listeners, handle_to_pointer_f64};
@@ -19,15 +24,50 @@ use crate::types::{
     jsvalue_to_body_bytes, read_string_header, PTR_MASK, STRING_TAG, TAG_NULL, TAG_UNDEFINED,
 };
 
+pub type ResponseBody = BoxBody<Bytes, Infallible>;
+
+struct TrailerBody {
+    body: Option<Bytes>,
+    trailers: Option<HeaderMap>,
+}
+
+impl Body for TrailerBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        if let Some(body) = self.body.take() {
+            return Poll::Ready(Some(Ok(Frame::data(body))));
+        }
+        if let Some(trailers) = self.trailers.take() {
+            return Poll::Ready(Some(Ok(Frame::trailers(trailers))));
+        }
+        Poll::Ready(None)
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        // Keep the upper bound unknown when trailers are present so Hyper
+        // does not synthesize Content-Length and suppress trailing headers.
+        SizeHint::new()
+    }
+}
+
 /// Per-request handle backing `ServerResponse` JS-side.
 pub struct ServerResponse {
     pub status_code: u16,
     pub status_message: Option<String>,
     /// Lowercase-keyed header map (the lookup table).
     pub headers: HashMap<String, String>,
+    /// Lowercase-keyed trailer map for HTTP trailers emitted after the
+    /// response body, per Node's `ServerResponse.addTrailers` contract.
+    pub trailers: HashMap<String, String>,
     /// Lowercase → original-case map so `getHeaderNames()` returns
     /// what the user originally set (matches Node behavior).
     pub raw_header_names: HashMap<String, String>,
+    pub raw_trailer_names: HashMap<String, String>,
     pub headers_sent: bool,
     pub writable_ended: bool,
     pub writable_finished: bool,
@@ -46,19 +86,39 @@ pub struct HyperResponseShape {
     pub status: u16,
     pub status_message: Option<String>,
     pub headers: Vec<(String, String)>,
+    pub trailers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
 
 impl HyperResponseShape {
-    /// Build a hyper `Response<Full<Bytes>>` ready to return from the
+    /// Build a hyper `Response<BoxBody<Bytes, Infallible>>` ready to return from the
     /// service fn.
-    pub fn into_hyper(self) -> Response<Full<Bytes>> {
+    pub fn into_hyper(self) -> Response<ResponseBody> {
         let mut builder =
             Response::builder().status(StatusCode::from_u16(self.status).unwrap_or(StatusCode::OK));
         for (k, v) in self.headers {
             builder = builder.header(k, v);
         }
-        builder.body(Full::new(Bytes::from(self.body))).unwrap()
+        let trailers = self.trailers;
+        let body = if trailers.is_empty() {
+            Full::new(Bytes::from(self.body)).boxed()
+        } else {
+            let mut map = HeaderMap::new();
+            for (name, value) in trailers {
+                if let (Ok(name), Ok(value)) = (
+                    HeaderName::from_bytes(name.as_bytes()),
+                    HeaderValue::from_str(&value),
+                ) {
+                    map.insert(name, value);
+                }
+            }
+            TrailerBody {
+                body: Some(Bytes::from(self.body)),
+                trailers: Some(map),
+            }
+            .boxed()
+        };
+        builder.body(body).unwrap()
     }
 }
 
@@ -68,7 +128,9 @@ impl ServerResponse {
             status_code: 200,
             status_message: None,
             headers: HashMap::new(),
+            trailers: HashMap::new(),
             raw_header_names: HashMap::new(),
+            raw_trailer_names: HashMap::new(),
             headers_sent: false,
             writable_ended: false,
             writable_finished: false,
@@ -93,8 +155,28 @@ impl ServerResponse {
         out
     }
 
+    fn snapshot_trailers(&self) -> Vec<(String, String)> {
+        let mut out = Vec::with_capacity(self.trailers.len());
+        for (lower_k, v) in &self.trailers {
+            let orig = self
+                .raw_trailer_names
+                .get(lower_k)
+                .cloned()
+                .unwrap_or_else(|| lower_k.clone());
+            out.push((orig, v.clone()));
+        }
+        out
+    }
+
     /// Auto-fill `Content-Length` if unset and we know the full body.
     fn ensure_content_length(&mut self) {
+        // A response with trailers must not declare a fixed Content-Length:
+        // the body length alone doesn't bound the response (trailing headers
+        // still follow), and some clients/proxies treat a present
+        // Content-Length as "body complete, no trailers expected".
+        if !self.trailers.is_empty() {
+            return;
+        }
         if !self.headers.contains_key("content-length")
             && !self.headers.contains_key("transfer-encoding")
         {
@@ -332,6 +414,42 @@ pub extern "C" fn js_node_http_res_write(handle: i64, chunk: f64) -> i32 {
     1
 }
 
+/// `res.addTrailers(headers)` — store HTTP trailers emitted after the
+/// response body, per Node's `ServerResponse.addTrailers`. Trailers carry
+/// metadata that isn't known until the body has been produced.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_add_trailers(handle: i64, headers_value: f64) {
+    let v = JsValue::from_bits(headers_value.to_bits());
+    if v.is_undefined() || v.is_null() {
+        return;
+    }
+    let json = match perry_ffi::json_stringify(v) {
+        Some(j) => j,
+        None => return,
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let Some(obj) = parsed.as_object() else {
+        return;
+    };
+    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        if sr.writable_ended {
+            return;
+        }
+        for (k, v) in obj {
+            let lower = k.to_lowercase();
+            let value = match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            sr.trailers.insert(lower.clone(), value);
+            sr.raw_trailer_names.insert(lower, k.clone());
+        }
+    }
+}
+
 /// `res.end(chunk?)` — append final chunk + flush the response back
 /// to hyper through the oneshot channel + fire `'finish'` and
 /// `'close'` listeners.
@@ -361,10 +479,12 @@ pub extern "C" fn js_node_http_res_end(handle: i64, chunk: f64) {
         sr.ensure_content_length();
         let body = std::mem::take(&mut sr.buffered_body);
         let headers = sr.snapshot_headers();
+        let trailers = sr.snapshot_trailers();
         shape = HyperResponseShape {
             status: sr.status_code,
             status_message: sr.status_message.clone(),
             headers,
+            trailers,
             body,
         };
         finish_listeners = sr.listeners.get("finish").cloned().unwrap_or_default();

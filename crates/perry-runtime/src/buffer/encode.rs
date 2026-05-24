@@ -4,7 +4,7 @@ use super::*;
 /// range (Node semantics: `start` clamped to `[0, len]`, `end` clamped to
 /// `[start, len]`; defaults are `start=0, end=len`).
 ///
-/// `encoding`: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url.
+/// `encoding`: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url, 4 = latin1/binary, 5 = ascii.
 #[no_mangle]
 pub extern "C" fn js_buffer_to_string_range(
     buf_ptr: *const BufferHeader,
@@ -40,13 +40,15 @@ pub extern "C" fn js_buffer_to_string_range(
             1 => hex_encode_into_string(bytes),
             2 => base64_encode_into_string(bytes),
             3 => base64url_encode_into_string(bytes),
+            4 => latin1_bytes_to_string(bytes),
+            5 => ascii_bytes_to_string(bytes),
             _ => buf_bytes_to_utf8_string(bytes),
         }
     }
 }
 
 /// Convert a buffer to a string
-/// encoding: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url.
+/// encoding: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url, 4 = latin1/binary, 5 = ascii.
 #[no_mangle]
 pub extern "C" fn js_buffer_to_string(
     buf_ptr: *const BufferHeader,
@@ -82,6 +84,8 @@ pub extern "C" fn js_buffer_to_string(
             1 => hex_encode_into_string(bytes),
             2 => base64_encode_into_string(bytes),
             3 => base64url_encode_into_string(bytes),
+            4 => latin1_bytes_to_string(bytes),
+            5 => ascii_bytes_to_string(bytes),
             _ => {
                 // UTF-8 (default) — Node spec: invalid UTF-8 sequences are
                 // replaced with U+FFFD. Pre-fix this path passed the raw
@@ -93,6 +97,27 @@ pub extern "C" fn js_buffer_to_string(
             }
         }
     }
+}
+
+/// Decode bytes as Node `latin1`/`binary`: each byte becomes U+00xx.
+fn latin1_bytes_to_string(bytes: &[u8]) -> *mut StringHeader {
+    if bytes.is_ascii() {
+        return js_string_from_ascii_bytes(bytes.as_ptr(), bytes.len() as u32);
+    }
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(char::from(b));
+    }
+    js_string_from_bytes(out.as_ptr(), out.len() as u32)
+}
+
+/// Decode bytes as Node `ascii`: each byte is masked to 7 bits.
+fn ascii_bytes_to_string(bytes: &[u8]) -> *mut StringHeader {
+    let mut out = Vec::with_capacity(bytes.len());
+    for &b in bytes {
+        out.push(b & 0x7F);
+    }
+    js_string_from_ascii_bytes(out.as_ptr(), out.len() as u32)
 }
 
 /// Build a Perry string (validated UTF-8) from a buffer's raw bytes.

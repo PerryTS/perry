@@ -234,10 +234,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Expr::String(s) = enc_expr.as_ref() {
                     let lower = s.to_ascii_lowercase();
                     let tag: i32 = match lower.as_str() {
-                        "utf8" | "utf-8" | "ascii" | "latin1" | "binary" => 0,
+                        "utf8" | "utf-8" => 0,
                         "hex" => 1,
                         "base64" => 2,
                         "base64url" => 3,
+                        "latin1" | "binary" => 4,
+                        "ascii" => 5,
                         _ => bail!(
                             "perry-codegen: unknown Buffer encoding \"{}\": expected one of utf8, utf-8, hex, base64, base64url, ascii, latin1, binary",
                             s
@@ -337,10 +339,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Expr::String(s) = enc_expr.as_ref() {
                         let lower = s.to_ascii_lowercase();
                         let tag: i32 = match lower.as_str() {
-                            "utf8" | "utf-8" | "ascii" | "latin1" | "binary" => 0,
+                            "utf8" | "utf-8" => 0,
                             "hex" => 1,
                             "base64" => 2,
                             "base64url" => 3,
+                            "latin1" | "binary" => 4,
+                            "ascii" => 5,
                             _ => bail!(
                                 "perry-codegen: unknown Buffer encoding \"{}\": expected one of utf8, utf-8, hex, base64, base64url, ascii, latin1, binary",
                                 s

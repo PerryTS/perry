@@ -1,7 +1,7 @@
 use super::*;
 
 /// Create a Buffer from a string
-/// encoding: 0 = utf8 (default), 1 = hex, 2 = base64
+/// encoding: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url, 4 = latin1/binary, 5 = ascii
 #[no_mangle]
 pub extern "C" fn js_buffer_from_string(
     str_ptr: *const StringHeader,
@@ -24,6 +24,7 @@ pub extern "C" fn js_buffer_from_string(
             // in-place writer skips both. ~2× speedup on 4 KB hex round-trips.
             1 => hex_decode_into_buffer(str_bytes),
             2 | 3 => base64_decode_into_buffer(str_bytes),
+            4 | 5 => latin1_string_to_buffer(str_bytes),
             _ => {
                 // UTF-8 (default)
                 let buf = buffer_alloc(len as u32);
@@ -35,13 +36,38 @@ pub extern "C" fn js_buffer_from_string(
     }
 }
 
+/// Encode a JS string as Node's `latin1`/`binary` Buffer input encoding.
+///
+/// Perry strings are stored as UTF-8, while Node's latin1 encoder writes the
+/// low byte of each JS code point. This keeps high-bit bytes in binary-over-
+/// string payloads from being expanded into UTF-8 multibyte sequences.
+/// `ascii` uses the same input-encoding behavior in modern Node, so it
+/// shares this path.
+fn latin1_string_to_buffer(str_bytes: &[u8]) -> *mut BufferHeader {
+    let decoded = String::from_utf8_lossy(str_bytes);
+    let mut out = Vec::with_capacity(decoded.chars().count());
+    for ch in decoded.chars() {
+        out.push((ch as u32 & 0xFF) as u8);
+    }
+    unsafe {
+        let buf = buffer_alloc(out.len() as u32);
+        (*buf).length = out.len() as u32;
+        if !out.is_empty() {
+            ptr::copy_nonoverlapping(out.as_ptr(), buffer_data_mut(buf), out.len());
+        }
+        buf
+    }
+}
+
 /// Map a JS string value (NaN-boxed, pointer-tagged, or raw `*const StringHeader`
 /// bitcast to f64) to the integer encoding tag expected by `js_buffer_from_string`
 /// and `js_buffer_to_string`:
-/// - 0 = utf8 / utf-8 / ascii / latin1 / binary (fallback default)
+/// - 0 = utf8 / utf-8 (fallback default)
 /// - 1 = hex
 /// - 2 = base64 decode-compatible
 /// - 3 = base64url encode tag (decode uses the same permissive table)
+/// - 4 = latin1 / binary
+/// - 5 = ascii
 ///
 /// Used by codegen for non-literal encoding arguments to `Buffer.from(str, enc)`
 /// and `buf.toString(enc)` where the encoding expression cannot be statically
@@ -76,8 +102,12 @@ pub extern "C" fn js_encoding_tag_from_value(value: f64) -> i32 {
             2
         } else if eq_ascii_lower(bytes, b"base64url") {
             3
+        } else if eq_ascii_lower(bytes, b"latin1") || eq_ascii_lower(bytes, b"binary") {
+            4
+        } else if eq_ascii_lower(bytes, b"ascii") {
+            5
         } else {
-            // utf8, utf-8, ascii, latin1, binary, and unknown all fall through to UTF-8.
+            // utf8, utf-8, and unknown fall through to UTF-8.
             // Matches the runtime's `_ =>` arm in js_buffer_from_string/js_buffer_to_string.
             0
         }

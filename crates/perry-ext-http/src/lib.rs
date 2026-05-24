@@ -54,6 +54,7 @@ use perry_ffi::{
 };
 use std::collections::HashMap;
 use std::sync::{Mutex, Once};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
@@ -71,6 +72,7 @@ enum PendingHttpEvent {
         status: u16,
         status_message: String,
         headers: Vec<(String, String)>,
+        trailers: Vec<(String, String)>,
         body: Vec<u8>,
     },
     Error {
@@ -130,6 +132,205 @@ fn push_event(ev: PendingHttpEvent) {
     notify_main_thread();
 }
 
+fn map_to_js_object(map: &HashMap<String, String>) -> f64 {
+    let mut out = f64::from_bits(TAG_UNDEFINED);
+    let keys: Vec<&str> = map.keys().map(|s| s.as_str()).collect();
+    let (packed, shape_id) = perry_ffi::build_object_shape(&keys);
+    let count = keys.len() as u32;
+    let obj: *mut ObjectHeader = unsafe {
+        perry_ffi::js_object_alloc_with_shape(shape_id, count, packed.as_ptr(), packed.len() as u32)
+    };
+    if !obj.is_null() {
+        for (i, key) in keys.iter().enumerate() {
+            if let Some(val) = map.get(*key) {
+                let s = alloc_string(val);
+                let v = JsValue::from_string_ptr(s.as_raw());
+                unsafe {
+                    perry_ffi::js_object_set_field(obj, i as u32, v);
+                }
+            }
+        }
+        let v = JsValue::from_object_ptr(obj as *mut u8);
+        out = f64::from_bits(v.bits());
+    }
+    out
+}
+
+fn expects_response_trailers(headers: &HashMap<String, String>) -> bool {
+    headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("te")
+            && value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("trailers"))
+    })
+}
+
+async fn dispatch_plain_http_request(
+    request_handle: Handle,
+    method: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    body: &[u8],
+    timeout_ms: Option<u64>,
+) -> Option<Result<(), String>> {
+    if !expects_response_trailers(headers) {
+        return None;
+    }
+    let parsed = match reqwest::Url::parse(url) {
+        Ok(u) if u.scheme() == "http" => u,
+        _ => return None,
+    };
+    let host = match parsed.host_str() {
+        Some(h) => h.to_string(),
+        None => return Some(Err("missing host".to_string())),
+    };
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let mut path = parsed.path().to_string();
+    if path.is_empty() {
+        path.push('/');
+    }
+    if let Some(q) = parsed.query() {
+        path.push('?');
+        path.push_str(q);
+    }
+
+    let fut = async {
+        let mut stream = tokio::net::TcpStream::connect((host.as_str(), port)).await?;
+        let host_header = if parsed.port().is_some() {
+            format!("{}:{}", host, port)
+        } else {
+            host.clone()
+        };
+        let mut req = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", method, path, host_header);
+        let mut has_content_length = false;
+        for (k, v) in headers {
+            if k.eq_ignore_ascii_case("content-length") {
+                has_content_length = true;
+            }
+            if k.eq_ignore_ascii_case("connection") {
+                // The raw trailer-aware path reads until EOF after the final
+                // chunk/trailer block. Force close here so an explicit
+                // `Connection: keep-alive` cannot hang until timeout.
+                continue;
+            }
+            req.push_str(k);
+            req.push_str(": ");
+            req.push_str(v);
+            req.push_str("\r\n");
+        }
+        req.push_str("Connection: close\r\n");
+        if !body.is_empty() && !has_content_length {
+            req.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        }
+        req.push_str("\r\n");
+        stream.write_all(req.as_bytes()).await?;
+        if !body.is_empty() {
+            stream.write_all(body).await?;
+        }
+
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await?;
+        Ok::<Vec<u8>, std::io::Error>(raw)
+    };
+
+    let raw = match timeout_ms {
+        Some(ms) => match tokio::time::timeout(std::time::Duration::from_millis(ms), fut).await {
+            Ok(r) => r,
+            Err(_) => return Some(Err("request timed out".to_string())),
+        },
+        None => match tokio::time::timeout(std::time::Duration::from_secs(30), fut).await {
+            Ok(r) => r,
+            Err(_) => return Some(Err("request timed out".to_string())),
+        },
+    };
+    let raw = match raw {
+        Ok(r) => r,
+        Err(e) => return Some(Err(e.to_string())),
+    };
+
+    let Some(header_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
+        return Some(Err("invalid HTTP response".to_string()));
+    };
+    let head = String::from_utf8_lossy(&raw[..header_end]);
+    let mut lines = head.split("\r\n");
+    let status_line = lines.next().unwrap_or_default();
+    let mut status_parts = status_line.splitn(3, ' ');
+    let _version = status_parts.next();
+    let status = status_parts
+        .next()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    let status_message = status_parts.next().unwrap_or("").to_string();
+    let mut hdrs = Vec::new();
+    let mut is_chunked = false;
+    let mut content_length: Option<usize> = None;
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            let name = name.trim().to_ascii_lowercase();
+            let value = value.trim().to_string();
+            if name == "transfer-encoding" && value.to_ascii_lowercase().contains("chunked") {
+                is_chunked = true;
+            }
+            if name == "content-length" {
+                content_length = value.parse::<usize>().ok();
+            }
+            hdrs.push((name, value));
+        }
+    }
+    let payload = &raw[header_end + 4..];
+    let mut decoded = Vec::new();
+    let mut trailers = Vec::new();
+    if is_chunked {
+        let mut pos = 0;
+        while pos < payload.len() {
+            let Some(line_end_rel) = payload[pos..].windows(2).position(|w| w == b"\r\n") else {
+                break;
+            };
+            let line_end = pos + line_end_rel;
+            let size_line = String::from_utf8_lossy(&payload[pos..line_end]);
+            let size_hex = size_line.split(';').next().unwrap_or("").trim();
+            let size = usize::from_str_radix(size_hex, 16).unwrap_or(0);
+            pos = line_end + 2;
+            if size == 0 {
+                if pos <= payload.len() {
+                    let rest = &payload[pos..];
+                    let trailer_end = rest
+                        .windows(4)
+                        .position(|w| w == b"\r\n\r\n")
+                        .unwrap_or(rest.len());
+                    let trailer_text = String::from_utf8_lossy(&rest[..trailer_end]);
+                    for line in trailer_text.split("\r\n") {
+                        if let Some((name, value)) = line.split_once(':') {
+                            trailers
+                                .push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
+                        }
+                    }
+                }
+                break;
+            }
+            if pos + size > payload.len() {
+                break;
+            }
+            decoded.extend_from_slice(&payload[pos..pos + size]);
+            pos += size + 2;
+        }
+    } else if let Some(len) = content_length {
+        decoded.extend_from_slice(&payload[..payload.len().min(len)]);
+    } else {
+        decoded.extend_from_slice(payload);
+    }
+
+    push_event(PendingHttpEvent::Response {
+        request_handle,
+        status,
+        status_message,
+        headers: hdrs,
+        trailers,
+        body: decoded,
+    });
+    Some(Ok(()))
+}
+
 // ------------------------------------------------------------------
 // Handle types
 // ------------------------------------------------------------------
@@ -155,6 +356,7 @@ pub struct IncomingMessageHandle {
     pub status_code: u16,
     pub status_message: String,
     pub headers: HashMap<String, String>,
+    pub trailers: HashMap<String, String>,
     pub body: Vec<u8>,
     pub listeners: HashMap<String, Vec<i64>>,
 }
@@ -330,6 +532,25 @@ fn dispatch_request(
         }
         let handle = tokio::runtime::Handle::current();
         let jh = handle.spawn(async move {
+            if let Some(result) = dispatch_plain_http_request(
+                request_handle,
+                method.as_str(),
+                &url,
+                &headers,
+                &body,
+                timeout_ms,
+            )
+            .await
+            {
+                if let Err(error_message) = result {
+                    push_event(PendingHttpEvent::Error {
+                        request_handle,
+                        error_message,
+                    });
+                }
+                return;
+            }
+
             let mut req = match method.as_str() {
                 "POST" => HTTP_CLIENT.post(&url),
                 "PUT" => HTTP_CLIENT.put(&url),
@@ -374,6 +595,7 @@ fn dispatch_request(
                         status,
                         status_message,
                         headers: hdrs,
+                        trailers: Vec::new(),
                         body,
                     });
                 }
@@ -628,33 +850,17 @@ pub extern "C" fn js_http_status_message(handle: Handle) -> *mut StringHeader {
 pub extern "C" fn js_http_response_headers(handle: Handle) -> f64 {
     let mut out = f64::from_bits(TAG_UNDEFINED);
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
-        // Build a shape-keyed object whose keys are the response
-        // header names, values are the header values.
-        let keys: Vec<&str> = res.headers.keys().map(|s| s.as_str()).collect();
-        let (packed, shape_id) = perry_ffi::build_object_shape(&keys);
-        let count = keys.len() as u32;
-        // SAFETY: `packed` is owned for the duration of the call.
-        let obj: *mut ObjectHeader = unsafe {
-            perry_ffi::js_object_alloc_with_shape(
-                shape_id,
-                count,
-                packed.as_ptr(),
-                packed.len() as u32,
-            )
-        };
-        if !obj.is_null() {
-            for (i, key) in keys.iter().enumerate() {
-                if let Some(val) = res.headers.get(*key) {
-                    let s = alloc_string(val);
-                    let v = JsValue::from_string_ptr(s.as_raw());
-                    unsafe {
-                        perry_ffi::js_object_set_field(obj, i as u32, v);
-                    }
-                }
-            }
-            let v = JsValue::from_object_ptr(obj as *mut u8);
-            out = f64::from_bits(v.bits());
-        }
+        out = map_to_js_object(&res.headers);
+    });
+    out
+}
+
+/// `res.trailers` — HTTP trailers populated after the body completes.
+#[no_mangle]
+pub extern "C" fn js_http_response_trailers(handle: Handle) -> f64 {
+    let mut out = f64::from_bits(TAG_UNDEFINED);
+    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
+        out = map_to_js_object(&res.trailers);
     });
     out
 }
@@ -690,6 +896,7 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 status,
                 status_message,
                 headers,
+                trailers,
                 body,
             } => {
                 let response_callback = get_handle_mut::<ClientRequestHandle>(request_handle)
@@ -700,12 +907,17 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 for (k, v) in headers {
                     headers_map.insert(k, v);
                 }
+                let mut trailers_map = HashMap::new();
+                for (k, v) in trailers {
+                    trailers_map.insert(k, v);
+                }
 
                 let body_clone = body.clone();
                 let incoming = register_handle(IncomingMessageHandle {
                     status_code: status,
                     status_message,
                     headers: headers_map,
+                    trailers: trailers_map,
                     body,
                     listeners: HashMap::new(),
                 });
@@ -877,6 +1089,7 @@ mod tests {
             status_code: 200,
             status_message: "OK".to_string(),
             headers: HashMap::new(),
+            trailers: HashMap::new(),
             body: Vec::new(),
             listeners: incoming_listeners,
         });

@@ -23,6 +23,7 @@
 //! lives in the sibling module.
 
 use anyhow::{anyhow, Result};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -467,6 +468,8 @@ pub(super) fn build_and_run_link(
             .arg("UIKit")
             .arg("-framework")
             .arg("Foundation")
+            .arg("-framework")
+            .arg("WebKit") // perry/ui WebView (#658) — WKWebView.
             .arg("-framework")
             .arg("CoreGraphics")
             .arg("-framework")
@@ -1003,6 +1006,8 @@ pub(super) fn build_and_run_link(
             } else {
                 if cfg!(target_os = "macos") || is_cross_macos {
                     cmd.arg("-framework").arg("AppKit");
+                    // perry/ui WebView (#658) — WKWebView / WKWebViewConfiguration.
+                    cmd.arg("-framework").arg("WebKit");
                     cmd.arg("-framework").arg("CoreGraphics");
                     cmd.arg("-framework").arg("QuartzCore");
                     cmd.arg("-framework").arg("AVFoundation");
@@ -1518,7 +1523,74 @@ pub(super) fn build_and_run_link(
         }
     }
 
-    let status = cmd.status()?;
+    // macOS privacy APIs (including camera/microphone requests made by
+    // WKWebView) consult the process Info.plist for usage-description keys.
+    // Perry's direct desktop output is a Mach-O executable, not a .app bundle,
+    // so embed a minimal Info.plist section when linking native macOS UI apps.
+    // Without this, WKWebView media capture can be denied by the platform even
+    // when WKUIDelegate grants the web-origin permission.
+    let is_macos_executable =
+        (target.is_none() && cfg!(target_os = "macos")) || matches!(target, Some("macos"));
+    let mut embedded_info_plist_path: Option<PathBuf> = None;
+    if ctx.needs_ui && is_macos_executable {
+        let exe_stem = exe_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("perry-app");
+        let bundle_id = format!(
+            "dev.perry.{}",
+            exe_stem
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect::<String>()
+                .trim_matches('-')
+        );
+        let info_plist = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>{bundle_id}</string>
+    <key>CFBundleName</key>
+    <string>{exe_stem}</string>
+    <key>CFBundleExecutable</key>
+    <string>{exe_stem}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>NSCameraUsageDescription</key>
+    <string>This app uses the camera for WebView video calls.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>This app uses the microphone for WebView video calls.</string>
+</dict>
+</plist>
+"#
+        );
+        let plist_path = std::env::temp_dir().join(format!(
+            "perry-embedded-info-{}-{}.plist",
+            std::process::id(),
+            exe_stem
+        ));
+        fs::write(&plist_path, info_plist)?;
+        embedded_info_plist_path = Some(plist_path.clone());
+        if is_cross_macos {
+            cmd.arg("-sectcreate")
+                .arg("__TEXT")
+                .arg("__info_plist")
+                .arg(&plist_path);
+        } else {
+            cmd.arg(format!(
+                "-Wl,-sectcreate,__TEXT,__info_plist,{}",
+                plist_path.display()
+            ));
+        }
+    }
+
+    let status_result = cmd.status();
+    if let Some(path) = embedded_info_plist_path {
+        let _ = fs::remove_file(path);
+    }
+    let status = status_result?;
 
     if !status.success() {
         return Err(anyhow!("Linking failed"));
