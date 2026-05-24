@@ -9,6 +9,26 @@ unsafe fn store_promise_jsvalue_slot(promise: *mut Promise, slot: *mut f64, valu
     crate::gc::runtime_store_gc_jsvalue_slot(promise as usize, slot as usize, value.to_bits());
 }
 
+#[inline]
+unsafe fn store_promise_closure_slot(
+    promise: *mut Promise,
+    slot: *mut ClosurePtr,
+    value: ClosurePtr,
+) {
+    // GC_STORE_AUDIT(BARRIERED): Promise raw closure fields are GC heap words.
+    crate::gc::runtime_store_gc_heap_word_slot(promise as usize, slot as usize, value as u64);
+}
+
+#[inline]
+unsafe fn store_promise_next_slot(
+    promise: *mut Promise,
+    slot: *mut *mut Promise,
+    value: *mut Promise,
+) {
+    // GC_STORE_AUDIT(BARRIERED): Promise raw next fields are GC heap words.
+    crate::gc::runtime_store_gc_heap_word_slot(promise as usize, slot as usize, value as u64);
+}
+
 /// Allocate a new Promise
 #[no_mangle]
 pub extern "C" fn js_promise_new() -> *mut Promise {
@@ -197,7 +217,7 @@ pub extern "C" fn js_promise_resolve_with_promise(outer: *mut Promise, inner: *m
                     && (*inner).on_rejected.is_null()
                     && (*inner).next.is_null()
                 {
-                    (*inner).next = outer;
+                    store_promise_next_slot(inner, std::ptr::addr_of_mut!((*inner).next), outer);
                     return;
                 }
 
@@ -217,9 +237,22 @@ pub extern "C" fn js_promise_resolve_with_promise(outer: *mut Promise, inner: *m
                 crate::closure::js_closure_set_capture_ptr(reject_closure, 0, outer_i64);
 
                 // Register the forwarding callbacks on the inner promise
-                (*inner).on_fulfilled = resolve_closure;
-                (*inner).on_rejected = reject_closure;
-                (*inner).next = ptr::null_mut(); // Don't chain, we handle resolution ourselves
+                store_promise_closure_slot(
+                    inner,
+                    std::ptr::addr_of_mut!((*inner).on_fulfilled),
+                    resolve_closure,
+                );
+                store_promise_closure_slot(
+                    inner,
+                    std::ptr::addr_of_mut!((*inner).on_rejected),
+                    reject_closure,
+                );
+                // Don't chain; the forwarding callbacks handle resolution.
+                store_promise_next_slot(
+                    inner,
+                    std::ptr::addr_of_mut!((*inner).next),
+                    ptr::null_mut(),
+                );
             }
         }
     }
@@ -306,9 +339,17 @@ pub extern "C" fn js_promise_then(
     let next = js_promise_new();
 
     unsafe {
-        (*promise).on_fulfilled = on_fulfilled;
-        (*promise).on_rejected = on_rejected;
-        (*promise).next = next;
+        store_promise_closure_slot(
+            promise,
+            std::ptr::addr_of_mut!((*promise).on_fulfilled),
+            on_fulfilled,
+        );
+        store_promise_closure_slot(
+            promise,
+            std::ptr::addr_of_mut!((*promise).on_rejected),
+            on_rejected,
+        );
+        store_promise_next_slot(promise, std::ptr::addr_of_mut!((*promise).next), next);
         set_promise_callback_context(promise);
 
         // If already settled, schedule callback immediately. Same propagation
@@ -364,8 +405,16 @@ pub(crate) fn js_promise_attach_handlers(
         return;
     }
     unsafe {
-        (*promise).on_fulfilled = on_fulfilled;
-        (*promise).on_rejected = on_rejected;
+        store_promise_closure_slot(
+            promise,
+            std::ptr::addr_of_mut!((*promise).on_fulfilled),
+            on_fulfilled,
+        );
+        store_promise_closure_slot(
+            promise,
+            std::ptr::addr_of_mut!((*promise).on_rejected),
+            on_rejected,
+        );
         set_promise_callback_context(promise);
         // No next — caller doesn't want a chained promise.
 
@@ -449,9 +498,22 @@ pub extern "C" fn js_promise_finally(
     // the wrapper — each wrapper handles `next` settlement itself via the
     // extra-tick passthrough pattern.
     unsafe {
-        (*promise).on_fulfilled = fulfill_wrap;
-        (*promise).on_rejected = reject_wrap;
-        (*promise).next = ptr::null_mut(); // wrappers own next; runner must not touch it
+        store_promise_closure_slot(
+            promise,
+            std::ptr::addr_of_mut!((*promise).on_fulfilled),
+            fulfill_wrap,
+        );
+        store_promise_closure_slot(
+            promise,
+            std::ptr::addr_of_mut!((*promise).on_rejected),
+            reject_wrap,
+        );
+        // Wrappers own next; runner must not touch it.
+        store_promise_next_slot(
+            promise,
+            std::ptr::addr_of_mut!((*promise).next),
+            ptr::null_mut(),
+        );
         set_promise_callback_context(promise);
 
         // If the promise is already settled, push its task now.

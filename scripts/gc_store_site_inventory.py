@@ -41,6 +41,9 @@ CODEGEN_EMIT_RAW_STORE_RE = re.compile(r'emit_raw\(format!\("store\b')
 RUST_FIELD_STORE_RE = re.compile(
     r"\(\*[^)\n]+\)\.(?P<field>keys_array|entries|elements)\s*="
 )
+RUST_PROMISE_FIELD_STORE_RE = re.compile(
+    r"\(\*[^)\n]+\)\.(?P<field>on_fulfilled|on_rejected|next)\s*="
+)
 RUST_POINTER_FIELD_STORE_RE = re.compile(
     r"\b(?P<owner>[A-Za-z_][A-Za-z0-9_]*)\.(?P<field>string_ptr)\s*="
 )
@@ -73,7 +76,7 @@ SCAN_PATHS = [
     Path("crates/perry-runtime/src/regex.rs"),
     Path("crates/perry-runtime/src/plugin.rs"),
     Path("crates/perry-runtime/src/thread.rs"),
-    Path("crates/perry-runtime/src/promise.rs"),
+    Path("crates/perry-runtime/src/promise"),
     Path("crates/perry-runtime/src/map.rs"),
     Path("crates/perry-runtime/src/set.rs"),
     Path("crates/perry-runtime/src/string.rs"),
@@ -270,6 +273,10 @@ def classify_rust_store(path: Path, lines: list[str], index: int) -> str | None:
 
     if RUST_TLS_INDEX_STORE_RE.search(line) and is_risky_tls_index_store(window):
         return "raw TLS cache pointer table store"
+
+    if "crates/perry-runtime/src/promise/" in path.as_posix():
+        if RUST_PROMISE_FIELD_STORE_RE.search(line):
+            return "raw Promise heap pointer field store"
 
     pointer_field = RUST_POINTER_FIELD_STORE_RE.search(line)
     if pointer_field:
@@ -501,6 +508,16 @@ def run_self_tests() -> int:
         "crates/perry-runtime/src/promise.rs",
         ["*fields.add(0) = promise_box_handle.get_nanbox_f64();"],
         "raw direct slot assignment",
+    )
+    check(
+        "crates/perry-runtime/src/promise/then.rs",
+        ["(*promise).on_fulfilled = callback;"],
+        "raw Promise heap pointer field store",
+    )
+    check(
+        "crates/perry-runtime/src/promise/then.rs",
+        ["(*promise).next = next;"],
+        "raw Promise heap pointer field store",
     )
 
     if failures:

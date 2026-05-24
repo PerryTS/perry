@@ -1036,6 +1036,88 @@ fn test_dirty_page_promise_value_slot_marks_child() {
     remembered_set_clear();
 }
 
+fn assert_heap_child_marked(ptr: *const u8, label: &str) {
+    assert!(!ptr.is_null(), "{label} should not be null");
+    unsafe {
+        let header = header_from_user_ptr(ptr);
+        assert_ne!(
+            (*header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "{label} should be marked through the Promise remembered-set edge"
+        );
+    }
+}
+
+#[test]
+fn test_promise_pointer_field_stores_dirty_old_page() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    reset_remembered_set();
+    clear_marks();
+    let promise = unsafe { alloc_old_test_promise() };
+    let callback = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    let next = crate::promise::js_promise_then(promise, callback, std::ptr::null());
+
+    assert!(
+        remembered_set_size() > 0,
+        "js_promise_then should dirty old Promise pointer fields"
+    );
+    let valid_ptrs = build_valid_pointer_set();
+    mark_remembered_set_roots(&valid_ptrs);
+    assert_heap_child_marked(callback as *const u8, "then fulfillment callback");
+    assert_heap_child_marked(next as *const u8, "then next promise");
+
+    reset_remembered_set();
+    clear_marks();
+    let inner = unsafe { alloc_old_test_promise() };
+    let outer = crate::promise::js_promise_new();
+    crate::promise::js_promise_resolve_with_promise(outer, inner);
+
+    assert!(
+        remembered_set_size() > 0,
+        "js_promise_resolve_with_promise should dirty old Promise next"
+    );
+    let valid_ptrs = build_valid_pointer_set();
+    mark_remembered_set_roots(&valid_ptrs);
+    assert_heap_child_marked(outer as *const u8, "resolved outer promise");
+
+    reset_remembered_set();
+    clear_marks();
+    let promise = unsafe { alloc_old_test_promise() };
+    let fulfill = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    let reject = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    crate::promise::js_promise_attach_handlers(promise, fulfill, reject);
+
+    assert!(
+        remembered_set_size() > 0,
+        "js_promise_attach_handlers should dirty old Promise callback fields"
+    );
+    let valid_ptrs = build_valid_pointer_set();
+    mark_remembered_set_roots(&valid_ptrs);
+    assert_heap_child_marked(fulfill as *const u8, "attached fulfillment callback");
+    assert_heap_child_marked(reject as *const u8, "attached rejection callback");
+
+    reset_remembered_set();
+    clear_marks();
+    let promise = unsafe { alloc_old_test_promise() };
+    let on_finally = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    let _next = crate::promise::js_promise_finally(promise, on_finally);
+    let (fulfill_wrap, reject_wrap) = unsafe { ((*promise).on_fulfilled, (*promise).on_rejected) };
+
+    assert!(
+        remembered_set_size() > 0,
+        "js_promise_finally should dirty old Promise wrapper fields"
+    );
+    let valid_ptrs = build_valid_pointer_set();
+    mark_remembered_set_roots(&valid_ptrs);
+    assert_heap_child_marked(fulfill_wrap as *const u8, "finally fulfillment wrapper");
+    assert_heap_child_marked(reject_wrap as *const u8, "finally rejection wrapper");
+
+    clear_marks();
+    remembered_set_clear();
+}
+
 #[test]
 fn test_dirty_page_error_cause_slot_marks_child() {
     reset_remembered_set();
