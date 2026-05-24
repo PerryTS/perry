@@ -1094,15 +1094,24 @@ pub(crate) fn lower_native_method_call(
         if let Some(props) = extract_options_fields(ctx, &args[0]) {
             let mut url_arg: Option<Expr> = None;
             let mut alt_arg: Option<Expr> = None;
+            let mut system_name_arg: Option<Expr> = None;
             for (key, val) in &props {
                 match key.as_str() {
                     "url" => url_arg = Some(val.clone()),
                     "alt" => alt_arg = Some(val.clone()),
+                    // #1495: Image({ systemName }) -> SF-symbol image,
+                    // routed to the same runtime as ImageSymbol(name).
+                    "systemName" => system_name_arg = Some(val.clone()),
                     _ => {
                         // Lower for side effects so any nested closures
                         // are still collected.
                         let _ = lower_expr(ctx, val)?;
                     }
+                }
+            }
+            if let Some(name) = system_name_arg {
+                if let Some(sig) = perry_ui_table_lookup("ImageSymbol") {
+                    return lower_perry_ui_table_call(ctx, sig, &[name]);
                 }
             }
             if let Some(u) = url_arg {
