@@ -577,11 +577,19 @@
     if (typeof globalThis.AbortController === 'undefined') {
         globalThis.AbortController = class AbortController {
             constructor() {
-                this.signal = { aborted: false, reason: undefined, addEventListener: () => {}, removeEventListener: () => {} };
+                const listeners = new Set();
+                this.signal = {
+                    aborted: false,
+                    reason: undefined,
+                    addEventListener: (type, listener) => { if (type === 'abort' && typeof listener === 'function') listeners.add(listener); },
+                    removeEventListener: (_type, listener) => { listeners.delete(listener); },
+                    _perryAbortListeners: listeners,
+                };
             }
             abort(reason) {
                 this.signal.aborted = true;
                 this.signal.reason = reason || new Error('AbortError');
+                for (const listener of Array.from(this.signal._perryAbortListeners)) listener.call(this.signal);
             }
         };
     }
