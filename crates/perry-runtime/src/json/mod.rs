@@ -620,4 +620,36 @@ mod tests {
         expected.push('"');
         assert_eq!(unsafe { str_from_header(output).unwrap() }, expected);
     }
+
+    #[test]
+    fn stringify_empty_object_emits_braces_not_null() {
+        // #1704: an object straight out of `js_object_alloc` has a null
+        // `keys_array` (this is the shape of `Object.fromEntries([])`,
+        // `Object.fromEntries(emptyURLSearchParams)`, and a never-mutated
+        // `{}` literal). It must stringify to "{}" — pre-fix the top-level
+        // path emitted the literal "null".
+        let empty = crate::object::js_object_alloc(0, 0);
+        assert!(unsafe { (*empty).keys_array.is_null() });
+        let boxed = crate::value::js_nanbox_pointer(empty as i64);
+        let output = unsafe { js_json_stringify(boxed, TYPE_UNKNOWN) };
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, "{}");
+    }
+
+    #[test]
+    fn stringify_nested_empty_object_does_not_segfault() {
+        // #1704: a nested empty object reaches `stringify_object_inner`
+        // directly via the `GC_TYPE_OBJECT` arm of `stringify_value_depth`
+        // (no `is_object_pointer` guard), so the null `keys_array` read
+        // would segfault. It must instead recurse to "{}" — the
+        // `@hono/perry-server` handler crash was `JSON.stringify({ url, o })`
+        // with `o = Object.fromEntries(emptyURLSearchParams)`.
+        let empty = crate::object::js_object_alloc(0, 0);
+        let outer = crate::object::js_object_alloc(0, 1);
+        let key = js_string_from_bytes(b"o".as_ptr(), 1);
+        let empty_boxed = crate::value::js_nanbox_pointer(empty as i64);
+        crate::object::js_object_set_field_by_name(outer, key, empty_boxed);
+        let outer_boxed = crate::value::js_nanbox_pointer(outer as i64);
+        let output = unsafe { js_json_stringify(outer_boxed, TYPE_UNKNOWN) };
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, r#"{"o":{}}"#);
+    }
 }

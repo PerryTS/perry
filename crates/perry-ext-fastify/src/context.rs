@@ -221,12 +221,21 @@ pub unsafe extern "C" fn js_fastify_req_method(ctx_handle: Handle) -> *mut Strin
     std::ptr::null_mut()
 }
 
-/// `request.url` / `c.req.url` — the path (query string lives in
-/// `query_string`).
+/// `request.url` / `c.req.url` — the path **with** its query string, matching
+/// Node/Fastify where `req.url` is the raw request target (e.g. `/p?k=v`).
+/// `FastifyContext` splits the incoming target into `url` (path) and
+/// `query_string` for routing/`req.query`, so reconstruct the original here.
+/// #1705: returning the bare path dropped `?k=v`, so `@hono/perry-server`'s
+/// `new Request('http://' + host + req.url)` lost the query and
+/// `c.req.query()` / `new URL(c.req.url).searchParams` came back empty.
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_req_url(ctx_handle: Handle) -> *mut StringHeader {
     if let Some(ctx) = get_handle::<FastifyContext>(ctx_handle) {
-        return alloc_string(&ctx.url).as_raw();
+        if ctx.query_string.is_empty() {
+            return alloc_string(&ctx.url).as_raw();
+        }
+        let full = format!("{}?{}", ctx.url, ctx.query_string);
+        return alloc_string(&full).as_raw();
     }
     std::ptr::null_mut()
 }

@@ -397,6 +397,13 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             crate::gc::GC_TYPE_OBJECT => {
                 if is_object_pointer(ptr) {
                     stringify_object(ptr, buf);
+                } else if (*(ptr as *const crate::ObjectHeader)).keys_array.is_null() {
+                    // #1704: a genuinely empty object (null keys_array, e.g.
+                    // `Object.fromEntries([])` / a never-mutated `{}`) fails
+                    // `is_object_pointer`'s `keys_len > 0` guard but is valid —
+                    // emit "{}" not "null". A non-empty object that fails the
+                    // check is treated as corrupted and still emits "null".
+                    buf.push_str("{}");
                 } else {
                     buf.push_str("null");
                 }
@@ -577,6 +584,21 @@ pub(crate) unsafe fn stringify_object(ptr: *const u8, buf: &mut String) {
 }
 
 pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, depth: u32) {
+    // #1704: an object with a null `keys_array` has no own enumerable
+    // properties — empty objects come out of `js_object_alloc` with
+    // `keys_array == null` and only get one once a field is set. This is the
+    // shape of `Object.fromEntries([])`, `Object.fromEntries(emptyURLSearchParams)`,
+    // and a never-mutated `{}` literal. Recursion into a nested empty object
+    // reaches here directly (the `GC_TYPE_OBJECT` arm in `stringify_value_depth`
+    // skips `is_object_pointer`), so the `(*keys_arr).length` read below would
+    // dereference null and segfault (the `Object.fromEntries(URL.searchParams)`
+    // crash inside a `@hono/perry-server` handler). Emit "{}" and return — an
+    // empty object has no children, so it can't be part of a cycle and the
+    // circular-reference tracking below is unnecessary.
+    if (*(ptr as *const crate::ObjectHeader)).keys_array.is_null() {
+        buf.push_str("{}");
+        return;
+    }
     if depth > MAX_FAST_DEPTH {
         // Deep nesting — switch to full circular detection
         if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {

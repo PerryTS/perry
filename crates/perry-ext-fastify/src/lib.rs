@@ -285,6 +285,40 @@ mod tests {
     }
 
     #[test]
+    fn req_url_includes_query_string() {
+        // #1705 — `c.req.url` / `req.url` must carry the query string like
+        // Node/Fastify (`@hono/perry-server` builds `new Request(host + req.url)`
+        // from it). The context splits the target internally, so the FFI getter
+        // reconstructs `path?query`.
+        let with_query = FastifyContext::new(
+            0,
+            "GET".to_string(),
+            "/u3?a=1&b=2".to_string(),
+            HashMap::new(),
+            None,
+            HashMap::new(),
+        );
+        let h = register_handle(with_query);
+        let got = unsafe { crate::context::string_from_header(super::js_fastify_req_url(h)) };
+        assert_eq!(got.as_deref(), Some("/u3?a=1&b=2"));
+        drop_handle(h);
+
+        // No query → bare path, no trailing '?'.
+        let no_query = FastifyContext::new(
+            0,
+            "GET".to_string(),
+            "/u3".to_string(),
+            HashMap::new(),
+            None,
+            HashMap::new(),
+        );
+        let h2 = register_handle(no_query);
+        let got2 = unsafe { crate::context::string_from_header(super::js_fastify_req_url(h2)) };
+        assert_eq!(got2.as_deref(), Some("/u3"));
+        drop_handle(h2);
+    }
+
+    #[test]
     fn ext_fastify_is_context_handle_membership() {
         // #1293 — the membership probe perry-stdlib's external-fastify
         // dispatch arms consult before forwarding `(request as any).json()`
