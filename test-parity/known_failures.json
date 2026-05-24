@@ -2587,5 +2587,59 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Writable 'finish' / 'close' event order — wrong sequence. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipe/end-false-then-write": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipe(dst,{end:false}) then manual dst.write — output order/count wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/web/from-single-promise": {
+    "issue": "1545",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream/web: RS.from(Promise) — should throw TypeError (Promise not iterable), or accept and treat as 1-value (depends on Node). Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/events/once-static-promise": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: events.once(stream, 'end') Promise — args shape wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/events/pause-resume-event-order": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: multiple pause/resume cycles — event order wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipeline/async-fn-rejection-propagates": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipeline async-fn throwing — cb does not receive the error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/from-array-many-items": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(50-item array) — count, sum or first/last value wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/iter-helpers/filter-then-toarray": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: filter(fn).toArray() — chain produces wrong result. Flips to PASS when #1558 lands."
+  },
+  "node-suite/stream/events/close-fires-on-destroy": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: 'close' event after destroy — fires 0 or 2+ times (should be exactly 1). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/readable/from-async-iter-mixed-values": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable.from(asyncGen yielding mixed types) — types lost or wrong. Flips to PASS when #1532 lands."
   }
 }
