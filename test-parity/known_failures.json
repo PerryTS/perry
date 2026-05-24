@@ -1687,5 +1687,23 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
+  },
+  "node-suite/stream/meta/readable-no-sync-iterator": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: Readable should NOT expose Symbol.iterator (only Symbol.asyncIterator) — typeof differs from Node. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/pipeline/promise-form": {
+    "issue": "1532",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: pipeline() from node:stream/promises — return value not a Promise<undefined>. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/iter-helpers/spread-tarray-result": {
+    "issue": "1558",
+    "added": "2026-05-24",
+    "category": "bug-open",
+    "reason": "node:stream: toArray() result not spreadable array (wrong type or shape). Flips to PASS when #1558 lands."
   }
 }
