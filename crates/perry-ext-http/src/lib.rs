@@ -203,22 +203,22 @@ async fn dispatch_plain_http_request(
         };
         let mut req = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", method, path, host_header);
         let mut has_content_length = false;
-        let mut has_connection = false;
         for (k, v) in headers {
             if k.eq_ignore_ascii_case("content-length") {
                 has_content_length = true;
             }
             if k.eq_ignore_ascii_case("connection") {
-                has_connection = true;
+                // The raw trailer-aware path reads until EOF after the final
+                // chunk/trailer block. Force close here so an explicit
+                // `Connection: keep-alive` cannot hang until timeout.
+                continue;
             }
             req.push_str(k);
             req.push_str(": ");
             req.push_str(v);
             req.push_str("\r\n");
         }
-        if !has_connection {
-            req.push_str("Connection: close\r\n");
-        }
+        req.push_str("Connection: close\r\n");
         if !body.is_empty() && !has_content_length {
             req.push_str(&format!("Content-Length: {}\r\n", body.len()));
         }
