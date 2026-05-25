@@ -34,7 +34,17 @@ pub(super) fn try_static_method_and_instance(
             // ClosureHeader.  See compile.rs::imported_classes for the
             // backing dispatch table that resolves these calls at
             // codegen time.
+            // A wildcard namespace import (`import * as Effect from "mod"`) is
+            // a module namespace, not a class — even when uppercase. Its
+            // members must be resolved and CALLED (`Effect.succeed(42)`), not
+            // lowered to a StaticMethodCall (which, post-V8-removal, returns
+            // the member function uncalled — the Effect #321 blocker).
+            // Excluding namespaces here lets `Effect.succeed(42)` fall through
+            // to the namespace-member-call path. Named/default imports of real
+            // classes (`import { MongoClient }`) are not namespace locals and
+            // keep this static-method path.
             let is_imported_upper = ctx.lookup_imported_func(&obj_name).is_some()
+                && !ctx.namespace_import_locals.contains(&obj_name)
                 && obj_name
                     .chars()
                     .next()

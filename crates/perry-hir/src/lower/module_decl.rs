@@ -188,6 +188,11 @@ pub(crate) fn lower_module_decl(
                         } else {
                             // Namespace import from JS module - register so calls resolve to ExternFuncRef
                             ctx.register_imported_func(local.clone(), local.clone());
+                            // Record that `local` is a module namespace (not a
+                            // class). `local.member(args)` must call the member,
+                            // not lower to StaticMethodCall — see the heuristic
+                            // in expr_call::static_and_instance.
+                            ctx.namespace_import_locals.insert(local.clone());
                         }
                         specifiers.push(ImportSpecifier::Namespace { local });
                     }

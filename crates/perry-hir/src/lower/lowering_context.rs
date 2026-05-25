@@ -211,6 +211,16 @@ pub struct LoweringContext {
     pub(crate) weakmap_locals: HashSet<String>,
     /// Local names whose value is a `WeakSet` instance.
     pub(crate) weakset_locals: HashSet<String>,
+    /// Local names bound by a wildcard namespace import (`import * as X from
+    /// "mod"`). These are module namespaces, NOT classes — so `X.member(args)`
+    /// must resolve+call the namespace member, never lower to a
+    /// `StaticMethodCall`. The uppercase-imported-identifier class heuristic in
+    /// `expr_call::static_and_instance` consults this set to skip namespaces
+    /// (an uppercase `import * as Effect` would otherwise be mistaken for a
+    /// class and the member call would return the function uncalled). Named /
+    /// default imports of actual classes (`import { MongoClient }`) are NOT in
+    /// this set and keep the static-method path.
+    pub(crate) namespace_import_locals: HashSet<String>,
     /// Names of functions declared with `function*` — used to detect generator
     /// calls in `for...of` so the iterator protocol loop is emitted instead of
     /// the array-index loop.
