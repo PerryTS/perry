@@ -955,6 +955,41 @@ pub extern "C" fn js_regexp_exec(
     }
 }
 
+/// Dynamic-receiver dispatch for `regex.test(str)` / `regex.exec(str)` when
+/// codegen couldn't prove the receiver is a RegExp (e.g. hono's RegExpRouter
+/// does `buildWildcardRegExp(k).test(path)`, where the receiver is the result
+/// of a function call). Returns `Some(result)` only when `ptr` is a live regex
+/// AND `method` is `test`/`exec`; `None` otherwise so the generic method
+/// dispatch in `js_native_call_method` continues. The argument is coerced to a
+/// string (`re.test(123)` tests against `"123"`). (#1731)
+pub(crate) fn dispatch_regex_receiver_method(
+    ptr: *const u8,
+    method: &str,
+    arg0: f64,
+) -> Option<f64> {
+    if !is_regex_pointer(ptr) {
+        return None;
+    }
+    let re = ptr as *mut RegExpHeader;
+    let s_ptr = crate::value::js_jsvalue_to_string(arg0);
+    match method {
+        "test" => {
+            let matched = js_regexp_test(re, s_ptr) != 0;
+            Some(f64::from_bits(crate::value::JSValue::bool(matched).bits()))
+        }
+        // exec: the match array, or `null` on no match (spec-correct).
+        "exec" => {
+            let arr = js_regexp_exec(re, s_ptr);
+            Some(if arr.is_null() {
+                f64::from_bits(crate::value::TAG_NULL)
+            } else {
+                f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits())
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Get the .index from the last exec() call
 #[no_mangle]
 pub extern "C" fn js_regexp_exec_get_index() -> f64 {

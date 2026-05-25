@@ -210,6 +210,20 @@ pub unsafe extern "C" fn js_native_call_method(
         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
     }
 
+    // `regex.test(str)` / `regex.exec(str)` on an *untyped* receiver — e.g.
+    // hono's RegExpRouter does `buildWildcardRegExp(k).test(path)`, a call on a
+    // function result the codegen `Expr::RegExpTest` fast path can't see; without
+    // this it throws `test is not a function`, breaking Hono `app.use('*', …)`
+    // (#1731). The helper returns None for non-regex so generic dispatch resumes.
+    if matches!(method_name, "test" | "exec") && jsval.is_pointer() {
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let arg0 = refreshed_args().first().copied().unwrap_or(undef);
+        let p = jsval.as_pointer::<u8>();
+        if let Some(r) = crate::regex::dispatch_regex_receiver_method(p, method_name, arg0) {
+            return r;
+        }
+    }
+
     // Node timer handles are represented in Perry as small integer ids
     // NaN-boxed as pointers. Provide the common Timeout/Immediate methods
     // directly so `timeout.ref().unref().hasRef()` style probes behave like
