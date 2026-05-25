@@ -3619,5 +3619,17 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: promises.finished({signal}) — abort doesn't reject with AbortError. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/static/is-errored-after-destroy": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: isErrored(stream) stays false after destroy(err) (should be true). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/static/get-default-hwm-objectmode": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: getDefaultHighWaterMark(true) returns undefined (objectMode default should be 16). Flips to PASS when #1532 lands."
   }
 }
