@@ -190,5 +190,8 @@ pub(crate) extern "C" fn timers_promises_scheduler(
     _closure: *const ClosureHeader,
     _arg: f64,
 ) -> f64 {
-    f64::from_bits(TAG_UNDEFINED)
+    let msg = b"scheduler is not a function";
+    let msg = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(boxed_ptr(err as *const u8))
 }

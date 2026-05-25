@@ -7,7 +7,7 @@ use perry_hir::Expr;
 
 use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 pub fn try_lower_namespace_member_call(
     ctx: &mut FnCtx<'_>,
@@ -38,6 +38,139 @@ pub fn try_lower_namespace_member_call(
     if !ctx.namespace_imports.contains(ns_name) {
         return Ok(None);
     }
+    if ctx
+        .namespace_node_submodules
+        .get(ns_name)
+        .is_some_and(|submod| submod == "timers")
+    {
+        match property.as_str() {
+            "setTimeout" if !args.is_empty() => {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let delay_box = if args.len() >= 2 {
+                    lower_expr(ctx, &args[1])?
+                } else {
+                    double_literal(0.0)
+                };
+                let blk = ctx.block();
+                let cb_handle = unbox_to_i64(blk, &cb_box);
+                if args.len() <= 2 {
+                    let id = blk.call(
+                        I64,
+                        "js_set_timeout_callback",
+                        &[(I64, &cb_handle), (DOUBLE, &delay_box)],
+                    );
+                    return Ok(Some(nanbox_pointer_inline(blk, &id)));
+                }
+                let n = args.len() - 2;
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, a) in args.iter().skip(2).enumerate() {
+                    let v = lower_expr(ctx, a)?;
+                    let blk = ctx.block();
+                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, &v, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg, n, buf
+                ));
+                let blk = ctx.block();
+                let id = blk.call(
+                    I64,
+                    "js_set_timeout_callback_args",
+                    &[
+                        (I64, &cb_handle),
+                        (DOUBLE, &delay_box),
+                        (PTR, &ptr_reg),
+                        (I32, &n.to_string()),
+                    ],
+                );
+                return Ok(Some(nanbox_pointer_inline(blk, &id)));
+            }
+            "setInterval" if args.len() >= 2 => {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let delay_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let cb_handle = unbox_to_i64(blk, &cb_box);
+                if args.len() == 2 {
+                    let id = blk.call(
+                        I64,
+                        "setInterval",
+                        &[(I64, &cb_handle), (DOUBLE, &delay_box)],
+                    );
+                    return Ok(Some(nanbox_pointer_inline(blk, &id)));
+                }
+                let n = args.len() - 2;
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, a) in args.iter().skip(2).enumerate() {
+                    let v = lower_expr(ctx, a)?;
+                    let blk = ctx.block();
+                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, &v, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg, n, buf
+                ));
+                let blk = ctx.block();
+                let id = blk.call(
+                    I64,
+                    "js_set_interval_callback_args",
+                    &[
+                        (I64, &cb_handle),
+                        (DOUBLE, &delay_box),
+                        (PTR, &ptr_reg),
+                        (I32, &n.to_string()),
+                    ],
+                );
+                return Ok(Some(nanbox_pointer_inline(blk, &id)));
+            }
+            "setImmediate" if !args.is_empty() => {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                let cb_handle = unbox_to_i64(blk, &cb_box);
+                if args.len() == 1 {
+                    let id = blk.call(I64, "js_set_immediate_callback", &[(I64, &cb_handle)]);
+                    return Ok(Some(nanbox_pointer_inline(blk, &id)));
+                }
+                let n = args.len() - 1;
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, a) in args.iter().skip(1).enumerate() {
+                    let v = lower_expr(ctx, a)?;
+                    let blk = ctx.block();
+                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, &v, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg, n, buf
+                ));
+                let blk = ctx.block();
+                let id = blk.call(
+                    I64,
+                    "js_set_immediate_callback_args",
+                    &[(I64, &cb_handle), (PTR, &ptr_reg), (I32, &n.to_string())],
+                );
+                return Ok(Some(nanbox_pointer_inline(blk, &id)));
+            }
+            "clearTimeout" | "clearInterval" | "clearImmediate" if args.len() == 1 => {
+                let id_box = lower_expr(ctx, &args[0])?;
+                let runtime = match property.as_str() {
+                    "clearTimeout" => "js_clear_timeout_value",
+                    "clearInterval" => "js_clear_interval_value",
+                    _ => "js_clear_immediate_value",
+                };
+                ctx.block().call_void(runtime, &[(DOUBLE, &id_box)]);
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
+            }
+            _ => {}
+        }
+    }
+
     if ctx
         .namespace_node_submodules
         .get(ns_name)

@@ -92,17 +92,11 @@ pub(crate) fn signal_aborted(signal: f64) -> bool {
 }
 
 pub(crate) fn abort_error_value() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 3);
-    let set = |name: &[u8], value: &[u8]| {
-        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let val = js_string_from_bytes(value.as_ptr(), value.len() as u32);
-        let val = f64::from_bits(JSValue::string_ptr(val).bits());
-        crate::object::js_object_set_field_by_name(obj, key, val);
-    };
-    set(b"name", b"AbortError");
-    set(b"message", b"The operation was aborted");
-    set(b"code", b"ABORT_ERR");
-    value_from_ptr(obj as *const u8)
+    let msg = b"The operation was aborted";
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_error_new_with_name_message(b"AbortError", msg_ptr);
+    crate::node_submodules::register_error_code_pub(msg_ptr, "ABORT_ERR");
+    value_from_ptr(err as *const u8)
 }
 
 pub(crate) fn signal_reason(signal: f64) -> f64 {

@@ -139,6 +139,14 @@ pub extern "C" fn js_error_new_with_message(message: *mut StringHeader) -> *mut 
     unsafe { alloc_error(ERROR_KIND_ERROR, b"Error", message) }
 }
 
+/// Create a new Error-like object with a custom `.name` and stack prefix.
+pub(crate) fn js_error_new_with_name_message(
+    name: &'static [u8],
+    message: *mut StringHeader,
+) -> *mut ErrorHeader {
+    unsafe { alloc_error(ERROR_KIND_ERROR, name, message) }
+}
+
 /// Create a new Error with a message and a cause (raw f64 NaN-boxed)
 #[no_mangle]
 pub extern "C" fn js_error_new_with_cause(

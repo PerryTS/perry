@@ -63,11 +63,25 @@ pub(crate) fn lower_stmt_for_of(
         && if let ast::Expr::Call(call) = &*for_of_stmt.right {
             if let ast::Callee::Expr(callee_expr) = &call.callee {
                 match &**callee_expr {
-                    ast::Expr::Ident(ident) => ident.sym.as_ref() == "setInterval",
-                    ast::Expr::Member(member) => matches!(
-                        &member.prop,
-                        ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "setInterval"
-                    ),
+                    ast::Expr::Ident(ident) => {
+                        ctx.lookup_native_module(ident.sym.as_ref()).is_some_and(
+                            |(module, method)| {
+                                module.strip_prefix("node:").unwrap_or(module) == "timers/promises"
+                                    && method == Some("setInterval")
+                            },
+                        ) || ctx
+                            .lookup_imported_func(ident.sym.as_ref())
+                            .is_some_and(|imported| imported == "setInterval")
+                    }
+                    ast::Expr::Member(member) => {
+                        matches!(
+                            (&*member.obj, &member.prop),
+                            (
+                                ast::Expr::Ident(_),
+                                ast::MemberProp::Ident(prop),
+                            ) if prop.sym.as_ref() == "setInterval"
+                        )
+                    }
                     _ => false,
                 }
             } else {
