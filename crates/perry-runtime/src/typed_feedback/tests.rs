@@ -515,7 +515,8 @@ fn typed_feedback_class_field_set_guard_fails_for_frozen_object() {
     crate::object::js_object_set_field(obj, 0, crate::JSValue::from_bits(1.0f64.to_bits()));
     crate::object::js_object_freeze(receiver);
 
-    let guard = js_typed_feedback_class_field_set_guard(31, receiver, class_id, keys, key, 0, 2.0, 0);
+    let guard =
+        js_typed_feedback_class_field_set_guard(31, receiver, class_id, keys, key, 0, 2.0, 0);
     assert_eq!(guard, 0);
     assert_eq!(
         crate::object::js_object_get_field(obj, 0).bits(),
@@ -548,7 +549,8 @@ fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
         );
     }
 
-    let guard = js_typed_feedback_class_field_set_guard(32, receiver, class_id, keys, key, 0, 7.0, 0);
+    let guard =
+        js_typed_feedback_class_field_set_guard(32, receiver, class_id, keys, key, 0, 7.0, 0);
     assert_eq!(guard, 0);
     js_typed_feedback_record_fallback_call(32);
     crate::object::js_object_set_field_by_name(obj, key, 7.0);
@@ -657,8 +659,16 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
         0,
     );
 
-    let first =
-        js_typed_feedback_class_field_set_guard(44, receiver, class_id, expected_keys, key_x, 0, 2.0, 1);
+    let first = js_typed_feedback_class_field_set_guard(
+        44,
+        receiver,
+        class_id,
+        expected_keys,
+        key_x,
+        0,
+        2.0,
+        1,
+    );
     assert_eq!(first, 1);
 
     let payload = crate::string::js_string_from_bytes(b"boxed".as_ptr(), 5);

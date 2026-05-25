@@ -60,12 +60,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let layout_note_needed = array_store_needs_layout_note(ctx, &array_expr, value);
             let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
             let value_is_numeric = is_numeric_expr(ctx, value);
+            let value_is_plain_number = is_plain_number_value_expr(ctx, value);
             let require_numeric_layout =
                 value_is_numeric && expr_has_numeric_pointer_free_array_layout(ctx, &array_expr);
             let v = lower_expr(ctx, value)?;
             let arr_box = lower_expr(ctx, &array_expr)?;
+            let skip_guarded_numeric_push = !ctx.loop_targets.is_empty() && value_is_plain_number;
 
             if require_numeric_layout
+                && !skip_guarded_numeric_push
                 && !ctx.boxed_vars.contains(array_id)
                 && !ctx.closure_captures.contains_key(array_id)
                 && ctx.locals.contains_key(array_id)
@@ -408,5 +411,57 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // (`perry_closure_<modprefix>__<func_id>`) earlier in
         // `compile_module` via the `compile_closure` pass.
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}
+
+fn is_plain_number_value_expr(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::Integer(_) | Expr::Number(_) | Expr::DateNow => true,
+        Expr::Uint8ArrayGet { .. }
+        | Expr::BufferIndexGet { .. }
+        | Expr::Uint8ArrayLength(_)
+        | Expr::BufferLength(_) => true,
+        Expr::LocalGet(id) | Expr::Update { id, .. } => {
+            ctx.integer_locals.contains(id) || ctx.unsigned_i32_locals.contains(id)
+        }
+        Expr::MathImul(_, _) => true,
+        Expr::Binary { op, left, right } => match op {
+            BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::UShr => {
+                is_plain_number_value_expr(ctx, left) && is_plain_number_value_expr(ctx, right)
+            }
+            BinaryOp::Div => {
+                is_plain_number_value_expr(ctx, left)
+                    && match right.as_ref() {
+                        Expr::Integer(n) => *n != 0,
+                        Expr::Number(n) => n.is_finite() && n.abs() >= 1.0,
+                        other => is_plain_number_value_expr(ctx, other),
+                    }
+            }
+            BinaryOp::Mod => {
+                is_plain_number_value_expr(ctx, left)
+                    && match right.as_ref() {
+                        Expr::Integer(n) => *n != 0,
+                        Expr::Number(n) => n.is_finite() && *n != 0.0,
+                        other => is_plain_number_value_expr(ctx, other),
+                    }
+            }
+            _ => false,
+        },
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            is_plain_number_value_expr(ctx, then_expr) && is_plain_number_value_expr(ctx, else_expr)
+        }
+        _ => false,
     }
 }

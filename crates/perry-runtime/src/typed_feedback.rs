@@ -1083,8 +1083,6 @@ fn object_key_matches_field(
     }
 }
 
-
-
 fn shape_keyed_object_addr(source: ObservationSource, object_addr: usize) -> usize {
     if matches!(
         source,
@@ -1859,9 +1857,5 @@ pub(crate) fn reset_typed_feedback_for_tests() {
 }
 
 #[cfg(test)]
-
 #[path = "typed_feedback/tests.rs"]
 mod tests;
-
-
-

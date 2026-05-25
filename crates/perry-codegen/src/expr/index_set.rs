@@ -259,9 +259,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 write_barrier_needed,
                             );
                             if !value_is_numeric {
-                                let value_bits =
-                                    value_bits.unwrap_or_else(|| blk.bitcast_double_to_i64(&val_double));
-                                emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
+                                let value_bits = value_bits
+                                    .unwrap_or_else(|| blk.bitcast_double_to_i64(&val_double));
+                                emit_array_numeric_write_note_on_block(
+                                    blk,
+                                    &arr_handle,
+                                    &value_bits,
+                                );
                             }
                         }
                         return Ok(val_double);

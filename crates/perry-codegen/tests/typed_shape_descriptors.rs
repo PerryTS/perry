@@ -326,18 +326,25 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
     );
 
     let ir = ir_for(module);
-    let body_ir = block_between(&ir, "\nidxset.bounded_fast.", "\nidxset.bounded_fallback.");
 
     assert!(
-        body_ir.contains("call i32 @js_array_numeric_set_f64_unboxed"),
+        ir.contains("call i32 @js_array_numeric_set_f64_unboxed"),
         "bounded numeric array store should route through the raw-f64 payload helper"
     );
     assert!(
-        !body_ir.contains("call void @js_gc_note_slot_layout"),
+        !ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
+        "bounded numeric array stores should not reintroduce typed-feedback guards into hot loops"
+    );
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_plain_array_index_set_guard"),
+        "bounded numeric array stores should not fall back to plain typed-feedback guards"
+    );
+    assert!(
+        !ir.contains("call void @js_gc_note_slot_layout"),
         "integer LocalGet store into a numeric array should not update slot layout"
     );
     assert!(
-        !body_ir.contains("call void @js_write_barrier_slot"),
+        !ir.contains("call void @js_write_barrier_slot"),
         "integer LocalGet store into a numeric array should not emit a slot barrier"
     );
 }
@@ -387,11 +394,15 @@ fn integer_arithmetic_array_push_omits_inbounds_layout_note_and_barrier() {
     );
 
     let ir = ir_for(module);
-    let inbounds_ir = block_between(&ir, "\napush.numeric_fast.", "\napush.numeric_fallback.");
+    let inbounds_ir = block_between(&ir, "\napush.inbounds.", "\napush.realloc.");
 
     assert!(
-        inbounds_ir.contains("call i64 @js_array_numeric_push_f64_unboxed"),
-        "optimized numeric push should route through the raw-f64 payload helper"
+        !ir.contains("call i32 @js_typed_feedback_numeric_array_push_guard"),
+        "plain-number loop pushes should not reintroduce typed-feedback guards into hot loops"
+    );
+    assert!(
+        inbounds_ir.contains("store double"),
+        "plain-number loop pushes should keep the hot inbounds store inline"
     );
     assert!(
         !inbounds_ir.contains("call void @js_gc_note_slot_layout"),
