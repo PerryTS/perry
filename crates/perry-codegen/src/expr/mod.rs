@@ -1848,6 +1848,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::StaticFieldSet { .. }
         | Expr::RegisterClassParentDynamic { .. }
         | Expr::RegisterClassStaticSymbol { .. }
+        | Expr::ClassExprFresh { .. }
         | Expr::SetFunctionPrototype { .. }
         | Expr::RegisterPrototypeMethod { .. }
         | Expr::RegisterFunctionPrototypeMethod { .. }

@@ -482,6 +482,19 @@ where
             f(key_expr);
             f(value_expr);
         }
+        Expr::ClassExprFresh {
+            named_statics,
+            symbol_statics,
+            ..
+        } => {
+            for (_, v) in named_statics {
+                f(v);
+            }
+            for (k, v) in symbol_statics {
+                f(k);
+                f(v);
+            }
+        }
         Expr::SetFunctionPrototype { func, proto } => {
             f(func);
             f(proto);

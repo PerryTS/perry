@@ -116,6 +116,7 @@ pub fn invalidate_exact_receivers_for_expr(expr: &Expr, facts: &mut ExactReceive
         | Expr::ClassStaticSymbolSet { .. }
         | Expr::RegisterClassParentDynamic { .. }
         | Expr::RegisterClassStaticSymbol { .. }
+        | Expr::ClassExprFresh { .. }
         | Expr::SetFunctionPrototype { .. }
         | Expr::RegisterPrototypeMethod { .. }
         | Expr::RegisterFunctionPrototypeMethod { .. }

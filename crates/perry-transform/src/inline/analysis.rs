@@ -474,6 +474,7 @@ pub fn construction_expr_can_affect_method_lookup(
         | Expr::ClassStaticSymbolSet { .. }
         | Expr::RegisterClassParentDynamic { .. }
         | Expr::RegisterClassStaticSymbol { .. }
+        | Expr::ClassExprFresh { .. }
         | Expr::SetFunctionPrototype { .. }
         | Expr::RegisterPrototypeMethod { .. }
         | Expr::RegisterFunctionPrototypeMethod { .. }

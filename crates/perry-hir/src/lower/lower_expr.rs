@@ -1317,7 +1317,35 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     _ => None,
                 })
                 .collect();
+            // Issue #1772: regular-named static fields with an initializer
+            // (`static ast = ast`). #894 only handled the Symbol-key case;
+            // these need the same per-evaluation treatment, otherwise a class
+            // expression returned from a factory (effect's `make`) shares one
+            // template class and `.ast` is undefined/clobbered.
+            let named_statics: Vec<(String, Expr)> = class
+                .static_fields
+                .iter()
+                .filter_map(|sf| match (sf.key_expr.as_ref(), sf.init.as_ref()) {
+                    (None, Some(v)) => Some((sf.name.clone(), v.clone())),
+                    _ => None,
+                })
+                .collect();
             ctx.pending_classes.push(class);
+            // #1772: a class EXPRESSION that carries per-evaluation static
+            // fields and is NOT a mixin (`class extends <expr>`) lowers to a
+            // fresh heap class object per evaluation (`ClassExprFresh`), so
+            // `make(a) !== make(b)` and each holds its own statics as own
+            // properties. Mixins and static-less class expressions keep the
+            // historical (shared-template) path.
+            if parent_expr.is_none()
+                && (!named_statics.is_empty() || !static_symbol_registrations.is_empty())
+            {
+                return Ok(Expr::ClassExprFresh {
+                    template: synthetic_name,
+                    named_statics,
+                    symbol_statics: static_symbol_registrations,
+                });
+            }
             let mut seq: Vec<Expr> = Vec::new();
             if let Some(p) = parent_expr {
                 seq.push(Expr::RegisterClassParentDynamic {

@@ -152,6 +152,53 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
         }
+        // Issue #1772: per-evaluation class identity for a class expression.
+        // Each evaluation allocates a real heap "class object" — a regular
+        // object stamped with the compile-time template's `class_id` (so
+        // static methods / `new` / instanceof dispatch through the existing
+        // class_id machinery, no fresh hop, no method regression) and
+        // carrying the per-evaluation static fields as its own properties.
+        // So `make(a) !== make(b)` (distinct pointers), `make(a).ast` is an
+        // own field, `make(a).pipe()` dispatches via class_id=template, and
+        // the object is GC-traced + collected when unreachable (no leak).
+        Expr::ClassExprFresh {
+            template,
+            named_statics,
+            symbol_statics,
+        } => {
+            let template_cid = ctx.class_ids.get(template).copied().unwrap_or(0);
+            let tcid_str = template_cid.to_string();
+            let nfields = named_statics.len().to_string();
+            // Allocate with class_id = template; set_field_by_name below
+            // performs the keys-array transition for the named statics.
+            let obj =
+                ctx.block()
+                    .call(I64, "js_object_alloc", &[(I32, &tcid_str), (I32, &nfields)]);
+            for (name, init) in named_statics {
+                let key_idx = ctx.strings.intern(name);
+                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let v = lower_expr(ctx, init)?;
+                let blk = ctx.block();
+                let key_box = blk.load(DOUBLE, &key_handle_global);
+                let key_bits = blk.bitcast_double_to_i64(&key_box);
+                let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+                blk.call_void(
+                    "js_object_set_field_by_name",
+                    &[(I64, &obj), (I64, &key_raw), (DOUBLE, &v)],
+                );
+            }
+            let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+            for (key, init) in symbol_statics {
+                let k = lower_expr(ctx, key)?;
+                let v = lower_expr(ctx, init)?;
+                ctx.block().call(
+                    DOUBLE,
+                    "js_object_set_symbol_property",
+                    &[(DOUBLE, &obj_box), (DOUBLE, &k), (DOUBLE, &v)],
+                );
+            }
+            Ok(obj_box)
+        }
         // Issue #711 part 2: `<expr>.prototype = <expr>` pattern.
         // Calls `js_set_function_prototype(func, proto)`, which (when
         // func is a closure and proto is an object) allocates a

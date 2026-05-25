@@ -303,6 +303,27 @@ pub enum Expr {
         value_expr: Box<Expr>,
     },
 
+    /// Issue #1772: per-evaluation identity for a class EXPRESSION
+    /// (`class C { ... }` in value position, e.g. effect's `make(ast) =>
+    /// class SchemaClass { static ast = ast }`). Codegen allocates a real
+    /// heap "class object" (`js_object_alloc(template_class_id, n)`) stamped
+    /// with the compile-time `template`'s class_id — so static methods /
+    /// `new` / `instanceof` keep dispatching through the existing class_id
+    /// machinery — and writes the per-evaluation static fields as the
+    /// object's OWN properties (`named_statics` via
+    /// `js_object_set_field_by_name`, `symbol_statics` via
+    /// `js_object_set_symbol_property`). The class value is the object
+    /// POINTER, so `make(a) !== make(b)` (distinct heap allocations) and
+    /// each carries its own `static ast`. Because it is a normal traced
+    /// heap object it is collectible — no leak. The static-field
+    /// initializers are evaluated against the current scope each time the
+    /// expression runs. Top-level class DECLARATIONS keep `INT32(class_id)`.
+    ClassExprFresh {
+        template: String,
+        named_statics: Vec<(String, Expr)>,
+        symbol_statics: Vec<(Expr, Expr)>,
+    },
+
     // Issue #711 part 2: `<func_expr>.prototype = <obj_expr>` pattern,
     // used by Effect's effectable.ts to declare prototype-based
     // classes. Codegen emits a call to `js_set_function_prototype`

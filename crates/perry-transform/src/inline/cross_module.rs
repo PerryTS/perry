@@ -401,6 +401,11 @@ pub fn body_references_class_in_set(stmts: &[Stmt], set: &HashSet<String>) -> bo
                     return true;
                 }
             }
+            Expr::ClassExprFresh { template, .. } => {
+                if set.contains(template) {
+                    return true;
+                }
+            }
             _ => {}
         }
         let mut hit = false;

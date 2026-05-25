@@ -772,6 +772,19 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(key_expr, out);
             walk(value_expr, out);
         }
+        Expr::ClassExprFresh {
+            named_statics,
+            symbol_statics,
+            ..
+        } => {
+            for (_, v) in named_statics {
+                walk(v, out);
+            }
+            for (k, v) in symbol_statics {
+                walk(k, out);
+                walk(v, out);
+            }
+        }
         Expr::RegisterClassParentDynamic { parent_expr, .. } => {
             walk(parent_expr, out);
         }
