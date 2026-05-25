@@ -748,8 +748,32 @@ pub fn run_with_parse_cache(
         }
         // Named exports (export { foo, bar as baz })
         for export in &hir_module.exports {
-            if let perry_hir::Export::Named { exported, .. } = export {
+            if let perry_hir::Export::Named { local, exported } = export {
                 exports.insert(exported.clone(), path_str.clone());
+                // #1758: a LOCAL renamed export of a CLASS
+                // (`export { Number$ as Number }`, no `from`) must record the
+                // origin (local) name so importers resolve `ns.Number` to the
+                // defining class `Number$`. The re-export propagation loop below
+                // only records origin names for cross-module
+                // `export { X as Y } from "src"`. Without this, the
+                // namespace-member class value-read (property_get.rs) looks up
+                // `class_ids["Number"]` (the export alias) — a miss — and
+                // `S.Number` falls back to the global `Number`, losing all
+                // inherited statics (effect's `S.Number.ast` → undefined →
+                // Schema decode crash). Scoped to classes: renamed var/func
+                // exports route through wrapper-symbol emission that keys on the
+                // export name, and feeding the origin name there breaks linking.
+                if local != exported
+                    && hir_module
+                        .classes
+                        .iter()
+                        .any(|c| c.name == *local && c.is_exported)
+                {
+                    all_module_export_origin_names
+                        .entry(path_str.clone())
+                        .or_insert_with(BTreeMap::new)
+                        .insert(exported.clone(), local.clone());
+                }
             }
             // ReExport is handled in the propagation loop below (avoids borrow issues)
         }

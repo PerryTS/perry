@@ -689,7 +689,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // (mirrors the `Expr::ExternFuncRef` arm at the
                     // bottom of this function): emit the INT32-tagged
                     // class-id NaN-box that `Expr::ClassRef` produces.
-                    if let Some(&cid) = ctx.class_ids.get(property) {
+                    // #1758: a renamed export (`export { Number$ as Number }`)
+                    // is keyed in `class_ids` under the ORIGIN name (`Number$`),
+                    // but `property` here is the EXPORTED alias (`Number`). Try
+                    // the alias first (direct exports), then the origin name via
+                    // `import_function_origin_names` — otherwise `ns.Number`
+                    // misses the class ref and falls back to the global
+                    // `Number`, dropping all inherited statics (effect's
+                    // `S.Number.ast`).
+                    let class_cid = ctx.class_ids.get(property).copied().or_else(|| {
+                        ctx.import_function_origin_names
+                            .get(property)
+                            .and_then(|origin| ctx.class_ids.get(origin).copied())
+                    });
+                    if let Some(cid) = class_cid {
                         let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
                         return Ok(double_literal(f64::from_bits(bits)));
                     }
