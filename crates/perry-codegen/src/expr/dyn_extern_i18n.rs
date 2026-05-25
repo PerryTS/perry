@@ -91,6 +91,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
                         return Ok(nanbox_pointer_inline(blk, &promise));
                     }
+                    // #1673: a dynamic import of a general native builtin
+                    // (`await import('node:crypto')`) carries the sentinel
+                    // prefix `__native_mod__<name>`. Build its namespace via
+                    // `js_create_native_module_namespace` — the same
+                    // NATIVE_MODULE_CLASS_ID object `require('node:crypto')`
+                    // produces, whose member access dispatches natively at
+                    // runtime — and resolve the promise with it.
+                    if let Some(name) = prefix.strip_prefix("__native_mod__") {
+                        let name = name.to_string();
+                        let mod_label = emit_string_literal_global(ctx, &name);
+                        let mod_len = name.len();
+                        let blk = ctx.block();
+                        let ns_val = blk.call(
+                            DOUBLE,
+                            "js_create_native_module_namespace",
+                            &[(PTR, &mod_label), (I64, &mod_len.to_string())],
+                        );
+                        let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
+                        return Ok(nanbox_pointer_inline(blk, &promise));
+                    }
                 }
                 let blk = ctx.block();
                 let ns_val = match target_prefix {
@@ -192,6 +212,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         DOUBLE,
                         "js_node_submodule_namespace",
                         &[(PTR, &submod_label), (I32, &submod_len.to_string())],
+                    )
+                } else if let Some(name) = target_prefix.strip_prefix("__native_mod__") {
+                    // #1673: general native builtin target in a multi-path
+                    // (`import(cond ? 'node:crypto' : './local.ts')`) chain.
+                    let name = name.to_string();
+                    let mod_label = emit_string_literal_global(ctx, &name);
+                    let mod_len = name.len();
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_create_native_module_namespace",
+                        &[(PTR, &mod_label), (I64, &mod_len.to_string())],
                     )
                 } else {
                     let blk = ctx.block();

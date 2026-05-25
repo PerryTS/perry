@@ -1673,6 +1673,27 @@ pub fn run_with_parse_cache(
                         self::collect_modules::known_node_submodule_key(&import.source)
                     {
                         local_map.insert(import.source.clone(), format!("__node_submod__{}", key));
+                    } else if import.is_native {
+                        // #1673: a dynamic `import('node:crypto')` /
+                        // `import('node:util')` targets a general native builtin
+                        // that is NOT in the node-submodule table and has no
+                        // compiled-source backing. The runtime builds its
+                        // namespace object via `js_create_native_module_namespace`
+                        // (the same object `require('node:crypto')` and `import *
+                        // as` produce). Record a `__native_mod__<name>` sentinel,
+                        // keyed by the `node:`-stripped module name, that the
+                        // dynamic-import codegen routes to that builder. An
+                        // unsupported builtin never reaches here (`is_native` is
+                        // false for it → no map entry → the dispatch rejects,
+                        // matching Node's failure mode).
+                        let native_name = import
+                            .source
+                            .strip_prefix("node:")
+                            .unwrap_or(&import.source);
+                        local_map.insert(
+                            import.source.clone(),
+                            format!("__native_mod__{}", native_name),
+                        );
                     }
                     continue;
                 }
