@@ -9,7 +9,7 @@ use super::{
 };
 use crate::block::LlBlock;
 use crate::nanbox::POINTER_MASK_I64;
-use crate::types::{DOUBLE, I32, I64, I8};
+use crate::types::{DOUBLE, I32, I64};
 
 /// Inline fast-path lowering for `local_arr[i] = v`.
 ///
@@ -18,6 +18,11 @@ use crate::types::{DOUBLE, I32, I64, I8};
 /// ```text
 ///   <current>:
 ///     %arr_handle = unbox(arr_box)
+///     %idx_i32 = fptosi %idx
+///     %guard_ok = call @js_typed_feedback_plain_array_index_set_guard(...)
+///     br i1 %guard_ok, label %guarded, label %fallback
+///
+///   <guarded>:
 ///     %length = load i32, ptr @ arr_handle+0
 ///     %in_bounds = icmp ult %idx_i32, %length
 ///     br i1 %in_bounds, label %fast_inbounds, label %check_capacity
@@ -44,13 +49,19 @@ use crate::types::{DOUBLE, I32, I64, I8};
 ///     store double %new_box, ptr %local_slot
 ///     br merge
 ///
+///   fallback:
+///     %new_box = call double @js_typed_feedback_array_index_set_fallback_boxed(...)
+///     store double %new_box, ptr %local_slot
+///     br merge
+///
 ///   merge:
 ///     <continues here>
 /// ```
 ///
-/// The first two paths are pure inline IR — no function calls, no extra
-/// memory loads. The third path only fires when the array actually has
-/// to grow (~17 times for a 100K-element build with doubling growth).
+/// The inline store paths are entered only after the runtime guard proves the
+/// receiver is a live, non-forwarded plain array with a sane header. The realloc
+/// path only fires when the array actually has to grow (~17 times for a
+/// 100K-element build with doubling growth).
 pub(crate) fn lower_index_set_fast(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -59,6 +70,7 @@ pub(crate) fn lower_index_set_fast(
     local_id: u32,
     layout_note_needed: bool,
     write_barrier_needed: bool,
+    feedback_site_id: &str,
 ) -> Result<()> {
     // Capture the local slot for the realloc path.
     let slot = ctx
@@ -73,56 +85,61 @@ pub(crate) fn lower_index_set_fast(
     let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
     let idx_i32 = blk.fptosi(DOUBLE, idx_double, I32);
 
-    // Issue #233: detect FORWARDED arrays (post-grow stale pointers
-    // from async-fn parameter handoff) and route to the realloc slow
-    // path. The slow path's `js_array_set_f64_extend` →
-    // `clean_arr_ptr_mut` follows the forwarding chain and writes
-    // into the live new array. Without this guard, length+capacity
-    // read at offsets 0/4 would be the lower 32 bits of the
-    // forwarding pointer (garbage) and the inline element store at
-    // arr+8+idx*8 would corrupt unrelated memory.
-    let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
-    let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
-    let gc_flags = blk.load(I8, &gc_flags_ptr);
-    let fwd_bits = blk.and(I8, &gc_flags, "128"); // GC_FLAG_FORWARDED
-    let is_fwd = blk.icmp_ne(I8, &fwd_bits, "0");
-
-    let fwd_idx = ctx.new_block("idxset.fwd");
-    let nofwd_idx = ctx.new_block("idxset.nofwd");
+    let guarded_idx = ctx.new_block("idxset.guarded");
+    let guard_fallback_idx = ctx.new_block("idxset.guard_fallback");
     let inbounds_idx = ctx.new_block("idxset.inbounds");
     let check_cap_idx = ctx.new_block("idxset.check_cap");
     let extend_inline_idx = ctx.new_block("idxset.extend_inline");
     let realloc_idx = ctx.new_block("idxset.realloc");
     let merge_idx = ctx.new_block("idxset.merge");
 
-    let fwd_label = ctx.block_label(fwd_idx);
-    let nofwd_label = ctx.block_label(nofwd_idx);
+    let guarded_label = ctx.block_label(guarded_idx);
+    let guard_fallback_label = ctx.block_label(guard_fallback_idx);
     let inbounds_label = ctx.block_label(inbounds_idx);
     let check_cap_label = ctx.block_label(check_cap_idx);
     let extend_inline_label = ctx.block_label(extend_inline_idx);
     let realloc_label = ctx.block_label(realloc_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    ctx.block().cond_br(&is_fwd, &fwd_label, &nofwd_label);
-
-    // FORWARDED branch: same shape as the realloc slow path —
-    // js_array_set_f64_extend handles forwarding via clean_arr_ptr.
-    ctx.current_block = fwd_idx;
-    {
+    // Runtime guard before any ArrayHeader read or raw element store. This
+    // rejects dynamic/cross-boundary receivers, lazy arrays, stale forwarded
+    // heads, and corrupt layouts; the fallback then uses boxed JSValue
+    // semantics and writes the returned receiver back to the local slot.
+    let guard_ok = {
         let blk = ctx.block();
-        let new_handle = blk.call(
-            I64,
-            "js_array_set_f64_extend",
-            &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, val_double)],
+        let guard_i32 = blk.call(
+            I32,
+            "js_typed_feedback_plain_array_index_set_guard",
+            &[
+                (I64, feedback_site_id),
+                (DOUBLE, arr_box),
+                (I32, &idx_i32),
+                (DOUBLE, val_double),
+                (I32, "0"),
+            ],
         );
-        let new_box = nanbox_pointer_inline(blk, &new_handle);
-        blk.store(DOUBLE, &new_box, &slot);
-        let val_bits = blk.bitcast_double_to_i64(val_double);
-        emit_write_barrier_slot_on_block(blk, &arr_handle, "0", &val_bits);
-        blk.br(&merge_label);
+        blk.icmp_ne(I32, &guard_i32, "0")
+    };
+    ctx.block()
+        .cond_br(&guard_ok, &guarded_label, &guard_fallback_label);
+
+    ctx.current_block = guard_fallback_idx;
+    {
+        let fallback_box = ctx.block().call(
+            DOUBLE,
+            "js_typed_feedback_array_index_set_fallback_boxed",
+            &[
+                (I64, feedback_site_id),
+                (DOUBLE, arr_box),
+                (I32, &idx_i32),
+                (DOUBLE, val_double),
+            ],
+        );
+        ctx.block().store(DOUBLE, &fallback_box, &slot);
+        ctx.block().br(&merge_label);
     }
 
-    ctx.current_block = nofwd_idx;
+    ctx.current_block = guarded_idx;
     // Load length from offset 0 (null-guarded).
     let length = ctx.block().safe_load_i32_from_ptr(&arr_handle);
     let in_bounds = ctx.block().icmp_ult(I32, &idx_i32, &length);
@@ -198,6 +215,10 @@ pub(crate) fn lower_index_set_fast(
     ctx.current_block = realloc_idx;
     {
         let blk = ctx.block();
+        blk.call_void(
+            "js_typed_feedback_record_fallback_call",
+            &[(I64, feedback_site_id)],
+        );
         let new_handle = blk.call(
             I64,
             "js_array_set_f64_extend",

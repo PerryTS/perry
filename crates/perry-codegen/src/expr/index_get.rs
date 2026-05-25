@@ -33,8 +33,8 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 use super::{
     buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
     emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
-    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
+    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
@@ -43,8 +43,87 @@ use super::{
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
     try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
     unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
-    I18nLowerCtx,
+    I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
 };
+
+fn lower_guarded_array_index_get(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_box: &str,
+    idx_i32: &str,
+    block_prefix: &str,
+) -> Result<String> {
+    let feedback_site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::ArrayElement,
+        "array[index]",
+        TypedFeedbackContract::array_get_index(),
+    );
+    let fast_idx = ctx.new_block(&format!("{}.fast", block_prefix));
+    let fallback_idx = ctx.new_block(&format!("{}.fallback", block_prefix));
+    let merge_idx = ctx.new_block(&format!("{}.merge", block_prefix));
+    let fast_label = ctx.block_label(fast_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    let guard_ok = {
+        let blk = ctx.block();
+        let guard_i32 = blk.call(
+            I32,
+            "js_typed_feedback_plain_array_index_get_guard",
+            &[
+                (I64, &feedback_site_id),
+                (DOUBLE, arr_box),
+                (DOUBLE, idx_box),
+                (I32, idx_i32),
+                (I32, "1"),
+            ],
+        );
+        blk.icmp_ne(I32, &guard_i32, "0")
+    };
+    ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+
+    ctx.current_block = fallback_idx;
+    let fallback_val = ctx.block().call(
+        DOUBLE,
+        "js_typed_feedback_array_index_get_fallback_boxed",
+        &[
+            (I64, &feedback_site_id),
+            (DOUBLE, arr_box),
+            (DOUBLE, idx_box),
+        ],
+    );
+    let fallback_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = fast_idx;
+    let fast_blk = ctx.block();
+    let arr_bits = fast_blk.bitcast_double_to_i64(arr_box);
+    let arr_handle = fast_blk.and(I64, &arr_bits, POINTER_MASK_I64);
+    let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
+    let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
+    let with_header = fast_blk.add(I64, &byte_offset, "8");
+    let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
+    let element_ptr = fast_blk.inttoptr(I64, &element_addr);
+    let fast_raw = fast_blk.load(DOUBLE, &element_ptr);
+    // `new Array(n)` slots are TAG_HOLE internally; JavaScript reads expose
+    // `undefined`.
+    let fast_raw_bits = fast_blk.bitcast_double_to_i64(&fast_raw);
+    let is_hole = fast_blk.icmp_eq(I64, &fast_raw_bits, crate::nanbox::TAG_HOLE_I64);
+    let undef_d = fast_blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
+    let fast_val = fast_blk.select(I1, &is_hole, DOUBLE, &undef_d, &fast_raw);
+    let fast_end_label = fast_blk.label.clone();
+    fast_blk.br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    Ok(ctx.block().phi(
+        DOUBLE,
+        &[
+            (&fast_val, &fast_end_label),
+            (&fallback_val, &fallback_end_label),
+        ],
+    ))
+}
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
@@ -198,191 +277,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let idx_double = lower_expr(ctx, index)?;
                             ctx.block().fptosi(DOUBLE, &idx_double, I32)
                         };
-                        let blk = ctx.block();
-                        let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-
-                        // Issue #179 Phase 3: lazy-array guard on the
-                        // bounded-index fast path. Same story as the
-                        // generic path above — a LazyArrayHeader has
-                        // unrelated bytes at `arr + 8 + idx*8`, so we
-                        // need to route through the slow path when
-                        // the receiver is lazy. Branchy here but the
-                        // branch is almost always trivially
-                        // well-predicted (same array for the loop's
-                        // duration; LLVM can often hoist the check).
-                        //
-                        // Issue #233: also detect FORWARDED arrays
-                        // (post-grow stale pointers from async-fn
-                        // parameter handoff). Same routing — slow
-                        // path's `clean_arr_ptr` follows the chain.
-                        let gc_type_addr = blk.sub(I64, &arr_handle, "8");
-                        let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
-                        let gc_type = blk.load(I8, &gc_type_ptr);
-                        let is_lazy = blk.icmp_eq(I8, &gc_type, "9");
-                        let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
-                        let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
-                        let gc_flags = blk.load(I8, &gc_flags_ptr);
-                        let fwd_bits = blk.and(I8, &gc_flags, "128"); // GC_FLAG_FORWARDED
-                        let is_fwd = blk.icmp_ne(I8, &fwd_bits, "0");
-                        let needs_slow = blk.or(I1, &is_lazy, &is_fwd);
-
-                        let lazy_idx = ctx.new_block("bidx.lazy");
-                        let fast_idx = ctx.new_block("bidx.fast");
-                        let merge_idx = ctx.new_block("bidx.merge");
-                        let lazy_label = ctx.block_label(lazy_idx);
-                        let fast_label = ctx.block_label(fast_idx);
-                        let merge_label = ctx.block_label(merge_idx);
-                        ctx.block().cond_br(&needs_slow, &lazy_label, &fast_label);
-
-                        ctx.current_block = lazy_idx;
-                        let lazy_blk = ctx.block();
-                        let lazy_val = lazy_blk.call(
-                            DOUBLE,
-                            "js_array_get_f64",
-                            &[(I64, &arr_handle), (I32, &idx_i32)],
+                        let idx_box = ctx.block().sitofp(I32, &idx_i32, DOUBLE);
+                        return lower_guarded_array_index_get(
+                            ctx, &arr_box, &idx_box, &idx_i32, "bidx",
                         );
-                        let lazy_end_label = lazy_blk.label.clone();
-                        lazy_blk.br(&merge_label);
-
-                        ctx.current_block = fast_idx;
-                        let fast_blk = ctx.block();
-                        let idx_i64 = fast_blk.zext(I32, &idx_i32, I64);
-                        let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
-                        let with_header = fast_blk.add(I64, &byte_offset, "8");
-                        let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
-                        let element_ptr = fast_blk.inttoptr(I64, &element_addr);
-                        let fast_raw = fast_blk.load(DOUBLE, &element_ptr);
-                        // Issue #323: `new Array(n)` slots are pre-filled with
-                        // TAG_HOLE so `Object.keys` / `in` can distinguish a
-                        // never-written slot from `arr[i] = undefined`. Reads
-                        // must translate HOLE → UNDEFINED so user code never
-                        // sees the sentinel. Branchless select.
-                        let fast_raw_bits = fast_blk.bitcast_double_to_i64(&fast_raw);
-                        let is_hole =
-                            fast_blk.icmp_eq(I64, &fast_raw_bits, crate::nanbox::TAG_HOLE_I64);
-                        let undef_d =
-                            fast_blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
-                        let fast_val = fast_blk.select(
-                            crate::types::I1,
-                            &is_hole,
-                            DOUBLE,
-                            &undef_d,
-                            &fast_raw,
-                        );
-                        let fast_end_label = fast_blk.label.clone();
-                        fast_blk.br(&merge_label);
-
-                        ctx.current_block = merge_idx;
-                        return Ok(ctx.block().phi(
-                            DOUBLE,
-                            &[(&fast_val, &fast_end_label), (&lazy_val, &lazy_end_label)],
-                        ));
                     }
                 }
 
                 let arr_box = lower_expr(ctx, object)?;
                 let idx_double = lower_expr(ctx, index)?;
-                let blk = ctx.block();
-                let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
-
-                // Issue #179 Phase 3: lazy-array guard on the inline
-                // IndexGet path. A `LazyArrayHeader` lives at the
-                // same pointer but has (magic, root_idx, tape_len,
-                // blob_str, materialized) after offset 0's
-                // `cached_length`, NOT element f64s. Reading `arr +
-                // 8 + idx*8` on a lazy value returns garbage. Check
-                // `GcHeader::obj_type` at `arr - 8` before the
-                // element load; if it's `GC_TYPE_LAZY_ARRAY` (9),
-                // route through `js_array_get_f64` which funnels
-                // every access through `clean_arr_ptr` —
-                // `clean_arr_ptr` force-materializes lazy values
-                // idempotently and returns the `ArrayHeader`-backed
-                // tree. Adds 2 instructions (sub + load i8) + one
-                // comparison + one branch on the fast path; the cost
-                // is in the same order as the existing null-guard
-                // and tag checks.
-                let gc_type_addr = blk.sub(I64, &arr_handle, "8");
-                let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
-                let gc_type = blk.load(I8, &gc_type_ptr);
-                let is_lazy = blk.icmp_eq(I8, &gc_type, "9"); // GC_TYPE_LAZY_ARRAY
-                                                              // Issue #233: also detect FORWARDED arrays (post-grow
-                                                              // stale pointers from async-fn parameter handoff). The
-                                                              // slow path's `clean_arr_ptr` follows forwarding
-                                                              // chains. Same lazy_idx branch (slow path) handles
-                                                              // both shapes correctly.
-                let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
-                let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
-                let gc_flags = blk.load(I8, &gc_flags_ptr);
-                let fwd_bits = blk.and(I8, &gc_flags, "128"); // GC_FLAG_FORWARDED
-                let is_fwd = blk.icmp_ne(I8, &fwd_bits, "0");
-                let needs_slow = blk.or(I1, &is_lazy, &is_fwd);
-
-                let lazy_idx = ctx.new_block("arr.lazy");
-                let fast_idx = ctx.new_block("arr.fast");
-                let merge_idx = ctx.new_block("arr.merge");
-                let lazy_label = ctx.block_label(lazy_idx);
-                let fast_label = ctx.block_label(fast_idx);
-                let merge_label = ctx.block_label(merge_idx);
-                ctx.block().cond_br(&needs_slow, &lazy_label, &fast_label);
-
-                // Lazy branch: js_array_get_f64 → clean_arr_ptr →
-                // force_materialize_lazy → element load on the
-                // materialized tree. Subsequent calls hit the
-                // cached `materialized` pointer — O(1) after the
-                // first access.
-                ctx.current_block = lazy_idx;
-                let lazy_blk = ctx.block();
-                let lazy_val = lazy_blk.call(
-                    DOUBLE,
-                    "js_array_get_f64",
-                    &[(I64, &arr_handle), (I32, &idx_i32)],
-                );
-                let lazy_end_label = lazy_blk.label.clone();
-                lazy_blk.br(&merge_label);
-
-                // Fast branch: unchanged inline load with bounds check.
-                ctx.current_block = fast_idx;
-                let fast_blk = ctx.block();
-                let len_i32 = fast_blk.safe_load_i32_from_ptr(&arr_handle);
-                let in_bounds = fast_blk.icmp_ult(I32, &idx_i32, &len_i32);
-                let ok_idx = ctx.new_block("arr.ok");
-                let oob_idx = ctx.new_block("arr.oob");
-                let ok_label = ctx.block_label(ok_idx);
-                let oob_label = ctx.block_label(oob_idx);
-                ctx.block().cond_br(&in_bounds, &ok_label, &oob_label);
-                ctx.current_block = ok_idx;
-                let blk = ctx.block();
-                let idx_i64 = blk.zext(I32, &idx_i32, I64);
-                let byte_offset = blk.shl(I64, &idx_i64, "3");
-                let with_header = blk.add(I64, &byte_offset, "8");
-                let element_addr = blk.add(I64, &arr_handle, &with_header);
-                let element_ptr = blk.inttoptr(I64, &element_addr);
-                let raw = blk.load(DOUBLE, &element_ptr);
-                // Issue #323: HOLE → UNDEFINED translation (see bounded-index
-                // path above). Branchless select keeps the hot path tight.
-                let raw_bits = blk.bitcast_double_to_i64(&raw);
-                let is_hole = blk.icmp_eq(I64, &raw_bits, crate::nanbox::TAG_HOLE_I64);
-                let undef_d = blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
-                let val = blk.select(crate::types::I1, &is_hole, DOUBLE, &undef_d, &raw);
-                let ok_end_label = ctx.block().label.clone();
-                ctx.block().br(&merge_label);
-                ctx.current_block = oob_idx;
-                let undef_bits = crate::nanbox::i64_literal(crate::nanbox::TAG_UNDEFINED);
-                let undef_val = ctx.block().bitcast_i64_to_double(&undef_bits);
-                let oob_end_label = ctx.block().label.clone();
-                ctx.block().br(&merge_label);
-                ctx.current_block = merge_idx;
-                return Ok(ctx.block().phi(
-                    DOUBLE,
-                    &[
-                        (&val, &ok_end_label),
-                        (&undef_val, &oob_end_label),
-                        (&lazy_val, &lazy_end_label),
-                    ],
-                ));
+                let idx_i32 = ctx.block().fptosi(DOUBLE, &idx_double, I32);
+                return lower_guarded_array_index_get(ctx, &arr_box, &idx_double, &idx_i32, "arr");
             }
             // Generic dynamic object access: stringify the index (no-op
             // for already-string keys, format for numeric keys) and
@@ -399,10 +304,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let key_box = blk.load(DOUBLE, &key_handle_global);
                 let key_bits = blk.bitcast_double_to_i64(&key_box);
                 let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                return Ok(blk.call(
+                let site_id = emit_typed_feedback_register_site(
+                    ctx,
+                    TypedFeedbackKind::PropertyGet,
+                    literal,
+                    TypedFeedbackContract::object_get_by_name(),
+                );
+                return Ok(ctx.block().call(
                     DOUBLE,
-                    "js_object_get_field_by_name_f64",
-                    &[(I64, &obj_handle), (I64, &key_raw)],
+                    "js_typed_feedback_object_get_field_by_name_f64",
+                    &[(I64, &site_id), (I64, &obj_handle), (I64, &key_raw)],
                 ));
             }
             if is_string_expr(ctx, index) {
@@ -416,10 +327,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let blk = ctx.block();
                 let obj_handle = unbox_to_i64(blk, &obj_box);
                 let key_handle = unbox_str_handle(blk, &key_box);
-                return Ok(blk.call(
+                let site_id = emit_typed_feedback_register_site(
+                    ctx,
+                    TypedFeedbackKind::PropertyGet,
+                    "object[index]",
+                    TypedFeedbackContract::object_get_by_name(),
+                );
+                return Ok(ctx.block().call(
                     DOUBLE,
-                    "js_object_get_field_by_name_f64",
-                    &[(I64, &obj_handle), (I64, &key_handle)],
+                    "js_typed_feedback_object_get_field_by_name_f64",
+                    &[(I64, &site_id), (I64, &obj_handle), (I64, &key_handle)],
                 ));
             }
             // Last-resort fallback with runtime tag checks on the index.
@@ -471,12 +388,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ctx.block().cond_br(&is_str, &str_lbl, &num_lbl);
             // String key → object field access.
             ctx.current_block = str_idx;
-            let blk = ctx.block();
-            let key_handle = unbox_str_handle(blk, &idx_box);
-            let v_str = blk.call(
+            let key_handle = {
+                let blk = ctx.block();
+                unbox_str_handle(blk, &idx_box)
+            };
+            let site_id = emit_typed_feedback_register_site(
+                ctx,
+                TypedFeedbackKind::PropertyGet,
+                "object[index]",
+                TypedFeedbackContract::object_get_by_name(),
+            );
+            let v_str = ctx.block().call(
                 DOUBLE,
-                "js_object_get_field_by_name_f64",
-                &[(I64, &obj_handle), (I64, &key_handle)],
+                "js_typed_feedback_object_get_field_by_name_f64",
+                &[(I64, &site_id), (I64, &obj_handle), (I64, &key_handle)],
             );
             let str_end_lbl = ctx.block().label.clone();
             ctx.block().br(&merge_lbl);

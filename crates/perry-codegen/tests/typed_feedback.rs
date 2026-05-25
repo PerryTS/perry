@@ -144,3 +144,31 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
     assert!(ir.contains("call void @js_typed_feedback_record_guard_fail"));
     assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
 }
+
+#[test]
+fn typed_feedback_guards_array_index_specialization() {
+    let array_ty = Type::Array(Box::new(Type::Number));
+    let ir = ir_for(module(
+        "typed_feedback_array.ts",
+        vec![param(1, "xs", array_ty)],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::Number(0.0)),
+                value: Box::new(Expr::Number(7.0)),
+            }),
+            Stmt::Return(Some(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::Number(0.0)),
+            })),
+        ],
+    ));
+
+    assert!(ir.contains("plain_array_index_set_guard"));
+    assert!(ir.contains("plain_array_index_get_guard"));
+    assert!(ir.contains("js_typed_feedback_plain_array_index_set_guard"));
+    assert!(ir.contains("js_typed_feedback_array_index_set_fallback_boxed"));
+    assert!(ir.contains("js_typed_feedback_plain_array_index_get_guard"));
+    assert!(ir.contains("js_typed_feedback_array_index_get_fallback_boxed"));
+}
