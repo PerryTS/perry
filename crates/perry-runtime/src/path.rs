@@ -254,6 +254,16 @@ fn normalize_win32_str(input: &str) -> String {
         // added so the result is exactly "\\server\share".
         result.pop();
     }
+    // #1728: a bare drive-relative ref (`C:`) normalizes to `C:.` — the
+    // drive's current directory, not the drive root (`C:\`). Node appends `.`
+    // only when there are no path segments and the ref isn't drive-absolute
+    // (`C:\` stays `C:\`, `C:foo` stays `C:foo`).
+    let is_drive_relative_prefix = prefix.len() == 2
+        && prefix.as_bytes()[1] == b':'
+        && prefix.as_bytes()[0].is_ascii_alphabetic();
+    if is_drive_relative_prefix && !is_absolute && out.is_empty() {
+        result.push('.');
+    }
     if result.is_empty() {
         return if is_absolute {
             "\\".to_string()
@@ -1201,5 +1211,35 @@ pub extern "C" fn js_path_win32_relative(
         let mut parts: Vec<&str> = std::iter::repeat_n("..", ups).collect();
         parts.extend(to_segs[common..].iter().copied());
         string_to_js(&parts.join("\\"))
+    }
+}
+
+#[cfg(test)]
+mod win32_normalize_tests {
+    use super::normalize_win32_str;
+
+    #[test]
+    fn drive_relative_bare_appends_dot() {
+        // #1728: a bare drive ref is the drive's *current dir*, not the root.
+        assert_eq!(normalize_win32_str("C:"), "C:.");
+        assert_eq!(normalize_win32_str("c:"), "c:.");
+    }
+
+    #[test]
+    fn drive_relative_with_segments_unchanged() {
+        // The `.` is only appended when there are no segments.
+        assert_eq!(normalize_win32_str("C:foo"), "C:foo");
+        assert_eq!(normalize_win32_str("C:.."), "C:..");
+        assert_eq!(normalize_win32_str("C:foo\\bar"), "C:foo\\bar");
+    }
+
+    #[test]
+    fn drive_absolute_and_others_unaffected() {
+        // Regression guard for the cases that already matched Node.
+        assert_eq!(normalize_win32_str("C:\\"), "C:\\");
+        assert_eq!(normalize_win32_str("C:\\foo"), "C:\\foo");
+        assert_eq!(normalize_win32_str("a//b//../b"), "a\\b");
+        assert_eq!(normalize_win32_str("/foo/../../../bar"), "\\bar");
+        assert_eq!(normalize_win32_str(""), ".");
     }
 }
