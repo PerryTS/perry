@@ -4370,6 +4370,113 @@ type Aes256Gcm13 = aes_gcm::AesGcm<Aes256, aes::cipher::consts::U12, aes::cipher
 type Aes256Gcm14 = aes_gcm::AesGcm<Aes256, aes::cipher::consts::U12, aes::cipher::consts::U14>;
 type Aes256Gcm15 = aes_gcm::AesGcm<Aes256, aes::cipher::consts::U12, aes::cipher::consts::U15>;
 
+type Aes128Ctr32Be = ctr::Ctr32BE<Aes128>;
+type Aes192Ctr32Be = ctr::Ctr32BE<Aes192>;
+type Aes256Ctr32Be = ctr::Ctr32BE<Aes256>;
+
+fn aes_encrypt_block<C>(key: &[u8], block: [u8; 16]) -> Option<[u8; 16]>
+where
+    C: aes::cipher::BlockEncrypt + aes::cipher::KeyInit,
+{
+    let cipher = <C as aes::cipher::KeyInit>::new_from_slice(key).ok()?;
+    let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(&block);
+    cipher.encrypt_block(&mut block);
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&block);
+    Some(out)
+}
+
+fn gcm_ghash<C>(key: &[u8], aad: &[u8], ciphertext: &[u8]) -> Option<[u8; 16]>
+where
+    C: aes::cipher::BlockEncrypt + aes::cipher::KeyInit,
+{
+    use ghash::universal_hash::{KeyInit as GHashKeyInit, UniversalHash};
+
+    let h = aes_encrypt_block::<C>(key, [0u8; 16])?;
+    let mut ghash = ghash::GHash::new(ghash::Key::from_slice(&h));
+    ghash.update_padded(aad);
+    ghash.update_padded(ciphertext);
+
+    let mut lengths = [0u8; 16];
+    lengths[..8].copy_from_slice(&((aad.len() as u64).wrapping_mul(8)).to_be_bytes());
+    lengths[8..].copy_from_slice(&((ciphertext.len() as u64).wrapping_mul(8)).to_be_bytes());
+    let length_block = ghash::Block::clone_from_slice(&lengths);
+    ghash.update(std::slice::from_ref(&length_block));
+
+    let tag = ghash.finalize();
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&tag);
+    Some(out)
+}
+
+fn gcm_j0<C>(key: &[u8], iv: &[u8]) -> Option<[u8; 16]>
+where
+    C: aes::cipher::BlockEncrypt + aes::cipher::KeyInit,
+{
+    if iv.len() == 12 {
+        let mut j0 = [0u8; 16];
+        j0[..12].copy_from_slice(iv);
+        j0[15] = 1;
+        return Some(j0);
+    }
+
+    // For non-96-bit IVs, GCM derives J0 with GHASH over the IV and a
+    // length block. This is equivalent to GHASH with empty AAD and IV as
+    // the ciphertext input.
+    gcm_ghash::<C>(key, &[], iv)
+}
+
+fn gcm_inc32(mut block: [u8; 16]) -> [u8; 16] {
+    let counter = u32::from_be_bytes([block[12], block[13], block[14], block[15]]).wrapping_add(1);
+    block[12..].copy_from_slice(&counter.to_be_bytes());
+    block
+}
+
+fn gcm_tag<C>(key: &[u8], j0: [u8; 16], aad: &[u8], ciphertext: &[u8]) -> Option<[u8; 16]>
+where
+    C: aes::cipher::BlockEncrypt + aes::cipher::KeyInit,
+{
+    let mut tag = gcm_ghash::<C>(key, aad, ciphertext)?;
+    let mask = aes_encrypt_block::<C>(key, j0)?;
+    for (tag_byte, mask_byte) in tag.iter_mut().zip(mask.iter()) {
+        *tag_byte ^= mask_byte;
+    }
+    Some(tag)
+}
+
+fn tag_prefix_eq(actual: &[u8], expected: &[u8]) -> bool {
+    if actual.len() > expected.len() {
+        return false;
+    }
+    actual
+        .iter()
+        .zip(expected.iter())
+        .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+        == 0
+}
+
+fn decrypt_gcm_short_tag<C, S>(
+    key: &[u8],
+    iv: &[u8],
+    aad: &[u8],
+    ciphertext: &[u8],
+    tag: &[u8],
+) -> Option<Vec<u8>>
+where
+    C: aes::cipher::BlockEncrypt + aes::cipher::KeyInit,
+    S: aes::cipher::KeyIvInit + aes::cipher::StreamCipher,
+{
+    let j0 = gcm_j0::<C>(key, iv)?;
+    let counter = gcm_inc32(j0);
+    let mut plaintext = ciphertext.to_vec();
+    <S as aes::cipher::KeyIvInit>::new_from_slices(key, &counter)
+        .ok()?
+        .apply_keystream(&mut plaintext);
+
+    let expected_tag = gcm_tag::<C>(key, j0, aad, ciphertext)?;
+    tag_prefix_eq(tag, &expected_tag).then_some(plaintext)
+}
+
 fn decrypt_gcm128_with_tag_len(
     key: &[u8],
     iv: &[u8],
@@ -4379,6 +4486,9 @@ fn decrypt_gcm128_with_tag_len(
 ) -> Option<Vec<u8>> {
     use aes_gcm::aead::{Aead, KeyInit, Payload};
     use aes_gcm::{Aes128Gcm, Nonce};
+    if matches!(tag.len(), 4 | 8) {
+        return decrypt_gcm_short_tag::<Aes128, Aes128Ctr32Be>(key, iv, aad, ciphertext, tag);
+    }
     let nonce = Nonce::from_slice(iv);
     let mut combined = ciphertext.to_vec();
     combined.extend_from_slice(tag);
@@ -4446,6 +4556,9 @@ fn decrypt_gcm192_with_tag_len(
 ) -> Option<Vec<u8>> {
     use aes_gcm::aead::{Aead, KeyInit, Payload};
     use aes_gcm::Nonce;
+    if matches!(tag.len(), 4 | 8) {
+        return decrypt_gcm_short_tag::<Aes192, Aes192Ctr32Be>(key, iv, aad, ciphertext, tag);
+    }
     let nonce = Nonce::from_slice(iv);
     let mut combined = ciphertext.to_vec();
     combined.extend_from_slice(tag);
@@ -4513,6 +4626,9 @@ fn decrypt_gcm256_with_tag_len(
 ) -> Option<Vec<u8>> {
     use aes_gcm::aead::{Aead, KeyInit, Payload};
     use aes_gcm::{Aes256Gcm, Nonce};
+    if matches!(tag.len(), 4 | 8) {
+        return decrypt_gcm_short_tag::<Aes256, Aes256Ctr32Be>(key, iv, aad, ciphertext, tag);
+    }
     let nonce = Nonce::from_slice(iv);
     let mut combined = ciphertext.to_vec();
     combined.extend_from_slice(tag);
