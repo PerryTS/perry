@@ -3626,22 +3626,10 @@
     "category": "bug-open",
     "reason": "node:stream: isWritable(stream) returns undefined instead of true. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/static/is-disturbed-after-consume": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: isDisturbed(stream) — 'end' not firing after consume, or returns wrong value. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/static/set-default-hwm-roundtrip": {
     "issue": "1532",
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: setDefaultHighWaterMark — not implemented (getDefaultHighWaterMark returns undefined after set). Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/static/is-readable-on-ended": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: isReadable(stream) after end — 'end' not firing or isReadable wrong. Flips to PASS when #1532 lands."
   }
 }
