@@ -50,8 +50,17 @@ Use `--output-type` to change what's produced:
 | Flag | Description |
 |------|-------------|
 | `--print-hir` | Print HIR (intermediate representation) to stdout |
+| `--trace <STAGES>` | Dump IR at one or more pipeline stages. Comma-separated: `hir` (post-transform HIR), `llvm` (per-module `.ll` into `.perry-trace/llvm/`), or `all` |
+| `--focus <NAME>` | Restrict `--trace hir` to functions/methods/classes whose name contains `NAME`, suppressing import/export/init noise. Implies `--trace hir` if no stage is given |
 | `--no-link` | Produce `.o` object file only, skip linking |
 | `--keep-intermediates` | Keep `.o` and `.asm` intermediate files |
+
+The `--trace`/`--focus` pair localizes "compiled to the wrong thing" bugs:
+`perry compile foo.ts --trace hir,llvm --focus parseRow` dumps just the
+`parseRow` function's lowered HIR and the module's LLVM IR, so you can see
+which stage corrupted it without scrolling a full-module dump. `--trace llvm`
+forces a full recompile (the object cache otherwise skips codegen for
+unchanged modules, leaving the trace dir empty).
 
 ## Output Optimization
 

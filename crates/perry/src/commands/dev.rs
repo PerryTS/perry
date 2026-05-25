@@ -313,6 +313,8 @@ fn build_once(
         harmonyos_profile: None,
         harmonyos_key_alias: None,
         skip_swift_build: false,
+        trace: None,
+        focus: None,
     };
     parse_cache.reset_counters();
     let result = super::compile::run_with_parse_cache(

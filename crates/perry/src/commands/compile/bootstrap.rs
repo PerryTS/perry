@@ -832,39 +832,89 @@ pub(super) fn apply_i18n_pass(
 }
 
 /// Debug dump triggered by `--print-hir`.
-pub(super) fn dump_hir_for_debug(ctx: &CompilationContext) {
+/// Print one HIR function's signature + lowered body. Shared between the
+/// top-level-function and class-method dump paths so focus mode renders
+/// methods identically to free functions.
+fn dump_hir_function(func: &perry_hir::Function, indent: &str) {
+    println!(
+        "{}- {} (params: {}, type_params: {}, async: {}, exported: {})",
+        indent,
+        func.name,
+        func.params.len(),
+        func.type_params.len(),
+        func.is_async,
+        func.is_exported
+    );
+    for p in &func.params {
+        println!("{}    param {} (id={}): {:?}", indent, p.name, p.id, p.ty);
+    }
+    for (i, stmt) in func.body.iter().enumerate() {
+        println!("{}    [{}] {:?}", indent, i, stmt);
+    }
+}
+
+/// Debug dump triggered by `--print-hir` (focus `None`) or
+/// `--trace hir` / `--trace hir --focus NAME`.
+///
+/// When `focus` is `Some(needle)`, only functions, class methods, and
+/// classes whose name contains `needle` are printed — and the
+/// imports/exports/init-statement sections are suppressed — so a single
+/// function's lowered body is readable instead of buried in a full-module
+/// dump. When `focus` is `None`, behaves exactly like the historical
+/// full dump.
+pub(super) fn dump_hir_for_debug(ctx: &CompilationContext, focus: Option<&str>) {
+    let matches = |name: &str| focus.map(|f| name.contains(f)).unwrap_or(true);
+
     for (path, hir_module) in &ctx.native_modules {
-        println!("\n=== HIR (after monomorphization): {} ===", path.display());
+        // In focus mode, skip whole modules that contain no match so the
+        // output isn't a wall of empty module headers.
+        if focus.is_some() {
+            let any = hir_module.functions.iter().any(|f| matches(&f.name))
+                || hir_module
+                    .classes
+                    .iter()
+                    .any(|c| matches(&c.name) || c.methods.iter().any(|m| matches(&m.name)));
+            if !any {
+                continue;
+            }
+        }
+
+        match focus {
+            Some(f) => println!("\n=== HIR trace (focus: {:?}): {} ===", f, path.display()),
+            None => println!("\n=== HIR (after monomorphization): {} ===", path.display()),
+        }
         println!("Module: {}", hir_module.name);
-        println!("Imports: {}", hir_module.imports.len());
-        for import in &hir_module.imports {
-            println!(
-                "  - {} ({} specifiers, kind: {:?})",
-                import.source,
-                import.specifiers.len(),
-                import.module_kind
-            );
-        }
-        println!("Exports: {}", hir_module.exports.len());
-        println!("Functions: {}", hir_module.functions.len());
-        for func in &hir_module.functions {
-            println!(
-                "  - {} (params: {}, type_params: {}, async: {}, exported: {})",
-                func.name,
-                func.params.len(),
-                func.type_params.len(),
-                func.is_async,
-                func.is_exported
-            );
-            for p in &func.params {
-                println!("      param {} (id={}): {:?}", p.name, p.id, p.ty);
+
+        if focus.is_none() {
+            println!("Imports: {}", hir_module.imports.len());
+            for import in &hir_module.imports {
+                println!(
+                    "  - {} ({} specifiers, kind: {:?})",
+                    import.source,
+                    import.specifiers.len(),
+                    import.module_kind
+                );
             }
-            for (i, stmt) in func.body.iter().enumerate() {
-                println!("      [{}] {:?}", i, stmt);
-            }
+            println!("Exports: {}", hir_module.exports.len());
         }
-        println!("Classes: {}", hir_module.classes.len());
-        for cls in &hir_module.classes {
+
+        let funcs: Vec<_> = hir_module
+            .functions
+            .iter()
+            .filter(|f| matches(&f.name))
+            .collect();
+        println!("Functions: {}", funcs.len());
+        for func in funcs {
+            dump_hir_function(func, "  ");
+        }
+
+        let classes: Vec<_> = hir_module
+            .classes
+            .iter()
+            .filter(|c| matches(&c.name) || c.methods.iter().any(|m| matches(&m.name)))
+            .collect();
+        println!("Classes: {}", classes.len());
+        for cls in classes {
             println!(
                 "  - {} (exported: {}, fields: {}, methods: {}, constructor: {})",
                 cls.name,
@@ -873,15 +923,31 @@ pub(super) fn dump_hir_for_debug(ctx: &CompilationContext) {
                 cls.methods.len(),
                 cls.constructor.is_some()
             );
+            // In focus mode, print the bodies of matching methods (and all
+            // methods when the class name itself matched). In full mode the
+            // historical output stops at the counts above, so keep it.
+            if focus.is_some() {
+                let class_matched = matches(&cls.name);
+                for m in cls
+                    .methods
+                    .iter()
+                    .filter(|m| class_matched || matches(&m.name))
+                {
+                    dump_hir_function(m, "    ");
+                }
+            }
         }
-        println!("Init statements: {}", hir_module.init.len());
-        for (i, stmt) in hir_module.init.iter().enumerate() {
-            println!("  [{}] {:?}", i, stmt);
+
+        if focus.is_none() {
+            println!("Init statements: {}", hir_module.init.len());
+            for (i, stmt) in hir_module.init.iter().enumerate() {
+                println!("  [{}] {:?}", i, stmt);
+            }
         }
         println!("===========\n");
     }
 
-    if !ctx.js_modules.is_empty() {
+    if focus.is_none() && !ctx.js_modules.is_empty() {
         println!("\n=== JavaScript Modules (interpreted) ===");
         for (specifier, module) in &ctx.js_modules {
             println!("  {} -> {}", specifier, module.path.display());

@@ -299,6 +299,32 @@ pub struct CompileArgs {
     /// built `WidgetExtension.appex` directory next to the sources.
     #[arg(long)]
     pub skip_swift_build: bool,
+
+    /// Dump the program's intermediate representation at one or more
+    /// pipeline stages, for debugging "compiled to the wrong thing"
+    /// bugs. Comma-separated stage list:
+    ///
+    ///   - `hir`  — post-transform HIR (same data as `--print-hir`,
+    ///              but honors `--focus`)
+    ///   - `llvm` — per-module LLVM IR `.ll` files (wires up the
+    ///              `PERRY_SAVE_LL` / `PERRY_LLVM_KEEP_IR` knobs so you
+    ///              don't have to remember the env vars). Written to
+    ///              `.perry-trace/llvm/`.
+    ///   - `all`  — every stage above
+    ///
+    /// Example: `perry compile foo.ts --trace hir,llvm --focus parseRow`
+    /// localizes which stage corrupted `parseRow` without scrolling a
+    /// 10k-line full dump.
+    #[arg(long, value_name = "STAGES")]
+    pub trace: Option<String>,
+
+    /// Restrict `--trace hir` output to functions, class methods, and
+    /// classes whose name contains this substring (case-sensitive).
+    /// Suppresses the imports/exports/init noise so a single function's
+    /// lowered body is ~40 lines instead of buried in the full module
+    /// dump. No effect unless `--trace hir` (or `--print-hir`) is set.
+    #[arg(long, value_name = "NAME")]
+    pub focus: Option<String>,
 }
 
 /// Information about a JavaScript module that will be interpreted at runtime

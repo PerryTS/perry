@@ -145,6 +145,53 @@ pub fn run_with_parse_cache(
         std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
     }
 
+    // `--trace <stages>` consolidates the scattered debug-dump knobs into one
+    // flag. Parse it up-front (single-threaded, before codegen spawns rayon
+    // workers) so the `llvm` stage can promote itself to the env vars the
+    // codegen + linker already honor, exactly like `--debug-symbols` above.
+    // `--focus NAME` alone implies `hir` — asking to focus something with no
+    // stage selected obviously means "show me that function's HIR".
+    let trace_stages: std::collections::HashSet<String> = args
+        .trace
+        .as_deref()
+        .map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_ascii_lowercase())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let trace_all = trace_stages.contains("all");
+    let trace_hir = trace_all
+        || trace_stages.contains("hir")
+        || args.print_hir
+        || (trace_stages.is_empty() && args.focus.is_some());
+    let trace_llvm = trace_all || trace_stages.contains("llvm");
+    if trace_llvm {
+        // Land .ll files in a predictable per-build directory so the user
+        // doesn't have to remember PERRY_SAVE_LL / PERRY_LLVM_KEEP_IR. Don't
+        // clobber an explicit env override.
+        if std::env::var_os("PERRY_SAVE_LL").is_none() {
+            // Absolute path: codegen runs the .ll write on rayon workers whose
+            // cwd we don't want to depend on. Join against cwd up-front.
+            let dir = std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(".perry-trace")
+                .join("llvm");
+            let _ = std::fs::create_dir_all(&dir);
+            std::env::set_var("PERRY_SAVE_LL", &dir);
+            std::env::set_var("PERRY_LLVM_KEEP_IR", "1");
+            // The per-module object cache short-circuits codegen for unchanged
+            // modules — which means `emit_module` (and thus the .ll write)
+            // never runs and the trace dir comes up empty. Force a full
+            // recompile for this build, exactly like --verify-native-regions.
+            std::env::set_var("PERRY_NO_CACHE", "1");
+            if matches!(format, OutputFormat::Text) {
+                println!("[trace] LLVM IR → {}", dir.display());
+            }
+        }
+    }
+
     match format {
         OutputFormat::Text => println!("Collecting modules..."),
         OutputFormat::Json => {}
@@ -258,8 +305,8 @@ pub fn run_with_parse_cache(
 
     let i18n_table = apply_i18n_pass(&mut ctx, i18n_config.as_ref(), &i18n_translations, format);
 
-    if args.print_hir {
-        dump_hir_for_debug(&ctx);
+    if trace_hir {
+        dump_hir_for_debug(&ctx, args.focus.as_deref());
     }
 
     write_i18n_key_registry(&ctx, i18n_table.as_ref());

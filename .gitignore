@@ -33,6 +33,9 @@ benchmarks/suite/assets/
 # SIGILL at runtime. Always machine-local, always regenerable.)
 .perry-cache/
 
+# `perry compile --trace llvm` dumps per-module .ll files here.
+.perry-trace/
+
 # Compiled test executables in the project root (no extension)
 /test_*
 /test-*
