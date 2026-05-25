@@ -307,6 +307,39 @@ fn typed_array_let(id: u32, name: &str, class_name: &str, kind: u8, length: Expr
     }
 }
 
+fn native_arena_owner_let(id: u32, name: &str, byte_length: Expr, mutable: bool) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Any,
+        mutable,
+        init: Some(Expr::NativeArenaAlloc(Box::new(byte_length))),
+    }
+}
+
+fn native_arena_view_let(
+    id: u32,
+    name: &str,
+    owner_id: u32,
+    class_name: &str,
+    kind: u8,
+    byte_offset: Expr,
+    length: Expr,
+) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Named(class_name.to_string()),
+        mutable: false,
+        init: Some(Expr::NativeArenaView {
+            owner: Box::new(local(owner_id)),
+            kind,
+            byte_offset: Box::new(byte_offset),
+            length: Box::new(length),
+        }),
+    }
+}
+
 fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
     Stmt::Let {
         id,
@@ -497,7 +530,7 @@ fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     ];
 
     let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 7);
+    assert_eq!(artifact["schema_version"], 8);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -530,7 +563,7 @@ fn artifact_schema_v6_records_rejected_facts_for_buffer_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 7);
+    assert_eq!(artifact["schema_version"], 8);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -576,7 +609,7 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
-    assert_eq!(artifact["schema_version"], 7);
+    assert_eq!(artifact["schema_version"], 8);
     assert_eq!(artifact["summary"]["pod_layout_count"], 1);
     assert_eq!(artifact["summary"]["pod_record_count"], 1);
     let layouts = artifact["pod_layouts"].as_array().unwrap();
@@ -648,7 +681,7 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
-    assert_eq!(artifact["schema_version"], 7);
+    assert_eq!(artifact["schema_version"], 8);
     assert!(
         artifact["records"]
             .as_array()
@@ -746,7 +779,7 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 7);
+    assert_eq!(artifact["schema_version"], 8);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
     assert!(
@@ -1170,6 +1203,244 @@ fn artifact_records_tracked_typed_array_native_reads() {
                 && record["materialization_reason"] == "unknown_bounds"
         }),
         "proven typed-array loads should materialize at a JSValue boundary, not as an unknown-bounds hazard:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_native_owned_typed_array_facts() {
+    let body = vec![
+        native_arena_owner_let(1, "owner", int(64), false),
+        native_arena_view_let(
+            2,
+            "view",
+            1,
+            "Float64Array",
+            perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+            int(0),
+            int(8),
+        ),
+        for_loop(
+            3,
+            int(8),
+            vec![array_set(2, local(3), add(local(3), number(0.5)))],
+        ),
+        for_loop(4, int(8), vec![Stmt::Expr(index_get(2, local(4)))]),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("native_owned_typed_array_fast_path.ts", body.clone());
+    assert!(
+        !ir.contains("call double @js_typed_array_get")
+            && !ir.contains("call void @js_typed_array_set"),
+        "native-owned typed-array hot loops should avoid typed-array runtime get/set:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json("artifact_native_owned_typed_array.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    let native_record = records.iter().find(|record| {
+        record["expr_kind"] == "TypedArrayGet"
+            && record["consumer"] == "TypedArrayGet.native_f64"
+            && record["access_mode"] == "unchecked_native"
+            && !record["native_owned_view"].is_null()
+    });
+    let Some(record) = native_record else {
+        panic!("expected native-owned f64 typed-array get record:\n{artifact:#}");
+    };
+    assert_eq!(record["native_owned_view"]["owner_local_id"], 1);
+    assert_eq!(record["native_owned_view"]["owner_root_state"], "rooted");
+    assert_eq!(record["native_owned_view"]["disposed_state"], "alive");
+    assert_eq!(record["native_owned_view"]["byte_offset"], 0);
+    assert_eq!(record["native_owned_view"]["byte_length"], 64);
+    assert_eq!(record["native_owned_view"]["element_width_bytes"], 8);
+    assert_eq!(record["native_owned_view"]["pointer_free_backing"], true);
+    assert_eq!(record["alias_state"], "no_alias_proven");
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "TypedArraySet"
+                && record["consumer"] == "f64_store"
+                && record["access_mode"] == "unchecked_native"
+                && record["alias_state"] == "no_alias_proven"
+                && !record["native_owned_view"].is_null()
+        }),
+        "expected native-owned f64 typed-array store record:\n{artifact:#}"
+    );
+    assert_eq!(artifact["summary"]["native_owned_view_count"], 4);
+}
+
+#[test]
+fn native_owned_typed_array_fallback_reasons_are_explicit() {
+    let disposed = compile_artifact_json(
+        "artifact_native_owned_disposed.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(1)))),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert!(
+        disposed["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["expr_kind"] == "TypedArrayGet"
+                    && record["consumer"] == "TypedArrayGet.slow_path"
+                    && record["access_mode"] == "dynamic_fallback"
+                    && record["materialization_reason"] == "use_after_dispose"
+                    && record["fallback_reason"] == "use_after_dispose"
+            }),
+        "expected disposed native-owned view fallback reason:\n{disposed:#}"
+    );
+
+    let stale_length = compile_artifact_json(
+        "artifact_native_owned_stale_length.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            number_let(3, "len", true, int(8)),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                local(3),
+            ),
+            Stmt::Expr(Expr::LocalSet(3, Box::new(int(4)))),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert!(
+        stale_length["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["expr_kind"] == "TypedArrayGet"
+                    && record["consumer"] == "TypedArrayGet.slow_path"
+                    && record["access_mode"] == "dynamic_fallback"
+                    && record["materialization_reason"] == "stale_view_length"
+                    && record["fallback_reason"] == "stale_view_length"
+            }),
+        "expected stale native-owned view length fallback reason:\n{stale_length:#}"
+    );
+
+    let mutable_alias = compile_artifact_json(
+        "artifact_native_owned_mutable_alias.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Let {
+                id: 3,
+                name: "alias".to_string(),
+                ty: Type::Named("Float64Array".to_string()),
+                mutable: false,
+                init: Some(local(2)),
+            },
+            Stmt::Return(Some(index_get(3, int(0)))),
+        ],
+    );
+    assert!(
+        mutable_alias["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["expr_kind"] == "TypedArrayGet"
+                    && record["consumer"] == "TypedArrayGet.slow_path"
+                    && record["access_mode"] == "dynamic_fallback"
+                    && record["materialization_reason"] == "mutable_alias"
+                    && record["fallback_reason"] == "mutable_alias"
+            }),
+        "expected native-owned mutable alias fallback reason:\n{mutable_alias:#}"
+    );
+
+    let missing_owner = compile_artifact_json(
+        "artifact_native_owned_missing_owner_root.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), true),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Expr(Expr::LocalSet(
+                1,
+                Box::new(Expr::NativeArenaAlloc(Box::new(int(64)))),
+            )),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert!(
+        missing_owner["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["expr_kind"] == "TypedArrayGet"
+                    && record["consumer"] == "TypedArrayGet.slow_path"
+                    && record["access_mode"] == "dynamic_fallback"
+                    && record["materialization_reason"] == "missing_owner_root"
+                    && record["fallback_reason"] == "missing_owner_root"
+            }),
+        "expected missing owner-root fallback reason:\n{missing_owner:#}"
+    );
+
+    let escaping = compile_artifact_json(
+        "artifact_native_owned_escaping_pointer.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Expr(extern_call(
+                "escape_native_view",
+                vec![local(2)],
+                Type::Number,
+            )),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert!(
+        escaping["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["expr_kind"] == "TypedArrayGet"
+                    && record["consumer"] == "TypedArrayGet.slow_path"
+                    && record["access_mode"] == "dynamic_fallback"
+                    && record["materialization_reason"] == "escaping_unowned_pointer"
+                    && record["fallback_reason"] == "escaping_unowned_pointer"
+            }),
+        "expected escaping unowned pointer fallback reason:\n{escaping:#}"
     );
 }
 

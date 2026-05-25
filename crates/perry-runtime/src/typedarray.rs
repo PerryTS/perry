@@ -113,6 +113,12 @@ pub fn register_typed_array(ptr: *const TypedArrayHeader, kind: u8) {
     });
 }
 
+pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
+    TYPED_ARRAY_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&(ptr as usize));
+    });
+}
+
 /// Returns Some(kind) if the (already-stripped) address is a registered
 /// typed array, else None.
 pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
@@ -140,12 +146,24 @@ pub fn clean_ta_ptr(ptr: *const TypedArrayHeader) -> *const TypedArrayHeader {
 
 #[inline]
 fn data_ptr(ta: *const TypedArrayHeader) -> *const u8 {
-    unsafe { (ta as *const u8).add(std::mem::size_of::<TypedArrayHeader>()) }
+    unsafe {
+        if crate::native_arena::is_native_typed_view(ta) {
+            crate::native_arena::native_view_data_ptr(ta)
+        } else {
+            (ta as *const u8).add(std::mem::size_of::<TypedArrayHeader>())
+        }
+    }
 }
 
 #[inline]
 fn data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
-    unsafe { (ta as *mut u8).add(std::mem::size_of::<TypedArrayHeader>()) }
+    unsafe {
+        if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
+            crate::native_arena::native_view_data_ptr_mut(ta)
+        } else {
+            (ta as *mut u8).add(std::mem::size_of::<TypedArrayHeader>())
+        }
+    }
 }
 
 fn ta_layout(capacity: u32, elem_size: usize) -> Layout {
@@ -488,7 +506,14 @@ pub extern "C" fn js_typed_array_length(ta: *const TypedArrayHeader) -> i32 {
     if ta.is_null() {
         return 0;
     }
-    unsafe { (*ta).length as i32 }
+    unsafe {
+        if crate::native_arena::is_native_typed_view(ta) {
+            crate::native_arena::validate_view_alive(
+                crate::native_arena::native_view_from_typed_array(ta),
+            );
+        }
+        (*ta).length as i32
+    }
 }
 
 /// `ta[i]` — returns plain f64 numeric value (NOT NaN-boxed).
@@ -499,6 +524,11 @@ pub extern "C" fn js_typed_array_get(ta: *const TypedArrayHeader, index: i32) ->
         return 0.0;
     }
     unsafe {
+        if crate::native_arena::is_native_typed_view(ta) {
+            crate::native_arena::validate_view_alive(
+                crate::native_arena::native_view_from_typed_array(ta),
+            );
+        }
         if index < 0 || index as u32 >= (*ta).length {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
@@ -514,6 +544,11 @@ pub extern "C" fn js_typed_array_at(ta: *const TypedArrayHeader, index: f64) -> 
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     unsafe {
+        if crate::native_arena::is_native_typed_view(ta) {
+            crate::native_arena::validate_view_alive(
+                crate::native_arena::native_view_from_typed_array(ta),
+            );
+        }
         let len = (*ta).length as i64;
         let mut idx = index as i64;
         if idx < 0 {
@@ -534,6 +569,11 @@ pub extern "C" fn js_typed_array_set(ta: *mut TypedArrayHeader, index: i32, valu
         return;
     }
     unsafe {
+        if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
+            crate::native_arena::validate_view_alive(
+                crate::native_arena::native_view_from_typed_array(ta as *const TypedArrayHeader),
+            );
+        }
         if index < 0 || index as u32 >= (*ta).length {
             return;
         }

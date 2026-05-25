@@ -1116,6 +1116,10 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
                 }
             }
         }
+        GcRewriteDescriptorKind::NativeTypedView => {
+            let view = user_ptr as *mut crate::native_arena::NativeTypedViewHeader;
+            visit(fixed_slot(&mut (*view).owner as *mut _ as *mut u64));
+        }
         GcRewriteDescriptorKind::Leaf => {}
     }
 }

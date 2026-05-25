@@ -298,6 +298,7 @@ fn is_owned_u8_buffer_alloc(expr: &Expr) -> bool {
         Expr::TypedArrayNew {
             arg: Some(size), ..
         } => is_fresh_uint8array_length_literal(size),
+        Expr::NativeArenaView { .. } => true,
         _ => false,
     }
 }

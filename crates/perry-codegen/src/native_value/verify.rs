@@ -182,6 +182,13 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
         }
         if matches!(
             record.access_mode.as_ref(),
+            Some(BufferAccessMode::UncheckedNative)
+        ) && record.native_owned_view.is_some()
+        {
+            validate_native_owned_unchecked_access(record, &mut errors);
+        }
+        if matches!(
+            record.access_mode.as_ref(),
             Some(BufferAccessMode::CheckedNative)
         ) && !matches!(
             record.bounds_state,
@@ -200,6 +207,218 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
         );
     }
     Ok(())
+}
+
+fn is_numeric_array_record(record: &NativeRepRecord) -> bool {
+    record.expr_kind.starts_with("NumericArray")
+}
+
+fn is_raw_numeric_field_record(record: &NativeRepRecord) -> bool {
+    record.expr_kind.starts_with("ClassField") || record.expr_kind.starts_with("ObjectShapeField")
+}
+
+fn validate_native_owned_unchecked_access(record: &NativeRepRecord, errors: &mut Vec<String>) {
+    let Some(fact) = record.native_owned_view.as_ref() else {
+        return;
+    };
+    let prefix = || {
+        format!(
+            "{}:{} {}",
+            record.function, record.block_label, record.consumer
+        )
+    };
+    if fact.owner_root_state != "rooted" {
+        errors.push(format!(
+            "{} unchecked native-owned view access missing rooted owner",
+            prefix()
+        ));
+    }
+    if fact.disposed_state != "alive" {
+        errors.push(format!(
+            "{} unchecked native-owned view access may use disposed owner",
+            prefix()
+        ));
+    }
+    if !matches!(
+        record.bounds_state,
+        Some(BoundsState::Proven { .. } | BoundsState::Guarded { .. })
+    ) {
+        errors.push(format!(
+            "{} unchecked native-owned view access missing bounds proof",
+            prefix()
+        ));
+    }
+    if !matches!(
+        record.alias_state,
+        Some(AliasState::NoAliasProven | AliasState::NoAliasGuarded { .. })
+    ) {
+        errors.push(format!(
+            "{} unchecked native-owned view access missing alias proof",
+            prefix()
+        ));
+    }
+}
+
+fn has_fact(facts: &[NativeFactUse], kind: &str, state: &str, detail: &str) -> bool {
+    let suffix = format!(".{}", detail);
+    facts
+        .iter()
+        .any(|fact| fact.kind == kind && fact.state == state && fact.fact_id.ends_with(&suffix))
+}
+
+fn validate_numeric_array_record(record: &NativeRepRecord, errors: &mut Vec<String>) {
+    let prefix = || {
+        format!(
+            "{}:{} {}",
+            record.function, record.block_label, record.consumer
+        )
+    };
+    match record.access_mode.as_ref() {
+        Some(BufferAccessMode::CheckedNative) => {
+            if record.native_rep != NativeRep::F64 {
+                errors.push(format!(
+                    "{} checked numeric array access must record f64 native rep",
+                    prefix()
+                ));
+            }
+            if !matches!(
+                record.bounds_state,
+                Some(BoundsState::Proven { .. } | BoundsState::Guarded { .. })
+            ) {
+                errors.push(format!(
+                    "{} checked numeric array access missing guarded/proven bounds",
+                    prefix()
+                ));
+            }
+            if !has_fact(
+                &record.consumed_facts,
+                "array_layout",
+                "consumed",
+                "raw_f64_pointer_free",
+            ) {
+                errors.push(format!(
+                    "{} checked numeric array access missing raw_f64_pointer_free layout fact",
+                    prefix()
+                ));
+            }
+            if !record
+                .consumed_facts
+                .iter()
+                .any(|fact| fact.kind == "bounds" && fact.state == "consumed")
+            {
+                errors.push(format!(
+                    "{} checked numeric array access missing consumed bounds fact",
+                    prefix()
+                ));
+            }
+            if !has_fact(
+                &record.consumed_facts,
+                "array_storage",
+                "consumed",
+                "side_storage_bytes=0",
+            ) {
+                errors.push(format!(
+                    "{} checked numeric array access missing zero side-storage fact",
+                    prefix()
+                ));
+            }
+        }
+        Some(BufferAccessMode::DynamicFallback) => {
+            if record.materialization_reason != Some(MaterializationReason::NumericArrayDowngrade)
+                || record.fallback_reason != Some(MaterializationReason::NumericArrayDowngrade)
+            {
+                errors.push(format!(
+                    "{} numeric array fallback missing numeric_array_downgrade reason",
+                    prefix()
+                ));
+            }
+            if !has_fact(
+                &record.rejected_facts,
+                "array_layout",
+                "invalidated",
+                "numeric_array_downgrade",
+            ) {
+                errors.push(format!(
+                    "{} numeric array fallback missing numeric_array_downgrade rejected fact",
+                    prefix()
+                ));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn validate_raw_numeric_field_record(record: &NativeRepRecord, errors: &mut Vec<String>) {
+    let prefix = || {
+        format!(
+            "{}:{} {}",
+            record.function, record.block_label, record.consumer
+        )
+    };
+    match record.access_mode.as_ref() {
+        Some(BufferAccessMode::CheckedNative) => {
+            if record.native_rep != NativeRep::F64 {
+                errors.push(format!(
+                    "{} checked raw numeric object-field access must record f64 native rep",
+                    prefix()
+                ));
+            }
+            if !record
+                .consumed_facts
+                .iter()
+                .any(|fact| fact.kind == "object_shape" && fact.state == "consumed")
+            {
+                errors.push(format!(
+                    "{} checked raw numeric object-field access missing object_shape fact",
+                    prefix()
+                ));
+            }
+            if !has_fact(
+                &record.consumed_facts,
+                "object_slot_layout",
+                "consumed",
+                "typed_raw_f64_slot",
+            ) {
+                errors.push(format!(
+                    "{} checked raw numeric object-field access missing typed_raw_f64_slot fact",
+                    prefix()
+                ));
+            }
+        }
+        Some(BufferAccessMode::DynamicFallback) => {
+            if record.materialization_reason != Some(MaterializationReason::RawNumericFieldFallback)
+                || record.fallback_reason != Some(MaterializationReason::RawNumericFieldFallback)
+            {
+                errors.push(format!(
+                    "{} raw numeric object-field fallback missing raw_numeric_field_fallback reason",
+                    prefix()
+                ));
+            }
+            if !has_fact(
+                &record.rejected_facts,
+                "object_shape",
+                "invalidated",
+                "raw_numeric_field_fallback",
+            ) {
+                errors.push(format!(
+                    "{} raw numeric object-field fallback missing object_shape rejected fact",
+                    prefix()
+                ));
+            }
+            if !has_fact(
+                &record.rejected_facts,
+                "object_slot_layout",
+                "invalidated",
+                "raw_numeric_field_fallback",
+            ) {
+                errors.push(format!(
+                    "{} raw numeric object-field fallback missing object_slot_layout rejected fact",
+                    prefix()
+                ));
+            }
+        }
+        _ => {}
+    }
 }
 
 fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
@@ -396,6 +615,7 @@ mod tests {
             alias_state: None,
             access_mode: None,
             buffer_access: None,
+            native_owned_view: None,
             materialization_reason: None,
             fallback_reason: None,
             native_value_state: NativeValueState::RegionLocal,

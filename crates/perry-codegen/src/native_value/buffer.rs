@@ -114,9 +114,56 @@ pub(crate) struct BufferViewRep {
     pub alias: AliasState,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct NativeOwnedViewFact {
+    pub owner_local_id: u32,
+    pub owner_root_state: String,
+    pub disposed_state: String,
+    pub byte_offset: Option<i64>,
+    pub byte_length: Option<i64>,
+    pub element_width_bytes: u32,
+    pub alias_group: String,
+    pub pointer_free_backing: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NativeOwnedViewSlot {
+    pub owner_local_id: u32,
+    pub byte_offset: Option<i64>,
+    pub byte_length: Option<i64>,
+    pub owner_rooted: bool,
+    pub disposed: bool,
+    pub pointer_free_backing: bool,
+}
+
+impl NativeOwnedViewSlot {
+    pub(crate) fn fact(
+        &self,
+        element_width_bytes: u32,
+        alias_group: String,
+    ) -> NativeOwnedViewFact {
+        NativeOwnedViewFact {
+            owner_local_id: self.owner_local_id,
+            owner_root_state: if self.owner_rooted {
+                "rooted"
+            } else {
+                "missing"
+            }
+            .to_string(),
+            disposed_state: if self.disposed { "disposed" } else { "alive" }.to_string(),
+            byte_offset: self.byte_offset,
+            byte_length: self.byte_length,
+            element_width_bytes,
+            alias_group,
+            pointer_free_backing: self.pointer_free_backing,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct BufferViewSlot {
     pub data_slot: String,
+    pub length_slot: Option<String>,
     pub scope_idx: Option<u32>,
     pub elem: BufferElem,
     pub element_width_bytes: u32,
@@ -125,6 +172,7 @@ pub(crate) struct BufferViewSlot {
     pub length_offset_from_data: i32,
     pub alias: AliasState,
     pub length_source: Option<LengthSource>,
+    pub native_owned: Option<NativeOwnedViewSlot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

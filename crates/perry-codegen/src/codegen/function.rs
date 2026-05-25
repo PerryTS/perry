@@ -309,6 +309,7 @@ pub(super) fn compile_function(
             p.id,
             BufferViewSlot {
                 data_slot: buf_slot,
+                length_slot: None,
                 scope_idx: Some(scope_idx),
                 elem: BufferElem::U8,
                 element_width_bytes: 1,
@@ -317,6 +318,7 @@ pub(super) fn compile_function(
                 length_offset_from_data: -8,
                 alias: AliasState::Unknown,
                 length_source: Some(LengthSource::Unknown),
+                native_owned: None,
             },
         );
     }

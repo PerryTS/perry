@@ -45,6 +45,7 @@ pub mod fs;
 pub mod gc;
 pub mod map;
 pub mod math;
+pub mod native_arena;
 pub mod node_stream;
 pub mod node_submodules;
 pub mod object;

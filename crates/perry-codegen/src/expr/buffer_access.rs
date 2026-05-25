@@ -3,14 +3,14 @@ use perry_hir::Expr;
 
 use crate::native_value::{
     BufferAccessFacts, BufferAccessMode, BufferAccessProof, BufferElem, BufferEndian,
-    BufferIndexUnit, ExpectedNativeRep, LoweredValue,
+    BufferIndexUnit, ExpectedNativeRep, LoweredValue, MaterializationReason,
 };
 use crate::types::{DOUBLE, F32, I16, I32, I8, PTR};
 
 use super::{
-    bounds_for_buffer_access_width, buffer_alias_metadata_suffix, buffer_view_lowered_value,
-    can_lower_expr_as_i32, effective_alias_state_for_access, is_numeric_expr, lower_expr,
-    lower_expr_native, FnCtx,
+    attach_native_owned_view_fact, bounds_for_buffer_access_width, buffer_alias_metadata_suffix,
+    buffer_view_lowered_value, can_lower_expr_as_i32, effective_alias_state_for_access,
+    is_numeric_expr, lower_expr, lower_expr_native, FnCtx,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -263,8 +263,14 @@ pub(crate) fn lower_buffer_access_proof(
         return Ok(None);
     }
 
-    let index = lower_index_i32_value(ctx, index_expr)?;
     let alias = effective_alias_state_for_access(ctx, &view);
+    if view.native_owned.is_some() && !alias.allows_noalias() {
+        ctx.buffer_hazard_reasons
+            .entry(buffer_local_id)
+            .or_insert(MaterializationReason::MutableAlias);
+        return Ok(None);
+    }
+    let index = lower_index_i32_value(ctx, index_expr)?;
     let access_mode = BufferAccessMode::UncheckedNative;
     let may_emit_inbounds =
         matches!(access_mode, BufferAccessMode::UncheckedNative) && bounds.allows_inbounds();
@@ -291,12 +297,16 @@ pub(crate) fn emit_buffer_access_pointer(
 ) -> BufferAccessEmission {
     let blk = ctx.block();
     let data_ptr = blk.load(PTR, &proof.view.data_slot);
-    let header_ptr = blk.gep(
-        I8,
-        &data_ptr,
-        &[(I32, &proof.view.length_offset_from_data.to_string())],
-    );
-    let len_i32 = blk.load_invariant(I32, &header_ptr);
+    let len_i32 = if let Some(length_slot) = proof.view.length_slot.as_ref() {
+        blk.load(I32, length_slot)
+    } else {
+        let header_ptr = blk.gep(
+            I8,
+            &data_ptr,
+            &[(I32, &proof.view.length_offset_from_data.to_string())],
+        );
+        blk.load_invariant(I32, &header_ptr)
+    };
     if proof.may_emit_inbounds {
         let bounds_width_units = spec.bounds_width_units();
         let in_bounds = if bounds_width_units == 1 {
@@ -367,6 +377,7 @@ fn record_buffer_view(
         proof.may_emit_noalias,
         vec![format!("elem={:?}", proof.view.elem)],
     );
+    attach_native_owned_view_fact(ctx, &proof.view);
 }
 
 pub(crate) fn lower_buffer_load(
@@ -403,6 +414,7 @@ pub(crate) fn lower_buffer_load(
         proof.may_emit_noalias,
         vec![format!("zext_to={}", result_i32)],
     );
+    attach_native_owned_view_fact(ctx, &proof.view);
     let result = LoweredValue::i32(result_i32);
     if let Some(consumer) = spec.result_consumer {
         let facts = access_facts_for_spec(spec, &proof.view, Some(&emission.len_i32));
@@ -411,9 +423,9 @@ pub(crate) fn lower_buffer_load(
             Some(proof.buffer_local_id),
             consumer,
             &result,
-            Some(proof.bounds),
-            Some(proof.alias),
-            Some(proof.access_mode),
+            Some(proof.bounds.clone()),
+            Some(proof.alias.clone()),
+            Some(proof.access_mode.clone()),
             None,
             None,
             Some(facts),
@@ -421,6 +433,7 @@ pub(crate) fn lower_buffer_load(
             false,
             Vec::new(),
         );
+        attach_native_owned_view_fact(ctx, &proof.view);
     }
     Ok(Some(result))
 }
@@ -460,6 +473,7 @@ pub(crate) fn lower_buffer_store(
         proof.may_emit_noalias,
         vec![format!("source_i32={}", val_i32)],
     );
+    attach_native_owned_view_fact(ctx, &proof.view);
     let result = LoweredValue::i32(val_i32.clone());
     Ok(Some(StoreResult { result }))
 }
@@ -579,9 +593,9 @@ pub(crate) fn lower_typed_array_load(
         Some(proof.buffer_local_id),
         spec.result_consumer.unwrap_or("TypedArrayGet.native_value"),
         &result,
-        Some(proof.bounds),
-        Some(proof.alias),
-        Some(proof.access_mode),
+        Some(proof.bounds.clone()),
+        Some(proof.alias.clone()),
+        Some(proof.access_mode.clone()),
         None,
         None,
         Some(facts),
@@ -589,6 +603,7 @@ pub(crate) fn lower_typed_array_load(
         proof.may_emit_noalias,
         vec![format!("elem={:?}", proof.view.elem)],
     );
+    attach_native_owned_view_fact(ctx, &proof.view);
     Ok(Some(result))
 }
 
@@ -701,9 +716,9 @@ pub(crate) fn lower_typed_array_store(
         Some(proof.buffer_local_id),
         spec.access_consumer,
         &stored,
-        Some(proof.bounds),
-        Some(proof.alias),
-        Some(proof.access_mode),
+        Some(proof.bounds.clone()),
+        Some(proof.alias.clone()),
+        Some(proof.access_mode.clone()),
         None,
         None,
         Some(facts),
@@ -711,5 +726,6 @@ pub(crate) fn lower_typed_array_store(
         proof.may_emit_noalias,
         vec![format!("elem={:?}", proof.view.elem)],
     );
+    attach_native_owned_view_fact(ctx, &proof.view);
     Ok(Some(StoreResult { result }))
 }

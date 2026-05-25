@@ -205,6 +205,8 @@ where
         | Expr::BufferIsBuffer(v)
         | Expr::BufferIsEncoding(v)
         | Expr::BufferLength(v)
+        | Expr::NativeArenaAlloc(v)
+        | Expr::NativeArenaDispose(v)
         | Expr::Uint8ArrayFrom(v)
         | Expr::Uint8ArrayLength(v)
         | Expr::ChildProcessGetProcessStatus(v)
@@ -308,6 +310,17 @@ where
         Expr::UrlCanParseWithBase { input, base } => {
             f(input);
             f(base);
+        }
+
+        Expr::NativeArenaView {
+            owner,
+            byte_offset,
+            length,
+            ..
+        } => {
+            f(owner);
+            f(byte_offset);
+            f(length);
         }
 
         Expr::UrlSearchParamsForEach { params, callback } => {

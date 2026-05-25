@@ -34,7 +34,9 @@ pub const GC_TYPE_LAZY_ARRAY: u8 = 9;
 pub const GC_TYPE_BUFFER: u8 = 10;
 pub const GC_TYPE_TYPED_ARRAY: u8 = 11;
 pub const GC_TYPE_SET: u8 = 12;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_SET;
+pub const GC_TYPE_NATIVE_ARENA_OWNER: u8 = 13;
+pub const GC_TYPE_NATIVE_TYPED_VIEW: u8 = 14;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_NATIVE_TYPED_VIEW;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -67,6 +69,7 @@ pub(crate) enum GcRewriteDescriptorKind {
     Map,
     LazyArray,
     Set,
+    NativeTypedView,
 }
 
 #[allow(dead_code)]
@@ -118,6 +121,8 @@ pub(crate) enum GcFinalizeHookKind {
     MapSideAllocation,
     SetSideAllocation,
     PromiseCleanup,
+    NativeArenaOwner,
+    NativeTypedView,
 }
 
 #[allow(dead_code)]
@@ -352,6 +357,36 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::SetIndex,
         GcFinalizeHookKind::SetSideAllocation,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_NATIVE_ARENA_OWNER,
+        "native_arena_owner",
+        GcAllocationPolicy::Malloc,
+        false,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        false,
+        GcExternalBytePolicy::SideAllocation,
+        GcLargeObjectPolicy::MallocTracked,
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::NativeArenaOwner,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_NATIVE_TYPED_VIEW,
+        "native_typed_view",
+        GcAllocationPolicy::Malloc,
+        false,
+        GcRewriteDescriptorKind::NativeTypedView,
+        GcLayoutSlotKind::None,
+        false,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::MallocTracked,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::NativeTypedView,
+    )),
 ];
 
 #[inline]
@@ -453,6 +488,16 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
             crate::async_hooks::enqueue_gc_destroy((*promise).async_id);
             crate::promise::clear_promise_context_for_gc(promise);
         }
+        GcFinalizeHookKind::NativeArenaOwner => {
+            crate::native_arena::finalize_native_arena_owner_for_gc(
+                user_ptr as *mut crate::native_arena::NativeArenaOwnerHeader,
+            );
+        }
+        GcFinalizeHookKind::NativeTypedView => {
+            crate::native_arena::finalize_native_typed_view_for_gc(
+                user_ptr as *mut crate::native_arena::NativeTypedViewHeader,
+            );
+        }
     }
 }
 
@@ -502,6 +547,11 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
                 return Err(
                     "external-backed rewrite descriptor must not expose payload layout slots",
                 );
+            }
+        }
+        GcRewriteDescriptorKind::NativeTypedView => {
+            if info.layout_slot_kind != GcLayoutSlotKind::None {
+                return Err("native typed view rewrite descriptor must use fixed slots only");
             }
         }
         GcRewriteDescriptorKind::Leaf => unreachable!("leaf handled above"),

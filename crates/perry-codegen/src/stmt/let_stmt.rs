@@ -5,7 +5,8 @@ use super::*;
 use crate::expr::lower_expr_with_expected_type;
 use crate::native_value::{
     AliasState, BufferAccessMode, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource,
-    LoweredValue, MaterializationReason, NativeRep, PodLayoutDecision, PodLocal, SemanticKind,
+    LoweredValue, MaterializationReason, NativeOwnedViewSlot, NativeRep, PodLayoutDecision,
+    PodLocal, SemanticKind,
 };
 use crate::types::{I32, I64, I8, PTR};
 
@@ -996,6 +997,9 @@ struct BufferViewInit {
     data_offset_bytes: i32,
     length_offset_from_data: i32,
     length_source: LengthSource,
+    native_owner_local_id: Option<u32>,
+    native_byte_offset: Option<i64>,
+    native_byte_length: Option<i64>,
 }
 
 fn register_noalias_buffer_view(
@@ -1010,20 +1014,46 @@ fn register_noalias_buffer_view(
     let blk = ctx.block();
     let handle = crate::expr::unbox_to_i64(blk, value);
     let handle_ptr = blk.inttoptr(I64, &handle);
-    let data_ptr = blk.gep(
-        I8,
-        &handle_ptr,
-        &[(I32, &init.data_offset_bytes.to_string())],
-    );
+    let data_ptr = if init.native_owner_local_id.is_some() {
+        let data_field = blk.gep(I8, &handle_ptr, &[(I32, "24")]);
+        blk.load(PTR, &data_field)
+    } else {
+        blk.gep(
+            I8,
+            &handle_ptr,
+            &[(I32, &init.data_offset_bytes.to_string())],
+        )
+    };
     let data_slot = ctx.func.alloca_entry(PTR);
     ctx.block().store(PTR, &data_ptr, &data_slot);
+    let length_slot = if init.native_owner_local_id.is_some() {
+        let len_field = ctx.block().gep(I8, &handle_ptr, &[(I32, "0")]);
+        let len_value = ctx.block().load(I32, &len_field);
+        let slot = ctx.func.alloca_entry(I32);
+        ctx.block().store(I32, &len_value, &slot);
+        Some(slot)
+    } else {
+        None
+    };
     let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
     ctx.buffer_data_slots
         .insert(id, (data_slot.clone(), scope_idx));
+    let native_owned = match init.native_owner_local_id {
+        Some(owner_local_id) => Some(NativeOwnedViewSlot {
+            owner_local_id,
+            byte_offset: init.native_byte_offset,
+            byte_length: init.native_byte_length,
+            owner_rooted: true,
+            disposed: false,
+            pointer_free_backing: true,
+        }),
+        None => None,
+    };
     ctx.buffer_view_slots.insert(
         id,
         BufferViewSlot {
             data_slot,
+            length_slot,
             scope_idx: Some(scope_idx),
             elem: init.elem,
             element_width_bytes: init.element_width_bytes,
@@ -1032,6 +1062,7 @@ fn register_noalias_buffer_view(
             length_offset_from_data: init.length_offset_from_data,
             alias: AliasState::NoAliasProven,
             length_source: Some(init.length_source),
+            native_owned,
         },
     );
 }
@@ -1047,6 +1078,9 @@ fn buffer_view_init_for_expr(expr: &perry_hir::Expr) -> Option<BufferViewInit> {
             data_offset_bytes: 8,
             length_offset_from_data: -8,
             length_source: buffer_alloc_length_source(expr),
+            native_owner_local_id: None,
+            native_byte_offset: None,
+            native_byte_length: None,
         }),
         perry_hir::Expr::TypedArrayNew { kind, .. } => {
             let (elem, width) = typed_array_elem_width_for_kind(*kind)?;
@@ -1057,6 +1091,35 @@ fn buffer_view_init_for_expr(expr: &perry_hir::Expr) -> Option<BufferViewInit> {
                 data_offset_bytes: 16,
                 length_offset_from_data: -16,
                 length_source: buffer_alloc_length_source(expr),
+                native_owner_local_id: None,
+                native_byte_offset: None,
+                native_byte_length: None,
+            })
+        }
+        perry_hir::Expr::NativeArenaView {
+            owner,
+            kind,
+            byte_offset,
+            length,
+        } => {
+            let (elem, width) = typed_array_elem_width_for_kind(*kind)?;
+            let owner_local_id = match owner.as_ref() {
+                perry_hir::Expr::LocalGet(id) => Some(*id),
+                _ => None,
+            }?;
+            let byte_offset_const = const_i64_expr(byte_offset);
+            let length_const = const_i64_expr(length);
+            let native_byte_length = length_const.and_then(|len| len.checked_mul(width as i64));
+            Some(BufferViewInit {
+                elem,
+                element_width_bytes: width,
+                index_unit: BufferIndexUnit::Element,
+                data_offset_bytes: 24,
+                length_offset_from_data: 0,
+                length_source: length_source_from_expr(length).unwrap_or(LengthSource::Unknown),
+                native_owner_local_id: Some(owner_local_id),
+                native_byte_offset: byte_offset_const,
+                native_byte_length,
             })
         }
         _ => None,
@@ -1127,10 +1190,59 @@ fn buffer_alloc_length_source(expr: &perry_hir::Expr) -> LengthSource {
         perry_hir::Expr::TypedArrayNew { arg: None, .. } => {
             return LengthSource::Constant(0);
         }
+        perry_hir::Expr::NativeArenaView { length, .. } => Some(length.as_ref()),
         _ => None,
     };
     len.and_then(length_source_from_expr)
         .unwrap_or(LengthSource::Unknown)
+}
+
+fn const_i64_expr(expr: &perry_hir::Expr) -> Option<i64> {
+    match expr {
+        perry_hir::Expr::Integer(n) => Some(*n),
+        perry_hir::Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => Some(*n as i64),
+        _ => None,
+    }
+}
+
+fn maybe_bind_local_object_shape(
+    ctx: &mut FnCtx<'_>,
+    id: u32,
+    init_expr: &perry_hir::Expr,
+    refined_ty: &perry_types::Type,
+    value: &str,
+) {
+    let perry_hir::Expr::Object(props) = init_expr else {
+        return;
+    };
+    let Some(shape) =
+        crate::expr::typed_object_literal_heap_shape_info(ctx, props, Some(refined_ty))
+    else {
+        return;
+    };
+    if !shape.fields.values().any(|field| field.raw_f64) {
+        return;
+    }
+
+    let expected_keys_slot = ctx.func.alloca_entry(I64);
+    ctx.func
+        .entry_allocas_push_store(I64, "0", &expected_keys_slot);
+    let blk = ctx.block();
+    let obj_bits = blk.bitcast_double_to_i64(value);
+    let obj_handle = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
+    let obj_ptr = blk.inttoptr(I64, &obj_handle);
+    let keys_addr = blk.gep(I8, &obj_ptr, &[(I64, "16")]);
+    let expected_keys = blk.load(I64, &keys_addr);
+    blk.store(I64, &expected_keys, &expected_keys_slot);
+
+    ctx.local_object_shapes.insert(
+        id,
+        crate::expr::LocalObjectShapeInfo {
+            expected_keys_slot,
+            field_count: shape.field_count,
+            fields: shape.fields,
+        },
+    );
 }
 
 fn length_source_from_expr(expr: &perry_hir::Expr) -> Option<LengthSource> {

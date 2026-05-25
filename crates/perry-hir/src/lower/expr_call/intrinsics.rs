@@ -305,6 +305,93 @@ pub(super) fn try_embed_wasm(ctx: &LoweringContext, call: &ast::CallExpr) -> Res
     Ok(None)
 }
 
+fn native_arena_kind_from_expr(expr: &ast::Expr) -> Option<u8> {
+    match expr {
+        ast::Expr::Lit(ast::Lit::Str(s)) => {
+            crate::ir::typed_array_kind_for_name(s.value.as_str().unwrap_or(""))
+        }
+        ast::Expr::Lit(ast::Lit::Num(n)) if n.value.fract() == 0.0 => {
+            let raw = n.value as i64;
+            (0..=crate::ir::TYPED_ARRAY_KIND_UINT8_CLAMPED as i64)
+                .contains(&raw)
+                .then_some(raw as u8)
+        }
+        _ => None,
+    }
+}
+
+/// Hidden internal native-arena intrinsics. They intentionally require the
+/// view kind to be a literal so native lowering can carry width facts.
+pub(super) fn try_native_arena_intrinsics(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    has_spread: bool,
+) -> Result<Option<Expr>> {
+    if has_spread {
+        return Ok(None);
+    }
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return Ok(None);
+    };
+    let ast::Expr::Ident(ident) = callee_expr.as_ref() else {
+        return Ok(None);
+    };
+    let name = ident.sym.as_ref();
+    if !name.starts_with("__perry_native_arena_") {
+        return Ok(None);
+    }
+    if ctx.lookup_local(name).is_some() || ctx.lookup_func(name).is_some() {
+        return Ok(None);
+    }
+    match name {
+        "__perry_native_arena_alloc" => {
+            if call.args.len() != 1 || call.args[0].spread.is_some() {
+                crate::lower_bail!(
+                    call.span,
+                    "__perry_native_arena_alloc(byteLength) expects exactly one argument"
+                );
+            }
+            Ok(Some(Expr::NativeArenaAlloc(Box::new(lower_expr(
+                ctx,
+                &call.args[0].expr,
+            )?))))
+        }
+        "__perry_native_arena_view" => {
+            if call.args.len() != 4 || call.args.iter().any(|arg| arg.spread.is_some()) {
+                crate::lower_bail!(
+                    call.span,
+                    "__perry_native_arena_view(owner, kind, byteOffset, length) expects exactly four arguments"
+                );
+            }
+            let Some(kind) = native_arena_kind_from_expr(call.args[1].expr.as_ref()) else {
+                crate::lower_bail!(
+                    call.span,
+                    "__perry_native_arena_view kind must be a typed-array name or kind literal"
+                );
+            };
+            Ok(Some(Expr::NativeArenaView {
+                owner: Box::new(lower_expr(ctx, &call.args[0].expr)?),
+                kind,
+                byte_offset: Box::new(lower_expr(ctx, &call.args[2].expr)?),
+                length: Box::new(lower_expr(ctx, &call.args[3].expr)?),
+            }))
+        }
+        "__perry_native_arena_dispose" => {
+            if call.args.len() != 1 || call.args[0].spread.is_some() {
+                crate::lower_bail!(
+                    call.span,
+                    "__perry_native_arena_dispose(owner) expects exactly one argument"
+                );
+            }
+            Ok(Some(Expr::NativeArenaDispose(Box::new(lower_expr(
+                ctx,
+                &call.args[0].expr,
+            )?))))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Issue #957 — `(function(...) { ... }.call(<thisArg>, ...args))` IIFE
 /// pattern used at the top of older CJS packages (lodash, underscore, and
 /// every package that copies their UMD prelude). Pre-fix the inner

@@ -1049,6 +1049,19 @@ pub enum Expr {
         arg: Option<Box<Expr>>,
     },
 
+    /// Hidden Perry intrinsic: `__perry_native_arena_alloc(byteLength)`.
+    NativeArenaAlloc(Box<Expr>),
+    /// Hidden Perry intrinsic:
+    /// `__perry_native_arena_view(owner, kind, byteOffset, length)`.
+    NativeArenaView {
+        owner: Box<Expr>,
+        kind: u8,
+        byte_offset: Box<Expr>,
+        length: Box<Expr>,
+    },
+    /// Hidden Perry intrinsic: `__perry_native_arena_dispose(owner)`.
+    NativeArenaDispose(Box<Expr>),
+
     // Child Process operations
     ChildProcessExecSync {
         // execSync(cmd, opts?) -> Buffer | string

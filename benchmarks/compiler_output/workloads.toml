@@ -1005,3 +1005,159 @@ access_mode = "dynamic_fallback"
 bounds_state = "unknown"
 materialization_reason = "unknown_bounds"
 notes_contains = "typed_array_fallback=untracked_or_unproven"
+
+[workloads.native_owned_typed_views]
+source = "benchmarks/compiler_output/fixtures/native_owned_typed_views.ts"
+kind = "native_owned_typed_views"
+allow_hot_loop_conversions = true
+
+[workloads.native_owned_typed_views.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: native-owned typed view fixture gates proof records and fallback reasons"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_reduction",
+]
+
+[workloads.native_owned_typed_views.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 16
+
+[[workloads.native_owned_typed_views.stdout_checks]]
+name = "native_owned_typed_views_checksum"
+contains = "native_owned_typed_views:1383.25"
+detail = "native-owned typed view checksum"
+
+[workloads.native_owned_typed_views.native_rep_checks]
+allow_materialization_reasons = [
+  "runtime_api",
+  "function_abi",
+  "use_after_dispose",
+  "stale_view_length",
+  "mutable_alias",
+  "missing_owner_root",
+  "escaping_unowned_pointer",
+]
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_f64_read"
+source_function = "nativeOwnedPositive"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_f64"
+native_rep_name = "f64"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_f64_store"
+source_function = "nativeOwnedPositive"
+expr_kind = "TypedArraySet"
+consumer = "f64_store"
+native_rep_name = "f64"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_u8_store"
+source_function = "nativeOwnedKinds"
+expr_kind = "Uint8ArraySet"
+consumer = "u8_store_trunc_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_i16_read"
+source_function = "nativeOwnedKinds"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_i32"
+native_rep_name = "i32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_u32_read"
+source_function = "nativeOwnedKinds"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_u32"
+native_rep_name = "u32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_f32_read"
+source_function = "nativeOwnedKinds"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_f32"
+native_rep_name = "f32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_f64_kind_read"
+source_function = "nativeOwnedKinds"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_f64"
+native_rep_name = "f64"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_disposed_fallback"
+source_function = "disposedFallback"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+materialization_reason = "use_after_dispose"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_stale_length_fallback"
+source_function = "staleLengthFallback"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+materialization_reason = "stale_view_length"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_mutable_alias_fallback"
+source_function = "mutableAliasFallback"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+materialization_reason = "mutable_alias"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_missing_owner_root_fallback"
+source_function = "missingOwnerRootFallback"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+materialization_reason = "missing_owner_root"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_escaping_pointer_fallback"
+source_function = "escapingUnownedPointerFallback"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+materialization_reason = "escaping_unowned_pointer"

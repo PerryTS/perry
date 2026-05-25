@@ -2,6 +2,7 @@ use perry_hir::{BinaryOp, CompareOp, Expr, UpdateOp};
 
 use crate::native_value::{
     AliasState, BoundsProof, BoundsState, BufferViewSlot, GuardedBufferIndex, LengthSource,
+    MaterializationReason,
 };
 
 use super::FnCtx;
@@ -305,13 +306,36 @@ pub(crate) fn invalidate_local_write_facts(ctx: &mut FnCtx<'_>, id: u32) {
     ctx.bounded_index_pairs
         .retain(|fact| fact.index_local_id != id && fact.array_local_id != id);
 
-    for view in ctx.buffer_view_slots.values_mut() {
+    let mut stale_length_views = Vec::new();
+    let mut owner_reassignment_views = Vec::new();
+    for (view_id, view) in ctx.buffer_view_slots.iter_mut() {
         if matches!(
             view.length_source.as_ref(),
             Some(LengthSource::Local { id: source_id, .. }) if *source_id == id
         ) {
             view.length_source = Some(LengthSource::Unknown);
+            stale_length_views.push(*view_id);
         }
+        if view
+            .native_owned
+            .as_ref()
+            .is_some_and(|native| native.owner_local_id == id)
+        {
+            view.alias = AliasState::MayAlias;
+            view.scope_idx = None;
+            if let Some(native) = view.native_owned.as_mut() {
+                native.owner_rooted = false;
+            }
+            owner_reassignment_views.push(*view_id);
+        }
+    }
+    for view_id in stale_length_views {
+        ctx.buffer_hazard_reasons
+            .insert(view_id, MaterializationReason::StaleViewLength);
+    }
+    for view_id in owner_reassignment_views {
+        ctx.buffer_hazard_reasons
+            .insert(view_id, MaterializationReason::MissingOwnerRoot);
     }
 }
 
@@ -672,6 +696,13 @@ pub(crate) fn effective_alias_state_for_access(
     if !view.alias.allows_noalias() || view.scope_idx.is_none() {
         return view.alias.clone();
     }
+    if view.native_owned.is_some() {
+        return if native_owned_view_has_overlapping_alias(ctx, view) {
+            AliasState::MayAlias
+        } else {
+            view.alias.clone()
+        };
+    }
     let noalias_candidate_count = ctx
         .buffer_view_slots
         .values()
@@ -682,4 +713,47 @@ pub(crate) fn effective_alias_state_for_access(
     } else {
         AliasState::MayAlias
     }
+}
+
+fn native_owned_view_has_overlapping_alias(ctx: &FnCtx<'_>, view: &BufferViewSlot) -> bool {
+    let Some(native) = view.native_owned.as_ref() else {
+        return false;
+    };
+    let scope_idx = view.scope_idx;
+    ctx.buffer_view_slots.values().any(|other| {
+        if other.scope_idx == scope_idx {
+            return false;
+        }
+        let Some(other_native) = other.native_owned.as_ref() else {
+            return false;
+        };
+        other_native.owner_local_id == native.owner_local_id
+            && native_owned_ranges_may_overlap(
+                native.byte_offset,
+                native.byte_length,
+                other_native.byte_offset,
+                other_native.byte_length,
+            )
+    })
+}
+
+fn native_owned_ranges_may_overlap(
+    a_offset: Option<i64>,
+    a_len: Option<i64>,
+    b_offset: Option<i64>,
+    b_len: Option<i64>,
+) -> bool {
+    let (Some(a_offset), Some(a_len), Some(b_offset), Some(b_len)) =
+        (a_offset, a_len, b_offset, b_len)
+    else {
+        return true;
+    };
+    if a_len <= 0 || b_len <= 0 {
+        return false;
+    }
+    let a_start = a_offset as i128;
+    let a_end = a_start + a_len as i128;
+    let b_start = b_offset as i128;
+    let b_end = b_start + b_len as i128;
+    a_start < b_end && b_start < a_end
 }

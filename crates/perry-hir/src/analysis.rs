@@ -1163,6 +1163,19 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(a, assigned);
             }
         }
+        Expr::NativeArenaAlloc(byte_length) | Expr::NativeArenaDispose(byte_length) => {
+            collect_assigned_locals_expr(byte_length, assigned);
+        }
+        Expr::NativeArenaView {
+            owner,
+            byte_offset,
+            length,
+            ..
+        } => {
+            collect_assigned_locals_expr(owner, assigned);
+            collect_assigned_locals_expr(byte_offset, assigned);
+            collect_assigned_locals_expr(length, assigned);
+        }
         // Dynamic env access
         Expr::EnvGetDynamic(key) => {
             collect_assigned_locals_expr(key, assigned);

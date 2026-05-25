@@ -810,6 +810,57 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
         }
 
+        Expr::NativeArenaAlloc(byte_length) => {
+            let byte_length = lower_expr(ctx, byte_length)?;
+            let byte_length_i64 = ctx.block().fptosi(DOUBLE, &byte_length, I64);
+            let owner = ctx
+                .block()
+                .call(I64, "js_native_arena_alloc", &[(I64, &byte_length_i64)]);
+            Ok(nanbox_pointer_inline(ctx.block(), &owner))
+        }
+
+        Expr::NativeArenaView {
+            owner,
+            kind,
+            byte_offset,
+            length,
+        } => {
+            let owner_value = lower_expr(ctx, owner)?;
+            let byte_offset = lower_expr(ctx, byte_offset)?;
+            let length = lower_expr(ctx, length)?;
+            let blk = ctx.block();
+            let owner_handle = unbox_to_i64(blk, &owner_value);
+            let kind_i32 = (*kind as i32).to_string();
+            let byte_offset_i64 = blk.fptosi(DOUBLE, &byte_offset, I64);
+            let length_i64 = blk.fptosi(DOUBLE, &length, I64);
+            let view = blk.call(
+                I64,
+                "js_native_arena_view",
+                &[
+                    (I64, &owner_handle),
+                    (I32, &kind_i32),
+                    (I64, &byte_offset_i64),
+                    (I64, &length_i64),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &view))
+        }
+
+        Expr::NativeArenaDispose(owner) => {
+            let owner_value = lower_expr(ctx, owner)?;
+            let blk = ctx.block();
+            let owner_handle = unbox_to_i64(blk, &owner_value);
+            blk.call_void("js_native_arena_dispose", &[(I64, &owner_handle)]);
+            if let Expr::LocalGet(owner_id) = owner.as_ref() {
+                super::invalidate_native_owned_views_for_owner(
+                    ctx,
+                    *owner_id,
+                    MaterializationReason::UseAfterDispose,
+                );
+            }
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+        }
+
         // -------- arr.unshift(value) --------
         // Issue #656: returns the new length per ECMA-262, not the (possibly
         // reallocated) array pointer. The runtime helper returns the new
