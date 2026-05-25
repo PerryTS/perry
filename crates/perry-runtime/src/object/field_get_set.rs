@@ -783,6 +783,31 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                 // false for now — out of scope for #323.
                 return nanbox_false;
             }
+            // #1758: a CLOSURE receiver (functions ARE objects in JS, so
+            // `key in fn` is valid). Pre-fix this fell through to the
+            // keys_array scan below, which read `(*obj_ptr).keys_array` at
+            // the closure's capture-slot offset — a NaN-boxed value, not a
+            // real *ArrayHeader — and SIGSEGV'd in `js_array_length`. effect's
+            // `dual`-wrapped helpers reach here (`<key> in someClosure` deep in
+            // the fiber runtime). Mirror the closure read path
+            // (`js_object_get_field_by_name`: `length` → arity, others →
+            // CLOSURE_DYNAMIC_PROPS): present-and-not-undefined ⇒ true.
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_CLOSURE {
+                if !key_val.is_any_string() {
+                    return nanbox_false;
+                }
+                let key_str =
+                    crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+                if key_str.is_null() {
+                    return nanbox_false;
+                }
+                let v = js_object_get_field_by_name(obj_ptr, key_str);
+                return if v.is_undefined() {
+                    nanbox_false
+                } else {
+                    nanbox_true
+                };
+            }
         }
     }
 
