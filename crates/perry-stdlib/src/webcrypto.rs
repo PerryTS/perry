@@ -2040,6 +2040,9 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
         };
         return resolve_with_bytes(&ciphertext);
     }
+    if !algo_name.eq_ignore_ascii_case("AES-GCM") {
+        return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name");
+    }
     let key_addr = strip_ptr(key_bits.to_bits());
     let mat = match lookup_crypto_key(key_addr) {
         Some(m) => m,
@@ -2169,6 +2172,9 @@ pub unsafe extern "C" fn js_webcrypto_decrypt(
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         return resolve_with_bytes(&plaintext);
+    }
+    if !algo_name.eq_ignore_ascii_case("AES-GCM") {
+        return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name");
     }
     let key_addr = strip_ptr(key_bits.to_bits());
     let mat = match lookup_crypto_key(key_addr) {
