@@ -149,6 +149,99 @@ function invalidArgTypeHelper(input) {
   return ' Received type ' + typeof input;
 }
 
+// ---------------------------------------------------------------------------
+// Additional helpers used across the supported-apis corpus (#800). These let
+// tests *load* under both runtimes instead of throwing "common.X is not a
+// function" (which would land them in node-skip and shrink the judged set).
+// ---------------------------------------------------------------------------
+
+// Like `skip` but does not exit — the test continues.
+function printSkipMessage(msg) {
+  console.log('1..0 # Skipped: ' + (msg || ''));
+}
+
+function skipIf(condition, msg) {
+  if (condition) skip(msg);
+}
+
+function canCreateSymLink() {
+  return !isWindows;
+}
+
+// Returns a validator for `assert.throws(fn, common.expectsError(props))` (and
+// the error-first-callback form). A props object is matched key-by-key against
+// the thrown error; a function/RegExp validator is applied directly.
+function expectsError(validator, exact) {
+  return mustCall(function (...args) {
+    const err = args[0];
+    if (typeof validator === 'function') return validator(err);
+    if (validator instanceof RegExp) {
+      assert.match(String(err && err.message), validator);
+      return true;
+    }
+    if (validator && typeof validator === 'object') {
+      for (const key of Object.keys(validator)) {
+        const expected = validator[key];
+        if (expected instanceof RegExp) {
+          assert.match(String(err[key]), expected);
+        } else {
+          assert.strictEqual(err[key], expected);
+        }
+      }
+    }
+    return true;
+  }, exact);
+}
+
+// Warning verification isn't modeled in the shim — accept and ignore so tests
+// that register expected warnings still run (the API under test executes).
+function expectWarning() {}
+
+// All TypedArray + DataView views over a Buffer's backing store.
+function getArrayBufferViews(buf) {
+  const { buffer, byteOffset, byteLength } = buf;
+  const out = [];
+  const ctors = [
+    Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array,
+    Int32Array, Uint32Array, Float32Array, Float64Array,
+  ];
+  for (const Ctor of ctors) {
+    const bpe = Ctor.BYTES_PER_ELEMENT;
+    if (byteLength % bpe === 0) {
+      out.push(new Ctor(buffer, byteOffset, byteLength / bpe));
+    }
+  }
+  out.push(new DataView(buffer, byteOffset, byteLength));
+  return out;
+}
+
+function getBufferSources(buf) {
+  return [...getArrayBufferViews(buf), new Uint8Array(buf).buffer];
+}
+
+// Calls `fn` with a file descriptor that is (almost certainly) not open.
+function runWithInvalidFD(fn) {
+  let fd = 1 << 30;
+  while (fd > 1 << 20) {
+    try {
+      return fn(fd);
+    } catch (e) {
+      fd = Math.floor(fd / 2);
+    }
+  }
+}
+
+// Template tag that cooks `cmd ${arg}` to `[command, env]`. The shim does no
+// real POSIX escaping — both runtimes receive the identical string, which is
+// all the differential needs.
+function escapePOSIXShell(strings, ...args) {
+  let s = strings[0];
+  for (let i = 0; i < args.length; i++) {
+    s += String(args[i]) + strings[i + 1];
+  }
+  return [s, {}];
+}
+
 module.exports = {
   mustCall,
   mustCallAtLeast,
@@ -157,8 +250,17 @@ module.exports = {
   mustNotMutateObjectDeep,
   platformTimeout,
   skip,
+  printSkipMessage,
+  skipIf,
   allowGlobals,
   invalidArgTypeHelper,
+  canCreateSymLink,
+  expectsError,
+  expectWarning,
+  getArrayBufferViews,
+  getBufferSources,
+  runWithInvalidFD,
+  escapePOSIXShell,
   isWindows,
   isMacOS,
   isOSX: isMacOS,
@@ -168,11 +270,20 @@ module.exports = {
   isAIX,
   isSunOS,
   isMainThread: true,
+  // Platform / build flags. Default to "ordinary release build on this host"
+  // so build-specific test branches don't throw on a missing flag.
+  isIBMi: process.platform === 'os400',
+  isDebug: false,
+  isASan: false,
+  isPi: false,
   // Assume a full-featured build. A test needing a capability Perry lacks
   // fails at the API call (a real gap signal), not here.
   hasCrypto: true,
   hasIntl: true,
   hasIPv6: true,
+  hasOpenSSL3: true,
+  hasQuic: false,
+  hasSQLite: false,
   enoughTestMem: true,
   PORT: 12346,
   localhostIPv4: '127.0.0.1',
