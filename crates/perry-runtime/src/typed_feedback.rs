@@ -1728,6 +1728,52 @@ pub fn typed_feedback_trace_json() -> serde_json::Value {
     })
 }
 
+// #1752: codegen emits calls to these `js_typed_feedback_*` instrumentation
+// helpers (property-get/set, method-call, array index, guard recording, etc.)
+// for sites it decides to profile. Nothing in the Rust crate graph references
+// them, so the default `.a` keeps them via staticlib-export semantics — but
+// the auto-optimize build round-trips the runtime through whole-program LLVM
+// bitcode and is free to internalize + dead-strip an unreferenced `#[no_mangle]`
+// symbol, leaving the codegen call dangling (`Undefined symbols:
+// _js_typed_feedback_native_call_method` etc. at final link — which is exactly
+// how an instrumented async program failed to link under auto-optimize). The
+// `#[used]` typed fn-pointer statics below take the address of each helper,
+// landing the functions themselves in `@llvm.used` so thin-LTO keeps them
+// external (not internalized) and the linker's `-dead_strip` honors them —
+// the same proven retention mechanism as `value/dyn_index.rs` / `process.rs`
+// (#1344). NOTE: a `[usize; N]` (ptrtoint) array or a `[*const (); N]` pointer
+// array do NOT keep the symbols external here — only individual typed
+// fn-pointer statics survive the thin-LTO + `strip=true` release profile
+// (both array forms were verified failing under auto-optimize). Function-
+// pointer types are `Sync`, so no wrapper is needed.
+#[rustfmt::skip]
+mod keep_typed_feedback {
+    use super::*;
+    #[used] static K00: extern "C" fn(u64, u32, *const u8, usize, *const u8, usize, *const u8, usize, *const u8, usize, *const u8, usize, *const u8, usize) = js_typed_feedback_register_site;
+    #[used] static K01: extern "C" fn(u64) = js_typed_feedback_record_guard_pass;
+    #[used] static K02: extern "C" fn(u64) = js_typed_feedback_record_guard_fail;
+    #[used] static K03: extern "C" fn(u64) = js_typed_feedback_record_fallback_call;
+    #[used] static K04: extern "C" fn(u64, *const ObjectHeader, *const crate::StringHeader) = js_typed_feedback_observe_property_get;
+    #[used] static K05: extern "C" fn(u64, *mut ObjectHeader, *const crate::StringHeader) = js_typed_feedback_observe_property_set;
+    #[used] static K06: extern "C" fn(u64, *const ObjectHeader, *const crate::StringHeader) -> f64 = js_typed_feedback_object_get_field_by_name_f64;
+    #[used] static K07: extern "C" fn(u64, *mut ObjectHeader, *const crate::StringHeader, f64) = js_typed_feedback_object_set_field_by_name;
+    #[used] static K08: unsafe extern "C" fn(u64, f64, *const i8, usize, *const f64, usize) -> f64 = js_typed_feedback_native_call_method;
+    #[used] static K09: unsafe extern "C" fn(u64, f64, *const i8, usize, i64) -> f64 = js_typed_feedback_native_call_method_apply;
+    #[used] static K10: extern "C" fn(u64, *const ArrayHeader, u32) -> f64 = js_typed_feedback_array_get_f64;
+    #[used] static K11: extern "C" fn(u64, f64, f64, i32, i32) -> i32 = js_typed_feedback_plain_array_index_get_guard;
+    #[used] static K12: extern "C" fn(u64, f64, f64) -> f64 = js_typed_feedback_array_index_get_fallback_boxed;
+    #[used] static K13: extern "C" fn(u64, *mut ArrayHeader, u32, f64) = js_typed_feedback_array_set_f64;
+    #[used] static K14: extern "C" fn(u64, *mut ArrayHeader, u32, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_f64_extend;
+    #[used] static K15: extern "C" fn(u64, f64, i32, f64, i32) -> i32 = js_typed_feedback_plain_array_index_set_guard;
+    #[used] static K16: extern "C" fn(u64, f64, i32, f64) -> f64 = js_typed_feedback_array_index_set_fallback_boxed;
+    #[used] static K17: extern "C" fn(u64, *const ArrayHeader, u32) = js_typed_feedback_observe_array_element;
+    #[used] static K18: extern "C" fn(u64, *mut ArrayHeader, *const crate::StringHeader, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_string_key;
+    #[used] static K19: extern "C" fn(u64, *mut ArrayHeader, f64, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_index_or_string;
+    #[used] static K20: extern "C" fn(u64, i64, f64, f64) = js_typed_feedback_object_set_index_polymorphic;
+    #[used] static K21: extern "C" fn(u64, *mut ObjectHeader, u32, *const crate::StringHeader, f64) = js_typed_feedback_object_set_unboxed_f64_field;
+    #[used] static K22: extern "C" fn(u64, f64) -> f64 = js_typed_feedback_observe_helper_return;
+}
+
 #[cfg(test)]
 pub(crate) fn reset_typed_feedback_for_tests() {
     let mut reg = registry();
