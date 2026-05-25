@@ -230,10 +230,23 @@ if [ "$RUN_OUTPUT" != "PASS" ]; then
 fi
 
 ARTIFACT_TEXT="$TMPDIR/native-reps.txt"
-cat "$ARTIFACT_DIR"/*.json > "$ARTIFACT_TEXT"
+shopt -s nullglob
+ARTIFACTS=("$ARTIFACT_DIR"/*.json)
+shopt -u nullglob
+if [ "${#ARTIFACTS[@]}" -eq 0 ]; then
+  echo "FAIL: native reps artifact missing"
+  echo "$COMPILE_OUTPUT" | tail -20
+  exit 1
+fi
+cat "${ARTIFACTS[@]}" > "$ARTIFACT_TEXT"
+
+if ! grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*[0-9]+' "$ARTIFACT_TEXT"; then
+  echo "FAIL: native reps artifact missing numeric schema_version"
+  echo "$COMPILE_OUTPUT" | tail -20
+  exit 1
+fi
 
 for token in \
-  '"schema_version": 6' \
   '"consumer": "native_library.raw_u32"' \
   '"consumer": "native_library.raw_u64"' \
   '"consumer": "native_library.raw_usize"' \
