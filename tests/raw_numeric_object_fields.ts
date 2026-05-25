@@ -65,6 +65,11 @@ console.log(c.bump(2.25));
 console.log(JSON.stringify(c));
 console.log((c as any).value.label);
 
+const shortStringCounter = new Counter();
+(shortStringCounter as any).value = "abc";
+console.log(JSON.stringify(shortStringCounter));
+console.log((shortStringCounter as any).value);
+
 class GuardedCounter {
   value: number = 9.5;
 }

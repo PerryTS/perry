@@ -420,6 +420,56 @@ fn test_typed_shape_descriptor_tracks_raw_numeric_slots() {
 }
 
 #[test]
+fn test_typed_shape_descriptor_rejects_nanbox_non_number_tags() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let raw_mask = [0b1u64];
+    let obj = crate::object::js_object_alloc(0, 1);
+    crate::object::js_object_set_unboxed_f64_field(obj, 0, 1.5);
+    js_gc_init_typed_shape_layout(
+        obj as u64,
+        1,
+        raw_mask.as_ptr(),
+        raw_mask.len() as u32,
+        std::ptr::null(),
+        0,
+    );
+    assert!(layout_typed_raw_f64_slot_for_user(obj as usize, 0));
+
+    let short = crate::value::JSValue::try_short_string(b"abc").unwrap();
+    crate::object::js_object_set_field(obj, 0, short);
+    assert!(
+        !layout_typed_raw_f64_slot_for_user(obj as usize, 0),
+        "SSO string tags must downgrade raw-f64 descriptors"
+    );
+    assert_eq!(test_layout_pointer_slot_count(obj as usize, 1), None);
+
+    let handle_obj = crate::object::js_object_alloc(0, 1);
+    crate::object::js_object_set_unboxed_f64_field(handle_obj, 0, 2.5);
+    js_gc_init_typed_shape_layout(
+        handle_obj as u64,
+        1,
+        raw_mask.as_ptr(),
+        raw_mask.len() as u32,
+        std::ptr::null(),
+        0,
+    );
+    assert!(layout_typed_raw_f64_slot_for_user(handle_obj as usize, 0));
+
+    let handle = crate::value::JSValue::from_bits(crate::value::JS_HANDLE_TAG | 0x1234);
+    crate::object::js_object_set_field(handle_obj, 0, handle);
+    assert!(
+        !layout_typed_raw_f64_slot_for_user(handle_obj as usize, 0),
+        "JS handle tags must downgrade raw-f64 descriptors"
+    );
+    assert_eq!(test_layout_pointer_slot_count(handle_obj as usize, 1), None);
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
+#[test]
 fn test_typed_shape_descriptor_growing_new_field_falls_back() {
     clear_marks();
     clear_mark_seeds();

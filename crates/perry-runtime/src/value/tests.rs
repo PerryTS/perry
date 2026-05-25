@@ -109,6 +109,7 @@ fn test_short_string_encoding_roundtrip() {
         assert!(v.is_short_string(), "tag mismatch for {:?}", s);
         assert!(v.is_any_string(), "is_any_string should accept SSO");
         assert!(!v.is_string(), "legacy is_string should NOT accept SSO");
+        assert!(!v.is_number(), "SSO strings are Perry tags, not numbers");
         assert_eq!(v.short_string_len(), s.len(), "length mismatch for {:?}", s);
         let mut buf = [0u8; SHORT_STRING_MAX_LEN];
         let n = v.short_string_to_buf(&mut buf);
@@ -162,6 +163,17 @@ fn test_short_string_tag_distinct_from_others() {
     assert!(!pointer.is_any_string());
     assert!(!int32.is_any_string());
     assert!(!number.is_any_string());
+}
+
+#[test]
+fn test_tagged_values_are_not_numbers() {
+    assert!(!JSValue::try_short_string(b"abc").unwrap().is_number());
+    assert!(!JSValue::from_bits(BIGINT_TAG | 0x1234).is_number());
+    assert!(!JSValue::from_bits(JS_HANDLE_TAG | 0x5678).is_number());
+    assert!(!JSValue::undefined().is_number());
+    assert!(!JSValue::int32(42).is_number());
+    assert!(JSValue::from_bits(0x7FF8_0000_0000_0000).is_number());
+    assert!(JSValue::number(f64::NAN).is_number());
 }
 
 #[test]

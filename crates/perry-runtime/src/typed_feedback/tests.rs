@@ -675,9 +675,35 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
     );
     assert_eq!(second, 0);
 
+    let short = crate::value::JSValue::try_short_string(b"abc").unwrap();
+    let third = js_typed_feedback_class_field_set_guard(
+        44,
+        receiver,
+        class_id,
+        expected_keys,
+        key_x,
+        0,
+        f64::from_bits(short.bits()),
+        1,
+    );
+    assert_eq!(third, 0);
+
+    let handle_value = f64::from_bits(crate::value::JS_HANDLE_TAG | 0x1234);
+    let fourth = js_typed_feedback_class_field_set_guard(
+        44,
+        receiver,
+        class_id,
+        expected_keys,
+        key_x,
+        0,
+        handle_value,
+        1,
+    );
+    assert_eq!(fourth, 0);
+
     let site = &typed_feedback_snapshot().sites[0];
     assert_eq!(site.guard_passes, 1);
-    assert_eq!(site.guard_failures, 1);
+    assert_eq!(site.guard_failures, 3);
 }
 
 #[test]

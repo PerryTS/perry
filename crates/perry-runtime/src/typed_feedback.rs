@@ -10,8 +10,8 @@ use std::sync::{LazyLock, Mutex};
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
 use crate::value::{
-    BIGINT_TAG, INT32_TAG, POINTER_MASK, POINTER_TAG, SHORT_STRING_TAG, STRING_TAG, TAG_FALSE,
-    TAG_HOLE, TAG_MASK, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+    BIGINT_TAG, INT32_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG, SHORT_STRING_TAG, STRING_TAG,
+    TAG_FALSE, TAG_HOLE, TAG_MASK, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 
 const POLYMORPHIC_CAP: usize = 4;
@@ -395,6 +395,7 @@ const STABLE_VALUE_STRING: u16 = 7;
 const STABLE_VALUE_BIGINT: u16 = 8;
 const STABLE_VALUE_POINTER: u16 = 9;
 const STABLE_VALUE_INT32: u16 = 10;
+const STABLE_VALUE_JS_HANDLE: u16 = 11;
 
 const ARRAY_ACCESS_UNKNOWN: u8 = 0;
 const ARRAY_ACCESS_INDEXED_IN_BOUNDS: u8 = 1;
@@ -424,6 +425,7 @@ fn stable_value_kind(bits: u64) -> u16 {
         POINTER_TAG => STABLE_VALUE_POINTER,
         STRING_TAG => STABLE_VALUE_STRING,
         BIGINT_TAG => STABLE_VALUE_BIGINT,
+        JS_HANDLE_TAG => STABLE_VALUE_JS_HANDLE,
         SHORT_STRING_TAG => STABLE_VALUE_SHORT_STRING,
         INT32_TAG => STABLE_VALUE_INT32,
         _ => STABLE_VALUE_NUMBER,
@@ -1860,4 +1862,6 @@ pub(crate) fn reset_typed_feedback_for_tests() {
 
 #[path = "typed_feedback/tests.rs"]
 mod tests;
+
+
 

@@ -17,6 +17,7 @@
 //! We use the top 16 bits for tagging:
 //! - 0x7FF9: short string (SSO, inline 5-byte payload)
 //! - 0x7FFA: bigint pointer
+//! - 0x7FFB: JS runtime handle
 //! - 0x7FFC + tag: singleton specials (undefined / null / true / false / hole)
 //! - 0x7FFD: object/array pointer (48-bit payload)
 //! - 0x7FFE: int32 (low 32 bits)

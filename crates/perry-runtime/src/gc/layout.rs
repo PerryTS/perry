@@ -263,8 +263,8 @@ pub(super) fn layout_pointer_bearing_bits(bits: u64) -> bool {
 
 #[inline]
 pub(super) fn layout_raw_f64_bits(bits: u64) -> bool {
-    let upper = bits >> 48;
-    !(0x7FFC..=0x7FFF).contains(&upper)
+    let tag = bits & crate::value::TAG_MASK;
+    !(crate::value::SHORT_STRING_TAG..=crate::value::STRING_TAG).contains(&tag)
 }
 
 #[inline]

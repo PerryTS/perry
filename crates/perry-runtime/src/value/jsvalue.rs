@@ -65,10 +65,11 @@ impl JSValue {
     /// Check if this is a number (not a tagged value)
     #[inline]
     pub fn is_number(&self) -> bool {
-        // A value is a number if upper 16 bits are not in our tagged range 0x7FFC-0x7FFF
-        // This allows IEEE NaN (0x7FF8), negative numbers, and all other f64 through
-        let upper = self.bits >> 48;
-        !(0x7FFC..=0x7FFF).contains(&upper)
+        // Perry-owned tags occupy the positive qNaN band 0x7FF9..=0x7FFF.
+        // Keep IEEE f64 values, including canonical qNaN 0x7FF8 and negative
+        // NaN payloads, classified as numbers.
+        let tag = self.bits & TAG_MASK;
+        !(SHORT_STRING_TAG..=STRING_TAG).contains(&tag)
     }
 
     /// Check if this is undefined

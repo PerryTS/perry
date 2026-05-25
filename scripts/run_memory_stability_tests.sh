@@ -1530,6 +1530,8 @@ run_raw_numeric_object_fields_codegen_semantics() {
         '3.75' \
         '{"value":{"label":"class-transition"},"other":"boxed"}' \
         'class-transition' \
+        '{"value":"abc","other":"boxed"}' \
+        'abc' \
         'frozen-write-error' \
         '9.5' \
         'sealed-extra-error' \
