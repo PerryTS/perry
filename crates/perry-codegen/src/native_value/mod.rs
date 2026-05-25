@@ -4,7 +4,7 @@ mod materialize;
 mod rep;
 mod verify;
 
-pub(crate) use artifact::{write_native_rep_artifact_if_enabled, NativeRepRecord};
+pub(crate) use artifact::{write_native_rep_artifact_if_enabled, NativeFactUse, NativeRepRecord};
 pub(crate) use buffer::{
     AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessMode, BufferAccessProof,
     BufferElem, BufferViewRep, BufferViewSlot, LengthSource,

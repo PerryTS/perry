@@ -25,7 +25,7 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
     AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessMode, BufferElem,
     BufferViewRep, BufferViewSlot, ExpectedNativeRep, LengthSource, LoweredValue,
-    MaterializationReason, NativeRep, NativeRepRecord, SemanticKind,
+    MaterializationReason, NativeFactUse, NativeRep, NativeRepRecord, SemanticKind,
 };
 use crate::strings::StringPool;
 use crate::type_analysis::{
@@ -893,6 +893,168 @@ pub(crate) struct BoundedIndexPair {
     pub scope_id: u32,
 }
 
+fn bounds_proof_label(proof: &BoundsProof) -> &'static str {
+    match proof {
+        BoundsProof::LoopGuard => "loop_guard",
+        BoundsProof::MinLength => "min_length",
+        BoundsProof::ExplicitGuard => "explicit_guard",
+        BoundsProof::ExplicitAssume => "explicit_assume",
+    }
+}
+
+fn materialization_reason_label(reason: &MaterializationReason) -> &'static str {
+    match reason {
+        MaterializationReason::FunctionAbi => "function_abi",
+        MaterializationReason::ReturnAbi => "return_abi",
+        MaterializationReason::GenericCall => "generic_call",
+        MaterializationReason::DynamicPropertyAccess => "dynamic_property_access",
+        MaterializationReason::ExceptionPath => "exception_path",
+        MaterializationReason::RuntimeApi => "runtime_api",
+        MaterializationReason::DebugLogging => "debug_logging",
+        MaterializationReason::UnknownAlias => "unknown_alias",
+        MaterializationReason::UnknownBounds => "unknown_bounds",
+        MaterializationReason::ClosureCapture => "closure_capture",
+        MaterializationReason::Reassignment => "reassignment",
+        MaterializationReason::UnknownCallEscape => "unknown_call_escape",
+    }
+}
+
+fn native_fact_use(
+    kind: &'static str,
+    local_id: Option<u32>,
+    state: &'static str,
+    detail: &str,
+    reason: Option<MaterializationReason>,
+) -> NativeFactUse {
+    let local = local_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    NativeFactUse {
+        fact_id: format!("native_region.{}.{}.{}", kind, local, detail),
+        kind: kind.to_string(),
+        local_id,
+        state: state.to_string(),
+        reason,
+    }
+}
+
+fn native_fact_uses_for_record(
+    local_id: Option<u32>,
+    lowered: &LoweredValue,
+    bounds_state: Option<&BoundsState>,
+    alias_state: Option<&AliasState>,
+    access_mode: Option<&BufferAccessMode>,
+    materialization_reason: Option<&MaterializationReason>,
+) -> (Vec<NativeFactUse>, Vec<NativeFactUse>) {
+    let mut consumed = Vec::new();
+    let mut rejected = Vec::new();
+    match &lowered.rep {
+        NativeRep::JsValue => {}
+        NativeRep::I32 => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "i32",
+            None,
+        )),
+        NativeRep::U32 => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "u32",
+            None,
+        )),
+        NativeRep::F64 => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "f64",
+            None,
+        )),
+        NativeRep::U8 => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "u8",
+            None,
+        )),
+        NativeRep::BufferView(_) => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "buffer_view",
+            None,
+        )),
+    }
+    match bounds_state {
+        Some(BoundsState::Proven { proof }) => consumed.push(native_fact_use(
+            "bounds",
+            local_id,
+            "consumed",
+            bounds_proof_label(proof),
+            None,
+        )),
+        Some(BoundsState::Guarded { guard_id }) => consumed.push(native_fact_use(
+            "bounds",
+            local_id,
+            "consumed",
+            guard_id,
+            None,
+        )),
+        Some(BoundsState::Unknown) | None => {
+            if matches!(
+                access_mode,
+                Some(BufferAccessMode::DynamicFallback | BufferAccessMode::CheckedNative)
+            ) {
+                rejected.push(native_fact_use(
+                    "bounds",
+                    local_id,
+                    "missing",
+                    "unknown",
+                    materialization_reason.cloned(),
+                ));
+            }
+        }
+    }
+    match alias_state {
+        Some(AliasState::NoAliasProven) => consumed.push(native_fact_use(
+            "alias_noalias",
+            local_id,
+            "consumed",
+            "noalias_proven",
+            None,
+        )),
+        Some(AliasState::NoAliasGuarded { guard_id }) => consumed.push(native_fact_use(
+            "alias_noalias",
+            local_id,
+            "consumed",
+            guard_id,
+            None,
+        )),
+        Some(AliasState::MayAlias | AliasState::Unknown) | None => {
+            if matches!(access_mode, Some(BufferAccessMode::DynamicFallback)) {
+                rejected.push(native_fact_use(
+                    "alias_noalias",
+                    local_id,
+                    "missing",
+                    "unknown_or_may_alias",
+                    materialization_reason.cloned(),
+                ));
+            }
+        }
+    }
+    if let Some(reason) = materialization_reason {
+        rejected.push(native_fact_use(
+            "materialization_hazard",
+            local_id,
+            "invalidated",
+            materialization_reason_label(reason),
+            Some(reason.clone()),
+        ));
+    }
+    (consumed, rejected)
+}
+
 impl<'a> FnCtx<'a> {
     pub fn next_loop_proof_scope_id(&mut self) -> u32 {
         let id = self.next_loop_proof_scope_id;
@@ -991,6 +1153,22 @@ impl<'a> FnCtx<'a> {
         notes: Vec<String>,
     ) {
         let block_label = self.current_block_label();
+        let (consumed_facts, rejected_facts) = native_fact_uses_for_record(
+            local_id,
+            lowered,
+            bounds_state.as_ref(),
+            alias_state.as_ref(),
+            access_mode.as_ref(),
+            materialization_reason.as_ref(),
+        );
+        let fallback_reason = if matches!(
+            access_mode.as_ref(),
+            Some(BufferAccessMode::DynamicFallback)
+        ) {
+            materialization_reason.clone()
+        } else {
+            None
+        };
         self.native_rep_records.push(NativeRepRecord {
             function: self.func.name.clone(),
             block_label: block_label.clone(),
@@ -1010,6 +1188,9 @@ impl<'a> FnCtx<'a> {
             alias_state,
             access_mode,
             materialization_reason,
+            fallback_reason,
+            consumed_facts,
+            rejected_facts,
             emitted_inbounds,
             emitted_noalias,
             notes,

@@ -1,24 +1,140 @@
 use perry_hir::{Expr, Stmt};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-/// Reusable HIR facts consumed by hot-loop lowering paths.
+/// Native specialization facts collected once per lowered HIR region.
 ///
-/// This keeps integer, bounded-index, and helper-return facts in one place
-/// instead of making every codegen entry point rediscover the same source
-/// shapes independently.
-pub(crate) struct HirFacts {
+/// A native region is a module init body, function, method, static method, or
+/// closure after all HIR transforms have run and before LLVM lowering starts.
+/// The graph is deliberately conservative: it only records facts consumed by
+/// existing native optimizations, and every consumer must keep the normal
+/// JSValue/NaN-boxed fallback at dynamic boundaries.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct NativeRegionFactGraph {
+    pub representation: RepresentationFacts,
+    pub integer_range: IntegerRangeFacts,
+    pub bounds: BoundsFacts,
+    pub alias_noalias: AliasNoAliasFacts,
+    pub escape: EscapeFacts,
+    pub purity: PurityFacts,
+    pub platform_constants: PlatformConstantFacts,
+    pub shape_stability: ShapeStabilityFacts,
+    pub materialization_hazards: MaterializationHazardFacts,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RepresentationFacts {
     pub integer_locals: HashSet<u32>,
     pub unsigned_i32_locals: HashSet<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct IntegerRangeFacts {
     pub index_used_locals: HashSet<u32>,
     pub strictly_i32_bounded_locals: HashSet<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BoundsFacts {
+    pub range_seed_locals: HashSet<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AliasNoAliasFacts {
     pub known_noalias_buffer_locals: HashSet<u32>,
 }
 
-pub(crate) fn collect_hir_facts(
+#[derive(Debug, Clone, Default)]
+pub(crate) struct EscapeFacts {
+    pub non_escaping_news: HashMap<u32, String>,
+    pub non_escaping_new_used_fields: HashMap<u32, HashSet<String>>,
+    pub non_escaping_arrays: HashMap<u32, u32>,
+    pub non_escaping_object_literals: HashMap<u32, Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PurityFacts {
+    pub pure_helper_function_ids: HashSet<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PlatformConstantFacts {
+    pub constants: HashMap<u32, f64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ShapeStabilityFacts {
+    pub scalar_replaceable_object_locals: HashSet<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MaterializationHazardFacts {
+    pub initially_known_hazard_locals: HashSet<u32>,
+}
+
+impl NativeRegionFactGraph {
+    pub(crate) fn integer_locals(&self) -> &HashSet<u32> {
+        &self.representation.integer_locals
+    }
+
+    pub(crate) fn unsigned_i32_locals(&self) -> &HashSet<u32> {
+        &self.representation.unsigned_i32_locals
+    }
+
+    pub(crate) fn index_used_locals(&self) -> &HashSet<u32> {
+        &self.integer_range.index_used_locals
+    }
+
+    pub(crate) fn strictly_i32_bounded_locals(&self) -> &HashSet<u32> {
+        &self.integer_range.strictly_i32_bounded_locals
+    }
+
+    pub(crate) fn range_seed_locals(&self) -> &HashSet<u32> {
+        &self.bounds.range_seed_locals
+    }
+
+    pub(crate) fn known_noalias_buffer_locals(&self) -> &HashSet<u32> {
+        &self.alias_noalias.known_noalias_buffer_locals
+    }
+
+    pub(crate) fn compile_time_constants(&self) -> &HashMap<u32, f64> {
+        &self.platform_constants.constants
+    }
+
+    pub(crate) fn non_escaping_news(&self) -> &HashMap<u32, String> {
+        &self.escape.non_escaping_news
+    }
+
+    pub(crate) fn non_escaping_new_used_fields(&self) -> &HashMap<u32, HashSet<String>> {
+        &self.escape.non_escaping_new_used_fields
+    }
+
+    pub(crate) fn non_escaping_arrays(&self) -> &HashMap<u32, u32> {
+        &self.escape.non_escaping_arrays
+    }
+
+    pub(crate) fn non_escaping_object_literals(&self) -> &HashMap<u32, Vec<String>> {
+        &self.escape.non_escaping_object_literals
+    }
+
+    pub(crate) fn materialization_hazard_locals(&self) -> &HashSet<u32> {
+        &self.materialization_hazards.initially_known_hazard_locals
+    }
+}
+
+/// Build the full native-region fact graph in one pass boundary.
+///
+/// Some subgraphs still delegate to established focused collectors; this
+/// function is the single contract used by codegen entry points so new native
+/// consumers do not need to rediscover facts independently.
+pub(crate) fn collect_native_region_fact_graph(
     stmts: &[Stmt],
     flat_const_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
-) -> HirFacts {
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    classes: &HashMap<String, &perry_hir::Class>,
+    compile_time_constants: &HashMap<u32, f64>,
+) -> NativeRegionFactGraph {
     let integer_locals =
         super::integer_locals::collect_integer_locals(stmts, flat_const_ids, clamp_fn_ids);
     let unsigned_i32_locals = super::i32_locals::collect_unsigned_i32_locals(stmts);
@@ -30,13 +146,76 @@ pub(crate) fn collect_hir_facts(
         clamp_fn_ids,
     );
     let known_noalias_buffer_locals = collect_known_noalias_buffer_locals(stmts);
-    HirFacts {
-        integer_locals,
-        unsigned_i32_locals,
-        index_used_locals,
-        strictly_i32_bounded_locals,
-        known_noalias_buffer_locals,
-    }
+    let non_escaping_news =
+        super::escape_news::collect_non_escaping_news(stmts, boxed_vars, module_globals, classes);
+    let non_escaping_new_used_fields =
+        super::escape_news::collect_non_escaping_new_used_fields(stmts, &non_escaping_news);
+    let non_escaping_arrays =
+        super::escape_arrays::collect_non_escaping_arrays(stmts, boxed_vars, module_globals);
+    let non_escaping_object_literals =
+        super::escape_objects::collect_non_escaping_object_literals(
+            stmts,
+            boxed_vars,
+            module_globals,
+        );
+    let scalar_replaceable_object_locals = non_escaping_news
+        .keys()
+        .chain(non_escaping_object_literals.keys())
+        .copied()
+        .collect();
+    let graph = NativeRegionFactGraph {
+        representation: RepresentationFacts {
+            integer_locals: integer_locals.clone(),
+            unsigned_i32_locals,
+        },
+        integer_range: IntegerRangeFacts {
+            index_used_locals,
+            strictly_i32_bounded_locals,
+        },
+        bounds: BoundsFacts {
+            range_seed_locals: integer_locals,
+        },
+        alias_noalias: AliasNoAliasFacts {
+            known_noalias_buffer_locals,
+        },
+        escape: EscapeFacts {
+            non_escaping_news,
+            non_escaping_new_used_fields,
+            non_escaping_arrays,
+            non_escaping_object_literals,
+        },
+        purity: PurityFacts {
+            pure_helper_function_ids: clamp_fn_ids.clone(),
+        },
+        platform_constants: PlatformConstantFacts {
+            constants: compile_time_constants.clone(),
+        },
+        shape_stability: ShapeStabilityFacts {
+            scalar_replaceable_object_locals,
+        },
+        materialization_hazards: MaterializationHazardFacts::default(),
+    };
+    debug_assert!(graph
+        .range_seed_locals()
+        .is_superset(graph.integer_locals()));
+    debug_assert!(graph.materialization_hazard_locals().is_empty());
+    graph
+}
+
+pub(crate) fn collect_hir_facts(
+    stmts: &[Stmt],
+    flat_const_ids: &HashSet<u32>,
+    clamp_fn_ids: &HashSet<u32>,
+) -> NativeRegionFactGraph {
+    collect_native_region_fact_graph(
+        stmts,
+        flat_const_ids,
+        clamp_fn_ids,
+        &HashSet::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+    )
 }
 
 fn collect_known_noalias_buffer_locals(stmts: &[Stmt]) -> HashSet<u32> {
@@ -214,8 +393,8 @@ mod tests {
             &HashSet::new(),
         );
 
-        assert!(facts.unsigned_i32_locals.contains(&2));
-        assert!(!facts.integer_locals.contains(&2));
+        assert!(facts.unsigned_i32_locals().contains(&2));
+        assert!(!facts.integer_locals().contains(&2));
     }
 
     #[test]
@@ -236,6 +415,64 @@ mod tests {
             &HashSet::new(),
         );
 
-        assert!(!facts.unsigned_i32_locals.contains(&2));
+        assert!(!facts.unsigned_i32_locals().contains(&2));
+    }
+
+    #[test]
+    fn native_fact_graph_collects_platform_purity_and_noalias_subgraphs() {
+        let mut constants = HashMap::new();
+        constants.insert(90, 1.0);
+        let mut pure_helpers = HashSet::new();
+        pure_helpers.insert(7);
+
+        let graph = collect_native_region_fact_graph(
+            &[const_let(1, Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(8)))))],
+            &HashSet::new(),
+            &pure_helpers,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &constants,
+        );
+
+        assert!(graph.known_noalias_buffer_locals().contains(&1));
+        assert_eq!(graph.compile_time_constants().get(&90), Some(&1.0));
+        assert!(graph.purity.pure_helper_function_ids.contains(&7));
+    }
+
+    #[test]
+    fn native_fact_graph_collects_range_and_shape_escape_facts() {
+        let stmts = vec![
+            mutable_number_let(1, Expr::Integer(0)),
+            Stmt::Expr(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(2)),
+                index: Box::new(Expr::LocalGet(1)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "o".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Object(vec![("x".to_string(), Expr::Integer(1))])),
+            },
+        ];
+
+        let graph = collect_native_region_fact_graph(
+            &stmts,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(graph.integer_locals().contains(&1));
+        assert!(graph.index_used_locals().contains(&1));
+        assert!(graph.non_escaping_object_literals().contains_key(&3));
+        assert!(graph
+            .shape_stability
+            .scalar_replaceable_object_locals
+            .contains(&3));
     }
 }

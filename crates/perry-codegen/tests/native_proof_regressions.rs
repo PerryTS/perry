@@ -2,6 +2,8 @@ use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{BinaryOp, CompareOp, Expr, Function, Module, ModuleInitKind, Stmt, UpdateOp};
 use perry_types::Type;
 
+static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn empty_opts() -> CompileOptions {
     CompileOptions {
         target: None,
@@ -93,6 +95,52 @@ fn module(name: &str, body: Vec<Stmt>) -> Module {
 
 fn compile_ir(name: &str, body: Vec<Stmt>) -> String {
     String::from_utf8(compile_module(&module(name, body), empty_opts()).unwrap()).unwrap()
+}
+
+fn compile_artifact_json(name: &str, body: Vec<Stmt>) -> serde_json::Value {
+    let _guard = ARTIFACT_ENV_LOCK.lock().unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "perry_native_reps_test_{}_{}",
+        std::process::id(),
+        name.replace(|c: char| !c.is_ascii_alphanumeric(), "_")
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let old_reps = std::env::var_os("PERRY_NATIVE_REPS");
+    let old_reps_dir = std::env::var_os("PERRY_NATIVE_REPS_DIR");
+    std::env::set_var("PERRY_NATIVE_REPS", "1");
+    std::env::set_var("PERRY_NATIVE_REPS_DIR", &dir);
+
+    let compile_result = compile_module(&module(name, body), empty_opts());
+
+    match old_reps {
+        Some(value) => std::env::set_var("PERRY_NATIVE_REPS", value),
+        None => std::env::remove_var("PERRY_NATIVE_REPS"),
+    }
+    match old_reps_dir {
+        Some(value) => std::env::set_var("PERRY_NATIVE_REPS_DIR", value),
+        None => std::env::remove_var("PERRY_NATIVE_REPS_DIR"),
+    }
+
+    compile_result.unwrap();
+    let paths: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    let mut parsed = Vec::new();
+    for path in paths {
+        if !path.extension().is_some_and(|ext| ext == "json") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        if value["module"] == name {
+            return value;
+        }
+        parsed.push(value["module"].clone());
+    }
+    panic!("native reps artifact for {name} not found in {dir:?}; saw modules {parsed:?}");
 }
 
 fn local(id: u32) -> Expr {
@@ -242,6 +290,63 @@ fn assert_buffer_store_uses_dynamic_fallback(ir: &str) {
     assert!(
         !ir.contains("getelementptr inbounds i8"),
         "stale-proof case must not emit an inbounds native buffer GEP:\n{ir}"
+    );
+}
+
+#[test]
+fn artifact_schema_v4_records_consumed_native_facts_for_buffer_region() {
+    let body = vec![
+        buffer_let(1, "src", int(8)),
+        buffer_let(2, "dst", int(8)),
+        for_loop(3, length(2), vec![buffer_set(2, local(3))]),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
+    assert_eq!(artifact["schema_version"], 4);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["access_mode"] == "unchecked_native"
+                && record["consumed_facts"]
+                    .as_array()
+                    .is_some_and(|facts| facts.iter().any(|fact| fact["kind"] == "bounds"))
+                && record["consumed_facts"]
+                    .as_array()
+                    .is_some_and(|facts| facts.iter().any(|fact| fact["kind"] == "alias_noalias"))
+        }),
+        "expected native buffer record with consumed bounds and noalias facts:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_schema_v4_records_rejected_facts_for_buffer_fallback() {
+    let body = vec![
+        buffer_let(1, "buf", int(8)),
+        for_loop(
+            2,
+            length(1),
+            vec![
+                number_let(3, "j", true, bit_or_zero(local(2))),
+                Stmt::Expr(Expr::LocalSet(3, Box::new(int(16)))),
+                buffer_set(1, local(3)),
+            ],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
+    assert_eq!(artifact["schema_version"], 4);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["access_mode"] == "dynamic_fallback"
+                && !record["fallback_reason"].is_null()
+                && record["rejected_facts"]
+                    .as_array()
+                    .is_some_and(|facts| !facts.is_empty())
+        }),
+        "expected fallback record with rejected facts:\n{artifact:#}"
     );
 }
 

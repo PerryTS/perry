@@ -137,19 +137,14 @@ pub(super) fn compile_function(
         .collect();
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
-    let hir_facts = crate::collectors::collect_hir_facts(&f.body, &flat_const_ids, &clamp_fn_ids);
-
-    // Pre-walk: which `let x = new Class(...)` locals never escape?
-    let non_escaping_news =
-        crate::collectors::collect_non_escaping_news(&f.body, &boxed_vars, module_globals, classes);
-    let non_escaping_new_used_fields =
-        crate::collectors::collect_non_escaping_new_used_fields(&f.body, &non_escaping_news);
-    let non_escaping_arrays =
-        crate::collectors::collect_non_escaping_arrays(&f.body, &boxed_vars, module_globals);
-    let non_escaping_object_literals = crate::collectors::collect_non_escaping_object_literals(
+    let native_facts = crate::collectors::collect_native_region_fact_graph(
         &f.body,
+        &flat_const_ids,
+        &clamp_fn_ids,
         &boxed_vars,
         module_globals,
+        classes,
+        &cross_module.compile_time_constants,
     );
 
     let mut ctx = FnCtx {
@@ -212,8 +207,8 @@ pub(super) fn compile_function(
         interfaces: &cross_module.interfaces,
         try_depth: 0,
         pending_declares: Vec::new(),
-        integer_locals: &hir_facts.integer_locals,
-        unsigned_i32_locals: &hir_facts.unsigned_i32_locals,
+        integer_locals: native_facts.integer_locals(),
+        unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         shadow_slot_map,
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
@@ -221,23 +216,23 @@ pub(super) fn compile_function(
         cached_lengths: HashMap::new(),
         bounded_index_pairs: Vec::new(),
         i32_counter_slots: HashMap::new(),
-        index_used_locals: &hir_facts.index_used_locals,
-        strictly_i32_bounded_locals: &hir_facts.strictly_i32_bounded_locals,
+        index_used_locals: native_facts.index_used_locals(),
+        strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
         i18n: &cross_module.i18n,
         dynamic_import_path_to_prefix: &cross_module.dynamic_import_path_to_prefix,
         local_class_aliases: HashMap::new(),
         local_class_field_aliases: HashMap::new(),
         local_id_to_name: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
-        compile_time_constants: &cross_module.compile_time_constants,
+        compile_time_constants: native_facts.compile_time_constants(),
         app_metadata: &cross_module.app_metadata,
         scalar_replaced: std::collections::HashMap::new(),
         scalar_replaced_arrays: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
-        non_escaping_news,
-        non_escaping_new_used_fields,
-        non_escaping_arrays,
-        non_escaping_object_literals,
+        non_escaping_news: native_facts.non_escaping_news().clone(),
+        non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),
+        non_escaping_arrays: native_facts.non_escaping_arrays().clone(),
+        non_escaping_object_literals: native_facts.non_escaping_object_literals().clone(),
         flat_const_arrays: &cross_module.flat_const_arrays,
         array_row_aliases: HashMap::new(),
         clamp3_functions: &cross_module.clamp3_functions,
@@ -261,7 +256,7 @@ pub(super) fn compile_function(
         next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: HashSet::new(),
         native_rep_records: Vec::new(),
-        known_noalias_buffer_locals: &hir_facts.known_noalias_buffer_locals,
+        known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,
     };
 

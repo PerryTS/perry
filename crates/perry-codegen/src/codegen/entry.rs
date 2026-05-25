@@ -221,30 +221,15 @@ pub(super) fn compile_module_entry(
             .chain(cross_module.returns_int_functions.iter())
             .copied()
             .collect();
-        let main_hir_facts =
-            crate::collectors::collect_hir_facts(&hir.init, &flat_const_ids, &clamp_fn_ids);
-        let main_non_escaping_news = crate::collectors::collect_non_escaping_news(
+        let main_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
+            &flat_const_ids,
+            &clamp_fn_ids,
             &main_boxed_vars,
             module_globals,
             classes,
+            &cross_module.compile_time_constants,
         );
-        let main_non_escaping_new_used_fields =
-            crate::collectors::collect_non_escaping_new_used_fields(
-                &hir.init,
-                &main_non_escaping_news,
-            );
-        let main_non_escaping_arrays = crate::collectors::collect_non_escaping_arrays(
-            &hir.init,
-            &main_boxed_vars,
-            module_globals,
-        );
-        let main_non_escaping_object_literals =
-            crate::collectors::collect_non_escaping_object_literals(
-                &hir.init,
-                &main_boxed_vars,
-                module_globals,
-            );
         let mut init_local_types: HashMap<u32, perry_types::Type> = HashMap::new();
         crate::boxed_vars::collect_let_types_in_stmts(&hir.init, &mut init_local_types);
         let mut ctx = FnCtx {
@@ -307,8 +292,8 @@ pub(super) fn compile_module_entry(
             interfaces: &cross_module.interfaces,
             try_depth: 0,
             pending_declares: Vec::new(),
-            integer_locals: &main_hir_facts.integer_locals,
-            unsigned_i32_locals: &main_hir_facts.unsigned_i32_locals,
+            integer_locals: main_native_facts.integer_locals(),
+            unsigned_i32_locals: main_native_facts.unsigned_i32_locals(),
             shadow_slot_map: main_shadow_slot_map,
             shadow_slot_clears_after_stmt: main_shadow_slot_clears_after_stmt,
             arena_state_slot: None,
@@ -316,23 +301,23 @@ pub(super) fn compile_module_entry(
             cached_lengths: HashMap::new(),
             bounded_index_pairs: Vec::new(),
             i32_counter_slots: HashMap::new(),
-            index_used_locals: &main_hir_facts.index_used_locals,
-            strictly_i32_bounded_locals: &main_hir_facts.strictly_i32_bounded_locals,
+            index_used_locals: main_native_facts.index_used_locals(),
+            strictly_i32_bounded_locals: main_native_facts.strictly_i32_bounded_locals(),
             i18n: &cross_module.i18n,
             dynamic_import_path_to_prefix: &cross_module.dynamic_import_path_to_prefix,
             local_class_aliases: HashMap::new(),
             local_class_field_aliases: HashMap::new(),
             local_id_to_name: HashMap::new(),
             imported_vars: &cross_module.imported_vars,
-            compile_time_constants: &cross_module.compile_time_constants,
+            compile_time_constants: main_native_facts.compile_time_constants(),
             app_metadata: &cross_module.app_metadata,
             scalar_replaced: std::collections::HashMap::new(),
             scalar_replaced_arrays: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
-            non_escaping_news: main_non_escaping_news,
-            non_escaping_new_used_fields: main_non_escaping_new_used_fields,
-            non_escaping_arrays: main_non_escaping_arrays,
-            non_escaping_object_literals: main_non_escaping_object_literals,
+            non_escaping_news: main_native_facts.non_escaping_news().clone(),
+            non_escaping_new_used_fields: main_native_facts.non_escaping_new_used_fields().clone(),
+            non_escaping_arrays: main_native_facts.non_escaping_arrays().clone(),
+            non_escaping_object_literals: main_native_facts.non_escaping_object_literals().clone(),
             flat_const_arrays: &cross_module.flat_const_arrays,
             array_row_aliases: HashMap::new(),
             clamp3_functions: &cross_module.clamp3_functions,
@@ -356,7 +341,7 @@ pub(super) fn compile_module_entry(
             next_loop_proof_scope_id: 0,
             nonnegative_integer_locals: HashSet::new(),
             native_rep_records: Vec::new(),
-            known_noalias_buffer_locals: &main_hir_facts.known_noalias_buffer_locals,
+            known_noalias_buffer_locals: main_native_facts.known_noalias_buffer_locals(),
             buffer_alias_base,
         };
         // Register every module-level global's ADDRESS as a GC root so
@@ -629,30 +614,15 @@ pub(super) fn compile_module_entry(
             .chain(cross_module.returns_int_functions.iter())
             .copied()
             .collect();
-        let init_hir_facts =
-            crate::collectors::collect_hir_facts(&hir.init, &flat_const_ids, &clamp_fn_ids);
-        let init_non_escaping_news = crate::collectors::collect_non_escaping_news(
+        let init_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
+            &flat_const_ids,
+            &clamp_fn_ids,
             &init_boxed_vars,
             module_globals,
             classes,
+            &cross_module.compile_time_constants,
         );
-        let init_non_escaping_new_used_fields =
-            crate::collectors::collect_non_escaping_new_used_fields(
-                &hir.init,
-                &init_non_escaping_news,
-            );
-        let init_non_escaping_arrays = crate::collectors::collect_non_escaping_arrays(
-            &hir.init,
-            &init_boxed_vars,
-            module_globals,
-        );
-        let init_non_escaping_object_literals =
-            crate::collectors::collect_non_escaping_object_literals(
-                &hir.init,
-                &init_boxed_vars,
-                module_globals,
-            );
         let mut ctx = FnCtx {
             func: init_fn,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -713,8 +683,8 @@ pub(super) fn compile_module_entry(
             interfaces: &cross_module.interfaces,
             try_depth: 0,
             pending_declares: Vec::new(),
-            integer_locals: &init_hir_facts.integer_locals,
-            unsigned_i32_locals: &init_hir_facts.unsigned_i32_locals,
+            integer_locals: init_native_facts.integer_locals(),
+            unsigned_i32_locals: init_native_facts.unsigned_i32_locals(),
             shadow_slot_map: init_shadow_slot_map,
             shadow_slot_clears_after_stmt: init_shadow_slot_clears_after_stmt,
             arena_state_slot: None,
@@ -722,23 +692,23 @@ pub(super) fn compile_module_entry(
             cached_lengths: HashMap::new(),
             bounded_index_pairs: Vec::new(),
             i32_counter_slots: HashMap::new(),
-            index_used_locals: &init_hir_facts.index_used_locals,
-            strictly_i32_bounded_locals: &init_hir_facts.strictly_i32_bounded_locals,
+            index_used_locals: init_native_facts.index_used_locals(),
+            strictly_i32_bounded_locals: init_native_facts.strictly_i32_bounded_locals(),
             i18n: &cross_module.i18n,
             dynamic_import_path_to_prefix: &cross_module.dynamic_import_path_to_prefix,
             local_class_aliases: HashMap::new(),
             local_class_field_aliases: HashMap::new(),
             local_id_to_name: HashMap::new(),
             imported_vars: &cross_module.imported_vars,
-            compile_time_constants: &cross_module.compile_time_constants,
+            compile_time_constants: init_native_facts.compile_time_constants(),
             app_metadata: &cross_module.app_metadata,
             scalar_replaced: std::collections::HashMap::new(),
             scalar_replaced_arrays: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
-            non_escaping_news: init_non_escaping_news,
-            non_escaping_new_used_fields: init_non_escaping_new_used_fields,
-            non_escaping_arrays: init_non_escaping_arrays,
-            non_escaping_object_literals: init_non_escaping_object_literals,
+            non_escaping_news: init_native_facts.non_escaping_news().clone(),
+            non_escaping_new_used_fields: init_native_facts.non_escaping_new_used_fields().clone(),
+            non_escaping_arrays: init_native_facts.non_escaping_arrays().clone(),
+            non_escaping_object_literals: init_native_facts.non_escaping_object_literals().clone(),
             flat_const_arrays: &cross_module.flat_const_arrays,
             array_row_aliases: HashMap::new(),
             clamp3_functions: &cross_module.clamp3_functions,
@@ -762,7 +732,7 @@ pub(super) fn compile_module_entry(
             next_loop_proof_scope_id: 0,
             nonnegative_integer_locals: HashSet::new(),
             native_rep_records: Vec::new(),
-            known_noalias_buffer_locals: &init_hir_facts.known_noalias_buffer_locals,
+            known_noalias_buffer_locals: init_native_facts.known_noalias_buffer_locals(),
             buffer_alias_base,
         };
         // Register every module-level global's ADDRESS as a GC root —

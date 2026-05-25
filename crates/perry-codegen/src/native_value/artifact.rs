@@ -14,6 +14,15 @@ use super::rep::{NativeRep, SemanticKind};
 static NATIVE_REP_NONCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize)]
+pub(crate) struct NativeFactUse {
+    pub fact_id: String,
+    pub kind: String,
+    pub local_id: Option<u32>,
+    pub state: String,
+    pub reason: Option<MaterializationReason>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct NativeRepRecord {
     pub function: String,
     pub block_label: String,
@@ -33,6 +42,9 @@ pub(crate) struct NativeRepRecord {
     pub alias_state: Option<AliasState>,
     pub access_mode: Option<BufferAccessMode>,
     pub materialization_reason: Option<MaterializationReason>,
+    pub fallback_reason: Option<MaterializationReason>,
+    pub consumed_facts: Vec<NativeFactUse>,
+    pub rejected_facts: Vec<NativeFactUse>,
     pub emitted_inbounds: bool,
     pub emitted_noalias: bool,
     pub notes: Vec<String>,
@@ -54,6 +66,8 @@ struct NativeRepSummary {
     unsafe_inbounds_claims: usize,
     unsafe_noalias_claims: usize,
     unsafe_unchecked_unknown_bounds_accesses: usize,
+    consumed_fact_count: usize,
+    rejected_fact_count: usize,
 }
 
 impl NativeRepSummary {
@@ -63,6 +77,8 @@ impl NativeRepSummary {
         let mut unsafe_inbounds_claims = 0;
         let mut unsafe_noalias_claims = 0;
         let mut unsafe_unchecked_unknown_bounds_accesses = 0;
+        let mut consumed_fact_count = 0;
+        let mut rejected_fact_count = 0;
         for record in records {
             *native_rep_counts
                 .entry(record.native_rep_name.clone())
@@ -95,6 +111,8 @@ impl NativeRepSummary {
             ) {
                 unsafe_unchecked_unknown_bounds_accesses += 1;
             }
+            consumed_fact_count += record.consumed_facts.len();
+            rejected_fact_count += record.rejected_facts.len();
         }
         Self {
             record_count: records.len(),
@@ -103,6 +121,8 @@ impl NativeRepSummary {
             unsafe_inbounds_claims,
             unsafe_noalias_claims,
             unsafe_unchecked_unknown_bounds_accesses,
+            consumed_fact_count,
+            rejected_fact_count,
         }
     }
 }
@@ -123,12 +143,25 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!(
+    let artifact_dir = match std::env::var_os("PERRY_NATIVE_REPS_DIR") {
+        Some(dir) => {
+            let dir = PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).with_context(|| {
+                format!(
+                    "failed to create native reps directory {}",
+                    dir.display()
+                )
+            })?;
+            dir
+        }
+        None => std::env::temp_dir(),
+    };
+    let path = artifact_dir.join(format!(
         "perry_native_reps_{}_{}_{}.json",
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 3,
+        schema_version: 4,
         module,
         records,
         summary: NativeRepSummary::from_records(records),
