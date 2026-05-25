@@ -3109,5 +3109,17 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: user _destroy(err, cb) — not invoked or receives wrong error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/consumers/text-from-buffer-chunks": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream/consumers: text() on Buffer chunks with multibyte UTF-8 — decode boundary wrong. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/promises/pipeline-with-transform-collect": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream/promises: pipeline(src, transform, asyncFnSink) — collected output wrong/empty. Flips to PASS when #1532 lands."
   }
 }
