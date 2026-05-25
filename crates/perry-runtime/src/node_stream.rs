@@ -131,7 +131,7 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
     let prev = get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0);
     let total = prev + added;
     set_hidden_value(stream, hidden_buffered_key(), total);
-    let hwm = get_hidden_value(stream, hidden_hwm_key()).unwrap_or(16384.0);
+    let hwm = get_hidden_value(stream, hidden_hwm_key()).unwrap_or_else(|| default_hwm(false));
     if total < hwm {
         f64::from_bits(TAG_TRUE)
     } else {
@@ -1458,13 +1458,41 @@ fn opt_number(opts: f64, key: &[u8]) -> Option<f64> {
     jsvalue_as_f64(get_hidden_value(opts, hidden_key(key))?)
 }
 
+/// Read a boolean constructor option, returning `true` only when the option
+/// is present and truthy.
+fn opt_bool(opts: f64, key: &[u8]) -> bool {
+    get_hidden_value(opts, hidden_key(key)).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
+}
+
+// #1537: the platform-default highWaterMark, settable at runtime via
+// `stream.setDefaultHighWaterMark(objectMode, value)`. Node's defaults are
+// 65536 bytes for byte streams and 16 for objectMode; both are mutable for
+// the lifetime of the process (Perry tracks them per-thread, matching its
+// per-thread runtime model). Streams constructed without an explicit
+// `highWaterMark` inherit the current default for their mode.
+thread_local! {
+    static DEFAULT_HWM_BYTE: std::cell::Cell<f64> = const { std::cell::Cell::new(65536.0) };
+    static DEFAULT_HWM_OBJECT: std::cell::Cell<f64> = const { std::cell::Cell::new(16.0) };
+}
+
+fn default_hwm(object_mode: bool) -> f64 {
+    if object_mode {
+        DEFAULT_HWM_OBJECT.with(|c| c.get())
+    } else {
+        DEFAULT_HWM_BYTE.with(|c| c.get())
+    }
+}
+
 /// Resolve an effective highWaterMark: the direction-specific option
 /// (`readableHighWaterMark` / `writableHighWaterMark`) falls back to the
-/// generic `highWaterMark`, then Node's default of 16384 for byte streams.
-fn resolve_hwm(opts: f64, specific: &[u8]) -> f64 {
-    opt_number(opts, specific)
-        .or_else(|| opt_number(opts, b"highWaterMark"))
-        .unwrap_or(16384.0)
+/// generic `highWaterMark`, then to the platform default for the stream's
+/// mode (#1537: 65536 for byte streams, 16 for objectMode).
+fn resolve_hwm(opts: f64, specific: &[u8], specific_object_mode: &[u8]) -> f64 {
+    if let Some(v) = opt_number(opts, specific).or_else(|| opt_number(opts, b"highWaterMark")) {
+        return v;
+    }
+    let object_mode = opt_bool(opts, specific_object_mode) || opt_bool(opts, b"objectMode");
+    default_hwm(object_mode)
 }
 
 /// Initialize the readable side of a stream: direction flag, buffered byte
@@ -1473,7 +1501,7 @@ fn resolve_hwm(opts: f64, specific: &[u8]) -> f64 {
 fn init_readable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_readable_flag_key(), f64::from_bits(TAG_TRUE));
     set_hidden_value(stream, hidden_buffered_key(), 0.0);
-    let r_hwm = resolve_hwm(opts, b"readableHighWaterMark");
+    let r_hwm = resolve_hwm(opts, b"readableHighWaterMark", b"readableObjectMode");
     set_hidden_value(stream, hidden_hwm_key(), r_hwm);
     set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
 }
@@ -1482,7 +1510,7 @@ fn init_readable_state(stream: f64, opts: f64) {
 /// `writableHighWaterMark` property (#1534/#1539).
 fn init_writable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_writable_flag_key(), f64::from_bits(TAG_TRUE));
-    let w_hwm = resolve_hwm(opts, b"writableHighWaterMark");
+    let w_hwm = resolve_hwm(opts, b"writableHighWaterMark", b"writableObjectMode");
     set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
 }
 
@@ -1587,24 +1615,64 @@ pub extern "C" fn js_node_stream_is_errored(stream: f64) -> f64 {
     }
 }
 
-/// #1534: `Readable.isReadable(s)` / module-level `isReadable(s)`. Node
-/// returns `true` while a readable-side stream is still readable —
-/// i.e. it has the readable direction and hasn't ended, errored, or
-/// been destroyed. Perry tracks the readable-direction flag at
-/// construction and the ended/errored bits as methods run, so a
-/// freshly-constructed Readable answers `true` and a Writable answers
-/// `false` (no readable flag).
+/// #1534/#1746: `Readable.isReadable(s)` / module-level `isReadable(s)`.
+/// Node returns `null` for a stream with no readable side (e.g. a bare
+/// Writable), `false` once the readable side has ended or errored, and
+/// `true` while it's still readable. Perry tracks the readable-direction
+/// flag at construction and the ended/errored bits as methods run.
 #[no_mangle]
 pub extern "C" fn js_node_stream_is_readable(stream: f64) -> f64 {
-    let is_readable_dir = get_hidden_value(stream, hidden_readable_flag_key())
-        .is_some_and(|v| crate::value::js_is_truthy(v) != 0);
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
+        return f64::from_bits(TAG_NULL);
+    }
     let ended = stream_hidden_ended(stream);
     let errored = readable_hidden_error(stream).is_some();
-    if is_readable_dir && !ended && !errored {
-        f64::from_bits(TAG_TRUE)
-    } else {
+    if ended || errored {
         f64::from_bits(TAG_FALSE)
+    } else {
+        f64::from_bits(TAG_TRUE)
     }
+}
+
+/// #1746: `stream.isWritable(s)` / `Writable.isWritable(s)`. Mirror of
+/// `isReadable` for the writable side: `null` for a stream with no
+/// writable side (a bare Readable), `false` once it has ended (`.end()`)
+/// or errored, `true` otherwise. A Duplex answers for its writable side.
+#[no_mangle]
+pub extern "C" fn js_node_stream_is_writable(stream: f64) -> f64 {
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
+        return f64::from_bits(TAG_NULL);
+    }
+    let ended = stream_hidden_ended(stream);
+    let errored = readable_hidden_error(stream).is_some();
+    if ended || errored {
+        f64::from_bits(TAG_FALSE)
+    } else {
+        f64::from_bits(TAG_TRUE)
+    }
+}
+
+/// #1537: `stream.getDefaultHighWaterMark(objectMode)` returns the current
+/// platform-default highWaterMark — 65536 for byte streams, 16 for
+/// objectMode (both settable via `setDefaultHighWaterMark`).
+#[no_mangle]
+pub extern "C" fn js_node_stream_get_default_hwm(object_mode: f64) -> f64 {
+    default_hwm(crate::value::js_is_truthy(object_mode) != 0)
+}
+
+/// #1537: `stream.setDefaultHighWaterMark(objectMode, value)` updates the
+/// per-mode default returned by `getDefaultHighWaterMark` and inherited by
+/// streams constructed without an explicit `highWaterMark`. Returns
+/// `undefined`, matching Node.
+#[no_mangle]
+pub extern "C" fn js_node_stream_set_default_hwm(object_mode: f64, value: f64) -> f64 {
+    let n = jsvalue_as_f64(value).unwrap_or(0.0);
+    if crate::value::js_is_truthy(object_mode) != 0 {
+        DEFAULT_HWM_OBJECT.with(|c| c.set(n));
+    } else {
+        DEFAULT_HWM_BYTE.with(|c| c.set(n));
+    }
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 /// #1541: `stream.addAbortSignal(signal, stream)` — Node wires the
@@ -1751,6 +1819,12 @@ static KEEP_NS_IS_DISTURBED: extern "C" fn(f64) -> f64 = js_node_stream_is_distu
 static KEEP_NS_IS_ERRORED: extern "C" fn(f64) -> f64 = js_node_stream_is_errored;
 #[used]
 static KEEP_NS_IS_READABLE: extern "C" fn(f64) -> f64 = js_node_stream_is_readable;
+#[used]
+static KEEP_NS_IS_WRITABLE: extern "C" fn(f64) -> f64 = js_node_stream_is_writable;
+#[used]
+static KEEP_NS_GET_DEFAULT_HWM: extern "C" fn(f64) -> f64 = js_node_stream_get_default_hwm;
+#[used]
+static KEEP_NS_SET_DEFAULT_HWM: extern "C" fn(f64, f64) -> f64 = js_node_stream_set_default_hwm;
 #[used]
 static KEEP_NS_ADD_ABORT_SIGNAL: extern "C" fn(f64, f64) -> f64 = js_node_stream_add_abort_signal;
 #[used]

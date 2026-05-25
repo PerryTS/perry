@@ -398,12 +398,6 @@
     "category": "bug-open",
     "reason": "node:stream: Writable does not invoke its write() option callback / finish event. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/highwater-mark-default": {
-    "issue": "1537",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: default highWaterMark is 65536 in Perry, 16384 in Node. Flips to PASS when #1537 lands."
-  },
   "node-suite/stream/readable/object-mode": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -469,12 +463,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: readable.pipe(writable) does not wire flow. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/static/get-default-hwm": {
-    "issue": "1537",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: getDefaultHighWaterMark(objectMode) helper not exposed (related to highWaterMark default mismatch). Flips to PASS when #1537 lands."
   },
   "node-suite/stream/readable/from-async-iterable": {
     "issue": "1532",
@@ -608,12 +596,6 @@
     "category": "bug-open",
     "reason": "node:stream: final() constructor option not invoked before finish. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/options/custom-hwm": {
-    "issue": "1537",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: highWaterMark option not honored — instance returns Perry default instead of user value. Flips to PASS when #1537 lands."
-  },
   "node-suite/stream/push/push-buffer": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -692,12 +674,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline error path doesn't invoke callback with Error. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/static/set-default-hwm": {
-    "issue": "1537",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: setDefaultHighWaterMark / getDefaultHighWaterMark missing. Flips to PASS when #1537 lands."
-  },
   "node-suite/stream/subclass/extends-readable": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -739,12 +715,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: removeAllListeners doesn't clear listenerCount. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/object-mode/default-hwm": {
-    "issue": "1537",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: objectMode default highWaterMark should be 16; Perry returns the byte-stream default. Flips to PASS when #1537 lands."
   },
   "node-suite/stream/push/typed-array": {
     "issue": "1532",
@@ -1825,12 +1795,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: read(N>buffered) — does not return remaining buffered bytes at EOF. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/static/get-default-hwm-types": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: getDefaultHighWaterMark(false|true) — return type or value mismatches Node (not Number or 0). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/pipeline/async-fn-sink": {
     "issue": "1532",
@@ -3056,12 +3020,6 @@
     "category": "bug-open",
     "reason": "node:stream: listener added during emit — fires this round (should NOT in EE spec). Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/highwater-mark-default-objectmode": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: objectMode HWM default — not 16 (object count). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/iter-and-data-listener": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -3638,52 +3596,16 @@
     "category": "bug-open",
     "reason": "node:stream/consumers: buffer() from raw-byte Buffer chunks — byte sequence or Array.from output differs from Node. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/static/is-writable-on-writable": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: isWritable(stream) returns undefined instead of true. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/static/set-default-hwm-roundtrip": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: setDefaultHighWaterMark — not implemented (getDefaultHighWaterMark returns undefined after set). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/static/is-errored-after-destroy": {
     "issue": "1532",
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: isErrored(stream) stays false after destroy(err) (should be true). Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/static/get-default-hwm-objectmode": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: getDefaultHighWaterMark(true) returns undefined (objectMode default should be 16). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/static/is-writable-after-end-false": {
     "issue": "1532",
     "added": "2026-05-25",
     "category": "bug-open",
-    "reason": "node:stream: isWritable() returns undefined (unimplemented). Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/static/get-default-hwm-byte-mode": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: getDefaultHighWaterMark(false) returns undefined (byte-mode default should be 65536). Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/static/is-readable-on-non-stream": {
-    "issue": "1746",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: isReadable(non-stream) returns false; Node returns null for non-stream args. Flips to PASS when #1746 lands."
-  },
-  "node-suite/stream/classes/transform-is-both": {
-    "issue": "1746",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: isWritable(transform) returns undefined (unimplemented helper). Flips to PASS when #1746 lands."
+    "reason": "node:stream: isWritable() itself is implemented (#1746) and returns false synchronously after end(); this test stays failing because it reads the value inside a 'finish' event handler, and finish/end events don't fire yet. Flips to PASS when #1532 (stream events) lands."
   }
 }

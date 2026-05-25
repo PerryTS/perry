@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1248 entries across 81 modules
+// Coverage: 1251 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1783,13 +1783,19 @@ declare module "stream" {
   /** stdlib */
   export function fromWeb(...args: any[]): any;
   /** stdlib */
+  export function getDefaultHighWaterMark(...args: any[]): any;
+  /** stdlib */
   export function isDisturbed(...args: any[]): any;
   /** stdlib */
   export function isErrored(...args: any[]): any;
   /** stdlib */
   export function isReadable(...args: any[]): any;
   /** stdlib */
+  export function isWritable(...args: any[]): any;
+  /** stdlib */
   export function pipeline(...args: any[]): any;
+  /** stdlib */
+  export function setDefaultHighWaterMark(...args: any[]): any;
   /** stdlib */
   export function toWeb(...args: any[]): any;
 }

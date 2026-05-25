@@ -2237,15 +2237,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // through the `Readable.foo` -> `stream.foo` route in
     // `lower_call.rs`, so the gate keys off `stream.from`.
     method("stream", "from", false, None),
-    // #1534: static introspection helpers — `Readable.isDisturbed(s)`,
-    // `Readable.isErrored(s)`, and `Readable.isReadable(s)` (also
-    // re-exported module-level). Perry now tracks per-stream
-    // disturbed/errored bits and the readable-direction flag, so these
-    // answer per-instance. `isWritable` is still deferred (the writable
-    // direction's null/true distinction isn't fully modelled yet).
+    // #1534/#1746: static introspection helpers — `Readable.isDisturbed(s)`,
+    // `Readable.isErrored(s)`, `Readable.isReadable(s)`, and
+    // `stream.isWritable(s)` (also re-exported module-level). Perry tracks
+    // per-stream disturbed/errored bits and readable/writable direction
+    // flags, so these answer per-instance (`null` for the wrong direction,
+    // `false` once ended/errored, `true` otherwise).
     method("stream", "isDisturbed", false, None),
     method("stream", "isErrored", false, None),
     method("stream", "isReadable", false, None),
+    method("stream", "isWritable", false, None),
+    // #1537: `stream.getDefaultHighWaterMark(objectMode)` /
+    // `setDefaultHighWaterMark(objectMode, value)` — the per-mode platform
+    // default highWaterMark (65536 byte / 16 objectMode), mutable at runtime.
+    method("stream", "getDefaultHighWaterMark", false, None),
+    method("stream", "setDefaultHighWaterMark", false, None),
     // #1541: `stream.addAbortSignal(signal, stream)` — Node wires
     // the AbortSignal so aborting it destroys the stream. Stub
     // ignores the signal and returns the stream verbatim so chain

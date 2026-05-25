@@ -433,6 +433,39 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // #1746: `stream.isWritable(s)` — mirror of `isReadable` for the
+    // writable side. `null` for a stream with no writable side, `false`
+    // once it has ended/errored, `true` otherwise.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "isWritable",
+        class_filter: None,
+        runtime: "js_node_stream_is_writable",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    // #1537: `stream.getDefaultHighWaterMark(objectMode)` /
+    // `setDefaultHighWaterMark(objectMode, value)` — the per-mode platform
+    // default highWaterMark (65536 byte / 16 objectMode), mutable at runtime.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "getDefaultHighWaterMark",
+        class_filter: None,
+        runtime: "js_node_stream_get_default_hwm",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "setDefaultHighWaterMark",
+        class_filter: None,
+        runtime: "js_node_stream_set_default_hwm",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
     // #1541: `stream.addAbortSignal(signal, stream)` wires the
     // AbortSignal so that aborting it destroys the stream — and
     // returns the stream for chaining. Perry's stream stubs don't

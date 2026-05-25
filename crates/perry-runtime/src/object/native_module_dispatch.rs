@@ -585,6 +585,79 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("path", "join") => str_to_f64(crate::path::js_path_join(arg_str_ptr(0), arg_str_ptr(1))),
         ("path", "isAbsolute") => bool_to_f64(crate::path::js_path_is_absolute(arg_str_ptr(0))),
 
+        // #1740: dynamic sub-namespace method dispatch — `path[k].method(...)`
+        // where `k` resolves to "win32"/"posix" at runtime. `path[k].sep`
+        // (property reads) already worked, but method calls landed here with
+        // module_name "path.win32" / "path.posix" and no matching arm, so they
+        // returned undefined. win32 routes to the `js_path_win32_*` family;
+        // posix routes to the base `js_path_*` family (POSIX `/` semantics),
+        // mirroring how the static `path.win32.X()` / `path.posix.X()` forms
+        // lower in codegen.
+        ("path.win32", "dirname") => str_to_f64(crate::path::js_path_win32_dirname(arg_str_ptr(0))),
+        ("path.win32", "basename") if args_len >= 2 => str_to_f64(
+            crate::path::js_path_win32_basename_ext(arg_str_ptr(0), arg_str_ptr(1)),
+        ),
+        ("path.win32", "basename") => {
+            str_to_f64(crate::path::js_path_win32_basename(arg_str_ptr(0)))
+        }
+        ("path.win32", "extname") => str_to_f64(crate::path::js_path_win32_extname(arg_str_ptr(0))),
+        ("path.win32", "normalize") => {
+            str_to_f64(crate::path::js_path_win32_normalize(arg_str_ptr(0)))
+        }
+        ("path.win32", "resolve") => str_to_f64(crate::path::js_path_win32_resolve(arg_str_ptr(0))),
+        ("path.win32", "join") => str_to_f64(crate::path::js_path_win32_join(
+            arg_str_ptr(0),
+            arg_str_ptr(1),
+        )),
+        ("path.win32", "relative") => str_to_f64(crate::path::js_path_win32_relative(
+            arg_str_ptr(0),
+            arg_str_ptr(1),
+        )),
+        ("path.win32", "toNamespacedPath") => str_to_f64(
+            crate::path::js_path_win32_to_namespaced_path(arg_str_ptr(0)),
+        ),
+        ("path.win32", "isAbsolute") => {
+            bool_to_f64(crate::path::js_path_win32_is_absolute(arg_str_ptr(0)))
+        }
+        ("path.win32", "matchesGlob") => bool_to_f64(crate::path::js_path_win32_matches_glob(
+            arg_str_ptr(0),
+            arg_str_ptr(1),
+        )),
+        ("path.win32", "parse") => {
+            ptr_to_f64(crate::path::js_path_win32_parse(arg_str_ptr(0)) as *const u8)
+        }
+        ("path.win32", "format") => str_to_f64(crate::path::js_path_win32_format(arg(0))),
+
+        ("path.posix", "dirname") => str_to_f64(crate::path::js_path_dirname(arg_str_ptr(0))),
+        ("path.posix", "basename") if args_len >= 2 => str_to_f64(
+            crate::path::js_path_basename_ext(arg_str_ptr(0), arg_str_ptr(1)),
+        ),
+        ("path.posix", "basename") => str_to_f64(crate::path::js_path_basename(arg_str_ptr(0))),
+        ("path.posix", "extname") => str_to_f64(crate::path::js_path_extname(arg_str_ptr(0))),
+        ("path.posix", "normalize") => str_to_f64(crate::path::js_path_normalize(arg_str_ptr(0))),
+        ("path.posix", "resolve") => str_to_f64(crate::path::js_path_resolve(arg_str_ptr(0))),
+        ("path.posix", "join") => {
+            str_to_f64(crate::path::js_path_join(arg_str_ptr(0), arg_str_ptr(1)))
+        }
+        ("path.posix", "relative") => str_to_f64(crate::path::js_path_relative(
+            arg_str_ptr(0),
+            arg_str_ptr(1),
+        )),
+        ("path.posix", "toNamespacedPath") => {
+            str_to_f64(crate::path::js_path_to_namespaced_path(arg_str_ptr(0)))
+        }
+        ("path.posix", "isAbsolute") => {
+            bool_to_f64(crate::path::js_path_is_absolute(arg_str_ptr(0)))
+        }
+        ("path.posix", "matchesGlob") => bool_to_f64(crate::path::js_path_matches_glob(
+            arg_str_ptr(0),
+            arg_str_ptr(1),
+        )),
+        ("path.posix", "parse") => {
+            ptr_to_f64(crate::path::js_path_parse(arg_str_ptr(0)) as *const u8)
+        }
+        ("path.posix", "format") => str_to_f64(crate::path::js_path_format(arg(0))),
+
         // ── util module ──
         ("util", "format") => crate::builtins::js_util_format(pack_args()),
         ("util", "formatWithOptions") => {
