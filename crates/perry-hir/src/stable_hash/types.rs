@@ -92,6 +92,7 @@ impl SH for ObjectType {
         let ObjectType {
             name,
             properties,
+            property_order,
             index_signature,
         } = self;
         name.hash(h);
@@ -104,6 +105,13 @@ impl SH for ObjectType {
         for (k, v) in entries {
             k.hash(h);
             v.hash(h);
+        }
+        match property_order {
+            None => tag(h, 0),
+            Some(order) => {
+                tag(h, 1);
+                order.hash(h);
+            }
         }
         match index_signature {
             None => tag(h, 0),

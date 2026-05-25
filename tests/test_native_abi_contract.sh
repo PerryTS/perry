@@ -233,7 +233,7 @@ ARTIFACT_TEXT="$TMPDIR/native-reps.txt"
 cat "$ARTIFACT_DIR"/*.json > "$ARTIFACT_TEXT"
 
 for token in \
-  '"schema_version": 5' \
+  '"schema_version": 6' \
   '"consumer": "native_library.raw_u32"' \
   '"consumer": "native_library.raw_u64"' \
   '"consumer": "native_library.raw_usize"' \

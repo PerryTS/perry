@@ -259,6 +259,7 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
         ast::Expr::Object(obj) => {
             let mut properties: std::collections::HashMap<String, perry_types::PropertyInfo> =
                 std::collections::HashMap::new();
+            let mut property_order: Vec<String> = Vec::new();
             let mut open_shape = false;
             for prop in &obj.props {
                 match prop {
@@ -270,6 +271,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                         ast::Prop::Shorthand(ident) => {
                             let name = ident.sym.to_string();
                             let ty = ctx.lookup_local_type(&name).cloned().unwrap_or(Type::Any);
+                            if !properties.contains_key(&name) {
+                                property_order.push(name.clone());
+                            }
                             properties.insert(
                                 name,
                                 perry_types::PropertyInfo {
@@ -290,6 +294,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                                 }
                             };
                             let ty = infer_type_from_expr(&kv.value, ctx);
+                            if !properties.contains_key(&key) {
+                                property_order.push(key.clone());
+                            }
                             properties.insert(
                                 key,
                                 perry_types::PropertyInfo {
@@ -312,6 +319,7 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                 Type::Object(perry_types::ObjectType {
                     name: None,
                     properties,
+                    property_order: Some(property_order),
                     index_signature: None,
                 })
             }
@@ -874,6 +882,20 @@ pub(crate) fn extract_ts_type_with_ctx(
                 }
             }
 
+            if matches!(
+                name.as_str(),
+                "PerryU32"
+                    | "PerryU64"
+                    | "PerryUSize"
+                    | "PerryF32"
+                    | "PerryF64"
+                    | "PerryI32"
+                    | "PerryI64"
+                    | "PerryBufferLen"
+            ) {
+                return Type::Named(name);
+            }
+
             // Check if this is a type alias — resolve to the underlying type
             // so the codegen sees Union/String/Number instead of Named("BlockTag").
             // Without this, `type BlockTag = 'latest' | number | string` stays as
@@ -976,6 +998,7 @@ pub(crate) fn extract_ts_type_with_ctx(
         // Type literal: { a: T, b: U }
         TsTypeLit(lit) => {
             let mut properties = std::collections::HashMap::new();
+            let mut property_order = Vec::new();
             for member in &lit.members {
                 match member {
                     ast::TsTypeElement::TsPropertySignature(prop) => {
@@ -986,6 +1009,9 @@ pub(crate) fn extract_ts_type_with_ctx(
                             } else {
                                 Type::Any
                             };
+                            if !properties.contains_key(&field_name) {
+                                property_order.push(field_name.clone());
+                            }
                             properties.insert(
                                 field_name,
                                 perry_types::PropertyInfo {
@@ -1034,6 +1060,7 @@ pub(crate) fn extract_ts_type_with_ctx(
                             return Type::Object(perry_types::ObjectType {
                                 name: None,
                                 properties,
+                                property_order: Some(property_order),
                                 index_signature: Some(Box::new(val_type)),
                             });
                         }
@@ -1047,6 +1074,7 @@ pub(crate) fn extract_ts_type_with_ctx(
                 Type::Object(perry_types::ObjectType {
                     name: None,
                     properties,
+                    property_order: Some(property_order),
                     index_signature: None,
                 })
             }

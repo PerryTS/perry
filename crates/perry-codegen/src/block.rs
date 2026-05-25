@@ -352,6 +352,15 @@ impl LlBlock {
         r
     }
 
+    pub fn load_aligned(&mut self, ty: LlvmType, ptr: &str, alignment: u32) -> String {
+        let r = self.reg();
+        self.emit(format!(
+            "{} = load {}, ptr {}, align {}",
+            r, ty, ptr, alignment
+        ));
+        r
+    }
+
     /// Load with `volatile` — prevents the optimizer from caching,
     /// reordering, or eliminating the load. Used for module globals
     /// that may be written by `optnone` functions.
@@ -383,6 +392,13 @@ impl LlBlock {
 
     pub fn store(&mut self, ty: LlvmType, val: &str, ptr: &str) {
         self.emit(format!("store {} {}, ptr {}", ty, val, ptr));
+    }
+
+    pub fn store_aligned(&mut self, ty: LlvmType, val: &str, ptr: &str, alignment: u32) {
+        self.emit(format!(
+            "store {} {}, ptr {}, align {}",
+            ty, val, ptr, alignment
+        ));
     }
 
     /// Store with `volatile` — prevents optimizer from eliminating or

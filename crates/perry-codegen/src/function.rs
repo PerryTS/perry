@@ -232,6 +232,18 @@ impl LlFunction {
         r
     }
 
+    /// Allocate a byte buffer in the entry block with an explicit ABI
+    /// alignment. Used for C-layout POD records where field GEPs must rest on
+    /// a verifier-checked stack object, not JS object storage.
+    pub fn alloca_entry_bytes_aligned(&mut self, size: u32, alignment: u32) -> String {
+        let r = format!("%r{}", self.reg_counter.next());
+        self.entry_allocas.push(format!(
+            "  {} = alloca [{} x i8], align {}",
+            r, size, alignment
+        ));
+        r
+    }
+
     /// Push a store instruction into the entry-block alloca section.
     /// Used to initialize allocas to a safe default (e.g. TAG_UNDEFINED)
     /// at the top of the function, before any user code runs.

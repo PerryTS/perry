@@ -143,7 +143,8 @@ pub fn lower_interface_decl(
     // how `JSON.stringify` lays them out on the wire.
     let source_keys: Vec<String> = properties.iter().map(|p| p.name.clone()).collect();
     if !source_keys.is_empty() {
-        ctx.interface_source_keys.insert(name.clone(), source_keys);
+        ctx.interface_source_keys
+            .insert(name.clone(), source_keys.clone());
     }
     // Also materialize an ObjectType so `resolve_typed_parse_ty` can
     // expand `Named("Item")` → `Object{fields}` for codegen.
@@ -165,6 +166,7 @@ pub fn lower_interface_decl(
             perry_types::ObjectType {
                 name: Some(name.clone()),
                 properties: obj_props,
+                property_order: Some(source_keys.clone()),
                 index_signature: None,
             },
         );

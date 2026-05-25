@@ -48,6 +48,7 @@ mod i32_fast_path;
 mod index;
 mod nanbox_inline;
 mod object_literal;
+mod pod_record;
 mod range_facts;
 mod strings;
 mod typed_feedback;
@@ -83,6 +84,10 @@ pub(crate) use nanbox_inline::{
     nanbox_string_inline,
 };
 pub(crate) use object_literal::lower_object_literal;
+pub(crate) use pod_record::{
+    lower_and_store_initial_pod_field, lower_pod_local_reassignment, materialize_pod_local,
+    try_lower_pod_field_get, try_lower_pod_field_set,
+};
 pub(crate) use range_facts::{
     bounds_for_buffer_access, bounds_for_buffer_access_width, effective_alias_state_for_access,
     int_range_expr, invalidate_local_write_facts, record_int_facts_for_let,
@@ -639,6 +644,11 @@ pub(crate) struct FnCtx<'a> {
     /// PropertyGet/PropertySet on these locals load/store from the allocas.
     pub scalar_replaced: std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
 
+    /// Exact closed POD record locals lowered to verifier-backed native stack
+    /// bytes. The ordinary JS slot for the same local holds the lazily
+    /// materialized object, initialized to undefined until a dynamic escape.
+    pub pod_records: std::collections::HashMap<u32, crate::native_value::PodLocal>,
+
     /// Stack for tracking which local is the target of a scalar-replaced
     /// constructor being inlined. Pushed when entering a scalar-replaced
     /// ctor body, popped on exit. PropertySet on `this` inside the ctor
@@ -923,6 +933,9 @@ fn materialization_reason_label(reason: &MaterializationReason) -> &'static str 
         MaterializationReason::ClosureCapture => "closure_capture",
         MaterializationReason::Reassignment => "reassignment",
         MaterializationReason::UnknownCallEscape => "unknown_call_escape",
+        MaterializationReason::PodMaterialization => "pod_materialization",
+        MaterializationReason::PodUnsupported => "pod_unsupported",
+        MaterializationReason::PodDynamicMutation => "pod_dynamic_mutation",
     }
 }
 
@@ -1039,6 +1052,13 @@ fn native_fact_uses_for_record(
             local_id,
             "consumed",
             "buffer_view",
+            None,
+        )),
+        NativeRep::PodRecord { layout_id, .. } => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            layout_id,
             None,
         )),
     }
@@ -1285,6 +1305,7 @@ impl<'a> FnCtx<'a> {
             native_value_state,
             native_abi_transition: scalar_conversion.clone(),
             scalar_conversion,
+            pod_layout: None,
             consumed_facts,
             rejected_facts,
             emitted_inbounds,

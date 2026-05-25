@@ -44,13 +44,28 @@ use super::{
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
-    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
-    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
-    I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
+    try_lower_flat_const_index_get, try_lower_pod_field_get, try_match_channel_reduction,
+    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
+    FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
+        Expr::PropertyGet { object, property }
+            if matches!(object.as_ref(), Expr::LocalGet(id)
+                if ctx.pod_records.get(id).is_some_and(|local| local
+                    .layout
+                    .fields
+                    .iter()
+                    .any(|field| field.name == *property))) =>
+        {
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if let Some(value) = try_lower_pod_field_get(ctx, *id, property)? {
+                    return Ok(value);
+                }
+            }
+            unreachable!("POD field guard should imply a lowered field")
+        }
         Expr::PropertyGet { object, property }
             if property == "length"
                 && matches!(

@@ -3,7 +3,7 @@ use perry_hir::{
     BinaryOp, Class, ClassField, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt,
     UpdateOp,
 };
-use perry_types::Type;
+use perry_types::{ObjectType, PropertyInfo, Type};
 
 static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -225,6 +225,51 @@ fn int(value: i64) -> Expr {
     Expr::Integer(value)
 }
 
+fn number(value: f64) -> Expr {
+    Expr::Number(value)
+}
+
+fn prop(ty: Type) -> PropertyInfo {
+    PropertyInfo {
+        ty,
+        optional: false,
+        readonly: false,
+    }
+}
+
+fn pod_type(fields: &[(&str, Type)]) -> Type {
+    let mut properties = std::collections::HashMap::new();
+    let mut property_order = Vec::new();
+    for (name, ty) in fields {
+        properties.insert((*name).to_string(), prop(ty.clone()));
+        property_order.push((*name).to_string());
+    }
+    Type::Generic {
+        base: "PerryPod".to_string(),
+        type_args: vec![Type::Object(ObjectType {
+            name: None,
+            properties,
+            property_order: Some(property_order),
+            index_signature: None,
+        })],
+    }
+}
+
+fn pod_let(id: u32, name: &str, ty: Type, fields: Vec<(&str, Expr)>) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty,
+        mutable: true,
+        init: Some(Expr::Object(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), value))
+                .collect(),
+        )),
+    }
+}
+
 fn number_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
         id,
@@ -413,7 +458,7 @@ fn assert_buffer_store_uses_dynamic_fallback(ir: &str) {
 }
 
 #[test]
-fn artifact_schema_v5_records_consumed_native_facts_for_buffer_region() {
+fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     let body = vec![
         buffer_let(1, "src", int(8)),
         buffer_let(2, "dst", int(8)),
@@ -422,7 +467,7 @@ fn artifact_schema_v5_records_consumed_native_facts_for_buffer_region() {
     ];
 
     let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 5);
+    assert_eq!(artifact["schema_version"], 6);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -439,7 +484,7 @@ fn artifact_schema_v5_records_consumed_native_facts_for_buffer_region() {
 }
 
 #[test]
-fn artifact_schema_v5_records_rejected_facts_for_buffer_fallback() {
+fn artifact_schema_v6_records_rejected_facts_for_buffer_fallback() {
     let body = vec![
         buffer_let(1, "buf", int(8)),
         for_loop(
@@ -455,7 +500,7 @@ fn artifact_schema_v5_records_rejected_facts_for_buffer_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 5);
+    assert_eq!(artifact["schema_version"], 6);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -466,6 +511,174 @@ fn artifact_schema_v5_records_rejected_facts_for_buffer_fallback() {
                     .is_some_and(|facts| !facts.is_empty())
         }),
         "expected fallback record with rejected facts:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_schema_v6_records_c_layout_pod_manifest() {
+    let packet_ty = pod_type(&[
+        ("tag", Type::Named("PerryU32".to_string())),
+        ("gain", Type::Named("PerryF32".to_string())),
+        ("total", Type::Number),
+        ("count", Type::Named("PerryBufferLen".to_string())),
+    ]);
+    let body = vec![
+        pod_let(
+            1,
+            "packet",
+            packet_ty,
+            vec![
+                ("tag", int(7)),
+                ("gain", number(1.5)),
+                ("total", number(2.25)),
+                ("count", int(4)),
+            ],
+        ),
+        Stmt::Expr(Expr::PropertySet {
+            object: Box::new(local(1)),
+            property: "tag".to_string(),
+            value: Box::new(int(9)),
+        }),
+        Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(local(1)),
+            property: "gain".to_string(),
+        })),
+    ];
+
+    let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
+    assert_eq!(artifact["schema_version"], 6);
+    assert_eq!(artifact["summary"]["pod_layout_count"], 1);
+    assert_eq!(artifact["summary"]["pod_record_count"], 1);
+    let layouts = artifact["pod_layouts"].as_array().unwrap();
+    assert_eq!(layouts.len(), 1);
+    let layout = &layouts[0];
+    assert_eq!(layout["endian"], "native");
+    assert_eq!(layout["packing"], "c");
+    assert_eq!(layout["size"], 24);
+    assert_eq!(layout["alignment"], 8);
+    assert_eq!(layout["tail_padding"], 4);
+    let fields = layout["fields"].as_array().unwrap();
+    let observed: Vec<_> = fields
+        .iter()
+        .map(|field| {
+            (
+                field["name"].as_str().unwrap(),
+                field["native_rep_name"].as_str().unwrap(),
+                field["offset"].as_u64().unwrap(),
+                field["size"].as_u64().unwrap(),
+                field["alignment"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        observed,
+        vec![
+            ("tag", "u32", 0, 4, 4),
+            ("gain", "f32", 4, 4, 4),
+            ("total", "f64", 8, 8, 8),
+            ("count", "buffer_len", 16, 4, 4),
+        ]
+    );
+    assert!(
+        artifact["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["native_rep_name"] == "pod_record"
+                    && !record["pod_layout"].is_null()
+                    && record["consumer"] == "pod_record_stack_alloc"
+            }),
+        "expected pod_record stack allocation record:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
+    let packet_ty = pod_type(&[
+        ("tag", Type::Named("PerryU32".to_string())),
+        ("gain", Type::Named("PerryF32".to_string())),
+    ]);
+    let body = vec![
+        pod_let(
+            1,
+            "packet",
+            packet_ty,
+            vec![("tag", int(7)), ("gain", number(1.5))],
+        ),
+        Stmt::Expr(Expr::PropertySet {
+            object: Box::new(local(1)),
+            property: "tag".to_string(),
+            value: Box::new(Expr::String("x".to_string())),
+        }),
+        Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(local(1)),
+            property: "tag".to_string(),
+        })),
+    ];
+
+    let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
+    assert_eq!(artifact["schema_version"], 6);
+    assert!(
+        artifact["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["consumer"] == "pod_record_field_set_dynamic_value"
+                    && record["access_mode"] == "dynamic_fallback"
+                    && record["materialization_reason"] == "pod_dynamic_mutation"
+                    && record["fallback_reason"] == "pod_dynamic_mutation"
+                    && record["notes"].as_array().is_some_and(|notes| {
+                        notes.iter().any(|note| {
+                            note.as_str()
+                                .is_some_and(|note| note == "rhs_not_scalar_compatible")
+                        })
+                    })
+            }),
+        "expected explicit POD dynamic write fallback record:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
+    let invalid_ty = pod_type(&[
+        ("tag", Type::Named("PerryU32".to_string())),
+        ("name", Type::String),
+    ]);
+    let body = vec![
+        pod_let(
+            1,
+            "packet",
+            invalid_ty,
+            vec![("tag", int(7)), ("name", Expr::String("x".to_string()))],
+        ),
+        Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(local(1)),
+            property: "tag".to_string(),
+        })),
+    ];
+
+    let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
+    assert_eq!(artifact["schema_version"], 6);
+    assert_eq!(artifact["summary"]["pod_layout_count"], 0);
+    assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
+    assert!(
+        artifact["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["expr_kind"] == "PodRecordRejected"
+                    && record["fallback_reason"] == "pod_unsupported"
+                    && record["notes"].as_array().is_some_and(|notes| {
+                        notes.iter().any(|note| {
+                            note.as_str()
+                                .is_some_and(|note| note.contains("field:name"))
+                        })
+                    })
+            }),
+        "expected explicit pointerful POD rejection record:\n{artifact:#}"
     );
 }
 

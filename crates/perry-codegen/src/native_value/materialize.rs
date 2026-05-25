@@ -22,6 +22,9 @@ pub(crate) enum MaterializationReason {
     ClosureCapture,
     Reassignment,
     UnknownCallEscape,
+    PodMaterialization,
+    PodUnsupported,
+    PodDynamicMutation,
 }
 
 fn transition_lossy(rep: &NativeRep, op: &NativeAbiTransitionOp) -> bool {
@@ -154,6 +157,7 @@ pub(crate) fn materialize_js_value(
         NativeRep::F32 => NativeAbiTransitionOp::FloatExtend,
         NativeRep::F64 => NativeAbiTransitionOp::None,
         NativeRep::BufferView(_)
+        | NativeRep::PodRecord { .. }
         | NativeRep::JsValue
         | NativeRep::NativeHandle
         | NativeRep::PromiseBoundary => NativeAbiTransitionOp::None,
@@ -171,6 +175,7 @@ pub(crate) fn materialize_js_value(
         NativeRep::BufferLen => ctx.block().uitofp(I32, &lowered.value, DOUBLE),
         NativeRep::F32 => ctx.block().fpext(F32, &lowered.value, DOUBLE),
         NativeRep::BufferView(_) => lowered.value.clone(),
+        NativeRep::PodRecord { .. } => lowered.value.clone(),
         NativeRep::JsValue
         | NativeRep::F64
         | NativeRep::NativeHandle

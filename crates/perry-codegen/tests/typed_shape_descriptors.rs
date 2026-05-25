@@ -90,12 +90,15 @@ fn prop(ty: Type) -> PropertyInfo {
 
 fn object_type(fields: &[(&str, Type)]) -> Type {
     let mut properties = std::collections::HashMap::new();
+    let mut property_order = Vec::new();
     for (name, ty) in fields {
         properties.insert((*name).to_string(), prop(ty.clone()));
+        property_order.push((*name).to_string());
     }
     Type::Object(ObjectType {
         name: None,
         properties,
+        property_order: Some(property_order),
         index_signature: None,
     })
 }

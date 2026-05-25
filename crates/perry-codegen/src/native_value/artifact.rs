@@ -52,6 +52,39 @@ pub(crate) struct NativeAbiTransitionRecord {
 
 pub(crate) type ScalarConversionRecord = NativeAbiTransitionRecord;
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct PodLayoutPadding {
+    pub offset: u32,
+    pub size: u32,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct PodLayoutField {
+    pub name: String,
+    pub native_rep: NativeRep,
+    pub native_rep_name: String,
+    pub offset: u32,
+    pub size: u32,
+    pub alignment: u32,
+    pub padding_before: u32,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct PodLayoutManifest {
+    pub layout_id: String,
+    pub size: u32,
+    pub alignment: u32,
+    pub endian: String,
+    pub packing: String,
+    pub fields: Vec<PodLayoutField>,
+    pub padding: Vec<PodLayoutPadding>,
+    pub tail_padding: u32,
+    pub pointer_mask: Vec<u64>,
+    pub materialization_hazards: Vec<String>,
+    pub explicit_pointer_metadata: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct NativeRepRecord {
     pub function: String,
@@ -76,6 +109,7 @@ pub(crate) struct NativeRepRecord {
     pub native_value_state: NativeValueState,
     pub native_abi_transition: Option<NativeAbiTransitionRecord>,
     pub scalar_conversion: Option<ScalarConversionRecord>,
+    pub pod_layout: Option<PodLayoutManifest>,
     pub consumed_facts: Vec<NativeFactUse>,
     pub rejected_facts: Vec<NativeFactUse>,
     pub emitted_inbounds: bool,
@@ -88,6 +122,7 @@ struct NativeRepArtifact<'a> {
     schema_version: u32,
     module: &'a str,
     records: &'a [NativeRepRecord],
+    pod_layouts: Vec<PodLayoutManifest>,
     summary: NativeRepSummary,
 }
 
@@ -104,6 +139,9 @@ struct NativeRepSummary {
     unsafe_unchecked_unknown_bounds_accesses: usize,
     consumed_fact_count: usize,
     rejected_fact_count: usize,
+    pod_layout_count: usize,
+    pod_record_count: usize,
+    pod_materialization_count: usize,
 }
 
 impl NativeRepSummary {
@@ -118,12 +156,27 @@ impl NativeRepSummary {
         let mut unsafe_unchecked_unknown_bounds_accesses = 0;
         let mut consumed_fact_count = 0;
         let mut rejected_fact_count = 0;
+        let mut pod_layout_count = 0;
+        let mut pod_record_count = 0;
+        let mut pod_materialization_count = 0;
         for record in records {
             *native_rep_counts
                 .entry(record.native_rep_name.clone())
                 .or_insert(0) += 1;
             if record.materialization_reason.is_some() {
                 materialization_count += 1;
+            }
+            if record.pod_layout.is_some() {
+                pod_layout_count += 1;
+            }
+            if matches!(record.native_rep, NativeRep::PodRecord { .. }) {
+                pod_record_count += 1;
+            }
+            if matches!(
+                record.materialization_reason,
+                Some(MaterializationReason::PodMaterialization)
+            ) {
+                pod_materialization_count += 1;
             }
             if let Some(transition) = record.native_abi_transition.as_ref() {
                 native_abi_transition_count += 1;
@@ -187,8 +240,24 @@ impl NativeRepSummary {
             unsafe_unchecked_unknown_bounds_accesses,
             consumed_fact_count,
             rejected_fact_count,
+            pod_layout_count,
+            pod_record_count,
+            pod_materialization_count,
         }
     }
+}
+
+fn collect_pod_layouts(records: &[NativeRepRecord]) -> Vec<PodLayoutManifest> {
+    let mut seen = std::collections::HashSet::new();
+    let mut layouts = Vec::new();
+    for record in records {
+        if let Some(layout) = record.pod_layout.as_ref() {
+            if seen.insert(layout.layout_id.clone()) {
+                layouts.push(layout.clone());
+            }
+        }
+    }
+    layouts
 }
 
 pub(crate) fn write_native_rep_artifact_if_enabled(
@@ -222,9 +291,10 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 5,
+        schema_version: 6,
         module,
         records,
+        pod_layouts: collect_pod_layouts(records),
         summary: NativeRepSummary::from_records(records),
     };
     let text = serde_json::to_string_pretty(&artifact)?;

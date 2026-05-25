@@ -2,8 +2,11 @@ use anyhow::{bail, Result};
 
 #[cfg(test)]
 use super::artifact::NativeAbiTransitionRecord;
-use super::artifact::{NativeAbiTransitionOp, NativeRepRecord, NativeValueState};
+use super::artifact::{
+    NativeAbiTransitionOp, NativeRepRecord, NativeValueState, PodLayoutManifest,
+};
 use super::buffer::{AliasState, BoundsState, BufferAccessMode};
+use super::pod::recompute_layout_from_fields;
 use super::rep::NativeRep;
 use crate::types::{DOUBLE, F32, I32, I64, I8, PTR};
 
@@ -44,6 +47,39 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
                 "{}:{} {} {} escaped region-local use",
                 record.function, record.block_label, record.consumer, record.native_rep_name
             ));
+        }
+        if let NativeRep::PodRecord {
+            layout_id,
+            size,
+            alignment,
+        } = &record.native_rep
+        {
+            if record.materialization_reason.is_some()
+                || record.fallback_reason.is_some()
+                || record.native_value_state != NativeValueState::RegionLocal
+            {
+                errors.push(format!(
+                    "{}:{} {} pod_record escaped region-local use",
+                    record.function, record.block_label, record.consumer
+                ));
+            }
+            match record.pod_layout.as_ref() {
+                Some(layout)
+                    if layout.layout_id == *layout_id
+                        && layout.size == *size
+                        && layout.alignment == *alignment => {}
+                Some(_) => errors.push(format!(
+                    "{}:{} {} pod_record manifest does not match native rep",
+                    record.function, record.block_label, record.consumer
+                )),
+                None => errors.push(format!(
+                    "{}:{} {} pod_record missing layout manifest",
+                    record.function, record.block_label, record.consumer
+                )),
+            }
+        }
+        if let Some(layout) = record.pod_layout.as_ref() {
+            validate_pod_layout(layout, record, &mut errors);
         }
         if matches!(record.native_rep, NativeRep::F32)
             && (record.materialization_reason.is_some()
@@ -179,7 +215,122 @@ fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
         NativeRep::BufferLen => I32,
         NativeRep::U8 => I8,
         NativeRep::BufferView(_) => PTR,
+        NativeRep::PodRecord { .. } => PTR,
     })
+}
+
+fn validate_pod_layout(
+    layout: &PodLayoutManifest,
+    record: &NativeRepRecord,
+    errors: &mut Vec<String>,
+) {
+    let prefix = || {
+        format!(
+            "{}:{} {}",
+            record.function, record.block_label, record.consumer
+        )
+    };
+    if layout.endian != "native" {
+        errors.push(format!("{} pod layout has non-native endian", prefix()));
+    }
+    if layout.packing != "c" {
+        errors.push(format!("{} pod layout has non-c packing", prefix()));
+    }
+    let specs: Vec<(String, NativeRep)> = layout
+        .fields
+        .iter()
+        .map(|field| (field.name.clone(), field.native_rep.clone()))
+        .collect();
+    let recomputed = match recompute_layout_from_fields(layout.layout_id.clone(), &specs) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            errors.push(format!(
+                "{} pod layout recompute failed: {}",
+                prefix(),
+                reason
+            ));
+            return;
+        }
+    };
+    if layout.size != recomputed.size || layout.alignment != recomputed.alignment {
+        errors.push(format!(
+            "{} pod layout size/alignment mismatch recorded=({},{}) recomputed=({},{})",
+            prefix(),
+            layout.size,
+            layout.alignment,
+            recomputed.size,
+            recomputed.alignment
+        ));
+    }
+    if layout.tail_padding != recomputed.tail_padding {
+        errors.push(format!(
+            "{} pod layout tail padding mismatch recorded={} recomputed={}",
+            prefix(),
+            layout.tail_padding,
+            recomputed.tail_padding
+        ));
+    }
+    if layout.padding != recomputed.padding {
+        errors.push(format!("{} pod layout padding mismatch", prefix()));
+    }
+    if layout.fields.len() != recomputed.fields.len() {
+        errors.push(format!("{} pod layout field count mismatch", prefix()));
+        return;
+    }
+    let mut ranges = Vec::with_capacity(layout.fields.len());
+    for (field, expected) in layout.fields.iter().zip(recomputed.fields.iter()) {
+        if field.name != expected.name
+            || field.native_rep != expected.native_rep
+            || field.native_rep_name != field.native_rep.name()
+            || field.offset != expected.offset
+            || field.size != expected.size
+            || field.alignment != expected.alignment
+            || field.padding_before != expected.padding_before
+        {
+            errors.push(format!(
+                "{} pod field layout mismatch for {}",
+                prefix(),
+                field.name
+            ));
+        }
+        if field.offset % field.alignment != 0 {
+            errors.push(format!(
+                "{} pod field {} offset {} violates alignment {}",
+                prefix(),
+                field.name,
+                field.offset,
+                field.alignment
+            ));
+        }
+        ranges.push((
+            field.offset,
+            field.offset.saturating_add(field.size),
+            &field.name,
+        ));
+    }
+    ranges.sort_by_key(|(start, _, _)| *start);
+    for pair in ranges.windows(2) {
+        let (a_start, a_end, a_name) = pair[0];
+        let (b_start, _, b_name) = pair[1];
+        if a_end > b_start {
+            errors.push(format!(
+                "{} pod fields overlap: {}@{}..{} and {}@{}",
+                prefix(),
+                a_name,
+                a_start,
+                a_end,
+                b_name,
+                b_start
+            ));
+        }
+    }
+    let pointer_mask_nonzero = layout.pointer_mask.iter().any(|word| *word != 0);
+    if pointer_mask_nonzero && !layout.explicit_pointer_metadata {
+        errors.push(format!(
+            "{} pod layout has nonzero pointer mask without explicit metadata",
+            prefix()
+        ));
+    }
 }
 
 fn valid_native_abi_transition(
@@ -217,7 +368,7 @@ mod tests {
         verify_native_rep_records, AliasState, BoundsProof, BoundsState, BufferAccessMode,
         BufferViewRep, LoweredValue, NativeRep, NativeRepRecord, NativeValueState, SemanticKind,
     };
-    use crate::types::{DOUBLE, F32, I32, I64};
+    use crate::types::{DOUBLE, F32, I32, I64, PTR};
 
     fn record() -> NativeRepRecord {
         let lowered = LoweredValue {
@@ -249,12 +400,41 @@ mod tests {
             native_value_state: NativeValueState::RegionLocal,
             native_abi_transition: None,
             scalar_conversion: None,
+            pod_layout: None,
             consumed_facts: Vec::new(),
             rejected_facts: Vec::new(),
             emitted_inbounds: false,
             emitted_noalias: false,
             notes: Vec::new(),
         }
+    }
+
+    fn pod_layout() -> crate::native_value::PodLayoutManifest {
+        super::recompute_layout_from_fields(
+            "pod_test".to_string(),
+            &[
+                ("tag".to_string(), NativeRep::U32),
+                ("gain".to_string(), NativeRep::F32),
+                ("total".to_string(), NativeRep::F64),
+                ("count".to_string(), NativeRep::BufferLen),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn pod_record(layout: crate::native_value::PodLayoutManifest) -> NativeRepRecord {
+        let mut r = record();
+        r.semantic = SemanticKind::PodRecord;
+        r.native_rep = NativeRep::PodRecord {
+            layout_id: layout.layout_id.clone(),
+            size: layout.size,
+            alignment: layout.alignment,
+        };
+        r.native_rep_name = "pod_record".to_string();
+        r.llvm_ty = PTR;
+        r.llvm_value = "%pod".to_string();
+        r.pod_layout = Some(layout);
+        r
     }
 
     #[test]
@@ -397,6 +577,30 @@ mod tests {
             promise_record
         ])
         .is_ok());
+    }
+
+    #[test]
+    fn accepts_verifier_backed_pod_layout() {
+        let layout = pod_layout();
+        let r = pod_record(layout);
+        assert!(verify_native_rep_records(&[r]).is_ok());
+    }
+
+    #[test]
+    fn rejects_pod_layout_offset_mismatch() {
+        let mut layout = pod_layout();
+        layout.fields[2].offset = 12;
+        let r = pod_record(layout);
+        assert!(verify_native_rep_records(&[r]).is_err());
+    }
+
+    #[test]
+    fn rejects_pod_pointer_mask_without_metadata() {
+        let mut layout = pod_layout();
+        layout.pointer_mask = vec![1];
+        layout.explicit_pointer_metadata = false;
+        let r = pod_record(layout);
+        assert!(verify_native_rep_records(&[r]).is_err());
     }
 
     #[test]

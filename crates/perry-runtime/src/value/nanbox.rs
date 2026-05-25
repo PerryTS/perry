@@ -7,7 +7,79 @@
 
 use super::*;
 
+const POD_REP_I32: i32 = 1;
+const POD_REP_I64: i32 = 2;
+const POD_REP_U32: i32 = 3;
+const POD_REP_U64: i32 = 4;
+const POD_REP_USIZE: i32 = 5;
+const POD_REP_F64: i32 = 6;
+const POD_REP_F32: i32 = 7;
+const POD_REP_BUFFER_LEN: i32 = 8;
+
 // FFI functions for creating NaN-boxed values from raw pointers
+
+/// Runtime guard for verifier-backed POD field writes.
+///
+/// A PerryPod field write may use native stack storage only when the assigned
+/// JS value is already representable by the field's native scalar rep and will
+/// materialize back to the same JS-visible number. Otherwise codegen must
+/// materialize the POD as a plain JS object and perform an ordinary property
+/// write so TypeScript annotations cannot coerce dynamic values.
+#[no_mangle]
+pub extern "C" fn js_pod_scalar_write_compatible(value: f64, native_rep: i32) -> i32 {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_number() {
+        return 0;
+    }
+
+    let number = js_value.as_number();
+    let compatible = match native_rep {
+        POD_REP_I32 => int_roundtrips_exact(number, i32::MIN as f64, (i32::MAX as f64) + 1.0),
+        POD_REP_I64 => int_roundtrips_exact(number, i64::MIN as f64, 9_223_372_036_854_775_808.0),
+        POD_REP_U32 | POD_REP_BUFFER_LEN => uint_roundtrips_exact(number, 4_294_967_296.0),
+        POD_REP_U64 | POD_REP_USIZE => uint_roundtrips_exact(number, 18_446_744_073_709_551_616.0),
+        POD_REP_F64 => true,
+        POD_REP_F32 => f32_roundtrips_exact(number),
+        _ => false,
+    };
+
+    if compatible {
+        1
+    } else {
+        0
+    }
+}
+
+fn int_roundtrips_exact(number: f64, min_inclusive: f64, max_exclusive: f64) -> bool {
+    if !number.is_finite()
+        || number < min_inclusive
+        || number >= max_exclusive
+        || number.trunc() != number
+    {
+        return false;
+    }
+    if number == 0.0 && number.is_sign_negative() {
+        return false;
+    }
+    true
+}
+
+fn uint_roundtrips_exact(number: f64, max_exclusive: f64) -> bool {
+    if !number.is_finite() || number < 0.0 || number >= max_exclusive || number.trunc() != number {
+        return false;
+    }
+    if number == 0.0 && number.is_sign_negative() {
+        return false;
+    }
+    true
+}
+
+fn f32_roundtrips_exact(number: f64) -> bool {
+    if number.is_nan() {
+        return false;
+    }
+    ((number as f32) as f64).to_bits() == number.to_bits()
+}
 
 /// Create a NaN-boxed pointer value from an i64 raw pointer.
 /// Returns the value as f64 for storage in union-typed variables.

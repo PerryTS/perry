@@ -4,8 +4,8 @@ use super::*;
 
 use crate::expr::lower_expr_with_expected_type;
 use crate::native_value::{
-    AliasState, BufferElem, BufferViewSlot, LengthSource, LoweredValue, MaterializationReason,
-    NativeRep, SemanticKind,
+    AliasState, BufferAccessMode, BufferElem, BufferViewSlot, LengthSource, LoweredValue,
+    MaterializationReason, NativeRep, PodLayoutDecision, PodLocal, SemanticKind,
 };
 use crate::types::{I32, I64, I8, PTR};
 
@@ -181,6 +181,90 @@ pub(crate) fn lower_let(
     {
         ctx.local_closure_func_ids.insert(id, *cfid);
         ctx.local_closure_param_counts.insert(id, params.len());
+    }
+
+    if let Some(init_expr) = init {
+        match crate::native_value::layout_decision_for_type(ctx, &refined_ty) {
+            PodLayoutDecision::Layout(layout) => {
+                match crate::native_value::collect_pod_init_fields(ctx, init_expr).and_then(
+                    |fields| {
+                        crate::native_value::validate_exact_init(&layout, &fields)?;
+                        Ok(fields)
+                    },
+                ) {
+                    Ok(init_fields) => {
+                        let data_slot = ctx
+                            .func
+                            .alloca_entry_bytes_aligned(layout.size, layout.alignment);
+                        let materialized_slot = ctx.func.alloca_entry(DOUBLE);
+                        let undef = crate::nanbox::double_literal(f64::from_bits(
+                            crate::nanbox::TAG_UNDEFINED,
+                        ));
+                        ctx.func
+                            .entry_allocas_push_store(DOUBLE, &undef, &materialized_slot);
+                        ctx.local_types.insert(id, refined_ty.clone());
+                        ctx.locals.insert(id, materialized_slot.clone());
+
+                        for ((_, value_expr), field) in
+                            init_fields.fields.iter().zip(layout.fields.iter())
+                        {
+                            crate::expr::lower_and_store_initial_pod_field(
+                                ctx, id, &data_slot, field, value_expr,
+                            )?;
+                        }
+
+                        let lowered = LoweredValue {
+                            semantic: SemanticKind::PodRecord,
+                            rep: NativeRep::PodRecord {
+                                layout_id: layout.layout_id.clone(),
+                                size: layout.size,
+                                alignment: layout.alignment,
+                            },
+                            llvm_ty: PTR,
+                            value: data_slot.clone(),
+                        };
+                        ctx.record_lowered_value(
+                            "PodRecordLiteralInit",
+                            Some(id),
+                            "pod_record_stack_alloc",
+                            &lowered,
+                            None,
+                            None,
+                            None,
+                            false,
+                            false,
+                            vec![
+                                format!("layout_id={}", layout.layout_id),
+                                "endian=native".to_string(),
+                                "packing=c".to_string(),
+                            ],
+                        );
+                        if let Some(record) = ctx.native_rep_records.last_mut() {
+                            record.pod_layout = Some(layout.clone());
+                        }
+                        ctx.pod_records.insert(
+                            id,
+                            PodLocal {
+                                layout,
+                                data_slot,
+                                materialized_slot,
+                            },
+                        );
+                        if ctx.module_globals.contains_key(&id) {
+                            let _ = crate::expr::materialize_pod_local(
+                                ctx,
+                                id,
+                                MaterializationReason::PodMaterialization,
+                            )?;
+                        }
+                        return Ok(());
+                    }
+                    Err(reason) => record_pod_rejection(ctx, id, reason),
+                }
+            }
+            PodLayoutDecision::Rejected(reason) => record_pod_rejection(ctx, id, reason),
+            PodLayoutDecision::NotPod => {}
+        }
     }
 
     // Scalar replacement: if this Let binds a non-escaping array
@@ -1076,6 +1160,24 @@ fn lower_unused_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<bool
         }
         _ => Ok(false),
     }
+}
+
+fn record_pod_rejection(ctx: &mut FnCtx<'_>, id: u32, reason: String) {
+    let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let lowered = LoweredValue::js_value(undef);
+    ctx.record_lowered_value_with_access_mode(
+        "PodRecordRejected",
+        Some(id),
+        "pod_record_fallback_to_js_object",
+        &lowered,
+        None,
+        None,
+        Some(BufferAccessMode::DynamicFallback),
+        Some(MaterializationReason::PodUnsupported),
+        false,
+        false,
+        vec![format!("reason={}", reason)],
+    );
 }
 
 fn array_map_callback_is_discard_pure(callback: &perry_hir::Expr) -> bool {

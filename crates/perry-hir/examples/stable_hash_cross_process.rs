@@ -44,6 +44,7 @@ fn build_canonical() -> Module {
     let obj = ObjectType {
         name: Some("Canon".to_string()),
         properties: props,
+        property_order: None,
         index_signature: None,
     };
 

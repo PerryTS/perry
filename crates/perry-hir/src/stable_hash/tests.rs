@@ -73,11 +73,13 @@ fn object_type_properties_insertion_order_independent() {
     let ot_x = ObjectType {
         name: Some("Foo".to_string()),
         properties: props_x,
+        property_order: None,
         index_signature: None,
     };
     let ot_y = ObjectType {
         name: Some("Foo".to_string()),
         properties: props_y,
+        property_order: None,
         index_signature: None,
     };
 

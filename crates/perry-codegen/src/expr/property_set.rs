@@ -44,9 +44,9 @@ use super::{
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
-    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
-    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
-    I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
+    try_lower_flat_const_index_get, try_lower_pod_field_set, try_match_channel_reduction,
+    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
+    FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -56,6 +56,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             property,
             value,
         } => {
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if ctx.pod_records.get(id).is_some_and(|local| {
+                    local
+                        .layout
+                        .fields
+                        .iter()
+                        .any(|field| field.name == *property)
+                }) {
+                    if let Some(value) = try_lower_pod_field_set(ctx, *id, property, value)? {
+                        return Ok(value);
+                    }
+                }
+            }
             // Closes #304: `arr.length = N` must mutate the ArrayHeader, not
             // set a "length" field in the object dispatch. Pre-fix the generic
             // `js_object_set_field_by_name(arr, "length", N)` path silently

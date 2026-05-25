@@ -21,6 +21,7 @@ use crate::lower_string_method::{
 };
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::native_value::MaterializationReason;
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -38,12 +39,12 @@ use super::{
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
-    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
-    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
-    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
-    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
-    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
-    I18nLowerCtx,
+    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_pod_local_reassignment,
+    lower_stream_super_init, lower_url_string_getter, materialize_pod_local, nanbox_bigint_inline,
+    nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
+    try_flat_const_2d_int, try_lower_flat_const_index_get, try_match_channel_reduction,
+    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
+    FlatConstInfo, FnCtx, I18nLowerCtx,
 };
 
 /// #1380: method names addressable on a `Set` instance, used by the
@@ -314,6 +315,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // functions read their own params/lets, and any function read
         // module-scope `let`s (the ones in `hir.init` at top level).
         Expr::LocalGet(id) => {
+            if ctx.pod_records.contains_key(id) {
+                return materialize_pod_local(ctx, *id, MaterializationReason::PodMaterialization);
+            }
             // Captured by closure (from outer scope):
             if let Some(&capture_idx) = ctx.closure_captures.get(id) {
                 let closure_ptr = ctx
@@ -395,6 +399,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // on bench_string_ops.
         Expr::LocalSet(id, value) => {
             super::invalidate_local_write_facts(ctx, *id);
+            if let Some(v) = lower_pod_local_reassignment(ctx, *id, value)? {
+                return Ok(v);
+            }
             // Detect the `x = x + y` self-append pattern.
             // The fast path requires a plain alloca slot in `ctx.locals` —
             // module globals (use `@global` loads), closure captures (use

@@ -11,6 +11,7 @@ pub(crate) enum SemanticKind {
     JsValue,
     TypedArrayElement,
     BufferObject,
+    PodRecord,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -48,6 +49,13 @@ pub(crate) enum NativeRep {
     /// it may be consumed only inside the native region that proved its bounds
     /// and alias facts.
     BufferView(BufferViewRep),
+    /// Region-local native stack storage for an exact closed POD record. The
+    /// artifact carries the verifier-owned C layout manifest.
+    PodRecord {
+        layout_id: String,
+        size: u32,
+        alignment: u32,
+    },
 }
 
 impl NativeRep {
@@ -66,6 +74,7 @@ impl NativeRep {
             Self::NativeHandle => "native_handle",
             Self::PromiseBoundary => "promise_boundary",
             Self::BufferView(_) => "buffer_view",
+            Self::PodRecord { .. } => "pod_record",
         }
     }
 }
