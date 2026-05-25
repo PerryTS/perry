@@ -57,7 +57,7 @@ use imported_array_methods::try_imported_array_methods;
 use inline_array_methods::try_inline_array_methods;
 use intrinsics::{
     try_bare_regexp_call, try_embed_wasm, try_function_return_this, try_iife_call_rewrite,
-    try_require_literal_bail,
+    try_native_module_method_apply_call, try_require_literal_bail,
 };
 use local_array_methods::try_local_array_methods;
 use module_class_static::try_module_class_static;
@@ -139,6 +139,13 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         return Ok(expr);
     }
     if let Some(expr) = try_iife_call_rewrite(ctx, call, has_spread)? {
+        return Ok(expr);
+    }
+    // #1722: `path.join.apply(null, [a, b])` / `.call(null, a, b)` and the
+    // same shape on any stdlib namespace — rewrite to the direct call so
+    // the dedicated per-method lowering runs (indirect invocation
+    // otherwise reads the method value as `undefined`).
+    if let Some(expr) = try_native_module_method_apply_call(ctx, call, has_spread)? {
         return Ok(expr);
     }
     if let Some(expr) = try_function_return_this(ctx, call, has_spread) {

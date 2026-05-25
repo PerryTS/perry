@@ -178,6 +178,117 @@ pub(super) fn try_iife_call_rewrite(
     Ok(None)
 }
 
+/// Issue #1722 — `<stdlibNamespace>.<method>.apply(thisArg, args)` /
+/// `<stdlibNamespace>.<method>.call(thisArg, ...args)`.
+///
+/// Stdlib namespace methods (`path.join`, `fs.existsSync`, `os.platform`,
+/// …) are dispatched by dedicated HIR lowerings keyed on the
+/// `<namespace>.<method>(...)` *direct-call* shape — `path.join(a, b)`
+/// folds to `Expr::PathJoin`, etc. The bare value `path.join` lowers to a
+/// runtime namespace-property read that returns `undefined` for methods
+/// not on the callable-export whitelist, so invoking it *indirectly* via
+/// `Function.prototype.apply` / `.call` never reaches the native impl and
+/// silently evaluates to `undefined` (Node returns the real result).
+/// Surfaced by the #800 node-core radar (`test-path-join.js` uses
+/// `path.join.apply(...)`).
+///
+/// Fix: when the callee is exactly `<ns>.<method>.{apply,call}` and `<ns>`
+/// is a known native-module namespace binding (so `this` is irrelevant —
+/// these are plain free functions), rewrite the AST to the equivalent
+/// direct call and re-dispatch through `lower_call`, reusing every
+/// existing per-method lowering. `thisArg` is dropped (correct for
+/// namespace functions, which ignore `this`).
+///
+/// Conservative scope:
+///   - `.call(thisArg, a, b, …)`         → `ns.method(a, b, …)`
+///   - `.apply(thisArg)` / `.apply()`    → `ns.method()`
+///   - `.apply(thisArg, [a, b, …])`      → `ns.method(a, b, …)` — only for
+///     a clean array *literal* (no holes, no element spreads).
+/// A non-literal apply-args array (a variable / call result) can't be
+/// statically expanded into positional args, so it falls through
+/// unchanged (the runtime spread path `ns.method(...arr)` is a separate
+/// gap). The namespace-binding guard keeps this away from `obj.fn.call(…)`
+/// method dispatch, function-literal IIFEs (`try_iife_call_rewrite`), and
+/// `Object.prototype.<m>.call(…)` (`try_object_prototype_call`).
+pub(super) fn try_native_module_method_apply_call(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    has_spread: bool,
+) -> Result<Option<Expr>> {
+    if has_spread {
+        return Ok(None);
+    }
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return Ok(None);
+    };
+    // Outer member: `<inner>.apply` / `<inner>.call`.
+    let ast::Expr::Member(outer) = callee_expr.as_ref() else {
+        return Ok(None);
+    };
+    let ast::MemberProp::Ident(outer_prop) = &outer.prop else {
+        return Ok(None);
+    };
+    let is_apply = match outer_prop.sym.as_ref() {
+        "apply" => true,
+        "call" => false,
+        _ => return Ok(None),
+    };
+    // Inner member: `<ns>.<method>` where `<ns>` is a native-module
+    // namespace ident and `<method>` is a plain (non-computed) name.
+    let ast::Expr::Member(inner) = outer.obj.as_ref() else {
+        return Ok(None);
+    };
+    if !matches!(&inner.prop, ast::MemberProp::Ident(_)) {
+        return Ok(None);
+    }
+    let ast::Expr::Ident(ns_id) = inner.obj.as_ref() else {
+        return Ok(None);
+    };
+    let ns_name = ns_id.sym.as_ref();
+    // Namespace bindings register both an alias (require / `import * as`)
+    // and a `(module, None)` native-module entry; named imports register
+    // `(module, Some(symbol))` and must NOT match here.
+    let is_module_ns = ctx.lookup_builtin_module_alias(ns_name).is_some()
+        || matches!(ctx.lookup_native_module(ns_name), Some((_, None)));
+    if !is_module_ns {
+        return Ok(None);
+    }
+
+    // Build the synthesized direct-call argument list at the AST level.
+    let synth_args: Vec<ast::ExprOrSpread> = if is_apply {
+        match call.args.get(1) {
+            // `.apply(thisArg)` / `.apply()` → no positional args.
+            None => Vec::new(),
+            Some(arr_arg) => match arr_arg.expr.as_ref() {
+                ast::Expr::Array(arr) => {
+                    // Only a clean literal (no holes, no element spreads)
+                    // can be expanded into positional args statically.
+                    let clean = arr
+                        .elems
+                        .iter()
+                        .all(|e| matches!(e, Some(eos) if eos.spread.is_none()));
+                    if !clean {
+                        return Ok(None);
+                    }
+                    arr.elems.iter().filter_map(|e| e.clone()).collect()
+                }
+                // Non-literal args array — can't statically expand.
+                _ => return Ok(None),
+            },
+        }
+    } else {
+        // `.call(thisArg, a, b, …)` → drop thisArg, keep the rest.
+        call.args.iter().skip(1).cloned().collect()
+    };
+
+    // Synthesize `<ns>.<method>(synth_args)` and re-dispatch. The new
+    // callee carries no `.apply`/`.call`, so this hook can't re-match it.
+    let mut synth_call = call.clone();
+    synth_call.callee = ast::Callee::Expr(Box::new(ast::Expr::Member(inner.clone())));
+    synth_call.args = synth_args;
+    Ok(Some(super::lower_call(ctx, &synth_call)?))
+}
+
 /// Followup to #957 / PR #959 — `Function('return this')()`.
 ///
 /// Every CJS/UMD-shaped library (lodash, underscore, Effect, …)
