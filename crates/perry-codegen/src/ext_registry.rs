@@ -186,6 +186,26 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_net_server_close",                         OwnerKind::WellKnown("net")),
     ("js_net_server_address",                       OwnerKind::WellKnown("net")),
     ("js_net_server_on",                            OwnerKind::WellKnown("net")),
+
+    // ── #1724: global Blob/File + URL object-URL helpers ──────────────
+    // `new Blob([...])`, `new File([...], name)`, `URL.createObjectURL`,
+    // `URL.revokeObjectURL`, and `resolveObjectURL` (node:buffer) are all
+    // global / built-in entry points — a program can use them without
+    // any `import` that maps to the `http-client` feature. Their FFI
+    // definitions live in `perry-stdlib::fetch_blob`, which is gated
+    // behind `#[cfg(feature = "http-client")]` (it shares the Blob
+    // registry + handle ABI with `fetch.rs`). Without a feature hint the
+    // auto-optimize stdlib rebuild drops the module entirely and the link
+    // fails with "Undefined symbols: _js_url_revoke_object_url" (and the
+    // companion `_js_blob_new` / `_js_url_create_object_url`). Tagging the
+    // constructor + object-URL entry points pulls in `http-client` so the
+    // module — and every Blob/File instance method reachable from a
+    // constructed value — is compiled into libperry_stdlib.a.
+    ("js_blob_new",                                 OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_file_new",                                 OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_url_create_object_url",                    OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_url_revoke_object_url",                    OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_buffer_resolve_object_url",                OwnerKind::Stdlib { feature: Some("http-client") }),
 ];
 
 /// Process-wide collector of provider keys observed during codegen.
@@ -245,6 +265,10 @@ mod tests {
         record_ffi_call("js_readable_stream_new");
         // Repro #846: server FFI should bind to WellKnown("http").
         record_ffi_call("js_node_http_create_server");
+        // Repro #1724: global Blob/URL object-URL FFI should bind to
+        // Stdlib { feature: Some("http-client") } so the auto-optimize
+        // stdlib rebuild compiles the `fetch_blob` module in.
+        record_ffi_call("js_url_revoke_object_url");
         // Non-registered FFI: must NOT cause an insert.
         record_ffi_call("js_definitely_not_a_real_ffi_symbol_zzz");
 
@@ -254,6 +278,13 @@ mod tests {
                 feature: Some("bundled-streams")
             }),
             "expected Stdlib(bundled-streams) in providers, got {:?}",
+            got
+        );
+        assert!(
+            got.contains(&OwnerKind::Stdlib {
+                feature: Some("http-client")
+            }),
+            "expected Stdlib(http-client) in providers (Blob/URL object-URL), got {:?}",
             got
         );
         assert!(
