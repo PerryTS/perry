@@ -1156,6 +1156,18 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // Refs #486: per-class setter dispatch — see object.rs::js_register_class_setter.
     module.declare_function("js_register_class_setter", VOID, &[I64, I64, I64, I64]);
     module.declare_function("js_register_class_method", VOID, &[I64, I64, I64, I64, I64]);
+    // #1788: register a class STATIC method + dispatch an inherited static
+    // method on a class value (subclass extends a class-expression value).
+    module.declare_function(
+        "js_register_class_static_method",
+        VOID,
+        &[I64, I64, I64, I64, I64],
+    );
+    module.declare_function(
+        "js_class_static_method_call",
+        DOUBLE,
+        &[DOUBLE, I64, I64, PTR, I64],
+    );
     // #446: bound-method closure for `obj.method` PropertyGet on a known class.
     // Lets `typeof obj.method === "function"` and `let f = obj.method; f(args)`
     // dispatch through CLASS_VTABLE_REGISTRY instead of returning undefined.

@@ -1106,6 +1106,13 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         for method in &class.methods {
             let _ = strings.intern(&method.name);
         }
+        // #1788: intern static-method names too, so the
+        // `js_register_class_static_method` registration loop in
+        // emit_string_pool finds their bytes_global without re-running
+        // through the string pool's mutable interner.
+        for sm in &class.static_methods {
+            let _ = strings.intern(&sm.name);
+        }
         // Refs #486: also intern getter property names so the cross-module
         // `js_register_class_getter` registration loop in emit_string_pool
         // can find their bytes_global without re-running through the

@@ -35,6 +35,16 @@ pub struct ClassVTable {
 /// Global vtable registry: class_id -> vtable
 pub static CLASS_VTABLE_REGISTRY: RwLock<Option<HashMap<u32, ClassVTable>>> = RwLock::new(None);
 
+/// #1788: per-class STATIC-method registry: class_id -> { name -> (func_ptr,
+/// param_count) }. Static methods are emitted as `perry_static_*` (no `this`
+/// param — they read `this` from the implicit-this slot) and are NOT in the
+/// instance vtable above, so a subclass whose parent is a class-expression
+/// value (`class Sub extends make(...) {}`) can't resolve an inherited static
+/// method (`Sub.greet()`) at compile time. This table is walked up the
+/// class_id parent chain at runtime by `js_class_static_method_call`.
+pub static CLASS_STATIC_METHODS: RwLock<Option<HashMap<u32, HashMap<String, (usize, u32)>>>> =
+    RwLock::new(None);
+
 /// Set of all registered class ids. Populated at module init by codegen
 /// emitting `js_register_class_id(cid)` for every user class — even
 /// classes without any methods. Refs #618 / #420 followup.
@@ -1481,6 +1491,146 @@ pub fn is_class_object_ptr(ptr: *const u8) -> bool {
 pub fn is_class_object_value(value: f64) -> bool {
     let jsval = crate::value::JSValue::from_bits(value.to_bits());
     jsval.is_pointer() && is_class_object_ptr(jsval.as_pointer::<u8>())
+}
+
+/// #1788: register a class STATIC method (`perry_static_*`, no `this` param)
+/// in `CLASS_STATIC_METHODS`, keyed by the (template) class_id. Emitted by
+/// codegen at module init alongside the instance-method vtable registration.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_static_method(
+    class_id: i64,
+    name_ptr: *const u8,
+    name_len: i64,
+    func_ptr: i64,
+    param_count: i64,
+) {
+    if class_id == 0 || name_ptr.is_null() || name_len <= 0 {
+        return;
+    }
+    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize)) {
+        Ok(s) => s.to_string(),
+        Err(_) => return,
+    };
+    let mut guard = CLASS_STATIC_METHODS.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard
+        .as_mut()
+        .unwrap()
+        .entry(class_id as u32)
+        .or_default()
+        .insert(name, (func_ptr as usize, param_count as u32));
+}
+
+/// Look up a static method by name in `CLASS_STATIC_METHODS`, walking the
+/// class_id parent chain (so a subclass inherits a parent's static method).
+fn lookup_static_method_in_chain(class_id: u32, name: &str) -> Option<(usize, u32)> {
+    let guard = CLASS_STATIC_METHODS.read().ok()?;
+    let map = guard.as_ref()?;
+    let mut cid = class_id;
+    let mut depth = 0usize;
+    while cid != 0 && depth < 32 {
+        if let Some(m) = map.get(&cid) {
+            if let Some(&entry) = m.get(name) {
+                return Some(entry);
+            }
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    None
+}
+
+/// Call a static method func_ptr with `args` (no `this` prepend — static
+/// methods read `this` from the implicit-this slot, set by the caller).
+/// Mirrors the arity dispatch of `call_vtable_method` minus the receiver arg.
+unsafe fn call_static_method(
+    func_ptr: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+    param_count: u32,
+) -> f64 {
+    #[inline(always)]
+    unsafe fn a(args_ptr: *const f64, args_len: usize, idx: usize) -> f64 {
+        if idx < args_len {
+            *args_ptr.add(idx)
+        } else {
+            f64::NAN
+        }
+    }
+    match param_count {
+        0 => (std::mem::transmute::<usize, extern "C" fn() -> f64>(func_ptr))(),
+        1 => (std::mem::transmute::<usize, extern "C" fn(f64) -> f64>(func_ptr))(a(
+            args_ptr, args_len, 0,
+        )),
+        2 => (std::mem::transmute::<usize, extern "C" fn(f64, f64) -> f64>(func_ptr))(
+            a(args_ptr, args_len, 0),
+            a(args_ptr, args_len, 1),
+        ),
+        3 => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64) -> f64>(func_ptr))(
+            a(args_ptr, args_len, 0),
+            a(args_ptr, args_len, 1),
+            a(args_ptr, args_len, 2),
+        ),
+        _ => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64) -> f64>(func_ptr))(
+            a(args_ptr, args_len, 0),
+            a(args_ptr, args_len, 1),
+            a(args_ptr, args_len, 2),
+            a(args_ptr, args_len, 3),
+        ),
+    }
+}
+
+/// #1788: dispatch a static method on a class value (`Sub.greet()` where
+/// `Sub extends make(...)`, or a class-object value) by walking the class_id
+/// parent chain in `CLASS_STATIC_METHODS`. Binds `this` to the receiver (so
+/// `this.<field>` resolves through the subclass's static-field chain), calls
+/// the method, and restores the previous implicit-this. On miss returns the
+/// receiver unchanged — preserving the prior "yield the class ref for a
+/// chained call during module init" behavior for genuinely-absent methods.
+#[no_mangle]
+pub unsafe extern "C" fn js_class_static_method_call(
+    receiver: f64,
+    name_ptr: *const u8,
+    name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    if name_ptr.is_null() || name_len == 0 {
+        return receiver;
+    }
+    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+        Ok(s) => s,
+        Err(_) => return receiver,
+    };
+    // Resolve the receiver's class_id: INT32 ClassRef payload, or the
+    // class_id stamped on a POINTER class object's ObjectHeader.
+    let bits = receiver.to_bits();
+    let top16 = bits >> 48;
+    let class_id = if top16 == 0x7FFE {
+        (bits & 0xFFFF_FFFF) as u32
+    } else if is_class_object_value(receiver) {
+        let obj = crate::value::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
+        js_object_get_class_id(obj)
+    } else {
+        0
+    };
+    if class_id == 0 {
+        return receiver;
+    }
+    if let Some((func_ptr, param_count)) = lookup_static_method_in_chain(class_id, name) {
+        let prev_this = crate::object::js_implicit_this_set(receiver);
+        let result = call_static_method(func_ptr, args_ptr, args_len, param_count);
+        crate::object::js_implicit_this_set(prev_this);
+        return result;
+    }
+    receiver
 }
 
 /// Look up parent class ID from the registry

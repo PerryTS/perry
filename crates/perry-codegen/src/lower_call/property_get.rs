@@ -943,15 +943,58 @@ pub fn try_lower_property_get_method_call(
                 .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &prev_this)]);
             return Ok(Some(result));
         }
-        // No static method resolved through the visible chain.
-        // Lower the args for side effects and return the ClassRef
-        // itself so chained `.pipe()` calls keep producing a
-        // typed-class-shaped value during module init.
+        // No static method resolved through the class's statically-visible
+        // chain. #1788: a subclass of a class-expression value
+        // (`class Sub extends make(...) {}`) inherits the parent's static
+        // methods at RUNTIME — dispatch through the class_id parent-chain
+        // walk in CLASS_STATIC_METHODS, binding `this` to the class ref so
+        // `this.<field>` resolves through the subclass's static-field chain.
+        // The helper returns the receiver unchanged on a genuine miss, which
+        // preserves the prior "yield the class ref for a chained `.pipe()`
+        // during module init" behavior for truly-absent methods.
         if matches!(object.as_ref(), Expr::ClassRef(_)) {
+            let recv_box = lower_expr(ctx, object)?;
+            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
             for a in args {
-                let _ = lower_expr(ctx, a)?;
+                lowered_args.push(lower_expr(ctx, a)?);
             }
-            return Ok(Some(lower_expr(ctx, object)?));
+            // Materialize the args into an entry-block `[N x double]` slot
+            // (see issue #167 — alloca must live in the entry block).
+            let (args_ptr, args_len) = if lowered_args.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let n = lowered_args.len();
+                let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, v) in lowered_args.iter().enumerate() {
+                    let slot = ctx
+                        .block()
+                        .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                    ctx.block().store(DOUBLE, v, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg, n, buf_reg
+                ));
+                (ptr_reg, n.to_string())
+            };
+            let key_idx = ctx.strings.intern(property);
+            let entry = ctx.strings.entry(key_idx);
+            let bytes_global = format!("@{}", entry.bytes_global);
+            let name_len = entry.byte_len.to_string();
+            let blk = ctx.block();
+            let name_ptr_i64 = blk.ptrtoint(&bytes_global, I64);
+            return Ok(Some(blk.call(
+                DOUBLE,
+                "js_class_static_method_call",
+                &[
+                    (DOUBLE, &recv_box),
+                    (I64, &name_ptr_i64),
+                    (I64, &name_len),
+                    (crate::types::PTR, &args_ptr),
+                    (I64, &args_len),
+                ],
+            )));
         }
         // For LocalGet receivers that resolve to a class but the
         // method isn't a static — fall through to the normal
