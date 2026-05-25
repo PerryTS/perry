@@ -667,6 +667,24 @@ pub unsafe extern "C" fn js_new_function_construct(
             _ => {}
         }
     }
+    // #1789: `new (classObjectValue)(args)` — the callee is a heap class
+    // object (the value a class EXPRESSION evaluates to, e.g.
+    // `const C = make(x); new C()`). Read its class_id (the compile-time
+    // template) and allocate an instance of it, so instance methods
+    // dispatch and `x instanceof C` matches. The template's constructor
+    // body / field initializers are emitted on the static `new ClassName()`
+    // path, not this dynamic helper, so a dynamically-constructed instance
+    // starts with no own props (constructor-run on dynamic new is a
+    // refinement); fields written afterward and prototype methods work.
+    if is_class_object_value(func_value) {
+        let obj =
+            crate::value::JSValue::from_bits(func_value.to_bits()).as_pointer::<ObjectHeader>();
+        let class_cid = js_object_get_class_id(obj);
+        if class_cid != 0 {
+            let inst = js_object_alloc(class_cid, 0);
+            return crate::value::js_nanbox_pointer(inst as i64);
+        }
+    }
     let cid = synthetic_class_id_for_function(func_value);
     // Allocate the instance with the synthetic class id (or 0 if the
     // value isn't callable). The object starts with no own props; the
@@ -1427,6 +1445,42 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
             write.as_mut().unwrap().insert(class_id, ptr as usize);
         }
     }
+}
+
+/// #1789: stamp a freshly-allocated object as a heap "class object" (the
+/// value a class EXPRESSION evaluates to). Sets `object_type =
+/// OBJECT_TYPE_CLASS` so `typeof` reports "function" and `new`/`instanceof`
+/// read `class_id` from it. Called by codegen right after `js_object_alloc`
+/// in the `ClassExprFresh` lowering.
+#[no_mangle]
+pub extern "C" fn js_object_mark_class(obj: i64) {
+    if obj != 0 {
+        unsafe {
+            (*(obj as *mut ObjectHeader)).object_type = crate::error::OBJECT_TYPE_CLASS;
+        }
+    }
+}
+
+/// #1789: is `ptr` a heap "class object" (`object_type == OBJECT_TYPE_CLASS`)?
+/// Validates the GcHeader is a `GC_TYPE_OBJECT` before reading `object_type`,
+/// so raw Map/Set/Buffer pointers (no GcHeader) are never misread. Used by
+/// `typeof`, `new`, and `instanceof` to recognize a class value.
+pub fn is_class_object_ptr(ptr: *const u8) -> bool {
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    unsafe {
+        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
+            && (*(ptr as *const ObjectHeader)).object_type == crate::error::OBJECT_TYPE_CLASS
+    }
+}
+
+/// #1789: f64-value form of [`is_class_object_ptr`] — true only for a
+/// POINTER-tagged value that is a class object.
+pub fn is_class_object_value(value: f64) -> bool {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    jsval.is_pointer() && is_class_object_ptr(jsval.as_pointer::<u8>())
 }
 
 /// Look up parent class ID from the registry

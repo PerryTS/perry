@@ -7,6 +7,14 @@ use crate::string::{js_string_from_bytes, StringHeader};
 /// Object type tag for runtime type discrimination
 pub const OBJECT_TYPE_REGULAR: u32 = 1;
 pub const OBJECT_TYPE_ERROR: u32 = 2;
+/// #1789: a heap "class object" — the value a class EXPRESSION evaluates to
+/// (a regular object stamped with the compile-time template's `class_id`,
+/// carrying per-evaluation static fields as own properties). Marks the value
+/// as the CLASS itself (vs an instance) so `typeof` is "function", and
+/// `new`/`instanceof` read `class_id` from the object. Own-field get/set
+/// treat it like OBJECT_TYPE_REGULAR (the get/set paths are gated on
+/// `gc_type`/`class_id`, not on this tag).
+pub const OBJECT_TYPE_CLASS: u32 = 3;
 
 /// Error subclass discriminator (stored in `error_kind`).
 /// Used by `instanceof TypeError` etc. to check kind without name string compare.

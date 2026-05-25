@@ -210,6 +210,12 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
                 let type_tag = unsafe { *(ptr.add(12) as *const u32) };
                 if type_tag == crate::closure::CLOSURE_MAGIC {
                     get_cached(&TYPEOF_FUNCTION, "function")
+                } else if crate::object::is_class_object_ptr(ptr) {
+                    // #1789: a class-expression VALUE is a heap object stamped
+                    // with OBJECT_TYPE_CLASS — `typeof aClassObject ===
+                    // "function"` (classes are callable in JS), matching the
+                    // INT32 ClassRef case below.
+                    get_cached(&TYPEOF_FUNCTION, "function")
                 } else {
                     get_cached(&TYPEOF_OBJECT, "object")
                 }

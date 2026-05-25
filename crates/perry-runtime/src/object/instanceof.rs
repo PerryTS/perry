@@ -22,6 +22,17 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             return js_instanceof(value, class_id);
         }
     }
+    // #1789: `x instanceof C` where C is a heap class object (the value a
+    // class EXPRESSION evaluates to, e.g. `const C = make(x); c instanceof
+    // C`). Read its class_id (the compile-time template) and walk the
+    // candidate's class chain against it.
+    if is_class_object_value(type_ref) {
+        let obj = crate::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
+        let class_id = js_object_get_class_id(obj);
+        if class_id != 0 {
+            return js_instanceof(value, class_id);
+        }
+    }
     f64::from_bits(TAG_FALSE)
 }
 

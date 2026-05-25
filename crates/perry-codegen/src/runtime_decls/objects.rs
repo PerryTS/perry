@@ -24,6 +24,10 @@ use super::*;
 /// `js_object_alloc(0, N)` is the fallback for dynamic cases.
 pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
+    // #1789: stamp a class-expression's heap object as a class object
+    // (object_type = OBJECT_TYPE_CLASS) so typeof → "function" and
+    // new/instanceof read class_id from it.
+    module.declare_function("js_object_mark_class", VOID, &[I64]);
     // Shape-cache-aware variant: pre-populates keys_array via SHAPE_INLINE_CACHE,
     // so subsequent field stores can use index-based set_field (skipping the
     // per-call linear key-search done by js_object_set_field_by_name).
