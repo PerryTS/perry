@@ -63,7 +63,10 @@ detail = "hot loop inttoptr counts"
 
 [[workloads.image_convolution.assembly_checks]]
 name = "assembly_contains_imul_constant"
-contains_any = ["16777619", "01000193", "0x1000193"]
+regex_any = [
+  "16777619|01000193|0x1000193",
+  "mov\\s+w\\d+, #0x193[\\s\\S]*movk\\s+w\\d+, #0x100, lsl #16[\\s\\S]*mul\\s+w",
+]
 detail = "object disassembly contains the FNV multiply constant"
 
 [[workloads.image_convolution.named_regions]]
@@ -121,10 +124,94 @@ min = { load_i8 = 1, xor_i32 = 1, mul_i32 = 1 }
 equals = { store_i8 = 0 }
 detail = "fnv hash i32 xor/mul shape"
 
+[workloads.image_convolution.native_rep_checks]
+allow_materialization_reasons = []
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_input_generation_buffer_view"
+block_label = "for.body.24"
+expr_kind = "Uint8ArraySet.array"
+consumer = "Uint8ArraySet.BufferView"
+native_rep_name = "buffer_view"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+min = 3
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_input_generation_byte_store"
+block_label = "for.body.24"
+expr_kind = "Uint8ArraySet"
+consumer = "u8_store_trunc_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+min = 3
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_noise_byte_load"
+block_label = "while.body.28"
+expr_kind = "Uint8ArrayGet"
+consumer = "u8_load_zext_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_noise_byte_store"
+block_label = "while.body.28"
+expr_kind = "Uint8ArraySet"
+consumer = "u8_store_trunc_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_blur_byte_load"
+block_label = "for.body.38"
+expr_kind = "Uint8ArrayGet"
+consumer = "u8_load_zext_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+min = 3
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_blur_byte_store"
+block_label = "for.body.38"
+expr_kind = "Uint8ArraySet"
+consumer = "u8_store_trunc_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_fnv_byte_load"
+block_label = "for.body.42"
+expr_kind = "Uint8ArrayGet"
+consumer = "u8_load_zext_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_fnv_i32_hash"
+block_label = "for.body.42"
+expr_kind = "MathImul"
+consumer = "lower_expr_native_i32"
+native_rep_name = "i32"
+access_mode = "none"
+
 [workloads.loop_data_dependent]
 source = "benchmarks/suite/17_loop_data_dependent.ts"
 kind = "numeric_loop"
 allow_hot_loop_conversions = true
+allowed_hot_loop_runtime_calls = [
+  "js_typed_feedback_numeric_array_index_get_guard",
+  "js_typed_feedback_numeric_array_push_guard",
+]
 
 [workloads.loop_data_dependent.vectorization]
 min_vectorized_loops = 0
@@ -158,7 +245,7 @@ required = true
 no_runtime_calls = true
 
 [[workloads.loop_data_dependent.named_regions.selectors]]
-label_prefix_any = ["for.body.11", "arr.merge.16", "arr.merge.21"]
+label_prefix_any = ["for.body.11", "arr.merge.14", "arr.merge.17"]
 
 [[workloads.loop_data_dependent.named_regions.checks]]
 name = "named_region_numeric_loop_no_fp_int_conversions"
@@ -169,6 +256,45 @@ detail = "numeric loop FP/int conversion shape"
 name = "named_region_numeric_loop_has_fp_ops"
 min = { fmul = 1, fadd = 1 }
 detail = "numeric loop FP multiply/add shape"
+
+[workloads.loop_data_dependent.native_rep_checks]
+allow_materialization_reasons = ["runtime_api"]
+
+[[workloads.loop_data_dependent.native_rep_checks.require_records]]
+name = "loop_array_push_fast_f64"
+expr_kind = "NumericArrayPush"
+consumer = "js_array_numeric_push_f64_unboxed"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.loop_data_dependent.native_rep_checks.require_records]]
+name = "loop_array_push_dynamic_fallback"
+expr_kind = "NumericArrayPush"
+consumer = "js_array_push_f64"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+bounds_state = "unknown"
+materialization_reason = "runtime_api"
+
+[[workloads.loop_data_dependent.native_rep_checks.require_records]]
+name = "loop_array_get_fast_f64"
+expr_kind = "NumericArrayIndexGet"
+consumer = "js_array_numeric_get_f64_unboxed"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+min = 2
+
+[[workloads.loop_data_dependent.native_rep_checks.require_records]]
+name = "loop_array_get_dynamic_fallback"
+expr_kind = "NumericArrayIndexGet"
+consumer = "js_typed_feedback_array_index_get_fallback_boxed"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+bounds_state = "unknown"
+materialization_reason = "runtime_api"
+min = 2
 
 [workloads.fma_contract]
 source = "benchmarks/compiler_output/fixtures/fma_contract.ts"
@@ -491,3 +617,257 @@ native_region_id = "h1_buffer_alias_negative_ts.staleallocationlength.stale_allo
 [[workloads.h1_buffer_alias_negative.named_regions]]
 name = "array_buffer_views"
 native_region_id = "h1_buffer_alias_negative_ts.arraybufferviews.array_buffer_views"
+
+[workloads.numeric_arrays]
+source = "benchmarks/compiler_output/fixtures/numeric_arrays.ts"
+kind = "numeric_arrays"
+allow_hot_loop_conversions = true
+allowed_hot_loop_runtime_calls = [
+  "js_typed_feedback_numeric_array_index_get_guard",
+  "js_typed_feedback_numeric_array_push_guard",
+  "js_typed_feedback_numeric_array_index_set_guard",
+]
+
+[workloads.numeric_arrays.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: this fixture gates numeric-array native rep shape"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.numeric_arrays.runtime_budgets]
+allocations_traced = 100
+gc_collections_traced = 0
+write_barriers_static = 16
+write_barriers_traced = 16
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.numeric_arrays.ir_checks]]
+name = "numeric_array_uses_unboxed_push"
+contains = "js_array_numeric_push_f64_unboxed"
+detail = "numeric Array.push uses the guarded raw-f64 helper"
+
+[[workloads.numeric_arrays.ir_checks]]
+name = "numeric_array_uses_unboxed_get"
+contains = "js_array_numeric_get_f64_unboxed"
+detail = "numeric indexed read uses the guarded raw-f64 helper"
+
+[[workloads.numeric_arrays.ir_checks]]
+name = "numeric_array_uses_unboxed_set"
+contains = "js_array_numeric_set_f64_unboxed"
+detail = "numeric indexed write uses the guarded raw-f64 helper"
+
+[[workloads.numeric_arrays.stdout_checks]]
+name = "numeric_arrays_checksum"
+contains = "25"
+detail = "numeric-array fixture stdout checksum"
+
+[workloads.numeric_arrays.native_rep_checks]
+allow_materialization_reasons = ["runtime_api"]
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_push_fast_f64"
+expr_kind = "NumericArrayPush"
+consumer = "js_array_numeric_push_f64_unboxed"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_push_dynamic_fallback"
+expr_kind = "NumericArrayPush"
+consumer = "js_array_push_f64"
+access_mode = "dynamic_fallback"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_get_fast_f64"
+expr_kind = "NumericArrayIndexGet"
+consumer = "js_array_numeric_get_f64_unboxed"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_get_dynamic_fallback"
+expr_kind = "NumericArrayIndexGet"
+consumer = "js_typed_feedback_array_index_get_fallback_boxed"
+access_mode = "dynamic_fallback"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_set_fast_f64"
+expr_kind = "NumericArrayIndexSet"
+consumer = "js_array_numeric_set_f64_unboxed"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_set_dynamic_fallback"
+expr_kind = "NumericArrayIndexSet"
+consumer_contains = "fallback"
+access_mode = "dynamic_fallback"
+
+[workloads.raw_numeric_object_fields]
+source = "tests/raw_numeric_object_fields.ts"
+kind = "raw_numeric_object_fields"
+allow_dynamic_property_runtime = true
+allow_hot_loop_conversions = true
+allowed_hot_loop_runtime_calls = [
+  "js_object_get_field_by_name_f64",
+  "js_object_set_field_by_name",
+]
+
+[workloads.raw_numeric_object_fields.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: this fixture gates raw numeric field structure"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.raw_numeric_object_fields.runtime_budgets]
+allocations_traced = 200
+gc_collections_traced = 0
+write_barriers_static = 64
+write_barriers_traced = 64
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_numeric_field_get_guard"
+contains = "js_typed_feedback_class_field_get_guard"
+detail = "class numeric field reads are guarded before raw slot loads"
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_numeric_field_set_guard"
+contains = "js_typed_feedback_class_field_set_guard"
+detail = "class numeric field writes are guarded before raw slot stores"
+
+[workloads.raw_numeric_object_fields.native_rep_checks]
+allow_materialization_reasons = ["runtime_api"]
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_class_field_get_fast_f64"
+expr_kind = "ClassFieldGet"
+consumer = "class_field_get.raw_f64_load"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_class_field_get_dynamic_fallback"
+expr_kind = "ClassFieldGet"
+consumer = "js_object_get_field_by_name_f64"
+access_mode = "dynamic_fallback"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_class_field_set_fast_f64"
+expr_kind = "ClassFieldSet"
+consumer = "class_field_set.raw_f64_store"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_class_field_set_dynamic_fallback"
+expr_kind = "ClassFieldSet"
+consumer = "js_object_set_field_by_name"
+access_mode = "dynamic_fallback"
+
+[workloads.scalar_replacement_literals]
+source = "benchmarks/compiler_output/fixtures/scalar_replacement_literals.ts"
+kind = "scalar_replacement_literals"
+allow_dynamic_property_runtime = true
+allow_hot_loop_conversions = true
+
+[workloads.scalar_replacement_literals.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: scalar replacement proof is stack-shape based"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.scalar_replacement_literals.runtime_budgets]
+allocations_traced = 100
+gc_collections_traced = 0
+write_barriers_static = 8
+write_barriers_traced = 8
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.scalar_replacement_literals.ir_checks]]
+name = "scalar_replacement_no_object_or_array_heap_alloc"
+function_contains = "scalarReplacementChecksum"
+regex_none = ["@js_object_alloc", "@js_object_alloc_with_shape", "@js_array_alloc"]
+detail = "scalar-replaced literals do not lower to heap object/array allocation helpers"
+
+[[workloads.scalar_replacement_literals.ir_checks]]
+name = "scalar_replacement_no_property_or_array_runtime_access"
+function_contains = "scalarReplacementChecksum"
+regex_none = ["@js_object_get_field", "@js_object_set_field", "@js_array_get", "@js_array_set"]
+detail = "scalar-replaced literals do not use runtime property or array access helpers"
+
+[[workloads.scalar_replacement_literals.stdout_checks]]
+name = "scalar_replacement_checksum"
+contains = "17"
+detail = "scalar-replacement fixture stdout checksum"
+
+[workloads.scalar_replacement_literals.native_rep_checks]
+function_contains = "scalarReplacementChecksum"
+allow_materialization_reasons = []
+
+[[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
+name = "scalar_object_literal_store"
+expr_kind = "ScalarObjectLiteralInit"
+consumer = "scalar_object_field_store"
+native_rep_name = "js_value"
+access_mode = "none"
+
+[[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
+name = "scalar_object_field_get"
+expr_kind = "ScalarObjectFieldGet"
+consumer = "scalar_object_field_load"
+native_rep_name = "js_value"
+access_mode = "none"
+
+[[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
+name = "scalar_object_field_set"
+expr_kind = "ScalarObjectFieldSet"
+consumer = "scalar_object_field_store"
+native_rep_name = "js_value"
+access_mode = "none"
+
+[[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
+name = "scalar_array_literal_store"
+expr_kind = "ScalarArrayLiteralInit"
+consumer = "scalar_array_element_store"
+native_rep_name = "js_value"
+access_mode = "none"
+
+[[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
+name = "scalar_array_index_get"
+expr_kind = "ScalarArrayIndexGet"
+consumer = "scalar_array_element_load"
+native_rep_name = "js_value"
+access_mode = "none"

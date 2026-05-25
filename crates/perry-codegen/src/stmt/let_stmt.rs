@@ -4,7 +4,8 @@ use super::*;
 
 use crate::expr::lower_expr_with_expected_type;
 use crate::native_value::{
-    AliasState, BufferElem, BufferViewSlot, LengthSource, MaterializationReason,
+    AliasState, BufferElem, BufferViewSlot, LengthSource, LoweredValue, MaterializationReason,
+    NativeRep, SemanticKind,
 };
 use crate::types::{I32, I64, I8, PTR};
 
@@ -202,6 +203,25 @@ pub(crate) fn lower_let(
             for (i, elem) in elements.iter().enumerate() {
                 let v = lower_expr(ctx, elem)?;
                 ctx.block().store(DOUBLE, &v, &slots[i]);
+                let lowered = LoweredValue {
+                    semantic: SemanticKind::JsValue,
+                    rep: NativeRep::JsValue,
+                    llvm_ty: DOUBLE,
+                    value: v,
+                };
+                ctx.record_lowered_value_with_access_mode(
+                    "ScalarArrayLiteralInit",
+                    Some(id),
+                    "scalar_array_element_store",
+                    &lowered,
+                    None,
+                    None,
+                    None,
+                    None,
+                    false,
+                    false,
+                    vec![format!("index={}", i)],
+                );
             }
             ctx.scalar_replaced_arrays.insert(id, slots);
 
@@ -241,6 +261,25 @@ pub(crate) fn lower_let(
                 let v = lower_expr(ctx, value_expr)?;
                 if let Some(slot) = field_slots.get(key).cloned() {
                     ctx.block().store(DOUBLE, &v, &slot);
+                    let lowered = LoweredValue {
+                        semantic: SemanticKind::JsValue,
+                        rep: NativeRep::JsValue,
+                        llvm_ty: DOUBLE,
+                        value: v,
+                    };
+                    ctx.record_lowered_value_with_access_mode(
+                        "ScalarObjectLiteralInit",
+                        Some(id),
+                        "scalar_object_field_store",
+                        &lowered,
+                        None,
+                        None,
+                        None,
+                        None,
+                        false,
+                        false,
+                        vec![format!("field={}", key)],
+                    );
                 }
             }
 
@@ -332,6 +371,29 @@ pub(crate) fn lower_let(
                         let arg_val = lower_expr(ctx, arg)?;
                         if let Some(slot) = slot {
                             ctx.block().store(DOUBLE, &arg_val, &slot);
+                            let lowered = LoweredValue {
+                                semantic: SemanticKind::JsValue,
+                                rep: NativeRep::JsValue,
+                                llvm_ty: DOUBLE,
+                                value: arg_val,
+                            };
+                            let field_note = all_fields
+                                .get(idx)
+                                .map(|fname| format!("field={}", fname))
+                                .unwrap_or_else(|| format!("field_index={}", idx));
+                            ctx.record_lowered_value_with_access_mode(
+                                "ScalarObjectLiteralInit",
+                                Some(id),
+                                "scalar_object_field_store",
+                                &lowered,
+                                None,
+                                None,
+                                None,
+                                None,
+                                false,
+                                false,
+                                vec![field_note],
+                            );
                         }
                     }
                     return Ok(());

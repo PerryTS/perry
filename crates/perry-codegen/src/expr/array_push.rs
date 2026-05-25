@@ -21,6 +21,9 @@ use crate::lower_string_method::{
 };
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::native_value::{
+    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
+};
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -111,6 +114,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.store(DOUBLE, &new_box, &slot);
                     blk.br(&merge_label);
                 }
+                let pushed = LoweredValue {
+                    semantic: SemanticKind::JsNumber,
+                    rep: NativeRep::F64,
+                    llvm_ty: DOUBLE,
+                    value: v.clone(),
+                };
+                ctx.record_lowered_value_with_access_mode(
+                    "NumericArrayPush",
+                    Some(*array_id),
+                    "js_array_numeric_push_f64_unboxed",
+                    &pushed,
+                    Some(BoundsState::Guarded {
+                        guard_id: "numeric_array_push_guard".to_string(),
+                    }),
+                    None,
+                    Some(BufferAccessMode::CheckedNative),
+                    None,
+                    false,
+                    false,
+                    Vec::new(),
+                );
 
                 ctx.current_block = fallback_idx;
                 {
@@ -129,6 +153,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.store(DOUBLE, &new_box, &slot);
                     blk.br(&merge_label);
                 }
+                let fallback = LoweredValue {
+                    semantic: SemanticKind::JsValue,
+                    rep: NativeRep::JsValue,
+                    llvm_ty: DOUBLE,
+                    value: v.clone(),
+                };
+                ctx.record_lowered_value_with_access_mode(
+                    "NumericArrayPush",
+                    Some(*array_id),
+                    "js_array_push_f64",
+                    &fallback,
+                    Some(BoundsState::Unknown),
+                    None,
+                    Some(BufferAccessMode::DynamicFallback),
+                    Some(MaterializationReason::RuntimeApi),
+                    false,
+                    false,
+                    Vec::new(),
+                );
 
                 ctx.current_block = merge_idx;
                 return Ok(arr_box);

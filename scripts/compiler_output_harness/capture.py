@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import shutil
@@ -32,6 +33,19 @@ from .common import (
 )
 from .spec import WORKLOADS
 from .verification import verify_artifacts
+
+
+SUITES: dict[str, list[str]] = {
+    "native-region-proof": [
+        "h1_native_rep_equivalence",
+        "h1_buffer_alias_negative",
+        "image_convolution",
+        "loop_data_dependent",
+        "numeric_arrays",
+        "raw_numeric_object_fields",
+        "scalar_replacement_literals",
+    ],
+}
 
 
 def resolve_perry(arg: str | None) -> list[str]:
@@ -94,6 +108,8 @@ def _append_common_perry_flags(cmd: list[str], args: argparse.Namespace) -> None
         cmd.append("--fast-math")
     if args.fp_contract:
         cmd.append(f"--fp-contract={args.fp_contract}")
+    if getattr(args, "verify_native_regions", False):
+        cmd.append("--verify-native-regions")
 
 
 def _metadata_candidates(object_path: Path, explicit: Path | None) -> list[Path]:
@@ -421,6 +437,70 @@ def capture(args: argparse.Namespace) -> int:
     if args.gate and verification["status"] != "pass":
         return 1
     return 0
+
+
+def capture_suite(args: argparse.Namespace) -> int:
+    workloads = SUITES.get(args.suite)
+    if workloads is None:
+        raise HarnessError(f"unknown suite {args.suite!r}")
+
+    suite_root = (
+        Path(args.out_dir)
+        if args.out_dir
+        else REPO_ROOT / "target/compiler-output-regression" / args.suite
+    )
+    if not suite_root.is_absolute():
+        suite_root = REPO_ROOT / suite_root
+    suite_root = suite_root.resolve()
+    suite_root.mkdir(parents=True, exist_ok=True)
+
+    rows: list[dict[str, Any]] = []
+    for workload in workloads:
+        workload_out = suite_root / workload
+        per_workload = copy.copy(args)
+        per_workload.workload = workload
+        per_workload.out_dir = str(workload_out)
+        per_workload.gate = False
+        per_workload.print_summary = False
+        per_workload.verify_native_regions = True
+        try:
+            exit_code = capture(per_workload)
+            report_path = workload_out / "structural-report.json"
+            report = read_json(report_path) if report_path.exists() else {}
+            status = str(report.get("status") or ("pass" if exit_code == 0 else "fail"))
+            errors = list(report.get("errors") or [])
+        except HarnessError as exc:
+            exit_code = 2
+            report_path = workload_out / "structural-report.json"
+            status = "fail"
+            errors = [str(exc)]
+        rows.append(
+            {
+                "workload": workload,
+                "status": status,
+                "exit_code": exit_code,
+                "artifact_dir": str(workload_out),
+                "structural_report": str(report_path),
+                "errors": errors,
+            }
+        )
+
+    failed = [row for row in rows if row["status"] != "pass" or row["exit_code"] != 0]
+    suite_report = {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": utc_now(),
+        "suite": args.suite,
+        "status": "pass" if not failed else "fail",
+        "workloads": rows,
+        "failed_workloads": [row["workload"] for row in failed],
+    }
+    report_path = suite_root / "suite-report.json"
+    write_text(report_path, json.dumps(suite_report, indent=2, sort_keys=True) + "\n")
+
+    if args.print_summary:
+        print(json.dumps({"suite_report": str(report_path), **suite_report}, indent=2))
+
+    return 1 if failed else 0
 
 
 def verify_existing(args: argparse.Namespace) -> int:

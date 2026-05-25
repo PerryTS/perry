@@ -33,6 +33,7 @@ from compiler_output_harness.analyzers import (
 )
 from compiler_output_harness.capture import (
     capture,
+    capture_suite,
     compiler_version,
     resolve_benchmark_runs,
     resolve_clang,

@@ -128,6 +128,7 @@ def named_region_contract_results(
     workloads: dict[str, Any] = WORKLOADS,
 ) -> list[dict[str, Any]]:
     workload_info = workloads.get(workload, {})
+    allowed_runtime_calls = set(workload_info.get("allowed_hot_loop_runtime_calls", []))
     results: list[dict[str, Any]] = []
 
     def region(name: str) -> dict[str, Any]:
@@ -149,10 +150,16 @@ def named_region_contract_results(
                 continue
         if region_spec.get("no_runtime_calls"):
             calls = counters.get("runtime_calls", {})
+            unexpected_calls = {
+                name: count
+                for name, count in calls.items()
+                if name not in allowed_runtime_calls
+            }
             add(
                 f"named_region_{name}_no_runtime_calls",
-                not calls,
-                f"{name} runtime_calls={json.dumps(calls, sort_keys=True)}",
+                not unexpected_calls,
+                f"{name} runtime_calls={json.dumps(calls, sort_keys=True)}"
+                + f"; allowed={json.dumps(sorted(allowed_runtime_calls))}",
             )
         if region_spec.get("no_conversions"):
             conversions = {
@@ -173,6 +180,12 @@ def named_region_contract_results(
 
 
 def _text_check_passes(text: str, check: dict[str, Any]) -> bool:
+    function_fragment = check.get("function_contains")
+    if function_fragment:
+        function_text = _function_text_containing(text, str(function_fragment))
+        if not function_text:
+            return False
+        text = function_text
     if "contains" in check and check["contains"] not in text:
         return False
     if "contains_all" in check and not all(part in text for part in check["contains_all"]):
@@ -181,11 +194,33 @@ def _text_check_passes(text: str, check: dict[str, Any]) -> bool:
         return False
     if "regex" in check and not re.search(check["regex"], text):
         return False
+    if "regex_any" in check and not any(
+        re.search(pattern, text) for pattern in check["regex_any"]
+    ):
+        return False
     if "regex_all" in check and not all(re.search(pattern, text) for pattern in check["regex_all"]):
         return False
     if "regex_none" in check and any(re.search(pattern, text) for pattern in check["regex_none"]):
         return False
     return True
+
+
+def _function_text_containing(text: str, fragment: str) -> str:
+    matches: list[str] = []
+    current: list[str] | None = None
+    for line in text.splitlines():
+        if line.startswith("define "):
+            current = [line]
+            continue
+        if current is None:
+            continue
+        current.append(line)
+        if line == "}":
+            body = "\n".join(current)
+            if fragment in body:
+                matches.append(body)
+            current = None
+    return "\n\n".join(matches)
 
 
 def _counter_check_passes(counters: dict[str, Any], check: dict[str, Any]) -> tuple[bool, Any]:
@@ -239,6 +274,13 @@ def _is_unchecked_native_unknown_bounds(record: dict[str, Any]) -> bool:
     )
 
 
+def _is_checked_native_unknown_bounds(record: dict[str, Any]) -> bool:
+    return (
+        _access_mode_name(record.get("access_mode")) == "checked_native"
+        and not _bounds_allows_inbounds(record.get("bounds_state"))
+    )
+
+
 def _is_dynamic_fallback(record: dict[str, Any]) -> bool:
     return _access_mode_name(record.get("access_mode")) == "dynamic_fallback"
 
@@ -263,18 +305,185 @@ def _records_for_region(
     return [record for record in records if record.get("block_label") in labels]
 
 
-def native_rep_contract_results(
+def _matches_state(actual: Any, expected: Any, *, state_kind: str) -> bool:
+    if expected is None:
+        return True
+    actual_name = _state_name(actual)
+    expected_name = str(expected)
+    if expected_name in {"any", "*"}:
+        return True
+    if expected_name in {"none", ""}:
+        return actual_name == ""
+    if state_kind == "bounds" and expected_name == "proven_or_guarded":
+        return _bounds_allows_inbounds(actual)
+    if state_kind == "alias" and expected_name == "no_alias_proven_or_guarded":
+        return _alias_allows_noalias(actual)
+    return actual_name == expected_name
+
+
+def _record_matches_required(record: dict[str, Any], spec: dict[str, Any]) -> bool:
+    exact_fields = (
+        "expr_kind",
+        "consumer",
+        "native_rep_name",
+        "region_id",
+        "source_function",
+        "block_label",
+        "function",
+        "materialization_reason",
+    )
+    for field in exact_fields:
+        if field in spec and str(record.get(field) or "") != str(spec[field]):
+            return False
+    contains_fields = (
+        ("consumer_contains", "consumer"),
+        ("expr_kind_contains", "expr_kind"),
+        ("function_contains", "function"),
+        ("region_id_contains", "region_id"),
+        ("notes_contains", "notes"),
+    )
+    for spec_field, record_field in contains_fields:
+        if spec_field not in spec:
+            continue
+        needle = str(spec[spec_field])
+        value = record.get(record_field)
+        if isinstance(value, list):
+            haystack = " ".join(str(item) for item in value)
+        else:
+            haystack = str(value or "")
+        if needle not in haystack:
+            return False
+    if "access_mode" in spec and not _matches_state(
+        record.get("access_mode"), spec["access_mode"], state_kind="access"
+    ):
+        return False
+    if "bounds_state" in spec and not _matches_state(
+        record.get("bounds_state"), spec["bounds_state"], state_kind="bounds"
+    ):
+        return False
+    if "alias_state" in spec and not _matches_state(
+        record.get("alias_state"), spec["alias_state"], state_kind="alias"
+    ):
+        return False
+    return True
+
+
+def generic_native_rep_contract_results(
     workload: str,
     records: list[dict[str, Any]],
-    named_regions: dict[str, Any],
+    native_rep_artifact_count: int,
+    workloads: dict[str, Any] = WORKLOADS,
 ) -> list[dict[str, Any]]:
+    workload_info = workloads.get(workload, {})
+    check_spec = workload_info.get("native_rep_checks") or {}
+    if not check_spec:
+        return []
+    function_fragment = check_spec.get("function_contains")
+    if function_fragment:
+        needle = str(function_fragment)
+        records = [
+            r
+            for r in records
+            if needle in str(r.get("function") or "")
+            or needle in str(r.get("source_function") or "")
+        ]
+
     results: list[dict[str, Any]] = []
 
     def add(name: str, passed: bool, detail: str) -> None:
         results.append({"name": name, "passed": passed, "detail": detail})
 
+    unsafe_inbounds = [
+        r
+        for r in records
+        if r.get("emitted_inbounds") and not _bounds_allows_inbounds(r.get("bounds_state"))
+    ]
+    unsafe_noalias = [
+        r
+        for r in records
+        if r.get("emitted_noalias") and not _alias_allows_noalias(r.get("alias_state"))
+    ]
+    unchecked_unknown_bounds = [
+        r for r in records if _is_unchecked_native_unknown_bounds(r)
+    ]
+    checked_unknown_bounds = [
+        r for r in records if _is_checked_native_unknown_bounds(r)
+    ]
+    allowed_reasons = {str(r) for r in check_spec.get("allow_materialization_reasons", [])}
+    unexpected_materializations = [
+        r
+        for r in records
+        if r.get("materialization_reason")
+        and (
+            _state_name(r.get("materialization_reason"))
+            or str(r.get("materialization_reason") or "")
+        )
+        not in allowed_reasons
+    ]
+
+    add(
+        "native_reps_artifact_present",
+        native_rep_artifact_count > 0,
+        f"artifacts={native_rep_artifact_count}, records={len(records)}",
+    )
+    add(
+        "native_reps_no_unsafe_inbounds_claims",
+        not unsafe_inbounds,
+        json.dumps(unsafe_inbounds[:5], sort_keys=True),
+    )
+    add(
+        "native_reps_no_unsafe_noalias_claims",
+        not unsafe_noalias,
+        json.dumps(unsafe_noalias[:5], sort_keys=True),
+    )
+    add(
+        "native_reps_no_unchecked_unknown_bounds",
+        not unchecked_unknown_bounds,
+        json.dumps(unchecked_unknown_bounds[:5], sort_keys=True),
+    )
+    add(
+        "native_reps_no_checked_unknown_bounds",
+        not checked_unknown_bounds,
+        json.dumps(checked_unknown_bounds[:5], sort_keys=True),
+    )
+    add(
+        "native_reps_no_unexpected_materialization_reasons",
+        not unexpected_materializations,
+        "allowed="
+        + json.dumps(sorted(allowed_reasons))
+        + " unexpected="
+        + json.dumps(unexpected_materializations[:5], sort_keys=True),
+    )
+
+    for required in check_spec.get("require_records", []) or []:
+        matches = [r for r in records if _record_matches_required(r, required)]
+        min_count = int(required.get("min", 1) or 1)
+        name = str(required.get("name") or required.get("consumer") or "record")
+        add(
+            f"native_reps_required_{name}",
+            len(matches) >= min_count,
+            f"required={json.dumps(required, sort_keys=True)} matches={len(matches)}",
+        )
+
+    return results
+
+
+def native_rep_contract_results(
+    workload: str,
+    records: list[dict[str, Any]],
+    named_regions: dict[str, Any],
+    native_rep_artifact_count: int = 0,
+    workloads: dict[str, Any] = WORKLOADS,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = generic_native_rep_contract_results(
+        workload, records, native_rep_artifact_count, workloads
+    )
+
+    def add(name: str, passed: bool, detail: str) -> None:
+        results.append({"name": name, "passed": passed, "detail": detail})
+
     def expected_region_id(region: str) -> str | None:
-        for region_spec in WORKLOADS.get(workload, {}).get("named_regions", []) or []:
+        for region_spec in workloads.get(workload, {}).get("named_regions", []) or []:
             if region_spec.get("name") == region:
                 value = region_spec.get("native_region_id")
                 return str(value) if value else None
@@ -804,6 +1013,15 @@ def verify_artifacts(
             all(run.get("exit_code") == 0 for run in benchmark.get("runs", [])),
             "all benchmark runs exited zero",
         )
+        benchmark_stdout = "\n".join(
+            str(run.get("stdout_first") or "") for run in benchmark.get("runs", [])
+        )
+        for check in workload_info.get("stdout_checks", []) or []:
+            add(
+                check["name"],
+                _text_check_passes(benchmark_stdout, check),
+                check.get("detail", check["name"]),
+            )
 
     for budget in runtime_budget_results(workload, runtime_summary, workloads):
         add(
@@ -818,7 +1036,9 @@ def verify_artifacts(
     for result in named_region_contract_results(workload, named_regions, workloads):
         add(result["name"], bool(result["passed"]), result["detail"])
 
-    for result in native_rep_contract_results(workload, native_records, named_regions):
+    for result in native_rep_contract_results(
+        workload, native_records, named_regions, len(native_reps or []), workloads
+    ):
         add(result["name"], bool(result["passed"]), result["detail"])
 
     vector_expectation = vectorization_expectation(workload, vectorization, workloads)
@@ -841,6 +1061,6 @@ def verify_artifacts(
             workload, named_regions, workloads
         ),
         "native_rep_contract_results": native_rep_contract_results(
-            workload, native_records, named_regions
+            workload, native_records, named_regions, len(native_reps or []), workloads
         ),
     }

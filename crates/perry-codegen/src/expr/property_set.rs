@@ -21,6 +21,9 @@ use crate::lower_string_method::{
 };
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::native_value::{
+    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
+};
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -111,6 +114,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     let val_double = lower_expr(ctx, value)?;
                     ctx.block().store(DOUBLE, &val_double, &slot);
+                    let lowered = LoweredValue {
+                        semantic: SemanticKind::JsValue,
+                        rep: NativeRep::JsValue,
+                        llvm_ty: DOUBLE,
+                        value: val_double.clone(),
+                    };
+                    ctx.record_lowered_value_with_access_mode(
+                        "ScalarObjectFieldSet",
+                        Some(*id),
+                        "scalar_object_field_store",
+                        &lowered,
+                        None,
+                        None,
+                        None,
+                        None,
+                        false,
+                        false,
+                        vec![format!("field={}", property)],
+                    );
                     return Ok(val_double);
                 }
             }
@@ -125,6 +147,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let val_double = lower_expr(ctx, value)?;
                     if let Some(slot) = maybe_slot {
                         ctx.block().store(DOUBLE, &val_double, &slot);
+                        let lowered = LoweredValue {
+                            semantic: SemanticKind::JsValue,
+                            rep: NativeRep::JsValue,
+                            llvm_ty: DOUBLE,
+                            value: val_double.clone(),
+                        };
+                        ctx.record_lowered_value_with_access_mode(
+                            "ScalarThisFieldSet",
+                            None,
+                            "scalar_object_field_store",
+                            &lowered,
+                            None,
+                            None,
+                            None,
+                            None,
+                            false,
+                            false,
+                            vec![format!("field={}", property)],
+                        );
                     }
                     return Ok(val_double);
                 }
@@ -237,6 +278,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             );
                         }
                         blk.br(&merge_label);
+                        if requires_raw_f64 {
+                            let stored = LoweredValue {
+                                semantic: SemanticKind::JsNumber,
+                                rep: NativeRep::F64,
+                                llvm_ty: DOUBLE,
+                                value: val_double.clone(),
+                            };
+                            ctx.record_lowered_value_with_access_mode(
+                                "ClassFieldSet",
+                                None,
+                                "class_field_set.raw_f64_store",
+                                &stored,
+                                Some(BoundsState::Guarded {
+                                    guard_id: "class_field_set_guard".to_string(),
+                                }),
+                                None,
+                                Some(BufferAccessMode::CheckedNative),
+                                None,
+                                false,
+                                false,
+                                vec![
+                                    format!("class={}", class_name),
+                                    format!("field={}", property),
+                                    format!("field_index={}", field_idx_str),
+                                ],
+                            );
+                        }
 
                         ctx.current_block = fallback_idx;
                         let blk = ctx.block();
@@ -247,6 +315,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
                         );
                         blk.br(&merge_label);
+                        if requires_raw_f64 {
+                            let fallback = LoweredValue {
+                                semantic: SemanticKind::JsValue,
+                                rep: NativeRep::JsValue,
+                                llvm_ty: DOUBLE,
+                                value: val_double.clone(),
+                            };
+                            ctx.record_lowered_value_with_access_mode(
+                                "ClassFieldSet",
+                                None,
+                                "js_object_set_field_by_name",
+                                &fallback,
+                                Some(BoundsState::Unknown),
+                                None,
+                                Some(BufferAccessMode::DynamicFallback),
+                                Some(MaterializationReason::RuntimeApi),
+                                false,
+                                false,
+                                vec![
+                                    format!("class={}", class_name),
+                                    format!("field={}", property),
+                                    format!("field_index={}", field_idx_str),
+                                ],
+                            );
+                        }
 
                         ctx.current_block = merge_idx;
                         return Ok(val_double);

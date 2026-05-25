@@ -219,26 +219,14 @@ jobs:
       - name: Run harness unit tests
         run: python3 -m unittest tests.test_compiler_output_regression
 
-      - name: Gate image_convolution compiler output
+      - name: Gate native-region proof compiler output
         run: |
-          python3 scripts/compiler_output_regression.py capture \
+          python3 scripts/compiler_output_regression.py suite \
+            --suite native-region-proof \
             --perry target/debug/perry \
-            --workload image_convolution \
             --benchmark-mode smoke \
             --runs 1 \
             --perf-counters off \
-            --gate \
-            --print-summary
-
-      - name: Gate numeric loop compiler output
-        run: |
-          python3 scripts/compiler_output_regression.py capture \
-            --perry target/debug/perry \
-            --workload loop_data_dependent \
-            --benchmark-mode smoke \
-            --runs 1 \
-            --perf-counters off \
-            --gate \
             --print-summary
 
       - name: Gate positive vectorization compiler output
@@ -257,25 +245,6 @@ jobs:
           python3 scripts/compiler_output_regression.py capture \
             --perry target/debug/perry \
             --workload hir_fact_rewrite \
-            --benchmark-mode smoke \
-            --runs 1 \
-            --perf-counters off \
-            --gate \
-            --print-summary
-
-      - name: Gate H1 native representation compiler output
-        run: |
-          python3 scripts/compiler_output_regression.py capture \
-            --perry target/debug/perry \
-            --workload h1_native_rep_equivalence \
-            --benchmark-mode smoke \
-            --runs 1 \
-            --perf-counters off \
-            --gate \
-            --print-summary
-          python3 scripts/compiler_output_regression.py capture \
-            --perry target/debug/perry \
-            --workload h1_buffer_alias_negative \
             --benchmark-mode smoke \
             --runs 1 \
             --perf-counters off \

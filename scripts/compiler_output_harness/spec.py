@@ -53,6 +53,25 @@ def validate_workload_spec(data: dict[str, Any]) -> None:
             )
         if not isinstance(workload.get("runtime_budgets"), dict):
             raise HarnessError(f"workload {name!r} runtime_budgets must be a table")
+        native_rep_checks = workload.get("native_rep_checks")
+        if native_rep_checks is not None:
+            if not isinstance(native_rep_checks, dict):
+                raise HarnessError(f"workload {name!r} native_rep_checks must be a table")
+            if not isinstance(native_rep_checks.get("require_records", []), list):
+                raise HarnessError(
+                    f"workload {name!r} native_rep_checks.require_records must be a list"
+                )
+            if not isinstance(
+                native_rep_checks.get("allow_materialization_reasons", []), list
+            ):
+                raise HarnessError(
+                    f"workload {name!r} native_rep_checks.allow_materialization_reasons must be a list"
+                )
+            for required in native_rep_checks.get("require_records", []) or []:
+                if not isinstance(required, dict) or not required.get("name"):
+                    raise HarnessError(
+                        f"workload {name!r} native_rep_checks require_records need names"
+                    )
         for region in workload.get("named_regions", []) or []:
             if not region.get("name"):
                 raise HarnessError(f"workload {name!r} has a named region without name")

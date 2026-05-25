@@ -9,6 +9,9 @@ use super::{
 };
 use crate::block::LlBlock;
 use crate::nanbox::POINTER_MASK_I64;
+use crate::native_value::{
+    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
+};
 use crate::types::{DOUBLE, I32, I64};
 
 /// Inline fast-path lowering for `local_arr[i] = v`.
@@ -144,6 +147,27 @@ pub(crate) fn lower_index_set_fast(
         );
         ctx.block().store(DOUBLE, &fallback_box, &slot);
         ctx.block().br(&merge_label);
+        if require_numeric_layout {
+            let fallback = LoweredValue {
+                semantic: SemanticKind::JsValue,
+                rep: NativeRep::JsValue,
+                llvm_ty: DOUBLE,
+                value: fallback_box,
+            };
+            ctx.record_lowered_value_with_access_mode(
+                "NumericArrayIndexSet",
+                Some(local_id),
+                "js_typed_feedback_array_index_set_fallback_boxed",
+                &fallback,
+                Some(BoundsState::Unknown),
+                None,
+                Some(BufferAccessMode::DynamicFallback),
+                Some(MaterializationReason::RuntimeApi),
+                false,
+                false,
+                Vec::new(),
+            );
+        }
     }
 
     ctx.current_block = guarded_idx;
@@ -192,6 +216,29 @@ pub(crate) fn lower_index_set_fast(
             }
         }
         blk.br(&merge_label);
+    }
+    if require_numeric_layout {
+        let stored = LoweredValue {
+            semantic: SemanticKind::JsNumber,
+            rep: NativeRep::F64,
+            llvm_ty: DOUBLE,
+            value: val_double.to_string(),
+        };
+        ctx.record_lowered_value_with_access_mode(
+            "NumericArrayIndexSet",
+            Some(local_id),
+            "js_array_numeric_set_f64_unboxed",
+            &stored,
+            Some(BoundsState::Guarded {
+                guard_id: "numeric_array_index_set_guard".to_string(),
+            }),
+            None,
+            Some(BufferAccessMode::CheckedNative),
+            None,
+            false,
+            false,
+            Vec::new(),
+        );
     }
 
     // MEDIUM: idx >= length but < capacity. Store + bump length.

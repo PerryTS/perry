@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -118,6 +119,174 @@ def native_record(function="main", block="for.body.2", rep="i32", **overrides):
     return row
 
 
+def image_native_records():
+    proven = {"proven": {"proof": "loop_guard"}}
+    input_records = [
+        native_record(
+            block="for.body.24",
+            rep="buffer_view",
+            expr_kind="Uint8ArraySet.array",
+            consumer="Uint8ArraySet.BufferView",
+            bounds_state=proven,
+            alias_state="may_alias",
+            access_mode="unchecked_native",
+            emitted_inbounds=True,
+        ),
+        native_record(
+            block="for.body.24",
+            rep="u8",
+            expr_kind="Uint8ArraySet",
+            consumer="u8_store_trunc_i32",
+            bounds_state=proven,
+            alias_state="may_alias",
+            access_mode="unchecked_native",
+            emitted_inbounds=True,
+        ),
+    ]
+    return [
+        *input_records,
+        *input_records,
+        *input_records,
+        native_record(
+            block="while.body.28",
+            rep="u8",
+            expr_kind="Uint8ArrayGet",
+            consumer="u8_load_zext_i32",
+            bounds_state=proven,
+            alias_state="may_alias",
+            access_mode="unchecked_native",
+            emitted_inbounds=True,
+        ),
+        native_record(
+            block="while.body.28",
+            rep="u8",
+            expr_kind="Uint8ArraySet",
+            consumer="u8_store_trunc_i32",
+            bounds_state=proven,
+            alias_state="may_alias",
+            access_mode="unchecked_native",
+            emitted_inbounds=True,
+        ),
+        native_record(
+            block="for.body.38",
+            rep="u8",
+            expr_kind="Uint8ArrayGet",
+            consumer="u8_load_zext_i32",
+            bounds_state=proven,
+            alias_state="no_alias_proven",
+            access_mode="unchecked_native",
+            emitted_inbounds=True,
+            emitted_noalias=True,
+        ),
+        native_record(
+            block="for.body.38",
+            rep="u8",
+            expr_kind="Uint8ArrayGet",
+            consumer="u8_load_zext_i32",
+            bounds_state=proven,
+            alias_state="no_alias_proven",
+            access_mode="unchecked_native",
+            emitted_inbounds=True,
+            emitted_noalias=True,
+        ),
+        native_record(
+            block="for.body.38",
+            rep="u8",
+            expr_kind="Uint8ArrayGet",
+            consumer="u8_load_zext_i32",
+            bounds_state=proven,
+            alias_state="no_alias_proven",
+            access_mode="unchecked_native",
+            emitted_inbounds=True,
+            emitted_noalias=True,
+        ),
+        native_record(
+            block="for.body.38",
+            rep="u8",
+            expr_kind="Uint8ArraySet",
+            consumer="u8_store_trunc_i32",
+            bounds_state=proven,
+            alias_state="no_alias_proven",
+            access_mode="unchecked_native",
+            emitted_inbounds=True,
+            emitted_noalias=True,
+        ),
+        native_record(
+            block="for.body.42",
+            rep="u8",
+            expr_kind="Uint8ArrayGet",
+            consumer="u8_load_zext_i32",
+            bounds_state=proven,
+            alias_state="no_alias_proven",
+            access_mode="unchecked_native",
+            emitted_inbounds=True,
+            emitted_noalias=True,
+        ),
+        native_record(
+            block="for.body.42",
+            rep="i32",
+            expr_kind="MathImul",
+            consumer="lower_expr_native_i32",
+        ),
+    ]
+
+
+def loop_data_dependent_native_records():
+    return [
+        native_record(
+            block="apush.numeric_fast.5",
+            rep="f64",
+            expr_kind="NumericArrayPush",
+            consumer="js_array_numeric_push_f64_unboxed",
+            access_mode="checked_native",
+            bounds_state={"guarded": {"guard_id": "numeric_array_push_guard"}},
+        ),
+        native_record(
+            block="apush.numeric_fallback.6",
+            rep="js_value",
+            expr_kind="NumericArrayPush",
+            consumer="js_array_push_f64",
+            access_mode="dynamic_fallback",
+            bounds_state="unknown",
+            materialization_reason="runtime_api",
+        ),
+        native_record(
+            block="arr.fast.12",
+            rep="f64",
+            expr_kind="NumericArrayIndexGet",
+            consumer="js_array_numeric_get_f64_unboxed",
+            access_mode="checked_native",
+            bounds_state={"guarded": {"guard_id": "numeric_array_index_get_guard"}},
+        ),
+        native_record(
+            block="arr.fast.15",
+            rep="f64",
+            expr_kind="NumericArrayIndexGet",
+            consumer="js_array_numeric_get_f64_unboxed",
+            access_mode="checked_native",
+            bounds_state={"guarded": {"guard_id": "numeric_array_index_get_guard"}},
+        ),
+        native_record(
+            block="arr.fallback.13",
+            rep="js_value",
+            expr_kind="NumericArrayIndexGet",
+            consumer="js_typed_feedback_array_index_get_fallback_boxed",
+            access_mode="dynamic_fallback",
+            bounds_state="unknown",
+            materialization_reason="runtime_api",
+        ),
+        native_record(
+            block="arr.fallback.16",
+            rep="js_value",
+            expr_kind="NumericArrayIndexGet",
+            consumer="js_typed_feedback_array_index_get_fallback_boxed",
+            access_mode="dynamic_fallback",
+            bounds_state="unknown",
+            materialization_reason="runtime_api",
+        ),
+    ]
+
+
 class CompilerOutputRegressionTests(unittest.TestCase):
     def test_image_convolution_good_shape_passes(self):
         report = HARNESS.verify_artifacts(
@@ -131,6 +300,7 @@ class CompilerOutputRegressionTests(unittest.TestCase):
                 "missed_count": 0,
                 "analysis_count": 0,
             },
+            native_reps=[{"records": image_native_records()}],
         )
         self.assertEqual(report["status"], "pass", report["errors"])
 
@@ -198,6 +368,7 @@ class CompilerOutputRegressionTests(unittest.TestCase):
                 "missed_count": 0,
                 "analysis_count": 0,
             },
+            native_reps=[{"records": image_native_records()}],
         )
         self.assertEqual(report["status"], "pass", report["errors"])
 
@@ -231,8 +402,82 @@ for.body.11:
                 "missed_count": 0,
                 "analysis_count": 0,
             },
+            native_reps=[{"records": loop_data_dependent_native_records()}],
         )
         self.assertEqual(report["status"], "pass", report["errors"])
+
+    def test_native_region_workloads_require_native_rep_artifacts(self):
+        numeric_ir = """
+define i32 @main() {
+entry:
+  br label %for.body.11
+for.body.11:
+  %x = fmul double %a, %b
+  %y = fadd double %x, %c
+  br label %for.body.11
+}
+"""
+        cases = [
+            ("image_convolution", GOOD_IR, GOOD_ASM),
+            ("loop_data_dependent", numeric_ir, "main:\n  retq\n"),
+        ]
+        for workload, ir, assembly in cases:
+            with self.subTest(workload=workload):
+                report = HARNESS.verify_artifacts(
+                    workload=workload,
+                    ir_before=ir,
+                    ir_after=ir,
+                    assembly=assembly,
+                    benchmark=None,
+                    vectorization={
+                        "vectorized_count": 0,
+                        "missed_count": 0,
+                        "analysis_count": 0,
+                    },
+                )
+                self.assertEqual(report["status"], "fail")
+                self.assertTrue(
+                    any(
+                        "native_reps_artifact_present" in error
+                        for error in report["errors"]
+                    )
+                )
+
+    def test_loop_data_dependent_requires_runtime_api_fallback_reasons(self):
+        numeric_ir = """
+define i32 @main() {
+entry:
+  br label %for.body.11
+for.body.11:
+  %x = fmul double %a, %b
+  %y = fadd double %x, %c
+  br label %for.body.11
+}
+"""
+        records = loop_data_dependent_native_records()
+        for record in records:
+            if record.get("access_mode") == "dynamic_fallback":
+                record["materialization_reason"] = None
+        report = HARNESS.verify_artifacts(
+            workload="loop_data_dependent",
+            ir_before=numeric_ir,
+            ir_after=numeric_ir,
+            assembly="main:\n  retq\n",
+            benchmark=None,
+            vectorization={
+                "vectorized_count": 0,
+                "missed_count": 0,
+                "analysis_count": 0,
+            },
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any(
+                "native_reps_required_loop_array_get_dynamic_fallback" in error
+                for error in report["errors"]
+            )
+        )
 
     def test_verify_existing_artifacts_writes_report(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -240,6 +485,10 @@ for.body.11:
             (root / "llvm-before-opt.ll").write_text(GOOD_IR, encoding="utf-8")
             (root / "llvm-after-opt.ll").write_text(GOOD_IR, encoding="utf-8")
             (root / "assembly.s").write_text(GOOD_ASM, encoding="utf-8")
+            (root / "native-reps.json").write_text(
+                json.dumps({"records": image_native_records()}),
+                encoding="utf-8",
+            )
             args = type(
                 "Args",
                 (),
@@ -263,6 +512,10 @@ for.body.11:
             (root / "llvm-before-opt.ll").write_text(GOOD_IR, encoding="utf-8")
             (root / "llvm-after-opt.analysis.ll").write_text(GOOD_IR, encoding="utf-8")
             (root / "object-disassembly.s").write_text(GOOD_ASM, encoding="utf-8")
+            (root / "native-reps.json").write_text(
+                json.dumps({"records": image_native_records()}),
+                encoding="utf-8",
+            )
             (root / "manifest.json").write_text(
                 """
 {
@@ -300,11 +553,33 @@ for.body.11:
         spec = HARNESS.load_workload_spec(HARNESS.DEFAULT_SPEC_PATH)
         self.assertIn("image_convolution", spec["workloads"])
         self.assertIn("fma_contract", spec["workloads"])
+        self.assertIn("numeric_arrays", spec["workloads"])
+        self.assertIn("raw_numeric_object_fields", spec["workloads"])
+        self.assertIn("scalar_replacement_literals", spec["workloads"])
         self.assertTrue(spec["workloads"]["fma_contract"]["fma_gate"]["enabled"])
         for name, workload in spec["workloads"].items():
             self.assertIn("source", workload, name)
             self.assertIn("vectorization", workload, name)
             self.assertIn("runtime_budgets", workload, name)
+
+    def test_suite_parser_accepts_native_region_proof(self):
+        parser = HARNESS.build_parser()
+        args = parser.parse_args(
+            [
+                "suite",
+                "--suite",
+                "native-region-proof",
+                "--perry",
+                "target/debug/perry",
+                "--benchmark-mode",
+                "smoke",
+                "--runs",
+                "1",
+                "--perf-counters",
+                "off",
+            ]
+        )
+        self.assertEqual(args.suite, "native-region-proof")
 
     def test_workload_spec_rejects_missing_required_fields(self):
         with self.assertRaises(HARNESS.HarnessError):
@@ -487,6 +762,107 @@ for.body.11:
         self.assertEqual(report["status"], "fail")
         self.assertTrue(
             any("native_reps_no_unchecked_unknown_bounds" in error for error in report["errors"])
+        )
+
+    def test_generic_native_rep_checks_require_configured_records(self):
+        ir = """
+define i32 @main() {
+entry:
+  call i64 @js_array_numeric_push_f64_unboxed(i64 1, double 2.0)
+  call double @js_array_numeric_get_f64_unboxed(i64 1, i32 0)
+  call i32 @js_array_numeric_set_f64_unboxed(i64 1, i32 0, double 3.0)
+  ret i32 0
+}
+"""
+        records = [
+            native_record(
+                rep="f64",
+                expr_kind="NumericArrayPush",
+                consumer="js_array_numeric_push_f64_unboxed",
+                access_mode="checked_native",
+                bounds_state={"guarded": {"guard_id": "numeric_array_push_guard"}},
+            ),
+            native_record(
+                rep="js_value",
+                expr_kind="NumericArrayPush",
+                consumer="js_array_push_f64",
+                access_mode="dynamic_fallback",
+                bounds_state="unknown",
+                materialization_reason="runtime_api",
+            ),
+            native_record(
+                rep="f64",
+                expr_kind="NumericArrayIndexGet",
+                consumer="js_array_numeric_get_f64_unboxed",
+                access_mode="checked_native",
+                bounds_state={"guarded": {"guard_id": "numeric_array_index_get_guard"}},
+            ),
+            native_record(
+                rep="js_value",
+                expr_kind="NumericArrayIndexGet",
+                consumer="js_typed_feedback_array_index_get_fallback_boxed",
+                access_mode="dynamic_fallback",
+                bounds_state="unknown",
+                materialization_reason="runtime_api",
+            ),
+            native_record(
+                rep="f64",
+                expr_kind="NumericArrayIndexSet",
+                consumer="js_array_numeric_set_f64_unboxed",
+                access_mode="checked_native",
+                bounds_state={"guarded": {"guard_id": "numeric_array_index_set_guard"}},
+            ),
+            native_record(
+                rep="js_value",
+                expr_kind="NumericArrayIndexSet",
+                consumer="js_typed_feedback_array_index_set_fallback_boxed",
+                access_mode="dynamic_fallback",
+                bounds_state="unknown",
+                materialization_reason="runtime_api",
+            ),
+        ]
+        report = HARNESS.verify_artifacts(
+            workload="numeric_arrays",
+            ir_before=ir,
+            ir_after=ir,
+            assembly=GOOD_ASM,
+            benchmark={"runs": [{"exit_code": 0, "stdout_first": "25\n"}]},
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "pass", report["errors"])
+
+    def test_generic_native_rep_checks_reject_unexpected_materialization(self):
+        ir = "define i32 @main() { entry: ret i32 0 }\n"
+        report = HARNESS.verify_artifacts(
+            workload="scalar_replacement_literals",
+            ir_before=ir,
+            ir_after=ir,
+            assembly=GOOD_ASM,
+            benchmark={"runs": [{"exit_code": 0, "stdout_first": "17\n"}]},
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[
+                {
+                    "records": [
+                        native_record(
+                            function="perry_fn_scalarReplacementChecksum",
+                            rep="js_value",
+                            expr_kind="ScalarObjectLiteralInit",
+                            consumer="scalar_object_field_store",
+                            access_mode=None,
+                            source_function="scalarReplacementChecksum",
+                            materialization_reason="runtime_api",
+                        )
+                    ]
+                }
+            ],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any(
+                "native_reps_no_unexpected_materialization_reasons" in error
+                for error in report["errors"]
+            )
         )
 
     def h1_alias_negative_records(self, length_records, mutated_records=None):
@@ -1169,6 +1545,7 @@ exit:
                 "missed_reason_kinds": {},
             },
             target="x86_64-unknown-linux-gnu",
+            native_reps=[{"records": loop_data_dependent_native_records()}],
         )
         self.assertEqual(report["status"], "pass", report["errors"])
         self.assertTrue(

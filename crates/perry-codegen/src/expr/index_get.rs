@@ -21,6 +21,9 @@ use crate::lower_string_method::{
 };
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::native_value::{
+    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
+};
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -107,6 +110,27 @@ fn lower_guarded_array_index_get(
     );
     let fallback_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
+    if require_numeric_layout {
+        let fallback = LoweredValue {
+            semantic: SemanticKind::JsValue,
+            rep: NativeRep::JsValue,
+            llvm_ty: DOUBLE,
+            value: fallback_val.clone(),
+        };
+        ctx.record_lowered_value_with_access_mode(
+            "NumericArrayIndexGet",
+            None,
+            "js_typed_feedback_array_index_get_fallback_boxed",
+            &fallback,
+            Some(BoundsState::Unknown),
+            None,
+            Some(BufferAccessMode::DynamicFallback),
+            Some(MaterializationReason::RuntimeApi),
+            false,
+            false,
+            Vec::new(),
+        );
+    }
 
     ctx.current_block = fast_idx;
     let fast_blk = ctx.block();
@@ -134,6 +158,29 @@ fn lower_guarded_array_index_get(
     };
     let fast_end_label = fast_blk.label.clone();
     fast_blk.br(&merge_label);
+    if require_numeric_layout {
+        let fast = LoweredValue {
+            semantic: SemanticKind::JsNumber,
+            rep: NativeRep::F64,
+            llvm_ty: DOUBLE,
+            value: fast_val.clone(),
+        };
+        ctx.record_lowered_value_with_access_mode(
+            "NumericArrayIndexGet",
+            None,
+            "js_array_numeric_get_f64_unboxed",
+            &fast,
+            Some(BoundsState::Guarded {
+                guard_id: "numeric_array_index_get_guard".to_string(),
+            }),
+            None,
+            Some(BufferAccessMode::CheckedNative),
+            None,
+            false,
+            false,
+            Vec::new(),
+        );
+    }
 
     ctx.current_block = merge_idx;
     Ok(ctx.block().phi(
@@ -355,7 +402,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                     if let Some(k) = k {
                         if k < slots.len() {
-                            return Ok(ctx.block().load(DOUBLE, &slots[k]));
+                            let value = ctx.block().load(DOUBLE, &slots[k]);
+                            let lowered = LoweredValue {
+                                semantic: SemanticKind::JsValue,
+                                rep: NativeRep::JsValue,
+                                llvm_ty: DOUBLE,
+                                value: value.clone(),
+                            };
+                            ctx.record_lowered_value_with_access_mode(
+                                "ScalarArrayIndexGet",
+                                Some(*id),
+                                "scalar_array_element_load",
+                                &lowered,
+                                None,
+                                None,
+                                None,
+                                None,
+                                false,
+                                false,
+                                vec![format!("index={}", k)],
+                            );
+                            return Ok(value);
                         }
                     }
                 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .capture import capture, verify_existing
+from .capture import capture, capture_suite, verify_existing
 from .common import DEFAULT_BENCHMARK_RUNS, HarnessError
 from .spec import WORKLOADS
 
@@ -41,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_p.add_argument("--no-gc-trace", action="store_true")
     capture_p.add_argument("--fast-math", action="store_true")
     capture_p.add_argument("--fp-contract", choices=("off", "on", "fast"))
+    capture_p.add_argument("--verify-native-regions", action="store_true")
     capture_p.add_argument(
         "--expect-fma",
         choices=("auto", "off", "on"),
@@ -51,6 +52,30 @@ def build_parser() -> argparse.ArgumentParser:
     capture_p.add_argument("--gate", action="store_true")
     capture_p.add_argument("--print-summary", action="store_true")
     capture_p.set_defaults(func=capture)
+
+    suite_p = sub.add_parser("suite", help="run a compiler-output proof suite")
+    suite_p.add_argument("--suite", choices=("native-region-proof",), required=True)
+    suite_p.add_argument("--out-dir")
+    suite_p.add_argument("--perry")
+    suite_p.add_argument("--clang")
+    suite_p.add_argument("--target")
+    suite_p.add_argument("--clang-arg", action="append")
+    suite_p.add_argument("--runs", type=int)
+    suite_p.add_argument(
+        "--benchmark-mode",
+        choices=sorted(DEFAULT_BENCHMARK_RUNS),
+        default="smoke",
+    )
+    suite_p.add_argument("--compile-timeout", type=int, default=300)
+    suite_p.add_argument("--run-timeout", type=int, default=300)
+    suite_p.add_argument("--skip-run", action="store_true")
+    suite_p.add_argument("--no-gc-trace", action="store_true")
+    suite_p.add_argument("--fast-math", action="store_true")
+    suite_p.add_argument("--fp-contract", choices=("off", "on", "fast"))
+    suite_p.add_argument("--expect-fma", choices=("auto", "off", "on"), default="auto")
+    suite_p.add_argument("--perf-counters", choices=("auto", "off", "on"), default="auto")
+    suite_p.add_argument("--print-summary", action="store_true")
+    suite_p.set_defaults(func=capture_suite)
 
     verify_p = sub.add_parser("verify", help="verify an existing artifact directory")
     verify_p.add_argument("--workload", choices=sorted(WORKLOADS), default="image_convolution")
