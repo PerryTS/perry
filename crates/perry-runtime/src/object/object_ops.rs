@@ -500,9 +500,16 @@ unsafe fn ensure_key_in_keys_array(obj: *mut ObjectHeader, key: *const crate::St
         }
         return;
     }
-    // Validate keys array pointer
+    // Validate keys array pointer. The bare high-bits/low-address checks let
+    // through values that are non-null and tag-free yet still not real heap
+    // pointers (e.g. a stray `0x20_0000_0203` left in a miscompiled object's
+    // keys_array slot), which then fault inside `js_array_length`'s GC-header
+    // read. Gate on the arena-bounds predicate (same one `js_object_create`
+    // uses for prototype validation) so a garbage slot is treated as "no keys
+    // array" instead of crashing the process. (#321: defends against the
+    // Effect `makeGenericTag` mis-tagged-receiver corruption.)
     let keys_ptr = keys as usize;
-    if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
+    if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 || !is_valid_obj_ptr(keys as *const u8) {
         return;
     }
     // Check if key already exists
