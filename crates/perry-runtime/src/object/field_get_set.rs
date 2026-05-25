@@ -872,6 +872,18 @@ pub extern "C" fn js_object_get_field_by_name(
                     if let Some(v) = result {
                         return JSValue::from_bits(v.to_bits());
                     }
+                    // #1788: a subclass of a class-expression value
+                    // (`class Sub extends make("A") {}`) inherits the parent
+                    // class OBJECT's OWN per-evaluation static fields. The
+                    // parent object was recorded as `class_id`'s static
+                    // prototype at `extends` time; walk that chain (also
+                    // covering multi-level `class Leaf extends Mid {}`).
+                    if let Some(v) = super::class_registry::resolve_proto_chain_field(class_id, key)
+                    {
+                        if !v.is_undefined() && !v.is_null() {
+                            return v;
+                        }
+                    }
                 }
             }
             return JSValue::undefined();

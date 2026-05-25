@@ -1408,6 +1408,25 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
     if parent_cid != 0 && parent_cid != class_id {
         register_class(class_id, parent_cid);
     }
+
+    // #1788: when the parent is a per-evaluation class OBJECT (a class
+    // expression value, POINTER-tagged), record it as `class_id`'s static
+    // prototype so static-field lookups on the subclass walk to the parent
+    // object's OWN per-evaluation static fields — effect's
+    // `class Number$ extends make(numberKeyword) {}` → `Number$.ast`. Reuses
+    // the CLASS_PROTOTYPE_OBJECTS map (the same #711/#809 vehicle), resolved
+    // via `resolve_proto_chain_field`; the class_id parent edge above keeps
+    // method/`new`/instanceof dispatch on the existing fast path.
+    if tag == POINTER_TAG {
+        let ptr = crate::value::js_nanbox_get_pointer(parent_value) as *mut ObjectHeader;
+        if !ptr.is_null() && js_object_get_class_id(ptr as *const ObjectHeader) != 0 {
+            let mut write = CLASS_PROTOTYPE_OBJECTS.write().unwrap();
+            if write.is_none() {
+                *write = Some(HashMap::new());
+            }
+            write.as_mut().unwrap().insert(class_id, ptr as usize);
+        }
+    }
 }
 
 /// Look up parent class ID from the registry
