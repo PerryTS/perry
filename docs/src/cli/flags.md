@@ -53,6 +53,7 @@ Use `--output-type` to change what's produced:
 | `--trace <STAGES>` | Dump IR at one or more pipeline stages. Comma-separated: `hir` (post-transform HIR), `llvm` (per-module `.ll` into `.perry-trace/llvm/`), or `all` |
 | `--focus <NAME>` | Restrict `--trace hir` to functions/methods/classes whose name contains `NAME`, suppressing import/export/init noise. Implies `--trace hir` if no stage is given |
 | `--no-link` | Produce `.o` object file only, skip linking |
+| `--no-codegen` | Skip the `package.json` `perry.codegen` build-time steps (also `PERRY_SKIP_CODEGEN=1`). See [Project Configuration](../getting-started/project-config.md) |
 | `--keep-intermediates` | Keep `.o` and `.asm` intermediate files |
 
 The `--trace`/`--focus` pair localizes "compiled to the wrong thing" bugs:

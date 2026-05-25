@@ -203,6 +203,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         keep_intermediates: false,
         print_hir: false,
         no_link: false,
+        no_codegen: false,
         enable_wasm_runtime: args.enable_wasm_runtime,
         target: target.clone(),
         app_bundle_id: Some(bundle_id),

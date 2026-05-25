@@ -119,6 +119,46 @@ pub(super) fn apply_pkg_and_toml_config(
                         }
                     }
                 }
+                // #1680 (Phase 2 of #1677): build-time codegen steps. Each
+                // entry is a shell command (or `{ command, label }`) run
+                // before module collection so codegen libraries with an
+                // eval-free build-time output (`ajv/standalone`, `prisma
+                // generate`, …) emit native-compilable source. Read only
+                // from the host package.json — never a dependency's — so a
+                // transitive dep can't smuggle in a build command (same
+                // trust boundary as compilePackages). The run cwd is the
+                // host package.json's directory so relative script paths
+                // resolve correctly.
+                if let Some(steps) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("codegen"))
+                    .and_then(|v| v.as_array())
+                {
+                    ctx.codegen_dir = pkg_json_path.parent().map(Path::to_path_buf);
+                    for entry in steps {
+                        let step = if let Some(cmd) = entry.as_str() {
+                            Some(super::CodegenStep {
+                                label: None,
+                                command: cmd.to_string(),
+                            })
+                        } else if let Some(obj) = entry.as_object() {
+                            obj.get("command").and_then(|c| c.as_str()).map(|cmd| {
+                                super::CodegenStep {
+                                    label: obj
+                                        .get("label")
+                                        .and_then(|l| l.as_str())
+                                        .map(str::to_string),
+                                    command: cmd.to_string(),
+                                }
+                            })
+                        } else {
+                            None
+                        };
+                        if let Some(step) = step {
+                            ctx.codegen_steps.push(step);
+                        }
+                    }
+                }
                 // perry.fastMath: opt in to LLVM `reassoc` per-instruction
                 // FMF flags on f64 ops. Off by default — Perry produces
                 // bit-exact f64 with Node. See `docs/src/cli/fast-math.md`.

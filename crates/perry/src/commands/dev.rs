@@ -282,6 +282,7 @@ fn build_once(
         keep_intermediates: false,
         print_hir: false,
         no_link: false,
+        no_codegen: false,
         enable_wasm_runtime: false,
         target: None,
         app_bundle_id: None,

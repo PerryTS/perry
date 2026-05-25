@@ -64,6 +64,13 @@ pub struct CompileArgs {
     #[arg(long)]
     pub no_link: bool,
 
+    /// #1680: skip the host `package.json` `perry.codegen` build-time
+    /// steps (also via `PERRY_SKIP_CODEGEN=1`). Use for reproducible /
+    /// sandboxed builds where codegen output is committed and re-running
+    /// the generator is unnecessary or undesirable.
+    #[arg(long)]
+    pub no_codegen: bool,
+
     /// Enable WebAssembly host runtime so the produced binary can load .wasm
     /// modules at runtime via `WebAssembly.instantiate(bytes)`. Engine: wasmi
     /// (pure-Rust interpreter). Adds ~1MB to the binary. Issue #76.
@@ -338,6 +345,17 @@ pub struct JsModule {
     pub specifier: String,
 }
 
+/// #1680 (Phase 2 of #1677): one build-time codegen step from the host
+/// `package.json` `perry.codegen` array. Declared as either a bare command
+/// string or `{ "command": "...", "label": "..." }`.
+#[derive(Debug, Clone)]
+pub struct CodegenStep {
+    /// Optional human-readable label shown in build output.
+    pub label: Option<String>,
+    /// The shell command to run before compilation (via `sh -c`).
+    pub command: String,
+}
+
 /// Compilation context tracking all modules
 pub struct CompilationContext {
     /// Native TypeScript modules to compile
@@ -393,6 +411,19 @@ pub struct CompilationContext {
     pub app_metadata: perry_codegen::AppMetadata,
     /// First-resolved directory for each compile package (deduplication across nested node_modules)
     pub compile_package_dirs: HashMap<String, PathBuf>,
+    /// #1680 (Phase 2 of #1677): build-time codegen steps declared in the
+    /// host `package.json` `perry.codegen`. Each is a shell command run
+    /// (in `codegen_dir`) before module collection, so a codegen library
+    /// with an eval-free build-time output (`ajv/standalone`, `prisma
+    /// generate`, `drizzle-kit introspect`, …) emits native-compilable
+    /// source the normal compile path then picks up — no runtime eval. Read
+    /// only from the host package.json (never a dependency's), same trust
+    /// boundary as `perry.compilePackages`.
+    pub codegen_steps: Vec<CodegenStep>,
+    /// Working directory for `codegen_steps` — the directory of the host
+    /// `package.json` they were declared in (relative script paths resolve
+    /// against it). `None` when no host package.json was found.
+    pub codegen_dir: Option<PathBuf>,
     /// Optional tsgo type checker client (when --type-check is enabled)
     pub type_checker: Option<crate::commands::typecheck::TsGoClient>,
     /// Cache for resolve_import results: (import_source, importer_dir) -> Option<(resolved_path, kind)>
@@ -587,6 +618,8 @@ impl CompilationContext {
             fp_contract_mode: perry_codegen::FpContractMode::Off,
             app_metadata: perry_codegen::AppMetadata::default(),
             compile_package_dirs: HashMap::new(),
+            codegen_steps: Vec::new(),
+            codegen_dir: None,
             type_checker: None,
             resolve_cache: HashMap::new(),
             node_modules_cache: HashMap::new(),
