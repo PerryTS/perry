@@ -33,8 +33,8 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 use super::{
     buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
     emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
-    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
+    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
@@ -43,7 +43,7 @@ use super::{
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
     try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
     unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
-    I18nLowerCtx,
+    I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -946,6 +946,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_box = blk.load(DOUBLE, &key_handle_global);
             let key_bits = blk.bitcast_double_to_i64(&key_box);
             let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+            let feedback_site_id = emit_typed_feedback_register_site(
+                ctx,
+                TypedFeedbackKind::PropertyGet,
+                property,
+                TypedFeedbackContract::object_get_by_name(),
+            );
 
             // Issue #70/#73/#128: guard against non-pointer receivers
             // before the PIC deref. Tag-based check on the unmasked
@@ -1025,13 +1031,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ctx.current_block = class_ref_idx;
             let class_ref_result = ctx.block().call(
                 DOUBLE,
-                "js_object_get_field_by_name_f64",
-                &[(I64, &obj_bits), (I64, &key_handle)],
+                "js_typed_feedback_object_get_field_by_name_f64",
+                &[
+                    (I64, &feedback_site_id),
+                    (I64, &obj_bits),
+                    (I64, &key_handle),
+                ],
             );
             let class_ref_end_label = ctx.block().label.clone();
             ctx.block().br(&final_merge_label);
 
             ctx.current_block = pic_idx;
+            ctx.block().call_void(
+                "js_typed_feedback_observe_property_get",
+                &[
+                    (I64, &feedback_site_id),
+                    (I64, &obj_handle),
+                    (I64, &key_handle),
+                ],
+            );
 
             // Issue #51: monomorphic inline cache. Per-site 16-byte global
             // holds [cached_keys_array_ptr, cached_slot_index]. The fast path
@@ -1192,6 +1210,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
             // PIC hit: direct field load.
             ctx.current_block = hit_idx;
+            ctx.block().call_void(
+                "js_typed_feedback_record_guard_pass",
+                &[(I64, &feedback_site_id)],
+            );
             let cache_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
             let slot = ctx.block().load(I64, &cache_slot_ptr);
             let offset = ctx.block().shl(I64, &slot, "3");
@@ -1204,6 +1226,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
             // PIC miss: slow path with cache population.
             ctx.current_block = miss_idx;
+            ctx.block().call_void(
+                "js_typed_feedback_record_guard_fail",
+                &[(I64, &feedback_site_id)],
+            );
+            ctx.block().call_void(
+                "js_typed_feedback_record_fallback_call",
+                &[(I64, &feedback_site_id)],
+            );
             let val_miss = ctx.block().call(
                 DOUBLE,
                 "js_object_get_field_ic_miss",

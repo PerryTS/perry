@@ -12,7 +12,10 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
+use crate::expr::{
+    emit_typed_feedback_register_site, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx,
+    TypedFeedbackContract, TypedFeedbackKind,
+};
 use crate::nanbox::double_literal;
 use crate::type_analysis::{is_global_constructor_expr, receiver_class_name};
 use crate::types::{DOUBLE, I32, I64, PTR};
@@ -638,11 +641,18 @@ pub fn try_lower_native_method_str_dispatch(
                 }
                 (buf_reg, n.to_string())
             };
+            let site_id = emit_typed_feedback_register_site(
+                ctx,
+                TypedFeedbackKind::MethodCall,
+                property,
+                TypedFeedbackContract::method_call(),
+            );
             let blk = ctx.block();
             return Ok(Some(blk.call(
                 DOUBLE,
-                "js_native_call_method",
+                "js_typed_feedback_native_call_method",
                 &[
+                    (I64, &site_id),
                     (DOUBLE, &recv_box),
                     (PTR, &bytes_global),
                     (I64, &name_len_str),
