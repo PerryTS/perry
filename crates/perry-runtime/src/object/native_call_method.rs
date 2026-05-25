@@ -140,6 +140,37 @@ pub unsafe extern "C" fn js_native_call_method(
 
     let jsval = JSValue::from_bits(object.to_bits());
 
+    // #1758 / epic #1785: a class-object VALUE reaching the *dynamic*
+    // dispatcher is a STATIC method call. This happens when the static
+    // analyzer couldn't prove the receiver is a class object — e.g.
+    // `class X extends (make(...) as any).annotations(y) {}` where the
+    // `make()` factory call wasn't inlined to a `ClassExprFresh` (so the
+    // `.annotations` receiver lowers to a generic Call result), or any
+    // `(expr-returning-a-class-object).staticMethod()`. The compile-time
+    // static-dispatch tower (property_get.rs) binds `this` via
+    // IMPLICIT_THIS; the generic field-scan path below does NOT, so
+    // `this.<staticField>` (effect's `annotations() { make(this.ast, ...) }`)
+    // read `undefined`. Route to `js_class_static_method_call`, which binds
+    // `this` to the receiver and walks the class_id parent chain — but only
+    // when the method actually resolves in the static chain, so an own
+    // function-valued static field still falls through to the generic path.
+    if crate::object::class_registry::is_class_object_value(object) {
+        let class_id = crate::object::js_object_get_class_id(jsval.as_pointer::<ObjectHeader>());
+        if class_id != 0
+            && crate::object::class_registry::lookup_static_method_in_chain(class_id, method_name)
+                .is_some()
+        {
+            let args = refreshed_args();
+            return crate::object::class_registry::js_class_static_method_call(
+                object_handle.get_nanbox_f64(),
+                method_name_ptr as *const u8,
+                method_name_len,
+                args.as_ptr(),
+                args.len(),
+            );
+        }
+    }
+
     // Issue #489 followup: Promise's `then` / `catch` / `finally` are
     // intrinsic — when the dynamic dispatch path lands a `.then(cb)` on
     // a Promise (drizzle's `mysql-proxy/session.js`:

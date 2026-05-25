@@ -1529,7 +1529,10 @@ pub unsafe extern "C" fn js_register_class_static_method(
 
 /// Look up a static method by name in `CLASS_STATIC_METHODS`, walking the
 /// class_id parent chain (so a subclass inherits a parent's static method).
-fn lookup_static_method_in_chain(class_id: u32, name: &str) -> Option<(usize, u32, bool)> {
+pub(crate) fn lookup_static_method_in_chain(
+    class_id: u32,
+    name: &str,
+) -> Option<(usize, u32, bool)> {
     let guard = CLASS_STATIC_METHODS.read().ok()?;
     let map = guard.as_ref()?;
     let mut cid = class_id;

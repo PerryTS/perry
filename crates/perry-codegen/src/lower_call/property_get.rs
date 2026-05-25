@@ -1113,6 +1113,16 @@ pub fn try_lower_property_get_method_call(
             for a in args {
                 lowered_args.push(lower_expr(ctx, a)?);
             }
+            // #1758 / epic #1785: capture the raw user args (no `this`, no
+            // issue-#235 padding, no rest-bundling) before any of the
+            // instance-calling-convention mangling below. A `perry_static_*`
+            // implementor (a class-object value reaching this instance-method
+            // tower — e.g. `class X extends (make(...)).annotations(y) {}`)
+            // must dispatch through `js_class_static_method_call`, which binds
+            // `this` and applies static arity/rest semantics; the
+            // instance-style `fname(recv, args…)` direct call would pass recv
+            // as arg0 and never set IMPLICIT_THIS (the #1787 broken-tower bug).
+            let static_user_args: Vec<String> = lowered_args[1..].to_vec();
             // Issue #235: pad lowered_args with TAG_UNDEFINED so the callee's
             // default-param desugaring fires when the call site passed fewer
             // args than the method declares. Pre-fix the dispatch tower
@@ -1321,7 +1331,46 @@ pub fn try_lower_property_get_method_call(
             let mut phi_inputs: Vec<(String, String)> = Vec::new();
             for ((_, fname), &case_idx) in implementors.iter().zip(case_idxs.iter()) {
                 ctx.current_block = case_idx;
-                let v = ctx.block().call(DOUBLE, fname, &arg_slices);
+                // #1758: a `perry_static_*` implementor is a STATIC method on a
+                // class-object receiver. Route it through the runtime
+                // `js_class_static_method_call` (binds `this`, walks the
+                // class_id parent chain, applies static arity/rest) instead of
+                // the instance-style direct call, which would pass recv as
+                // arg0 and leave `this` unset (#1787 broken-tower behavior).
+                let v = if fname.starts_with("perry_static_") {
+                    let n = static_user_args.len();
+                    let (sa_ptr, sa_len) = if n == 0 {
+                        ("null".to_string(), "0".to_string())
+                    } else {
+                        let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+                        for (i, a_val) in static_user_args.iter().enumerate() {
+                            let slot =
+                                ctx.block()
+                                    .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                            ctx.block().store(DOUBLE, a_val, &slot);
+                        }
+                        let ptr_reg = ctx.block().next_reg();
+                        ctx.block().emit_raw(format!(
+                            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                            ptr_reg, n, buf_reg
+                        ));
+                        (ptr_reg, n.to_string())
+                    };
+                    let name_ptr_i64 = ctx.block().ptrtoint(&probe_bytes_global, I64);
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_class_static_method_call",
+                        &[
+                            (DOUBLE, &recv_box),
+                            (I64, &name_ptr_i64),
+                            (I64, &probe_name_len_str),
+                            (crate::types::PTR, &sa_ptr),
+                            (I64, &sa_len),
+                        ],
+                    )
+                } else {
+                    ctx.block().call(DOUBLE, fname, &arg_slices)
+                };
                 let after_label = ctx.block().label.clone();
                 if !ctx.block().is_terminated() {
                     ctx.block().br(&merge_label);
