@@ -361,61 +361,226 @@ fn flatten_into<'a, F>(
     }
 }
 
-/// Issue #100: collect every `Stmt::Let { mutable: false, init: Some(_), .. }`
-/// declared at the module's top level into a `local_id → init_expr`
-/// map. Function-local consts are NOT included — the dynamic-import
-/// argument is always evaluated in module-init scope, so only module-
-/// level consts can flow into it via the standard scope rules.
+/// Issue #100 / #1725: collect every `Stmt::Let { mutable: false, init: Some(_), .. }`
+/// reachable in the module into a `local_id → init_expr` map — the module-init
+/// body, every function / method / constructor body, and (descending) nested
+/// closure bodies.
 ///
-/// Mutable bindings (`let`, `var`, reassigned-anywhere consts) are
-/// excluded — only `const x = <single_init>` shapes participate. This
-/// matches the spec's "single SSA def to a resolvable expression"
-/// constraint without needing a full SSA pass: TypeScript-style `const`
-/// already guarantees a single assignment by the type system, and an
-/// occasional later `LocalSet` (e.g. an erased TS reassignment that
-/// somehow survived to HIR) is treated as Unresolved.
+/// Pre-#1725 this collected ONLY top-level module consts, on the assumption that
+/// a dynamic `import()` argument is always evaluated in module-init scope. That
+/// is wrong: `import()` can sit inside a function. hono's
+/// `hono/dist/utils/color.js` does
+/// ```js
+/// async function getColorEnabledAsync() {
+///   const cfWorkers = "cloudflare:workers";
+///   try { return "NO_COLOR" in ((await import(cfWorkers)).env ?? {}); } catch { return false; }
+/// }
+/// ```
+/// — a function-local `const` string literal used as the specifier (wrapped in
+/// the optional-dep `try/catch` idiom). At this HIR stage closures are still
+/// inline and capture by the *original* `LocalId`, and `for_each_dynamic_import_mut`
+/// descends into closure bodies, so a const declared in any enclosing scope
+/// resolves at the import site. `LocalId`s are module-unique, so a single flat
+/// id→init map across all scopes is unambiguous.
+///
+/// Mutable bindings (`let`, `var`, reassigned-anywhere consts) are excluded —
+/// only `const x = <single_init>` shapes participate. This matches the spec's
+/// "single SSA def to a resolvable expression" constraint without a full SSA
+/// pass: TypeScript-style `const` already guarantees a single assignment, and an
+/// occasional later `LocalSet` (an erased TS reassignment that survived to HIR)
+/// invalidates the entry below so it falls back to Unresolved.
 pub fn collect_module_const_locals(module: &Module) -> std::collections::HashMap<u32, Expr> {
     use std::collections::HashMap;
     let mut consts: HashMap<u32, Expr> = HashMap::new();
-    for stmt in &module.init {
-        if let Stmt::Let {
-            id,
-            init: Some(expr),
-            mutable: false,
-            ..
-        } = stmt
-        {
-            consts.insert(*id, expr.clone());
+
+    // Gather every function body and standalone init expression reachable in
+    // the module — the SAME scope set `for_each_dynamic_import_mut` walks
+    // (top-level, functions, class ctor/methods/getters/setters/static-methods,
+    // field + global initializers). Collecting consts from all of them means a
+    // const in scope at *any* dynamic-import site resolves, regardless of where
+    // the `import()` sits (#1725).
+    let mut funcs: Vec<&Function> = module.functions.iter().collect();
+    let mut init_exprs: Vec<&Expr> = Vec::new();
+    for cls in &module.classes {
+        if let Some(ctor) = &cls.constructor {
+            funcs.push(ctor);
+        }
+        funcs.extend(cls.methods.iter());
+        funcs.extend(cls.getters.iter().map(|(_, f)| f));
+        funcs.extend(cls.setters.iter().map(|(_, f)| f));
+        funcs.extend(cls.static_methods.iter());
+        for field in cls.fields.iter().chain(cls.static_fields.iter()) {
+            if let Some(init) = &field.init {
+                init_exprs.push(init);
+            }
         }
     }
-    // Any later mutation invalidates the entry. Walk the entire module
-    // (top-level + every function/method body) and remove ids that get
-    // reassigned.
+    for g in &module.globals {
+        if let Some(init) = &g.init {
+            init_exprs.push(init);
+        }
+    }
+
+    for stmt in &module.init {
+        collect_const_locals_stmt(stmt, &mut consts);
+    }
+    for func in &funcs {
+        for s in &func.body {
+            collect_const_locals_stmt(s, &mut consts);
+        }
+        for p in &func.params {
+            if let Some(d) = &p.default {
+                collect_const_locals_expr(d, &mut consts);
+            }
+        }
+    }
+    for e in &init_exprs {
+        collect_const_locals_expr(e, &mut consts);
+    }
+
+    // Any later mutation invalidates the entry — walk the same scope set
+    // (descending into closures) and remove ids that get reassigned.
     let mut mutated: std::collections::HashSet<u32> = std::collections::HashSet::new();
     for stmt in &module.init {
         scan_mutations_stmt(stmt, &mut mutated);
     }
-    for func in &module.functions {
+    for func in &funcs {
         for s in &func.body {
             scan_mutations_stmt(s, &mut mutated);
         }
-    }
-    for cls in &module.classes {
-        if let Some(ctor) = &cls.constructor {
-            for s in &ctor.body {
-                scan_mutations_stmt(s, &mut mutated);
-            }
-        }
-        for m in &cls.methods {
-            for s in &m.body {
-                scan_mutations_stmt(s, &mut mutated);
+        for p in &func.params {
+            if let Some(d) = &p.default {
+                scan_mutations_expr(d, &mut mutated);
             }
         }
     }
+    for e in &init_exprs {
+        scan_mutations_expr(e, &mut mutated);
+    }
+
     for id in mutated {
         consts.remove(&id);
     }
     consts
+}
+
+/// Collect `const x = <init>` bindings reachable from `stmt` into `out`,
+/// recursing through nested blocks (#1725). Mirrors `scan_mutations_stmt`'s
+/// traversal and additionally descends into closure bodies via
+/// `collect_const_locals_expr`.
+fn collect_const_locals_stmt(stmt: &Stmt, out: &mut std::collections::HashMap<u32, Expr>) {
+    match stmt {
+        Stmt::Let {
+            id,
+            init: Some(e),
+            mutable,
+            ..
+        } => {
+            if !*mutable {
+                out.insert(*id, e.clone());
+            }
+            collect_const_locals_expr(e, out);
+        }
+        Stmt::Let { init: None, .. } => {}
+        Stmt::Expr(e) => collect_const_locals_expr(e, out),
+        Stmt::Return(opt) => {
+            if let Some(e) = opt {
+                collect_const_locals_expr(e, out);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_const_locals_expr(condition, out);
+            for s in then_branch {
+                collect_const_locals_stmt(s, out);
+            }
+            if let Some(eb) = else_branch {
+                for s in eb {
+                    collect_const_locals_stmt(s, out);
+                }
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            collect_const_locals_expr(condition, out);
+            for s in body {
+                collect_const_locals_stmt(s, out);
+            }
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                collect_const_locals_stmt(i, out);
+            }
+            if let Some(c) = condition {
+                collect_const_locals_expr(c, out);
+            }
+            if let Some(u) = update {
+                collect_const_locals_expr(u, out);
+            }
+            for s in body {
+                collect_const_locals_stmt(s, out);
+            }
+        }
+        Stmt::Labeled { body, .. } => collect_const_locals_stmt(body, out),
+        Stmt::Throw(e) => collect_const_locals_expr(e, out),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                collect_const_locals_stmt(s, out);
+            }
+            if let Some(c) = catch {
+                for s in &c.body {
+                    collect_const_locals_stmt(s, out);
+                }
+            }
+            if let Some(fb) = finally {
+                for s in fb {
+                    collect_const_locals_stmt(s, out);
+                }
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            collect_const_locals_expr(discriminant, out);
+            for c in cases {
+                if let Some(t) = &c.test {
+                    collect_const_locals_expr(t, out);
+                }
+                for s in &c.body {
+                    collect_const_locals_stmt(s, out);
+                }
+            }
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => {}
+    }
+}
+
+/// Descend into an expression collecting const locals declared inside closure
+/// bodies (`walk_expr_children` deliberately skips closure bodies, so handle
+/// them explicitly). #1725.
+fn collect_const_locals_expr(expr: &Expr, out: &mut std::collections::HashMap<u32, Expr>) {
+    if let Expr::Closure { body, .. } = expr {
+        for s in body {
+            collect_const_locals_stmt(s, out);
+        }
+    }
+    walk_expr_children(expr, &mut |child| collect_const_locals_expr(child, out));
 }
 
 fn scan_mutations_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<u32>) {
@@ -523,6 +688,14 @@ fn scan_mutations_expr(expr: &Expr, out: &mut std::collections::HashSet<u32>) {
             out.insert(*id);
         }
         _ => {}
+    }
+    // `walk_expr_children` deliberately skips closure bodies; descend manually
+    // so a const reassigned inside a nested closure still invalidates the
+    // entry now that function/closure-scope consts are collected (#1725).
+    if let Expr::Closure { body, .. } = expr {
+        for s in body {
+            scan_mutations_stmt(s, out);
+        }
     }
     walk_expr_children(expr, &mut |child| scan_mutations_expr(child, out));
 }
@@ -928,6 +1101,79 @@ mod tests {
         let consts = collect_module_const_locals(&m);
         assert!(consts.contains_key(&1));
         assert!(!consts.contains_key(&2));
+    }
+
+    #[test]
+    fn resolve_closure_local_const_specifier() {
+        // #1725: `() => { const cfWorkers = "cloudflare:workers"; import(cfWorkers) }`
+        // — the const lives inside a closure body (hono's getColorEnabledAsync
+        // IIFE shape), not at module top level. It must be collected so the
+        // specifier resolves instead of erroring "not a module-level const".
+        let mut m = Module::new("t");
+        let closure = Expr::Closure {
+            func_id: 0,
+            params: vec![],
+            return_type: Type::Any,
+            body: vec![Stmt::Let {
+                id: 9,
+                name: "cfWorkers".into(),
+                ty: Type::String,
+                mutable: false,
+                init: Some(Expr::String("cloudflare:workers".into())),
+            }],
+            captures: vec![],
+            mutable_captures: vec![],
+            captures_this: false,
+            enclosing_class: None,
+            is_async: true,
+        };
+        m.init.push(Stmt::Expr(closure));
+
+        let consts = collect_module_const_locals(&m);
+        assert!(
+            consts.contains_key(&9),
+            "const declared inside a closure body should be collected"
+        );
+
+        let mut visiting = std::collections::HashSet::new();
+        match resolve_import_path_with_consts(&Expr::LocalGet(9), &consts, &mut visiting) {
+            Resolution::Set(v) => assert_eq!(v, vec!["cloudflare:workers"]),
+            other => panic!("expected resolved Set, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn collect_consts_invalidates_closure_mutation() {
+        // Soundness: a binding reassigned inside a closure body must be dropped
+        // from the const map (the mutation scan descends into closures, #1725).
+        let mut m = Module::new("t");
+        m.init.push(Stmt::Let {
+            id: 5,
+            name: "p".into(),
+            ty: Type::String,
+            mutable: false,
+            init: Some(Expr::String("./a.ts".into())),
+        });
+        let closure = Expr::Closure {
+            func_id: 0,
+            params: vec![],
+            return_type: Type::Any,
+            body: vec![Stmt::Expr(Expr::LocalSet(
+                5,
+                Box::new(Expr::String("./b.ts".into())),
+            ))],
+            captures: vec![5],
+            mutable_captures: vec![5],
+            captures_this: false,
+            enclosing_class: None,
+            is_async: false,
+        };
+        m.init.push(Stmt::Expr(closure));
+        let consts = collect_module_const_locals(&m);
+        assert!(
+            !consts.contains_key(&5),
+            "mutation inside closure must invalidate"
+        );
     }
 
     #[test]
