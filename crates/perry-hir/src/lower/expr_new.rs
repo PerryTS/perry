@@ -186,6 +186,29 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
         ast::Expr::Ident(ident) => {
             let class_name = ident.sym.to_string();
 
+            // #1691: an inline `new Request(...)` / `new Response(...)` / etc.
+            // whose result is consumed immediately (never bound to a local)
+            // skips the var-decl detection in destructuring/var_decl.rs, so
+            // `uses_fetch` would stay false and the auto-optimize build would
+            // strip the fetch / http-client feature — the link then fails on
+            // `_js_request_new` / `_js_request_text` / … Set the flag here so
+            // the inline and variable-assigned forms agree. (Lowering itself
+            // is unchanged — these fall through to `Expr::New { class_name }`
+            // below, which codegen dispatches to the runtime ctor.)
+            if matches!(
+                class_name.as_str(),
+                "Request"
+                    | "Response"
+                    | "Headers"
+                    | "Blob"
+                    | "File"
+                    | "ReadableStream"
+                    | "WritableStream"
+                    | "TransformStream"
+            ) {
+                ctx.uses_fetch = true;
+            }
+
             // Handle built-in types
             if class_name == "Map" {
                 // new Map() or new Map(entries)

@@ -68,11 +68,13 @@ pub(crate) struct DiagTracingState {
 
 // Known follow-ups for the thread-local state below:
 //
-// * #1309 — channels are pinned for the process lifetime. Entries are
-//   never removed from `DIAG_CHANNEL_BY_KEY`/`DIAG_CHANNELS`, so a
-//   long-running service that mints per-request channel names leaks
-//   memory unboundedly. Node holds channels weakly; mirroring that
-//   needs either a GC post-sweep hook or a weak-ref primitive.
+// * #1309 — channels used to be pinned for the process lifetime. A soft
+//   cap now evicts the oldest *inactive* channels (no subscribers, no
+//   stores) once the map crosses `DIAG_CHANNEL_SOFT_CAP`, so a long-running
+//   service that mints per-request channel names stays bounded (see
+//   `evict_inactive_diag_channels_if_needed`). Full weak-collection (drop a
+//   channel the moment no user reference and no subscriber remain) still
+//   needs a GC post-sweep hook or a weak-ref primitive.
 //
 // * #1310 — these maps are `thread_local!`, so `parallelMap`/`spawn`
 //   workers see an empty world. A `publish` from a worker thread
@@ -387,11 +389,66 @@ pub(crate) fn update_all_tracing_active() {
     });
 }
 
+// #1309: soft cap on the number of live diagnostics channels. Node holds
+// channels weakly — a channel with no subscribers, no bound stores, and no
+// user reference is collectible. Perry can't observe "no user reference"
+// without GC integration, but the unbounded-growth case the issue describes
+// is a long-running service minting per-request channel names that nobody
+// subscribes to (`dc.channel(`req-${id}`)`). When the map crosses the cap we
+// drop the oldest *inactive* channels (no subscribers, no stores) so memory
+// stays bounded. The cap is generous enough that normal programs (a handful
+// of stable channel names) never trigger eviction; active channels are never
+// evicted, so subscribed/published flows are unaffected.
+const DIAG_CHANNEL_SOFT_CAP: usize = 8192;
+const DIAG_CHANNEL_EVICT_BATCH: usize = 2048;
+
+/// Drop the oldest inactive channels when the live-channel map crosses the
+/// soft cap (#1309). Eviction happens in batches so the O(n) scan amortizes
+/// across many `channel(name)` calls. Ids are monotonic, so the lowest ids
+/// are the oldest. An evicted name simply re-allocates a fresh channel on the
+/// next `channel(name)` — correct for the unsubscribed per-request pattern;
+/// a still-held channel object whose name was evicted would dispatch against
+/// a dropped id (a rare divergence accepted for the leak fix).
+fn evict_inactive_diag_channels_if_needed() {
+    let len = DIAG_CHANNELS.with(|m| m.borrow().len());
+    if len < DIAG_CHANNEL_SOFT_CAP {
+        return;
+    }
+    let mut victims: Vec<(i64, f64)> = DIAG_CHANNELS.with(|m| {
+        let m = m.borrow();
+        let mut v: Vec<(i64, f64)> = m
+            .iter()
+            .filter(|(_, s)| s.subscribers.is_empty() && s.stores.is_empty())
+            .map(|(id, s)| (*id, s.name))
+            .collect();
+        v.sort_unstable_by_key(|(id, _)| *id);
+        v
+    });
+    victims.truncate(DIAG_CHANNEL_EVICT_BATCH);
+    for (id, name) in victims {
+        DIAG_CHANNELS.with(|m| {
+            m.borrow_mut().remove(&id);
+        });
+        if let Some(key) = channel_key(name) {
+            DIAG_CHANNEL_BY_KEY.with(|m| {
+                let mut map = m.borrow_mut();
+                // Only drop the name→id mapping if it still points at the
+                // channel we're evicting (a re-created channel would have
+                // overwritten it with a new id).
+                if map.get(&key).copied() == Some(id) {
+                    map.remove(&key);
+                }
+            });
+        }
+    }
+}
+
 pub(crate) fn ensure_channel(name: f64) -> i64 {
     let key = channel_key(name).unwrap_or_else(|| throw_invalid_arg());
     if let Some(id) = DIAG_CHANNEL_BY_KEY.with(|m| m.borrow().get(&key).copied()) {
         return id;
     }
+    evict_inactive_diag_channels_if_needed();
     let id = next_diag_id();
     let obj = js_object_alloc(0, 9);
     set_field_value(obj, "name", name);
@@ -1148,4 +1205,66 @@ pub(crate) fn ensure_diag_noop_closure() -> *mut ClosureHeader {
         ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
         allocated
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inactive_state() -> DiagChannelState {
+        DiagChannelState {
+            name: 0.0,
+            obj: std::ptr::null_mut(),
+            subscribers: Vec::new(),
+            stores: Vec::new(),
+        }
+    }
+
+    // #1309: crossing the soft cap evicts a batch of the oldest inactive
+    // channels so the live-channel map stays bounded.
+    #[test]
+    fn diag_channels_capped_by_evicting_inactive() {
+        DIAG_CHANNELS.with(|m| m.borrow_mut().clear());
+        DIAG_CHANNEL_BY_KEY.with(|m| m.borrow_mut().clear());
+        for _ in 0..DIAG_CHANNEL_SOFT_CAP + 100 {
+            let id = next_diag_id();
+            DIAG_CHANNELS.with(|m| {
+                m.borrow_mut().insert(id, inactive_state());
+            });
+        }
+        evict_inactive_diag_channels_if_needed();
+        let len = DIAG_CHANNELS.with(|m| m.borrow().len());
+        assert!(len <= DIAG_CHANNEL_SOFT_CAP, "expected <= cap, got {len}");
+        assert!(
+            len >= DIAG_CHANNEL_SOFT_CAP - DIAG_CHANNEL_EVICT_BATCH,
+            "should evict at most one batch, got {len}"
+        );
+        DIAG_CHANNELS.with(|m| m.borrow_mut().clear());
+    }
+
+    // #1309: a subscribed (active) channel is never evicted, even when the
+    // map is over the cap.
+    #[test]
+    fn active_diag_channel_survives_eviction() {
+        DIAG_CHANNELS.with(|m| m.borrow_mut().clear());
+        DIAG_CHANNEL_BY_KEY.with(|m| m.borrow_mut().clear());
+        let active_id = next_diag_id();
+        DIAG_CHANNELS.with(|m| {
+            let mut s = inactive_state();
+            s.subscribers.push(1.0);
+            m.borrow_mut().insert(active_id, s);
+        });
+        for _ in 0..DIAG_CHANNEL_SOFT_CAP + 100 {
+            let id = next_diag_id();
+            DIAG_CHANNELS.with(|m| {
+                m.borrow_mut().insert(id, inactive_state());
+            });
+        }
+        evict_inactive_diag_channels_if_needed();
+        assert!(
+            DIAG_CHANNELS.with(|m| m.borrow().contains_key(&active_id)),
+            "subscribed channel must not be evicted"
+        );
+        DIAG_CHANNELS.with(|m| m.borrow_mut().clear());
+    }
 }
