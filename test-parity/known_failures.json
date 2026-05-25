@@ -3109,5 +3109,23 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: user _destroy(err, cb) — not invoked or receives wrong error. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/promises/pipeline-five-stages": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: 5-stage promises-pipeline — final sink doesn't receive chunks. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/promises/pipeline-array-source-promise": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: promises.pipeline(array, dst) — sync iterable source not collected. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/promises/finished-abortable-signal-abort": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: promises.finished({signal}) — abort doesn't reject with AbortError. Flips to PASS when #1532 lands."
   }
 }
