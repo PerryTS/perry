@@ -395,6 +395,7 @@ mod tests {
             bounds_state: None,
             alias_state: None,
             access_mode: None,
+            buffer_access: None,
             materialization_reason: None,
             fallback_reason: None,
             native_value_state: NativeValueState::RegionLocal,
@@ -610,6 +611,10 @@ mod tests {
             data_ptr: "%ptr".to_string(),
             length: "%len".to_string(),
             elem: crate::native_value::BufferElem::U8,
+            element_width_bytes: 1,
+            index_unit: crate::native_value::BufferIndexUnit::Byte,
+            view_byte_offset: Some(0),
+            length_offset_from_data: -8,
             bounds: BoundsState::Unknown,
             alias: AliasState::Unknown,
         });

@@ -98,7 +98,12 @@ pub(crate) fn lower_if(
 
     // Compile then branch.
     ctx.current_block = then_idx;
+    let guard_scope_id = ctx.next_loop_proof_scope_id();
+    let guarded = crate::expr::guarded_buffer_indices_for_condition(ctx, condition, guard_scope_id);
+    ctx.guarded_buffer_index_pairs.extend(guarded);
     lower_stmts(ctx, then_branch)?;
+    ctx.guarded_buffer_index_pairs
+        .retain(|fact| fact.scope_id != guard_scope_id);
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }

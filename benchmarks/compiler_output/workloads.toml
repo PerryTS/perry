@@ -839,3 +839,169 @@ expr_kind = "ScalarArrayIndexGet"
 consumer = "scalar_array_element_load"
 native_rep_name = "js_value"
 access_mode = "none"
+
+[workloads.width_aware_buffer_kernels]
+source = "benchmarks/compiler_output/fixtures/width_aware_buffer_kernels.ts"
+kind = "width_aware_buffer_kernels"
+allow_hot_loop_conversions = true
+allow_dynamic_property_runtime = true
+
+[workloads.width_aware_buffer_kernels.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: mixed endian and floating-point parsing loops are scalar"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.width_aware_buffer_kernels.runtime_budgets]
+allocations_traced = 5
+gc_collections_traced = 0
+write_barriers_static = 5
+write_barriers_traced = 5
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 18
+
+[[workloads.width_aware_buffer_kernels.ir_checks]]
+name = "wide_buffer_reads_have_bswap"
+contains_any = ["@llvm.bswap.i32", "@llvm.bswap.i64"]
+detail = "big-endian fixed-width Buffer reads lower through native bswap"
+
+[[workloads.width_aware_buffer_kernels.ir_checks]]
+name = "no_buffer_get_set_helpers_in_hot_kernel"
+regex_none = ["@js_buffer_get", "@js_buffer_set"]
+detail = "width-aware hot loops avoid byte Buffer runtime helpers"
+
+[[workloads.width_aware_buffer_kernels.ir_checks]]
+name = "typed_array_native_load_widths"
+regex_all = ["\\bload i16, ptr\\b", "\\bload i32, ptr\\b", "\\bload float, ptr\\b", "\\bload double, ptr\\b"]
+detail = "tracked typed arrays use native element-width loads"
+
+[[workloads.width_aware_buffer_kernels.stdout_checks]]
+name = "width_aware_buffer_kernels_checksum"
+contains = "width_aware_buffer_kernels:38314632556"
+detail = "width-aware buffer and typed-array semantic checksum"
+
+[workloads.width_aware_buffer_kernels.native_rep_checks]
+allow_materialization_reasons = ["function_abi", "runtime_api", "unknown_alias", "unknown_bounds"]
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "buffer_read_u32_be"
+expr_kind = "BufferNumericRead"
+consumer = "BufferNumericRead.native_u32"
+native_rep_name = "u32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+notes_contains = "method=readUInt32BE"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "buffer_read_i32_le"
+expr_kind = "BufferNumericRead"
+consumer = "BufferNumericRead.native_i32"
+native_rep_name = "i32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+notes_contains = "method=readInt32LE"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "buffer_read_f32_be"
+expr_kind = "BufferNumericRead"
+consumer = "BufferNumericRead.native_f32"
+native_rep_name = "f32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+notes_contains = "method=readFloatBE"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "buffer_read_f64_le"
+expr_kind = "BufferNumericRead"
+consumer = "BufferNumericRead.native_f64"
+native_rep_name = "f64"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+notes_contains = "method=readDoubleLE"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_u16_read"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_u32"
+native_rep_name = "u32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+min = 2
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_i32_read"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_i32"
+native_rep_name = "i32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_f32_read"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_f32"
+native_rep_name = "f32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_f64_read"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_f64"
+native_rep_name = "f64"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_alias_get_fallback"
+source_function = "typedArrayHazards"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+bounds_state = "unknown"
+materialization_reason = "unknown_alias"
+notes_contains = "typed_array_fallback=untracked_or_unproven"
+min = 2
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_bounds_get_fallback"
+source_function = "typedArrayHazards"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+bounds_state = "unknown"
+materialization_reason = "unknown_bounds"
+notes_contains = "typed_array_fallback=untracked_or_unproven"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_alias_set_fallback"
+source_function = "typedArrayHazards"
+expr_kind = "TypedArraySet"
+consumer = "TypedArraySet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+bounds_state = "unknown"
+materialization_reason = "unknown_alias"
+notes_contains = "typed_array_fallback=untracked_or_unproven"
+min = 2
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_bounds_set_fallback"
+source_function = "typedArrayHazards"
+expr_kind = "TypedArraySet"
+consumer = "TypedArraySet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+bounds_state = "unknown"
+materialization_reason = "unknown_bounds"
+notes_contains = "typed_array_fallback=untracked_or_unproven"

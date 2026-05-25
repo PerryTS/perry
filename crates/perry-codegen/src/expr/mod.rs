@@ -23,10 +23,10 @@ use crate::lower_string_method::{
 };
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
-    AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessMode, BufferElem,
-    BufferViewRep, BufferViewSlot, ExpectedNativeRep, LengthSource, LoweredValue,
-    MaterializationReason, NativeFactUse, NativeRep, NativeRepRecord, NativeValueState,
-    ScalarConversionRecord, SemanticKind,
+    AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode,
+    BufferElem, BufferIndexUnit, BufferViewRep, BufferViewSlot, ExpectedNativeRep,
+    GuardedBufferIndex, LengthSource, LoweredValue, MaterializationReason, NativeFactUse,
+    NativeRep, NativeRepRecord, NativeValueState, ScalarConversionRecord, SemanticKind,
 };
 use crate::strings::StringPool;
 use crate::type_analysis::{
@@ -59,7 +59,8 @@ mod write_barrier;
 pub(crate) use crate::native_value::materialize_js_value;
 pub(crate) use array_literal::lower_array_literal;
 pub(crate) use buffer_access::{
-    emit_buffer_access_pointer, lower_buffer_access_proof, lower_buffer_load, lower_buffer_store,
+    access_facts_for_spec, emit_buffer_access_pointer, lower_buffer_access_proof,
+    lower_buffer_load, lower_buffer_store, lower_typed_array_load, lower_typed_array_store,
     BufferAccessEmission, BufferAccessSpec, StoreResult,
 };
 #[allow(unused_imports)] // ChannelReduction kept reachable for surface stability
@@ -90,9 +91,9 @@ pub(crate) use pod_record::{
 };
 pub(crate) use range_facts::{
     bounds_for_buffer_access, bounds_for_buffer_access_width, effective_alias_state_for_access,
-    int_range_expr, invalidate_local_write_facts, record_int_facts_for_let,
-    record_int_facts_for_local_set, record_int_facts_for_update, while_condition_range_fact,
-    IntRange, IntRangeFact,
+    guarded_buffer_indices_for_condition, int_range_expr, invalidate_local_write_facts,
+    record_int_facts_for_let, record_int_facts_for_local_set, record_int_facts_for_update,
+    while_condition_range_fact, IntRange, IntRangeFact,
 };
 pub(crate) use strings::emit_string_literal_global;
 pub(crate) use typed_feedback::{
@@ -783,6 +784,10 @@ pub(crate) struct FnCtx<'a> {
     /// Loop-local facts proving a buffer index is bounded inside the current
     /// loop body.
     pub bounded_buffer_index_pairs: Vec<BoundedBufferIndex>,
+    /// Branch/loop-condition facts proving `index + width <= view.length`.
+    /// These are scoped like loop facts and consumed only for accesses whose
+    /// required width does not exceed the guarded width.
+    pub guarded_buffer_index_pairs: Vec<GuardedBufferIndex>,
     pub buffer_hazard_reasons: std::collections::HashMap<u32, MaterializationReason>,
     /// Local aliases that preserve an i32 index, e.g. `const j = i | 0`.
     pub native_i32_aliases: std::collections::HashMap<u32, u32>,
@@ -1246,6 +1251,7 @@ impl<'a> FnCtx<'a> {
             access_mode,
             materialization_reason,
             None,
+            None,
             emitted_inbounds,
             emitted_noalias,
             notes,
@@ -1263,6 +1269,7 @@ impl<'a> FnCtx<'a> {
         access_mode: Option<BufferAccessMode>,
         materialization_reason: Option<MaterializationReason>,
         scalar_conversion: Option<ScalarConversionRecord>,
+        buffer_access: Option<BufferAccessFacts>,
         emitted_inbounds: bool,
         emitted_noalias: bool,
         notes: Vec<String>,
@@ -1312,6 +1319,7 @@ impl<'a> FnCtx<'a> {
             bounds_state,
             alias_state,
             access_mode,
+            buffer_access,
             materialization_reason,
             fallback_reason,
             native_value_state,
@@ -1330,10 +1338,25 @@ impl<'a> FnCtx<'a> {
 pub(crate) fn buffer_view_lowered_value(
     data_ptr: &str,
     length: &str,
+    elem: BufferElem,
+    element_width_bytes: u32,
+    index_unit: BufferIndexUnit,
+    view_byte_offset: Option<i64>,
+    length_offset_from_data: i32,
     bounds: BoundsState,
     alias: AliasState,
 ) -> LoweredValue {
-    LoweredValue::buffer_view(data_ptr, length, bounds, alias)
+    LoweredValue::buffer_view(
+        data_ptr,
+        length,
+        elem,
+        element_width_bytes,
+        index_unit,
+        view_byte_offset,
+        length_offset_from_data,
+        bounds,
+        alias,
+    )
 }
 
 pub(crate) fn downgrade_buffer_alias(ctx: &mut FnCtx<'_>, id: u32, reason: MaterializationReason) {
@@ -1386,6 +1409,10 @@ pub(crate) fn update_buffer_view_for_assignment(
                 data_slot,
                 scope_idx: None,
                 elem: BufferElem::U8,
+                element_width_bytes: 1,
+                index_unit: BufferIndexUnit::Byte,
+                view_byte_offset: Some(0),
+                length_offset_from_data: -8,
                 alias: AliasState::MayAlias,
                 length_source: Some(LengthSource::Unknown),
             },

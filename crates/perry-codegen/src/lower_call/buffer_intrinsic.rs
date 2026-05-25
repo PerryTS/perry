@@ -8,8 +8,8 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{BufferAccessSpec, FnCtx};
-use crate::native_value::LoweredValue;
+use crate::expr::{access_facts_for_spec, BufferAccessSpec, FnCtx};
+use crate::native_value::{BufferEndian, LoweredValue};
 use crate::types::{F32, I32};
 
 /// Issue #92: inline Buffer numeric reads (`buf.readInt32BE(offset)` etc.)
@@ -21,7 +21,7 @@ use crate::types::{F32, I32};
 /// currently that's any receiver that isn't a tracked `buffer_data_slot`.
 struct BufferNumericReadSpec {
     width_bytes: u32,
-    swap: bool,     // BE → emit @llvm.bswap; LE → skip
+    endian: BufferEndian,
     signed: bool,   // signed vs unsigned JS-number materialization
     is_float: bool, // true for readFloat*/readDouble*
 }
@@ -31,86 +31,86 @@ fn classify_buffer_numeric_read(method: &str) -> Option<BufferNumericReadSpec> {
     Some(match method {
         "readUInt8" | "readUint8" => S {
             width_bytes: 1,
-            swap: false,
+            endian: BufferEndian::Native,
             signed: false,
             is_float: false,
         },
         "readInt8" => S {
             width_bytes: 1,
-            swap: false,
+            endian: BufferEndian::Native,
             signed: true,
             is_float: false,
         },
         "readUInt16BE" | "readUint16BE" => S {
             width_bytes: 2,
-            swap: true,
+            endian: BufferEndian::Big,
             signed: false,
             is_float: false,
         },
         "readUInt16LE" | "readUint16LE" => S {
             width_bytes: 2,
-            swap: false,
+            endian: BufferEndian::Little,
             signed: false,
             is_float: false,
         },
         "readInt16BE" => S {
             width_bytes: 2,
-            swap: true,
+            endian: BufferEndian::Big,
             signed: true,
             is_float: false,
         },
         "readInt16LE" => S {
             width_bytes: 2,
-            swap: false,
+            endian: BufferEndian::Little,
             signed: true,
             is_float: false,
         },
         "readUInt32BE" | "readUint32BE" => S {
             width_bytes: 4,
-            swap: true,
+            endian: BufferEndian::Big,
             signed: false,
             is_float: false,
         },
         "readUInt32LE" | "readUint32LE" => S {
             width_bytes: 4,
-            swap: false,
+            endian: BufferEndian::Little,
             signed: false,
             is_float: false,
         },
         "readInt32BE" => S {
             width_bytes: 4,
-            swap: true,
+            endian: BufferEndian::Big,
             signed: true,
             is_float: false,
         },
         "readInt32LE" => S {
             width_bytes: 4,
-            swap: false,
+            endian: BufferEndian::Little,
             signed: true,
             is_float: false,
         },
         "readFloatBE" => S {
             width_bytes: 4,
-            swap: true,
-            signed: true,
+            endian: BufferEndian::Big,
+            signed: false,
             is_float: true,
         },
         "readFloatLE" => S {
             width_bytes: 4,
-            swap: false,
-            signed: true,
+            endian: BufferEndian::Little,
+            signed: false,
             is_float: true,
         },
         "readDoubleBE" => S {
             width_bytes: 8,
-            swap: true,
-            signed: true,
+            endian: BufferEndian::Big,
+            signed: false,
             is_float: true,
         },
         "readDoubleLE" => S {
             width_bytes: 8,
-            swap: false,
-            signed: true,
+            endian: BufferEndian::Little,
+            signed: false,
             is_float: true,
         },
         _ => return None,
@@ -133,7 +133,12 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     if args.len() != 1 {
         return Ok(None);
     }
-    let access_spec = BufferAccessSpec::buffer_numeric_read(spec.width_bytes);
+    let access_spec = BufferAccessSpec::buffer_numeric_read(
+        spec.width_bytes,
+        spec.endian,
+        spec.signed,
+        spec.is_float,
+    );
     let Some(proof) = crate::expr::lower_buffer_access_proof(ctx, object, &args[0], access_spec)?
     else {
         return Ok(None);
@@ -149,13 +154,21 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         _ => unreachable!(),
     };
     let raw = blk.fresh_reg();
+    let load_align = if access_spec.index_unit == crate::native_value::BufferIndexUnit::Byte {
+        1
+    } else {
+        spec.width_bytes.max(1)
+    };
     blk.emit_raw(format!(
-        "{} = load {}, ptr {}{}",
-        raw, load_ty, emission.elem_ptr, emission.alias_metadata
+        "{} = load {}, ptr {}, align {}{}",
+        raw, load_ty, emission.elem_ptr, load_align, emission.alias_metadata
     ));
     // Byte-swap for BE on multi-byte widths (swap.i8 doesn't exist; width=1
     // never has `swap=true` in the spec table anyway).
-    let swapped = match (spec.swap, swap_intrinsic) {
+    let should_swap = spec.width_bytes > 1
+        && spec.endian != BufferEndian::Native
+        && spec.endian != target_endian();
+    let swapped = match (should_swap, swap_intrinsic) {
         (true, Some(intr)) => {
             let r = blk.fresh_reg();
             blk.emit_raw(format!(
@@ -210,10 +223,16 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     let buffer_view = crate::expr::buffer_view_lowered_value(
         &emission.data_ptr,
         &emission.len_i32,
+        proof.view.elem.clone(),
+        proof.view.element_width_bytes,
+        proof.view.index_unit,
+        proof.view.view_byte_offset,
+        proof.view.length_offset_from_data,
         proof.bounds.clone(),
         proof.alias.clone(),
     );
-    ctx.record_lowered_value_with_access_mode(
+    let facts = access_facts_for_spec(access_spec, &proof.view, Some(&emission.len_i32));
+    ctx.record_lowered_value_with_access_mode_and_conversion(
         "BufferNumericRead",
         Some(proof.buffer_local_id),
         "BufferNumericRead.BufferView",
@@ -222,6 +241,8 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         Some(proof.alias.clone()),
         Some(proof.access_mode),
         None,
+        None,
+        Some(facts),
         proof.may_emit_inbounds,
         proof.may_emit_noalias,
         vec![format!("width_bytes={}", spec.width_bytes)],
@@ -233,7 +254,8 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         "f64" => "BufferNumericRead.native_f64",
         _ => "BufferNumericRead.native_value",
     };
-    ctx.record_lowered_value_with_access_mode(
+    let facts = access_facts_for_spec(access_spec, &proof.view, Some(&emission.len_i32));
+    ctx.record_lowered_value_with_access_mode_and_conversion(
         "BufferNumericRead",
         Some(proof.buffer_local_id),
         result_consumer,
@@ -242,12 +264,23 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         Some(proof.alias),
         Some(proof.access_mode),
         None,
+        None,
+        Some(facts),
         false,
         false,
         vec![
             format!("method={}", method),
             format!("width_bytes={}", spec.width_bytes),
+            format!("endian={:?}", spec.endian),
         ],
     );
     Ok(Some(result))
+}
+
+fn target_endian() -> BufferEndian {
+    if cfg!(target_endian = "big") {
+        BufferEndian::Big
+    } else {
+        BufferEndian::Little
+    }
 }

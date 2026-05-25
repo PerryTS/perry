@@ -21,6 +21,7 @@ use crate::lower_string_method::{
 };
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::native_value::{BoundsState, BufferAccessMode, LoweredValue, MaterializationReason};
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -31,23 +32,39 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
-    array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
-    can_lower_expr_as_i32, emit_array_numeric_write_note_on_block,
-    emit_jsvalue_slot_store_on_block, emit_layout_note_slot_on_block, emit_shadow_slot_clear,
-    emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
-    emit_write_barrier, emit_write_barrier_slot_on_block,
+    array_store_needs_layout_note, array_store_needs_write_barrier,
+    buffer_access_materialization_reason, buffer_alias_metadata_suffix, can_lower_expr_as_i32,
+    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
+    emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
+    emit_string_literal_global, emit_typed_feedback_register_site, emit_v8_export_call,
+    emit_v8_member_method_call, emit_write_barrier, emit_write_barrier_slot_on_block,
     expr_has_numeric_pointer_free_array_layout, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
-    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
-    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
-    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
-    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
-    I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
+    lower_typed_array_store, lower_url_string_getter, materialize_js_value, nanbox_bigint_inline,
+    nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
+    try_flat_const_2d_int, try_lower_flat_const_index_get, try_match_channel_reduction,
+    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
+    FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
 };
+
+fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    matches!(
+        receiver_class_name(ctx, object).as_deref(),
+        Some(
+            "Int8Array"
+                | "Uint8ClampedArray"
+                | "Int16Array"
+                | "Uint16Array"
+                | "Int32Array"
+                | "Uint32Array"
+                | "Float32Array"
+                | "Float64Array"
+        )
+    )
+}
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
@@ -88,16 +105,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
                 return Ok(val_double);
             }
-            // Uint8ClampedArray writes must apply ToUint8Clamp (NaN → 0,
-            // v ≤ 0 → 0, v ≥ 255 → 255, otherwise round-half-to-even).
-            // Route to the runtime helper which already implements the
-            // proper clamping in its KIND_UINT8_CLAMPED branch. Without
-            // this intercept the generic numeric-key path below emits a
-            // raw f64 stride store that bypasses clamping entirely.
-            if matches!(
-                receiver_class_name(ctx, object).as_deref(),
-                Some("Uint8ClampedArray")
-            ) {
+            if is_width_tracked_typed_array_receiver(ctx, object) {
+                if let Some(store) = lower_typed_array_store(ctx, object, index, value)? {
+                    if ctx.discard_expr_value {
+                        return Ok(double_literal(0.0));
+                    }
+                    return Ok(materialize_js_value(
+                        ctx,
+                        store.result,
+                        MaterializationReason::FunctionAbi,
+                    ));
+                }
+
+                // Stores fall back for untracked views, unknown bounds, unsafe
+                // conversions, and Uint8ClampedArray's ToUint8Clamp semantics.
                 let arr_box = lower_expr(ctx, object)?;
                 let idx_double = lower_expr(ctx, index)?;
                 let val_double = lower_expr(ctx, value)?;
@@ -108,6 +129,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 blk.call_void(
                     "js_typed_array_set",
                     &[(I64, &arr_i64), (I32, &idx_i32), (DOUBLE, &val_double)],
+                );
+                let slow = LoweredValue::js_value(val_double.clone());
+                ctx.record_lowered_value_with_access_mode(
+                    "TypedArraySet",
+                    None,
+                    "TypedArraySet.slow_path",
+                    &slow,
+                    Some(BoundsState::Unknown),
+                    None,
+                    Some(BufferAccessMode::DynamicFallback),
+                    Some(buffer_access_materialization_reason(ctx, object)),
+                    false,
+                    false,
+                    vec!["typed_array_fallback=untracked_or_unproven".to_string()],
                 );
                 return Ok(val_double);
             }

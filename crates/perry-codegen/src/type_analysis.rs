@@ -586,6 +586,46 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+fn is_numeric_typed_array_class(name: &str) -> bool {
+    matches!(
+        name,
+        "Int8Array"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float32Array"
+            | "Float64Array"
+    )
+}
+
+fn is_fixed_width_buffer_numeric_read(method: &str) -> bool {
+    matches!(
+        method,
+        "readUInt8"
+            | "readUint8"
+            | "readInt8"
+            | "readUInt16BE"
+            | "readUint16BE"
+            | "readUInt16LE"
+            | "readUint16LE"
+            | "readInt16BE"
+            | "readInt16LE"
+            | "readUInt32BE"
+            | "readUint32BE"
+            | "readUInt32LE"
+            | "readUint32LE"
+            | "readInt32BE"
+            | "readInt32LE"
+            | "readFloatBE"
+            | "readFloatLE"
+            | "readDoubleBE"
+            | "readDoubleLE"
+    )
+}
+
 pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) => true,
@@ -646,6 +686,12 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // load in `js_number_coerce` which blocks LLVM's vectorizer
         // and adds a function call per iteration.
         Expr::IndexGet { object, .. } => {
+            if receiver_class_name(ctx, object)
+                .as_deref()
+                .is_some_and(is_numeric_typed_array_class)
+            {
+                return true;
+            }
             let Expr::LocalGet(arr_id) = object.as_ref() else {
                 return false;
             };
@@ -653,6 +699,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 Some(HirType::Array(elem)) => {
                     matches!(**elem, HirType::Number | HirType::Int32)
                 }
+                Some(HirType::Named(name)) => is_numeric_typed_array_class(name),
                 _ => false,
             }
         }
@@ -660,6 +707,15 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Without this, `fib(n-1) + fib(n-2)` wraps both results in
         // js_number_coerce — ~4 billion wasted runtime calls on fib(40).
         Expr::Call { callee, .. } => {
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if is_fixed_width_buffer_numeric_read(property)
+                    && receiver_class_name(ctx, object)
+                        .as_deref()
+                        .is_some_and(|name| matches!(name, "Buffer" | "Uint8Array"))
+                {
+                    return true;
+                }
+            }
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 ctx.func_signatures
                     .get(fid)

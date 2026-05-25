@@ -1,6 +1,8 @@
 use perry_hir::{BinaryOp, CompareOp, Expr, UpdateOp};
 
-use crate::native_value::{AliasState, BoundsProof, BoundsState, BufferViewSlot, LengthSource};
+use crate::native_value::{
+    AliasState, BoundsProof, BoundsState, BufferViewSlot, GuardedBufferIndex, LengthSource,
+};
 
 use super::FnCtx;
 
@@ -298,6 +300,8 @@ pub(crate) fn invalidate_local_write_facts(ctx: &mut FnCtx<'_>, id: u32) {
 
     ctx.bounded_buffer_index_pairs
         .retain(|fact| fact.index_local_id != id && fact.buffer_local_id != id);
+    ctx.guarded_buffer_index_pairs
+        .retain(|fact| fact.index_local_id != id && fact.buffer_local_id != id);
     ctx.bounded_index_pairs
         .retain(|fact| fact.index_local_id != id && fact.array_local_id != id);
 
@@ -399,9 +403,9 @@ pub(crate) fn bounds_for_buffer_access_width(
     ctx: &FnCtx<'_>,
     buffer_local_id: u32,
     index: &Expr,
-    width_bytes: u32,
+    bounds_width_units: u32,
 ) -> BoundsState {
-    let width_bytes = width_bytes.max(1);
+    let bounds_width_units = bounds_width_units.max(1);
     if let Some(index_local_id) = native_index_source_local(ctx, index) {
         if let Some(bounds) = ctx
             .bounded_buffer_index_pairs
@@ -410,9 +414,24 @@ pub(crate) fn bounds_for_buffer_access_width(
             .find(|fact| {
                 fact.index_local_id == index_local_id
                     && fact.buffer_local_id == buffer_local_id
-                    && width_bytes <= fact.proven_width_bytes.max(1)
+                    && fact.bounds_width_units >= bounds_width_units
             })
             .map(|fact| fact.bounds.clone())
+        {
+            return bounds;
+        }
+        if let Some(bounds) = ctx
+            .guarded_buffer_index_pairs
+            .iter()
+            .rev()
+            .find(|fact| {
+                fact.index_local_id == index_local_id
+                    && fact.buffer_local_id == buffer_local_id
+                    && fact.bounds_width_units >= bounds_width_units
+            })
+            .map(|fact| BoundsState::Guarded {
+                guard_id: fact.guard_id.clone(),
+            })
         {
             return bounds;
         }
@@ -426,7 +445,7 @@ pub(crate) fn bounds_for_buffer_access_width(
             .as_ref()
             .and_then(|source| length_source_constant(ctx, source));
         if let Some(length) = length {
-            let width = i64::from(width_bytes);
+            let width = i64::from(bounds_width_units);
             if index_value >= 0
                 && index_value
                     .checked_add(width)
@@ -439,14 +458,14 @@ pub(crate) fn bounds_for_buffer_access_width(
             return BoundsState::Unknown;
         }
     }
-    range_bounds_for_buffer_access(ctx, buffer_local_id, index, width_bytes)
+    range_bounds_for_buffer_access(ctx, buffer_local_id, index, bounds_width_units)
 }
 
 fn range_bounds_for_buffer_access(
     ctx: &FnCtx<'_>,
     buffer_local_id: u32,
     index: &Expr,
-    width_bytes: u32,
+    bounds_width_units: u32,
 ) -> BoundsState {
     let Some(view) = ctx.buffer_view_slots.get(&buffer_local_id) else {
         return BoundsState::Unknown;
@@ -461,7 +480,7 @@ fn range_bounds_for_buffer_access(
     else {
         return BoundsState::Unknown;
     };
-    let width = i64::from(width_bytes.max(1));
+    let width = i64::from(bounds_width_units.max(1));
     if index_range.min >= 0
         && index_range
             .max
@@ -473,6 +492,176 @@ fn range_bounds_for_buffer_access(
         }
     } else {
         BoundsState::Unknown
+    }
+}
+
+pub(crate) fn guarded_buffer_indices_for_condition(
+    ctx: &FnCtx<'_>,
+    condition: &Expr,
+    scope_id: u32,
+) -> Vec<GuardedBufferIndex> {
+    use perry_hir::{CompareOp, Expr, LogicalOp};
+    match condition {
+        Expr::Logical {
+            op: LogicalOp::And,
+            left,
+            right,
+        } => {
+            let mut out = guarded_buffer_indices_for_condition(ctx, left, scope_id);
+            out.extend(guarded_buffer_indices_for_condition(ctx, right, scope_id));
+            out
+        }
+        Expr::Compare { op, left, right } => match op {
+            CompareOp::Le => guarded_buffer_indices_from_ordered_cmp(
+                ctx,
+                left,
+                right,
+                GuardComparison::LessEqual,
+                scope_id,
+            )
+            .into_iter()
+            .collect(),
+            CompareOp::Lt => guarded_buffer_indices_from_ordered_cmp(
+                ctx,
+                left,
+                right,
+                GuardComparison::LessThan,
+                scope_id,
+            )
+            .into_iter()
+            .collect(),
+            CompareOp::Ge => guarded_buffer_indices_from_ordered_cmp(
+                ctx,
+                right,
+                left,
+                GuardComparison::LessEqual,
+                scope_id,
+            )
+            .into_iter()
+            .collect(),
+            CompareOp::Gt => guarded_buffer_indices_from_ordered_cmp(
+                ctx,
+                right,
+                left,
+                GuardComparison::LessThan,
+                scope_id,
+            )
+            .into_iter()
+            .collect(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GuardComparison {
+    LessEqual,
+    LessThan,
+}
+
+fn guarded_buffer_indices_from_ordered_cmp(
+    ctx: &FnCtx<'_>,
+    left: &Expr,
+    right: &Expr,
+    cmp: GuardComparison,
+    scope_id: u32,
+) -> Option<GuardedBufferIndex> {
+    if let Some((index_local_id, addend)) = index_expr_plus_constant(ctx, left) {
+        if let Some(buffer_local_id) = local_buffer_length_expr(right) {
+            let width = match cmp {
+                GuardComparison::LessEqual => addend,
+                GuardComparison::LessThan => addend.checked_add(1)?,
+            };
+            return guarded_buffer_index(ctx, index_local_id, buffer_local_id, width, scope_id);
+        }
+    }
+    let (buffer_local_id, subtrahend) = local_buffer_length_minus_constant(ctx, right)?;
+    let (index_local_id, addend) = index_expr_plus_constant(ctx, left)?;
+    let width = match cmp {
+        GuardComparison::LessEqual => subtrahend.checked_add(addend)?,
+        GuardComparison::LessThan => subtrahend.checked_add(addend)?.checked_add(1)?,
+    };
+    guarded_buffer_index(ctx, index_local_id, buffer_local_id, width, scope_id)
+}
+
+fn guarded_buffer_index(
+    ctx: &FnCtx<'_>,
+    index_local_id: u32,
+    buffer_local_id: u32,
+    width: i64,
+    scope_id: u32,
+) -> Option<GuardedBufferIndex> {
+    if width < 1 || width > u32::MAX as i64 {
+        return None;
+    }
+    if !ctx.buffer_view_slots.contains_key(&buffer_local_id) {
+        return None;
+    }
+    let nonnegative = ctx.nonnegative_integer_locals.contains(&index_local_id)
+        || int_range_for_local(ctx, index_local_id, &mut std::collections::HashSet::new())
+            .is_some_and(|range| range.min >= 0);
+    if !nonnegative {
+        return None;
+    }
+    Some(GuardedBufferIndex {
+        index_local_id,
+        buffer_local_id,
+        scope_id,
+        bounds_width_units: width as u32,
+        guard_id: format!("explicit_guard_width_{}", width),
+    })
+}
+
+fn index_expr_plus_constant(ctx: &FnCtx<'_>, expr: &Expr) -> Option<(u32, i64)> {
+    match expr {
+        Expr::LocalGet(id) => Some((resolve_native_i32_alias(ctx, *id), 0)),
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+            match (left.as_ref(), right.as_ref()) {
+                (Expr::LocalGet(id), Expr::Integer(addend)) => {
+                    let addend = if matches!(op, BinaryOp::Sub) {
+                        addend.checked_neg()?
+                    } else {
+                        *addend
+                    };
+                    Some((resolve_native_i32_alias(ctx, *id), addend))
+                }
+                (Expr::Integer(addend), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => {
+                    Some((resolve_native_i32_alias(ctx, *id), *addend))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn local_buffer_length_expr(expr: &Expr) -> Option<u32> {
+    match expr {
+        Expr::Uint8ArrayLength(inner) | Expr::BufferLength(inner) => match inner.as_ref() {
+            Expr::LocalGet(id) => Some(*id),
+            _ => None,
+        },
+        Expr::PropertyGet { object, property } if property == "length" => match object.as_ref() {
+            Expr::LocalGet(id) => Some(*id),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn local_buffer_length_minus_constant(ctx: &FnCtx<'_>, expr: &Expr) -> Option<(u32, i64)> {
+    match expr {
+        Expr::Binary {
+            op: BinaryOp::Sub,
+            left,
+            right,
+        } => {
+            let id = local_buffer_length_expr(left)?;
+            let n = exact_i64_expr(ctx, right)?;
+            Some((id, n))
+        }
+        _ => None,
     }
 }
 

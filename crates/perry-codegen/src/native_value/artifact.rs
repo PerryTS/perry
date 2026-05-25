@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::types::LlvmType;
 
-use super::buffer::{AliasState, BoundsState, BufferAccessMode};
+use super::buffer::{AliasState, BoundsState, BufferAccessFacts, BufferAccessMode};
 use super::materialize::MaterializationReason;
 use super::rep::{NativeRep, SemanticKind};
 
@@ -104,6 +104,7 @@ pub(crate) struct NativeRepRecord {
     pub bounds_state: Option<BoundsState>,
     pub alias_state: Option<AliasState>,
     pub access_mode: Option<BufferAccessMode>,
+    pub buffer_access: Option<BufferAccessFacts>,
     pub materialization_reason: Option<MaterializationReason>,
     pub fallback_reason: Option<MaterializationReason>,
     pub native_value_state: NativeValueState,
@@ -291,7 +292,7 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 6,
+        schema_version: 7,
         module,
         records,
         pod_layouts: collect_pod_layouts(records),

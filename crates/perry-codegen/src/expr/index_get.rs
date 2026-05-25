@@ -34,21 +34,37 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
-    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
-    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
-    emit_write_barrier, emit_write_barrier_slot_on_block,
+    buffer_access_materialization_reason, buffer_alias_metadata_suffix, can_lower_expr_as_i32,
+    emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
+    emit_string_literal_global, emit_typed_feedback_register_site, emit_v8_export_call,
+    emit_v8_member_method_call, emit_write_barrier, emit_write_barrier_slot_on_block,
     expr_has_numeric_pointer_free_array_layout, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
-    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
-    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
-    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
-    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
-    I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
+    lower_typed_array_load, lower_url_string_getter, materialize_js_value, nanbox_bigint_inline,
+    nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
+    try_flat_const_2d_int, try_lower_flat_const_index_get, try_match_channel_reduction,
+    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
+    FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
 };
+
+fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    matches!(
+        receiver_class_name(ctx, object).as_deref(),
+        Some(
+            "Int8Array"
+                | "Uint8ClampedArray"
+                | "Int16Array"
+                | "Uint16Array"
+                | "Int32Array"
+                | "Uint32Array"
+                | "Float32Array"
+                | "Float64Array"
+        )
+    )
+}
 
 fn lower_guarded_array_index_get(
     ctx: &mut FnCtx<'_>,
@@ -365,27 +381,45 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(I64, &key_handle)],
                 ));
             }
-            // Uint8ClampedArray reads must use byte-stride load (the
-            // runtime stores 1 byte per element, not 8). Route to the
-            // runtime helper which handles the per-kind load. Without
-            // this intercept the generic numeric-key path below emits
-            // an f64 stride read that returns garbage on byte-packed
-            // Uint8ClampedArray storage.
-            if matches!(
-                receiver_class_name(ctx, object).as_deref(),
-                Some("Uint8ClampedArray")
-            ) {
+            if is_width_tracked_typed_array_receiver(ctx, object) {
+                if let Some(value) = lower_typed_array_load(ctx, object, index)? {
+                    return Ok(materialize_js_value(
+                        ctx,
+                        value,
+                        MaterializationReason::RuntimeApi,
+                    ));
+                }
+
+                // Width-aware typed-array native lowering is only sound for
+                // tracked fresh views with proven/guarded element bounds. All
+                // aliases, reassigned locals, and unknown bounds stay on the
+                // runtime helper, with artifact evidence for the fallback.
                 let arr_box = lower_expr(ctx, object)?;
                 let idx_double = lower_expr(ctx, index)?;
                 let blk = ctx.block();
                 let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                 let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
                 let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
-                return Ok(blk.call(
+                let result = blk.call(
                     DOUBLE,
                     "js_typed_array_get",
                     &[(I64, &arr_i64), (I32, &idx_i32)],
-                ));
+                );
+                let slow = LoweredValue::js_value(result.clone());
+                ctx.record_lowered_value_with_access_mode(
+                    "TypedArrayGet",
+                    None,
+                    "TypedArrayGet.slow_path",
+                    &slow,
+                    Some(BoundsState::Unknown),
+                    None,
+                    Some(BufferAccessMode::DynamicFallback),
+                    Some(buffer_access_materialization_reason(ctx, object)),
+                    false,
+                    false,
+                    vec!["typed_array_fallback=untracked_or_unproven".to_string()],
+                );
+                return Ok(result);
             }
             // Scalar-replaced array literal: `arr[k]` where arr was bound to
             // `[...]` and never escaped, and k is a compile-time index in

@@ -10,8 +10,9 @@ pub(crate) use artifact::{
     PodLayoutField, PodLayoutManifest, ScalarConversionRecord,
 };
 pub(crate) use buffer::{
-    AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessMode, BufferAccessProof,
-    BufferElem, BufferViewRep, BufferViewSlot, LengthSource,
+    AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode,
+    BufferAccessProof, BufferElem, BufferEndian, BufferIndexUnit, BufferViewRep, BufferViewSlot,
+    GuardedBufferIndex, LengthSource,
 };
 pub(crate) use materialize::{
     materialize_js_value, materialize_native_handle_to_js_value,

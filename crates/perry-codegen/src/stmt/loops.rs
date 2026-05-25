@@ -99,7 +99,7 @@ pub(crate) fn lower_for(
                         index_local_id: counter_id,
                         buffer_local_id: arr_id,
                         scope_id: loop_proof_scope_id,
-                        proven_width_bytes: 1,
+                        bounds_width_units: 1,
                         bounds: BoundsState::Proven {
                             proof: BoundsProof::LoopGuard,
                         },
@@ -220,7 +220,7 @@ pub(crate) fn lower_for(
                             index_local_id: counter_id,
                             buffer_local_id,
                             scope_id: loop_proof_scope_id,
-                            proven_width_bytes: 1,
+                            bounds_width_units: 1,
                             bounds: BoundsState::Proven {
                                 proof: BoundsProof::MinLength,
                             },
@@ -243,7 +243,7 @@ pub(crate) fn lower_for(
                     index_local_id: counter_id,
                     buffer_local_id,
                     scope_id: loop_proof_scope_id,
-                    proven_width_bytes: 1,
+                    bounds_width_units: 1,
                     bounds: BoundsState::Proven {
                         proof: BoundsProof::LoopGuard,
                     },
@@ -338,6 +338,12 @@ pub(crate) fn lower_for(
 
     // Body block.
     ctx.current_block = body_idx;
+    if let Some(cond) = condition {
+        let mut guarded =
+            crate::expr::guarded_buffer_indices_for_condition(ctx, cond, loop_proof_scope_id);
+        guarded.retain(|fact| loop_counter_bounds_are_safe(ctx, fact.index_local_id, update, body));
+        ctx.guarded_buffer_index_pairs.extend(guarded);
+    }
     lower_stmts(ctx, body)?;
     clear_loop_body_shadow_slots(ctx, body);
     // Issue #74: insert an empty `asm sideeffect` in bodies whose
@@ -388,6 +394,8 @@ pub(crate) fn lower_for(
     ctx.bounded_index_pairs
         .retain(|fact| fact.scope_id != loop_proof_scope_id);
     ctx.bounded_buffer_index_pairs
+        .retain(|fact| fact.scope_id != loop_proof_scope_id);
+    ctx.guarded_buffer_index_pairs
         .retain(|fact| fact.scope_id != loop_proof_scope_id);
     ctx.int_range_facts
         .retain(|fact| fact.scope_id != loop_proof_scope_id);
@@ -1035,6 +1043,10 @@ pub(crate) fn lower_while(
     {
         ctx.int_range_facts.push(fact);
     }
+    let mut guarded =
+        crate::expr::guarded_buffer_indices_for_condition(ctx, condition, loop_proof_scope_id);
+    guarded.retain(|fact| !stmts_mutate_local(body, fact.index_local_id));
+    ctx.guarded_buffer_index_pairs.extend(guarded);
 
     ctx.current_block = body_idx;
     lower_stmts(ctx, body)?;
@@ -1049,6 +1061,8 @@ pub(crate) fn lower_while(
     ctx.active_region_id = previous_region_id;
 
     ctx.loop_targets.pop();
+    ctx.guarded_buffer_index_pairs
+        .retain(|fact| fact.scope_id != loop_proof_scope_id);
     ctx.int_range_facts
         .retain(|fact| fact.scope_id != loop_proof_scope_id);
 

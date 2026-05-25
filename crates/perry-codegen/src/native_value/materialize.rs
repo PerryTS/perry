@@ -67,6 +67,7 @@ fn record_materialized_transition(
         None,
         Some(reason),
         Some(transition),
+        None,
         false,
         false,
         Vec::new(),

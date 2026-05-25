@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::types::{LlvmType, DOUBLE, F32, I32, I64, I8, PTR};
 
-use super::buffer::{AliasState, BoundsState, BufferElem, BufferViewRep};
+use super::buffer::{AliasState, BoundsState, BufferElem, BufferIndexUnit, BufferViewRep};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -172,6 +172,11 @@ impl LoweredValue {
     pub(crate) fn buffer_view(
         data_ptr: impl Into<String>,
         length: impl Into<String>,
+        elem: BufferElem,
+        element_width_bytes: u32,
+        index_unit: BufferIndexUnit,
+        view_byte_offset: Option<i64>,
+        length_offset_from_data: i32,
         bounds: BoundsState,
         alias: AliasState,
     ) -> Self {
@@ -181,7 +186,11 @@ impl LoweredValue {
             NativeRep::BufferView(BufferViewRep {
                 data_ptr: data_ptr.clone(),
                 length: length.into(),
-                elem: BufferElem::U8,
+                elem,
+                element_width_bytes,
+                index_unit,
+                view_byte_offset,
+                length_offset_from_data,
                 bounds,
                 alias,
             }),

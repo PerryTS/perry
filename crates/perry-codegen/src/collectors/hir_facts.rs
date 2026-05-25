@@ -294,6 +294,10 @@ fn is_owned_u8_buffer_alloc(expr: &Expr) -> bool {
         Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) => true,
         Expr::Uint8ArrayNew(None) => true,
         Expr::Uint8ArrayNew(Some(size)) => is_fresh_uint8array_length_literal(size),
+        Expr::TypedArrayNew { arg: None, .. } => true,
+        Expr::TypedArrayNew {
+            arg: Some(size), ..
+        } => is_fresh_uint8array_length_literal(size),
         _ => false,
     }
 }

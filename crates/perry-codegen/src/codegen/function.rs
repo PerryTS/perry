@@ -9,7 +9,7 @@ use perry_hir::Function;
 
 use crate::expr::FnCtx;
 use crate::module::LlModule;
-use crate::native_value::{AliasState, BufferElem, BufferViewSlot, LengthSource};
+use crate::native_value::{AliasState, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource};
 use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I32, I64, I8, PTR};
@@ -252,6 +252,7 @@ pub(super) fn compile_function(
         disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
         min_length_bounds: HashMap::new(),
         bounded_buffer_index_pairs: Vec::new(),
+        guarded_buffer_index_pairs: Vec::new(),
         buffer_hazard_reasons: HashMap::new(),
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),
@@ -310,6 +311,10 @@ pub(super) fn compile_function(
                 data_slot: buf_slot,
                 scope_idx: Some(scope_idx),
                 elem: BufferElem::U8,
+                element_width_bytes: 1,
+                index_unit: BufferIndexUnit::Byte,
+                view_byte_offset: Some(0),
+                length_offset_from_data: -8,
                 alias: AliasState::Unknown,
                 length_source: Some(LengthSource::Unknown),
             },

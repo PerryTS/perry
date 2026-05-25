@@ -321,6 +321,7 @@ pub(super) fn compile_closure(
         disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
         min_length_bounds: HashMap::new(),
         bounded_buffer_index_pairs: Vec::new(),
+        guarded_buffer_index_pairs: Vec::new(),
         buffer_hazard_reasons: HashMap::new(),
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),

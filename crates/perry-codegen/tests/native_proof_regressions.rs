@@ -294,6 +294,19 @@ fn buffer_let(id: u32, name: &str, size: Expr) -> Stmt {
     }
 }
 
+fn typed_array_let(id: u32, name: &str, class_name: &str, kind: u8, length: Expr) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Named(class_name.to_string()),
+        mutable: false,
+        init: Some(Expr::TypedArrayNew {
+            kind,
+            arg: Some(Box::new(length)),
+        }),
+    }
+}
+
 fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
     Stmt::Let {
         id,
@@ -341,6 +354,23 @@ fn buffer_set(buffer_id: u32, index: Expr) -> Stmt {
         index: Box::new(index),
         value: Box::new(int(1)),
     })
+}
+
+fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
+    call(
+        Expr::PropertyGet {
+            object: Box::new(local(buffer_id)),
+            property: method.to_string(),
+        },
+        vec![index],
+    )
+}
+
+fn index_get(object_id: u32, index: Expr) -> Expr {
+    Expr::IndexGet {
+        object: Box::new(local(object_id)),
+        index: Box::new(index),
+    }
 }
 
 fn call(callee: Expr, args: Vec<Expr>) -> Expr {
@@ -467,7 +497,7 @@ fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     ];
 
     let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 6);
+    assert_eq!(artifact["schema_version"], 7);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -500,7 +530,7 @@ fn artifact_schema_v6_records_rejected_facts_for_buffer_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 6);
+    assert_eq!(artifact["schema_version"], 7);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -546,7 +576,7 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
-    assert_eq!(artifact["schema_version"], 6);
+    assert_eq!(artifact["schema_version"], 7);
     assert_eq!(artifact["summary"]["pod_layout_count"], 1);
     assert_eq!(artifact["summary"]["pod_record_count"], 1);
     let layouts = artifact["pod_layouts"].as_array().unwrap();
@@ -618,7 +648,7 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
-    assert_eq!(artifact["schema_version"], 6);
+    assert_eq!(artifact["schema_version"], 7);
     assert!(
         artifact["records"]
             .as_array()
@@ -716,7 +746,7 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 6);
+    assert_eq!(artifact["schema_version"], 7);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
     assert!(
@@ -893,6 +923,370 @@ fn artifact_records_buffer_read_float_as_f32_and_float_extend_materialization() 
                 && record["native_abi_transition"]["lossy"] == false
         }),
         "expected explicit f32->double materialization record:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_width_aware_buffer_numeric_read_facts() {
+    let reads = [
+        ("readUInt16BE", 2, "big", false, false, "u32"),
+        ("readUInt16LE", 2, "little", false, false, "u32"),
+        ("readUInt32BE", 4, "big", false, false, "u32"),
+        ("readUInt32LE", 4, "little", false, false, "u32"),
+        ("readInt16BE", 2, "big", true, false, "i32"),
+        ("readInt16LE", 2, "little", true, false, "i32"),
+        ("readInt32BE", 4, "big", true, false, "i32"),
+        ("readInt32LE", 4, "little", true, false, "i32"),
+        ("readFloatBE", 4, "big", false, true, "f32"),
+        ("readFloatLE", 4, "little", false, true, "f32"),
+        ("readDoubleBE", 8, "big", false, true, "f64"),
+        ("readDoubleLE", 8, "little", false, true, "f64"),
+    ];
+    let mut body = vec![buffer_let(1, "buf", int(16))];
+    for (method, ..) in reads {
+        body.push(Stmt::Expr(buffer_read(1, method, int(0))));
+    }
+    body.push(Stmt::Return(Some(int(0))));
+
+    let artifact = compile_artifact_json("artifact_width_aware_buffer_reads.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    for (method, width, endian, signed, floating, native_rep) in reads {
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == "BufferNumericRead"
+                    && record["native_rep_name"] == native_rep
+                    && record["buffer_access"]["access_width_bytes"] == width
+                    && record["buffer_access"]["bounds_width_units"] == width
+                    && record["buffer_access"]["index_unit"] == "byte"
+                    && record["buffer_access"]["element_width_bytes"] == 1
+                    && record["buffer_access"]["endian"] == endian
+                    && record["buffer_access"]["signed"] == signed
+                    && record["buffer_access"]["floating"] == floating
+                    && record["notes"].as_array().is_some_and(|notes| {
+                        notes.iter().any(|note| {
+                            note.as_str()
+                                .is_some_and(|note| note == format!("method={method}"))
+                        })
+                    })
+            }),
+            "expected structured buffer_access facts for {method}:\n{artifact:#}"
+        );
+    }
+}
+
+#[test]
+fn loop_bound_by_buffer_length_only_does_not_prove_wide_read() {
+    let body = vec![
+        buffer_let(1, "buf", int(16)),
+        for_loop(
+            2,
+            length(1),
+            vec![Stmt::Expr(buffer_read(1, "readUInt32BE", local(2)))],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let artifact = compile_artifact_json("artifact_wide_read_needs_width_guard.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        !records.iter().any(|record| {
+            record["expr_kind"] == "BufferNumericRead"
+                && record["consumer"] == "BufferNumericRead.native_u32"
+                && record["buffer_access"]["access_width_bytes"] == 4
+        }),
+        "i < buf.length must not prove a 4-byte Buffer read:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn explicit_width_guard_proves_wide_buffer_read() {
+    let body = vec![
+        buffer_let(1, "buf", int(16)),
+        Stmt::For {
+            init: Some(Box::new(number_let(2, "i", true, int(0)))),
+            condition: Some(Expr::Compare {
+                op: CompareOp::Le,
+                left: Box::new(add(local(2), int(4))),
+                right: Box::new(length(1)),
+            }),
+            update: Some(increment(2)),
+            body: vec![Stmt::Expr(buffer_read(1, "readUInt32BE", local(2)))],
+        },
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let artifact = compile_artifact_json("artifact_width_guard_buffer_read.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "BufferNumericRead"
+                && record["consumer"] == "BufferNumericRead.native_u32"
+                && record["bounds_state"]["guarded"]["guard_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("width_4"))
+                && record["buffer_access"]["access_width_bytes"] == 4
+                && record["buffer_access"]["bounds_width_units"] == 4
+        }),
+        "expected i + 4 <= buf.length to guard a 4-byte native read:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn proven_buffer_and_typed_array_reads_are_numeric_operands() {
+    let body = vec![
+        buffer_let(1, "buf", int(16)),
+        number_let(2, "sum", true, int(0)),
+        Stmt::For {
+            init: Some(Box::new(number_let(3, "i", true, int(0)))),
+            condition: Some(Expr::Compare {
+                op: CompareOp::Le,
+                left: Box::new(add(local(3), int(4))),
+                right: Box::new(length(1)),
+            }),
+            update: Some(increment(3)),
+            body: vec![Stmt::Expr(Expr::LocalSet(
+                2,
+                Box::new(add(local(2), buffer_read(1, "readUInt32BE", local(3)))),
+            ))],
+        },
+        typed_array_let(
+            4,
+            "u16",
+            "Uint16Array",
+            perry_hir::TYPED_ARRAY_KIND_UINT16,
+            int(8),
+        ),
+        for_loop(
+            5,
+            int(8),
+            vec![Stmt::Expr(Expr::LocalSet(
+                2,
+                Box::new(add(local(2), index_get(4, local(5)))),
+            ))],
+        ),
+        Stmt::Return(Some(local(2))),
+    ];
+
+    let ir = compile_ir("numeric_buffer_typed_array_operands.ts", body);
+    assert!(
+        !ir.contains("call double @js_number_coerce"),
+        "proven native numeric reads should not force JS number coercion:\n{ir}"
+    );
+    assert!(
+        ir.contains("load i32, ptr") && ir.contains("align 1"),
+        "byte-offset Buffer numeric reads must use unaligned-safe loads:\n{ir}"
+    );
+}
+
+#[test]
+fn artifact_records_tracked_typed_array_native_reads() {
+    let arrays = [
+        (
+            1,
+            "u16",
+            "Uint16Array",
+            perry_hir::TYPED_ARRAY_KIND_UINT16,
+            "u32",
+            2,
+            false,
+            false,
+        ),
+        (
+            3,
+            "i32s",
+            "Int32Array",
+            perry_hir::TYPED_ARRAY_KIND_INT32,
+            "i32",
+            4,
+            true,
+            false,
+        ),
+        (
+            5,
+            "u32s",
+            "Uint32Array",
+            perry_hir::TYPED_ARRAY_KIND_UINT32,
+            "u32",
+            4,
+            false,
+            false,
+        ),
+        (
+            7,
+            "f32s",
+            "Float32Array",
+            perry_hir::TYPED_ARRAY_KIND_FLOAT32,
+            "f32",
+            4,
+            false,
+            true,
+        ),
+        (
+            9,
+            "f64s",
+            "Float64Array",
+            perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+            "f64",
+            8,
+            false,
+            true,
+        ),
+    ];
+    let mut body = Vec::new();
+    for (array_id, name, class_name, kind, ..) in arrays {
+        body.push(typed_array_let(array_id, name, class_name, kind, int(8)));
+        body.push(for_loop(
+            array_id + 1,
+            int(8),
+            vec![Stmt::Expr(index_get(array_id, local(array_id + 1)))],
+        ));
+    }
+    body.push(Stmt::Return(Some(int(0))));
+
+    let artifact = compile_artifact_json("artifact_tracked_typed_array_reads.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    for (_, name, _, _, native_rep, width, signed, floating) in arrays {
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == "TypedArrayGet"
+                    && record["native_rep_name"] == native_rep
+                    && record["access_mode"] == "unchecked_native"
+                    && record["buffer_access"]["index_unit"] == "element"
+                    && record["buffer_access"]["access_width_bytes"] == width
+                    && record["buffer_access"]["element_width_bytes"] == width
+                    && record["buffer_access"]["bounds_width_units"] == 1
+                    && record["buffer_access"]["signed"] == signed
+                    && record["buffer_access"]["floating"] == floating
+            }),
+            "expected native typed-array read record for {name}:\n{artifact:#}"
+        );
+    }
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "materialize_js_value"
+                && record["materialization_reason"] == "runtime_api"
+        }) && !records.iter().any(|record| {
+            record["consumer"] == "materialize_js_value"
+                && record["materialization_reason"] == "unknown_bounds"
+        }),
+        "proven typed-array loads should materialize at a JSValue boundary, not as an unknown-bounds hazard:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn uint8_clamped_typed_array_store_records_runtime_fallback() {
+    let body = vec![
+        typed_array_let(
+            1,
+            "clamped",
+            "Uint8ClampedArray",
+            perry_hir::TYPED_ARRAY_KIND_UINT8_CLAMPED,
+            int(8),
+        ),
+        Stmt::Expr(Expr::IndexSet {
+            object: Box::new(local(1)),
+            index: Box::new(int(0)),
+            value: Box::new(number(300.5)),
+        }),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let artifact = compile_artifact_json("artifact_uint8_clamped_store_fallback.ts", body);
+    assert!(
+        artifact["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["expr_kind"] == "TypedArraySet"
+                    && record["consumer"] == "TypedArraySet.slow_path"
+                    && record["access_mode"] == "dynamic_fallback"
+                    && !record["fallback_reason"].is_null()
+            }),
+        "expected Uint8ClampedArray store to stay on runtime fallback:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_array_alias_read_records_runtime_fallback() {
+    let body = vec![
+        typed_array_let(
+            1,
+            "array",
+            "Uint16Array",
+            perry_hir::TYPED_ARRAY_KIND_UINT16,
+            int(8),
+        ),
+        Stmt::Let {
+            id: 2,
+            name: "alias".to_string(),
+            ty: Type::Named("Uint16Array".to_string()),
+            mutable: false,
+            init: Some(local(1)),
+        },
+        for_loop(3, int(8), vec![Stmt::Expr(index_get(2, local(3)))]),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let artifact = compile_artifact_json("artifact_typed_array_alias_fallback.ts", body);
+    assert!(
+        artifact["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["expr_kind"] == "TypedArrayGet"
+                    && record["consumer"] == "TypedArrayGet.slow_path"
+                    && record["access_mode"] == "dynamic_fallback"
+                    && !record["fallback_reason"].is_null()
+            }),
+        "expected aliased typed-array read to record runtime fallback:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn reassigned_typed_array_store_records_runtime_fallback() {
+    let body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "array".to_string(),
+            ty: Type::Named("Int32Array".to_string()),
+            mutable: true,
+            init: Some(Expr::TypedArrayNew {
+                kind: perry_hir::TYPED_ARRAY_KIND_INT32,
+                arg: Some(Box::new(int(8))),
+            }),
+        },
+        Stmt::Expr(Expr::LocalSet(
+            1,
+            Box::new(Expr::TypedArrayNew {
+                kind: perry_hir::TYPED_ARRAY_KIND_INT32,
+                arg: Some(Box::new(int(8))),
+            }),
+        )),
+        array_set(1, int(0), int(42)),
+        Stmt::Return(Some(index_get(1, int(0)))),
+    ];
+
+    let artifact = compile_artifact_json("artifact_typed_array_reassign_fallback.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "TypedArraySet"
+                && record["consumer"] == "TypedArraySet.slow_path"
+                && record["access_mode"] == "dynamic_fallback"
+                && !record["fallback_reason"].is_null()
+        }),
+        "expected reassigned typed-array store to record runtime fallback:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "TypedArrayGet"
+                && record["consumer"] == "TypedArrayGet.slow_path"
+                && record["access_mode"] == "dynamic_fallback"
+                && !record["fallback_reason"].is_null()
+        }),
+        "expected reassigned typed-array read to record runtime fallback:\n{artifact:#}"
     );
 }
 

@@ -5,7 +5,43 @@ use super::rep::LoweredValue;
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BufferElem {
+    I8,
     U8,
+    U8Clamped,
+    I16,
+    U16,
+    I32,
+    U32,
+    F32,
+    F64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum BufferIndexUnit {
+    Byte,
+    Element,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum BufferEndian {
+    Native,
+    Little,
+    Big,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct BufferAccessFacts {
+    pub access_width_bytes: u32,
+    pub index_unit: BufferIndexUnit,
+    pub element_width_bytes: u32,
+    pub endian: BufferEndian,
+    pub signed: bool,
+    pub floating: bool,
+    pub bounds_width_units: u32,
+    pub view_length: Option<String>,
+    pub view_byte_offset: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -70,6 +106,10 @@ pub(crate) struct BufferViewRep {
     pub data_ptr: String,
     pub length: String,
     pub elem: BufferElem,
+    pub element_width_bytes: u32,
+    pub index_unit: BufferIndexUnit,
+    pub view_byte_offset: Option<i64>,
+    pub length_offset_from_data: i32,
     pub bounds: BoundsState,
     pub alias: AliasState,
 }
@@ -79,6 +119,10 @@ pub(crate) struct BufferViewSlot {
     pub data_slot: String,
     pub scope_idx: Option<u32>,
     pub elem: BufferElem,
+    pub element_width_bytes: u32,
+    pub index_unit: BufferIndexUnit,
+    pub view_byte_offset: Option<i64>,
+    pub length_offset_from_data: i32,
     pub alias: AliasState,
     pub length_source: Option<LengthSource>,
 }
@@ -95,8 +139,17 @@ pub(crate) struct BoundedBufferIndex {
     pub index_local_id: u32,
     pub buffer_local_id: u32,
     pub scope_id: u32,
-    pub proven_width_bytes: u32,
+    pub bounds_width_units: u32,
     pub bounds: BoundsState,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct GuardedBufferIndex {
+    pub index_local_id: u32,
+    pub buffer_local_id: u32,
+    pub scope_id: u32,
+    pub bounds_width_units: u32,
+    pub guard_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +159,7 @@ pub(crate) struct BufferAccessProof {
     pub index: LoweredValue,
     pub access_mode: BufferAccessMode,
     pub bounds: BoundsState,
+    pub facts: BufferAccessFacts,
     pub alias: AliasState,
     pub may_emit_inbounds: bool,
     pub may_emit_noalias: bool,
