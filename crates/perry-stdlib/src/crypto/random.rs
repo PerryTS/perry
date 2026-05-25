@@ -1,3 +1,5 @@
+// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+
 /// Generate random bytes and return as a Buffer
 /// crypto.randomBytes(size) -> Buffer
 #[no_mangle]

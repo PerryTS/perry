@@ -1,3 +1,5 @@
+// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+
 pub struct X509Handle {
     der: Vec<u8>,
     cert: x509_cert::Certificate,

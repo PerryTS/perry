@@ -1,8 +1,13 @@
 //! Web Crypto API: `crypto.subtle.digest` / `importKey` / `sign` / `verify`
 //! / `encrypt` / `decrypt`.
 //!
-//! The implementation is split into topical include files while preserving the
-//! single public `webcrypto` module ABI expected by runtime bindings.
+//! This file intentionally keeps the public `webcrypto` module ABI intact and
+//! uses `include!` shards for a low-risk mechanical split of the former
+//! monolith. The file-size gate measures per-file review surface; a follow-up
+//! can migrate these shards to real Rust submodules for compile-unit isolation.
+//!
+//! Include order is load-bearing: `webcrypto/util.rs` declares shared imports,
+//! helpers, and private types used by later shards, so it must stay first.
 include!("webcrypto/util.rs");
 include!("webcrypto/digest.rs");
 include!("webcrypto/jwk.rs");

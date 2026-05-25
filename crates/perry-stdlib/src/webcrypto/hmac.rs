@@ -1,3 +1,5 @@
+// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+
 /// `crypto.subtle.sign(algorithm, key, data)` → Promise<Uint8Array>
 ///
 /// Supports HMAC and ECDSA/P-256. HMAC reads the hash from the

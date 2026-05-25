@@ -1,3 +1,5 @@
+// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+
 use crate::common::handle::{get_handle_mut, register_handle, Handle};
 use aes::{Aes128, Aes192, Aes256};
 use base64::Engine as _;

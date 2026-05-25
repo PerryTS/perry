@@ -1,3 +1,5 @@
+// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+
 /// `crypto.subtle.deriveBits({ name: "ECDH", public }, privateKey, length)`
 /// → Promise<Uint8Array>. Initial asymmetric-derive coverage implements
 /// P-256 ECDH, matching Node/Bun WebCrypto suites.

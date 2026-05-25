@@ -1,3 +1,5 @@
+// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CipherKind {
     Aes128Cbc,

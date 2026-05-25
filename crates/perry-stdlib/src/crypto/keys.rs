@@ -1,3 +1,5 @@
+// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+
 /// `crypto.createSecretKey(key, encoding?)` — produce a key Buffer
 /// that jose / jsonwebtoken / etc. can use as an HS* signing key.
 ///

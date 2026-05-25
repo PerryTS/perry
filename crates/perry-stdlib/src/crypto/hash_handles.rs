@@ -1,3 +1,5 @@
+// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+
 // ---------------------------------------------------------------------------
 // Hash handle — powers `const h = crypto.createHash('sha1'); h.update(x);
 // h.digest()` (issue #86). The runtime-resident chain-collapse in

@@ -1,3 +1,5 @@
+// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 

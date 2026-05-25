@@ -1,3 +1,5 @@
+// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+
 /// `crypto.subtle.importKey("raw", keyBytes, algorithm, extractable, keyUsages)`
 /// → Promise<CryptoKey>
 ///

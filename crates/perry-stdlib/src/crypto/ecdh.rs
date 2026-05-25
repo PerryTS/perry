@@ -1,3 +1,5 @@
+// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_create_sign(alg_ptr: i64) -> f64 {
     let alg_bytes = bytes_from_ptr(alg_ptr);

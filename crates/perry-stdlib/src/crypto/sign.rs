@@ -1,3 +1,5 @@
+// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+
 /// Resolve `(start, end)` byte indices from Node-style `offset` / `size`
 /// arguments against a buffer of `total` bytes. Out-of-range values are
 /// clamped to `[0, total]`.

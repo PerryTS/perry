@@ -1,3 +1,5 @@
+// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_generate_prime_sync(
     size_bits: f64,

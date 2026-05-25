@@ -1,3 +1,5 @@
+// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+
 /// `crypto.subtle.digest(algorithm, data)` → Promise<Uint8Array>
 ///
 /// `algorithm` is "SHA-1" / "SHA-256" / "SHA-384" / "SHA-512" (string)

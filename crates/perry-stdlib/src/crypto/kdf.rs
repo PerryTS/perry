@@ -1,3 +1,5 @@
+// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+
 /// PBKDF2-HMAC returning a Buffer. Counterpart of
 /// `crypto.pbkdf2Sync(password, salt, iterations, keylen, digest)`.
 /// Accepts string or Buffer for both password and salt.

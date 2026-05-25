@@ -1,3 +1,5 @@
+// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+
 pub struct SignHandle {
     alg: RsaDigestKind,
     data: std::sync::Mutex<Vec<u8>>,

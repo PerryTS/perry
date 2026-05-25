@@ -1,3 +1,5 @@
+// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+
 /// Create SHA256 hash of data
 /// crypto.createHash('sha256').update(data).digest('hex') -> string
 #[no_mangle]
