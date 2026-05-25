@@ -196,7 +196,7 @@ impl ValidPointerSet {
 
 /// Build a set of all valid user-space pointers (pointers returned to callers).
 /// Used to validate candidates found during conservative stack scanning.
-pub(super) fn build_valid_pointer_set() -> ValidPointerSet {
+pub(crate) fn build_valid_pointer_set() -> ValidPointerSet {
     let malloc_count = MALLOC_STATE.with(|s| s.borrow().objects.len());
     // 48 bytes is a conservative under-estimate (smaller than the
     // typical 96-byte class instance) so the Vec doesn't realloc.

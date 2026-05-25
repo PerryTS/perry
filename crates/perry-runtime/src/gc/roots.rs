@@ -694,7 +694,7 @@ impl<'a> RuntimeRootVisitor<'a> {
         }
     }
 
-    pub(super) fn for_rewrite(valid_ptrs: &'a ValidPointerSet) -> Self {
+    pub(crate) fn for_rewrite(valid_ptrs: &'a ValidPointerSet) -> Self {
         Self {
             mode: RuntimeRootVisitMode::Rewrite { valid_ptrs },
             root_source_stats: None,

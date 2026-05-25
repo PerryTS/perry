@@ -150,6 +150,29 @@ fn ir_for(module: Module) -> String {
     String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap()
 }
 
+fn entry_ir_for(module: Module) -> String {
+    let mut opts = empty_opts();
+    opts.is_entry_module = true;
+    String::from_utf8(compile_module(&module, opts).unwrap()).unwrap()
+}
+
+#[test]
+fn typed_feedback_trace_dump_runs_before_entry_return() {
+    let ir = entry_ir_for(module(
+        "typed_feedback_epilogue.ts",
+        Vec::new(),
+        Type::Void,
+        Vec::new(),
+    ));
+
+    assert!(ir.contains("declare void @js_typed_feedback_maybe_dump_trace()"));
+    let dump_pos = ir
+        .rfind("call void @js_typed_feedback_maybe_dump_trace()")
+        .expect("entry should call typed-feedback trace dump");
+    let ret_pos = ir.rfind("ret i32 0").expect("entry should return i32 0");
+    assert!(dump_pos < ret_pos);
+}
+
 #[test]
 fn typed_feedback_instruments_property_and_method_boundaries() {
     let ir = ir_for(module(

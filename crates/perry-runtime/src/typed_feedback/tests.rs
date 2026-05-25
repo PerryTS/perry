@@ -89,6 +89,64 @@ fn plain_object_with_key(
     (obj, key)
 }
 
+struct EnvGuard {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvGuard {
+    fn set(value: Option<&str>) -> Self {
+        let previous = std::env::var_os("PERRY_TYPED_FEEDBACK_TRACE");
+        match value {
+            Some(value) => std::env::set_var("PERRY_TYPED_FEEDBACK_TRACE", value),
+            None => std::env::remove_var("PERRY_TYPED_FEEDBACK_TRACE"),
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.as_ref() {
+            std::env::set_var("PERRY_TYPED_FEEDBACK_TRACE", previous);
+        } else {
+            std::env::remove_var("PERRY_TYPED_FEEDBACK_TRACE");
+        }
+    }
+}
+
+struct CurrentDirGuard {
+    previous: std::path::PathBuf,
+}
+
+impl CurrentDirGuard {
+    fn set(path: &std::path::Path) -> Self {
+        let previous = std::env::current_dir().expect("current dir");
+        std::env::set_current_dir(path).expect("set current dir");
+        Self { previous }
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.previous);
+    }
+}
+
+fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+    let mut path = std::env::temp_dir();
+    let unique = format!(
+        "perry-typed-feedback-{name}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    path.push(unique);
+    std::fs::create_dir_all(&path).expect("create temp dir");
+    path
+}
+
 #[test]
 fn typed_feedback_registers_source_attribution() {
     let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
@@ -979,4 +1037,134 @@ fn typed_feedback_trace_json_reports_counts() {
     assert_eq!(json["sites"][0]["guard_passes"].as_u64(), Some(1));
     assert_eq!(json["sites"][0]["guard_failures"].as_u64(), Some(1));
     assert_eq!(json["sites"][0]["fallback_calls"].as_u64(), Some(1));
+}
+
+#[test]
+fn typed_feedback_trace_json_includes_observed_kinds() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(67, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
+
+    let values = [1.0, 2.0];
+    let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+    assert_eq!(
+        js_typed_feedback_numeric_array_index_set_guard(67, arr_box, 1, 3.0, 1),
+        1
+    );
+
+    let payload = crate::string::js_string_from_bytes(b"not-number".as_ptr(), 10);
+    let payload_value = crate::value::js_nanbox_string(payload as i64);
+    assert_eq!(
+        js_typed_feedback_numeric_array_index_set_guard(67, arr_box, 1, payload_value, 1),
+        0
+    );
+
+    let json = typed_feedback_trace_json();
+    let observed = json["sites"][0]["observed_kinds"]
+        .as_array()
+        .expect("observed_kinds array");
+    assert!(
+        observed.iter().any(|kind| {
+            kind["source"].as_str() == Some("array")
+                && kind["heap_type"].as_str() == Some("array")
+                && kind["array_layout"].as_str() == Some("pointer_free")
+                && kind["array_element_kind"].as_str() == Some("number")
+                && kind["value_kind"].as_str() == Some("number")
+        }),
+        "expected numeric array observation in {observed:?}"
+    );
+    assert!(
+        observed
+            .iter()
+            .any(|kind| kind["value_kind"].as_str() == Some("string")),
+        "expected fallback value kind in {observed:?}"
+    );
+    for kind in observed {
+        let obj = kind.as_object().expect("kind object");
+        assert!(!obj.contains_key("object_addr"));
+        assert!(!obj.contains_key("shape_addr"));
+    }
+}
+
+#[test]
+fn typed_feedback_trace_dump_honors_env_paths() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+
+    let disabled_dir = unique_temp_dir("disabled");
+    {
+        let _cwd = CurrentDirGuard::set(&disabled_dir);
+        for value in [None, Some(""), Some("0")] {
+            reset_typed_feedback_for_tests();
+            let _env = EnvGuard::set(value);
+            js_typed_feedback_maybe_dump_trace();
+            assert!(!disabled_dir.join("typed-feedback-trace.json").exists());
+        }
+    }
+    let _ = std::fs::remove_dir_all(&disabled_dir);
+
+    let explicit_dir = unique_temp_dir("explicit");
+    let explicit_path = explicit_dir.join("nested").join("trace.json");
+    {
+        reset_typed_feedback_for_tests();
+        register(68, TypedFeedbackSiteKind::PropertyGet, "obj.x");
+        let _env = EnvGuard::set(Some(explicit_path.to_str().unwrap()));
+        js_typed_feedback_maybe_dump_trace();
+        assert!(explicit_path.exists());
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&explicit_path).unwrap()).unwrap();
+        assert_eq!(parsed["total_sites"].as_u64(), Some(1));
+    }
+    let _ = std::fs::remove_dir_all(&explicit_dir);
+
+    let default_dir = unique_temp_dir("default");
+    {
+        reset_typed_feedback_for_tests();
+        register(69, TypedFeedbackSiteKind::PropertyGet, "obj.y");
+        let _cwd = CurrentDirGuard::set(&default_dir);
+        let _env = EnvGuard::set(Some("1"));
+        js_typed_feedback_maybe_dump_trace();
+        assert!(default_dir.join("typed-feedback-trace.json").exists());
+    }
+    let _ = std::fs::remove_dir_all(&default_dir);
+}
+
+#[test]
+fn typed_feedback_roots_rewrite_shape_observations() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+
+    let shape_user = crate::arena::arena_alloc_gc(64, 8, crate::gc::GC_TYPE_ARRAY);
+    register(70, TypedFeedbackSiteKind::PropertyGet, "obj.x");
+    observe(
+        70,
+        TypedFeedbackSiteKind::PropertyGet,
+        Observation {
+            source: ObservationSource::Property,
+            object_addr: 0,
+            shape_addr: shape_user as usize,
+            key_hash: 0xABCD,
+            class_id: 7,
+            heap_type: crate::gc::GC_TYPE_OBJECT as u16,
+            aux: 0,
+            value_tag: STABLE_VALUE_POINTER,
+        },
+    );
+
+    let valid_ptrs = crate::gc::build_valid_pointer_set();
+    let forwarded_user = crate::arena::arena_alloc_gc_old(64, 8, crate::gc::GC_TYPE_ARRAY);
+    unsafe {
+        let shape_header =
+            (shape_user as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        crate::gc::set_forwarding_address(shape_header, forwarded_user);
+    }
+
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_rewrite(&valid_ptrs);
+    scan_typed_feedback_roots_mut(&mut visitor);
+
+    let reg = registry();
+    let shape_addr = reg.sites.get(&70).unwrap().observations[0].shape_addr;
+    assert_eq!(shape_addr, forwarded_user as usize);
+    assert_ne!(shape_addr, shape_user as usize);
 }

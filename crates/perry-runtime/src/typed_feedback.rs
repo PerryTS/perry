@@ -5,7 +5,11 @@
 //! has actually seen at runtime.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{LazyLock, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    LazyLock, Mutex,
+};
 
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
@@ -18,6 +22,7 @@ const POLYMORPHIC_CAP: usize = 4;
 
 static REGISTRY: LazyLock<Mutex<TypedFeedbackRegistry>> =
     LazyLock::new(|| Mutex::new(TypedFeedbackRegistry::default()));
+static TRACE_DUMPED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(test)]
 pub(crate) static TYPED_FEEDBACK_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -322,6 +327,7 @@ pub struct TypedFeedbackSiteSnapshot {
     pub shape_invalidations: u64,
     pub method_invalidations: u64,
     pub representation_invalidations: u64,
+    pub observed_kinds: Vec<serde_json::Value>,
 }
 
 fn read_static_str(ptr: *const u8, len: usize) -> String {
@@ -1736,6 +1742,171 @@ pub fn scan_typed_feedback_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor
     }
 }
 
+fn observation_source_name(source: ObservationSource) -> &'static str {
+    match source {
+        ObservationSource::Property => "property",
+        ObservationSource::Method => "method",
+        ObservationSource::Closure => "closure",
+        ObservationSource::Array => "array",
+        ObservationSource::NumericWrite => "numeric_write",
+        ObservationSource::HelperReturn => "helper_return",
+    }
+}
+
+fn heap_type_name(heap_type: u16) -> &'static str {
+    match heap_type as u8 {
+        0 => "unknown",
+        crate::gc::GC_TYPE_ARRAY => "array",
+        crate::gc::GC_TYPE_OBJECT => "object",
+        crate::gc::GC_TYPE_STRING => "string",
+        crate::gc::GC_TYPE_CLOSURE => "closure",
+        crate::gc::GC_TYPE_PROMISE => "promise",
+        crate::gc::GC_TYPE_BIGINT => "bigint",
+        crate::gc::GC_TYPE_ERROR => "error",
+        crate::gc::GC_TYPE_MAP => "map",
+        crate::gc::GC_TYPE_LAZY_ARRAY => "lazy_array",
+        crate::gc::GC_TYPE_BUFFER => "buffer",
+        crate::gc::GC_TYPE_TYPED_ARRAY => "typed_array",
+        crate::gc::GC_TYPE_SET => "set",
+        _ => "unknown",
+    }
+}
+
+fn stable_value_kind_name(kind: u16) -> String {
+    let name = match kind {
+        STABLE_VALUE_NUMBER => "number",
+        STABLE_VALUE_BOOLEAN => "boolean",
+        STABLE_VALUE_NULL => "null",
+        STABLE_VALUE_UNDEFINED => "undefined",
+        STABLE_VALUE_HOLE => "hole",
+        STABLE_VALUE_SHORT_STRING => "short_string",
+        STABLE_VALUE_STRING => "string",
+        STABLE_VALUE_BIGINT => "bigint",
+        STABLE_VALUE_POINTER => "pointer",
+        STABLE_VALUE_INT32 => "int32",
+        STABLE_VALUE_JS_HANDLE => "js_handle",
+        _ if kind < 0x7ff8 => "number",
+        _ if kind == (POINTER_TAG >> 48) as u16 => "pointer",
+        _ if kind == (STRING_TAG >> 48) as u16 => "string",
+        _ if kind == (BIGINT_TAG >> 48) as u16 => "bigint",
+        _ if kind == (SHORT_STRING_TAG >> 48) as u16 => "short_string",
+        _ if kind == (INT32_TAG >> 48) as u16 => "int32",
+        _ if kind == (JS_HANDLE_TAG >> 48) as u16 => "js_handle",
+        _ => return format!("raw_tag_0x{kind:04x}"),
+    };
+    name.to_string()
+}
+
+fn array_access_kind_name(kind: u8) -> &'static str {
+    match kind {
+        ARRAY_ACCESS_INDEXED_IN_BOUNDS => "indexed_in_bounds",
+        ARRAY_ACCESS_INDEXED_OUT_OF_BOUNDS => "indexed_out_of_bounds",
+        ARRAY_ACCESS_STRING_KEY => "string_key",
+        _ => "unknown",
+    }
+}
+
+fn array_layout_kind_name(kind: u8) -> &'static str {
+    match kind {
+        ARRAY_LAYOUT_EMPTY => "empty",
+        ARRAY_LAYOUT_POINTER_FREE => "pointer_free",
+        ARRAY_LAYOUT_POINTER_ONLY => "pointer_only",
+        ARRAY_LAYOUT_MIXED => "mixed",
+        ARRAY_LAYOUT_UNKNOWN => "unknown",
+        ARRAY_LAYOUT_BUFFER => "buffer",
+        ARRAY_LAYOUT_TYPED_ARRAY => "typed_array",
+        ARRAY_LAYOUT_LAZY => "lazy",
+        _ => "invalid",
+    }
+}
+
+fn decode_array_aux(aux: u64) -> (u8, u8, u16, u8) {
+    (
+        (aux & 0xff) as u8,
+        ((aux >> 8) & 0xff) as u8,
+        ((aux >> 16) & 0xffff) as u16,
+        ((aux >> 32) & 0xff) as u8,
+    )
+}
+
+fn observation_has_array_facts(obs: &Observation) -> bool {
+    matches!(obs.source, ObservationSource::Array)
+        || matches!(
+            obs.heap_type as u8,
+            crate::gc::GC_TYPE_ARRAY
+                | crate::gc::GC_TYPE_LAZY_ARRAY
+                | crate::gc::GC_TYPE_BUFFER
+                | crate::gc::GC_TYPE_TYPED_ARRAY
+        )
+}
+
+fn observed_kind_json(obs: &Observation) -> serde_json::Value {
+    let mut row = serde_json::Map::new();
+    row.insert(
+        "source".to_string(),
+        serde_json::Value::String(observation_source_name(obs.source).to_string()),
+    );
+    row.insert(
+        "heap_type".to_string(),
+        serde_json::Value::String(heap_type_name(obs.heap_type).to_string()),
+    );
+    row.insert("class_id".to_string(), serde_json::json!(obs.class_id));
+    row.insert(
+        "value_kind".to_string(),
+        serde_json::Value::String(stable_value_kind_name(obs.value_tag)),
+    );
+
+    if matches!(
+        obs.source,
+        ObservationSource::Property | ObservationSource::Method | ObservationSource::NumericWrite
+    ) {
+        row.insert("key_hash".to_string(), serde_json::json!(obs.key_hash));
+    }
+
+    if observation_has_array_facts(obs) {
+        let (access_kind, layout_kind, element_kind, typed_kind) = decode_array_aux(obs.aux);
+        row.insert(
+            "array_access".to_string(),
+            serde_json::Value::String(array_access_kind_name(access_kind).to_string()),
+        );
+        row.insert(
+            "array_layout".to_string(),
+            serde_json::Value::String(array_layout_kind_name(layout_kind).to_string()),
+        );
+        row.insert(
+            "array_element_kind".to_string(),
+            serde_json::Value::String(stable_value_kind_name(element_kind)),
+        );
+        if layout_kind == ARRAY_LAYOUT_TYPED_ARRAY {
+            row.insert(
+                "typed_array_kind".to_string(),
+                serde_json::Value::String(crate::typedarray::name_for_kind(typed_kind).to_string()),
+            );
+        }
+    }
+
+    if matches!(obs.source, ObservationSource::NumericWrite)
+        || (matches!(obs.source, ObservationSource::Property) && obs.aux != 0)
+    {
+        row.insert("field_index".to_string(), serde_json::json!(obs.aux));
+    }
+
+    serde_json::Value::Object(row)
+}
+
+fn observed_kinds_snapshot(observations: &[Observation]) -> Vec<serde_json::Value> {
+    let mut rows = observations
+        .iter()
+        .map(observed_kind_json)
+        .collect::<Vec<serde_json::Value>>();
+    rows.sort_by(|a, b| {
+        let a = serde_json::to_string(a).unwrap_or_default();
+        let b = serde_json::to_string(b).unwrap_or_default();
+        a.cmp(&b)
+    });
+    rows
+}
+
 pub fn typed_feedback_snapshot() -> TypedFeedbackSnapshot {
     let reg = registry();
     let mut snapshot = TypedFeedbackSnapshot {
@@ -1774,6 +1945,7 @@ pub fn typed_feedback_snapshot() -> TypedFeedbackSnapshot {
             shape_invalidations: site.shape_invalidations,
             method_invalidations: site.method_invalidations,
             representation_invalidations: site.representation_invalidations,
+            observed_kinds: observed_kinds_snapshot(&site.observations),
         });
         snapshot.guard_passes = snapshot.guard_passes.saturating_add(site.guard_passes);
         snapshot.guard_failures = snapshot.guard_failures.saturating_add(site.guard_failures);
@@ -1835,6 +2007,7 @@ pub fn typed_feedback_trace_json() -> serde_json::Value {
                 "guard_passes": site.guard_passes,
                 "guard_failures": site.guard_failures,
                 "fallback_calls": site.fallback_calls,
+                "observed_kinds": site.observed_kinds.clone(),
                 "guards": {
                     "passes": site.guard_passes,
                     "failures": site.guard_failures,
@@ -1848,6 +2021,52 @@ pub fn typed_feedback_trace_json() -> serde_json::Value {
             })
         }).collect::<Vec<_>>(),
     })
+}
+
+fn typed_feedback_trace_path_from_env() -> Option<PathBuf> {
+    let value = std::env::var("PERRY_TYPED_FEEDBACK_TRACE").ok()?;
+    if value.is_empty() || value == "0" {
+        return None;
+    }
+    if value == "1" {
+        Some(PathBuf::from("typed-feedback-trace.json"))
+    } else {
+        Some(PathBuf::from(value))
+    }
+}
+
+fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    Ok(())
+}
+
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_maybe_dump_trace() {
+    let Some(path) = typed_feedback_trace_path_from_env() else {
+        return;
+    };
+    if TRACE_DUMPED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let json = typed_feedback_trace_json();
+    let bytes = match serde_json::to_vec_pretty(&json) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            eprintln!("perry typed-feedback trace: failed to encode JSON: {err}");
+            return;
+        }
+    };
+    if let Err(err) = ensure_parent_dir(&path).and_then(|_| std::fs::write(&path, bytes)) {
+        eprintln!(
+            "perry typed-feedback trace: failed to write {}: {err}",
+            path.display()
+        );
+    }
 }
 
 // #1752: codegen emits calls to these `js_typed_feedback_*` instrumentation
@@ -1894,10 +2113,12 @@ mod keep_typed_feedback {
     #[used] static K20: extern "C" fn(u64, i64, f64, f64) = js_typed_feedback_object_set_index_polymorphic;
     #[used] static K21: extern "C" fn(u64, *mut ObjectHeader, u32, *const crate::StringHeader, f64) = js_typed_feedback_object_set_unboxed_f64_field;
     #[used] static K22: extern "C" fn(u64, f64) -> f64 = js_typed_feedback_observe_helper_return;
+    #[used] static K23: extern "C" fn() = js_typed_feedback_maybe_dump_trace;
 }
 
 #[cfg(test)]
 pub(crate) fn reset_typed_feedback_for_tests() {
+    TRACE_DUMPED.store(false, Ordering::Release);
     let mut reg = registry();
     *reg = TypedFeedbackRegistry::default();
 }

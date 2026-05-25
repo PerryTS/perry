@@ -82,6 +82,10 @@ pub struct LlFunction {
     /// land wiring incrementally (e.g. just `main`) before
     /// flipping the default across every user function.
     shadow_frame_slot: Option<String>,
+    /// Runtime hooks emitted immediately before each non-pointer `ret`.
+    /// Entry/module-init functions use this for process-level diagnostics
+    /// that must run regardless of which block reaches the normal epilogue.
+    pre_return_void_calls: Vec<String>,
 }
 
 impl LlFunction {
@@ -114,6 +118,7 @@ impl LlFunction {
             entry_post_init_setup: Vec::new(),
             entry_init_boundary: None,
             shadow_frame_slot: None,
+            pre_return_void_calls: Vec::new(),
         }
     }
 
@@ -190,6 +195,10 @@ impl LlFunction {
         } else {
             self.entry_init_boundary = Some(0);
         }
+    }
+
+    pub fn add_pre_return_void_call(&mut self, func_name: impl Into<String>) {
+        self.pre_return_void_calls.push(func_name.into());
     }
 
     /// Allocate a fresh stack slot in the function entry block. Returns
@@ -408,21 +417,14 @@ impl LlFunction {
 
         ir.push_str("}\n");
 
-        // Shadow-stack pop rewrite (gen-GC Phase A sub-phase 2).
-        // When `shadow_frame_slot` is set, every `  ret <ty> <val>`
-        // line in the IR must be prefixed with a load of the frame
-        // handle and a call to `js_shadow_frame_pop`. Textual
-        // rewrite on the full IR is the simplest way to intercept
-        // every ret site regardless of which codegen path emitted
-        // it (Stmt::Return, implicit return, error-handling early
-        // return, generator-transform machinery, etc.) — passing
-        // through the normal `LlBlock::ret` emit hook would miss
-        // any hand-emitted ret via `emit("ret ...")`.
+        // Return-site rewrite hooks.
         //
-        // Unique SSA names: `%shadow_pop_<seq>` where `<seq>` is a
-        // monotonic counter over the function's ret sites. No
-        // collision with codegen's `%r<N>` namespace.
-        if let Some(handle_slot) = &self.shadow_frame_slot {
+        // Shadow-stack pop (gen-GC Phase A sub-phase 2) and entry
+        // diagnostics both need to run before every normal return,
+        // regardless of which lowering path emitted it. Textual rewrite
+        // on the full IR catches implicit returns, Stmt::Return, and any
+        // hand-emitted `ret`.
+        if self.shadow_frame_slot.is_some() || !self.pre_return_void_calls.is_empty() {
             let mut out = String::with_capacity(ir.len() + 512);
             let mut seq: u32 = 0;
             for line in ir.lines() {
@@ -431,13 +433,18 @@ impl LlFunction {
                     && !trimmed.starts_with("ret ptr ")
                 // skip rare ptr rets
                 {
-                    let load_reg = format!("%shadow_pop_l_{}", seq);
-                    seq += 1;
-                    out.push_str(&format!("  {} = load i64, ptr {}\n", load_reg, handle_slot));
-                    out.push_str(&format!(
-                        "  call void @js_shadow_frame_pop(i64 {})\n",
-                        load_reg
-                    ));
+                    for func_name in &self.pre_return_void_calls {
+                        out.push_str(&format!("  call void @{}()\n", func_name));
+                    }
+                    if let Some(handle_slot) = &self.shadow_frame_slot {
+                        let load_reg = format!("%shadow_pop_l_{}", seq);
+                        seq += 1;
+                        out.push_str(&format!("  {} = load i64, ptr {}\n", load_reg, handle_slot));
+                        out.push_str(&format!(
+                            "  call void @js_shadow_frame_pop(i64 {})\n",
+                            load_reg
+                        ));
+                    }
                 }
                 out.push_str(line);
                 out.push('\n');

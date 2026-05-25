@@ -34,6 +34,7 @@ pub use strings::declare_phase_b_strings;
 pub fn declare_phase1(module: &mut LlModule) {
     // GC / runtime bootstrap.
     module.declare_function("js_gc_init", VOID, &[]);
+    module.declare_function("js_typed_feedback_maybe_dump_trace", VOID, &[]);
     // Handle-method dispatcher wiring (issue #86). Stdlib provides the
     // real impl; when only runtime is linked, it's a no-op stub.
     module.declare_function("js_stdlib_init_dispatch", VOID, &[]);

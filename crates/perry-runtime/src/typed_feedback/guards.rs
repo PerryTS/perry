@@ -442,9 +442,14 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
         value_bits,
     );
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
+    let source = if require_raw_f64 != 0 {
+        ObservationSource::NumericWrite
+    } else {
+        ObservationSource::Property
+    };
     let observation = Observation {
-        source: ObservationSource::Property,
-        object_addr: shape_keyed_object_addr(ObservationSource::Property, object_addr),
+        source,
+        object_addr: shape_keyed_object_addr(source, object_addr),
         shape_addr,
         key_hash: key_hash(key),
         class_id,
@@ -454,7 +459,11 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
     };
     if guard_observe(
         site_id,
-        TypedFeedbackSiteKind::PropertySet,
+        if require_raw_f64 != 0 {
+            TypedFeedbackSiteKind::NumericFieldWrite
+        } else {
+            TypedFeedbackSiteKind::PropertySet
+        },
         observation,
         contract_valid,
     ) {

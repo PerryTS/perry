@@ -133,6 +133,7 @@ pub(super) fn compile_module_entry(
         } else {
             llmod.define_function("main", I32, vec![])
         };
+        main.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
         let _ = main.create_block("entry");
         {
             let blk = main.block_mut(0).unwrap();
@@ -593,6 +594,9 @@ pub(super) fn compile_module_entry(
         let buffer_alias_base = llmod.buffer_alias_counter;
         let init_fn = llmod.define_function(&init_name, VOID, vec![]);
         init_fn.linkage = "internal".to_string();
+        if is_dylib {
+            init_fn.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
+        }
         let _ = init_fn.create_block("entry");
         {
             let blk = init_fn.block_mut(0).unwrap();
