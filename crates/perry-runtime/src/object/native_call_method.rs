@@ -1759,6 +1759,18 @@ pub unsafe extern "C" fn js_native_call_method(
             return crate::perf_hooks::perf_entry_to_json(object);
         }
 
+        // WeakMap/WeakSet dynamic method dispatch (issue #1757/#1758): these
+        // are GcHeader-backed objects stamped with a reserved class_id, so a
+        // WeakMap reaching here through an `any`-typed binding (effect's
+        // `globalValue(() => new WeakMap())`) still routes has/get/set/delete/
+        // add to the js_weak* helpers instead of throwing "has is not a
+        // function". The class_id guard + routing live in weakref.rs.
+        if let Some(r) =
+            crate::weakref::try_weak_method_dispatch(obj, object, method_name, args_ptr, args_len)
+        {
+            return r;
+        }
+
         if gc_type != crate::gc::GC_TYPE_OBJECT {
             // Only accept object_type == 1 (OBJECT_TYPE_REGULAR)
             let object_type = (*obj).object_type;

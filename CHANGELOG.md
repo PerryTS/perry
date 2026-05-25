@@ -2,6 +2,55 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1029 — Effect: WeakMap dynamic dispatch + TS param-property defaults (#1763)
+
+Two small, regression-safe correctness fixes toward Effect end-to-end (#321),
+continuing from #1756. With #1756 merged, the originally-filed symptoms of
+#1757 (makeGenericTag tag-local) and #1758 (Schema.ts `_tag`) no longer
+reproduced — both surfaced a shared deeper blocker instead. This batch fixes
+the real root cause and the next blocker after it. Net effect: the deep-import
+DoD `import * as Effect from "effect/Effect"; Effect.runSync(Effect.succeed(42))`
+now prints `42`, byte-for-byte with node.
+
+- **#1757 / #1758** `fix(runtime)`: WeakMap/WeakSet **dynamic** method
+  dispatch. `new WeakMap()` already builds a real `js_weakmap_new` object, and
+  a directly-declared `const w = new WeakMap()` dispatches `.has/.get/.set/
+  .delete` via the static `weakmap_locals` lowering. But a WeakMap reaching the
+  dynamic dispatcher `js_native_call_method` through an `any`-typed binding —
+  exactly effect's `globalValue(() => new WeakMap())`, whose generic return
+  type erases the WeakMap-ness — had no dispatch arm, so `randomHashCache.has(
+  self)` in `Hash.ts` threw `TypeError: has is not a function`. Unlike Map/Set
+  (plain-alloc, raw-pointer registries), WeakMap/WeakSet objects are
+  GcHeader-backed and movable, so a raw-pointer registry would dangle after a
+  GC evacuation; instead `js_weakmap_new`/`js_weakset_new` now stamp a
+  GC-stable reserved `class_id` (`0xFFFF0027`/`0xFFFF0028`, following the
+  `CLASS_ID_MAP`/`CLASS_ID_SET` convention) and `js_native_call_method` routes
+  `has/get/set/delete`/`add` to the existing `js_weakmap_*`/`js_weakset_*`
+  helpers via `weakref::try_weak_method_dispatch` (extracted to `weakref.rs` to
+  keep `native_call_method.rs` — a dispatch tower already at the file-size
+  gate — readable; the file is allowlisted with a split note under #1435).
+- **#1757 / #1758** `fix(hir)`: TS constructor **parameter-property default
+  values**. `constructor(readonly tags: ReadonlyArray<X> = [])` dropped the
+  default during lowering (`class_members.rs` forced `default: None` on every
+  `TsParamProp`), leaving `this.tags` null when the argument was omitted;
+  effect's `MetricKeyImpl` then threw `Cannot read properties of null (reading
+  'length')` in `Hash.array(this.tags)`. The `TsParamProp` arms now capture the
+  default (lowering `assign.right`, and treating `x?` optional as `undefined`)
+  so the existing `build_default_param_stmts` pass applies it before the
+  synthesized `this.field = param` assignment.
+- New gap test `test-files/test_gap_weakmap_dynamic.ts` covers `any`-typed
+  WeakMap/WeakSet dispatch (byte-for-byte parity with node).
+
+Remaining toward #321 (not in this batch): the barrel import `import { Effect }
+from "effect"` (which additionally drags in `Schema.ts`/`SchemaAST.ts`) now
+advances past these two blockers and reaches the original #1758 symptom —
+`Cannot read properties of undefined (reading '_tag')` in `SchemaAST_ts__239 ←
+Schema_ts__211/__227` during Schema init — tracked under #1758. A statically
+`WeakMap`-typed receiver (e.g. a function return type) still mis-dispatches as
+Map (`local_array_methods.rs` treats `WeakMap` like `Map`) onto a
+`js_weakmap_new` object; effect doesn't hit this (its WeakMap is `any`-typed),
+tracked as #1766.
+
 ## v0.5.1028 — release sweep: tag the post-v0.5.1027 catch-up batch
 
 Captures the 7 PRs that landed on `main` after the v0.5.1027 version

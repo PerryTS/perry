@@ -78,6 +78,10 @@ crates/perry-runtime/src/object/field_get_set.rs
 # fast-path gate refinements + main's process / fs / perf_hooks Expr
 # additions. Splitting per-builtin family tracked alongside #1435.
 crates/perry-codegen/src/expr/calls.rs
+# Dynamic method-call dispatch tower (js_native_call_method); crossed the
+# limit by the 7-line WeakMap/WeakSet dispatch hook in #1757/#1758. Splitting
+# per receiver-kind family tracked alongside #1435.
+crates/perry-runtime/src/object/native_call_method.rs
 EOF
 )
 

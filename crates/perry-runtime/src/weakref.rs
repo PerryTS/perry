@@ -148,6 +148,60 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
 const WEAKMAP_SHAPE_ID: u32 = 0x7FFF_FE12;
 const WEAKSET_SHAPE_ID: u32 = 0x7FFF_FE13;
 
+// Reserved `ObjectHeader.class_id` markers for WeakMap/WeakSet instances.
+// These follow the same `0xFFFF00xx` reserved-builtin convention as
+// CLASS_ID_MAP/CLASS_ID_SET (see object/instanceof.rs). Unlike Map/Set —
+// which are plain-alloc and tracked in raw-pointer registries — WeakMap/
+// WeakSet objects are GcHeader-backed and movable, so a registry of raw
+// pointers would dangle after a GC evacuation. The class_id travels with
+// the object across GC moves, so `js_native_call_method` can recognise a
+// WeakMap/WeakSet held in an `any`-typed binding (e.g. effect's
+// `globalValue(() => new WeakMap())`) and dispatch .has/.get/.set/.delete/
+// .add through to these helpers. 0x27/0x28 are the next free slots after
+// CLASS_ID_BLOB (0x26). Issue #1757/#1758.
+pub const CLASS_ID_WEAKMAP: u32 = 0xFFFF_0027;
+pub const CLASS_ID_WEAKSET: u32 = 0xFFFF_0028;
+
+/// Dynamic-dispatch entry point for WeakMap/WeakSet method calls (issue
+/// #1757/#1758). `js_native_call_method` calls this for any heap object;
+/// it returns `Some(result)` only when `obj` carries the reserved
+/// WeakMap/WeakSet `class_id` and `method_name` is one of their methods,
+/// and `None` otherwise so the caller falls through to its normal
+/// dispatch. `receiver` is the NaN-boxed f64 the `js_weak*` helpers expect.
+///
+/// Unknown methods on a known WeakMap/WeakSet resolve to `undefined`,
+/// mirroring the Map/Set registry arms in the dynamic dispatcher.
+///
+/// # Safety
+/// `obj` must be a valid, readable `ObjectHeader` pointer (the caller has
+/// already validated it as a live heap object).
+pub unsafe fn try_weak_method_dispatch(
+    obj: *const ObjectHeader,
+    receiver: f64,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let class_id = (*obj).class_id;
+    if class_id != CLASS_ID_WEAKMAP && class_id != CLASS_ID_WEAKSET {
+        return None;
+    }
+    let args: &[f64] = if !args_ptr.is_null() && args_len > 0 {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    } else {
+        &[]
+    };
+    let result = match method_name {
+        "set" if args.len() >= 2 => js_weakmap_set(receiver, args[0], args[1]),
+        "add" if !args.is_empty() => js_weakset_add(receiver, args[0]),
+        "get" if !args.is_empty() => js_weakmap_get(receiver, args[0]),
+        "has" if !args.is_empty() => js_weakmap_has(receiver, args[0]),
+        "delete" if !args.is_empty() => js_weakmap_delete(receiver, args[0]),
+        _ => f64::from_bits(TAG_UNDEFINED),
+    };
+    Some(result)
+}
+
 unsafe fn entries_array(reg: *mut ObjectHeader) -> *mut ArrayHeader {
     let entries_key = crate::string::js_string_from_bytes(b"entries".as_ptr(), 7);
     let entries_val = js_object_get_field_by_name(reg, entries_key);
@@ -160,6 +214,11 @@ pub extern "C" fn js_weakmap_new() -> *mut ObjectHeader {
     let obj = js_object_alloc_with_shape(WEAKMAP_SHAPE_ID, 1, packed.as_ptr(), packed.len() as u32);
     let entries_arr = js_array_alloc(0);
     js_object_set_field(obj, 0, JSValue::array_ptr(entries_arr));
+    // Stamp the GC-stable kind marker so dynamic method dispatch
+    // (js_native_call_method) recognises this as a WeakMap. Issue #1757.
+    unsafe {
+        (*obj).class_id = CLASS_ID_WEAKMAP;
+    }
     obj
 }
 
@@ -294,6 +353,10 @@ pub extern "C" fn js_weakset_new() -> *mut ObjectHeader {
     let obj = js_object_alloc_with_shape(WEAKSET_SHAPE_ID, 1, packed.as_ptr(), packed.len() as u32);
     let entries_arr = js_array_alloc(0);
     js_object_set_field(obj, 0, JSValue::array_ptr(entries_arr));
+    // Stamp the GC-stable kind marker (see js_weakmap_new). Issue #1757.
+    unsafe {
+        (*obj).class_id = CLASS_ID_WEAKSET;
+    }
     obj
 }
 

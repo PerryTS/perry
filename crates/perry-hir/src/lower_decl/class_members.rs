@@ -63,7 +63,15 @@ pub fn lower_constructor(
             }
             ast::ParamOrTsParamProp::TsParamProp(ts_prop) => {
                 // Handle parameter properties (e.g., constructor(public x: number))
-                let (param_name, param_type) = match &ts_prop.param {
+                // Capture the default like a plain param: `build_default_param_stmts`
+                // (below) turns it into `if (p === undefined) p = <default>` so the
+                // synthesized `this.field = p` assignment stores the default rather
+                // than `undefined` when the arg is omitted. Without this, a defaulted
+                // parameter property such as effect's MetricKeyImpl
+                // `readonly tags: ReadonlyArray<...> = []` left `this.tags` null, and
+                // `Hash.array(this.tags)` then threw "Cannot read properties of null
+                // (reading 'length')". Issue #1757/#1758 (toward #321).
+                let (param_name, param_type, param_default) = match &ts_prop.param {
                     ast::TsParamPropParam::Ident(ident) => {
                         let name = ident.id.sym.to_string();
                         let ty = ident
@@ -71,12 +79,22 @@ pub fn lower_constructor(
                             .as_ref()
                             .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
                             .unwrap_or(Type::Any);
-                        (name, ty)
+                        // `constructor(public x?: T)` — optional param props
+                        // default to undefined, mirroring get_param_default.
+                        let default = if ident.id.optional {
+                            Some(Expr::Undefined)
+                        } else {
+                            None
+                        };
+                        (name, ty, default)
                     }
                     ast::TsParamPropParam::Assign(assign) => {
                         let name = get_pat_name(&assign.left)?;
                         let ty = extract_param_type_with_ctx(&assign.left, Some(ctx));
-                        (name, ty)
+                        // Lower the default before defining this param's local,
+                        // matching the plain-`Param` ordering at get_param_default.
+                        let default = Some(lower_expr(ctx, &assign.right)?);
+                        (name, ty, default)
                     }
                 };
                 let param_id = ctx.define_local(param_name.clone(), param_type.clone());
@@ -86,7 +104,7 @@ pub fn lower_constructor(
                     id: param_id,
                     name: param_name,
                     ty: param_type,
-                    default: None,
+                    default: param_default,
                     decorators: lower_decorators(ctx, &ts_prop.decorators),
                     is_rest: false, // TsParamProp cannot be a rest parameter
                 });
