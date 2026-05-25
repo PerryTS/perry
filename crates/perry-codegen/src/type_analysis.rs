@@ -1523,6 +1523,32 @@ pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// True when `e` is a *dynamic* index into a native-module namespace —
+/// the auditable `ns[dynamicKey]` sub-namespace-selection shape (#1740,
+/// e.g. `(path as any)[k]` resolving to `path.win32` / `path.posix`).
+///
+/// Such a receiver evaluates to a native-module sub-object at runtime,
+/// never a primitive, so a method call on it must route through the
+/// generic `js_native_call_method` dispatch (which reaches
+/// `dispatch_native_module_method`) rather than being mis-classified as
+/// a `String`/`Number` prototype method by its name alone. Without this,
+/// a prototype-colliding name like `normalize` is lowered as a string
+/// method and the namespace pointer is handed to a string FFI → SIGSEGV
+/// (#1760).
+///
+/// Gated on a *non-literal* index: `(path as any)["sep"]` (a literal
+/// string property) can legitimately resolve to a string and must keep
+/// its string-method lowering, whereas `(path as any)[k]` is the dynamic
+/// sub-namespace form this targets.
+pub(crate) fn is_native_module_dynamic_index(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::IndexGet { object, index }
+            if matches!(object.as_ref(), Expr::NativeModuleRef(_))
+                && !matches!(index.as_ref(), Expr::String(_) | Expr::WtfString(_))
+    )
+}
+
 /// Best-effort static type lookup for an expression. Returns the HIR
 /// type when it's cheap to determine (literals, locals, field accesses
 /// on known classes). Returns `None` when computing the type would

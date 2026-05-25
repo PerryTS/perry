@@ -10,8 +10,8 @@ use crate::lower_array_method::lower_array_method;
 use crate::lower_string_method::lower_string_method;
 use crate::nanbox::double_literal;
 use crate::type_analysis::{
-    is_array_expr, is_global_constructor_expr, is_map_expr, is_promise_expr, is_set_expr,
-    is_string_expr, is_url_search_params_expr, receiver_class_name,
+    is_array_expr, is_global_constructor_expr, is_map_expr, is_native_module_dynamic_index,
+    is_promise_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
 };
 use crate::types::{DOUBLE, I32, I64};
 
@@ -44,6 +44,7 @@ pub fn try_lower_property_get_method_call(
         && args.len() == 1
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
+        && !is_native_module_dynamic_index(object)
     {
         let v = lower_expr(ctx, object)?;
         let dec = lower_expr(ctx, &args[0])?;
@@ -56,6 +57,7 @@ pub fn try_lower_property_get_method_call(
         && args.len() == 1
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
+        && !is_native_module_dynamic_index(object)
     {
         let v = lower_expr(ctx, object)?;
         let prec = lower_expr(ctx, &args[0])?;
@@ -72,6 +74,7 @@ pub fn try_lower_property_get_method_call(
         && args.len() <= 1
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
+        && !is_native_module_dynamic_index(object)
     {
         let v = lower_expr(ctx, object)?;
         let dec = if args.is_empty() {
@@ -279,7 +282,17 @@ pub fn try_lower_property_get_method_call(
             crate::type_analysis::static_type_of(ctx, object),
             Some(perry_types::Type::Named(ref n)) if n == "Uint8Array" || n == "Buffer"
         );
-        if is_string_only_method && !is_array_expr(ctx, object) && !is_buffer {
+        // #1760: a dynamic native-module sub-namespace receiver
+        // (`(path as any)[k]` → `path.win32`) is NOT a string, even though a
+        // method like `normalize` collides with a String.prototype name.
+        // Falling through here routes it to the generic `js_native_call_method`
+        // dispatch (→ `dispatch_native_module_method`); forcing the string path
+        // hands the namespace pointer to a string FFI and SIGSEGVs.
+        if is_string_only_method
+            && !is_array_expr(ctx, object)
+            && !is_buffer
+            && !is_native_module_dynamic_index(object)
+        {
             return Ok(Some(lower_string_method(ctx, object, property, args)?));
         }
     }

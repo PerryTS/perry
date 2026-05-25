@@ -8,10 +8,9 @@ import * as path from "node:path";
 // `undefined` until the runtime dispatch table learned `path.win32` /
 // `path.posix`. Surfaced by the #800 node-core radar (`test-path-glob.js`).
 //
-// (`.normalize`/`.format`/`.resolve` are intentionally not exercised here:
-// `normalize` collides with a String.prototype method name and is mis-lowered
-// by codegen on an `any`-typed receiver — a separate codegen gap — and
-// `resolve` is cwd-dependent.)
+// (`.normalize`/`.format` — the prototype-name-colliding methods that #1760
+// fixed — are exercised in the companion `normalize-format.ts`. `.resolve` is
+// still omitted here because it is cwd-dependent.)
 const w = "win32";
 console.log("win32 sep:", (path as any)[w].sep, "delim:", (path as any)[w].delimiter);
 console.log("win32 join:", (path as any)[w].join("a", "b"));
