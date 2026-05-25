@@ -3619,5 +3619,17 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: promises.finished({signal}) — abort doesn't reject with AbortError. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/static/is-writable-after-end-false": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: isWritable() returns undefined (unimplemented). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/static/get-default-hwm-byte-mode": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: getDefaultHighWaterMark(false) returns undefined (byte-mode default should be 65536). Flips to PASS when #1532 lands."
   }
 }
