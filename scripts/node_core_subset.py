@@ -33,6 +33,26 @@ Usage
     scripts/node_core_subset.py --root vendor/nodejs
     scripts/node_core_subset.py --root vendor/nodejs --api path url
     scripts/node_core_subset.py --root vendor/nodejs --max-per-api 25
+    scripts/node_core_subset.py --root vendor/nodejs --api http net --auto-optimize
+
+Feature-gated APIs (#1778)
+--------------------------
+By default the radar compiles with `PERRY_NO_AUTO_OPTIMIZE=1`, a speed hack
+that links the prebuilt full-feature `target/release/libperry_*.a` instead of
+rebuilding a per-program runtime. But Perry's http/net/https/ws *servers*,
+zlib, crypto and async_hooks live in `perry-ext-*` crates / Cargo features
+that are only built + added to the link line by the **auto-optimize** path.
+With that path skipped, those tests compile fine but fail to *link*
+(`Undefined symbols: _js_node_http_create_server`, `_js_net_create_server`,
+…) and get mis-bucketed as `compile-fail` — understating http/net/https/
+zlib/crypto/async_hooks parity (~570 tests in the full sweep).
+
+`--auto-optimize` drops `PERRY_NO_AUTO_OPTIMIZE` so each program links the
+ext crates it actually imports, making those APIs measurable. The first
+compile per distinct import-set triggers a cargo rebuild (cached per
+feature-set in `target/perry-auto-<hash>/`), so the per-compile timeout is
+bumped automatically (see `--compile-timeout`). Restrict with `--api` to
+keep the sweep tractable.
 
 See test-compat/node-core/README.md.
 """
@@ -176,6 +196,17 @@ def main() -> int:
     ap.add_argument("--max-per-api", type=int, default=0,
                     help="cap tests per API (0 = no cap)")
     ap.add_argument("--timeout", type=int, default=20, help="per-test timeout (s)")
+    ap.add_argument("--auto-optimize", action="store_true",
+                    help="link the per-program perry-ext-* crates / Cargo "
+                         "features (drops PERRY_NO_AUTO_OPTIMIZE) so http/net/"
+                         "https/ws servers, zlib, crypto and async_hooks are "
+                         "measurable instead of mis-bucketed as compile-fail "
+                         "link artifacts (#1778). Slower: the first compile per "
+                         "import-set rebuilds the runtime (cached after).")
+    ap.add_argument("--compile-timeout", type=int, default=0,
+                    help="per-compile timeout (s); 0 = use --timeout, or 600 "
+                         "under --auto-optimize to absorb the cold ext-crate "
+                         "rebuild without mis-bucketing it as compile-fail")
     ap.add_argument("--perry-bin", type=Path,
                     default=REPO_ROOT / "target" / "release" / "perry")
     ap.add_argument("--report", type=Path, default=NODE_CORE_DIR / "report.json")
@@ -183,6 +214,13 @@ def main() -> int:
                     help="failing-test samples to record per bucket per API report")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
+
+    # The cold ext-crate rebuild on the first compile of each distinct
+    # import-set can take minutes; without a longer compile budget it would
+    # time out and land in compile-fail — the exact mis-bucketing #1778 is
+    # about. Per-test execution still uses the tighter --timeout.
+    compile_timeout = args.compile_timeout or (
+        max(args.timeout, 600) if args.auto_optimize else args.timeout)
 
     root = args.root.resolve()
     if not (root / "test" / "parallel").is_dir():
@@ -200,6 +238,11 @@ def main() -> int:
 
     apis = args.api or read_api_list(NODE_CORE_DIR / "supported-apis.txt")
     pinned = (NODE_CORE_DIR / "pinned-version.txt").read_text().strip()
+
+    if args.auto_optimize and not args.quiet:
+        print(f"  auto-optimize: ON (#1778) — linking per-program perry-ext-* "
+              f"crates; first compile per import-set rebuilds the runtime "
+              f"(compile-timeout={compile_timeout}s).")
 
     base_env = dict(os.environ)
     base_env.update(FORCE_COLOR="0", NO_COLOR="1", NODE_DISABLE_COLORS="1")
@@ -255,15 +298,20 @@ def main() -> int:
                 #    as runtime divergence, the gap signal). Raw CommonJS `.js`
                 #    is handled natively now (require/module.exports rewritten
                 #    to ESM); no .ts staging or external rewriter needed.
-                #    PERRY_NO_AUTO_OPTIMIZE skips the per-compile runtime
-                #    rebuild; cwd=bin_dir contains the `.o` litter perry emits.
+                #    By default PERRY_NO_AUTO_OPTIMIZE skips the per-compile
+                #    runtime rebuild for speed, but that also skips linking the
+                #    perry-ext-* server/feature crates — see #1778 and the
+                #    --auto-optimize flag, which leaves it unset so the ext
+                #    crates this program imports actually get linked.
+                #    cwd=bin_dir contains the `.o` litter perry emits.
                 out_bin = bin_dir / (test_name + ".out")
-                c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1",
-                             PERRY_NO_AUTO_OPTIMIZE="1")
+                c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1")
+                if not args.auto_optimize:
+                    c_env["PERRY_NO_AUTO_OPTIMIZE"] = "1"
                 c_exit, c_out = run(
                     [str(args.perry_bin), "compile", str(staged),
                      "-o", str(out_bin)],
-                    c_env, args.timeout, cwd=str(bin_dir))
+                    c_env, compile_timeout, cwd=str(bin_dir))
                 if c_exit != 0:
                     buckets["compile-fail"].add(
                         api, test_name, error_line(c_out), args.sample_cap)
@@ -313,6 +361,7 @@ def main() -> int:
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "node_pinned": pinned,
         "node_runtime": run(["node", "--version"], base_env, 10)[1].strip(),
+        "auto_optimize": args.auto_optimize,
         "apis": apis,
         "totals": totals,
         "judged": judged,

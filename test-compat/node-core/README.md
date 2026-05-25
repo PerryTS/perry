@@ -73,6 +73,38 @@ scripts/node_core_subset.py --root vendor/nodejs --api path url
 scripts/node_core_subset.py --root vendor/nodejs --max-per-api 25
 ```
 
+## Feature-gated APIs: `--auto-optimize` (#1778)
+
+By default the radar compiles each test with `PERRY_NO_AUTO_OPTIMIZE=1`. This
+links the prebuilt full-feature `target/release/libperry_*.a` instead of
+rebuilding a specialized runtime per program — fast, and fine for pure-logic
+APIs (`path`, `url`, `buffer`, …).
+
+But Perry's **http/net/https/ws servers**, **zlib**, **crypto** and
+**async_hooks** live in `perry-ext-*` crates / Cargo features that are only
+built and added to the link line by the **auto-optimize** path
+(`crates/perry/src/commands/compile/optimized_libs.rs`). With that path
+skipped, those tests *compile* but fail to *link* —
+`Undefined symbols: _js_node_http_create_server`, `_js_net_create_server`, … —
+and get mis-bucketed as `compile-fail`. In the full sweep this is the dominant
+`compile-fail` cause (~570 tests: http, net, https, zlib, crypto, async_hooks,
+process, stream, child_process) and badly understates those APIs' parity. They
+are **not real gaps** — Perry implements these APIs; the radar just wasn't
+linking them.
+
+Pass `--auto-optimize` to leave `PERRY_NO_AUTO_OPTIMIZE` unset so each program
+links the ext crates it actually imports:
+
+```bash
+scripts/node_core_subset.py --root vendor/nodejs --api http net https zlib crypto async_hooks --auto-optimize
+```
+
+The first compile of each distinct import-set triggers a cargo rebuild
+(cached per feature-set under `target/perry-auto-<hash>/`), so the per-compile
+timeout is bumped automatically (override with `--compile-timeout`). Restrict
+the sweep with `--api` to keep it tractable. The report records which mode
+produced the numbers (`"auto_optimize": true|false`).
+
 ## What a CI job would do
 
 1. Sparse-checks-out `nodejs/node` at `pinned-version.txt`.
