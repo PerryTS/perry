@@ -15,7 +15,16 @@ pub extern "C" fn js_buffer_from_string(
         let len = (*str_ptr).byte_len as usize;
         let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let str_bytes = std::slice::from_raw_parts(data_ptr, len);
+        buffer_from_str_bytes(str_bytes, encoding)
+    }
+}
 
+/// Decode a raw string byte-slice into a Buffer according to the encoding
+/// tag (see `js_buffer_from_string` for the tag legend). Shared by the heap
+/// `StringHeader` path and the inline SSO short-string path so both honor
+/// the same hex / base64 / latin1 / utf8 semantics.
+fn buffer_from_str_bytes(str_bytes: &[u8], encoding: i32) -> *mut BufferHeader {
+    unsafe {
         match encoding {
             // v0.5.772 perf: decode directly into the BufferHeader instead of
             // routing through `decode_hex(&[u8]) -> Vec<u8>` + a follow-up
@@ -27,6 +36,7 @@ pub extern "C" fn js_buffer_from_string(
             4 | 5 => latin1_string_to_buffer(str_bytes),
             _ => {
                 // UTF-8 (default)
+                let len = str_bytes.len();
                 let buf = buffer_alloc(len as u32);
                 (*buf).length = len as u32;
                 ptr::copy_nonoverlapping(str_bytes.as_ptr(), buffer_data_mut(buf), len);
@@ -121,10 +131,25 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
     let bits = value as u64;
     let jsval = crate::JSValue::from_bits(bits);
 
-    // Check if it's a NaN-boxed string
+    // Check if it's a NaN-boxed heap string
     if jsval.is_string() {
         let str_ptr = jsval.as_string_ptr();
         return js_buffer_from_string(str_ptr as *const crate::string::StringHeader, encoding);
+    }
+
+    // Inline SSO short string (SHORT_STRING_TAG = 0x7FF9): strings of length
+    // 0..=5 carry their bytes inside the NaN-box payload instead of a heap
+    // `StringHeader`. `is_string()` above is STRING_TAG-only and rejects
+    // these, so without this branch the SSO value would fall through to the
+    // pointer-extraction path below, where its inline bytes (e.g. the ASCII
+    // of a 5-char `apiKey`) are misread as an array/buffer pointer and
+    // dereferenced — the #1767 SIGSEGV in `Buffer.from(shortString)` reached
+    // from `@perryts/mysql`'s prepared-statement param encoder. Decode the
+    // inline bytes and route through the shared encoder.
+    if jsval.is_short_string() {
+        let mut tmp = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let len = jsval.short_string_to_buf(&mut tmp);
+        return buffer_from_str_bytes(&tmp[..len], encoding);
     }
 
     // Extract the raw pointer

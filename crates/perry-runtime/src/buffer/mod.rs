@@ -216,4 +216,50 @@ mod tests {
         let decoded = decode_base64(&encoded);
         assert_eq!(decoded, original);
     }
+
+    /// #1767: `Buffer.from(shortString)` must handle inline SSO strings.
+    /// A string of length 0..=5 lives in the NaN-box payload (tag 0x7FF9),
+    /// not behind a heap `StringHeader`. `js_buffer_from_value` only checked
+    /// the strict `is_string()` (STRING_TAG 0x7FFF) predicate, so an SSO
+    /// value fell through to the pointer/array path and its inline bytes
+    /// (e.g. the ASCII of a 5-char `apiKey` like "mango") were dereferenced
+    /// as an `ArrayHeader*` — SIGSEGV. Reached from `@perryts/mysql`'s
+    /// prepared-statement param encoder (`Buffer.from(v, 'utf8')`).
+    #[test]
+    fn buffer_from_value_decodes_sso_short_string_utf8() {
+        for s in ["", "a", "id", "p1", "mango"] {
+            let v = crate::JSValue::try_short_string(s.as_bytes())
+                .expect("len<=5 encodes as inline SSO");
+            assert!(v.is_short_string(), "{s:?} should be an inline SSO value");
+            let buf = js_buffer_from_value(v.bits() as i64, 0 /* utf8 */);
+            assert!(!buf.is_null(), "null buffer for {s:?}");
+            assert_eq!(
+                js_buffer_length(buf) as usize,
+                s.len(),
+                "length mismatch for {s:?}"
+            );
+            for (i, &b) in s.as_bytes().iter().enumerate() {
+                assert_eq!(
+                    js_buffer_get(buf, i as i32) as u8,
+                    b,
+                    "byte {i} mismatch for {s:?}"
+                );
+            }
+        }
+    }
+
+    /// Same SSO value, but decoded under the `hex` encoding tag (1): the
+    /// short string holds hex digits and must produce the decoded bytes,
+    /// proving the SSO branch routes through the shared encoding helper
+    /// rather than a utf8-only fast path.
+    #[test]
+    fn buffer_from_value_decodes_sso_short_string_hex() {
+        // "ff00" is 4 bytes (<= 5) → SSO; hex-decodes to [0xff, 0x00].
+        let v = crate::JSValue::try_short_string(b"ff00").expect("SSO");
+        let buf = js_buffer_from_value(v.bits() as i64, 1 /* hex */);
+        assert!(!buf.is_null());
+        assert_eq!(js_buffer_length(buf), 2);
+        assert_eq!(js_buffer_get(buf, 0) as u8, 0xff);
+        assert_eq!(js_buffer_get(buf, 1) as u8, 0x00);
+    }
 }
