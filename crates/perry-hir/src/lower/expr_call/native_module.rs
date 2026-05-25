@@ -723,6 +723,11 @@ pub(super) fn try_native_module_methods(
                                 Box::new(key),
                             )));
                         }
+                        "getOwnPropertyDescriptors" => {
+                            return Ok(Ok(Expr::ObjectGetOwnPropertyDescriptors(Box::new(
+                                args.into_iter().next().unwrap_or(Expr::Undefined),
+                            ))));
+                        }
                         "getOwnPropertyNames" => {
                             return Ok(Ok(Expr::ObjectGetOwnPropertyNames(Box::new(
                                 args.into_iter().next().unwrap_or(Expr::Undefined),

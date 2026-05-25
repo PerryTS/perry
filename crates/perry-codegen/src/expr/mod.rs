@@ -1647,6 +1647,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ArrayIndexOf { .. }
         | Expr::ArrayForEach { .. }
         | Expr::ObjectGetOwnPropertyDescriptor(..)
+        | Expr::ObjectGetOwnPropertyDescriptors(..)
         | Expr::MathCbrt(..)
         | Expr::DateGetFullYear(..)
         | Expr::DateGetMonth(..)

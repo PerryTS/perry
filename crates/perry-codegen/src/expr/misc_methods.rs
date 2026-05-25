@@ -526,6 +526,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
 
+        // -------- Object.getOwnPropertyDescriptors(obj) --------
+        Expr::ObjectGetOwnPropertyDescriptors(obj) => {
+            let o = lower_expr(ctx, obj)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_get_own_property_descriptors",
+                &[(DOUBLE, &o)],
+            ))
+        }
+
         // -------- Math.cbrt --------
         Expr::MathCbrt(operand) => {
             let v = lower_expr(ctx, operand)?;

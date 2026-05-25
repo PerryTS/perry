@@ -876,6 +876,49 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
     }
 }
 
+/// Object.getOwnPropertyDescriptors(obj) — returns a new object whose own
+/// property keys (the same set `Object.getOwnPropertyNames` reports, including
+/// non-enumerable keys and class-ref method names) each map to the property
+/// descriptor produced by `js_object_get_own_property_descriptor`. Spec:
+/// "for each own property key K of O, set result[K] = descriptor(O, K)".
+///
+/// effect's `SchemaAST.annotations` builds a fresh AST node via
+/// `Object.create(Object.getPrototypeOf(ast), Object.getOwnPropertyDescriptors(ast))`,
+/// so without this the plural call lowered to a null callee and Schema.ts
+/// module init threw `TypeError: value is not a function` (#1791/#1758).
+#[no_mangle]
+pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 {
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    unsafe {
+        // Enumerate own keys exactly like Object.getOwnPropertyNames — this
+        // handles class refs and plain objects, and includes non-enumerable
+        // keys, matching the spec's [[OwnPropertyKeys]] string-key set.
+        let names_value = js_object_get_own_property_names(obj_value);
+        let names_arr =
+            crate::value::js_nanbox_get_pointer(names_value) as *const crate::array::ArrayHeader;
+
+        // Fresh result object that collects { key: descriptor } entries.
+        // Like js_object_entries / js_object_get_own_property_names above, the
+        // intermediate allocations aren't rooted — Perry's builder helpers
+        // follow this convention.
+        let result = js_object_alloc(0, 0);
+
+        if !names_arr.is_null() {
+            let len = crate::array::js_array_length(names_arr) as usize;
+            for i in 0..len {
+                let key_val = crate::array::js_array_get(names_arr, i as u32);
+                let key_f64 = f64::from_bits(key_val.bits());
+                let desc = js_object_get_own_property_descriptor(obj_value, key_f64);
+                let key_str = crate::builtins::js_string_coerce(key_f64);
+                if !key_str.is_null() {
+                    js_object_set_field_by_name(result, key_str, desc);
+                }
+            }
+        }
+        f64::from_bits((result as u64) | POINTER_TAG)
+    }
+}
+
 /// Object.create(proto) — create empty object. Perry ignores prototype; Object.create(null) returns {}.
 #[no_mangle]
 pub extern "C" fn js_object_create(proto_value: f64) -> f64 {

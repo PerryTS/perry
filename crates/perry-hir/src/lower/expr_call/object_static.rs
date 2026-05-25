@@ -49,6 +49,9 @@ pub(super) fn build_object_static_method_call(method: &str, args: Vec<Expr>) -> 
             let key = iter.next().unwrap_or(Expr::Undefined);
             Expr::ObjectGetOwnPropertyDescriptor(Box::new(obj), Box::new(key))
         }
+        "getOwnPropertyDescriptors" => {
+            Expr::ObjectGetOwnPropertyDescriptors(Box::new(iter.next().unwrap_or(Expr::Undefined)))
+        }
         "getOwnPropertyNames" => {
             Expr::ObjectGetOwnPropertyNames(Box::new(iter.next().unwrap_or(Expr::Undefined)))
         }

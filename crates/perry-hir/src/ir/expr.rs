@@ -583,18 +583,19 @@ pub enum Expr {
     // Object property descriptor methods
     ObjectDefineProperty(Box<Expr>, Box<Expr>, Box<Expr>), // Object.defineProperty(obj, key, desc)
     ObjectGetOwnPropertyDescriptor(Box<Expr>, Box<Expr>), // Object.getOwnPropertyDescriptor(obj, key)
-    ObjectGetOwnPropertyNames(Box<Expr>), // Object.getOwnPropertyNames(obj) -> string[]
-    ObjectCreate(Box<Expr>),              // Object.create(proto)
-    ObjectFreeze(Box<Expr>),              // Object.freeze(obj)
-    ObjectSeal(Box<Expr>),                // Object.seal(obj)
-    ObjectPreventExtensions(Box<Expr>),   // Object.preventExtensions(obj)
-    ObjectIsFrozen(Box<Expr>),            // Object.isFrozen(obj)
-    ObjectIsSealed(Box<Expr>),            // Object.isSealed(obj)
-    ObjectIsExtensible(Box<Expr>),        // Object.isExtensible(obj)
-    ObjectGetPrototypeOf(Box<Expr>),      // Object.getPrototypeOf(obj)
+    ObjectGetOwnPropertyDescriptors(Box<Expr>), // Object.getOwnPropertyDescriptors(obj) -> { [k]: descriptor }
+    ObjectGetOwnPropertyNames(Box<Expr>),       // Object.getOwnPropertyNames(obj) -> string[]
+    ObjectCreate(Box<Expr>),                    // Object.create(proto)
+    ObjectFreeze(Box<Expr>),                    // Object.freeze(obj)
+    ObjectSeal(Box<Expr>),                      // Object.seal(obj)
+    ObjectPreventExtensions(Box<Expr>),         // Object.preventExtensions(obj)
+    ObjectIsFrozen(Box<Expr>),                  // Object.isFrozen(obj)
+    ObjectIsSealed(Box<Expr>),                  // Object.isSealed(obj)
+    ObjectIsExtensible(Box<Expr>),              // Object.isExtensible(obj)
+    ObjectGetPrototypeOf(Box<Expr>),            // Object.getPrototypeOf(obj)
     ObjectSetPrototypeOf(Box<Expr>, Box<Expr>), // Object.setPrototypeOf(obj, proto) -> obj
     ObjectDefineProperties(Box<Expr>, Box<Expr>), // Object.defineProperties(target, descriptors)
-    ObjectGetOwnPropertySymbols(Box<Expr>), // Object.getOwnPropertySymbols(obj) -> symbol[]
+    ObjectGetOwnPropertySymbols(Box<Expr>),     // Object.getOwnPropertySymbols(obj) -> symbol[]
 
     // Symbol operations
     SymbolNew(Option<Box<Expr>>), // Symbol() / Symbol(description)
