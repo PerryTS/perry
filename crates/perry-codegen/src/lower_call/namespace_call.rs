@@ -155,7 +155,7 @@ pub fn try_lower_namespace_member_call(
                 );
                 return Ok(Some(nanbox_pointer_inline(blk, &id)));
             }
-            "clearTimeout" | "clearInterval" | "clearImmediate" if args.len() == 1 => {
+            "clearTimeout" | "clearInterval" | "clearImmediate" if !args.is_empty() => {
                 let id_box = lower_expr(ctx, &args[0])?;
                 let runtime = match property.as_str() {
                     "clearTimeout" => "js_clear_timeout_value",

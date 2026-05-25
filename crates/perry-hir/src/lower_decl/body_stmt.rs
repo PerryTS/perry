@@ -905,13 +905,14 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                     .is_some_and(|imported| imported == "setInterval")
                             }
                             ast::Expr::Member(member) => {
-                                matches!(
-                                    (&*member.obj, &member.prop),
-                                    (
-                                        ast::Expr::Ident(_),
-                                        ast::MemberProp::Ident(prop),
-                                    ) if prop.sym.as_ref() == "setInterval"
-                                )
+                                if let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) =
+                                    (&*member.obj, &member.prop)
+                                {
+                                    prop.sym.as_ref() == "setInterval"
+                                        && ctx.lookup_local(obj.sym.as_ref()).is_none()
+                                } else {
+                                    false
+                                }
                             }
                             _ => false,
                         }

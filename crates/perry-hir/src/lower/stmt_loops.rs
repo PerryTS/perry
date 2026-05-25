@@ -74,13 +74,14 @@ pub(crate) fn lower_stmt_for_of(
                             .is_some_and(|imported| imported == "setInterval")
                     }
                     ast::Expr::Member(member) => {
-                        matches!(
-                            (&*member.obj, &member.prop),
-                            (
-                                ast::Expr::Ident(_),
-                                ast::MemberProp::Ident(prop),
-                            ) if prop.sym.as_ref() == "setInterval"
-                        )
+                        if let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) =
+                            (&*member.obj, &member.prop)
+                        {
+                            prop.sym.as_ref() == "setInterval"
+                                && ctx.lookup_local(obj.sym.as_ref()).is_none()
+                        } else {
+                            false
+                        }
                     }
                     _ => false,
                 }
