@@ -36,13 +36,16 @@ pub struct ClassVTable {
 pub static CLASS_VTABLE_REGISTRY: RwLock<Option<HashMap<u32, ClassVTable>>> = RwLock::new(None);
 
 /// #1788: per-class STATIC-method registry: class_id -> { name -> (func_ptr,
-/// param_count) }. Static methods are emitted as `perry_static_*` (no `this`
-/// param — they read `this` from the implicit-this slot) and are NOT in the
-/// instance vtable above, so a subclass whose parent is a class-expression
-/// value (`class Sub extends make(...) {}`) can't resolve an inherited static
-/// method (`Sub.greet()`) at compile time. This table is walked up the
-/// class_id parent chain at runtime by `js_class_static_method_call`.
-pub static CLASS_STATIC_METHODS: RwLock<Option<HashMap<u32, HashMap<String, (usize, u32)>>>> =
+/// param_count, has_rest) }. Static methods are emitted as `perry_static_*`
+/// (no `this` param — they read `this` from the implicit-this slot) and are
+/// NOT in the instance vtable above, so a subclass whose parent is a
+/// class-expression value (`class Sub extends make(...) {}`) can't resolve an
+/// inherited static method (`Sub.greet()`) at compile time. This table is
+/// walked up the class_id parent chain at runtime by
+/// `js_class_static_method_call`. `has_rest` marks a trailing rest param
+/// (`static pipe(...args)`, effect's `pipe`/`dual`) so the dispatcher bundles
+/// the call args into an array for that slot.
+pub static CLASS_STATIC_METHODS: RwLock<Option<HashMap<u32, HashMap<String, (usize, u32, bool)>>>> =
     RwLock::new(None);
 
 /// Set of all registered class ids. Populated at module init by codegen
@@ -1503,6 +1506,7 @@ pub unsafe extern "C" fn js_register_class_static_method(
     name_len: i64,
     func_ptr: i64,
     param_count: i64,
+    has_rest: i64,
 ) {
     if class_id == 0 || name_ptr.is_null() || name_len <= 0 {
         return;
@@ -1520,12 +1524,12 @@ pub unsafe extern "C" fn js_register_class_static_method(
         .unwrap()
         .entry(class_id as u32)
         .or_default()
-        .insert(name, (func_ptr as usize, param_count as u32));
+        .insert(name, (func_ptr as usize, param_count as u32, has_rest != 0));
 }
 
 /// Look up a static method by name in `CLASS_STATIC_METHODS`, walking the
 /// class_id parent chain (so a subclass inherits a parent's static method).
-fn lookup_static_method_in_chain(class_id: u32, name: &str) -> Option<(usize, u32)> {
+fn lookup_static_method_in_chain(class_id: u32, name: &str) -> Option<(usize, u32, bool)> {
     let guard = CLASS_STATIC_METHODS.read().ok()?;
     let map = guard.as_ref()?;
     let mut cid = class_id;
@@ -1624,9 +1628,37 @@ pub unsafe extern "C" fn js_class_static_method_call(
     if class_id == 0 {
         return receiver;
     }
-    if let Some((func_ptr, param_count)) = lookup_static_method_in_chain(class_id, name) {
+    if let Some((func_ptr, param_count, has_rest)) = lookup_static_method_in_chain(class_id, name) {
         let prev_this = crate::object::js_implicit_this_set(receiver);
-        let result = call_static_method(func_ptr, args_ptr, args_len, param_count);
+        let result = if has_rest {
+            // `static foo(a, b, ...rest)` / `static pipe(...args)` (effect's
+            // `pipe`/`dual`): pass the first `param_count-1` positional args
+            // as-is, then bundle the remaining call args into a JS array for
+            // the rest slot — matching JS `arguments`/rest semantics and the
+            // direct-call (#1787 / #915) static-dispatch path.
+            let fixed = (param_count as usize).saturating_sub(1);
+            let arr = crate::array::js_array_alloc(args_len.saturating_sub(fixed) as u32);
+            let mut i = fixed;
+            while i < args_len {
+                crate::array::js_array_push_f64(arr, *args_ptr.add(i));
+                i += 1;
+            }
+            let rest_box = crate::value::js_nanbox_pointer(arr as i64);
+            // Build the [param_count]-slot effective-args buffer:
+            // positional fixed args, then the bundled rest array.
+            let mut buf: Vec<f64> = Vec::with_capacity(param_count as usize);
+            for j in 0..fixed {
+                buf.push(if j < args_len {
+                    *args_ptr.add(j)
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                });
+            }
+            buf.push(rest_box);
+            call_static_method(func_ptr, buf.as_ptr(), buf.len(), param_count)
+        } else {
+            call_static_method(func_ptr, args_ptr, args_len, param_count)
+        };
         crate::object::js_implicit_this_set(prev_this);
         return result;
     }

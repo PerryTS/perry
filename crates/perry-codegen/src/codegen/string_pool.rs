@@ -300,11 +300,12 @@ pub(super) fn emit_string_pool(
     // Each module's init registers its own classes; the linker
     // ensures all init functions run before main.
     let mut method_triples: Vec<(u32, String, String, u32)> = Vec::new();
-    // #1788: (cid, static-method name, perry_static_* symbol, param_count).
-    // Registered into the runtime CLASS_STATIC_METHODS table so a subclass
-    // whose parent is a class-expression value inherits the parent's static
-    // methods (`class Sub extends make(...) {}; Sub.greet()`).
-    let mut static_method_triples: Vec<(u32, String, String, u32)> = Vec::new();
+    // #1788: (cid, static-method name, perry_static_* symbol, param_count,
+    // has_rest). Registered into the runtime CLASS_STATIC_METHODS table so a
+    // subclass whose parent is a class-expression value inherits the parent's
+    // static methods (`class Sub extends make(...) {}; Sub.greet()`); has_rest
+    // tells the dispatcher to bundle trailing args for a `...rest` param.
+    let mut static_method_triples: Vec<(u32, String, String, u32, bool)> = Vec::new();
     for (class_name, class) in classes.iter() {
         // Refs #486: skip alias keys (class_table now contains both the
         // canonical name and self-binding aliases like `_X` from
@@ -352,7 +353,14 @@ pub(super) fn emit_string_pool(
                 sanitize(class_name),
                 sanitize(&sm.name),
             );
-            static_method_triples.push((cid, sm.name.clone(), llvm_name, sm.params.len() as u32));
+            let has_rest = sm.params.last().map(|p| p.is_rest).unwrap_or(false);
+            static_method_triples.push((
+                cid,
+                sm.name.clone(),
+                llvm_name,
+                sm.params.len() as u32,
+                has_rest,
+            ));
         }
     }
     method_triples.sort_unstable();
@@ -388,7 +396,7 @@ pub(super) fn emit_string_pool(
     // static methods (subclass extends a class-expression value) resolve at
     // runtime via the class_id parent-chain walk.
     static_method_triples.sort_unstable();
-    for (cid, method_name, llvm_name, param_count) in static_method_triples {
+    for (cid, method_name, llvm_name, param_count, has_rest) in static_method_triples {
         let entry = match strings.iter().find(|e| e.value == method_name) {
             Some(e) => e,
             None => continue,
@@ -398,6 +406,7 @@ pub(super) fn emit_string_pool(
         let func_ref = format!("@{}", llvm_name);
         let func_i64 = blk.ptrtoint(&func_ref, I64);
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+        let has_rest_str = if has_rest { "1" } else { "0" };
         blk.call_void(
             "js_register_class_static_method",
             &[
@@ -406,6 +415,7 @@ pub(super) fn emit_string_pool(
                 (I64, &len_str),
                 (I64, &func_i64),
                 (I64, &param_count.to_string()),
+                (I64, has_rest_str),
             ],
         );
     }

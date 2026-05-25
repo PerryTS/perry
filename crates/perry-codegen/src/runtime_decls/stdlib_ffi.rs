@@ -1161,7 +1161,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function(
         "js_register_class_static_method",
         VOID,
-        &[I64, I64, I64, I64, I64],
+        &[I64, I64, I64, I64, I64, I64],
     );
     module.declare_function(
         "js_class_static_method_call",
