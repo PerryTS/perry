@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::thread::ThreadId;
 
 use crate::closure::ClosureHeader;
@@ -67,6 +67,32 @@ pub(crate) struct DiagChannelState {
 pub(crate) struct DiagTracingState {
     pub(crate) obj: *mut ObjectHeader,
     pub(crate) events: [i64; 5],
+}
+
+/// The event-loop/main thread is the only thread that may register
+/// diagnostics subscribers/stores. `perry/thread::spawn` workers are
+/// temporary runtimes with independent arenas and no persistent pump after
+/// their closure returns, so keeping worker-owned callbacks would leave no
+/// safe thread/lifetime for later cross-thread delivery (#1798).
+static DIAG_MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
+
+pub fn diagnostics_channel_init_main_thread() {
+    let _ = DIAG_MAIN_THREAD.set(std::thread::current().id());
+}
+
+fn is_diagnostics_main_thread() -> bool {
+    DIAG_MAIN_THREAD
+        .get()
+        .is_some_and(|main| *main == std::thread::current().id())
+}
+
+fn ensure_subscriber_owner_thread() {
+    if is_diagnostics_main_thread() {
+        return;
+    }
+    throw_type_error_no_code(
+        b"node:diagnostics_channel subscribers are only supported on Perry's main thread",
+    );
 }
 
 /// Cross-thread activity count keyed by channel name.
@@ -169,12 +195,6 @@ pub fn diagnostics_channel_has_pending_publishes() -> bool {
 /// thread. This must be called from a thread whose local diagnostics registry
 /// owns the subscriber closures; in the normal executable this is the main
 /// thread's microtask/event-loop pump.
-///
-/// TODO(#1310 follow-up): if a future persistent worker runtime can keep a
-/// worker-local subscriber alive, it also needs its own pump or destination
-/// routing. Today `perry/thread::spawn` workers do not run an event loop, so
-/// retained items for worker-only subscribers may remain pending until a
-/// broader cross-thread diagnostics registry exists.
 pub fn diagnostics_channel_process_pending() -> i32 {
     let current_thread = std::thread::current().id();
     let pending = {
@@ -670,6 +690,7 @@ pub(crate) fn channel_obj(id: i64) -> f64 {
 }
 
 pub(crate) fn add_subscriber(id: i64, subscriber: f64) {
+    ensure_subscriber_owner_thread();
     if !valid_closure_value(subscriber) {
         throw_invalid_arg();
     }
@@ -865,6 +886,7 @@ pub(crate) extern "C" fn diag_channel_bind_store(
     store: f64,
     transform: f64,
 ) -> f64 {
+    ensure_subscriber_owner_thread();
     let id = method_id(closure);
     let transform = if valid_closure_value(transform) {
         Some(transform)

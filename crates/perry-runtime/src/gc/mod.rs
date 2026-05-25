@@ -733,6 +733,7 @@ pub fn gc_init() {
 
 #[no_mangle]
 pub extern "C" fn js_gc_init() {
+    crate::node_submodules::diagnostics_channel_init_main_thread();
     gc_init();
 }
 

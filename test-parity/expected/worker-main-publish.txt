@@ -1,0 +1,7 @@
+main has subscribers: true
+worker saw subscribers: true
+main saw events: 1
+payload value: 42
+payload text: from-worker
+payload array len: 3
+main saw events after main publish: 2
