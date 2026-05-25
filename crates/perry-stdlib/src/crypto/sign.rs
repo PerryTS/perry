@@ -1,9 +1,13 @@
-// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 /// Resolve `(start, end)` byte indices from Node-style `offset` / `size`
 /// arguments against a buffer of `total` bytes. Out-of-range values are
 /// clamped to `[0, total]`.
-fn resolve_range(total: usize, offset: Option<usize>, size: Option<usize>) -> (usize, usize) {
+pub(super) fn resolve_range(
+    total: usize,
+    offset: Option<usize>,
+    size: Option<usize>,
+) -> (usize, usize) {
     let start = offset.unwrap_or(0).min(total);
     let end = match size {
         Some(s) => start.saturating_add(s).min(total),
@@ -563,4 +567,3 @@ pub unsafe extern "C" fn js_crypto_diffie_hellman(
     let secret = private.diffie_hellman(&public);
     alloc_buffer_from_slice(secret.as_bytes())
 }
-

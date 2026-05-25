@@ -1,4 +1,4 @@
-// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 /// `crypto.createSecretKey(key, encoding?)` — produce a key Buffer
 /// that jose / jsonwebtoken / etc. can use as an HS* signing key.
@@ -98,7 +98,7 @@ pub unsafe extern "C" fn js_crypto_generate_key_sync(
     buf
 }
 
-unsafe fn call_node_style_callback2(callback_bits: f64, err: f64, value: f64) {
+pub(super) unsafe fn call_node_style_callback2(callback_bits: f64, err: f64, value: f64) {
     let raw = callback_bits.to_bits() & 0x0000_FFFF_FFFF_FFFF;
     if raw < 0x1000 {
         return;
@@ -110,7 +110,7 @@ unsafe fn call_node_style_callback2(callback_bits: f64, err: f64, value: f64) {
     );
 }
 
-unsafe fn call_node_style_callback3(callback_bits: f64, err: f64, a: f64, b: f64) {
+pub(super) unsafe fn call_node_style_callback3(callback_bits: f64, err: f64, a: f64, b: f64) {
     let raw = callback_bits.to_bits() & 0x0000_FFFF_FFFF_FFFF;
     if raw < 0x1000 {
         return;
@@ -165,4 +165,3 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_async(
     );
     undefined
 }
-

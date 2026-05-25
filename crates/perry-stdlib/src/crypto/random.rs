@@ -1,4 +1,4 @@
-// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 /// Generate random bytes and return as a Buffer
 /// crypto.randomBytes(size) -> Buffer
@@ -248,7 +248,7 @@ pub unsafe extern "C" fn js_crypto_random_fill_async(
 
 /// Best-effort extract a non-negative integer from a NaN-boxed `f64`.
 /// `undefined`, `null`, NaN, negatives → `None` (caller picks default).
-fn nanboxed_to_usize(bits: f64) -> Option<usize> {
+pub(super) fn nanboxed_to_usize(bits: f64) -> Option<usize> {
     let raw = bits.to_bits();
     let top16 = (raw >> 48) as u16;
     // Undefined / null / false / true sentinels.
@@ -270,7 +270,7 @@ fn nanboxed_to_usize(bits: f64) -> Option<usize> {
     Some(bits as usize)
 }
 
-fn nanboxed_to_i64(bits: f64) -> Option<i64> {
+pub(super) fn nanboxed_to_i64(bits: f64) -> Option<i64> {
     let raw = bits.to_bits();
     let top16 = (raw >> 48) as u16;
     if matches!(raw, 0x7FFC_0000_0000_0001 | 0x7FFC_0000_0000_0002) {
@@ -285,7 +285,7 @@ fn nanboxed_to_i64(bits: f64) -> Option<i64> {
     Some(bits as i64)
 }
 
-unsafe fn crypto_value_bytes(bits: f64) -> Vec<u8> {
+pub(super) unsafe fn crypto_value_bytes(bits: f64) -> Vec<u8> {
     let raw = bits.to_bits();
     let top16 = (raw >> 48) as u16;
     if top16 == 0x7FFE {
@@ -308,7 +308,7 @@ unsafe fn crypto_value_bytes(bits: f64) -> Vec<u8> {
     bytes_from_ptr(ptr)
 }
 
-fn bytes_to_u128(bytes: &[u8]) -> Option<u128> {
+pub(super) fn bytes_to_u128(bytes: &[u8]) -> Option<u128> {
     if bytes.len() > 16 {
         return None;
     }
@@ -319,7 +319,7 @@ fn bytes_to_u128(bytes: &[u8]) -> Option<u128> {
     Some(n)
 }
 
-fn mod_pow_u128(mut base: u128, mut exp: u128, modu: u128) -> u128 {
+pub(super) fn mod_pow_u128(mut base: u128, mut exp: u128, modu: u128) -> u128 {
     if modu == 1 {
         return 0;
     }
@@ -335,7 +335,7 @@ fn mod_pow_u128(mut base: u128, mut exp: u128, modu: u128) -> u128 {
     acc
 }
 
-fn is_prime_u128(n: u128) -> bool {
+pub(super) fn is_prime_u128(n: u128) -> bool {
     if n < 2 {
         return false;
     }
@@ -376,13 +376,13 @@ fn is_prime_u128(n: u128) -> bool {
     true
 }
 
-fn prime_to_be_bytes(n: u128, bits: usize) -> Vec<u8> {
+pub(super) fn prime_to_be_bytes(n: u128, bits: usize) -> Vec<u8> {
     let len = ((bits.max(1) + 7) / 8).max(1);
     let all = n.to_be_bytes();
     all[all.len() - len..].to_vec()
 }
 
-unsafe fn object_field_bool(obj_bits: u64, name: &[u8]) -> Option<bool> {
+pub(super) unsafe fn object_field_bool(obj_bits: u64, name: &[u8]) -> Option<bool> {
     match object_field_bits(obj_bits, name)? {
         0x7FFC_0000_0000_0004 => Some(true),
         0x7FFC_0000_0000_0003 => Some(false),
@@ -390,7 +390,7 @@ unsafe fn object_field_bool(obj_bits: u64, name: &[u8]) -> Option<bool> {
     }
 }
 
-unsafe fn object_field_u128(obj_bits: u64, name: &[u8]) -> Option<u128> {
+pub(super) unsafe fn object_field_u128(obj_bits: u64, name: &[u8]) -> Option<u128> {
     let bits = object_field_bits(obj_bits, name)?;
     let top16 = (bits >> 48) as u16;
     if top16 == 0x7FFE {
@@ -400,7 +400,7 @@ unsafe fn object_field_u128(obj_bits: u64, name: &[u8]) -> Option<u128> {
     bytes_to_u128(&crypto_value_bytes(f64::from_bits(bits)))
 }
 
-fn generate_prime_u128(
+pub(super) fn generate_prime_u128(
     bits: usize,
     safe: bool,
     add: Option<u128>,
@@ -437,4 +437,3 @@ fn generate_prime_u128(
     }
     None
 }
-

@@ -1,4 +1,4 @@
-// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 pub struct X509Handle {
     der: Vec<u8>,
@@ -7,7 +7,7 @@ pub struct X509Handle {
 
 /// Short attribute name for an X.500 DN OID, matching Node's subject /
 /// issuer formatting (`CN`, `O`, `C`, …); falls back to the dotted OID.
-fn x509_attr_short_name(oid: &str) -> String {
+pub(super) fn x509_attr_short_name(oid: &str) -> String {
     match oid {
         "2.5.4.3" => "CN",
         "2.5.4.6" => "C",
@@ -28,7 +28,7 @@ fn x509_attr_short_name(oid: &str) -> String {
 
 /// Format an X.500 `Name` the way Node's `cert.subject` / `cert.issuer`
 /// do: one `TYPE=value` per line, newline-joined, in encoding order.
-fn x509_format_name(name: &x509_cert::name::Name) -> String {
+pub(super) fn x509_format_name(name: &x509_cert::name::Name) -> String {
     use x509_cert::der::Encode;
     let mut lines: Vec<String> = Vec::new();
     for rdn in name.0.iter() {
@@ -68,7 +68,7 @@ fn x509_format_name(name: &x509_cert::name::Name) -> String {
 
 /// Format an X.509 validity `Time` as Node does — `MMM D HH:MM:SS YYYY GMT`
 /// with a space-padded day (e.g. `Jan  1 00:00:00 2020 GMT`).
-fn x509_format_time(time: &x509_cert::time::Time) -> String {
+pub(super) fn x509_format_time(time: &x509_cert::time::Time) -> String {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
@@ -90,7 +90,7 @@ fn x509_format_time(time: &x509_cert::time::Time) -> String {
 
 /// Uppercase colon-separated hex of a digest, matching Node's
 /// `cert.fingerprint` / `.fingerprint256`.
-fn x509_colon_hex(bytes: &[u8]) -> String {
+pub(super) fn x509_colon_hex(bytes: &[u8]) -> String {
     bytes
         .iter()
         .map(|b| format!("{:02X}", b))
@@ -181,7 +181,7 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
 }
 
 /// Extract the BasicConstraints `cA` flag (default false when absent).
-fn x509_basic_constraints_ca(cert: &x509_cert::Certificate) -> bool {
+pub(super) fn x509_basic_constraints_ca(cert: &x509_cert::Certificate) -> bool {
     use x509_cert::der::Decode;
     let Some(exts) = cert.tbs_certificate.extensions.as_ref() else {
         return false;
@@ -198,7 +198,7 @@ fn x509_basic_constraints_ca(cert: &x509_cert::Certificate) -> bool {
     false
 }
 
-const DH_DEFAULT_PRIME_HEX: &str = concat!(
+pub(super) const DH_DEFAULT_PRIME_HEX: &str = concat!(
     "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1",
     "29024E088A67CC74020BBEA63B139B22514A08798E3404DD",
     "EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245",
@@ -207,15 +207,15 @@ const DH_DEFAULT_PRIME_HEX: &str = concat!(
     "FFFFFFFFFFFFFFFF"
 );
 
-fn dh_default_prime() -> Vec<u8> {
+pub(super) fn dh_default_prime() -> Vec<u8> {
     hex::decode(DH_DEFAULT_PRIME_HEX).unwrap_or_else(|_| vec![0xff; 128])
 }
 
-fn dh_default_generator() -> Vec<u8> {
+pub(super) fn dh_default_generator() -> Vec<u8> {
     vec![2]
 }
 
-fn bigint_to_padded_bytes(n: &RsaBigUint, len: usize) -> Vec<u8> {
+pub(super) fn bigint_to_padded_bytes(n: &RsaBigUint, len: usize) -> Vec<u8> {
     let mut bytes = n.to_bytes_be();
     if bytes.len() > len {
         bytes = bytes[bytes.len() - len..].to_vec();
@@ -227,7 +227,11 @@ fn bigint_to_padded_bytes(n: &RsaBigUint, len: usize) -> Vec<u8> {
     bytes
 }
 
-fn dh_public_from_private(prime: &[u8], generator: &[u8], private_key: &[u8]) -> Vec<u8> {
+pub(super) fn dh_public_from_private(
+    prime: &[u8],
+    generator: &[u8],
+    private_key: &[u8],
+) -> Vec<u8> {
     let p = RsaBigUint::from_bytes_be(prime);
     let g = RsaBigUint::from_bytes_be(generator);
     let x = RsaBigUint::from_bytes_be(private_key);
@@ -235,7 +239,7 @@ fn dh_public_from_private(prime: &[u8], generator: &[u8], private_key: &[u8]) ->
     bigint_to_padded_bytes(&y, prime.len())
 }
 
-fn dh_secret(prime: &[u8], private_key: &[u8], other_public_key: &[u8]) -> Vec<u8> {
+pub(super) fn dh_secret(prime: &[u8], private_key: &[u8], other_public_key: &[u8]) -> Vec<u8> {
     let p = RsaBigUint::from_bytes_be(prime);
     let x = RsaBigUint::from_bytes_be(private_key);
     let y = RsaBigUint::from_bytes_be(other_public_key);
@@ -243,7 +247,7 @@ fn dh_secret(prime: &[u8], private_key: &[u8], other_public_key: &[u8]) -> Vec<u
     bigint_to_padded_bytes(&s, prime.len())
 }
 
-fn dh_random_private_key(prime: &[u8]) -> Vec<u8> {
+pub(super) fn dh_random_private_key(prime: &[u8]) -> Vec<u8> {
     let p = RsaBigUint::from_bytes_be(prime);
     let two = RsaBigUint::from(2u32);
     let mut rng = rand::thread_rng();
@@ -259,30 +263,30 @@ fn dh_random_private_key(prime: &[u8]) -> Vec<u8> {
     bigint_to_padded_bytes(&fallback, prime.len())
 }
 
-fn nanbox_ptr<T>(ptr: *mut T) -> f64 {
+pub(super) fn nanbox_ptr<T>(ptr: *mut T) -> f64 {
     f64::from_bits(0x7FFD_0000_0000_0000u64 | ((ptr as u64) & 0x0000_FFFF_FFFF_FFFF))
 }
 
-fn arg_ptr(arg: f64) -> i64 {
+pub(super) fn arg_ptr(arg: f64) -> i64 {
     (arg.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
 }
 
-unsafe fn arg_bytes(args: &[f64], idx: usize) -> Vec<u8> {
+pub(super) unsafe fn arg_bytes(args: &[f64], idx: usize) -> Vec<u8> {
     args.get(idx)
         .map(|arg| bytes_from_ptr(arg_ptr(*arg)))
         .unwrap_or_default()
 }
 
-unsafe fn arg_string(args: &[f64], idx: usize) -> String {
+pub(super) unsafe fn arg_string(args: &[f64], idx: usize) -> String {
     String::from_utf8(arg_bytes(args, idx)).unwrap_or_default()
 }
 
-unsafe fn string_value(bytes: &[u8]) -> f64 {
+pub(super) unsafe fn string_value(bytes: &[u8]) -> f64 {
     let s = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
     nanbox_str(s)
 }
 
-unsafe fn ecdh_output(bytes: &[u8], encoding: Option<&str>) -> f64 {
+pub(super) unsafe fn ecdh_output(bytes: &[u8], encoding: Option<&str>) -> f64 {
     if matches!(encoding, Some(enc) if enc.eq_ignore_ascii_case("hex")) {
         return string_value(hex::encode(bytes).as_bytes());
     }
@@ -293,7 +297,7 @@ unsafe fn ecdh_output(bytes: &[u8], encoding: Option<&str>) -> f64 {
     nanbox_ptr(alloc_buffer_from_slice(bytes))
 }
 
-unsafe fn decode_ecdh_input(ptr: i64, encoding: &str) -> Vec<u8> {
+pub(super) unsafe fn decode_ecdh_input(ptr: i64, encoding: &str) -> Vec<u8> {
     let bytes = bytes_from_ptr(ptr);
     if encoding.eq_ignore_ascii_case("hex") {
         let s = String::from_utf8(bytes).unwrap_or_default();
@@ -308,11 +312,11 @@ unsafe fn decode_ecdh_input(ptr: i64, encoding: &str) -> Vec<u8> {
     bytes
 }
 
-unsafe fn decode_crypto_value(value: f64, encoding: &str) -> Vec<u8> {
+pub(super) unsafe fn decode_crypto_value(value: f64, encoding: &str) -> Vec<u8> {
     decode_ecdh_input(arg_ptr(value), encoding)
 }
 
-unsafe fn decode_hash_update_value(value: f64, encoding: &str) -> Vec<u8> {
+pub(super) unsafe fn decode_hash_update_value(value: f64, encoding: &str) -> Vec<u8> {
     let bytes = bytes_from_ptr(arg_ptr(value));
     if encoding.eq_ignore_ascii_case("hex") {
         let s = String::from_utf8(bytes).unwrap_or_default();
@@ -333,7 +337,7 @@ unsafe fn decode_hash_update_value(value: f64, encoding: &str) -> Vec<u8> {
     bytes
 }
 
-unsafe fn decode_dh_prime_value(value: f64, encoding: &str) -> Vec<u8> {
+pub(super) unsafe fn decode_dh_prime_value(value: f64, encoding: &str) -> Vec<u8> {
     if value.is_finite() {
         return dh_default_prime();
     }
@@ -345,7 +349,7 @@ unsafe fn decode_dh_prime_value(value: f64, encoding: &str) -> Vec<u8> {
     }
 }
 
-unsafe fn decode_dh_generator_value(value: Option<f64>, encoding: &str) -> Vec<u8> {
+pub(super) unsafe fn decode_dh_generator_value(value: Option<f64>, encoding: &str) -> Vec<u8> {
     let Some(value) = value else {
         return dh_default_generator();
     };
@@ -369,7 +373,7 @@ unsafe fn decode_dh_generator_value(value: Option<f64>, encoding: &str) -> Vec<u
     }
 }
 
-fn generate_p256_secret_key() -> Option<P256SecretKey> {
+pub(super) fn generate_p256_secret_key() -> Option<P256SecretKey> {
     let mut rng = rand::thread_rng();
     for _ in 0..128 {
         let mut bytes = [0u8; 32];
@@ -381,7 +385,7 @@ fn generate_p256_secret_key() -> Option<P256SecretKey> {
     None
 }
 
-fn p256_public_bytes(private_key: &P256SecretKey, format: &str) -> Vec<u8> {
+pub(super) fn p256_public_bytes(private_key: &P256SecretKey, format: &str) -> Vec<u8> {
     let compressed = format.eq_ignore_ascii_case("compressed");
     private_key
         .public_key()
@@ -389,4 +393,3 @@ fn p256_public_bytes(private_key: &P256SecretKey, format: &str) -> Vec<u8> {
         .as_bytes()
         .to_vec()
 }
-

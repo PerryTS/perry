@@ -1,4 +1,4 @@
-// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 /// `crypto.subtle.deriveBits({ name: "ECDH", public }, privateKey, length)`
 /// → Promise<Uint8Array>. Initial asymmetric-derive coverage implements

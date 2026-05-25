@@ -1,4 +1,4 @@
-// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 /// Create SHA256 hash of data
 /// crypto.createHash('sha256').update(data).digest('hex') -> string
@@ -91,4 +91,3 @@ pub unsafe extern "C" fn js_crypto_md5(data_ptr: *const StringHeader) -> *mut St
 
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }
-

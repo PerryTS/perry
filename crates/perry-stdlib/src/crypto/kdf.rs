@@ -1,4 +1,4 @@
-// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 /// PBKDF2-HMAC returning a Buffer. Counterpart of
 /// `crypto.pbkdf2Sync(password, salt, iterations, keylen, digest)`.
@@ -212,7 +212,7 @@ pub unsafe extern "C" fn js_crypto_get_ciphers() -> *mut perry_runtime::array::A
     ])
 }
 
-struct CipherInfo {
+pub(super) struct CipherInfo {
     name: &'static str,
     nid: f64,
     block_size: f64,
@@ -221,7 +221,7 @@ struct CipherInfo {
     mode: &'static str,
 }
 
-fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
+pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
     match name.to_ascii_lowercase().as_str() {
         "aes-128-cbc" => Some(CipherInfo {
             name: "aes-128-cbc",
@@ -323,7 +323,7 @@ fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
     }
 }
 
-fn cipher_info_for_nid(nid: i32) -> Option<CipherInfo> {
+pub(super) fn cipher_info_for_nid(nid: i32) -> Option<CipherInfo> {
     match nid {
         419 => cipher_info_for_name("aes-128-cbc"),
         418 => cipher_info_for_name("aes-128-ecb"),
@@ -409,8 +409,8 @@ pub unsafe extern "C" fn js_crypto_secure_heap_used() -> *mut ObjectHeader {
 }
 
 // Type aliases for AES-256-CBC
-type Aes256CbcEnc = Encryptor<Aes256>;
-type Aes256CbcDec = Decryptor<Aes256>;
+pub(super) type Aes256CbcEnc = Encryptor<Aes256>;
+pub(super) type Aes256CbcDec = Decryptor<Aes256>;
 
 /// AES-256-CBC encryption
 /// crypto.createCipheriv('aes-256-cbc', key, iv) -> string (base64)
@@ -838,7 +838,7 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync(type_ptr: i64, options
 
 /// Read a numeric field from a NaN-unboxed options object pointer (0/null →
 /// `None`). Shared by `generateKeyPairSync`.
-unsafe fn read_options_number(options_ptr: i64, name: &str) -> Option<f64> {
+pub(super) unsafe fn read_options_number(options_ptr: i64, name: &str) -> Option<f64> {
     if (options_ptr as usize) < 0x1000 {
         return None;
     }
@@ -854,7 +854,7 @@ unsafe fn read_options_number(options_ptr: i64, name: &str) -> Option<f64> {
 
 /// Build a `{ publicKey, privateKey }` JS object holding the two PEM strings,
 /// returned NaN-boxed as POINTER_TAG.
-unsafe fn build_key_pair_object(pub_pem: &str, priv_pem: &str) -> f64 {
+pub(super) unsafe fn build_key_pair_object(pub_pem: &str, priv_pem: &str) -> f64 {
     use perry_runtime::{
         js_array_alloc, js_array_push, js_object_alloc, js_object_set_field, js_object_set_keys,
         JSValue,
@@ -872,4 +872,3 @@ unsafe fn build_key_pair_object(pub_pem: &str, priv_pem: &str) -> f64 {
     js_object_set_keys(obj, keys);
     nanbox_pointer_f64(obj as usize)
 }
-

@@ -1,18 +1,24 @@
 //! Web Crypto API: `crypto.subtle.digest` / `importKey` / `sign` / `verify`
 //! / `encrypt` / `decrypt`.
 //!
-//! This file intentionally keeps the public `webcrypto` module ABI intact and
-//! uses `include!` shards for a low-risk mechanical split of the former
-//! monolith. The file-size gate measures per-file review surface; a follow-up
-//! can migrate these shards to real Rust submodules for compile-unit isolation.
+//! The implementation is split into real Rust submodules so each algorithm
+//! family has its own namespace and compilation unit while preserving the
+//! public `webcrypto` module ABI expected by generated runtime bindings.
 //!
-//! Include order is load-bearing: `webcrypto/util.rs` declares shared imports,
-//! helpers, and private types used by later shards, so it must stay first.
-include!("webcrypto/util.rs");
-include!("webcrypto/digest.rs");
-include!("webcrypto/jwk.rs");
-include!("webcrypto/hmac.rs");
-include!("webcrypto/kdf.rs");
-include!("webcrypto/aes.rs");
-include!("webcrypto/keys.rs");
-include!("webcrypto/wrap.rs");
+//! `util` declares shared imports, helpers, and private types that are
+//! re-exported only inside this module for sibling shards.
+mod aes;
+mod digest;
+mod hmac;
+mod jwk;
+mod kdf;
+mod keys;
+mod util;
+mod wrap;
+
+#[allow(unused_imports)]
+// Private imports keep sibling modules able to share `pub(super)` helpers.
+use self::{aes::*, digest::*, hmac::*, jwk::*, kdf::*, keys::*, util::*, wrap::*};
+
+// Public re-exports preserve the parent module surface for FFI entry points.
+pub use self::{aes::*, digest::*, hmac::*, jwk::*, kdf::*, keys::*, wrap::*};

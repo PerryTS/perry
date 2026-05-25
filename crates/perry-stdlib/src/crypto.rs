@@ -2,22 +2,34 @@
 //!
 //! Native implementation of Node.js crypto module functions.
 //!
-//! This file intentionally keeps the public `crypto` module ABI intact and
-//! uses `include!` shards for a low-risk mechanical split of the former
-//! monolith. The file-size gate measures per-file review surface; a follow-up
-//! can migrate these shards to real Rust submodules for compile-unit isolation.
+//! The implementation is split into real Rust submodules so each algorithm
+//! family has its own namespace and compilation unit while preserving the
+//! public `crypto` module ABI expected by generated runtime bindings.
 //!
-//! Include order is load-bearing: `crypto/util.rs` declares shared imports,
-//! helpers, and private types used by later shards, so it must stay first.
-include!("crypto/util.rs");
-include!("crypto/hash.rs");
-include!("crypto/keys.rs");
-include!("crypto/random.rs");
-include!("crypto/prime.rs");
-include!("crypto/sign.rs");
-include!("crypto/handles.rs");
-include!("crypto/x509.rs");
-include!("crypto/ecdh.rs");
-include!("crypto/kdf.rs");
-include!("crypto/hash_handles.rs");
-include!("crypto/cipher.rs");
+//! `util` declares shared imports, helpers, and private types that are
+//! re-exported only inside this module for sibling shards.
+mod cipher;
+mod ecdh;
+mod handles;
+mod hash;
+mod hash_handles;
+mod kdf;
+mod keys;
+mod prime;
+mod random;
+mod sign;
+mod util;
+mod x509;
+
+#[allow(unused_imports)]
+// Private imports keep sibling modules able to share `pub(super)` helpers.
+use self::{
+    cipher::*, ecdh::*, handles::*, hash::*, hash_handles::*, kdf::*, keys::*, prime::*, random::*,
+    sign::*, util::*, x509::*,
+};
+
+// Public re-exports preserve the parent module surface for FFI entry points.
+pub use self::{
+    cipher::*, ecdh::*, handles::*, hash::*, hash_handles::*, kdf::*, keys::*, prime::*, random::*,
+    sign::*, x509::*,
+};

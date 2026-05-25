@@ -1,4 +1,4 @@
-// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 /// `crypto.subtle.importKey("raw", keyBytes, algorithm, extractable, keyUsages)`
 /// → Promise<CryptoKey>
@@ -314,23 +314,23 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
     resolve_with_bytes(&key_bytes)
 }
 
-fn b64u_uint(n: &RsaBigUint) -> String {
+pub(super) fn b64u_uint(n: &RsaBigUint) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(n.to_bytes_be())
 }
 
-fn b64u_decode_uint(s: &str) -> Option<RsaBigUint> {
+pub(super) fn b64u_decode_uint(s: &str) -> Option<RsaBigUint> {
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(s.as_bytes())
         .ok()?;
     Some(RsaBigUint::from_bytes_be(&bytes))
 }
 
-unsafe fn jwk_uint_field(obj_bits: u64, name: &[u8]) -> Option<RsaBigUint> {
+pub(super) unsafe fn jwk_uint_field(obj_bits: u64, name: &[u8]) -> Option<RsaBigUint> {
     let value = object_field_string(obj_bits, name)?;
     b64u_decode_uint(&value)
 }
 
-fn rsa_jwk_alg(algo: KeyAlgo, hash: HashAlgo) -> &'static str {
+pub(super) fn rsa_jwk_alg(algo: KeyAlgo, hash: HashAlgo) -> &'static str {
     match (algo, hash) {
         (KeyAlgo::RsaOaep, HashAlgo::Sha1) => "RSA-OAEP",
         (KeyAlgo::RsaOaep, HashAlgo::Sha256) => "RSA-OAEP-256",
@@ -348,7 +348,7 @@ fn rsa_jwk_alg(algo: KeyAlgo, hash: HashAlgo) -> &'static str {
     }
 }
 
-unsafe fn jwk_ec_bytes(obj_bits: u64, kind: KeyKind) -> Option<Vec<u8>> {
+pub(super) unsafe fn jwk_ec_bytes(obj_bits: u64, kind: KeyKind) -> Option<Vec<u8>> {
     let kty = object_field_string(obj_bits, b"kty")?;
     let crv = object_field_string(obj_bits, b"crv")?;
     if kty != "EC" || crv != "P-256" {
@@ -379,7 +379,11 @@ unsafe fn jwk_ec_bytes(obj_bits: u64, kind: KeyKind) -> Option<Vec<u8>> {
     Some(sec1)
 }
 
-unsafe fn jwk_okp_bytes(obj_bits: u64, key_algo: KeyAlgo, kind: KeyKind) -> Option<Vec<u8>> {
+pub(super) unsafe fn jwk_okp_bytes(
+    obj_bits: u64,
+    key_algo: KeyAlgo,
+    kind: KeyKind,
+) -> Option<Vec<u8>> {
     let kty = object_field_string(obj_bits, b"kty")?;
     let crv = object_field_string(obj_bits, b"crv")?;
     let expected_crv = match key_algo {
@@ -402,7 +406,11 @@ unsafe fn jwk_okp_bytes(obj_bits: u64, key_algo: KeyAlgo, kind: KeyKind) -> Opti
     }
 }
 
-unsafe fn jwk_import_key_bytes(obj_bits: u64, key_algo: KeyAlgo, kind: KeyKind) -> Option<Vec<u8>> {
+pub(super) unsafe fn jwk_import_key_bytes(
+    obj_bits: u64,
+    key_algo: KeyAlgo,
+    kind: KeyKind,
+) -> Option<Vec<u8>> {
     let kty = object_field_string(obj_bits, b"kty")?;
     if matches!(key_algo, KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256) {
         return jwk_ec_bytes(obj_bits, kind);
@@ -445,7 +453,7 @@ unsafe fn jwk_import_key_bytes(obj_bits: u64, key_algo: KeyAlgo, kind: KeyKind) 
     }
 }
 
-unsafe fn rsa_jwk_export_object(
+pub(super) unsafe fn rsa_jwk_export_object(
     key_bytes: &[u8],
     mat: CryptoKeyMaterial,
 ) -> Option<*mut perry_runtime::ObjectHeader> {
@@ -496,7 +504,7 @@ unsafe fn rsa_jwk_export_object(
     Some(obj)
 }
 
-unsafe fn okp_jwk_export_object(
+pub(super) unsafe fn okp_jwk_export_object(
     key_bytes: &[u8],
     mat: CryptoKeyMaterial,
 ) -> Option<*mut perry_runtime::ObjectHeader> {
@@ -548,7 +556,7 @@ unsafe fn okp_jwk_export_object(
     Some(obj)
 }
 
-unsafe fn ec_p256_jwk_export_object(
+pub(super) unsafe fn ec_p256_jwk_export_object(
     key_bytes: &[u8],
     mat: CryptoKeyMaterial,
 ) -> Option<*mut perry_runtime::ObjectHeader> {
@@ -597,7 +605,7 @@ unsafe fn ec_p256_jwk_export_object(
 /// Used by importKey / encrypt / decrypt where jose passes the shorthand
 /// `"AES-GCM"` to importKey but a full `{ name: "AES-GCM", iv: ... }`
 /// at encrypt time.
-unsafe fn extract_algo_name(bits: u64) -> Option<String> {
+pub(super) unsafe fn extract_algo_name(bits: u64) -> Option<String> {
     if let Some(s) = string_from_jsvalue(bits) {
         return Some(s);
     }
@@ -609,4 +617,3 @@ unsafe fn extract_algo_name(bits: u64) -> Option<String> {
     let name_val = perry_runtime::js_object_get_field_by_name(obj_ptr, key_ptr);
     string_from_jsvalue(name_val.bits())
 }
-

@@ -1,4 +1,4 @@
-// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 /// `crypto.subtle.generateKey(algorithm, extractable, keyUsages)` →
 /// Promise<CryptoKey>
@@ -353,4 +353,3 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
     let val = JSValue::pointer(buf as *const u8).bits();
     resolve_with_bits(val)
 }
-

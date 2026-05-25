@@ -1,7 +1,7 @@
-// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum CipherKind {
+pub(super) enum CipherKind {
     Aes128Cbc,
     Aes192Cbc,
     Aes256Cbc,
@@ -57,31 +57,43 @@ impl CipherKind {
 }
 
 // CBC type aliases (Aes256CbcEnc/Dec already exist above for aes-256-cbc).
-type Aes128CbcEnc = Encryptor<Aes128>;
-type Aes128CbcDec = Decryptor<Aes128>;
-type Aes192CbcEnc = Encryptor<Aes192>;
-type Aes192CbcDec = Decryptor<Aes192>;
-type Aes128EcbEnc = ecb::Encryptor<Aes128>;
-type Aes128EcbDec = ecb::Decryptor<Aes128>;
-type Aes192EcbEnc = ecb::Encryptor<Aes192>;
-type Aes192EcbDec = ecb::Decryptor<Aes192>;
-type Aes256EcbEnc = ecb::Encryptor<Aes256>;
-type Aes256EcbDec = ecb::Decryptor<Aes256>;
-type Aes192Gcm = aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12>;
-type Aes128Gcm12 = aes_gcm::AesGcm<Aes128, aes::cipher::consts::U12, aes::cipher::consts::U12>;
-type Aes128Gcm13 = aes_gcm::AesGcm<Aes128, aes::cipher::consts::U12, aes::cipher::consts::U13>;
-type Aes128Gcm14 = aes_gcm::AesGcm<Aes128, aes::cipher::consts::U12, aes::cipher::consts::U14>;
-type Aes128Gcm15 = aes_gcm::AesGcm<Aes128, aes::cipher::consts::U12, aes::cipher::consts::U15>;
-type Aes192Gcm12 = aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12, aes::cipher::consts::U12>;
-type Aes192Gcm13 = aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12, aes::cipher::consts::U13>;
-type Aes192Gcm14 = aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12, aes::cipher::consts::U14>;
-type Aes192Gcm15 = aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12, aes::cipher::consts::U15>;
-type Aes256Gcm12 = aes_gcm::AesGcm<Aes256, aes::cipher::consts::U12, aes::cipher::consts::U12>;
-type Aes256Gcm13 = aes_gcm::AesGcm<Aes256, aes::cipher::consts::U12, aes::cipher::consts::U13>;
-type Aes256Gcm14 = aes_gcm::AesGcm<Aes256, aes::cipher::consts::U12, aes::cipher::consts::U14>;
-type Aes256Gcm15 = aes_gcm::AesGcm<Aes256, aes::cipher::consts::U12, aes::cipher::consts::U15>;
+pub(super) type Aes128CbcEnc = Encryptor<Aes128>;
+pub(super) type Aes128CbcDec = Decryptor<Aes128>;
+pub(super) type Aes192CbcEnc = Encryptor<Aes192>;
+pub(super) type Aes192CbcDec = Decryptor<Aes192>;
+pub(super) type Aes128EcbEnc = ecb::Encryptor<Aes128>;
+pub(super) type Aes128EcbDec = ecb::Decryptor<Aes128>;
+pub(super) type Aes192EcbEnc = ecb::Encryptor<Aes192>;
+pub(super) type Aes192EcbDec = ecb::Decryptor<Aes192>;
+pub(super) type Aes256EcbEnc = ecb::Encryptor<Aes256>;
+pub(super) type Aes256EcbDec = ecb::Decryptor<Aes256>;
+pub(super) type Aes192Gcm = aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12>;
+pub(super) type Aes128Gcm12 =
+    aes_gcm::AesGcm<Aes128, aes::cipher::consts::U12, aes::cipher::consts::U12>;
+pub(super) type Aes128Gcm13 =
+    aes_gcm::AesGcm<Aes128, aes::cipher::consts::U12, aes::cipher::consts::U13>;
+pub(super) type Aes128Gcm14 =
+    aes_gcm::AesGcm<Aes128, aes::cipher::consts::U12, aes::cipher::consts::U14>;
+pub(super) type Aes128Gcm15 =
+    aes_gcm::AesGcm<Aes128, aes::cipher::consts::U12, aes::cipher::consts::U15>;
+pub(super) type Aes192Gcm12 =
+    aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12, aes::cipher::consts::U12>;
+pub(super) type Aes192Gcm13 =
+    aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12, aes::cipher::consts::U13>;
+pub(super) type Aes192Gcm14 =
+    aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12, aes::cipher::consts::U14>;
+pub(super) type Aes192Gcm15 =
+    aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12, aes::cipher::consts::U15>;
+pub(super) type Aes256Gcm12 =
+    aes_gcm::AesGcm<Aes256, aes::cipher::consts::U12, aes::cipher::consts::U12>;
+pub(super) type Aes256Gcm13 =
+    aes_gcm::AesGcm<Aes256, aes::cipher::consts::U12, aes::cipher::consts::U13>;
+pub(super) type Aes256Gcm14 =
+    aes_gcm::AesGcm<Aes256, aes::cipher::consts::U12, aes::cipher::consts::U14>;
+pub(super) type Aes256Gcm15 =
+    aes_gcm::AesGcm<Aes256, aes::cipher::consts::U12, aes::cipher::consts::U15>;
 
-fn decrypt_gcm128_with_tag_len(
+pub(super) fn decrypt_gcm128_with_tag_len(
     key: &[u8],
     iv: &[u8],
     aad: &[u8],
@@ -148,7 +160,7 @@ fn decrypt_gcm128_with_tag_len(
     }
 }
 
-fn decrypt_gcm192_with_tag_len(
+pub(super) fn decrypt_gcm192_with_tag_len(
     key: &[u8],
     iv: &[u8],
     aad: &[u8],
@@ -215,7 +227,7 @@ fn decrypt_gcm192_with_tag_len(
     }
 }
 
-fn decrypt_gcm256_with_tag_len(
+pub(super) fn decrypt_gcm256_with_tag_len(
     key: &[u8],
     iv: &[u8],
     aad: &[u8],
@@ -294,7 +306,7 @@ pub struct CipherHandle {
     state: std::sync::Mutex<CipherState>,
 }
 
-struct CipherState {
+pub(super) struct CipherState {
     kind: CipherKind,
     encrypt: bool,
     key: Vec<u8>,
@@ -310,16 +322,16 @@ struct CipherState {
 }
 
 #[inline]
-fn nanbox_pointer_f64(ptr: usize) -> f64 {
+pub(super) fn nanbox_pointer_f64(ptr: usize) -> f64 {
     f64::from_bits(0x7FFD_0000_0000_0000u64 | ((ptr as u64) & 0x0000_FFFF_FFFF_FFFF))
 }
 
 #[inline]
-fn nanbox_undefined() -> f64 {
+pub(super) fn nanbox_undefined() -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
 
-unsafe fn create_cipher_handle(
+pub(super) unsafe fn create_cipher_handle(
     alg_ptr: i64,
     key_ptr: i64,
     iv_ptr: i64,

@@ -1,4 +1,4 @@
-// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 // =====================================================================
 // AES-GCM encrypt / decrypt
@@ -16,7 +16,7 @@
 
 /// Read an optional object field by name and return its raw bytes, or
 /// `None` if the field is absent / not a buffer-like value.
-unsafe fn object_field_bytes(obj_bits: u64, name: &[u8]) -> Option<Vec<u8>> {
+pub(super) unsafe fn object_field_bytes(obj_bits: u64, name: &[u8]) -> Option<Vec<u8>> {
     let obj_ptr = strip_ptr(obj_bits) as *const perry_runtime::ObjectHeader;
     if (obj_ptr as usize) < 0x1000 {
         return None;
@@ -34,7 +34,7 @@ unsafe fn object_field_bytes(obj_bits: u64, name: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-unsafe fn object_field_bits(obj_bits: u64, name: &[u8]) -> Option<u64> {
+pub(super) unsafe fn object_field_bits(obj_bits: u64, name: &[u8]) -> Option<u64> {
     let obj_ptr = strip_ptr(obj_bits) as *const perry_runtime::ObjectHeader;
     if (obj_ptr as usize) < 0x1000 {
         return None;
@@ -50,7 +50,7 @@ unsafe fn object_field_bits(obj_bits: u64, name: &[u8]) -> Option<u64> {
 }
 
 /// Read an optional string field from an algorithm object.
-unsafe fn object_field_string(obj_bits: u64, name: &[u8]) -> Option<String> {
+pub(super) unsafe fn object_field_string(obj_bits: u64, name: &[u8]) -> Option<String> {
     let obj_ptr = strip_ptr(obj_bits) as *const perry_runtime::ObjectHeader;
     if (obj_ptr as usize) < 0x1000 {
         return None;
@@ -60,7 +60,11 @@ unsafe fn object_field_string(obj_bits: u64, name: &[u8]) -> Option<String> {
     string_from_jsvalue(val.bits())
 }
 
-unsafe fn set_object_string_field(obj: *mut perry_runtime::ObjectHeader, name: &[u8], value: &str) {
+pub(super) unsafe fn set_object_string_field(
+    obj: *mut perry_runtime::ObjectHeader,
+    name: &[u8],
+    value: &str,
+) {
     let key = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let val = perry_runtime::js_string_from_bytes(value.as_ptr(), value.len() as u32);
     js_object_set_field_by_name(
@@ -71,10 +75,15 @@ unsafe fn set_object_string_field(obj: *mut perry_runtime::ObjectHeader, name: &
 }
 
 /// AES-GCM encrypt. Returns ciphertext || tag (matches WebCrypto spec).
-fn aes_gcm_encrypt(key: &[u8], iv: &[u8], aad: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn aes_gcm_encrypt(
+    key: &[u8],
+    iv: &[u8],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Option<Vec<u8>> {
     use aes_gcm::aead::{Aead, KeyInit, Payload};
     use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
-    type Aes192Gcm = aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12>;
+    type Aes192Gcm = aes_gcm::AesGcm<Aes192, ::aes::cipher::consts::U12>;
 
     if iv.len() != 12 {
         return None;
@@ -102,10 +111,15 @@ fn aes_gcm_encrypt(key: &[u8], iv: &[u8], aad: &[u8], plaintext: &[u8]) -> Optio
 }
 
 /// AES-GCM decrypt. Expects `ciphertext || tag` per the WebCrypto spec.
-fn aes_gcm_decrypt(key: &[u8], iv: &[u8], aad: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn aes_gcm_decrypt(
+    key: &[u8],
+    iv: &[u8],
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Option<Vec<u8>> {
     use aes_gcm::aead::{Aead, KeyInit, Payload};
     use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
-    type Aes192Gcm = aes_gcm::AesGcm<Aes192, aes::cipher::consts::U12>;
+    type Aes192Gcm = aes_gcm::AesGcm<Aes192, ::aes::cipher::consts::U12>;
 
     if iv.len() != 12 {
         return None;
@@ -132,14 +146,14 @@ fn aes_gcm_decrypt(key: &[u8], iv: &[u8], aad: &[u8], ciphertext: &[u8]) -> Opti
     }
 }
 
-type Aes128CbcEnc = Encryptor<Aes128>;
-type Aes192CbcEnc = Encryptor<Aes192>;
-type Aes256CbcEnc = Encryptor<Aes256>;
-type Aes128CbcDec = Decryptor<Aes128>;
-type Aes192CbcDec = Decryptor<Aes192>;
-type Aes256CbcDec = Decryptor<Aes256>;
+pub(super) type Aes128CbcEnc = Encryptor<Aes128>;
+pub(super) type Aes192CbcEnc = Encryptor<Aes192>;
+pub(super) type Aes256CbcEnc = Encryptor<Aes256>;
+pub(super) type Aes128CbcDec = Decryptor<Aes128>;
+pub(super) type Aes192CbcDec = Decryptor<Aes192>;
+pub(super) type Aes256CbcDec = Decryptor<Aes256>;
 
-fn aes_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn aes_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
     if iv.len() != 16 {
         return None;
     }
@@ -164,7 +178,7 @@ fn aes_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
     Some(out.to_vec())
 }
 
-fn aes_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn aes_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
     if iv.len() != 16 || ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
         return None;
     }
@@ -187,7 +201,7 @@ fn aes_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> 
     Some(out.to_vec())
 }
 
-unsafe fn extract_aes_cbc_args(
+pub(super) unsafe fn extract_aes_cbc_args(
     algo_bits: u64,
     key_bits: u64,
     data_bits: u64,
@@ -212,7 +226,7 @@ unsafe fn extract_aes_cbc_args(
 /// the raw key bytes (validating they came from an AES-GCM importKey)
 /// and the data bytes. Returns `None` if any required piece is missing.
 
-fn increment_ctr_counter(counter: &mut [u8; 16], length: u32) {
+pub(super) fn increment_ctr_counter(counter: &mut [u8; 16], length: u32) {
     let n = u128::from_be_bytes(*counter);
     let mask = if length == 128 {
         u128::MAX
@@ -224,7 +238,12 @@ fn increment_ctr_counter(counter: &mut [u8; 16], length: u32) {
     *counter = (prefix | next).to_be_bytes();
 }
 
-fn aes_ctr_apply(key: &[u8], counter: &[u8], length: u32, data: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn aes_ctr_apply(
+    key: &[u8],
+    counter: &[u8],
+    length: u32,
+    data: &[u8],
+) -> Option<Vec<u8>> {
     if counter.len() != 16 || length == 0 || length > 128 {
         return None;
     }
@@ -245,7 +264,7 @@ fn aes_ctr_apply(key: &[u8], counter: &[u8], length: u32, data: &[u8]) -> Option
     Some(out)
 }
 
-unsafe fn extract_aes_ctr_args(
+pub(super) unsafe fn extract_aes_ctr_args(
     algo_bits: u64,
     key_bits: u64,
     data_bits: u64,
@@ -266,7 +285,7 @@ unsafe fn extract_aes_ctr_args(
     Some((key_bytes, counter, length, data_bytes))
 }
 
-unsafe fn extract_aes_gcm_args(
+pub(super) unsafe fn extract_aes_gcm_args(
     algo_bits: u64,
     key_bits: u64,
     data_bits: u64,
@@ -559,7 +578,7 @@ pub unsafe extern "C" fn js_webcrypto_decrypt(
 /// allows 128, 192, or 256 here but we only honor 128 and 256 (the
 /// `aes-gcm` 0.10 crate doesn't ship a 192-bit type, matching the
 /// existing encrypt/decrypt rejection at line ~547).
-unsafe fn object_field_number(obj_bits: u64, name: &[u8]) -> Option<u32> {
+pub(super) unsafe fn object_field_number(obj_bits: u64, name: &[u8]) -> Option<u32> {
     let obj_ptr = strip_ptr(obj_bits) as *const perry_runtime::ObjectHeader;
     if (obj_ptr as usize) < 0x1000 {
         return None;

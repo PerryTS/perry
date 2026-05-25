@@ -1,4 +1,4 @@
-// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 // ---------------------------------------------------------------------------
 // Hash handle — powers `const h = crypto.createHash('sha1'); h.update(x);
@@ -203,7 +203,7 @@ pub unsafe fn dispatch_hash_property(handle: i64, property: &str) -> f64 {
 }
 
 #[inline]
-fn is_undefined_f64(v: f64) -> bool {
+pub(super) fn is_undefined_f64(v: f64) -> bool {
     v.to_bits() == 0x7FFC_0000_0000_0001
 }
 
@@ -405,4 +405,3 @@ pub unsafe fn dispatch_hmac_property(handle: i64, property: &str) -> f64 {
 // `final()` has run. For decrypt-side GCM, `setAuthTag(buf)` must be called
 // before `final()` so the verifier can authenticate.
 // ---------------------------------------------------------------------------
-

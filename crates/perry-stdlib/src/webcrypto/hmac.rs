@@ -1,4 +1,4 @@
-// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 /// `crypto.subtle.sign(algorithm, key, data)` → Promise<Uint8Array>
 ///
@@ -213,7 +213,7 @@ pub unsafe extern "C" fn js_webcrypto_verify(
 
 /// Algorithm-arg coercion shared by sign / verify: accepts a string
 /// ("HMAC") or an object with a `.name` field ({ name: "HMAC" }).
-unsafe fn extract_hmac_or_hash(bits: u64) -> Option<String> {
+pub(super) unsafe fn extract_hmac_or_hash(bits: u64) -> Option<String> {
     if let Some(s) = string_from_jsvalue(bits) {
         return Some(s);
     }
@@ -228,7 +228,7 @@ unsafe fn extract_hmac_or_hash(bits: u64) -> Option<String> {
 
 /// Constant-time byte slice equality, to keep `verify` from leaking the
 /// position of the first mismatching byte through timing.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(super) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -239,7 +239,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-fn number_from_bits(bits: u64) -> Option<u32> {
+pub(super) fn number_from_bits(bits: u64) -> Option<u32> {
     let top16 = (bits >> 48) as u16;
     if top16 == 0x7FFE {
         let raw = (bits & 0xFFFF_FFFF) as i32;
@@ -253,7 +253,10 @@ fn number_from_bits(bits: u64) -> Option<u32> {
     }
 }
 
-unsafe fn ecdh_shared_secret_bytes(algo_bits: u64, base_key_bits: u64) -> Option<Vec<u8>> {
+pub(super) unsafe fn ecdh_shared_secret_bytes(
+    algo_bits: u64,
+    base_key_bits: u64,
+) -> Option<Vec<u8>> {
     let algo_name = extract_algo_name(algo_bits)?;
     let algo_upper = algo_name.to_ascii_uppercase();
     if algo_upper != "ECDH" && algo_upper != "X25519" {
@@ -288,7 +291,13 @@ unsafe fn ecdh_shared_secret_bytes(algo_bits: u64, base_key_bits: u64) -> Option
     Some(secret.raw_secret_bytes().to_vec())
 }
 
-fn hkdf_expand(hash: HashAlgo, ikm: &[u8], salt: &[u8], info: &[u8], out: &mut [u8]) -> bool {
+pub(super) fn hkdf_expand(
+    hash: HashAlgo,
+    ikm: &[u8],
+    salt: &[u8],
+    info: &[u8],
+    out: &mut [u8],
+) -> bool {
     match hash {
         HashAlgo::Sha1 => hkdf::Hkdf::<Sha1>::new(Some(salt), ikm)
             .expand(info, out)
@@ -305,7 +314,13 @@ fn hkdf_expand(hash: HashAlgo, ikm: &[u8], salt: &[u8], info: &[u8], out: &mut [
     }
 }
 
-fn pbkdf2_derive(hash: HashAlgo, pass: &[u8], salt: &[u8], iterations: u32, out: &mut [u8]) {
+pub(super) fn pbkdf2_derive(
+    hash: HashAlgo,
+    pass: &[u8],
+    salt: &[u8],
+    iterations: u32,
+    out: &mut [u8],
+) {
     match hash {
         HashAlgo::Sha1 => pbkdf2::pbkdf2_hmac::<Sha1>(pass, salt, iterations, out),
         HashAlgo::Sha256 => pbkdf2::pbkdf2_hmac::<Sha256>(pass, salt, iterations, out),
@@ -314,7 +329,11 @@ fn pbkdf2_derive(hash: HashAlgo, pass: &[u8], salt: &[u8], iterations: u32, out:
     }
 }
 
-unsafe fn kdf_derive_bytes(algo_bits: u64, base_key_bits: u64, byte_len: usize) -> Option<Vec<u8>> {
+pub(super) unsafe fn kdf_derive_bytes(
+    algo_bits: u64,
+    base_key_bits: u64,
+    byte_len: usize,
+) -> Option<Vec<u8>> {
     let algo_name = extract_algo_name(algo_bits)?;
     let algo_upper = algo_name.to_ascii_uppercase();
     let base_key_addr = strip_ptr(base_key_bits);
@@ -351,4 +370,3 @@ unsafe fn kdf_derive_bytes(algo_bits: u64, base_key_bits: u64, byte_len: usize) 
     }
     None
 }
-

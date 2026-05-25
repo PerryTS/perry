@@ -1,4 +1,4 @@
-// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_create_sign(alg_ptr: i64) -> f64 {

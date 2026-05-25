@@ -1,44 +1,44 @@
-// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+pub(super) use std::collections::HashMap;
+pub(super) use std::sync::Mutex;
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-
-use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit as AesBlockKeyInit};
-use aes::{Aes128, Aes192, Aes256};
-use base64::Engine as _;
-use cbc::{
+pub(super) use aes::cipher::{
+    generic_array::GenericArray, BlockEncrypt, KeyInit as AesBlockKeyInit,
+};
+pub(super) use aes::{Aes128, Aes192, Aes256};
+pub(super) use base64::Engine as _;
+pub(super) use cbc::{
     cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit},
     Decryptor, Encryptor,
 };
-use hmac::{Hmac, KeyInit, Mac};
-use once_cell::sync::Lazy;
-use p256::ecdh::diffie_hellman as p256_diffie_hellman;
-use p256::ecdsa::signature::{Signer as EcdsaSigner, Verifier as EcdsaVerifier};
-use p256::ecdsa::{
+pub(super) use hmac::{Hmac, KeyInit, Mac};
+pub(super) use once_cell::sync::Lazy;
+pub(super) use p256::ecdh::diffie_hellman as p256_diffie_hellman;
+pub(super) use p256::ecdsa::signature::{Signer as EcdsaSigner, Verifier as EcdsaVerifier};
+pub(super) use p256::ecdsa::{
     Signature as P256EcdsaSignature, SigningKey as P256EcdsaSigningKey,
     VerifyingKey as P256EcdsaVerifyingKey,
 };
-use p256::elliptic_curve::sec1::ToEncodedPoint;
-use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
-use rsa::pkcs1v15::{
+pub(super) use p256::elliptic_curve::sec1::ToEncodedPoint;
+pub(super) use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
+pub(super) use rsa::pkcs1v15::{
     Signature as RsaPkcs1v15Signature, SigningKey as RsaPkcs1v15SigningKey,
     VerifyingKey as RsaPkcs1v15VerifyingKey,
 };
-use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
-use rsa::pss::{
+pub(super) use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
+pub(super) use rsa::pss::{
     Signature as RsaPssSignature, SigningKey as RsaPssSigningKey,
     VerifyingKey as RsaPssVerifyingKey,
 };
-use rsa::sha2::{Sha256 as RsaSha256, Sha384 as RsaSha384, Sha512 as RsaSha512};
-use rsa::signature::{
+pub(super) use rsa::sha2::{Sha256 as RsaSha256, Sha384 as RsaSha384, Sha512 as RsaSha512};
+pub(super) use rsa::signature::{
     RandomizedSigner as RsaRandomizedSigner, SignatureEncoding as RsaSignatureEncoding,
 };
-use rsa::traits::{PrivateKeyParts, PublicKeyParts};
-use rsa::{BigUint as RsaBigUint, Oaep, RsaPrivateKey, RsaPublicKey};
-use sha1::Sha1;
-use sha2::{Digest as Sha2Digest, Sha256, Sha384, Sha512};
+pub(super) use rsa::traits::{PrivateKeyParts, PublicKeyParts};
+pub(super) use rsa::{BigUint as RsaBigUint, Oaep, RsaPrivateKey, RsaPublicKey};
+pub(super) use sha1::Sha1;
+pub(super) use sha2::{Digest as Sha2Digest, Sha256, Sha384, Sha512};
 
-use perry_runtime::{
+pub(super) use perry_runtime::{
     buffer::{
         buffer_alloc, buffer_data_mut, is_registered_buffer, mark_as_uint8array, BufferHeader,
     },
@@ -48,7 +48,7 @@ use perry_runtime::{
 
 /// `buffer_data` is private to perry-runtime — open-code the same offset.
 #[inline]
-unsafe fn buffer_payload(buf: *const BufferHeader) -> *const u8 {
+pub(super) unsafe fn buffer_payload(buf: *const BufferHeader) -> *const u8 {
     (buf as *const u8).add(std::mem::size_of::<BufferHeader>())
 }
 
@@ -59,17 +59,17 @@ unsafe fn buffer_payload(buf: *const BufferHeader) -> *const u8 {
 // future caller editing here can see the full encoding contract at the
 // top of the file.
 #[allow(dead_code)]
-const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+pub(super) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+pub(super) const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 #[allow(dead_code)]
-const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
+pub(super) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 #[allow(dead_code)]
-const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
-const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+pub(super) const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
+pub(super) const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+pub(super) const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum HashAlgo {
+pub(super) enum HashAlgo {
     Sha1,
     Sha256,
     Sha384,
@@ -77,7 +77,7 @@ enum HashAlgo {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum KeyAlgo {
+pub(super) enum KeyAlgo {
     Hmac,
     Hkdf,
     Pbkdf2,
@@ -95,30 +95,30 @@ enum KeyAlgo {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum KeyKind {
+pub(super) enum KeyKind {
     Secret,
     Private,
     Public,
 }
 
 #[derive(Copy, Clone, Debug)]
-struct CryptoKeyMaterial {
-    algo: KeyAlgo,
+pub(super) struct CryptoKeyMaterial {
+    pub(super) algo: KeyAlgo,
     /// For HMAC: the underlying hash. For AES-GCM the hash slot is
     /// unused (we keep `HashAlgo::Sha256` as a harmless placeholder so
     /// the struct stays `Copy`).
-    hash: HashAlgo,
-    kind: KeyKind,
+    pub(super) hash: HashAlgo,
+    pub(super) kind: KeyKind,
 }
 
-static CRYPTO_KEY_REGISTRY: Lazy<Mutex<HashMap<usize, CryptoKeyMaterial>>> =
+pub(super) static CRYPTO_KEY_REGISTRY: Lazy<Mutex<HashMap<usize, CryptoKeyMaterial>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-fn register_crypto_key(buf_addr: usize, mat: CryptoKeyMaterial) {
+pub(super) fn register_crypto_key(buf_addr: usize, mat: CryptoKeyMaterial) {
     CRYPTO_KEY_REGISTRY.lock().unwrap().insert(buf_addr, mat);
 }
 
-fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
+pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
     CRYPTO_KEY_REGISTRY
         .lock()
         .unwrap()
@@ -155,7 +155,7 @@ fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
 
 /// Strip POINTER_TAG / STRING_TAG from a NaN-boxed value, returning the
 /// raw 48-bit pointer. Returns 0 for tagged primitives (undef/null/bool/int).
-fn strip_ptr(bits: u64) -> usize {
+pub(super) fn strip_ptr(bits: u64) -> usize {
     let top16 = (bits >> 48) as u16;
     if top16 == 0x7FFD || top16 == 0x7FFF {
         (bits & POINTER_MASK) as usize
@@ -167,7 +167,7 @@ fn strip_ptr(bits: u64) -> usize {
 /// Read raw bytes from a NaN-boxed value. Accepts strings (StringHeader),
 /// Buffers / Uint8Arrays (BufferHeader — perry uses one type for both),
 /// and TypedArrayHeader (Uint8Array allocated via the typed-array path).
-unsafe fn bytes_from_jsvalue(bits: u64) -> Vec<u8> {
+pub(super) unsafe fn bytes_from_jsvalue(bits: u64) -> Vec<u8> {
     let top16 = (bits >> 48) as u16;
     // Inline SSO short string.
     if top16 == 0x7FF9 {
@@ -215,7 +215,7 @@ unsafe fn bytes_from_jsvalue(bits: u64) -> Vec<u8> {
 
 /// Coerce a NaN-boxed value to a String. Returns None for non-string
 /// primitives (we want loud failures, not "undefined" → "undefined").
-unsafe fn string_from_jsvalue(bits: u64) -> Option<String> {
+pub(super) unsafe fn string_from_jsvalue(bits: u64) -> Option<String> {
     let top16 = (bits >> 48) as u16;
     if top16 == 0x7FF9 {
         let v = JSValue::from_bits(bits);
@@ -236,7 +236,7 @@ unsafe fn string_from_jsvalue(bits: u64) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(str::to_string)
 }
 
-fn parse_hash_alg(name: &str) -> Option<HashAlgo> {
+pub(super) fn parse_hash_alg(name: &str) -> Option<HashAlgo> {
     let upper: String = name.chars().flat_map(char::to_uppercase).collect();
     match upper.replace('-', "").as_str() {
         "SHA1" => Some(HashAlgo::Sha1),
@@ -250,7 +250,7 @@ fn parse_hash_alg(name: &str) -> Option<HashAlgo> {
 /// Extract a hash algorithm name from the digest's first arg. Accepts
 /// either a string ("SHA-256") or an object with a `.name` field
 /// ({ name: "SHA-256" }), per the spec's `AlgorithmIdentifier` shape.
-unsafe fn extract_hash_algo(bits: u64) -> Option<HashAlgo> {
+pub(super) unsafe fn extract_hash_algo(bits: u64) -> Option<HashAlgo> {
     if let Some(s) = string_from_jsvalue(bits) {
         return parse_hash_alg(&s);
     }
@@ -267,7 +267,7 @@ unsafe fn extract_hash_algo(bits: u64) -> Option<HashAlgo> {
 
 /// Extract the HMAC hash from an algorithm object literal:
 /// `{ name: "HMAC", hash: "SHA-256" }` or `{ name: "HMAC", hash: { name: "SHA-256" } }`.
-unsafe fn extract_hmac_hash(algo_bits: u64) -> Option<HashAlgo> {
+pub(super) unsafe fn extract_hmac_hash(algo_bits: u64) -> Option<HashAlgo> {
     // Direct string shorthand: `importKey("raw", k, "HMAC", ...)` is not
     // spec-legal but some libraries pass it; treat it as HMAC-SHA-256
     // by default — actually no, stay strict and require the object form.
@@ -281,7 +281,7 @@ unsafe fn extract_hmac_hash(algo_bits: u64) -> Option<HashAlgo> {
     extract_hash_algo(hash_val.bits())
 }
 
-unsafe fn extract_algorithm_hash(algo_bits: u64, default: HashAlgo) -> HashAlgo {
+pub(super) unsafe fn extract_algorithm_hash(algo_bits: u64, default: HashAlgo) -> HashAlgo {
     let obj_ptr = strip_ptr(algo_bits) as *const perry_runtime::ObjectHeader;
     if (obj_ptr as usize) < 0x1000 {
         return default;
@@ -294,7 +294,7 @@ unsafe fn extract_algorithm_hash(algo_bits: u64, default: HashAlgo) -> HashAlgo 
 
 /// Allocate a fresh Buffer marked as Uint8Array (so `instanceof Uint8Array`
 /// is true and `new Uint8Array(buf)` memcpy's correctly), copy `bytes` in.
-unsafe fn alloc_uint8array_from_slice(bytes: &[u8]) -> *mut BufferHeader {
+pub(super) unsafe fn alloc_uint8array_from_slice(bytes: &[u8]) -> *mut BufferHeader {
     let buf = buffer_alloc(bytes.len() as u32);
     if buf.is_null() {
         return buf;
@@ -309,7 +309,7 @@ unsafe fn alloc_uint8array_from_slice(bytes: &[u8]) -> *mut BufferHeader {
 }
 
 /// Wrap a heap value (NaN-boxed bits) in an already-resolved Promise.
-fn resolve_with_bits(bits: u64) -> *mut Promise {
+pub(super) fn resolve_with_bits(bits: u64) -> *mut Promise {
     js_promise_resolved(f64::from_bits(bits))
 }
 
@@ -320,7 +320,7 @@ fn resolve_with_bits(bits: u64) -> *mut Promise {
 /// and consumers (`.catch(e => e.name === "...")`) match on `.name` —
 /// we model that shape rather than the full DOM `code` lookup table.
 /// Issue #1431.
-unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mut Promise {
+pub(super) unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mut Promise {
     let obj = js_object_alloc(0, 3);
     if obj.is_null() {
         return perry_runtime::js_promise_rejected(f64::from_bits(0x7FFC_0000_0000_0001));
@@ -342,7 +342,7 @@ unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mut Promise {
 }
 
 /// Resolve a Promise with a Uint8Array view of `bytes`.
-unsafe fn resolve_with_bytes(bytes: &[u8]) -> *mut Promise {
+pub(super) unsafe fn resolve_with_bytes(bytes: &[u8]) -> *mut Promise {
     let buf = alloc_uint8array_from_slice(bytes);
     if buf.is_null() {
         return reject_with_dom_exception("OperationError", "The operation failed");
@@ -351,12 +351,12 @@ unsafe fn resolve_with_bytes(bytes: &[u8]) -> *mut Promise {
     resolve_with_bits(val)
 }
 
-unsafe fn resolve_with_bool(b: bool) -> *mut Promise {
+pub(super) unsafe fn resolve_with_bool(b: bool) -> *mut Promise {
     let bits = if b { TAG_TRUE } else { TAG_FALSE };
     resolve_with_bits(bits)
 }
 
-fn compute_digest(algo: HashAlgo, data: &[u8]) -> Vec<u8> {
+pub(super) fn compute_digest(algo: HashAlgo, data: &[u8]) -> Vec<u8> {
     match algo {
         HashAlgo::Sha1 => Sha1::digest(data).to_vec(),
         HashAlgo::Sha256 => Sha256::digest(data).to_vec(),
@@ -365,7 +365,7 @@ fn compute_digest(algo: HashAlgo, data: &[u8]) -> Vec<u8> {
     }
 }
 
-fn compute_hmac(hash: HashAlgo, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn compute_hmac(hash: HashAlgo, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
     match hash {
         HashAlgo::Sha1 => {
             let mut mac = <Hmac<Sha1>>::new_from_slice(key).ok()?;
@@ -390,7 +390,7 @@ fn compute_hmac(hash: HashAlgo, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-fn generate_p256_signing_key() -> Option<P256EcdsaSigningKey> {
+pub(super) fn generate_p256_signing_key() -> Option<P256EcdsaSigningKey> {
     use rand::RngCore;
     let mut rng = rand::rngs::OsRng;
     for _ in 0..128 {
@@ -403,7 +403,7 @@ fn generate_p256_signing_key() -> Option<P256EcdsaSigningKey> {
     None
 }
 
-fn generate_p256_secret_key() -> Option<P256SecretKey> {
+pub(super) fn generate_p256_secret_key() -> Option<P256SecretKey> {
     use rand::RngCore;
     let mut rng = rand::rngs::OsRng;
     for _ in 0..128 {
@@ -416,7 +416,7 @@ fn generate_p256_secret_key() -> Option<P256SecretKey> {
     None
 }
 
-fn rsa_oaep_encrypt(hash: HashAlgo, key: &RsaPublicKey, data: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn rsa_oaep_encrypt(hash: HashAlgo, key: &RsaPublicKey, data: &[u8]) -> Option<Vec<u8>> {
     let mut rng = rand::rngs::OsRng;
     match hash {
         HashAlgo::Sha1 => key
@@ -428,7 +428,11 @@ fn rsa_oaep_encrypt(hash: HashAlgo, key: &RsaPublicKey, data: &[u8]) -> Option<V
     }
 }
 
-fn rsa_oaep_decrypt(hash: HashAlgo, key: &RsaPrivateKey, data: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn rsa_oaep_decrypt(
+    hash: HashAlgo,
+    key: &RsaPrivateKey,
+    data: &[u8],
+) -> Option<Vec<u8>> {
     let mut rng = rand::rngs::OsRng;
     match hash {
         HashAlgo::Sha1 => key
@@ -446,7 +450,7 @@ fn rsa_oaep_decrypt(hash: HashAlgo, key: &RsaPrivateKey, data: &[u8]) -> Option<
     }
 }
 
-fn rsa_pkcs1_sign(hash: HashAlgo, key: RsaPrivateKey, data: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn rsa_pkcs1_sign(hash: HashAlgo, key: RsaPrivateKey, data: &[u8]) -> Option<Vec<u8>> {
     match hash {
         HashAlgo::Sha256 => Some(
             RsaPkcs1v15SigningKey::<RsaSha256>::new(key)
@@ -467,7 +471,12 @@ fn rsa_pkcs1_sign(hash: HashAlgo, key: RsaPrivateKey, data: &[u8]) -> Option<Vec
     }
 }
 
-fn rsa_pkcs1_verify(hash: HashAlgo, key: RsaPublicKey, data: &[u8], sig: &[u8]) -> Option<bool> {
+pub(super) fn rsa_pkcs1_verify(
+    hash: HashAlgo,
+    key: RsaPublicKey,
+    data: &[u8],
+    sig: &[u8],
+) -> Option<bool> {
     let sig = RsaPkcs1v15Signature::try_from(sig).ok()?;
     let ok = match hash {
         HashAlgo::Sha256 => RsaPkcs1v15VerifyingKey::<RsaSha256>::new(key)
@@ -484,7 +493,7 @@ fn rsa_pkcs1_verify(hash: HashAlgo, key: RsaPublicKey, data: &[u8], sig: &[u8]) 
     Some(ok)
 }
 
-fn rsa_pss_sign(
+pub(super) fn rsa_pss_sign(
     hash: HashAlgo,
     key: RsaPrivateKey,
     data: &[u8],
@@ -508,7 +517,7 @@ fn rsa_pss_sign(
     }
 }
 
-fn rsa_pss_verify(
+pub(super) fn rsa_pss_verify(
     hash: HashAlgo,
     key: RsaPublicKey,
     data: &[u8],
@@ -537,4 +546,3 @@ fn rsa_pss_verify(
 // POINTER_TAG. Each takes `f64` for value args (NaN-boxed at the call
 // site) so the ABI matches perry's standard JS-value calling convention.
 // =====================================================================
-

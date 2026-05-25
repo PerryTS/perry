@@ -1,4 +1,4 @@
-// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 /// `crypto.subtle.digest(algorithm, data)` → Promise<Uint8Array>
 ///
@@ -16,4 +16,3 @@ pub unsafe extern "C" fn js_webcrypto_digest(algo_bits: f64, data_bits: f64) -> 
     let digest = compute_digest(algo, &bytes);
     resolve_with_bytes(&digest)
 }
-

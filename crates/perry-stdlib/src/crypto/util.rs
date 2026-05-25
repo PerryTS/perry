@@ -1,48 +1,48 @@
-// Included from `crypto.rs`; shares that module's imports, helpers, and private namespace.
-
-use crate::common::handle::{get_handle_mut, register_handle, Handle};
-use aes::{Aes128, Aes192, Aes256};
-use base64::Engine as _;
-use cbc::{
+pub(super) use crate::common::handle::{get_handle_mut, register_handle, Handle};
+pub(super) use aes::{Aes128, Aes192, Aes256};
+pub(super) use base64::Engine as _;
+pub(super) use cbc::{
     cipher::{
         block_padding::{NoPadding, Pkcs7},
         BlockDecryptMut, BlockEncryptMut, KeyInit, KeyIvInit,
     },
     Decryptor, Encryptor,
 };
-use hkdf::Hkdf;
-use md5::{Digest as Md5Digest, Md5};
-use p256::ecdh::diffie_hellman as p256_diffie_hellman;
-use p256::ecdsa::{Signature as P256EcdsaSignature, SigningKey as P256EcdsaSigningKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
-use p256::pkcs8::{
+pub(super) use hkdf::Hkdf;
+pub(super) use md5::{Digest as Md5Digest, Md5};
+pub(super) use p256::ecdh::diffie_hellman as p256_diffie_hellman;
+pub(super) use p256::ecdsa::{Signature as P256EcdsaSignature, SigningKey as P256EcdsaSigningKey};
+pub(super) use p256::elliptic_curve::sec1::ToEncodedPoint;
+pub(super) use p256::pkcs8::{
     EncodePrivateKey as P256EncodePrivateKey, EncodePublicKey as P256EncodePublicKey,
 };
-use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
-use perry_runtime::{
+pub(super) use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
+pub(super) use perry_runtime::{
     js_object_alloc, js_object_get_field_by_name, js_object_set_field_by_name,
     js_string_from_bytes, JSValue, ObjectHeader, StringHeader,
 };
-use rand::{Rng, RngCore};
-use rsa::pkcs1v15::{Pkcs1v15Sign, Signature as RsaPkcs1v15Signature, SigningKey, VerifyingKey};
-use rsa::pss::{
+pub(super) use rand::{Rng, RngCore};
+pub(super) use rsa::pkcs1v15::{
+    Pkcs1v15Sign, Signature as RsaPkcs1v15Signature, SigningKey, VerifyingKey,
+};
+pub(super) use rsa::pss::{
     Signature as RsaPssSignature, SigningKey as RsaPssSigningKey,
     VerifyingKey as RsaPssVerifyingKey,
 };
-use rsa::sha2::{Sha256 as RsaSha256, Sha384 as RsaSha384, Sha512 as RsaSha512};
-use rsa::signature::{RandomizedSigner, SignatureEncoding, Signer, Verifier};
-use rsa::traits::{PrivateKeyParts, PublicKeyParts};
-use rsa::Oaep;
-use rsa::{BigUint as RsaBigUint, RsaPrivateKey, RsaPublicKey};
-use sha1::Sha1;
-use sha2::{Digest as Sha256Digest, Sha224, Sha256, Sha384, Sha512, Sha512_256};
-use sha3::{
+pub(super) use rsa::sha2::{Sha256 as RsaSha256, Sha384 as RsaSha384, Sha512 as RsaSha512};
+pub(super) use rsa::signature::{RandomizedSigner, SignatureEncoding, Signer, Verifier};
+pub(super) use rsa::traits::{PrivateKeyParts, PublicKeyParts};
+pub(super) use rsa::Oaep;
+pub(super) use rsa::{BigUint as RsaBigUint, RsaPrivateKey, RsaPublicKey};
+pub(super) use sha1::Sha1;
+pub(super) use sha2::{Digest as Sha256Digest, Sha224, Sha256, Sha384, Sha512, Sha512_256};
+pub(super) use sha3::{
     digest::{ExtendableOutput, XofReader},
     Shake128, Shake256,
 };
 
 /// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
+pub(super) unsafe fn string_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
     if ptr.is_null() {
         return None;
     }
@@ -60,7 +60,7 @@ unsafe fn string_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
 /// header, and both store the byte count (in UTF-8 / as raw bytes) in
 /// the same u32 slot for our purposes — but we pick the correct field
 /// based on whether the pointer is a registered Buffer.
-unsafe fn bytes_from_ptr(ptr: i64) -> Vec<u8> {
+pub(super) unsafe fn bytes_from_ptr(ptr: i64) -> Vec<u8> {
     let addr = ptr as usize;
     if addr < 0x1000 {
         return Vec::new();
@@ -81,7 +81,9 @@ unsafe fn bytes_from_ptr(ptr: i64) -> Vec<u8> {
 }
 
 /// Allocate a new Buffer, copy `bytes` into it, return the registered pointer.
-unsafe fn alloc_buffer_from_slice(bytes: &[u8]) -> *mut perry_runtime::buffer::BufferHeader {
+pub(super) unsafe fn alloc_buffer_from_slice(
+    bytes: &[u8],
+) -> *mut perry_runtime::buffer::BufferHeader {
     let buf = perry_runtime::buffer::buffer_alloc(bytes.len() as u32);
     if buf.is_null() {
         return buf;
@@ -93,13 +95,13 @@ unsafe fn alloc_buffer_from_slice(bytes: &[u8]) -> *mut perry_runtime::buffer::B
 }
 
 #[derive(Clone, Copy)]
-enum RsaDigestKind {
+pub(super) enum RsaDigestKind {
     Sha256,
     Sha384,
     Sha512,
 }
 
-fn normalize_sign_algorithm(algorithm: &[u8]) -> Option<RsaDigestKind> {
+pub(super) fn normalize_sign_algorithm(algorithm: &[u8]) -> Option<RsaDigestKind> {
     let alg = std::str::from_utf8(algorithm)
         .unwrap_or("")
         .to_ascii_lowercase();
@@ -111,7 +113,7 @@ fn normalize_sign_algorithm(algorithm: &[u8]) -> Option<RsaDigestKind> {
     }
 }
 
-fn parse_rsa_private_key_pem(pem: &str) -> Option<RsaPrivateKey> {
+pub(super) fn parse_rsa_private_key_pem(pem: &str) -> Option<RsaPrivateKey> {
     use rsa::pkcs1::DecodeRsaPrivateKey;
     use rsa::pkcs8::DecodePrivateKey;
 
@@ -120,7 +122,7 @@ fn parse_rsa_private_key_pem(pem: &str) -> Option<RsaPrivateKey> {
         .ok()
 }
 
-fn parse_rsa_public_key_pem(pem: &str) -> Option<RsaPublicKey> {
+pub(super) fn parse_rsa_public_key_pem(pem: &str) -> Option<RsaPublicKey> {
     use rsa::pkcs1::DecodeRsaPublicKey;
     use rsa::pkcs8::DecodePublicKey;
 
@@ -130,7 +132,7 @@ fn parse_rsa_public_key_pem(pem: &str) -> Option<RsaPublicKey> {
         .or_else(|| parse_rsa_private_key_pem(pem).map(RsaPublicKey::from))
 }
 
-fn rsa_public_key_to_pem(public_key: &RsaPublicKey) -> Option<String> {
+pub(super) fn rsa_public_key_to_pem(public_key: &RsaPublicKey) -> Option<String> {
     use rsa::pkcs1::EncodeRsaPublicKey;
     use rsa::pkcs8::EncodePublicKey;
 
@@ -141,13 +143,13 @@ fn rsa_public_key_to_pem(public_key: &RsaPublicKey) -> Option<String> {
         .map(|pem| pem.to_string())
 }
 
-fn parse_p256_signing_key_pem(pem: &str) -> Option<P256EcdsaSigningKey> {
+pub(super) fn parse_p256_signing_key_pem(pem: &str) -> Option<P256EcdsaSigningKey> {
     use p256::pkcs8::DecodePrivateKey;
 
     P256EcdsaSigningKey::from_pkcs8_pem(pem).ok()
 }
 
-fn parse_p256_verifying_key_pem(pem: &str) -> Option<p256::ecdsa::VerifyingKey> {
+pub(super) fn parse_p256_verifying_key_pem(pem: &str) -> Option<p256::ecdsa::VerifyingKey> {
     use p256::pkcs8::{DecodePrivateKey, DecodePublicKey};
 
     p256::ecdsa::VerifyingKey::from_public_key_pem(pem)
@@ -159,24 +161,24 @@ fn parse_p256_verifying_key_pem(pem: &str) -> Option<p256::ecdsa::VerifyingKey> 
         })
 }
 
-const ED25519_PRIVATE_PREFIX: &str = "PERRY-ED25519-PRIVATE:";
-const ED25519_PUBLIC_PREFIX: &str = "PERRY-ED25519-PUBLIC:";
-const X25519_PRIVATE_PREFIX: &str = "PERRY-X25519-PRIVATE:";
-const X25519_PUBLIC_PREFIX: &str = "PERRY-X25519-PUBLIC:";
+pub(super) const ED25519_PRIVATE_PREFIX: &str = "PERRY-ED25519-PRIVATE:";
+pub(super) const ED25519_PUBLIC_PREFIX: &str = "PERRY-ED25519-PUBLIC:";
+pub(super) const X25519_PRIVATE_PREFIX: &str = "PERRY-X25519-PRIVATE:";
+pub(super) const X25519_PUBLIC_PREFIX: &str = "PERRY-X25519-PUBLIC:";
 
-fn ed25519_private_surrogate(key: &ed25519_dalek::SigningKey) -> String {
+pub(super) fn ed25519_private_surrogate(key: &ed25519_dalek::SigningKey) -> String {
     let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.to_bytes());
     let public =
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes());
     format!("{ED25519_PRIVATE_PREFIX}{secret}.{public}")
 }
 
-fn ed25519_public_surrogate(key: &ed25519_dalek::VerifyingKey) -> String {
+pub(super) fn ed25519_public_surrogate(key: &ed25519_dalek::VerifyingKey) -> String {
     let public = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.to_bytes());
     format!("{ED25519_PUBLIC_PREFIX}{public}")
 }
 
-fn parse_ed25519_private_surrogate(value: &str) -> Option<ed25519_dalek::SigningKey> {
+pub(super) fn parse_ed25519_private_surrogate(value: &str) -> Option<ed25519_dalek::SigningKey> {
     let rest = value.strip_prefix(ED25519_PRIVATE_PREFIX)?;
     let secret_b64 = rest.split('.').next()?;
     let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -186,7 +188,7 @@ fn parse_ed25519_private_surrogate(value: &str) -> Option<ed25519_dalek::Signing
     Some(ed25519_dalek::SigningKey::from_bytes(&secret))
 }
 
-fn parse_ed25519_public_surrogate(value: &str) -> Option<ed25519_dalek::VerifyingKey> {
+pub(super) fn parse_ed25519_public_surrogate(value: &str) -> Option<ed25519_dalek::VerifyingKey> {
     if let Some(private) = parse_ed25519_private_surrogate(value) {
         return Some(private.verifying_key());
     }
@@ -198,17 +200,17 @@ fn parse_ed25519_public_surrogate(value: &str) -> Option<ed25519_dalek::Verifyin
     ed25519_dalek::VerifyingKey::from_bytes(&public).ok()
 }
 
-fn x25519_private_surrogate(secret: &[u8; 32]) -> String {
+pub(super) fn x25519_private_surrogate(secret: &[u8; 32]) -> String {
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
     format!("{X25519_PRIVATE_PREFIX}{encoded}")
 }
 
-fn x25519_public_surrogate(public: &[u8; 32]) -> String {
+pub(super) fn x25519_public_surrogate(public: &[u8; 32]) -> String {
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public);
     format!("{X25519_PUBLIC_PREFIX}{encoded}")
 }
 
-fn parse_x25519_private_surrogate(value: &str) -> Option<[u8; 32]> {
+pub(super) fn parse_x25519_private_surrogate(value: &str) -> Option<[u8; 32]> {
     let rest = value.strip_prefix(X25519_PRIVATE_PREFIX)?;
     let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(rest.as_bytes())
@@ -216,7 +218,7 @@ fn parse_x25519_private_surrogate(value: &str) -> Option<[u8; 32]> {
     secret.as_slice().try_into().ok()
 }
 
-fn parse_x25519_public_surrogate(value: &str) -> Option<[u8; 32]> {
+pub(super) fn parse_x25519_public_surrogate(value: &str) -> Option<[u8; 32]> {
     if let Some(secret) = parse_x25519_private_surrogate(value) {
         let secret = x25519_dalek::StaticSecret::from(secret);
         let public = x25519_dalek::PublicKey::from(&secret);
@@ -229,11 +231,11 @@ fn parse_x25519_public_surrogate(value: &str) -> Option<[u8; 32]> {
     public.as_slice().try_into().ok()
 }
 
-fn js_bool(b: bool) -> f64 {
+pub(super) fn js_bool(b: bool) -> f64 {
     f64::from_bits(JSValue::bool(b).bits())
 }
 
-fn js_truthy(v: f64) -> bool {
+pub(super) fn js_truthy(v: f64) -> bool {
     let js = JSValue::from_bits(v.to_bits());
     if js.is_bool() {
         return js.as_bool();
@@ -247,11 +249,11 @@ fn js_truthy(v: f64) -> bool {
     true
 }
 
-fn nanbox_str(ptr: *mut StringHeader) -> f64 {
+pub(super) fn nanbox_str(ptr: *mut StringHeader) -> f64 {
     f64::from_bits(0x7FFF_0000_0000_0000u64 | (ptr as u64 & 0x0000_FFFF_FFFF_FFFF))
 }
 
-unsafe fn mark_keyobject_string(ptr: *mut StringHeader, kind: KeyKind, asym_type: u8) {
+pub(super) unsafe fn mark_keyobject_string(ptr: *mut StringHeader, kind: KeyKind, asym_type: u8) {
     if ptr.is_null() {
         return;
     }
@@ -263,12 +265,12 @@ unsafe fn mark_keyobject_string(ptr: *mut StringHeader, kind: KeyKind, asym_type
 }
 
 #[derive(Clone, Copy)]
-enum KeyKind {
+pub(super) enum KeyKind {
     Private,
     Public,
 }
 
-fn classify_private_key_surrogate(pem: &str) -> Option<u8> {
+pub(super) fn classify_private_key_surrogate(pem: &str) -> Option<u8> {
     if parse_rsa_private_key_pem(pem).is_some() {
         Some(1)
     } else if parse_p256_signing_key_pem(pem).is_some() {
@@ -282,7 +284,7 @@ fn classify_private_key_surrogate(pem: &str) -> Option<u8> {
     }
 }
 
-fn classify_public_key_surrogate(pem: &str) -> Option<u8> {
+pub(super) fn classify_public_key_surrogate(pem: &str) -> Option<u8> {
     if parse_rsa_public_key_pem(pem).is_some() {
         Some(1)
     } else if parse_p256_verifying_key_pem(pem).is_some() {
@@ -296,7 +298,7 @@ fn classify_public_key_surrogate(pem: &str) -> Option<u8> {
     }
 }
 
-unsafe fn string_from_jsvalue(bits: u64) -> Option<String> {
+pub(super) unsafe fn string_from_jsvalue(bits: u64) -> Option<String> {
     let top16 = (bits >> 48) as u16;
     if top16 == 0x7FF9 {
         let v = JSValue::from_bits(bits);
@@ -318,7 +320,7 @@ unsafe fn string_from_jsvalue(bits: u64) -> Option<String> {
         .map(str::to_string)
 }
 
-unsafe fn object_field_bits(obj_bits: u64, name: &[u8]) -> Option<u64> {
+pub(super) unsafe fn object_field_bits(obj_bits: u64, name: &[u8]) -> Option<u64> {
     if (obj_bits >> 48) as u16 != 0x7FFD {
         return None;
     }
@@ -336,41 +338,41 @@ unsafe fn object_field_bits(obj_bits: u64, name: &[u8]) -> Option<u64> {
     }
 }
 
-unsafe fn object_field_string(obj_bits: u64, name: &[u8]) -> Option<String> {
+pub(super) unsafe fn object_field_string(obj_bits: u64, name: &[u8]) -> Option<String> {
     string_from_jsvalue(object_field_bits(obj_bits, name)?)
 }
 
-fn b64u_decode_uint(s: &str) -> Option<RsaBigUint> {
+pub(super) fn b64u_decode_uint(s: &str) -> Option<RsaBigUint> {
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(s.as_bytes())
         .ok()?;
     Some(RsaBigUint::from_bytes_be(&bytes))
 }
 
-fn b64u_uint(value: &RsaBigUint) -> String {
+pub(super) fn b64u_uint(value: &RsaBigUint) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_bytes_be())
 }
 
-unsafe fn jwk_uint_field(obj_bits: u64, name: &[u8]) -> Option<RsaBigUint> {
+pub(super) unsafe fn jwk_uint_field(obj_bits: u64, name: &[u8]) -> Option<RsaBigUint> {
     b64u_decode_uint(&object_field_string(obj_bits, name)?)
 }
 
-unsafe fn set_object_string_field(obj: *mut ObjectHeader, name: &[u8], value: &str) {
+pub(super) unsafe fn set_object_string_field(obj: *mut ObjectHeader, name: &[u8], value: &str) {
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let val = js_string_from_bytes(value.as_ptr(), value.len() as u32);
     js_object_set_field_by_name(obj, key, nanbox_str(val));
 }
 
-unsafe fn set_object_value_field(obj: *mut ObjectHeader, name: &[u8], value: f64) {
+pub(super) unsafe fn set_object_value_field(obj: *mut ObjectHeader, name: &[u8], value: f64) {
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     js_object_set_field_by_name(obj, key, value);
 }
 
-fn nanbox_pointer(ptr: *mut ObjectHeader) -> f64 {
+pub(super) fn nanbox_pointer(ptr: *mut ObjectHeader) -> f64 {
     f64::from_bits(JSValue::pointer(ptr as *const u8).bits())
 }
 
-unsafe fn rsa_public_jwk_object(public_key: &RsaPublicKey) -> Option<*mut ObjectHeader> {
+pub(super) unsafe fn rsa_public_jwk_object(public_key: &RsaPublicKey) -> Option<*mut ObjectHeader> {
     let obj = js_object_alloc(0, 3);
     if obj.is_null() {
         return None;
@@ -381,7 +383,9 @@ unsafe fn rsa_public_jwk_object(public_key: &RsaPublicKey) -> Option<*mut Object
     Some(obj)
 }
 
-unsafe fn rsa_private_jwk_object(private_key: &RsaPrivateKey) -> Option<*mut ObjectHeader> {
+pub(super) unsafe fn rsa_private_jwk_object(
+    private_key: &RsaPrivateKey,
+) -> Option<*mut ObjectHeader> {
     let primes = private_key.primes();
     if primes.len() < 2 {
         return None;
@@ -414,7 +418,9 @@ unsafe fn rsa_private_jwk_object(private_key: &RsaPrivateKey) -> Option<*mut Obj
     Some(obj)
 }
 
-unsafe fn ec_p256_public_jwk_object(public_key: &P256PublicKey) -> Option<*mut ObjectHeader> {
+pub(super) unsafe fn ec_p256_public_jwk_object(
+    public_key: &P256PublicKey,
+) -> Option<*mut ObjectHeader> {
     let point = public_key.to_encoded_point(false);
     let bytes = point.as_bytes();
     if bytes.len() != 65 || bytes[0] != 0x04 {
@@ -439,7 +445,9 @@ unsafe fn ec_p256_public_jwk_object(public_key: &P256PublicKey) -> Option<*mut O
     Some(obj)
 }
 
-unsafe fn ec_p256_private_jwk_object(private_key: &P256SecretKey) -> Option<*mut ObjectHeader> {
+pub(super) unsafe fn ec_p256_private_jwk_object(
+    private_key: &P256SecretKey,
+) -> Option<*mut ObjectHeader> {
     let public = private_key.public_key();
     let obj = ec_p256_public_jwk_object(&public)?;
     let d = private_key.to_bytes();
@@ -451,7 +459,7 @@ unsafe fn ec_p256_private_jwk_object(private_key: &P256SecretKey) -> Option<*mut
     Some(obj)
 }
 
-unsafe fn jwk_rsa_private_to_pem(jwk_bits: u64) -> Option<String> {
+pub(super) unsafe fn jwk_rsa_private_to_pem(jwk_bits: u64) -> Option<String> {
     use rsa::pkcs8::EncodePrivateKey;
     let kty = object_field_string(jwk_bits, b"kty")?;
     if kty != "RSA" {
@@ -468,7 +476,7 @@ unsafe fn jwk_rsa_private_to_pem(jwk_bits: u64) -> Option<String> {
         .map(|pem| pem.to_string())
 }
 
-unsafe fn jwk_rsa_public_to_pem(jwk_bits: u64) -> Option<String> {
+pub(super) unsafe fn jwk_rsa_public_to_pem(jwk_bits: u64) -> Option<String> {
     let kty = object_field_string(jwk_bits, b"kty")?;
     if kty != "RSA" {
         return None;
@@ -479,7 +487,7 @@ unsafe fn jwk_rsa_public_to_pem(jwk_bits: u64) -> Option<String> {
     rsa_public_key_to_pem(&key)
 }
 
-unsafe fn jwk_ec_private_to_pem(jwk_bits: u64) -> Option<String> {
+pub(super) unsafe fn jwk_ec_private_to_pem(jwk_bits: u64) -> Option<String> {
     let kty = object_field_string(jwk_bits, b"kty")?;
     let crv = object_field_string(jwk_bits, b"crv")?;
     if kty != "EC" || crv != "P-256" {
@@ -495,7 +503,7 @@ unsafe fn jwk_ec_private_to_pem(jwk_bits: u64) -> Option<String> {
         .map(|pem| pem.to_string())
 }
 
-unsafe fn jwk_ec_public_to_pem(jwk_bits: u64) -> Option<String> {
+pub(super) unsafe fn jwk_ec_public_to_pem(jwk_bits: u64) -> Option<String> {
     let kty = object_field_string(jwk_bits, b"kty")?;
     let crv = object_field_string(jwk_bits, b"crv")?;
     if kty != "EC" || crv != "P-256" {
@@ -520,7 +528,7 @@ unsafe fn jwk_ec_public_to_pem(jwk_bits: u64) -> Option<String> {
     public.to_public_key_pem(Default::default()).ok()
 }
 
-unsafe fn crypto_key_input_to_private_pem(value_bits: u64) -> Option<String> {
+pub(super) unsafe fn crypto_key_input_to_private_pem(value_bits: u64) -> Option<String> {
     let format = object_field_string(value_bits, b"format");
     if let Some(key_bits) = object_field_bits(value_bits, b"key") {
         if matches!(format.as_deref(), Some(f) if f.eq_ignore_ascii_case("jwk")) {
@@ -535,7 +543,7 @@ unsafe fn crypto_key_input_to_private_pem(value_bits: u64) -> Option<String> {
     String::from_utf8(bytes_from_ptr(ptr)).ok()
 }
 
-unsafe fn crypto_key_input_to_public_pem(value_bits: u64) -> Option<String> {
+pub(super) unsafe fn crypto_key_input_to_public_pem(value_bits: u64) -> Option<String> {
     let format = object_field_string(value_bits, b"format");
     if let Some(key_bits) = object_field_bits(value_bits, b"key") {
         if matches!(format.as_deref(), Some(f) if f.eq_ignore_ascii_case("jwk")) {
@@ -582,18 +590,18 @@ unsafe fn crypto_key_input_to_public_pem(value_bits: u64) -> Option<String> {
     parse_rsa_public_key_pem(&pem).and_then(|key| rsa_public_key_to_pem(&key))
 }
 
-unsafe fn key_input_uses_ieee_p1363(value_bits: u64) -> bool {
+pub(super) unsafe fn key_input_uses_ieee_p1363(value_bits: u64) -> bool {
     matches!(
         object_field_string(value_bits, b"dsaEncoding").as_deref(),
         Some(enc) if enc.eq_ignore_ascii_case("ieee-p1363")
     )
 }
 
-unsafe fn key_input_uses_rsa_pss(value_bits: u64) -> bool {
+pub(super) unsafe fn key_input_uses_rsa_pss(value_bits: u64) -> bool {
     matches!(object_field_bits(value_bits, b"padding"), Some(v) if f64::from_bits(v) as i32 == 6)
 }
 
-unsafe fn key_input_pss_salt_len(value_bits: u64, alg: RsaDigestKind) -> usize {
+pub(super) unsafe fn key_input_pss_salt_len(value_bits: u64, alg: RsaDigestKind) -> usize {
     if let Some(v) = object_field_bits(value_bits, b"saltLength") {
         let n = f64::from_bits(v) as i32;
         if n > 0 {
@@ -607,7 +615,7 @@ unsafe fn key_input_pss_salt_len(value_bits: u64, alg: RsaDigestKind) -> usize {
     }
 }
 
-unsafe fn keygen_encoding_wants_jwk(options_bits: u64, field: &[u8]) -> bool {
+pub(super) unsafe fn keygen_encoding_wants_jwk(options_bits: u64, field: &[u8]) -> bool {
     let Some(encoding_bits) = object_field_bits(options_bits, field) else {
         return false;
     };
@@ -617,7 +625,11 @@ unsafe fn keygen_encoding_wants_jwk(options_bits: u64, field: &[u8]) -> bool {
     )
 }
 
-fn sign_rsa_data(alg: RsaDigestKind, private_key: RsaPrivateKey, data: &[u8]) -> Vec<u8> {
+pub(super) fn sign_rsa_data(
+    alg: RsaDigestKind,
+    private_key: RsaPrivateKey,
+    data: &[u8],
+) -> Vec<u8> {
     match alg {
         RsaDigestKind::Sha256 => SigningKey::<RsaSha256>::new(private_key)
             .sign(data)
@@ -634,7 +646,7 @@ fn sign_rsa_data(alg: RsaDigestKind, private_key: RsaPrivateKey, data: &[u8]) ->
     }
 }
 
-fn sign_rsa_pss_data(
+pub(super) fn sign_rsa_pss_data(
     alg: RsaDigestKind,
     private_key: RsaPrivateKey,
     data: &[u8],
@@ -663,7 +675,7 @@ fn sign_rsa_pss_data(
     }
 }
 
-fn verify_rsa_data(
+pub(super) fn verify_rsa_data(
     alg: RsaDigestKind,
     public_key: RsaPublicKey,
     data: &[u8],
@@ -682,7 +694,7 @@ fn verify_rsa_data(
     }
 }
 
-fn verify_rsa_pss_data(
+pub(super) fn verify_rsa_pss_data(
     alg: RsaDigestKind,
     public_key: RsaPublicKey,
     data: &[u8],
@@ -708,7 +720,10 @@ fn verify_rsa_pss_data(
     }
 }
 
-fn rsa_public_unpad_pkcs1_type1(public_key: &RsaPublicKey, encrypted: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn rsa_public_unpad_pkcs1_type1(
+    public_key: &RsaPublicKey,
+    encrypted: &[u8],
+) -> Option<Vec<u8>> {
     let sig = RsaBigUint::from_bytes_be(encrypted);
     if &sig >= public_key.n() || encrypted.len() != public_key.size() {
         return None;
@@ -736,7 +751,7 @@ fn rsa_public_unpad_pkcs1_type1(public_key: &RsaPublicKey, encrypted: &[u8]) -> 
     Some(em[idx + 1..].to_vec())
 }
 
-unsafe fn string_array(items: &[&str]) -> *mut perry_runtime::array::ArrayHeader {
+pub(super) unsafe fn string_array(items: &[&str]) -> *mut perry_runtime::array::ArrayHeader {
     let mut arr = perry_runtime::js_array_alloc(items.len() as u32);
     for item in items {
         let s = js_string_from_bytes(item.as_ptr(), item.len() as u32);
@@ -744,4 +759,3 @@ unsafe fn string_array(items: &[&str]) -> *mut perry_runtime::array::ArrayHeader
     }
     arr
 }
-

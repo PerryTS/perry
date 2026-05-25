@@ -1,4 +1,4 @@
-// Included from `webcrypto.rs`; shares that module's imports, helpers, and private namespace.
+use super::*;
 
 // =====================================================================
 // subtle.wrapKey / subtle.unwrapKey
@@ -22,7 +22,7 @@
 /// than `plaintext_key`). `aes-kw` 0.3 ships
 /// `KwAes128/192/256`; we support all three lengths the WebCrypto
 /// spec allows for AES-KW.
-fn aes_kw_wrap(wrapping_key: &[u8], plaintext_key: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn aes_kw_wrap(wrapping_key: &[u8], plaintext_key: &[u8]) -> Option<Vec<u8>> {
     use aes_kw::{KeyInit, KwAes128, KwAes192, KwAes256};
     let mut buf = vec![0u8; plaintext_key.len() + 8];
     match wrapping_key.len() {
@@ -47,7 +47,7 @@ fn aes_kw_wrap(wrapping_key: &[u8], plaintext_key: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// AES-KW unwrap — RFC 3394.
-fn aes_kw_unwrap(wrapping_key: &[u8], wrapped_key: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn aes_kw_unwrap(wrapping_key: &[u8], wrapped_key: &[u8]) -> Option<Vec<u8>> {
     use aes_kw::{KeyInit, KwAes128, KwAes192, KwAes256};
     if wrapped_key.len() < 8 {
         return None;
@@ -76,7 +76,7 @@ fn aes_kw_unwrap(wrapping_key: &[u8], wrapped_key: &[u8]) -> Option<Vec<u8>> {
 
 /// Resolve the AES-GCM IV / AAD pair from a wrap-algorithm object.
 /// Returns `None` if the IV is missing (the only mandatory field).
-unsafe fn resolve_aes_gcm_iv_aad(algo_bits: u64) -> Option<(Vec<u8>, Vec<u8>)> {
+pub(super) unsafe fn resolve_aes_gcm_iv_aad(algo_bits: u64) -> Option<(Vec<u8>, Vec<u8>)> {
     let iv = object_field_bytes(algo_bits, b"iv")?;
     let aad = object_field_bytes(algo_bits, b"additionalData").unwrap_or_default();
     Some((iv, aad))
@@ -84,7 +84,7 @@ unsafe fn resolve_aes_gcm_iv_aad(algo_bits: u64) -> Option<(Vec<u8>, Vec<u8>)> {
 
 /// Read the canonical algorithm-name from an algorithm arg (string or
 /// `{ name }` object), upper-cased for matching.
-unsafe fn wrap_algo_name(algo_bits: u64) -> Option<String> {
+pub(super) unsafe fn wrap_algo_name(algo_bits: u64) -> Option<String> {
     extract_algo_name(algo_bits).map(|s| s.to_ascii_uppercase())
 }
 
