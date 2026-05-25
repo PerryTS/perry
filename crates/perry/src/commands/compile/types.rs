@@ -392,6 +392,16 @@ pub struct CompilationContext {
     pub package_aliases: HashMap<String, String>,
     /// Packages to compile natively instead of routing to V8 (from perry.compilePackages)
     pub compile_packages: HashSet<String>,
+    /// #1681 (Phase 3 of #1677): true when this is the build-time capture
+    /// stage (the `current_exe` subprocess), so `precompile(EXPR)` sites
+    /// emit their build-time value instead of substituting. Re-installed on
+    /// the lowering thread before each `lower_module_full` (rayon-safe),
+    /// like the `#665`/`#503` thread-locals.
+    pub precompile_capture: bool,
+    /// #1681: captured build-time `precompile` results, keyed by
+    /// `(source_file, span.lo)`, installed by the main compile after the
+    /// capture stage and re-installed on the lowering thread per module.
+    pub precompile_results: HashMap<(String, u32), String>,
     /// Resolved `--fast-math` setting for this build. Default false.
     /// Sources, last wins: `perry.fastMath` in package.json → env var
     /// `PERRY_FAST_MATH=1` → CLI `--fast-math`. Drives the per-instruction
@@ -614,6 +624,8 @@ impl CompilationContext {
             native_libraries: Vec::new(),
             package_aliases: HashMap::new(),
             compile_packages: HashSet::new(),
+            precompile_capture: false,
+            precompile_results: HashMap::new(),
             fast_math: false,
             fp_contract_mode: perry_codegen::FpContractMode::Off,
             app_metadata: perry_codegen::AppMetadata::default(),

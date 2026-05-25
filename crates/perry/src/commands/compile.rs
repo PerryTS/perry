@@ -35,6 +35,7 @@ mod object_cache;
 mod optimized_libs;
 mod parse_cache;
 mod post_link;
+mod precompile_capture;
 mod resolve;
 mod resources;
 mod sandbox_buildrs;
@@ -224,6 +225,13 @@ pub fn run_with_parse_cache(
     // the eval-free generated output is on disk for the normal compile path.
     let skip_codegen = args.no_codegen || codegen_steps::skip_from_env();
     codegen_steps::run_codegen_steps(&ctx, skip_codegen, format)?;
+
+    // #1681 (Phase 3 of #1677): self-hosted build-time `precompile(...)`.
+    // If this is the capture subprocess, enter capture mode; otherwise, when
+    // the entry uses `precompile(`, compile+run it via Perry itself (no node,
+    // no V8) to evaluate the codegen at build time and install the captured
+    // generated sources for the main compile below.
+    precompile_capture::prepare_precompile(&args, &mut ctx, format)?;
 
     maybe_init_type_checker(&args, &project_root, format, &mut ctx);
 

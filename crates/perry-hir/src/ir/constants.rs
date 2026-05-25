@@ -102,6 +102,51 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+// ---- #1681 build-time precompile (self-hosted codegen) ----
+
+thread_local! {
+    /// #1681: when true, this compile is the build-time *capture* stage —
+    /// each `precompile(EXPR)` site lowers to a `console.log` that emits its
+    /// build-time-evaluated source instead of substituting a compiled
+    /// function. Set (via the `PERRY_PRECOMPILE_CAPTURE` env var) only on the
+    /// Stage-1 subprocess the driver spawns with `current_exe`.
+    static PRECOMPILE_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// #1681: results captured by the Stage-1 build-time run, keyed by the
+    /// `precompile` call site's `(source_file, span.lo)` so the key is stable
+    /// across the capture subprocess and the main compile (no dependence on
+    /// lowering order / parallelism). Value = the generated function source.
+    /// The driver installs this before the main `collect_modules`.
+    static PRECOMPILE_RESULTS: std::cell::RefCell<std::collections::HashMap<(String, u32), String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// #1681: enter (true) / leave (false) build-time precompile capture mode.
+pub fn set_precompile_capture(on: bool) {
+    PRECOMPILE_CAPTURE.with(|c| c.set(on));
+}
+
+/// #1681: is this compile the build-time capture stage?
+pub fn precompile_capture_enabled() -> bool {
+    PRECOMPILE_CAPTURE.with(|c| c.get())
+}
+
+/// #1681: install the captured build-time results (driver → main compile).
+pub fn set_precompile_results(results: std::collections::HashMap<(String, u32), String>) {
+    PRECOMPILE_RESULTS.with(|c| *c.borrow_mut() = results);
+}
+
+/// #1681: look up the captured generated source for a `precompile` site.
+pub fn precompile_result_at(source_file: &str, span_lo: u32) -> Option<String> {
+    PRECOMPILE_RESULTS.with(|c| c.borrow().get(&(source_file.to_string(), span_lo)).cloned())
+}
+
+/// #1681: clear precompile state (symmetry with the other per-build resets).
+pub fn clear_precompile_state() {
+    PRECOMPILE_CAPTURE.with(|c| c.set(false));
+    PRECOMPILE_RESULTS.with(|c| c.borrow_mut().clear());
+}
+
 /// #503: enable (true) or disable (false) the dynamic-stdlib-dispatch
 /// refusal pass. Default is true (refusal active). The compile driver
 /// calls this once with the resolved configuration before kicking off

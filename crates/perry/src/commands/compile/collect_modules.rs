@@ -476,6 +476,13 @@ pub(super) fn collect_modules(
     // after the lower call so it can't leak to unrelated work on this
     // thread.
     perry_hir::set_current_module_source(source.clone());
+    // #1681: re-install build-time precompile state on the (possibly rayon
+    // worker) lowering thread — capture mode emits `precompile(EXPR)` source;
+    // otherwise the captured results are substituted. Cleared after the lower.
+    perry_hir::set_precompile_capture(ctx.precompile_capture);
+    if !ctx.precompile_results.is_empty() {
+        perry_hir::set_precompile_results(ctx.precompile_results.clone());
+    }
     let lower_result = perry_hir::lower_module_full(
         ast_module,
         &module_name,
@@ -488,6 +495,7 @@ pub(super) fn collect_modules(
     );
     perry_hir::clear_compile_packages_override();
     perry_hir::clear_current_module_source();
+    perry_hir::clear_precompile_state();
     let (mut hir_module, new_next_class_id) = lower_result?;
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
