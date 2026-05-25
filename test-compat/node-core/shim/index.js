@@ -71,9 +71,9 @@ function _mustCall(fn, criteria, field) {
   if (mustCallChecks.length === 0) process.on('exit', runCallChecks);
   mustCallChecks.push(context);
 
-  return function () {
+  return function (...args) {
     context.actual++;
-    return fn.apply(this, arguments);
+    return fn(...args);
   };
 }
 
@@ -86,18 +86,20 @@ function mustCallAtLeast(fn, minimum) {
 }
 
 function mustSucceed(fn, exact) {
-  return mustCall(function (err) {
+  // Rest params + spread instead of `Array.prototype.slice.call(arguments, 1)`
+  // — the latter trips Perry's #1777 gap (builtin prototype methods aren't
+  // first-class values, so `.call` on `Array.prototype.slice` is undefined),
+  // which would fail this scaffolding before the API under test even runs.
+  return mustCall(function (err, ...rest) {
     assert.ifError(err);
     if (typeof fn === 'function') {
-      const rest = Array.prototype.slice.call(arguments, 1);
-      return fn.apply(this, rest);
+      return fn(...rest);
     }
   }, exact);
 }
 
 function mustNotCall(msg) {
-  return function () {
-    const args = Array.prototype.slice.call(arguments);
+  return function (...args) {
     let info = '';
     if (args.length > 0) info = ' with arguments: ' + args.join(', ');
     assert.fail((msg || 'function should not have been called') + info);

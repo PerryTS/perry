@@ -10,14 +10,16 @@ const path = require('path');
 
 const fixturesDir = process.env.PERRY_NODE_CORE_FIXTURES || '/nonexistent-fixtures';
 
-function fixturesPath() {
-  const parts = Array.prototype.slice.call(arguments);
-  return path.join.apply(path, [fixturesDir].concat(parts));
+// Rest params + iterative join instead of `Array.prototype.slice.call` +
+// `.apply` (both trip Perry's #1777 gap).
+function fixturesPath(...parts) {
+  let p = fixturesDir;
+  for (const part of parts) p = path.join(p, part);
+  return p;
 }
 
-function readSync() {
-  const args = Array.prototype.slice.call(arguments);
-  return fs.readFileSync(fixturesPath.apply(null, args));
+function readSync(...parts) {
+  return fs.readFileSync(fixturesPath(...parts));
 }
 
 function readKey(name, enc) {

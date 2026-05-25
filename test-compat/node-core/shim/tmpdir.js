@@ -19,9 +19,12 @@ function refresh() {
   fs.mkdirSync(tmpPath, { recursive: true });
 }
 
-function resolve() {
-  const parts = Array.prototype.slice.call(arguments);
-  return path.join.apply(path, [tmpPath].concat(parts));
+function resolve(...parts) {
+  // Avoid `Array.prototype.slice.call(arguments)` + `path.join.apply` — both
+  // trip Perry's #1777 gap (builtin/stdlib methods aren't first-class values).
+  let p = tmpPath;
+  for (const part of parts) p = path.join(p, part);
+  return p;
 }
 
 module.exports = {
