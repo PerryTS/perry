@@ -1,5 +1,8 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
-use perry_hir::{BinaryOp, CompareOp, Expr, Function, Module, ModuleInitKind, Stmt, UpdateOp};
+use perry_hir::{
+    BinaryOp, Class, ClassField, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt,
+    UpdateOp,
+};
 use perry_types::Type;
 
 static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -53,11 +56,21 @@ fn empty_opts() -> CompileOptions {
 }
 
 fn module(name: &str, body: Vec<Stmt>) -> Module {
+    module_with_classes_and_params(name, Vec::new(), Vec::new(), Type::Number, body)
+}
+
+fn module_with_classes_and_params(
+    name: &str,
+    classes: Vec<Class>,
+    params: Vec<Param>,
+    return_type: Type,
+    body: Vec<Stmt>,
+) -> Module {
     Module {
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
-        classes: Vec::new(),
+        classes,
         interfaces: Vec::new(),
         type_aliases: Vec::new(),
         enums: Vec::new(),
@@ -66,8 +79,8 @@ fn module(name: &str, body: Vec<Stmt>) -> Module {
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
-            params: Vec::new(),
-            return_type: Type::Number,
+            params,
+            return_type,
             body,
             is_async: false,
             is_generator: false,
@@ -98,6 +111,11 @@ fn compile_ir(name: &str, body: Vec<Stmt>) -> String {
 }
 
 fn compile_artifact_json(name: &str, body: Vec<Stmt>) -> serde_json::Value {
+    compile_artifact_json_for_module(module(name, body))
+}
+
+fn compile_artifact_json_for_module(module: Module) -> serde_json::Value {
+    let name = module.name.clone();
     let _guard = ARTIFACT_ENV_LOCK.lock().unwrap();
     let dir = std::env::temp_dir().join(format!(
         "perry_native_reps_test_{}_{}",
@@ -112,7 +130,7 @@ fn compile_artifact_json(name: &str, body: Vec<Stmt>) -> serde_json::Value {
     std::env::set_var("PERRY_NATIVE_REPS", "1");
     std::env::set_var("PERRY_NATIVE_REPS_DIR", &dir);
 
-    let compile_result = compile_module(&module(name, body), empty_opts());
+    let compile_result = compile_module(&module, empty_opts());
 
     match old_reps {
         Some(value) => std::env::set_var("PERRY_NATIVE_REPS", value),
@@ -141,6 +159,51 @@ fn compile_artifact_json(name: &str, body: Vec<Stmt>) -> serde_json::Value {
         parsed.push(value["module"].clone());
     }
     panic!("native reps artifact for {name} not found in {dir:?}; saw modules {parsed:?}");
+}
+
+fn param(id: u32, name: &str, ty: Type) -> Param {
+    Param {
+        id,
+        name: name.to_string(),
+        ty,
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+    }
+}
+
+fn class_field(name: &str, ty: Type) -> ClassField {
+    ClassField {
+        name: name.to_string(),
+        key_expr: None,
+        ty,
+        init: None,
+        is_private: false,
+        is_readonly: false,
+        decorators: Vec::new(),
+    }
+}
+
+fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
+    Class {
+        id,
+        name: name.to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        fields,
+        constructor: None,
+        methods: Vec::new(),
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+    }
 }
 
 fn local(id: u32) -> Expr {
@@ -347,6 +410,182 @@ fn artifact_schema_v4_records_rejected_facts_for_buffer_fallback() {
                     .is_some_and(|facts| !facts.is_empty())
         }),
         "expected fallback record with rejected facts:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
+    let body = vec![
+        buffer_let(1, "buf", int(8)),
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "readUInt32BE".to_string(),
+            }),
+            args: vec![int(0)],
+            type_args: Vec::new(),
+        })),
+    ];
+
+    let artifact = compile_artifact_json("artifact_buffer_read_u32.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "BufferNumericRead"
+                && record["consumer"] == "BufferNumericRead.native_u32"
+                && record["native_rep_name"] == "u32"
+                && record["llvm_ty"] == "i32"
+                && record["native_value_state"] == "region_local"
+        }),
+        "expected region-local u32 buffer numeric read record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "materialize_js_value"
+                && record["native_value_state"] == "materialized"
+                && record["scalar_conversion"]["from_native_rep"] == "u32"
+                && record["scalar_conversion"]["to_native_rep"] == "js_value"
+                && record["scalar_conversion"]["op"] == "unsigned_int_to_float"
+        }),
+        "expected unsigned u32 JS materialization record:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_buffer_read_double_as_f64() {
+    let body = vec![
+        buffer_let(1, "buf", int(8)),
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "readDoubleLE".to_string(),
+            }),
+            args: vec![int(0)],
+            type_args: Vec::new(),
+        })),
+    ];
+
+    let artifact = compile_artifact_json("artifact_buffer_read_double.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "BufferNumericRead"
+                && record["consumer"] == "BufferNumericRead.native_f64"
+                && record["native_rep_name"] == "f64"
+                && record["llvm_ty"] == "double"
+                && record["native_value_state"] == "region_local"
+        }),
+        "expected region-local f64 buffer numeric read record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "materialize_js_value"
+                && record["scalar_conversion"]["from_native_rep"] == "f64"
+                && record["scalar_conversion"]["op"] == "none"
+        }),
+        "expected no-op f64 JS materialization record:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
+    let array_ty = Type::Array(Box::new(Type::Number));
+    let module = module_with_classes_and_params(
+        "artifact_numeric_array_f64.ts",
+        Vec::new(),
+        vec![param(1, "xs", array_ty)],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(local(1)),
+                index: Box::new(int(0)),
+                value: Box::new(Expr::Number(7.0)),
+            }),
+            Stmt::Return(Some(Expr::IndexGet {
+                object: Box::new(local(1)),
+                index: Box::new(int(0)),
+            })),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "NumericArrayIndexSet"
+                && record["consumer"] == "js_array_numeric_set_f64_unboxed"
+                && record["native_rep_name"] == "f64"
+                && record["access_mode"] == "checked_native"
+        }),
+        "expected numeric array f64 set fast-path record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "NumericArrayIndexGet"
+                && record["consumer"] == "js_array_numeric_get_f64_unboxed"
+                && record["native_rep_name"] == "f64"
+                && record["access_mode"] == "checked_native"
+        }),
+        "expected numeric array f64 get fast-path record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["access_mode"] == "dynamic_fallback"
+                && record["materialization_reason"] == "runtime_api"
+                && record["fallback_reason"] == "runtime_api"
+        }),
+        "expected boxed runtime fallback reason records:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons() {
+    let point = class(101, "Point", vec![class_field("x", Type::Number)]);
+    let module = module_with_classes_and_params(
+        "artifact_raw_numeric_class_field.ts",
+        vec![point],
+        vec![param(1, "p", Type::Named("Point".to_string()))],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(local(1)),
+                property: "x".to_string(),
+                value: Box::new(Expr::Number(7.0)),
+            }),
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "x".to_string(),
+            })),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ClassFieldSet"
+                && record["consumer"] == "class_field_set.raw_f64_store"
+                && record["native_rep_name"] == "f64"
+                && record["access_mode"] == "checked_native"
+        }),
+        "expected raw numeric class field f64 store record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ClassFieldGet"
+                && record["consumer"] == "class_field_get.raw_f64_load"
+                && record["native_rep_name"] == "f64"
+                && record["access_mode"] == "checked_native"
+        }),
+        "expected raw numeric class field f64 load record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["access_mode"] == "dynamic_fallback"
+                && record["materialization_reason"] == "runtime_api"
+                && record["fallback_reason"] == "runtime_api"
+        }),
+        "expected boxed raw-field fallback reason records:\n{artifact:#}"
     );
 }
 

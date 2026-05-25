@@ -22,6 +22,30 @@ pub(crate) struct NativeFactUse {
     pub reason: Option<MaterializationReason>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NativeValueState {
+    RegionLocal,
+    Materialized,
+    DynamicFallback,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ScalarConversionOp {
+    None,
+    SignedIntToFloat,
+    UnsignedIntToFloat,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct ScalarConversionRecord {
+    pub from_native_rep: String,
+    pub to_native_rep: String,
+    pub op: ScalarConversionOp,
+    pub reason: MaterializationReason,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct NativeRepRecord {
     pub function: String,
@@ -43,6 +67,8 @@ pub(crate) struct NativeRepRecord {
     pub access_mode: Option<BufferAccessMode>,
     pub materialization_reason: Option<MaterializationReason>,
     pub fallback_reason: Option<MaterializationReason>,
+    pub native_value_state: NativeValueState,
+    pub scalar_conversion: Option<ScalarConversionRecord>,
     pub consumed_facts: Vec<NativeFactUse>,
     pub rejected_facts: Vec<NativeFactUse>,
     pub emitted_inbounds: bool,
@@ -63,6 +89,7 @@ struct NativeRepSummary {
     record_count: usize,
     native_rep_counts: HashMap<String, usize>,
     materialization_count: usize,
+    native_value_state_counts: HashMap<String, usize>,
     unsafe_inbounds_claims: usize,
     unsafe_noalias_claims: usize,
     unsafe_unchecked_unknown_bounds_accesses: usize,
@@ -73,6 +100,7 @@ struct NativeRepSummary {
 impl NativeRepSummary {
     fn from_records(records: &[NativeRepRecord]) -> Self {
         let mut native_rep_counts = HashMap::new();
+        let mut native_value_state_counts = HashMap::new();
         let mut materialization_count = 0;
         let mut unsafe_inbounds_claims = 0;
         let mut unsafe_noalias_claims = 0;
@@ -86,6 +114,14 @@ impl NativeRepSummary {
             if record.materialization_reason.is_some() {
                 materialization_count += 1;
             }
+            let state_name = match record.native_value_state {
+                NativeValueState::RegionLocal => "region_local",
+                NativeValueState::Materialized => "materialized",
+                NativeValueState::DynamicFallback => "dynamic_fallback",
+            };
+            *native_value_state_counts
+                .entry(state_name.to_string())
+                .or_insert(0) += 1;
             if record.emitted_inbounds
                 && !matches!(
                     record.bounds_state,
@@ -118,6 +154,7 @@ impl NativeRepSummary {
             record_count: records.len(),
             native_rep_counts,
             materialization_count,
+            native_value_state_counts,
             unsafe_inbounds_claims,
             unsafe_noalias_claims,
             unsafe_unchecked_unknown_bounds_accesses,

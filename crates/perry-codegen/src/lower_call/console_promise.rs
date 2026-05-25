@@ -610,8 +610,13 @@ pub fn try_lower_native_method_str_dispatch(
             // success; falls through to the runtime dispatch for all other
             // Buffer methods or untracked receivers.
             if is_buffer_class {
-                if let Some(reg) = try_emit_buffer_read_intrinsic(ctx, object, property, args)? {
-                    return Ok(Some(reg));
+                if let Some(lowered) = try_emit_buffer_read_intrinsic(ctx, object, property, args)? {
+                    let materialized = crate::expr::materialize_js_value(
+                        ctx,
+                        lowered,
+                        crate::native_value::MaterializationReason::FunctionAbi,
+                    );
+                    return Ok(Some(materialized));
                 }
             }
             let recv_box = lower_expr(ctx, object)?;

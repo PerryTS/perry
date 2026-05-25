@@ -25,7 +25,8 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
     AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessMode, BufferElem,
     BufferViewRep, BufferViewSlot, ExpectedNativeRep, LengthSource, LoweredValue,
-    MaterializationReason, NativeFactUse, NativeRep, NativeRepRecord, SemanticKind,
+    MaterializationReason, NativeFactUse, NativeRep, NativeRepRecord, NativeValueState,
+    ScalarConversionRecord, SemanticKind,
 };
 use crate::strings::StringPool;
 use crate::type_analysis::{
@@ -82,9 +83,10 @@ pub(crate) use nanbox_inline::{
 };
 pub(crate) use object_literal::lower_object_literal;
 pub(crate) use range_facts::{
-    bounds_for_buffer_access, effective_alias_state_for_access, int_range_expr,
-    invalidate_local_write_facts, record_int_facts_for_let, record_int_facts_for_local_set,
-    record_int_facts_for_update, while_condition_range_fact, IntRange, IntRangeFact,
+    bounds_for_buffer_access, bounds_for_buffer_access_width, effective_alias_state_for_access,
+    int_range_expr, invalidate_local_write_facts, record_int_facts_for_let,
+    record_int_facts_for_local_set, record_int_facts_for_update, while_condition_range_fact,
+    IntRange, IntRangeFact,
 };
 pub(crate) use strings::emit_string_literal_global;
 pub(crate) use url_helpers::lower_url_string_getter;
@@ -1152,6 +1154,37 @@ impl<'a> FnCtx<'a> {
         emitted_noalias: bool,
         notes: Vec<String>,
     ) {
+        self.record_lowered_value_with_access_mode_and_conversion(
+            expr_kind,
+            local_id,
+            consumer,
+            lowered,
+            bounds_state,
+            alias_state,
+            access_mode,
+            materialization_reason,
+            None,
+            emitted_inbounds,
+            emitted_noalias,
+            notes,
+        );
+    }
+
+    pub fn record_lowered_value_with_access_mode_and_conversion(
+        &mut self,
+        expr_kind: impl Into<String>,
+        local_id: Option<u32>,
+        consumer: impl Into<String>,
+        lowered: &LoweredValue,
+        bounds_state: Option<BoundsState>,
+        alias_state: Option<AliasState>,
+        access_mode: Option<BufferAccessMode>,
+        materialization_reason: Option<MaterializationReason>,
+        scalar_conversion: Option<ScalarConversionRecord>,
+        emitted_inbounds: bool,
+        emitted_noalias: bool,
+        notes: Vec<String>,
+    ) {
         let block_label = self.current_block_label();
         let (consumed_facts, rejected_facts) = native_fact_uses_for_record(
             local_id,
@@ -1168,6 +1201,16 @@ impl<'a> FnCtx<'a> {
             materialization_reason.clone()
         } else {
             None
+        };
+        let native_value_state = if matches!(
+            access_mode.as_ref(),
+            Some(BufferAccessMode::DynamicFallback)
+        ) {
+            NativeValueState::DynamicFallback
+        } else if materialization_reason.is_some() {
+            NativeValueState::Materialized
+        } else {
+            NativeValueState::RegionLocal
         };
         self.native_rep_records.push(NativeRepRecord {
             function: self.func.name.clone(),
@@ -1189,6 +1232,8 @@ impl<'a> FnCtx<'a> {
             access_mode,
             materialization_reason,
             fallback_reason,
+            native_value_state,
+            scalar_conversion,
             consumed_facts,
             rejected_facts,
             emitted_inbounds,
@@ -1477,18 +1522,7 @@ pub(crate) fn buffer_view_lowered_value(
     bounds: BoundsState,
     alias: AliasState,
 ) -> LoweredValue {
-    LoweredValue {
-        semantic: SemanticKind::BufferObject,
-        rep: NativeRep::BufferView(BufferViewRep {
-            data_ptr: data_ptr.to_string(),
-            length: length.to_string(),
-            elem: BufferElem::U8,
-            bounds,
-            alias,
-        }),
-        llvm_ty: PTR,
-        value: data_ptr.to_string(),
-    }
+    LoweredValue::buffer_view(data_ptr, length, bounds, alias)
 }
 
 pub(crate) fn downgrade_buffer_alias(ctx: &mut FnCtx<'_>, id: u32, reason: MaterializationReason) {

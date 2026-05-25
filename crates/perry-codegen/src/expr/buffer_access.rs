@@ -2,12 +2,12 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::native_value::{
-    BoundsState, BufferAccessMode, BufferAccessProof, LoweredValue, NativeRep, SemanticKind,
+    BufferAccessMode, BufferAccessProof, LoweredValue,
 };
 use crate::types::{DOUBLE, I32, I8, PTR};
 
 use super::{
-    bounds_for_buffer_access, buffer_alias_metadata_suffix, buffer_view_lowered_value,
+    bounds_for_buffer_access_width, buffer_alias_metadata_suffix, buffer_view_lowered_value,
     can_lower_expr_as_i32, effective_alias_state_for_access, lower_expr, lower_expr_native, FnCtx,
 };
 
@@ -106,12 +106,7 @@ fn lower_index_i32_value(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<LoweredVal
         let d = lower_expr(ctx, index)?;
         ctx.block().fptosi(DOUBLE, &d, I32)
     };
-    Ok(LoweredValue {
-        semantic: SemanticKind::JsNumber,
-        rep: NativeRep::I32,
-        llvm_ty: I32,
-        value,
-    })
+    Ok(LoweredValue::i32(value))
 }
 
 fn lower_value_i32(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<String> {
@@ -151,10 +146,7 @@ pub(crate) fn lower_buffer_access_proof(
         _ => return Ok(None),
     };
 
-    let mut bounds = bounds_for_buffer_access(ctx, buffer_local_id, index_expr);
-    if spec.width_bytes != 1 && bounds.allows_inbounds() {
-        bounds = BoundsState::Unknown;
-    }
+    let bounds = bounds_for_buffer_access_width(ctx, buffer_local_id, index_expr, spec.width_bytes);
     if !bounds.allows_inbounds() {
         return Ok(None);
     }
@@ -259,12 +251,7 @@ pub(crate) fn lower_buffer_load(
     ));
     let result_i32 = ctx.block().zext(I8, &byte_val, I32);
     record_buffer_view(ctx, &proof, &emission, spec);
-    let u8_value = LoweredValue {
-        semantic: SemanticKind::TypedArrayElement,
-        rep: NativeRep::U8,
-        llvm_ty: I8,
-        value: byte_val,
-    };
+    let u8_value = LoweredValue::u8(byte_val);
     ctx.record_lowered_value_with_access_mode(
         spec.expr_kind,
         Some(proof.buffer_local_id),
@@ -278,12 +265,7 @@ pub(crate) fn lower_buffer_load(
         proof.may_emit_noalias,
         vec![format!("zext_to={}", result_i32)],
     );
-    let result = LoweredValue {
-        semantic: SemanticKind::JsNumber,
-        rep: NativeRep::I32,
-        llvm_ty: I32,
-        value: result_i32,
-    };
+    let result = LoweredValue::i32(result_i32);
     if let Some(consumer) = spec.result_consumer {
         ctx.record_lowered_value_with_access_mode(
             spec.expr_kind,
@@ -320,12 +302,7 @@ pub(crate) fn lower_buffer_store(
         byte_val, emission.elem_ptr, emission.alias_metadata
     ));
     record_buffer_view(ctx, &proof, &emission, spec);
-    let stored = LoweredValue {
-        semantic: SemanticKind::TypedArrayElement,
-        rep: NativeRep::U8,
-        llvm_ty: I8,
-        value: byte_val,
-    };
+    let stored = LoweredValue::u8(byte_val);
     ctx.record_lowered_value_with_access_mode(
         spec.expr_kind,
         Some(proof.buffer_local_id),
@@ -339,11 +316,6 @@ pub(crate) fn lower_buffer_store(
         proof.may_emit_noalias,
         vec![format!("source_i32={}", val_i32)],
     );
-    let result = LoweredValue {
-        semantic: SemanticKind::JsNumber,
-        rep: NativeRep::I32,
-        llvm_ty: I32,
-        value: val_i32.clone(),
-    };
+    let result = LoweredValue::i32(val_i32.clone());
     Ok(Some(StoreResult { result }))
 }

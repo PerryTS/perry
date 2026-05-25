@@ -5,7 +5,7 @@ use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
 
 use super::{lower_expr, FlatConstInfo, FnCtx};
-use crate::native_value::{ExpectedNativeRep, LoweredValue, NativeRep, SemanticKind};
+use crate::native_value::{ExpectedNativeRep, LoweredValue};
 use crate::types::{DOUBLE, I32};
 
 /// Returns true if `e` is guaranteed to produce a finite double value
@@ -341,6 +341,8 @@ pub(crate) fn lower_expr_native(
 ) -> Result<LoweredValue> {
     match expected {
         ExpectedNativeRep::I32 => lower_expr_native_i32(ctx, e),
+        ExpectedNativeRep::U32 => lower_expr_native_u32(ctx, e),
+        ExpectedNativeRep::F64 => lower_expr_native_f64(ctx, e),
     }
 }
 
@@ -351,12 +353,15 @@ pub(crate) fn lower_expr_as_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String>
 }
 
 fn i32_lowered(value: String) -> LoweredValue {
-    LoweredValue {
-        semantic: SemanticKind::JsNumber,
-        rep: NativeRep::I32,
-        llvm_ty: I32,
-        value,
-    }
+    LoweredValue::i32(value)
+}
+
+fn u32_lowered(value: String) -> LoweredValue {
+    LoweredValue::u32(value)
+}
+
+fn f64_lowered(value: String) -> LoweredValue {
+    LoweredValue::f64(value)
 }
 
 fn native_expr_kind(e: &Expr) -> &'static str {
@@ -489,6 +494,65 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         native_expr_kind(e),
         None,
         "lower_expr_native_i32",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
+fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let value = match e {
+        Expr::Integer(n) if *n >= 0 && u32::try_from(*n).is_ok() => (*n as u32).to_string(),
+        Expr::LocalGet(id) => {
+            if let Some(slot) = ctx.i32_counter_slots.get(id).cloned() {
+                ctx.block().load(I32, &slot)
+            } else {
+                let d = lower_expr(ctx, e)?;
+                ctx.block().toint32(&d)
+            }
+        }
+        Expr::Binary {
+            op: BinaryOp::UShr,
+            left,
+            right,
+        } => {
+            let l = lower_expr_native_u32(ctx, left)?.value;
+            let r = lower_expr_native_u32(ctx, right)?.value;
+            ctx.block().lshr(I32, &l, &r)
+        }
+        _ => {
+            let d = lower_expr(ctx, e)?;
+            ctx.block().toint32(&d)
+        }
+    };
+    let lowered = u32_lowered(value);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_u32",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
+fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let value = lower_expr(ctx, e)?;
+    let lowered = f64_lowered(value);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_f64",
         &lowered,
         None,
         None,

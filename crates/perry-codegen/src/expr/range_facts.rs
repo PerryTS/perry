@@ -392,6 +392,15 @@ pub(crate) fn bounds_for_buffer_access(
     buffer_local_id: u32,
     index: &Expr,
 ) -> BoundsState {
+    bounds_for_buffer_access_width(ctx, buffer_local_id, index, 1)
+}
+
+pub(crate) fn bounds_for_buffer_access_width(
+    ctx: &FnCtx<'_>,
+    buffer_local_id: u32,
+    index: &Expr,
+    width_bytes: u32,
+) -> BoundsState {
     if let Some(index_local_id) = native_index_source_local(ctx, index) {
         if let Some(bounds) = ctx
             .bounded_buffer_index_pairs
@@ -414,7 +423,12 @@ pub(crate) fn bounds_for_buffer_access(
             .as_ref()
             .and_then(|source| length_source_constant(ctx, source));
         if let Some(length) = length {
-            if index_value >= 0 && index_value < length {
+            let width = i64::from(width_bytes.max(1));
+            if index_value >= 0
+                && index_value
+                    .checked_add(width)
+                    .is_some_and(|end| end <= length)
+            {
                 return BoundsState::Proven {
                     proof: BoundsProof::ExplicitGuard,
                 };
@@ -422,13 +436,14 @@ pub(crate) fn bounds_for_buffer_access(
             return BoundsState::Unknown;
         }
     }
-    range_bounds_for_buffer_access(ctx, buffer_local_id, index)
+    range_bounds_for_buffer_access(ctx, buffer_local_id, index, width_bytes)
 }
 
 fn range_bounds_for_buffer_access(
     ctx: &FnCtx<'_>,
     buffer_local_id: u32,
     index: &Expr,
+    width_bytes: u32,
 ) -> BoundsState {
     let Some(view) = ctx.buffer_view_slots.get(&buffer_local_id) else {
         return BoundsState::Unknown;
@@ -443,7 +458,13 @@ fn range_bounds_for_buffer_access(
     else {
         return BoundsState::Unknown;
     };
-    if index_range.min >= 0 && index_range.max < length_range.min {
+    let width = i64::from(width_bytes.max(1));
+    if index_range.min >= 0
+        && index_range
+            .max
+            .checked_add(width)
+            .is_some_and(|end| end <= length_range.min)
+    {
         BoundsState::Proven {
             proof: BoundsProof::LoopGuard,
         }

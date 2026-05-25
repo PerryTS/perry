@@ -3,13 +3,14 @@
 //! Extracted from `lower_call.rs` (#1099, part of #1097) — pure move,
 //! no behavior change. `try_emit_buffer_read_intrinsic` and its
 //! classification helper inline `buf.readInt32BE(offset)`-style reads
-//! as LLVM load + bswap + convert instead of a runtime dispatch.
+//! as LLVM load + bswap + `LoweredValue` instead of a runtime dispatch.
 
 use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::expr::{BufferAccessSpec, FnCtx};
-use crate::types::{DOUBLE, I32};
+use crate::native_value::LoweredValue;
+use crate::types::I32;
 
 /// Issue #92: inline Buffer numeric reads (`buf.readInt32BE(offset)` etc.)
 /// as LLVM load + bswap + convert instead of a runtime dispatch through
@@ -21,7 +22,7 @@ use crate::types::{DOUBLE, I32};
 struct BufferNumericReadSpec {
     width_bytes: u32,
     swap: bool,     // BE → emit @llvm.bswap; LE → skip
-    signed: bool,   // sitofp vs uitofp (ignored for float/double)
+    signed: bool,   // signed vs unsigned JS-number materialization
     is_float: bool, // true for readFloat*/readDouble*
 }
 
@@ -121,7 +122,7 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     object: &Expr,
     method: &str,
     args: &[Expr],
-) -> Result<Option<String>> {
+) -> Result<Option<LoweredValue>> {
     let spec = match classify_buffer_numeric_read(method) {
         Some(s) => s,
         None => return Ok(None),
@@ -165,7 +166,6 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         }
         _ => raw,
     };
-    // Convert to f64.
     let result = if spec.is_float {
         // Float/double: bitcast int bits → float bits, then fpext f32→f64 if needed.
         let float_ty = if spec.width_bytes == 4 {
@@ -181,14 +181,14 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         if spec.width_bytes == 4 {
             let extended = blk.fresh_reg();
             blk.emit_raw(format!("{} = fpext float {} to double", extended, as_float));
-            extended
+            LoweredValue::f64(extended)
         } else {
-            as_float
+            LoweredValue::f64(as_float)
         }
     } else {
-        // Integer: sitofp or uitofp through at least i32. The 1- and 2-byte
-        // loads need a zext/sext to i32 first so the final fptoXi picks the
-        // right sign semantics.
+        // Integer: keep the raw i32 in the native lattice. Signed reads
+        // materialize with `sitofp`; unsigned reads materialize with
+        // `uitofp`, including `readUInt32*` values whose high bit is set.
         let i32_val = match spec.width_bytes {
             1 | 2 => {
                 if spec.signed {
@@ -207,12 +207,12 @@ pub(super) fn try_emit_buffer_read_intrinsic(
             _ => unreachable!(),
         };
         if spec.signed {
-            blk.sitofp(I32, &i32_val, DOUBLE)
+            LoweredValue::i32(i32_val)
         } else {
-            blk.uitofp(I32, &i32_val, DOUBLE)
+            LoweredValue::u32(i32_val)
         }
     };
-    let lowered = crate::expr::buffer_view_lowered_value(
+    let buffer_view = crate::expr::buffer_view_lowered_value(
         &emission.data_ptr,
         &emission.len_i32,
         proof.bounds.clone(),
@@ -222,14 +222,33 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         "BufferNumericRead",
         Some(proof.buffer_local_id),
         "BufferNumericRead.BufferView",
-        &lowered,
-        Some(proof.bounds),
-        Some(proof.alias),
+        &buffer_view,
+        Some(proof.bounds.clone()),
+        Some(proof.alias.clone()),
         Some(proof.access_mode),
         None,
         proof.may_emit_inbounds,
         proof.may_emit_noalias,
         vec![format!("width_bytes={}", spec.width_bytes)],
+    );
+    let result_consumer = match result.rep.name() {
+        "i32" => "BufferNumericRead.native_i32",
+        "u32" => "BufferNumericRead.native_u32",
+        "f64" => "BufferNumericRead.native_f64",
+        _ => "BufferNumericRead.native_value",
+    };
+    ctx.record_lowered_value_with_access_mode(
+        "BufferNumericRead",
+        Some(proof.buffer_local_id),
+        result_consumer,
+        &result,
+        Some(proof.bounds),
+        Some(proof.alias),
+        Some(proof.access_mode),
+        None,
+        false,
+        false,
+        vec![format!("method={}", method), format!("width_bytes={}", spec.width_bytes)],
     );
     Ok(Some(result))
 }
