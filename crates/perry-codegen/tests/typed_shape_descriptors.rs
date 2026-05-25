@@ -155,6 +155,22 @@ fn block_between<'a>(ir: &'a str, start: &str, end: &str) -> &'a str {
     &block_ir[..end_pos]
 }
 
+fn assert_typed_feedback_setter_after(ir: &str, start_pos: usize, context: &str) {
+    let after_start = &ir[start_pos..];
+    assert!(
+        after_start.contains("call void @js_typed_feedback_object_set_field_by_name"),
+        "{context} should use the typed-feedback setter wrapper"
+    );
+    assert!(
+        ir.contains("js_object_set_field_by_name"),
+        "{context} should keep the safe runtime setter as the typed-feedback fallback"
+    );
+    assert!(
+        !after_start.contains("call void @js_object_set_unboxed_f64_field"),
+        "{context} should not use the raw unboxed field setter for dynamic mutation"
+    );
+}
+
 fn point_module(name: &str, body: Vec<Stmt>) -> Module {
     base_module(name, body, Vec::new())
 }
@@ -547,10 +563,11 @@ fn typed_object_literal_pointer_free_descriptor_precedes_dynamic_mutation() {
     let descriptor_pos = ir
         .find(", i32 1, ptr null, i32 0)")
         .expect("number-only object type should install a pointer-free descriptor");
-    let mutation_pos = ir[descriptor_pos..]
-        .find("call void @js_object_set_field_by_name")
-        .expect("dynamic property mutation should still go through the safe runtime setter");
-    assert!(mutation_pos > 0);
+    assert_typed_feedback_setter_after(
+        &ir,
+        descriptor_pos,
+        "dynamic property mutation after a pointer-free descriptor",
+    );
 }
 
 #[test]
@@ -650,8 +667,9 @@ fn unboxed_point_dynamic_mutation_still_uses_safe_by_name_setter() {
     let layout_pos = ir
         .find("call void @js_gc_init_unboxed_object_layout")
         .expect("fixture should install unboxed layout");
-    let mutation_pos = ir[layout_pos..]
-        .find("call void @js_object_set_field_by_name")
-        .expect("dynamic property mutation should stay on the safe setter");
-    assert!(mutation_pos > 0);
+    assert_typed_feedback_setter_after(
+        &ir,
+        layout_pos,
+        "dynamic property mutation after an unboxed layout",
+    );
 }
