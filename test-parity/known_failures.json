@@ -3619,5 +3619,23 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: promises.finished({signal}) — abort doesn't reject with AbortError. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/static/is-readable-on-non-stream": {
+    "issue": "1746",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: isReadable(non-stream) returns false; Node returns null for non-stream args. Flips to PASS when #1746 lands."
+  },
+  "node-suite/stream/classes/passthrough-write-read": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: PassThrough write→data-listener produces no output (data events not delivered before exit). Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/classes/transform-is-both": {
+    "issue": "1746",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream: isWritable(transform) returns undefined (unimplemented helper). Flips to PASS when #1746 lands."
   }
 }
