@@ -198,6 +198,12 @@ pub struct LoweringContext {
     pub(crate) imported_functions_index: HashMap<String, usize>,
     /// Shadow index: local alias name -> index in `builtin_module_aliases` Vec
     pub(crate) builtin_module_aliases_index: HashMap<String, usize>,
+    /// Local names bound to a `path` sub-namespace (`const w = path.win32`).
+    /// Maps the local name -> (root identifier name, sub "win32"|"posix").
+    /// Resolution of the root identifier to the `path` module is deferred to
+    /// call-lowering time because imports aren't registered yet during the
+    /// pre-scan that populates this; see `try_path_subnamespace`. #1750.
+    pub(crate) subns_path_aliases: HashMap<String, (String, String)>,
     /// Local names whose value is a `WeakRef` instance (so `x.deref()` routes to
     /// `Expr::WeakRefDeref`). Pragmatic tracking — populated when lowering
     /// `let/const x = new WeakRef(...)`. Cleared on scope exit.

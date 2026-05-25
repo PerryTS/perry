@@ -49,6 +49,7 @@ impl LoweringContext {
             imported_functions: Vec::new(),
             native_modules: Vec::new(),
             builtin_module_aliases: Vec::new(),
+            subns_path_aliases: HashMap::new(),
             type_param_scopes: Vec::new(),
             native_instances: Vec::new(),
             ui_widget_type_aliases: HashMap::new(),
@@ -907,6 +908,22 @@ impl LoweringContext {
         self.builtin_module_aliases_index
             .get(name)
             .map(|&idx| self.builtin_module_aliases[idx].1.as_str())
+    }
+
+    /// #1750: record `const w = <root>.win32` / `.posix` so that later
+    /// `w.<method>(...)` calls dispatch like `path.<sub>.<method>(...)`. The
+    /// root identifier is stored unresolved (imports aren't processed yet at
+    /// pre-scan time); the `path` check happens when the call is lowered.
+    pub(crate) fn register_subns_path_alias(&mut self, local: String, root: String, sub: String) {
+        self.subns_path_aliases.insert(local, (root, sub));
+    }
+
+    /// Look up a local recorded by `register_subns_path_alias`, returning
+    /// `(root_identifier_name, sub_namespace)`.
+    pub(crate) fn lookup_subns_path_alias(&self, name: &str) -> Option<(&str, &str)> {
+        self.subns_path_aliases
+            .get(name)
+            .map(|(root, sub)| (root.as_str(), sub.as_str()))
     }
 
     pub(crate) fn register_native_instance(

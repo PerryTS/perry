@@ -354,206 +354,211 @@ pub(super) fn try_util_types_namespace(
 ///   so the result uses `\` separators. Other path.win32.<method>
 ///   calls route to the generic `Expr::PathWin32` carrier, which
 ///   codegen dispatches to `js_path_win32_*` (issue #1162).
+/// True when `root_name` refers to the `node:path` module — directly, via a
+/// builtin-module alias, or via a namespace import (`import * as p from
+/// "node:path"`).
+fn is_path_root(ctx: &LoweringContext, root_name: &str) -> bool {
+    root_name == "path"
+        || ctx.lookup_builtin_module_alias(root_name) == Some("path")
+        || ctx
+            .lookup_native_module(root_name)
+            .map(|(m, _)| m == "path")
+            .unwrap_or(false)
+}
+
+/// Core dispatch for `path.<sub>.<method>(...)` where `sub` is `"win32"` or
+/// `"posix"`. Shared by the direct member form and the aliased-local form
+/// (`const w = path.win32; w.<method>(...)`, #1750). Returns `Err(args)` when
+/// no method matches so the caller can fall through to generic lowering.
+fn dispatch_path_subnamespace(sub: &str, method: &str, args: Vec<Expr>) -> Result<Expr, Vec<Expr>> {
+    // path.<sub>.join(...)
+    if method == "join" {
+        if args.is_empty() {
+            return Ok(Expr::String(".".to_string()));
+        }
+        if sub == "win32" {
+            let mut iter = args.into_iter();
+            let mut result = iter.next().unwrap();
+            for next_arg in iter {
+                result = Expr::PathWin32Join(Box::new(result), Box::new(next_arg));
+            }
+            return Ok(result);
+        } else {
+            // posix.join → existing PathJoin
+            if args.len() == 1 {
+                return Ok(Expr::PathNormalize(Box::new(
+                    args.into_iter().next().unwrap(),
+                )));
+            }
+            let mut iter = args.into_iter();
+            let mut result = iter.next().unwrap();
+            for next_arg in iter {
+                result = Expr::PathJoin(Box::new(result), Box::new(next_arg));
+            }
+            return Ok(result);
+        }
+    }
+
+    // path.win32.<method> — issue #1162. Route every supported method to the
+    // generic `Expr::PathWin32` carrier; codegen dispatches to the matching
+    // `js_path_win32_*` runtime function.
+    if sub == "win32" {
+        use crate::ir::PathWin32Method as M;
+        let m = match method {
+            "dirname" if !args.is_empty() => Some(M::Dirname),
+            "basename" if args.len() >= 2 => Some(M::BasenameExt),
+            "basename" if !args.is_empty() => Some(M::Basename),
+            "extname" if !args.is_empty() => Some(M::Extname),
+            "isAbsolute" if !args.is_empty() => Some(M::IsAbsolute),
+            "normalize" if !args.is_empty() => Some(M::Normalize),
+            "parse" if !args.is_empty() => Some(M::Parse),
+            "format" if !args.is_empty() => Some(M::Format),
+            "relative" if args.len() >= 2 => Some(M::Relative),
+            "toNamespacedPath" if !args.is_empty() => Some(M::ToNamespacedPath),
+            "matchesGlob" if args.len() >= 2 => Some(M::MatchesGlob),
+            _ => None,
+        };
+        if let Some(m) = m {
+            return Ok(Expr::PathWin32 { method: m, args });
+        }
+        // resolve has multi-arg chaining like POSIX — first arg seeds,
+        // remaining fold via ResolveJoin, final via Resolve.
+        if method == "resolve" {
+            if args.is_empty() {
+                return Ok(Expr::PathWin32 {
+                    method: M::Resolve,
+                    args: vec![Expr::String(String::new())],
+                });
+            }
+            let mut it = args.into_iter();
+            let first = it.next().unwrap();
+            let mut joined = first;
+            for next_arg in it {
+                joined = Expr::PathWin32 {
+                    method: M::ResolveJoin,
+                    args: vec![joined, next_arg],
+                };
+            }
+            return Ok(Expr::PathWin32 {
+                method: M::Resolve,
+                args: vec![joined],
+            });
+        }
+    }
+    // The remaining methods route to the existing POSIX Expr::Path* variants
+    // only for the `posix` sub-namespace.
+    if sub == "posix" {
+        match method {
+            "dirname" if !args.is_empty() => {
+                return Ok(Expr::PathDirname(Box::new(
+                    args.into_iter().next().unwrap(),
+                )));
+            }
+            "basename" if args.len() >= 2 => {
+                let mut it = args.into_iter();
+                let p = it.next().unwrap();
+                let e = it.next().unwrap();
+                return Ok(Expr::PathBasenameExt(Box::new(p), Box::new(e)));
+            }
+            "basename" if !args.is_empty() => {
+                return Ok(Expr::PathBasename(Box::new(
+                    args.into_iter().next().unwrap(),
+                )));
+            }
+            "extname" if !args.is_empty() => {
+                return Ok(Expr::PathExtname(Box::new(
+                    args.into_iter().next().unwrap(),
+                )));
+            }
+            "isAbsolute" if !args.is_empty() => {
+                return Ok(Expr::PathIsAbsolute(Box::new(
+                    args.into_iter().next().unwrap(),
+                )));
+            }
+            "normalize" if !args.is_empty() => {
+                return Ok(Expr::PathNormalize(Box::new(
+                    args.into_iter().next().unwrap(),
+                )));
+            }
+            "parse" if !args.is_empty() => {
+                return Ok(Expr::PathParse(Box::new(args.into_iter().next().unwrap())));
+            }
+            "format" if !args.is_empty() => {
+                return Ok(Expr::PathFormat(Box::new(args.into_iter().next().unwrap())));
+            }
+            "toNamespacedPath" if !args.is_empty() => {
+                return Ok(Expr::PathToNamespacedPath(Box::new(
+                    args.into_iter().next().unwrap(),
+                )));
+            }
+            "relative" if args.len() >= 2 => {
+                let mut it = args.into_iter();
+                let from = it.next().unwrap();
+                let to = it.next().unwrap();
+                return Ok(Expr::PathRelative(Box::new(from), Box::new(to)));
+            }
+            "resolve" if args.is_empty() => {
+                return Ok(Expr::PathResolve(Box::new(Expr::String(String::new()))));
+            }
+            "resolve" if !args.is_empty() => {
+                let mut it = args.into_iter();
+                let first = it.next().unwrap();
+                let mut joined = first;
+                for next_arg in it {
+                    joined = Expr::PathResolveJoin(Box::new(joined), Box::new(next_arg));
+                }
+                return Ok(Expr::PathResolve(Box::new(joined)));
+            }
+            "matchesGlob" if args.len() >= 2 => {
+                let mut it = args.into_iter();
+                let p = it.next().unwrap();
+                let pat = it.next().unwrap();
+                return Ok(Expr::PathMatchesGlob(Box::new(p), Box::new(pat)));
+            }
+            _ => {}
+        }
+    }
+    Err(args)
+}
+
 pub(super) fn try_path_subnamespace(
     ctx: &LoweringContext,
     expr: &ast::Expr,
     args: Vec<Expr>,
 ) -> Result<Expr, Vec<Expr>> {
-    if let ast::Expr::Member(outer_member) = expr {
-        if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
-            if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
-                let root_name = root_ident.sym.as_ref();
-                let is_path_root = root_name == "path"
-                    || ctx.lookup_builtin_module_alias(root_name) == Some("path")
-                    || ctx
-                        .lookup_native_module(root_name)
-                        .map(|(m, _)| m == "path")
-                        .unwrap_or(false);
-                if is_path_root {
-                    if let (ast::MemberProp::Ident(sub_prop), ast::MemberProp::Ident(method_prop)) =
-                        (&inner_member.prop, &outer_member.prop)
-                    {
-                        let sub = sub_prop.sym.as_ref();
-                        let method = method_prop.sym.as_ref();
-                        if sub == "posix" || sub == "win32" {
-                            // path.<sub>.join(...)
-                            if method == "join" {
-                                if args.is_empty() {
-                                    return Ok(Expr::String(".".to_string()));
-                                }
-                                if sub == "win32" {
-                                    let mut iter = args.into_iter();
-                                    let mut result = iter.next().unwrap();
-                                    for next_arg in iter {
-                                        result = Expr::PathWin32Join(
-                                            Box::new(result),
-                                            Box::new(next_arg),
-                                        );
-                                    }
-                                    return Ok(result);
-                                } else {
-                                    // posix.join → existing PathJoin
-                                    if args.len() == 1 {
-                                        return Ok(Expr::PathNormalize(Box::new(
-                                            args.into_iter().next().unwrap(),
-                                        )));
-                                    }
-                                    let mut iter = args.into_iter();
-                                    let mut result = iter.next().unwrap();
-                                    for next_arg in iter {
-                                        result =
-                                            Expr::PathJoin(Box::new(result), Box::new(next_arg));
-                                    }
-                                    return Ok(result);
-                                }
-                            }
+    let ast::Expr::Member(outer_member) = expr else {
+        return Err(args);
+    };
+    let ast::MemberProp::Ident(method_prop) = &outer_member.prop else {
+        return Err(args);
+    };
+    let method = method_prop.sym.as_ref();
 
-                            // path.win32.<method> — issue #1162. Route
-                            // every supported method to the generic
-                            // `Expr::PathWin32` carrier; codegen
-                            // dispatches to the matching
-                            // `js_path_win32_*` runtime function.
-                            if sub == "win32" {
-                                use crate::ir::PathWin32Method as M;
-                                let m = match method {
-                                    "dirname" if !args.is_empty() => Some(M::Dirname),
-                                    "basename" if args.len() >= 2 => Some(M::BasenameExt),
-                                    "basename" if !args.is_empty() => Some(M::Basename),
-                                    "extname" if !args.is_empty() => Some(M::Extname),
-                                    "isAbsolute" if !args.is_empty() => Some(M::IsAbsolute),
-                                    "normalize" if !args.is_empty() => Some(M::Normalize),
-                                    "parse" if !args.is_empty() => Some(M::Parse),
-                                    "format" if !args.is_empty() => Some(M::Format),
-                                    "relative" if args.len() >= 2 => Some(M::Relative),
-                                    "toNamespacedPath" if !args.is_empty() => {
-                                        Some(M::ToNamespacedPath)
-                                    }
-                                    "matchesGlob" if args.len() >= 2 => Some(M::MatchesGlob),
-                                    _ => None,
-                                };
-                                if let Some(m) = m {
-                                    return Ok(Expr::PathWin32 { method: m, args });
-                                }
-                                // resolve has multi-arg chaining like
-                                // POSIX — first arg seeds, remaining
-                                // fold via ResolveJoin, final via
-                                // Resolve.
-                                if method == "resolve" {
-                                    if args.is_empty() {
-                                        return Ok(Expr::PathWin32 {
-                                            method: M::Resolve,
-                                            args: vec![Expr::String(String::new())],
-                                        });
-                                    }
-                                    let mut it = args.into_iter();
-                                    let first = it.next().unwrap();
-                                    let mut joined = first;
-                                    for next_arg in it {
-                                        joined = Expr::PathWin32 {
-                                            method: M::ResolveJoin,
-                                            args: vec![joined, next_arg],
-                                        };
-                                    }
-                                    return Ok(Expr::PathWin32 {
-                                        method: M::Resolve,
-                                        args: vec![joined],
-                                    });
-                                }
-                            }
-                            // The remaining methods route to the
-                            // existing POSIX Expr::Path* variants
-                            // only for the `posix` sub-namespace.
-                            if sub == "posix" {
-                                match method {
-                                    "dirname" if !args.is_empty() => {
-                                        return Ok(Expr::PathDirname(Box::new(
-                                            args.into_iter().next().unwrap(),
-                                        )));
-                                    }
-                                    "basename" if args.len() >= 2 => {
-                                        let mut it = args.into_iter();
-                                        let p = it.next().unwrap();
-                                        let e = it.next().unwrap();
-                                        return Ok(Expr::PathBasenameExt(Box::new(p), Box::new(e)));
-                                    }
-                                    "basename" if !args.is_empty() => {
-                                        return Ok(Expr::PathBasename(Box::new(
-                                            args.into_iter().next().unwrap(),
-                                        )));
-                                    }
-                                    "extname" if !args.is_empty() => {
-                                        return Ok(Expr::PathExtname(Box::new(
-                                            args.into_iter().next().unwrap(),
-                                        )));
-                                    }
-                                    "isAbsolute" if !args.is_empty() => {
-                                        return Ok(Expr::PathIsAbsolute(Box::new(
-                                            args.into_iter().next().unwrap(),
-                                        )));
-                                    }
-                                    "normalize" if !args.is_empty() => {
-                                        return Ok(Expr::PathNormalize(Box::new(
-                                            args.into_iter().next().unwrap(),
-                                        )));
-                                    }
-                                    "parse" if !args.is_empty() => {
-                                        return Ok(Expr::PathParse(Box::new(
-                                            args.into_iter().next().unwrap(),
-                                        )));
-                                    }
-                                    "format" if !args.is_empty() => {
-                                        return Ok(Expr::PathFormat(Box::new(
-                                            args.into_iter().next().unwrap(),
-                                        )));
-                                    }
-                                    "toNamespacedPath" if !args.is_empty() => {
-                                        return Ok(Expr::PathToNamespacedPath(Box::new(
-                                            args.into_iter().next().unwrap(),
-                                        )));
-                                    }
-                                    "relative" if args.len() >= 2 => {
-                                        let mut it = args.into_iter();
-                                        let from = it.next().unwrap();
-                                        let to = it.next().unwrap();
-                                        return Ok(Expr::PathRelative(
-                                            Box::new(from),
-                                            Box::new(to),
-                                        ));
-                                    }
-                                    "resolve" if args.is_empty() => {
-                                        return Ok(Expr::PathResolve(Box::new(Expr::String(
-                                            String::new(),
-                                        ))));
-                                    }
-                                    "resolve" if !args.is_empty() => {
-                                        let mut it = args.into_iter();
-                                        let first = it.next().unwrap();
-                                        let mut joined = first;
-                                        for next_arg in it {
-                                            joined = Expr::PathResolveJoin(
-                                                Box::new(joined),
-                                                Box::new(next_arg),
-                                            );
-                                        }
-                                        return Ok(Expr::PathResolve(Box::new(joined)));
-                                    }
-                                    "matchesGlob" if args.len() >= 2 => {
-                                        let mut it = args.into_iter();
-                                        let p = it.next().unwrap();
-                                        let pat = it.next().unwrap();
-                                        return Ok(Expr::PathMatchesGlob(
-                                            Box::new(p),
-                                            Box::new(pat),
-                                        ));
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
+    // Direct form: `path.<sub>.<method>(...)` — a 3-level member where the
+    // root identifier resolves to the path module.
+    if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
+        if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
+            if is_path_root(ctx, root_ident.sym.as_ref()) {
+                if let ast::MemberProp::Ident(sub_prop) = &inner_member.prop {
+                    let sub = sub_prop.sym.as_ref();
+                    if sub == "posix" || sub == "win32" {
+                        return dispatch_path_subnamespace(sub, method, args);
                     }
                 }
             }
         }
     }
+
+    // Aliased form (#1750): `const w = path.<sub>; w.<method>(...)` — a 2-level
+    // member whose receiver is a local recorded as a path sub-namespace alias.
+    if let ast::Expr::Ident(recv) = outer_member.obj.as_ref() {
+        if let Some((root, sub)) = ctx.lookup_subns_path_alias(recv.sym.as_ref()) {
+            let (root, sub) = (root.to_string(), sub.to_string());
+            if is_path_root(ctx, &root) {
+                return dispatch_path_subnamespace(&sub, method, args);
+            }
+        }
+    }
+
     Err(args)
 }

@@ -78,6 +78,23 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
                     }
                     _ => {}
                 }
+            } else if let ast::Expr::Member(member) = init_unwrapped {
+                // #1750: `const w = path.win32` / `const p = path.posix`.
+                // Record the alias so `w.normalize(...)` later dispatches like
+                // `path.win32.normalize(...)`. The root ident is stored
+                // unresolved; the `path` check is deferred to call lowering.
+                if let (ast::Expr::Ident(root), ast::MemberProp::Ident(sub_prop)) =
+                    (member.obj.as_ref(), &member.prop)
+                {
+                    let sub = sub_prop.sym.as_ref();
+                    if sub == "win32" || sub == "posix" {
+                        ctx.register_subns_path_alias(
+                            ident.id.sym.to_string(),
+                            root.sym.to_string(),
+                            sub.to_string(),
+                        );
+                    }
+                }
             }
         }
     }
