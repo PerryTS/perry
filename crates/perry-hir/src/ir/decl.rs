@@ -104,6 +104,18 @@ pub struct Import {
     /// but do NOT pin the target as eager — if no static edge reaches it
     /// the target is `Deferred`. `specifiers` is empty for these.
     pub is_dynamic: bool,
+    /// Issue #1672: this source is the target of at least one dynamic
+    /// `import()` site in the module, but the edge could NOT be a
+    /// dedicated `is_dynamic` synthetic edge because a *static* import of
+    /// the same source already exists (the fold in `collect_modules`
+    /// keeps the static edge for binding materialization + init order).
+    /// The static edge therefore stays `is_dynamic = false`, and this
+    /// flag is set on it so the driver still registers the source in the
+    /// dynamic-import dispatch map (`dynamic_import_path_to_prefix`) and
+    /// marks the target module as a namespace-emitting dynamic target.
+    /// Always `false` on `is_dynamic` synthetic edges (those are already
+    /// dynamic targets by virtue of `is_dynamic`).
+    pub is_dynamic_target: bool,
 }
 
 /// Import specifier

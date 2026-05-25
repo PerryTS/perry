@@ -489,6 +489,7 @@ pub fn inline_functions(
                     resolved_path: Some(path),
                     type_only: false,
                     is_dynamic: false,
+                    is_dynamic_target: false,
                 });
             }
         }

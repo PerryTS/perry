@@ -1480,7 +1480,11 @@ pub fn run_with_parse_cache(
     let mut dyn_target_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for (_path, hir_module) in &ctx.native_modules {
         for import in &hir_module.imports {
-            if !import.is_dynamic {
+            // `is_dynamic` covers dynamic-only synthetic edges;
+            // `is_dynamic_target` (#1672) covers a static edge that is
+            // ALSO the target of a dynamic `import()` in the same module.
+            // Both need the target to emit `@__perry_ns_<prefix>`.
+            if !(import.is_dynamic || import.is_dynamic_target) {
                 continue;
             }
             if let Some(rp) = &import.resolved_path {
@@ -1599,13 +1603,15 @@ pub fn run_with_parse_cache(
     // For each consumer module, map every `Expr::DynamicImport` arg-path
     // string (as resolved in `collect_modules`) to the target's
     // sanitized prefix. Built by scanning the consumer's imports for
-    // `is_dynamic == true` and reading the `source` + `resolved_path`.
+    // `is_dynamic == true` (dynamic-only edges) or `is_dynamic_target ==
+    // true` (#1672: a static edge that is also a dynamic-import target)
+    // and reading the `source` + `resolved_path`.
     let mut per_module_dyn_import_targets: HashMap<PathBuf, HashMap<String, String>> =
         HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let mut local_map: HashMap<String, String> = HashMap::new();
         for import in &hir_module.imports {
-            if !import.is_dynamic {
+            if !(import.is_dynamic || import.is_dynamic_target) {
                 continue;
             }
             let rp = match &import.resolved_path {

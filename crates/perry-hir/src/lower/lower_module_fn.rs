@@ -150,6 +150,7 @@ pub fn lower_module_full(
             resolved_path: None,
             type_only: false,
             is_dynamic: false,
+            is_dynamic_target: false,
         });
     }
 

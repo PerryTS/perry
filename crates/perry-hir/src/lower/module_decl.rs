@@ -211,6 +211,7 @@ pub(crate) fn lower_module_decl(
                 resolved_path: None, // Will be set by compiler driver during module resolution
                 type_only: whole_decl_type_only,
                 is_dynamic: false,
+                is_dynamic_target: false,
             });
         }
         ast::ModuleDecl::ExportDecl(export) => {

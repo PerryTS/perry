@@ -92,6 +92,7 @@ impl SH for Import {
             resolved_path,
             type_only,
             is_dynamic,
+            is_dynamic_target,
         } = self;
         source.hash(h);
         specifiers.hash(h);
@@ -100,6 +101,7 @@ impl SH for Import {
         resolved_path.hash(h);
         type_only.hash(h);
         is_dynamic.hash(h);
+        is_dynamic_target.hash(h);
     }
 }
 

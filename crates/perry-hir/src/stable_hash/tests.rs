@@ -115,6 +115,7 @@ fn module_metadata_affects_hash() {
         resolved_path: None,
         type_only: false,
         is_dynamic: false,
+        is_dynamic_target: false,
     });
     assert_ne!(base_hash, hash_module(&m_imp));
 

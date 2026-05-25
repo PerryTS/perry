@@ -548,15 +548,23 @@ pub(super) fn collect_modules(
     }
     for source in new_dyn_imports {
         // A dynamic edge to the same source as a static import is folded
-        // into the existing edge (just flip is_dynamic off — the static
-        // edge already gives us full namespace materialization). A
-        // dynamic-only target appears as a new import with empty
+        // into the existing static edge: that edge already gives us full
+        // namespace materialization + the eager init-order pin, both of
+        // which depend on it staying `is_dynamic = false`. But the
+        // dynamic `import()` dispatch still needs the source registered
+        // as a dynamic-import target (#1672) — otherwise
+        // `dynamic_import_path_to_prefix` has no entry for it and the
+        // dispatch falls through to `js_promise_rejected(undefined)` even
+        // though the module is compiled in. So mark the static edge with
+        // `is_dynamic_target` instead of dropping the information.
+        // A dynamic-only target appears as a new import with empty
         // specifiers and `is_dynamic = true`.
-        if hir_module
+        if let Some(existing) = hir_module
             .imports
-            .iter()
-            .any(|i| i.source == source && !i.is_dynamic)
+            .iter_mut()
+            .find(|i| i.source == source && !i.is_dynamic)
         {
+            existing.is_dynamic_target = true;
             continue;
         }
         let is_native = perry_hir::is_native_module(&source);
@@ -573,6 +581,7 @@ pub(super) fn collect_modules(
             resolved_path: None,
             type_only: false,
             is_dynamic: true,
+            is_dynamic_target: false,
         });
     }
 
