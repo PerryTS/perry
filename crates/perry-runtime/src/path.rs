@@ -200,12 +200,35 @@ fn normalize_win32_str(input: &str) -> String {
     if input.is_empty() {
         return ".".to_string();
     }
+    // Node fast-path: a single char is either the root separator or itself.
+    if input.len() == 1 {
+        let c = input.as_bytes()[0] as char;
+        return if is_win32_sep(c) {
+            "\\".to_string()
+        } else {
+            input.to_string()
+        };
+    }
+
     let split = split_win32(input);
-    let prefix = split.prefix;
     let is_absolute = split.is_absolute;
     let rest = split.rest;
-    let trailing_sep = !rest.is_empty() && is_win32_sep(rest.chars().last().unwrap());
+    // A non-empty prefix is Node's "device" — a drive (`C:`) or a
+    // UNC/long-path root (`\\server\share`, `\\?\C:`).
+    let has_device = !split.prefix.is_empty();
+    let prefix_is_unc = split.prefix.starts_with('\\') || split.prefix.starts_with('/');
+    let device: String = if prefix_is_unc {
+        // Re-emit the UNC/device root with backslash separators.
+        split
+            .prefix
+            .chars()
+            .map(|c| if c == '/' { '\\' } else { c })
+            .collect()
+    } else {
+        split.prefix.to_string()
+    };
 
+    // Collapse `.`/`..`/duplicate-separator segments in the remainder.
     let mut out: Vec<&str> = Vec::new();
     for seg in rest.split(is_win32_sep) {
         if seg.is_empty() || seg == "." {
@@ -225,56 +248,42 @@ fn normalize_win32_str(input: &str) -> String {
         }
         out.push(seg);
     }
+    let mut tail = out.join("\\");
 
-    // Assemble: prefix, then root separator, then segments.
-    let mut result = String::new();
-    // UNC prefixes already include "\\server\share" without trailing sep.
-    let prefix_is_unc = prefix.starts_with('\\') || prefix.starts_with('/');
-    if prefix_is_unc {
-        // Re-emit UNC prefix with backslash separators.
-        let mut normed = String::with_capacity(prefix.len());
-        for c in prefix.chars() {
-            normed.push(if c == '/' { '\\' } else { c });
+    // #1728: an empty tail on a non-absolute ref becomes `.` — so `C:` → `C:.`
+    // (the drive's cwd, not its root) and `.\` → `.`, never an empty string.
+    if tail.is_empty() && !is_absolute {
+        tail = ".".to_string();
+    }
+    // #1728: preserve a trailing separator the input carried, matching Node
+    // (`.\` → `.\`, `C:\foo\` → `C:\foo\`). Only meaningful with a non-empty tail.
+    let input_trailing_sep = input.chars().next_back().map_or(false, is_win32_sep);
+    if !tail.is_empty() && input_trailing_sep {
+        tail.push('\\');
+    }
+
+    // Assemble device + root separator + tail (mirrors Node's win32 normalize).
+    if !has_device {
+        if is_absolute {
+            return if tail.is_empty() {
+                "\\".to_string()
+            } else {
+                format!("\\{}", tail)
+            };
         }
-        result.push_str(&normed);
-    } else {
-        result.push_str(prefix);
+        return tail;
     }
-    if is_absolute && !prefix_is_unc {
-        // Drive-absolute, or rooted-no-drive — emit the root separator.
-        result.push('\\');
-    } else if prefix_is_unc {
-        // UNC always followed by a separator before the first segment.
-        result.push('\\');
-    }
-    if !out.is_empty() {
-        result.push_str(&out.join("\\"));
-    } else if prefix_is_unc {
-        // UNC with no segments — strip the trailing separator we just
-        // added so the result is exactly "\\server\share".
-        result.pop();
-    }
-    // #1728: a bare drive-relative ref (`C:`) normalizes to `C:.` — the
-    // drive's current directory, not the drive root (`C:\`). Node appends `.`
-    // only when there are no path segments and the ref isn't drive-absolute
-    // (`C:\` stays `C:\`, `C:foo` stays `C:foo`).
-    let is_drive_relative_prefix = prefix.len() == 2
-        && prefix.as_bytes()[1] == b':'
-        && prefix.as_bytes()[0].is_ascii_alphabetic();
-    if is_drive_relative_prefix && !is_absolute && out.is_empty() {
-        result.push('.');
-    }
-    if result.is_empty() {
-        return if is_absolute {
-            "\\".to_string()
+    if is_absolute {
+        // Drive-absolute (`C:\...`) or UNC/device root (`\\server\share`,
+        // `\\?\C:`): a bare root still keeps its trailing separator (#1728).
+        return if tail.is_empty() {
+            format!("{}\\", device)
         } else {
-            ".".to_string()
+            format!("{}\\{}", device, tail)
         };
     }
-    if trailing_sep && !result.ends_with('\\') && !out.is_empty() {
-        result.push('\\');
-    }
-    result
+    // Drive-relative (`C:foo`, `C:.`) — no separator between device and tail.
+    format!("{}{}", device, tail)
 }
 
 /// Get directory name from path. Per Node spec, the root's dirname is the
@@ -751,24 +760,29 @@ pub extern "C" fn js_path_matches_glob(
 // Win32 sub-namespace (issue #1162)
 // ===================================================================
 
-/// Last segment of a win32 path. Handles UNC roots / drive prefixes
-/// by stripping the root portion first, then taking the final segment
-/// of the remainder (with `\` or `/` as separators, matching Node's
-/// `win32.basename`).
+/// Last segment of a win32 path, matching Node's `win32.basename`: skip a
+/// leading drive letter, then take the final non-empty separator-delimited
+/// segment (`\` or `/`). UNC server/share segments are ordinary segments, so
+/// `\\server\share\` yields `share`.
 fn win32_basename_inner(input: &str) -> String {
     if input.is_empty() {
         return String::new();
     }
-    let split = split_win32(input);
-    let segments: Vec<&str> = split
-        .rest
-        .split(is_win32_sep)
+    // Node skips a leading drive letter (`C:`) so its colon/separator isn't
+    // mistaken for a path separator, then takes the last non-empty segment.
+    let bytes = input.as_bytes();
+    let scan = if bytes.len() >= 2 && (bytes[0] as char).is_ascii_alphabetic() && bytes[1] == b':' {
+        &input[2..]
+    } else {
+        input
+    };
+    // #1728: UNC server/share segments count as ordinary segments here, so
+    // `\\server\share\` → `share` rather than the old root-stripped empty.
+    scan.split(is_win32_sep)
         .filter(|s| !s.is_empty())
-        .collect();
-    match segments.last() {
-        Some(s) => (*s).to_string(),
-        None => String::new(),
-    }
+        .next_back()
+        .unwrap_or("")
+        .to_string()
 }
 
 #[no_mangle]
@@ -1216,13 +1230,52 @@ pub extern "C" fn js_path_win32_relative(
 
 #[cfg(test)]
 mod win32_normalize_tests {
-    use super::normalize_win32_str;
+    use super::{normalize_win32_str, win32_basename_inner};
 
     #[test]
     fn drive_relative_bare_appends_dot() {
         // #1728: a bare drive ref is the drive's *current dir*, not the root.
         assert_eq!(normalize_win32_str("C:"), "C:.");
         assert_eq!(normalize_win32_str("c:"), "c:.");
+    }
+
+    #[test]
+    fn trailing_separator_preserved() {
+        // #1728: a trailing separator the input carried is kept.
+        assert_eq!(normalize_win32_str(".\\"), ".\\");
+        assert_eq!(normalize_win32_str("C:\\foo\\"), "C:\\foo\\");
+        assert_eq!(normalize_win32_str("\\\\?\\C:\\"), "\\\\?\\C:\\");
+    }
+
+    #[test]
+    fn unc_root_keeps_trailing_separator() {
+        // #1728: a bare UNC/device root normalizes with a trailing separator.
+        assert_eq!(
+            normalize_win32_str("\\\\server\\share"),
+            "\\\\server\\share\\"
+        );
+        assert_eq!(
+            normalize_win32_str("\\\\server\\share\\"),
+            "\\\\server\\share\\"
+        );
+        // Content after the root is unaffected (no spurious trailing sep).
+        assert_eq!(
+            normalize_win32_str("\\\\server\\share\\foo\\..\\bar"),
+            "\\\\server\\share\\bar"
+        );
+        assert_eq!(
+            normalize_win32_str("//server/share/a/b"),
+            "\\\\server\\share\\a\\b"
+        );
+    }
+
+    #[test]
+    fn basename_handles_unc_root_and_drive() {
+        // #1728: win32.basename of a UNC root is the share segment.
+        assert_eq!(win32_basename_inner("\\\\server\\share\\"), "share");
+        assert_eq!(win32_basename_inner("\\\\server\\share\\file"), "file");
+        assert_eq!(win32_basename_inner("C:\\foo\\bar\\baz.txt"), "baz.txt");
+        assert_eq!(win32_basename_inner("C:foo"), "foo");
     }
 
     #[test]
