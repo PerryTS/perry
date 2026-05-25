@@ -2,6 +2,37 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1028 — release sweep: tag the post-v0.5.1027 catch-up batch
+
+Captures the 7 PRs that landed on `main` after the v0.5.1027 version
+bump (`50c391ff`) without their own per-PR tags. Neither v0.5.1026 nor
+v0.5.1027 were tagged on the remote — v0.5.1028 is the first tag in
+this window. CHANGELOG entries for v0.5.1027 and v0.5.1026 below remain
+authoritative for the prior batches; this entry covers only what's new
+since `50c391ff`.
+
+- **#1738** `feat(compile)`: add `--trace` / `--focus` debugging flags
+  to the compile driver. Lets contributors narrow the compile trace to
+  a specific module/function without recompiling the whole tree.
+- **#1723 / #1741** `fix(lockdown)`: #503 guard must allow auditable
+  `ns[dynamicKey].staticMember` accesses (closure-local dynamic key
+  reads + manifest-static member). Pre-fix the lockdown gate
+  conservative-failed on legit codepaths in fastify request adapters.
+- **#1673 / #1742** `fix(dynamic-import)`: a literal `node:` builtin
+  specifier like `import('node:crypto')` now resolves to the native
+  namespace path instead of falling through to V8-shim resolution.
+- **#1724 / #1747** `fix(node)`: referencing `Blob` / `URL` (or
+  `URL.createObjectURL`) at the global scope now triggers the
+  http-client stdlib feature gate so the object-URL helper landing
+  side is available at link time.
+- **#1728 / #1749** `fix(node:path)`: win32 `normalize` / `basename` /
+  `toNamespacedPath` edge cases (bare drive refs, mixed separators,
+  trailing-slash collapsing).
+- **#1751** `test(parity)`: stream — consolidated consumers / promises
+  / static batch (batches 28–34, iter-145..152).
+- **#1754** `test(node-core)`: enrich the `common` shim to raise the
+  #800 radar denominator.
+
 ## v0.5.1027 — fix(windows): #1542 black areas on window resize + restore Windows source build
 
 Two Windows-only fixes.
