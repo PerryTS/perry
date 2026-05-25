@@ -112,7 +112,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let data_ptr = blk.load(PTR, &ptr_slot);
             let header_ptr = blk.gep(I8, &data_ptr, &[(I32, "-8")]);
             let len_i32 = blk.load_invariant(I32, &header_ptr);
-            return Ok(blk.sitofp(I32, &len_i32, DOUBLE));
+            let lowered = LoweredValue::buffer_len(len_i32);
+            ctx.record_lowered_value(
+                "Buffer.length",
+                Some(arr_id),
+                "Buffer.length.native_buffer_len",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                Vec::new(),
+            );
+            return Ok(crate::native_value::materialize_js_value(
+                ctx,
+                lowered,
+                MaterializationReason::FunctionAbi,
+            ));
         }
 
         // `arr.length` / `str.length` — INLINE. Both ArrayHeader and

@@ -13,16 +13,19 @@ generic JavaScript `double`/NaN-box value.
 2. Expression lowering produces a `LoweredValue`: the JavaScript semantic kind,
    the selected `NativeRep`, the LLVM type, and the SSA value.
 3. A `NativeRep` describes the compiler contract, not an optimization by
-   itself. Examples are `I32`, `U8`, `F64`, `JsValue`, and `BufferView`.
+   itself. Examples are `I32`, `U32`, `U64`, `USize`, `F32`, `F64`, `U8`,
+   `BufferLen`, `NativeHandle`, `PromiseBoundary`, `JsValue`, and
+   `BufferView`.
 4. `materialize_js_value` is the boundary where a native value is converted back
    to the generic JS ABI representation. Each conversion records a
-   `MaterializationReason`.
+   `MaterializationReason` and, for native ABI crossings, a
+   `native_abi_transition`.
 5. LLVM emission consumes the native representation. For buffers, unsafe LLVM
    attributes are emitted only through `BufferAccessProof`.
 6. `native-reps.json` records what happened: source function, lowering block,
    optional stable `region_id`, native rep, bounds state, alias state,
-   access mode, materialization reason, and whether `inbounds` or alias metadata
-   was emitted.
+   access mode, materialization reason, native ABI transition, and whether
+   `inbounds` or alias metadata was emitted.
 7. The compiler-output harness verifies both optimized IR shape and
    native-representation records. H1 fixtures use labeled loops so checks can
    match exact `region_id`s instead of optimized LLVM block names.
@@ -56,6 +59,27 @@ added.
   requires proven or guarded bounds before it can appear.
 - `dynamic_fallback`: runtime helper or generic dispatch path.
 
+## Native ABI Contract
+
+Schema version 5 records explicit native ABI transitions. Native values may stay
+region-local with their LLVM ABI type:
+
+- `I32`, `U32`, and `BufferLen`: LLVM `i32`; `U32` and `BufferLen` materialize
+  with unsigned integer-to-double conversion.
+- `I64`, `U64`, `USize`, `NativeHandle`, and `PromiseBoundary`: LLVM `i64`;
+  `U64` and `USize` materialization is unsigned and lossy above JS integer
+  precision.
+- `F32`: LLVM `float`; JS-number materialization is explicit `fpext` to
+  `double`. Raw `f32` records are not JS-visible.
+- `F64` and `JsValue`: LLVM `double`.
+- `BufferView`: LLVM `ptr`, scoped to the native buffer proof region.
+
+`native_abi_transition` records use `{ from_native_rep, to_native_rep, op,
+reason, lossy }`. Valid ops are `none`, `signed_int_to_float`,
+`unsigned_int_to_float`, `float_extend`, `pointer_box`, and `promise_box`.
+The legacy `scalar_conversion` field is still written for compatibility, but
+new checks should read `native_abi_transition`.
+
 ## Verification Mode
 
 Native-region verification is explicit. Enable it with
@@ -71,6 +95,12 @@ The verifier rejects records that claim:
 - `unchecked_native` with unknown bounds.
 - `checked_native` without proven or guarded bounds.
 - `explicit_assume` as a bounds proof.
+- LLVM type mismatches for the claimed native rep.
+- JS-visible or materialized raw `F32` records.
+- Escaping raw `NativeHandle` or `PromiseBoundary` records.
+- Native ABI transitions without a matching materialization reason.
+- Invalid transition ops or signedness, including implicit unsigned/signed
+  widening or narrowing claims.
 
 ## Buffer Fast-Path Benchmarking
 
@@ -96,10 +126,6 @@ PERRY_DISABLE_BUFFER_FAST_PATH=1 python3 scripts/compiler_output_regression.py c
 
 ## Extension Points
 
-- `i64`: add a scalar `NativeRep` variant and materialization rule, then route
-  integer-returning HIR facts into `LoweredValue`.
-- `f32`: add a native scalar rep and keep the JS materialization boundary as an
-  explicit fpext/fptrunc decision.
 - `Uint32Array`: add a typed-array element kind and width-aware buffer access
   proof before emitting inbounds for multi-byte accesses.
 - Strings: model string handles separately from generic `JsValue`, then record

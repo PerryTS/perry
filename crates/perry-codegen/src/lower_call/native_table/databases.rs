@@ -461,7 +461,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ioredis_connect",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_PROMISE,
     },
     // npm `redis`'s `client.disconnect()` — alias for `.quit()`.
     NativeModSig {
@@ -485,7 +485,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_connect",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_PROMISE,
     },
     NativeModSig {
         module: "mongodb",
@@ -494,7 +494,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_client_connect",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_PROMISE,
     },
     // Symbol-name fix: every row below previously emitted a stripped-name
     // form (`js_mongodb_db`, `js_mongodb_insert_one`, etc.) but the actual

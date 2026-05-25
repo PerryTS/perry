@@ -662,9 +662,8 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
     // ========== perry/ads (issue #867) ==========
     // Six FFI entry points exported by `crates/perry-ext-ads`:
     //   - 4 promise-returning load/show pairs for interstitial +
-    //     rewarded (NR_PTR — runtime sees a `*mut perry_ffi::Promise`
-    //     and NaN-boxes via POINTER_TAG, same as bcrypt / argon2 /
-    //     google-auth).
+    //     rewarded (NR_PROMISE — runtime sees a `*mut perry_ffi::Promise`
+    //     and NaN-boxes via an explicit promise-boundary transition).
     //   - 2 synchronous banner create/destroy (NR_F64 / NR_VOID —
     //     banner_create returns a handle as a `number`, destroy is
     //     fire-and-forget).
@@ -677,7 +676,7 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ads_interstitial_load",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_PROMISE,
     },
     NativeModSig {
         module: "perry/ads",
@@ -686,7 +685,7 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ads_interstitial_show",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_PROMISE,
     },
     NativeModSig {
         module: "perry/ads",
@@ -695,7 +694,7 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ads_rewarded_load",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_PROMISE,
     },
     NativeModSig {
         module: "perry/ads",
@@ -704,7 +703,7 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ads_rewarded_show",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_PROMISE,
     },
     NativeModSig {
         module: "perry/ads",

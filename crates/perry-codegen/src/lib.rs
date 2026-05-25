@@ -61,8 +61,8 @@ pub struct NativeMethodRef {
     /// `"NA_VARARGS"`, `"NA_JSON"`. Used by `perry-api-manifest`'s
     /// param-count drift test (#512).
     pub arg_kinds: &'static [&'static str],
-    /// Return-kind tag. One of `"NR_PTR"`, `"NR_STR"`, `"NR_BIGINT"`,
-    /// `"NR_F64"`, `"NR_I32"`, `"NR_VOID"`.
+    /// Return-kind tag. One of `"NR_PTR"`, `"NR_PROMISE"`, `"NR_STR"`,
+    /// `"NR_BIGINT"`, `"NR_F64"`, `"NR_I32"`, `"NR_VOID"`.
     pub ret_kind: &'static str,
 }
 

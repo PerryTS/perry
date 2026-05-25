@@ -5,11 +5,12 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{
-    lower_expr, nanbox_bigint_inline, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64,
-    FnCtx,
-};
+use crate::expr::{lower_expr, nanbox_bigint_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
+use crate::native_value::{
+    materialize_native_handle_to_js_value, materialize_promise_boundary_to_js_value, LoweredValue,
+    MaterializationReason,
+};
 use crate::types::{DOUBLE, I32, I64};
 
 use super::{NativeArgKind, NativeModSig, NativeRetKind, NATIVE_MODULE_TABLE};
@@ -157,6 +158,7 @@ pub fn lower_native_module_dispatch(
     // Determine return type for the declare
     let ret_type = match sig.ret {
         NativeRetKind::Ptr
+        | NativeRetKind::Promise
         | NativeRetKind::Str
         | NativeRetKind::ObjFromJsonStr
         | NativeRetKind::BigInt => I64,
@@ -175,7 +177,46 @@ pub fn lower_native_module_dispatch(
         NativeRetKind::Ptr => {
             let blk = ctx.block();
             let raw = blk.call(I64, sig.runtime, &arg_slices);
-            Ok(nanbox_pointer_inline(blk, &raw))
+            let lowered = LoweredValue::native_handle(raw.clone());
+            ctx.record_lowered_value(
+                "NativeModuleReturn",
+                None,
+                "native_module.raw_handle",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec![format!("runtime={}", sig.runtime)],
+            );
+            Ok(materialize_native_handle_to_js_value(
+                ctx,
+                lowered,
+                MaterializationReason::ReturnAbi,
+            ))
+        }
+        NativeRetKind::Promise => {
+            let blk = ctx.block();
+            let raw = blk.call(I64, sig.runtime, &arg_slices);
+            let lowered = LoweredValue::promise_boundary(raw.clone());
+            ctx.record_lowered_value(
+                "NativeModuleReturn",
+                None,
+                "native_module.raw_promise",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec![format!("runtime={}", sig.runtime)],
+            );
+            Ok(materialize_promise_boundary_to_js_value(
+                ctx,
+                lowered,
+                MaterializationReason::ReturnAbi,
+            ))
         }
         NativeRetKind::Str => {
             // Returned raw *mut StringHeader — NaN-box with STRING_TAG so

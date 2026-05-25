@@ -32,19 +32,25 @@ pub(crate) enum NativeValueState {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ScalarConversionOp {
+pub(crate) enum NativeAbiTransitionOp {
     None,
     SignedIntToFloat,
     UnsignedIntToFloat,
+    FloatExtend,
+    PointerBox,
+    PromiseBox,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(crate) struct ScalarConversionRecord {
+pub(crate) struct NativeAbiTransitionRecord {
     pub from_native_rep: String,
     pub to_native_rep: String,
-    pub op: ScalarConversionOp,
+    pub op: NativeAbiTransitionOp,
     pub reason: MaterializationReason,
+    pub lossy: bool,
 }
+
+pub(crate) type ScalarConversionRecord = NativeAbiTransitionRecord;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct NativeRepRecord {
@@ -68,6 +74,7 @@ pub(crate) struct NativeRepRecord {
     pub materialization_reason: Option<MaterializationReason>,
     pub fallback_reason: Option<MaterializationReason>,
     pub native_value_state: NativeValueState,
+    pub native_abi_transition: Option<NativeAbiTransitionRecord>,
     pub scalar_conversion: Option<ScalarConversionRecord>,
     pub consumed_facts: Vec<NativeFactUse>,
     pub rejected_facts: Vec<NativeFactUse>,
@@ -89,6 +96,8 @@ struct NativeRepSummary {
     record_count: usize,
     native_rep_counts: HashMap<String, usize>,
     materialization_count: usize,
+    native_abi_transition_count: usize,
+    native_abi_transition_op_counts: HashMap<String, usize>,
     native_value_state_counts: HashMap<String, usize>,
     unsafe_inbounds_claims: usize,
     unsafe_noalias_claims: usize,
@@ -101,7 +110,9 @@ impl NativeRepSummary {
     fn from_records(records: &[NativeRepRecord]) -> Self {
         let mut native_rep_counts = HashMap::new();
         let mut native_value_state_counts = HashMap::new();
+        let mut native_abi_transition_op_counts = HashMap::new();
         let mut materialization_count = 0;
+        let mut native_abi_transition_count = 0;
         let mut unsafe_inbounds_claims = 0;
         let mut unsafe_noalias_claims = 0;
         let mut unsafe_unchecked_unknown_bounds_accesses = 0;
@@ -113,6 +124,20 @@ impl NativeRepSummary {
                 .or_insert(0) += 1;
             if record.materialization_reason.is_some() {
                 materialization_count += 1;
+            }
+            if let Some(transition) = record.native_abi_transition.as_ref() {
+                native_abi_transition_count += 1;
+                let op_name = match transition.op {
+                    NativeAbiTransitionOp::None => "none",
+                    NativeAbiTransitionOp::SignedIntToFloat => "signed_int_to_float",
+                    NativeAbiTransitionOp::UnsignedIntToFloat => "unsigned_int_to_float",
+                    NativeAbiTransitionOp::FloatExtend => "float_extend",
+                    NativeAbiTransitionOp::PointerBox => "pointer_box",
+                    NativeAbiTransitionOp::PromiseBox => "promise_box",
+                };
+                *native_abi_transition_op_counts
+                    .entry(op_name.to_string())
+                    .or_insert(0) += 1;
             }
             let state_name = match record.native_value_state {
                 NativeValueState::RegionLocal => "region_local",
@@ -154,6 +179,8 @@ impl NativeRepSummary {
             record_count: records.len(),
             native_rep_counts,
             materialization_count,
+            native_abi_transition_count,
+            native_abi_transition_op_counts,
             native_value_state_counts,
             unsafe_inbounds_claims,
             unsafe_noalias_claims,
@@ -184,10 +211,7 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         Some(dir) => {
             let dir = PathBuf::from(dir);
             std::fs::create_dir_all(&dir).with_context(|| {
-                format!(
-                    "failed to create native reps directory {}",
-                    dir.display()
-                )
+                format!("failed to create native reps directory {}", dir.display())
             })?;
             dir
         }
@@ -198,7 +222,7 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 4,
+        schema_version: 5,
         module,
         records,
         summary: NativeRepSummary::from_records(records),

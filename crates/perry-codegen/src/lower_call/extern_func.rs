@@ -10,13 +10,41 @@ use perry_types::Type as HirType;
 
 use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::native_value::{
+    materialize_js_value, materialize_native_handle_to_js_value,
+    materialize_promise_boundary_to_js_value, LoweredValue, MaterializationReason,
+};
 use crate::type_analysis::{is_array_expr, is_string_expr};
-use crate::types::{DOUBLE, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, F32, I32, I64, I8, PTR};
 
 use super::{
     lower_perry_ui_table_call, perry_background_table_lookup, perry_system_table_lookup,
     perry_updater_table_lookup, try_rewrite_perry_tui_jsx_intrinsic,
 };
+
+fn is_manifest_string_param(kind: Option<&str>) -> bool {
+    matches!(kind, Some("string" | "ptr"))
+}
+
+fn is_manifest_i64_param(kind: Option<&str>) -> bool {
+    matches!(kind, Some("i64"))
+}
+
+fn is_manifest_u32_param(kind: Option<&str>) -> bool {
+    matches!(kind, Some("u32" | "buffer_len"))
+}
+
+fn is_manifest_u64_param(kind: Option<&str>) -> bool {
+    matches!(kind, Some("u64" | "usize"))
+}
+
+fn is_manifest_f32_param(kind: Option<&str>) -> bool {
+    matches!(kind, Some("f32"))
+}
+
+fn is_manifest_handle_param(kind: Option<&str>) -> bool {
+    matches!(kind, Some("handle" | "promise"))
+}
 
 pub fn try_lower_extern_func_call(
     ctx: &mut FnCtx<'_>,
@@ -459,13 +487,15 @@ pub fn try_lower_extern_func_call(
             let manifest_kind: Option<&str> = manifest_sig
                 .as_ref()
                 .and_then(|(p, _)| p.get(idx).map(|s| s.as_str()));
-            if is_string_expr(ctx, a) {
+            if is_manifest_string_param(manifest_kind)
+                || (manifest_kind.is_none() && is_string_expr(ctx, a))
+            {
                 let blk = ctx.block();
                 let raw_ptr = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val)]);
                 let ptr_val = blk.inttoptr(I64, &raw_ptr);
                 lowered.push(ptr_val);
                 arg_types.push(PTR);
-            } else if is_array_expr(ctx, a) {
+            } else if manifest_kind.is_none() && is_array_expr(ctx, a) {
                 let blk = ctx.block();
                 let bits = blk.bitcast_double_to_i64(&val);
                 let header_handle = blk.and(I64, &bits, POINTER_MASK_I64);
@@ -476,7 +506,7 @@ pub fn try_lower_extern_func_call(
                 let data_ptr = blk.gep(I8, &header_ptr, &[(I64, &eight)]);
                 lowered.push(data_ptr);
                 arg_types.push(PTR);
-            } else if matches!(manifest_kind, Some("i64")) {
+            } else if is_manifest_i64_param(manifest_kind) {
                 // Manifest declares this param as i64 → place in
                 // x-register. JS numbers are stored as f64 directly
                 // (a handle of `0x305b42a0c00` is the f64 value
@@ -485,6 +515,22 @@ pub fn try_lower_extern_func_call(
                 let blk = ctx.block();
                 let i = blk.fptosi(DOUBLE, &val, I64);
                 lowered.push(i);
+                arg_types.push(I64);
+            } else if is_manifest_u32_param(manifest_kind) {
+                let i = ctx.block().toint32(&val);
+                lowered.push(i);
+                arg_types.push(I32);
+            } else if is_manifest_u64_param(manifest_kind) {
+                let i = ctx.block().fptoui(DOUBLE, &val, I64);
+                lowered.push(i);
+                arg_types.push(I64);
+            } else if is_manifest_f32_param(manifest_kind) {
+                let f = ctx.block().fptrunc(DOUBLE, &val, F32);
+                lowered.push(f);
+                arg_types.push(F32);
+            } else if is_manifest_handle_param(manifest_kind) {
+                let handle = unbox_to_i64(ctx.block(), &val);
+                lowered.push(handle);
                 arg_types.push(I64);
             } else {
                 lowered.push(val);
@@ -509,6 +555,13 @@ pub fn try_lower_extern_func_call(
         //                       `-> i64` but the value is a string pointer.
         //   "i64"             → I64 return; sitofp → JS number. Use for opaque
         //                       handles / integers (`*mut View`, counts, etc.).
+        //   "u32" / "u64" /
+        //   "usize" / "f32"  → native scalar ABI return; explicitly
+        //                       materialized to a JS number at this boundary.
+        //   "buffer_len"      → u32 BufferHeader.length return.
+        //   "handle"          → I64 opaque handle; NaN-box via POINTER_TAG.
+        //   "promise"         → I64 Promise handle; NaN-box via POINTER_TAG
+        //                       with a promise-boundary transition record.
         //   "void"            → no return value.
         //   (absent)          → fall back to HIR ExternFuncRef.return_type and
         //                       the name-pattern heuristic below.
@@ -529,6 +582,13 @@ pub fn try_lower_extern_func_call(
         let returns_void = matches!(manifest_ret, Some("void"))
             || (manifest_ret.is_none() && matches!(ext_return_type, HirType::Void));
         let returns_i64 = matches!(manifest_ret, Some("i64"));
+        let returns_u32 = matches!(manifest_ret, Some("u32"));
+        let returns_u64 = matches!(manifest_ret, Some("u64"));
+        let returns_usize = matches!(manifest_ret, Some("usize"));
+        let returns_f32 = matches!(manifest_ret, Some("f32"));
+        let returns_buffer_len = matches!(manifest_ret, Some("buffer_len"));
+        let returns_handle = matches!(manifest_ret, Some("handle"));
+        let returns_promise = matches!(manifest_ret, Some("promise"));
         if returns_void {
             ctx.pending_declares
                 .push((name.clone(), crate::types::VOID, arg_types));
@@ -561,8 +621,145 @@ pub fn try_lower_extern_func_call(
             // back as an i64 param will truncate via `fptosi`.
             ctx.pending_declares.push((name.clone(), I64, arg_types));
             let raw = ctx.block().call(I64, name, &arg_slices);
-            let blk = ctx.block();
-            return Ok(Some(blk.sitofp(I64, &raw, DOUBLE)));
+            let lowered = LoweredValue::i64(raw.clone());
+            ctx.record_lowered_value(
+                "NativeLibraryReturn",
+                None,
+                "native_library.raw_i64",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec![format!("runtime={}", name)],
+            );
+            return Ok(Some(materialize_js_value(
+                ctx,
+                lowered,
+                MaterializationReason::ReturnAbi,
+            )));
+        } else if returns_u32 || returns_buffer_len {
+            ctx.pending_declares.push((name.clone(), I32, arg_types));
+            let raw = ctx.block().call(I32, name, &arg_slices);
+            let lowered = if returns_buffer_len {
+                LoweredValue::buffer_len(raw.clone())
+            } else {
+                LoweredValue::u32(raw.clone())
+            };
+            ctx.record_lowered_value(
+                "NativeLibraryReturn",
+                None,
+                if returns_buffer_len {
+                    "native_library.raw_buffer_len"
+                } else {
+                    "native_library.raw_u32"
+                },
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec![format!("runtime={}", name)],
+            );
+            return Ok(Some(materialize_js_value(
+                ctx,
+                lowered,
+                MaterializationReason::ReturnAbi,
+            )));
+        } else if returns_u64 || returns_usize {
+            ctx.pending_declares.push((name.clone(), I64, arg_types));
+            let raw = ctx.block().call(I64, name, &arg_slices);
+            let lowered = if returns_usize {
+                LoweredValue::usize(raw.clone())
+            } else {
+                LoweredValue::u64(raw.clone())
+            };
+            ctx.record_lowered_value(
+                "NativeLibraryReturn",
+                None,
+                if returns_usize {
+                    "native_library.raw_usize"
+                } else {
+                    "native_library.raw_u64"
+                },
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec![format!("runtime={}", name)],
+            );
+            return Ok(Some(materialize_js_value(
+                ctx,
+                lowered,
+                MaterializationReason::ReturnAbi,
+            )));
+        } else if returns_f32 {
+            ctx.pending_declares.push((name.clone(), F32, arg_types));
+            let raw = ctx.block().call(F32, name, &arg_slices);
+            let lowered = LoweredValue::f32(raw.clone());
+            ctx.record_lowered_value(
+                "NativeLibraryReturn",
+                None,
+                "native_library.raw_f32",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec![format!("runtime={}", name)],
+            );
+            return Ok(Some(materialize_js_value(
+                ctx,
+                lowered,
+                MaterializationReason::ReturnAbi,
+            )));
+        } else if returns_handle {
+            ctx.pending_declares.push((name.clone(), I64, arg_types));
+            let raw = ctx.block().call(I64, name, &arg_slices);
+            let lowered = LoweredValue::native_handle(raw.clone());
+            ctx.record_lowered_value(
+                "NativeLibraryReturn",
+                None,
+                "native_library.raw_handle",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec![format!("runtime={}", name)],
+            );
+            return Ok(Some(materialize_native_handle_to_js_value(
+                ctx,
+                lowered,
+                MaterializationReason::ReturnAbi,
+            )));
+        } else if returns_promise {
+            ctx.pending_declares.push((name.clone(), I64, arg_types));
+            let raw = ctx.block().call(I64, name, &arg_slices);
+            let lowered = LoweredValue::promise_boundary(raw.clone());
+            ctx.record_lowered_value(
+                "NativeLibraryReturn",
+                None,
+                "native_library.raw_promise",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec![format!("runtime={}", name)],
+            );
+            return Ok(Some(materialize_promise_boundary_to_js_value(
+                ctx,
+                lowered,
+                MaterializationReason::ReturnAbi,
+            )));
         } else {
             // Native library functions (Bloom, etc.) return f64 in
             // the d0 register — they use the Perry double-based ABI,

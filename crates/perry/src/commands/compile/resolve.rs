@@ -141,8 +141,18 @@ pub(super) fn parse_native_library_manifest(
     //                        is a string pointer (closes issue #222).
     //   "i64"             → I64 return; sitofp → JS number.  Opaque handles,
     //                        counts, etc.
+    //   "u32" / "u64" /
+    //   "usize" / "f32"  → native scalar ABI return; explicitly
+    //                        materialized to a JS number.
+    //   "buffer_len"      → u32 BufferHeader.length return.
+    //   "handle"          → I64 opaque handle; NaN-boxed as POINTER_TAG.
+    //   "promise"         → I64 promise-boundary handle; NaN-boxed as
+    //                        POINTER_TAG with an explicit transition record.
     //   "void"            → no return value.
     //   (anything else)   → treated as f64 (Perry double ABI).
+    //
+    // Param strings use the same lowercase native ABI names where applicable:
+    // "u32", "u64", "usize", "f32", "buffer_len", "handle", and "promise".
     let functions: Vec<NativeFunctionDecl> = native_lib
         .get("functions")?
         .as_array()?

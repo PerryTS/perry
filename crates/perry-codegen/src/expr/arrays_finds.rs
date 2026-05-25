@@ -546,7 +546,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let handle = unbox_to_i64(blk, &v);
             let len_i32 = blk.call(I32, "js_buffer_length", &[(I64, &handle)]);
-            Ok(blk.sitofp(I32, &len_i32, DOUBLE))
+            let lowered = LoweredValue::buffer_len(len_i32);
+            ctx.record_lowered_value(
+                "Uint8ArrayLength",
+                None,
+                "Uint8ArrayLength.native_buffer_len",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                Vec::new(),
+            );
+            Ok(materialize_js_value(
+                ctx,
+                lowered,
+                MaterializationReason::FunctionAbi,
+            ))
         }
         Expr::Uint8ArrayGet { array, index } => {
             let value = lower_uint8array_get_i32(ctx, array, index)?;

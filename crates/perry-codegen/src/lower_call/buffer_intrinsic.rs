@@ -10,7 +10,7 @@ use perry_hir::Expr;
 
 use crate::expr::{BufferAccessSpec, FnCtx};
 use crate::native_value::LoweredValue;
-use crate::types::I32;
+use crate::types::{F32, I32};
 
 /// Issue #92: inline Buffer numeric reads (`buf.readInt32BE(offset)` etc.)
 /// as LLVM load + bswap + convert instead of a runtime dispatch through
@@ -167,21 +167,16 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         _ => raw,
     };
     let result = if spec.is_float {
-        // Float/double: bitcast int bits → float bits, then fpext f32→f64 if needed.
-        let float_ty = if spec.width_bytes == 4 {
-            "float"
-        } else {
-            "double"
-        };
+        // Float/double: bitcast int bits → native float bits. readFloat*
+        // stays region-local as f32; JS boundaries fpext it explicitly.
+        let float_ty = if spec.width_bytes == 4 { F32 } else { "double" };
         let as_float = blk.fresh_reg();
         blk.emit_raw(format!(
             "{} = bitcast {} {} to {}",
             as_float, load_ty, swapped, float_ty
         ));
         if spec.width_bytes == 4 {
-            let extended = blk.fresh_reg();
-            blk.emit_raw(format!("{} = fpext float {} to double", extended, as_float));
-            LoweredValue::f64(extended)
+            LoweredValue::f32(as_float)
         } else {
             LoweredValue::f64(as_float)
         }
@@ -234,6 +229,7 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     let result_consumer = match result.rep.name() {
         "i32" => "BufferNumericRead.native_i32",
         "u32" => "BufferNumericRead.native_u32",
+        "f32" => "BufferNumericRead.native_f32",
         "f64" => "BufferNumericRead.native_f64",
         _ => "BufferNumericRead.native_value",
     };
@@ -248,7 +244,10 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         None,
         false,
         false,
-        vec![format!("method={}", method), format!("width_bytes={}", spec.width_bytes)],
+        vec![
+            format!("method={}", method),
+            format!("width_bytes={}", spec.width_bytes),
+        ],
     );
     Ok(Some(result))
 }

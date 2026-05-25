@@ -417,9 +417,27 @@ impl LlBlock {
         r
     }
 
+    pub fn fpext(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
+        let r = self.reg();
+        self.emit(format!("{} = fpext {} {} to {}", r, from_ty, val, to_ty));
+        r
+    }
+
+    pub fn fptrunc(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
+        let r = self.reg();
+        self.emit(format!("{} = fptrunc {} {} to {}", r, from_ty, val, to_ty));
+        r
+    }
+
     pub fn fptosi(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
         let r = self.reg();
         self.emit(format!("{} = fptosi {} {} to {}", r, from_ty, val, to_ty));
+        r
+    }
+
+    pub fn fptoui(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
+        let r = self.reg();
+        self.emit(format!("{} = fptoui {} {} to {}", r, from_ty, val, to_ty));
         r
     }
 

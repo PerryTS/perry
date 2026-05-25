@@ -304,7 +304,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_upgrade_tls",
         args: &[NA_STR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_PROMISE,
     },
     // Factory: `tls.connect(host, port, servername, verify)` opens plain TCP
     // then runs a full TLS handshake before firing 'connect'. Returns a Socket

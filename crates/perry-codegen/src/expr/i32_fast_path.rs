@@ -4,9 +4,9 @@
 use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
 
-use super::{lower_expr, FlatConstInfo, FnCtx};
+use super::{lower_expr, unbox_to_i64, FlatConstInfo, FnCtx};
 use crate::native_value::{ExpectedNativeRep, LoweredValue};
-use crate::types::{DOUBLE, I32};
+use crate::types::{DOUBLE, F32, I32, I64};
 
 /// Returns true if `e` is guaranteed to produce a finite double value
 /// (not NaN, not ±Infinity). Used to skip the NaN/Inf guard in `toint32`
@@ -341,8 +341,15 @@ pub(crate) fn lower_expr_native(
 ) -> Result<LoweredValue> {
     match expected {
         ExpectedNativeRep::I32 => lower_expr_native_i32(ctx, e),
+        ExpectedNativeRep::I64 => lower_expr_native_i64(ctx, e),
         ExpectedNativeRep::U32 => lower_expr_native_u32(ctx, e),
+        ExpectedNativeRep::U64 => lower_expr_native_u64(ctx, e),
+        ExpectedNativeRep::USize => lower_expr_native_usize(ctx, e),
         ExpectedNativeRep::F64 => lower_expr_native_f64(ctx, e),
+        ExpectedNativeRep::F32 => lower_expr_native_f32(ctx, e),
+        ExpectedNativeRep::BufferLen => lower_expr_native_buffer_len(ctx, e),
+        ExpectedNativeRep::NativeHandle => lower_expr_native_handle(ctx, e),
+        ExpectedNativeRep::PromiseBoundary => lower_expr_native_promise_boundary(ctx, e),
     }
 }
 
@@ -356,12 +363,32 @@ fn i32_lowered(value: String) -> LoweredValue {
     LoweredValue::i32(value)
 }
 
+fn i64_lowered(value: String) -> LoweredValue {
+    LoweredValue::i64(value)
+}
+
 fn u32_lowered(value: String) -> LoweredValue {
     LoweredValue::u32(value)
 }
 
+fn u64_lowered(value: String) -> LoweredValue {
+    LoweredValue::u64(value)
+}
+
+fn usize_lowered(value: String) -> LoweredValue {
+    LoweredValue::usize(value)
+}
+
 fn f64_lowered(value: String) -> LoweredValue {
     LoweredValue::f64(value)
+}
+
+fn f32_lowered(value: String) -> LoweredValue {
+    LoweredValue::f32(value)
+}
+
+fn buffer_len_lowered(value: String) -> LoweredValue {
+    LoweredValue::buffer_len(value)
 }
 
 fn native_expr_kind(e: &Expr) -> &'static str {
@@ -546,6 +573,72 @@ fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
     Ok(lowered)
 }
 
+fn lower_expr_native_i64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let value = match e {
+        Expr::Integer(n) => n.to_string(),
+        _ => {
+            let d = lower_expr(ctx, e)?;
+            ctx.block().fptosi(DOUBLE, &d, I64)
+        }
+    };
+    let lowered = i64_lowered(value);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_i64",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
+fn lower_expr_native_u64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let value = match e {
+        Expr::Integer(n) if *n >= 0 => (*n as u64).to_string(),
+        _ => {
+            let d = lower_expr(ctx, e)?;
+            ctx.block().fptoui(DOUBLE, &d, I64)
+        }
+    };
+    let lowered = u64_lowered(value);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_u64",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
+fn lower_expr_native_usize(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let value = lower_expr_native_u64(ctx, e)?.value;
+    let lowered = usize_lowered(value);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_usize",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
 fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
     let value = lower_expr(ctx, e)?;
     let lowered = f64_lowered(value);
@@ -553,6 +646,81 @@ fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         native_expr_kind(e),
         None,
         "lower_expr_native_f64",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
+fn lower_expr_native_f32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let d = lower_expr(ctx, e)?;
+    let value = ctx.block().fptrunc(DOUBLE, &d, F32);
+    let lowered = f32_lowered(value);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_f32",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
+fn lower_expr_native_buffer_len(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let value = lower_expr_native_u32(ctx, e)?.value;
+    let lowered = buffer_len_lowered(value);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_buffer_len",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
+fn lower_expr_native_handle(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let value = lower_expr(ctx, e)?;
+    let handle = unbox_to_i64(ctx.block(), &value);
+    let lowered = LoweredValue::native_handle(handle);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_native_handle",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
+fn lower_expr_native_promise_boundary(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let value = lower_expr(ctx, e)?;
+    let handle = unbox_to_i64(ctx.block(), &value);
+    let lowered = LoweredValue::promise_boundary(handle);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_promise_boundary",
         &lowered,
         None,
         None,

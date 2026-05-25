@@ -65,6 +65,9 @@ pub(super) enum NativeArgKind {
 pub(super) enum NativeRetKind {
     /// Returns i64 handle → NaN-box as POINTER.
     Ptr,
+    /// Returns i64 promise handle → NaN-box as POINTER, but record the async
+    /// boundary separately from generic native handles.
+    Promise,
     /// Returns `*mut StringHeader` → NaN-box as STRING. Use for runtime
     /// functions whose Rust signature returns a raw string pointer; the
     /// caller (and `JSON.stringify`, string-comparison, etc.) needs the
@@ -112,6 +115,7 @@ pub(super) const NA_PTR: NativeArgKind = NativeArgKind::PtrI64;
 pub(super) const NA_JSV: NativeArgKind = NativeArgKind::JsvalI64;
 pub(super) const NA_VARARGS: NativeArgKind = NativeArgKind::VarArgsAsArray;
 pub(super) const NR_PTR: NativeRetKind = NativeRetKind::Ptr;
+pub(super) const NR_PROMISE: NativeRetKind = NativeRetKind::Promise;
 pub(super) const NR_STR: NativeRetKind = NativeRetKind::Str;
 pub(super) const NR_OBJ_FROM_JSON_STR: NativeRetKind = NativeRetKind::ObjFromJsonStr;
 pub(super) const NR_BIGINT: NativeRetKind = NativeRetKind::BigInt;
@@ -211,6 +215,7 @@ fn arg_kind_tag(a: &NativeArgKind) -> &'static str {
 fn ret_kind_tag(r: &NativeRetKind) -> &'static str {
     match r {
         NativeRetKind::Ptr => "NR_PTR",
+        NativeRetKind::Promise => "NR_PROMISE",
         NativeRetKind::Str => "NR_STR",
         NativeRetKind::ObjFromJsonStr => "NR_OBJ_FROM_JSON_STR",
         NativeRetKind::BigInt => "NR_BIGINT",
