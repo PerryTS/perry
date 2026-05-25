@@ -1,5 +1,5 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
-use perry_hir::{Expr, Function, Module, ModuleInitKind, Param, Stmt};
+use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
 use perry_types::Type;
 
 fn empty_opts() -> CompileOptions {
@@ -60,12 +60,56 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
     }
 }
 
+fn field(name: &str, ty: Type) -> ClassField {
+    ClassField {
+        name: name.to_string(),
+        key_expr: None,
+        ty,
+        init: None,
+        is_private: false,
+        is_readonly: false,
+        decorators: Vec::new(),
+    }
+}
+
+fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
+    Class {
+        id,
+        name: name.to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        fields,
+        constructor: None,
+        methods: Vec::new(),
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+    }
+}
+
 fn module(name: &str, params: Vec<Param>, return_type: Type, body: Vec<Stmt>) -> Module {
+    module_with_classes(name, Vec::new(), params, return_type, body)
+}
+
+fn module_with_classes(
+    name: &str,
+    classes: Vec<Class>,
+    params: Vec<Param>,
+    return_type: Type,
+    body: Vec<Stmt>,
+) -> Module {
     Module {
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
-        classes: Vec::new(),
+        classes,
         interfaces: Vec::new(),
         type_aliases: Vec::new(),
         enums: Vec::new(),
@@ -137,12 +181,47 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
     assert!(ir.contains("object_set_by_name_guard"));
     assert!(ir.contains("object_get_by_name_guard"));
     assert!(ir.contains("method_call_guard"));
+    assert!(ir.contains("js_typed_feedback_object_set_field_by_name_fast"));
     assert!(ir.contains("js_object_set_field_by_name"));
     assert!(ir.contains("js_object_get_field_by_name_f64"));
     assert!(ir.contains("call double @js_typed_feedback_native_call_method"));
     assert!(ir.contains("call void @js_typed_feedback_record_guard_pass"));
     assert!(ir.contains("call void @js_typed_feedback_record_guard_fail"));
     assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
+}
+
+#[test]
+fn typed_feedback_guards_direct_class_field_specialization() {
+    let point = class(101, "Point", vec![field("x", Type::Number)]);
+    let ir = ir_for(module_with_classes(
+        "typed_feedback_class_field.ts",
+        vec![point],
+        vec![param(1, "p", Type::Named("Point".to_string()))],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "x".to_string(),
+                value: Box::new(Expr::Number(7.0)),
+            }),
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "x".to_string(),
+            })),
+        ],
+    ));
+
+    assert!(ir.contains("class_field_set_guard"));
+    assert!(ir.contains("class_field_get_guard"));
+    assert!(ir.contains("js_typed_feedback_class_field_set_guard"));
+    assert!(ir.contains("js_typed_feedback_class_field_get_guard"));
+    assert!(ir.contains("class_field_set.fast"));
+    assert!(ir.contains("class_field_set.fallback"));
+    assert!(ir.contains("class_field_get.fast"));
+    assert!(ir.contains("class_field_get.fallback"));
+    assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
+    assert!(ir.contains("call void @js_object_set_field_by_name"));
+    assert!(ir.contains("call double @js_object_get_field_by_name_f64"));
 }
 
 #[test]

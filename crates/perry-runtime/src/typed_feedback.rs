@@ -880,6 +880,38 @@ pub extern "C" fn js_typed_feedback_object_set_field_by_name(
     crate::object::js_object_set_field_by_name(obj, key, value);
 }
 
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_object_set_field_by_name_fast(
+    site_id: u64,
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) {
+    let object_addr = normalize_raw_object_addr(obj as u64);
+    let (shape_addr, class_id, gc_type) = object_shape(object_addr);
+    let handled = crate::object::js_object_set_field_by_name_transition_fast(obj, key, value) != 0;
+    let observation = Observation {
+        source: ObservationSource::Property,
+        object_addr: shape_keyed_object_addr(ObservationSource::Property, object_addr),
+        shape_addr,
+        key_hash: key_hash(key),
+        class_id,
+        heap_type: gc_type,
+        aux: 0,
+        value_tag: stable_value_kind(value.to_bits()),
+    };
+    guard_observe(
+        site_id,
+        TypedFeedbackSiteKind::PropertySet,
+        observation,
+        handled,
+    );
+    if !handled {
+        record_fallback_call(site_id);
+        crate::object::js_object_set_field_by_name(obj, key, value);
+    }
+}
+
 fn hash_bytes(bytes: &[u8]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     for &b in bytes {
@@ -984,6 +1016,302 @@ fn object_key_matches_field(
         stored.is_string()
             && !stored.as_string_ptr().is_null()
             && crate::string::js_string_equals(key, stored.as_string_ptr()) != 0
+    }
+}
+
+fn key_as_str(key: *const crate::StringHeader) -> Option<String> {
+    if !valid_string_key(key) {
+        return None;
+    }
+    unsafe {
+        let len = (*key).byte_len as usize;
+        let data = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        std::str::from_utf8(std::slice::from_raw_parts(data, len))
+            .ok()
+            .map(|s| s.to_string())
+    }
+}
+
+fn class_setter_in_chain(class_id: u32, key_name: &str) -> bool {
+    if class_id == 0 {
+        return false;
+    }
+    let Ok(registry) = crate::object::CLASS_VTABLE_REGISTRY.read() else {
+        return true;
+    };
+    let Some(registry) = registry.as_ref() else {
+        return false;
+    };
+    let mut cid = class_id;
+    for _ in 0..32 {
+        if registry
+            .get(&cid)
+            .map(|vtable| vtable.setters.contains_key(key_name))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        match crate::object::get_parent_class_id(cid) {
+            Some(parent) if parent != 0 && parent != cid => cid = parent,
+            _ => break,
+        }
+    }
+    false
+}
+
+fn class_getter_in_chain(class_id: u32, key_name: &str) -> bool {
+    if class_id == 0 {
+        return false;
+    }
+    let Ok(registry) = crate::object::CLASS_VTABLE_REGISTRY.read() else {
+        return true;
+    };
+    let Some(registry) = registry.as_ref() else {
+        return false;
+    };
+    let mut cid = class_id;
+    for _ in 0..32 {
+        if registry
+            .get(&cid)
+            .map(|vtable| vtable.getters.contains_key(key_name))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        match crate::object::get_parent_class_id(cid) {
+            Some(parent) if parent != 0 && parent != cid => cid = parent,
+            _ => break,
+        }
+    }
+    false
+}
+
+fn descriptor_blocks_class_field_get(obj_addr: usize, class_id: u32, key_name: &str) -> bool {
+    if !crate::object::descriptors_in_use() {
+        return false;
+    }
+    if crate::object::get_accessor_descriptor(obj_addr, key_name).is_some() {
+        return true;
+    }
+
+    let mut cid = class_id;
+    for _ in 0..32 {
+        let proto = crate::object::class_prototype_object(cid);
+        if !proto.is_null()
+            && crate::object::get_accessor_descriptor(proto as usize, key_name).is_some()
+        {
+            return true;
+        }
+        match crate::object::get_parent_class_id(cid) {
+            Some(parent) if parent != 0 && parent != cid => cid = parent,
+            _ => break,
+        }
+    }
+    false
+}
+
+fn class_field_get_contract(
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+    key: *const crate::StringHeader,
+    expected_field_index: u32,
+) -> (usize, u32, u16, bool) {
+    let object_addr = normalize_raw_object_addr(receiver.to_bits());
+    if object_addr == 0 || expected_class_id == 0 || expected_keys.is_null() {
+        return (0, 0, 0, false);
+    }
+    let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
+        return (0, 0, 0, false);
+    };
+    unsafe {
+        let gc_type = (*gc_header).obj_type as u16;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return (0, 0, gc_type, false);
+        }
+        if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+            return (0, 0, gc_type, false);
+        }
+
+        let obj = object_addr as *mut ObjectHeader;
+        let class_id = (*obj).class_id;
+        let shape_addr = (*obj).keys_array as usize;
+        let key_name = match key_as_str(key) {
+            Some(name) => name,
+            None => return (shape_addr, class_id, gc_type, false),
+        };
+        let expected_shape_addr = expected_keys as usize;
+        let valid = (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR
+            && class_id == expected_class_id
+            && shape_addr == expected_shape_addr
+            && expected_field_index < (*obj).field_count
+            && plain_array_index_guard(expected_keys, expected_field_index, true)
+            && object_key_matches_field(obj, key, expected_field_index)
+            && !class_getter_in_chain(class_id, &key_name)
+            && !descriptor_blocks_class_field_get(object_addr, class_id, &key_name);
+        (shape_addr, class_id, gc_type, valid)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_class_field_get_guard(
+    site_id: u64,
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+    key: *const crate::StringHeader,
+    expected_field_index: u32,
+) -> i32 {
+    let (shape_addr, class_id, gc_type, contract_valid) = class_field_get_contract(
+        receiver,
+        expected_class_id,
+        expected_keys,
+        key,
+        expected_field_index,
+    );
+    let object_addr = normalize_raw_object_addr(receiver.to_bits());
+    let observation = Observation {
+        source: ObservationSource::Property,
+        object_addr: shape_keyed_object_addr(ObservationSource::Property, object_addr),
+        shape_addr,
+        key_hash: key_hash(key),
+        class_id,
+        heap_type: gc_type,
+        aux: expected_field_index as u64,
+        value_tag: value_tag(receiver.to_bits()),
+    };
+    if guard_observe(
+        site_id,
+        TypedFeedbackSiteKind::PropertyGet,
+        observation,
+        contract_valid,
+    ) {
+        1
+    } else {
+        0
+    }
+}
+
+fn descriptor_blocks_class_field_set(obj_addr: usize, class_id: u32, key_name: &str) -> bool {
+    if !crate::object::descriptors_in_use() {
+        return false;
+    }
+    if crate::object::get_accessor_descriptor(obj_addr, key_name).is_some() {
+        return true;
+    }
+    if crate::object::get_property_attrs(obj_addr, key_name)
+        .map(|attrs| !attrs.writable())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    let mut cid = class_id;
+    for _ in 0..32 {
+        let proto = crate::object::class_prototype_object(cid);
+        if !proto.is_null() {
+            let proto_addr = proto as usize;
+            if crate::object::get_accessor_descriptor(proto_addr, key_name).is_some() {
+                return true;
+            }
+            if crate::object::get_property_attrs(proto_addr, key_name)
+                .map(|attrs| !attrs.writable())
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+        match crate::object::get_parent_class_id(cid) {
+            Some(parent) if parent != 0 && parent != cid => cid = parent,
+            _ => break,
+        }
+    }
+    false
+}
+
+fn class_field_set_contract(
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+    key: *const crate::StringHeader,
+    expected_field_index: u32,
+) -> (usize, u32, u16, bool) {
+    let object_addr = normalize_raw_object_addr(receiver.to_bits());
+    if object_addr == 0 || expected_class_id == 0 || expected_keys.is_null() {
+        return (0, 0, 0, false);
+    }
+    let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
+        return (0, 0, 0, false);
+    };
+    unsafe {
+        let gc_type = (*gc_header).obj_type as u16;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return (0, 0, gc_type, false);
+        }
+        if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+            return (0, 0, gc_type, false);
+        }
+        if (*gc_header)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
+            let obj = object_addr as *mut ObjectHeader;
+            return ((*obj).keys_array as usize, (*obj).class_id, gc_type, false);
+        }
+
+        let obj = object_addr as *mut ObjectHeader;
+        let class_id = (*obj).class_id;
+        let shape_addr = (*obj).keys_array as usize;
+        let key_name = match key_as_str(key) {
+            Some(name) => name,
+            None => return (shape_addr, class_id, gc_type, false),
+        };
+        let expected_shape_addr = expected_keys as usize;
+        let valid = class_id == expected_class_id
+            && shape_addr == expected_shape_addr
+            && expected_field_index < (*obj).field_count
+            && plain_array_index_guard(expected_keys, expected_field_index, true)
+            && object_key_matches_field(obj, key, expected_field_index)
+            && !class_setter_in_chain(class_id, &key_name)
+            && !descriptor_blocks_class_field_set(object_addr, class_id, &key_name);
+        (shape_addr, class_id, gc_type, valid)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_class_field_set_guard(
+    site_id: u64,
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+    key: *const crate::StringHeader,
+    expected_field_index: u32,
+    value: f64,
+) -> i32 {
+    let (shape_addr, class_id, gc_type, contract_valid) = class_field_set_contract(
+        receiver,
+        expected_class_id,
+        expected_keys,
+        key,
+        expected_field_index,
+    );
+    let object_addr = normalize_raw_object_addr(receiver.to_bits());
+    let observation = Observation {
+        source: ObservationSource::Property,
+        object_addr: shape_keyed_object_addr(ObservationSource::Property, object_addr),
+        shape_addr,
+        key_hash: key_hash(key),
+        class_id,
+        heap_type: gc_type,
+        aux: expected_field_index as u64,
+        value_tag: stable_value_kind(value.to_bits()),
+    };
+    if guard_observe(
+        site_id,
+        TypedFeedbackSiteKind::PropertySet,
+        observation,
+        contract_valid,
+    ) {
+        1
+    } else {
+        0
     }
 }
 

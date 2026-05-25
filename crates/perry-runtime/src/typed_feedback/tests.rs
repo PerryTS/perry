@@ -1,5 +1,16 @@
 use super::*;
 
+static CLASS_FIELD_SETTER_CALLS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static CLASS_FIELD_SETTER_VALUE_BITS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+extern "C" fn test_class_field_setter(_this: f64, value: f64) -> f64 {
+    CLASS_FIELD_SETTER_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    CLASS_FIELD_SETTER_VALUE_BITS.store(value.to_bits(), std::sync::atomic::Ordering::SeqCst);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 fn register(site_id: u64, kind: TypedFeedbackSiteKind, op: &'static str) {
     js_typed_feedback_register_site(
         site_id,
@@ -17,6 +28,39 @@ fn register(site_id: u64, kind: TypedFeedbackSiteKind, op: &'static str) {
         b"test_fallback".as_ptr(),
         "test_fallback".len(),
     );
+}
+
+fn class_instance(
+    class_id: u32,
+    key_name: &'static [u8],
+) -> (
+    *mut crate::object::ObjectHeader,
+    *mut crate::array::ArrayHeader,
+    *const crate::StringHeader,
+    f64,
+) {
+    let mut packed = Vec::with_capacity(key_name.len() + 1);
+    packed.extend_from_slice(key_name);
+    packed.push(0);
+    let obj = crate::object::js_object_alloc_class_with_keys(
+        class_id,
+        0,
+        1,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    let key = crate::string::js_string_from_bytes(key_name.as_ptr(), key_name.len() as u32);
+    let keys = unsafe { (*obj).keys_array };
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    (obj, keys, key, receiver)
+}
+
+fn plain_object_with_key(
+    key_name: &'static [u8],
+) -> (*mut crate::object::ObjectHeader, *const crate::StringHeader) {
+    let obj = crate::object::js_object_alloc(0, 0);
+    let key = crate::string::js_string_from_bytes(key_name.as_ptr(), key_name.len() as u32);
+    (obj, key)
 }
 
 #[test]
@@ -341,6 +385,148 @@ fn typed_feedback_non_bounded_array_set_guard_failure_uses_jsvalue_object_fallba
     let stored = crate::object::js_object_get_field_by_name_f64(obj, key);
     assert_eq!(stored.to_bits(), 99.0f64.to_bits());
 
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 0);
+    assert_eq!(site.guard_failures, 1);
+    assert_eq!(site.fallback_calls, 1);
+}
+
+#[test]
+fn typed_feedback_class_field_set_guard_fails_for_frozen_object() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(31, TypedFeedbackSiteKind::PropertySet, "obj.x=");
+
+    let class_id = 0x7EED_0031;
+    let (obj, keys, key, receiver) = class_instance(class_id, b"x");
+    crate::object::js_object_set_field(obj, 0, crate::JSValue::from_bits(1.0f64.to_bits()));
+    crate::object::js_object_freeze(receiver);
+
+    let guard =
+        js_typed_feedback_class_field_set_guard(31, receiver, class_id, keys, key, 0, 2.0);
+    assert_eq!(guard, 0);
+    assert_eq!(
+        crate::object::js_object_get_field(obj, 0).bits(),
+        1.0f64.to_bits()
+    );
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 0);
+    assert_eq!(site.guard_failures, 1);
+    assert_eq!(site.fallback_calls, 0);
+}
+
+#[test]
+fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    CLASS_FIELD_SETTER_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+    CLASS_FIELD_SETTER_VALUE_BITS.store(0, std::sync::atomic::Ordering::SeqCst);
+    register(32, TypedFeedbackSiteKind::PropertySet, "obj.x=");
+
+    let class_id = 0x7EED_0032;
+    let (obj, keys, key, receiver) = class_instance(class_id, b"x");
+    crate::object::js_object_set_field(obj, 0, crate::JSValue::from_bits(1.0f64.to_bits()));
+    unsafe {
+        crate::object::js_register_class_setter(
+            class_id as i64,
+            b"x".as_ptr(),
+            1,
+            test_class_field_setter as *const () as usize as i64,
+        );
+    }
+
+    let guard =
+        js_typed_feedback_class_field_set_guard(32, receiver, class_id, keys, key, 0, 7.0);
+    assert_eq!(guard, 0);
+    js_typed_feedback_record_fallback_call(32);
+    crate::object::js_object_set_field_by_name(obj, key, 7.0);
+
+    assert_eq!(
+        CLASS_FIELD_SETTER_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        CLASS_FIELD_SETTER_VALUE_BITS.load(std::sync::atomic::Ordering::SeqCst),
+        7.0f64.to_bits()
+    );
+    assert_eq!(
+        crate::object::js_object_get_field(obj, 0).bits(),
+        1.0f64.to_bits()
+    );
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 0);
+    assert_eq!(site.guard_failures, 1);
+    assert_eq!(site.fallback_calls, 1);
+}
+
+#[test]
+fn typed_feedback_class_field_get_guard_falls_back_after_shape_transition() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(39, TypedFeedbackSiteKind::PropertyGet, "obj.x");
+
+    let class_id = 0x7EED_0039;
+    let (obj, expected_keys, key_x, receiver) = class_instance(class_id, b"x");
+    crate::object::js_object_set_field(obj, 0, crate::JSValue::from_bits(5.0f64.to_bits()));
+    let first =
+        js_typed_feedback_class_field_get_guard(39, receiver, class_id, expected_keys, key_x, 0);
+    assert_eq!(first, 1);
+
+    let key_y = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
+    crate::object::js_object_set_field_by_name(obj, key_y, 10.0);
+    assert_ne!(unsafe { (*obj).keys_array }, expected_keys);
+
+    let second =
+        js_typed_feedback_class_field_get_guard(39, receiver, class_id, expected_keys, key_x, 0);
+    assert_eq!(second, 0);
+    js_typed_feedback_record_fallback_call(39);
+    let stored = crate::object::js_object_get_field_by_name_f64(obj, key_x);
+    assert_eq!(stored.to_bits(), 5.0f64.to_bits());
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_failures, 1);
+    assert_eq!(site.fallback_calls, 1);
+}
+
+#[test]
+fn typed_feedback_object_set_fast_hits_learned_dynamic_key_transition() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(34, TypedFeedbackSiteKind::PropertySet, "obj[dyn]=");
+
+    let (first_obj, key) = plain_object_with_key(b"dyn_fast_key_34");
+    js_typed_feedback_object_set_field_by_name_fast(34, first_obj, key, 11.0);
+    let first_site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(first_site.fallback_calls, 1);
+
+    let second_obj = crate::object::js_object_alloc(0, 0);
+    js_typed_feedback_object_set_field_by_name_fast(34, second_obj, key, 12.0);
+    let stored = crate::object::js_object_get_field_by_name_f64(second_obj, key);
+    assert_eq!(stored.to_bits(), 12.0f64.to_bits());
+
+    let site = &typed_feedback_snapshot().sites[0];
+    if crate::object::descriptors_in_use() {
+        assert_eq!(site.fallback_calls, 2);
+    } else {
+        assert_eq!(site.fallback_calls, 1);
+        assert!(site.guard_passes >= 1);
+    }
+}
+
+#[test]
+fn typed_feedback_object_set_fast_falls_back_for_uncached_dynamic_key() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(35, TypedFeedbackSiteKind::PropertySet, "obj[dyn_miss]=");
+
+    let (obj, key) = plain_object_with_key(b"dyn_uncached_key_35");
+    js_typed_feedback_object_set_field_by_name_fast(35, obj, key, 21.0);
+
+    let stored = crate::object::js_object_get_field_by_name_f64(obj, key);
+    assert_eq!(stored.to_bits(), 21.0f64.to_bits());
     let site = &typed_feedback_snapshot().sites[0];
     assert_eq!(site.guard_passes, 0);
     assert_eq!(site.guard_failures, 1);

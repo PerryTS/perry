@@ -77,6 +77,21 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[I64, I64, I64, DOUBLE],
     );
     module.declare_function(
+        "js_typed_feedback_object_set_field_by_name_fast",
+        VOID,
+        &[I64, I64, I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_typed_feedback_class_field_set_guard",
+        I32,
+        &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE],
+    );
+    module.declare_function(
+        "js_typed_feedback_class_field_get_guard",
+        I32,
+        &[I64, DOUBLE, I32, I64, I64, I32],
+    );
+    module.declare_function(
         "js_typed_feedback_native_call_method",
         DOUBLE,
         &[I64, DOUBLE, PTR, I64, PTR, I64],

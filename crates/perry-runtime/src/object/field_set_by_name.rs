@@ -6,6 +6,139 @@
 
 use super::*;
 
+/// Fast transition-cache-backed dynamic property write.
+///
+/// This is intentionally narrower than `js_object_set_field_by_name`: it only
+/// handles plain object-shape transitions that have already been learned by
+/// the runtime transition cache. Accessors/descriptors, frozen/sealed objects,
+/// class/prototype receivers, closures, native handles, arrays, strings, and
+/// cache misses return 0 so callers preserve the full setter semantics by
+/// falling back to `js_object_set_field_by_name`.
+#[no_mangle]
+pub extern "C" fn js_object_set_field_by_name_transition_fast(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> i32 {
+    if key.is_null() || (key as usize) < 0x10000 {
+        return 0;
+    }
+
+    let obj = {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        if top16 >= 0x7FF8 {
+            if top16 == 0x7FFC {
+                return 0;
+            }
+            let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+            if raw.is_null() || (raw as usize) < 0x10000 {
+                return 0;
+            }
+            raw
+        } else {
+            obj
+        }
+    };
+
+    if obj.is_null() || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return 0;
+    }
+    if GLOBAL_DESCRIPTORS_IN_USE.load(Ordering::Relaxed) {
+        return 0;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let key_handle = scope.root_string_ptr(key);
+    let value_handle = scope.root_nanbox_f64(value);
+
+    unsafe {
+        let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+
+        if !is_valid_obj_ptr(obj as *const u8) {
+            return 0;
+        }
+        let gc_header =
+            (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
+            || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return 0;
+        }
+        let object_flags = (*gc_header)._reserved;
+        if object_flags
+            & (crate::gc::OBJ_FLAG_FROZEN
+                | crate::gc::OBJ_FLAG_SEALED
+                | crate::gc::OBJ_FLAG_NO_EXTEND)
+            != 0
+        {
+            return 0;
+        }
+        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR || (*obj).class_id != 0 {
+            return 0;
+        }
+
+        let key_gc =
+            (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*key_gc).obj_type != crate::gc::GC_TYPE_STRING {
+            return 0;
+        }
+        let interned_key = if (*key_gc).gc_flags & crate::gc::GC_FLAG_INTERNED != 0 {
+            key
+        } else {
+            let hash = key_content_hash(key);
+            crate::string::js_string_intern(key, hash)
+        };
+        if interned_key.is_null() {
+            return 0;
+        }
+
+        obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let value = value_handle.get_nanbox_f64();
+
+        let keys = (*obj).keys_array;
+        let prev_keys = keys as usize;
+        if !keys.is_null() {
+            let keys_ptr = keys as usize;
+            if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
+                return 0;
+            }
+        }
+
+        let Some((next_keys, slot_idx)) = transition_cache_lookup(prev_keys, interned_key) else {
+            return 0;
+        };
+        if next_keys == 0 {
+            return 0;
+        }
+
+        set_object_keys_array(obj, next_keys as *mut ArrayHeader);
+        super::mark_object_dynamic_shape_unknown(obj);
+
+        let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
+        let slot_usize = slot_idx as usize;
+        let vbits = value.to_bits();
+        let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
+            crate::value::TAG_UNDEFINED
+        } else {
+            vbits
+        };
+
+        if slot_usize < alloc_limit {
+            store_object_field_slot(obj, slot_usize, vbits);
+            if slot_idx >= (*obj).field_count {
+                (*obj).field_count = slot_idx + 1;
+            }
+        } else {
+            overflow_set(obj as usize, slot_usize, vbits);
+        }
+    }
+
+    1
+}
+
 /// Issue #615 helper — read a `*const StringHeader` as a Rust `String`
 /// for inclusion in TypeError diagnostic messages. Returns `"<unknown>"`
 /// for null / non-UTF-8 / corrupt headers so the throw still fires

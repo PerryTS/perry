@@ -163,29 +163,89 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(field_index) =
                     crate::type_analysis::class_field_global_index(ctx, &class_name, property)
                 {
-                    let recv_box = lower_expr(ctx, object)?;
-                    let val_double = lower_expr(ctx, value)?;
-                    let blk = ctx.block();
-                    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
-                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-                    let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                    let header_skip = "24".to_string();
-                    let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-                    let idx_str = field_index.to_string();
-                    let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &idx_str)]);
-                    let field_addr = blk.ptrtoint(&field_ptr, I64);
-                    emit_jsvalue_slot_store_on_block(
-                        blk,
-                        &field_ptr,
-                        &val_double,
-                        &obj_handle,
-                        &idx_str,
-                        true,
-                        &obj_bits,
-                        &field_addr,
-                        true,
-                    );
-                    return Ok(val_double);
+                    if let (Some(&expected_class_id), Some(keys_global_name)) = (
+                        ctx.class_ids.get(&class_name),
+                        ctx.class_keys_globals.get(&class_name).cloned(),
+                    ) {
+                        let recv_box = lower_expr(ctx, object)?;
+                        let val_double = lower_expr(ctx, value)?;
+                        let key_idx = ctx.strings.intern(property);
+                        let key_handle_global =
+                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                        let site_id = emit_typed_feedback_register_site(
+                            ctx,
+                            TypedFeedbackKind::PropertySet,
+                            property,
+                            TypedFeedbackContract::class_field_set(),
+                        );
+                        let field_idx_str = field_index.to_string();
+                        let expected_class_id_str = expected_class_id.to_string();
+                        let (key_raw, guard_ok) = {
+                            let blk = ctx.block();
+                            let key_box = blk.load(DOUBLE, &key_handle_global);
+                            let key_bits = blk.bitcast_double_to_i64(&key_box);
+                            let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                            let expected_keys = blk.load(I64, &format!("@{}", keys_global_name));
+                            let guard_ok = blk.call(
+                                I32,
+                                "js_typed_feedback_class_field_set_guard",
+                                &[
+                                    (I64, &site_id),
+                                    (DOUBLE, &recv_box),
+                                    (I32, &expected_class_id_str),
+                                    (I64, &expected_keys),
+                                    (I64, &key_raw),
+                                    (I32, &field_idx_str),
+                                    (DOUBLE, &val_double),
+                                ],
+                            );
+                            (key_raw, guard_ok)
+                        };
+                        let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
+                        let fast_idx = ctx.new_block("class_field_set.fast");
+                        let fallback_idx = ctx.new_block("class_field_set.fallback");
+                        let merge_idx = ctx.new_block("class_field_set.merge");
+                        let fast_label = ctx.block_label(fast_idx);
+                        let fallback_label = ctx.block_label(fallback_idx);
+                        let merge_label = ctx.block_label(merge_idx);
+                        ctx.block()
+                            .cond_br(&guard_pass, &fast_label, &fallback_label);
+
+                        ctx.current_block = fast_idx;
+                        let blk = ctx.block();
+                        let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                        let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                        let obj_ptr = blk.inttoptr(I64, &obj_handle);
+                        let header_skip = "24".to_string();
+                        let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                        let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+                        let field_addr = blk.ptrtoint(&field_ptr, I64);
+                        emit_jsvalue_slot_store_on_block(
+                            blk,
+                            &field_ptr,
+                            &val_double,
+                            &obj_handle,
+                            &field_idx_str,
+                            true,
+                            &obj_bits,
+                            &field_addr,
+                            true,
+                        );
+                        blk.br(&merge_label);
+
+                        ctx.current_block = fallback_idx;
+                        let blk = ctx.block();
+                        let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                        blk.call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
+                        blk.call_void(
+                            "js_object_set_field_by_name",
+                            &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
+                        );
+                        blk.br(&merge_label);
+
+                        ctx.current_block = merge_idx;
+                        return Ok(val_double);
+                    }
                 }
             }
             let obj_box = lower_expr(ctx, object)?;
@@ -213,7 +273,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 TypedFeedbackContract::object_set_by_name(),
             );
             ctx.block().call_void(
-                "js_typed_feedback_object_set_field_by_name",
+                "js_typed_feedback_object_set_field_by_name_fast",
                 &[
                     (I64, &site_id),
                     (I64, &obj_bits),

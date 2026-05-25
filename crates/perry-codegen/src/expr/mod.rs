@@ -1044,6 +1044,14 @@ impl TypedFeedbackContract {
         Self::new("object_set_by_name_guard", "js_object_set_field_by_name")
     }
 
+    pub(crate) const fn class_field_get() -> Self {
+        Self::new("class_field_get_guard", "js_object_get_field_by_name_f64")
+    }
+
+    pub(crate) const fn class_field_set() -> Self {
+        Self::new("class_field_set_guard", "js_object_set_field_by_name")
+    }
+
     pub(crate) const fn method_call() -> Self {
         Self::new("method_call_guard", "js_native_call_method")
     }
