@@ -1288,6 +1288,11 @@ impl JsEmitter {
                 self.emit_expr(key);
                 self.output.push(')');
             }
+            Expr::ObjectGetOwnPropertyDescriptors(obj) => {
+                self.output.push_str("Object.getOwnPropertyDescriptors(");
+                self.emit_expr(obj);
+                self.output.push(')');
+            }
             Expr::ObjectGetOwnPropertyNames(obj) => {
                 self.output.push_str("Object.getOwnPropertyNames(");
                 self.emit_expr(obj);

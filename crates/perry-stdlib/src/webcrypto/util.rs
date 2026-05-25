@@ -311,10 +311,6 @@ fn resolve_with_bits(bits: u64) -> *mut Promise {
     js_promise_resolved(f64::from_bits(bits))
 }
 
-fn resolve_undefined() -> *mut Promise {
-    js_promise_resolved(f64::from_bits(0x7FFC_0000_0000_0001))
-}
-
 /// Construct a DOMException-shaped object (`{ name, message, stack: "" }`)
 /// and return a rejected Promise carrying it. WebCrypto spec demands
 /// `DOMException` instances on subtle.* error paths (`OperationError`,
@@ -325,7 +321,7 @@ fn resolve_undefined() -> *mut Promise {
 unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mut Promise {
     let obj = js_object_alloc(0, 3);
     if obj.is_null() {
-        return resolve_undefined();
+        return perry_runtime::js_promise_rejected(f64::from_bits(0x7FFC_0000_0000_0001));
     }
     let name_key = perry_runtime::js_string_from_bytes(b"name".as_ptr(), 4);
     let message_key = perry_runtime::js_string_from_bytes(b"message".as_ptr(), 7);
@@ -347,7 +343,7 @@ unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mut Promise {
 unsafe fn resolve_with_bytes(bytes: &[u8]) -> *mut Promise {
     let buf = alloc_uint8array_from_slice(bytes);
     if buf.is_null() {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     let val = JSValue::pointer(buf as *const u8).bits();
     resolve_with_bits(val)

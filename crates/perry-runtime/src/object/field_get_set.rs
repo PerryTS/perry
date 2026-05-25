@@ -654,6 +654,22 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     let obj_val = JSValue::from_bits(obj.to_bits());
     let key_val = JSValue::from_bits(key.to_bits());
 
+    // #1758: a SYMBOL key. The class-ref path below + the keys_array scan
+    // (string keys only) can't see a class-object's static `[Sym]` props nor
+    // ones inherited from a class-expression parent. Delegate to the symbol
+    // resolver (handles INT32 class refs, POINTER class-objects, own +
+    // prototype-chain), mirroring the string-key "present-and-not-undefined"
+    // semantics. Fixes effect's `Predicate.hasProperty(classObj, TypeId)`
+    // (`isSchema` → `dual` → `transformOrFail`) and `Sym in obj` generally.
+    if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+        let v = unsafe { crate::symbol::js_object_get_symbol_property(obj, key) };
+        return if v.to_bits() != crate::value::TAG_UNDEFINED {
+            nanbox_true
+        } else {
+            nanbox_false
+        };
+    }
+
     // Refs #420 / #618: `Symbol in ClassRef` — drizzle's `entityKind in cls`.
     // Class refs are INT32-tagged. Check CLASS_STATIC_SYMBOLS for symbol
     // keys and CLASS_DYNAMIC_PROPS for string keys.

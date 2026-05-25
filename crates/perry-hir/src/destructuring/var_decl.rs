@@ -1312,6 +1312,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     | "setPrototypeOf"
                                     | "getPrototypeOf"
                                     | "getOwnPropertyDescriptor"
+                                    | "getOwnPropertyDescriptors"
                                     | "getOwnPropertyNames"
                                     | "getOwnPropertySymbols"
                                     | "keys"

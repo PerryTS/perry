@@ -636,6 +636,30 @@ pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) ->
 /// init via `js_class_register_static_symbol`. Pre-fix the dispatch
 /// only looked at the per-instance `SYMBOL_PROPERTIES` map and class
 /// refs always returned undefined.
+/// #1758: the OWN symbol-property lookup — the raw `SYMBOL_PROPERTIES`
+/// side-table read keyed by the object's address (no class-ref / no prototype
+/// chain). Used by `js_object_get_symbol_property` and by
+/// `resolve_proto_chain_symbol`, which walks prototype objects itself and must
+/// therefore NOT recurse into the full chain-walking getter.
+pub(crate) unsafe fn own_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> {
+    let obj_key = obj_key_from_f64(obj_f64);
+    let sym_key = sym_key_from_f64(sym_f64);
+    if obj_key == 0 || sym_key == 0 {
+        return None;
+    }
+    let guard = SYMBOL_PROPERTIES.lock().unwrap();
+    if let Some(map) = guard.as_ref() {
+        if let Some(entries) = map.get(&obj_key) {
+            for &(sk, vb) in entries.iter() {
+                if sk == sym_key {
+                    return Some(f64::from_bits(vb));
+                }
+            }
+        }
+    }
+    None
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f64) -> f64 {
     // Check CLASS_STATIC_SYMBOLS first when receiver is a class ref
@@ -645,6 +669,12 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         let class_id = (bits & 0xFFFF_FFFF) as u32;
         if let Some(vb) = class_static_symbol_lookup(class_id, sym_f64) {
             return f64::from_bits(vb);
+        }
+        // #1758: a class ref whose own static symbols miss may inherit the
+        // symbol from a class-expression parent (`class Sub extends make(...) {}`
+        // → `Sub[TypeId]`). Walk the CLASS_PROTOTYPE_OBJECTS chain.
+        if let Some(v) = crate::object::resolve_proto_chain_symbol(class_id, sym_f64) {
+            return v;
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -670,17 +700,21 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
-    let obj_key = obj_key_from_f64(obj_f64);
-    let sym_key = sym_key_from_f64(sym_f64);
-    if obj_key == 0 || sym_key == 0 {
-        return f64::from_bits(TAG_UNDEFINED);
+    if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
+        return v;
     }
-    let guard = SYMBOL_PROPERTIES.lock().unwrap();
-    if let Some(map) = guard.as_ref() {
-        if let Some(entries) = map.get(&obj_key) {
-            for &(sk, vb) in entries.iter() {
-                if sk == sym_key {
-                    return f64::from_bits(vb);
+    // #1758: a POINTER class-object whose OWN symbol props miss may inherit
+    // the symbol through its class_id prototype chain. (The SYMBOL_PROPERTIES
+    // lock is released above before recursing into the resolver, which takes
+    // it again per prototype object.)
+    if (bits >> 48) == 0x7FFD {
+        let obj_ptr =
+            crate::value::JSValue::from_bits(bits).as_pointer::<crate::object::ObjectHeader>();
+        if !obj_ptr.is_null() {
+            let cid = crate::object::js_object_get_class_id(obj_ptr);
+            if cid != 0 {
+                if let Some(v) = crate::object::resolve_proto_chain_symbol(cid, sym_f64) {
+                    return v;
                 }
             }
         }

@@ -132,6 +132,7 @@ where
         | Expr::WeakRefDeref(v)
         | Expr::FinalizationRegistryNew(v)
         | Expr::ObjectGetOwnPropertyNames(v)
+        | Expr::ObjectGetOwnPropertyDescriptors(v)
         | Expr::ObjectCreate(v)
         | Expr::ObjectFreeze(v)
         | Expr::ObjectSeal(v)

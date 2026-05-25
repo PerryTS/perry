@@ -49,7 +49,7 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     {
         let hash = match extract_hmac_hash(algo_bits.to_bits()) {
             Some(h) => h,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         (KeyAlgo::Hmac, hash, KeyKind::Secret)
     } else if algo_upper == "HKDF" && format_lower == "raw" {
@@ -74,11 +74,11 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     } else if algo_upper == "ECDSA" && (format_lower == "raw" || format_lower == "jwk") {
         let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let curve_upper = curve.to_ascii_uppercase();
         if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         let kind =
             if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
@@ -90,11 +90,11 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     } else if algo_upper == "ECDH" && (format_lower == "raw" || format_lower == "jwk") {
         let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let curve_upper = curve.to_ascii_uppercase();
         if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         let kind =
             if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
@@ -163,12 +163,12 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
             P256SecretKey::from_slice(&key_bytes).is_ok()
         };
         if !ok {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
     }
     if matches!(key_algo, KeyAlgo::Ed25519 | KeyAlgo::X25519) {
         if key_bytes.len() != 32 {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         if key_algo == KeyAlgo::Ed25519 {
             let ok = if kind == KeyKind::Private {
@@ -183,7 +183,7 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
                     .is_some()
             };
             if !ok {
-                return resolve_undefined();
+                return reject_with_dom_exception("OperationError", "The operation failed");
             }
         }
     }
@@ -197,12 +197,12 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
             RsaPrivateKey::from_pkcs8_der(&key_bytes).is_ok()
         };
         if !ok {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
     }
     let buf = alloc_uint8array_from_slice(&key_bytes);
     if buf.is_null() {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     register_crypto_key(
         buf as usize,
@@ -241,7 +241,7 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
         }
     };
     if format_lower == "raw" && mat.kind == KeyKind::Private {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     if format_lower == "jwk"
         && mat.kind != KeyKind::Secret
@@ -256,20 +256,20 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
                 | KeyAlgo::X25519
         )
     {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     if format_lower == "spki" && mat.kind != KeyKind::Public {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     if format_lower == "pkcs8" && mat.kind != KeyKind::Private {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     if format_lower != "raw"
         && format_lower != "spki"
         && format_lower != "pkcs8"
         && format_lower != "jwk"
     {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
     if format_lower == "jwk" {
@@ -277,7 +277,7 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
             let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&key_bytes);
             let obj = js_object_alloc(0, 2);
             if obj.is_null() {
-                return resolve_undefined();
+                return reject_with_dom_exception("OperationError", "The operation failed");
             }
             set_object_string_field(obj, b"kty", "oct");
             set_object_string_field(obj, b"k", &encoded);
@@ -289,25 +289,25 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
         ) {
             let obj = match rsa_jwk_export_object(&key_bytes, mat) {
                 Some(o) => o,
-                None => return resolve_undefined(),
+                None => return reject_with_dom_exception("OperationError", "The operation failed"),
             };
             return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
         }
         if matches!(mat.algo, KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256) {
             let obj = match ec_p256_jwk_export_object(&key_bytes, mat) {
                 Some(o) => o,
-                None => return resolve_undefined(),
+                None => return reject_with_dom_exception("OperationError", "The operation failed"),
             };
             return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
         }
         if matches!(mat.algo, KeyAlgo::Ed25519 | KeyAlgo::X25519) {
             let obj = match okp_jwk_export_object(&key_bytes, mat) {
                 Some(o) => o,
-                None => return resolve_undefined(),
+                None => return reject_with_dom_exception("OperationError", "The operation failed"),
             };
             return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
         }
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     resolve_with_bytes(&key_bytes)
 }

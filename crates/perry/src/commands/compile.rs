@@ -22,6 +22,7 @@ mod bootstrap;
 mod bundle_apple;
 mod bundle_ios;
 mod cjs_wrap;
+mod codegen_steps;
 mod collect_modules;
 mod harmonyos_shim;
 mod host_config;
@@ -217,6 +218,12 @@ pub fn run_with_parse_cache(
     // loading lifted into compile/host_config.rs::apply_pkg_and_toml_config.
     let (i18n_config, i18n_translations) =
         apply_pkg_and_toml_config(&args, &project_root, &mut ctx, format)?;
+
+    // #1680 (Phase 2 of #1677): run host-declared build-time codegen steps
+    // (e.g. `ajv/standalone`, `prisma generate`) before module collection so
+    // the eval-free generated output is on disk for the normal compile path.
+    let skip_codegen = args.no_codegen || codegen_steps::skip_from_env();
+    codegen_steps::run_codegen_steps(&ctx, skip_codegen, format)?;
 
     maybe_init_type_checker(&args, &project_root, format, &mut ctx);
 

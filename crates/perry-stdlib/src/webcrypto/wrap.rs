@@ -1,3 +1,91 @@
+// =====================================================================
+// subtle.wrapKey / subtle.unwrapKey
+//
+// jose reaches for these to ship key material between A256GCMKW
+// (AES-GCM wrap) and the symmetric encrypted-payload flow. We
+// support two wrap algorithms:
+//
+//   - `{ name: "AES-KW" }`  (RFC 3394) — the wrappingKey is an
+//     AES key (128/192/256-bit); wrapped output is `keyBytes` + 8.
+//   - `{ name: "AES-GCM", iv, additionalData? }` — same shape the
+//     existing encrypt/decrypt path takes; wrapped output is
+//     `ciphertext || tag`.
+//
+// `format` is currently restricted to `"raw"` — the only format
+// jose uses for symmetric keys. JWK / spki / pkcs8 are TODO follow-
+// ups (they require an asymmetric algorithm we haven't wired yet).
+// =====================================================================
+
+/// AES-KW wrap — RFC 3394. Returns the wrapped key (8 bytes longer
+/// than `plaintext_key`). `aes-kw` 0.3 ships
+/// `KwAes128/192/256`; we support all three lengths the WebCrypto
+/// spec allows for AES-KW.
+fn aes_kw_wrap(wrapping_key: &[u8], plaintext_key: &[u8]) -> Option<Vec<u8>> {
+    use aes_kw::{KeyInit, KwAes128, KwAes192, KwAes256};
+    let mut buf = vec![0u8; plaintext_key.len() + 8];
+    match wrapping_key.len() {
+        16 => {
+            let key_arr: [u8; 16] = wrapping_key.try_into().ok()?;
+            let kek = KwAes128::new(&key_arr.into());
+            kek.wrap_key(plaintext_key, &mut buf).ok()?;
+        }
+        24 => {
+            let key_arr: [u8; 24] = wrapping_key.try_into().ok()?;
+            let kek = KwAes192::new(&key_arr.into());
+            kek.wrap_key(plaintext_key, &mut buf).ok()?;
+        }
+        32 => {
+            let key_arr: [u8; 32] = wrapping_key.try_into().ok()?;
+            let kek = KwAes256::new(&key_arr.into());
+            kek.wrap_key(plaintext_key, &mut buf).ok()?;
+        }
+        _ => return None,
+    }
+    Some(buf)
+}
+
+/// AES-KW unwrap — RFC 3394.
+fn aes_kw_unwrap(wrapping_key: &[u8], wrapped_key: &[u8]) -> Option<Vec<u8>> {
+    use aes_kw::{KeyInit, KwAes128, KwAes192, KwAes256};
+    if wrapped_key.len() < 8 {
+        return None;
+    }
+    let mut buf = vec![0u8; wrapped_key.len() - 8];
+    match wrapping_key.len() {
+        16 => {
+            let key_arr: [u8; 16] = wrapping_key.try_into().ok()?;
+            let kek = KwAes128::new(&key_arr.into());
+            kek.unwrap_key(wrapped_key, &mut buf).ok()?;
+        }
+        24 => {
+            let key_arr: [u8; 24] = wrapping_key.try_into().ok()?;
+            let kek = KwAes192::new(&key_arr.into());
+            kek.unwrap_key(wrapped_key, &mut buf).ok()?;
+        }
+        32 => {
+            let key_arr: [u8; 32] = wrapping_key.try_into().ok()?;
+            let kek = KwAes256::new(&key_arr.into());
+            kek.unwrap_key(wrapped_key, &mut buf).ok()?;
+        }
+        _ => return None,
+    }
+    Some(buf)
+}
+
+/// Resolve the AES-GCM IV / AAD pair from a wrap-algorithm object.
+/// Returns `None` if the IV is missing (the only mandatory field).
+unsafe fn resolve_aes_gcm_iv_aad(algo_bits: u64) -> Option<(Vec<u8>, Vec<u8>)> {
+    let iv = object_field_bytes(algo_bits, b"iv")?;
+    let aad = object_field_bytes(algo_bits, b"additionalData").unwrap_or_default();
+    Some((iv, aad))
+}
+
+/// Read the canonical algorithm-name from an algorithm arg (string or
+/// `{ name }` object), upper-cased for matching.
+unsafe fn wrap_algo_name(algo_bits: u64) -> Option<String> {
+    extract_algo_name(algo_bits).map(|s| s.to_ascii_uppercase())
+}
+
 /// `crypto.subtle.wrapKey(format, key, wrappingKey, wrapAlgorithm)` →
 /// Promise<Uint8Array>
 ///
@@ -34,12 +122,15 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
     }
     let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
     let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
-    if lookup_crypto_key(wrapping_key_addr).is_none() {
-        return reject_with_dom_exception(
-            "InvalidAccessError",
-            "Wrapping key is not a valid CryptoKey",
-        );
-    }
+    let wrapping_mat = match lookup_crypto_key(wrapping_key_addr) {
+        Some(m) => m,
+        None => {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Wrapping key is not a valid CryptoKey",
+            )
+        }
+    };
     let wrapping_key_bytes = bytes_from_jsvalue(wrapping_key_bits.to_bits());
 
     let upper = match wrap_algo_name(wrap_algo_bits.to_bits()) {
@@ -52,68 +143,102 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
         }
     };
     let wrapped = if upper == "AES-KW" {
+        if wrapping_mat.algo != KeyAlgo::AesKw {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
         match aes_kw_wrap(&wrapping_key_bytes, &key_bytes) {
             Some(w) => w,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "AES-GCM" {
+        if wrapping_mat.algo != KeyAlgo::AesGcm {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
         let (iv, aad) = match resolve_aes_gcm_iv_aad(wrap_algo_bits.to_bits()) {
             Some(t) => t,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize wrap algorithm parameters",
+                )
+            }
         };
         match aes_gcm_encrypt(&wrapping_key_bytes, &iv, &aad, &key_bytes) {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "AES-CBC" {
-        let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
-        if !matches!(lookup_crypto_key(wrapping_key_addr), Some(m) if m.algo == KeyAlgo::AesCbc) {
-            return resolve_undefined();
+        if wrapping_mat.algo != KeyAlgo::AesCbc {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let iv = match object_field_bytes(wrap_algo_bits.to_bits(), b"iv") {
             Some(v) => v,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize wrap algorithm parameters",
+                )
+            }
         };
         match aes_cbc_encrypt(&wrapping_key_bytes, &iv, &key_bytes) {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "AES-CTR" {
-        let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
-        if !matches!(lookup_crypto_key(wrapping_key_addr), Some(m) if m.algo == KeyAlgo::AesCtr) {
-            return resolve_undefined();
+        if wrapping_mat.algo != KeyAlgo::AesCtr {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let counter = match object_field_bytes(wrap_algo_bits.to_bits(), b"counter") {
             Some(v) => v,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize wrap algorithm parameters",
+                )
+            }
         };
         let length = match object_field_number(wrap_algo_bits.to_bits(), b"length") {
             Some(v) => v,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize wrap algorithm parameters",
+                )
+            }
         };
         match aes_ctr_apply(&wrapping_key_bytes, &counter, length, &key_bytes) {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "RSA-OAEP" {
-        let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
-        let mat = match lookup_crypto_key(wrapping_key_addr) {
-            Some(m) => m,
-            None => return resolve_undefined(),
-        };
-        if mat.algo != KeyAlgo::RsaOaep || mat.kind != KeyKind::Public {
-            return resolve_undefined();
+        if wrapping_mat.algo != KeyAlgo::RsaOaep || wrapping_mat.kind != KeyKind::Public {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let public_key = match RsaPublicKey::from_public_key_der(&wrapping_key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        match rsa_oaep_encrypt(mat.hash, &public_key, &key_bytes) {
+        match rsa_oaep_encrypt(wrapping_mat.hash, &public_key, &key_bytes) {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else {
-        return resolve_undefined();
+        return reject_with_dom_exception("NotSupportedError", "Unrecognized wrap-algorithm name");
     };
     resolve_with_bytes(&wrapped)
 }
@@ -150,12 +275,15 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
     }
     let wrapped_bytes = bytes_from_jsvalue(wrapped_key_bits.to_bits());
     let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
-    if lookup_crypto_key(unwrapping_key_addr).is_none() {
-        return reject_with_dom_exception(
-            "InvalidAccessError",
-            "Unwrapping key is not a valid CryptoKey",
-        );
-    }
+    let unwrapping_mat = match lookup_crypto_key(unwrapping_key_addr) {
+        Some(m) => m,
+        None => {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unwrapping key is not a valid CryptoKey",
+            )
+        }
+    };
     let unwrapping_key_bytes = bytes_from_jsvalue(unwrapping_key_bits.to_bits());
 
     let upper = match wrap_algo_name(unwrap_algo_bits.to_bits()) {
@@ -168,86 +296,128 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
         }
     };
     let recovered = if upper == "AES-KW" {
+        if unwrapping_mat.algo != KeyAlgo::AesKw {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
         match aes_kw_unwrap(&unwrapping_key_bytes, &wrapped_bytes) {
             Some(r) => r,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "AES-GCM" {
+        if unwrapping_mat.algo != KeyAlgo::AesGcm {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
         let (iv, aad) = match resolve_aes_gcm_iv_aad(unwrap_algo_bits.to_bits()) {
             Some(t) => t,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize unwrap algorithm parameters",
+                )
+            }
         };
         match aes_gcm_decrypt(&unwrapping_key_bytes, &iv, &aad, &wrapped_bytes) {
             Some(p) => p,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "AES-CBC" {
-        let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
-        if !matches!(lookup_crypto_key(unwrapping_key_addr), Some(m) if m.algo == KeyAlgo::AesCbc) {
-            return resolve_undefined();
+        if unwrapping_mat.algo != KeyAlgo::AesCbc {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let iv = match object_field_bytes(unwrap_algo_bits.to_bits(), b"iv") {
             Some(v) => v,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize unwrap algorithm parameters",
+                )
+            }
         };
         match aes_cbc_decrypt(&unwrapping_key_bytes, &iv, &wrapped_bytes) {
             Some(p) => p,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "AES-CTR" {
-        let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
-        if !matches!(lookup_crypto_key(unwrapping_key_addr), Some(m) if m.algo == KeyAlgo::AesCtr) {
-            return resolve_undefined();
+        if unwrapping_mat.algo != KeyAlgo::AesCtr {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let counter = match object_field_bytes(unwrap_algo_bits.to_bits(), b"counter") {
             Some(v) => v,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize unwrap algorithm parameters",
+                )
+            }
         };
         let length = match object_field_number(unwrap_algo_bits.to_bits(), b"length") {
             Some(v) => v,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize unwrap algorithm parameters",
+                )
+            }
         };
         match aes_ctr_apply(&unwrapping_key_bytes, &counter, length, &wrapped_bytes) {
             Some(p) => p,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "RSA-OAEP" {
-        let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
-        let mat = match lookup_crypto_key(unwrapping_key_addr) {
-            Some(m) => m,
-            None => return resolve_undefined(),
-        };
-        if mat.algo != KeyAlgo::RsaOaep || mat.kind != KeyKind::Private {
-            return resolve_undefined();
+        if unwrapping_mat.algo != KeyAlgo::RsaOaep || unwrapping_mat.kind != KeyKind::Private {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let private_key = match RsaPrivateKey::from_pkcs8_der(&unwrapping_key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        match rsa_oaep_decrypt(mat.hash, &private_key, &wrapped_bytes) {
+        match rsa_oaep_decrypt(unwrapping_mat.hash, &private_key, &wrapped_bytes) {
             Some(p) => p,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else {
-        return resolve_undefined();
+        return reject_with_dom_exception(
+            "NotSupportedError",
+            "Unrecognized unwrap-algorithm name",
+        );
     };
 
     // Register the recovered bytes as a CryptoKey under the requested
     // unwrappedKeyAlgorithm.
     let unwrapped_name = match wrap_algo_name(unwrapped_algo_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception(
+                "NotSupportedError",
+                "Unrecognized unwrapped-key algorithm name",
+            )
+        }
     };
     let key_algo = match unwrapped_name.as_str() {
         "AES-GCM" => KeyAlgo::AesGcm,
         "AES-KW" => KeyAlgo::AesKw,
         "AES-CBC" => KeyAlgo::AesCbc,
         "AES-CTR" => KeyAlgo::AesCtr,
-        _ => return resolve_undefined(),
+        _ => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
     let buf = alloc_uint8array_from_slice(&recovered);
     if buf.is_null() {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     register_crypto_key(
         buf as usize,

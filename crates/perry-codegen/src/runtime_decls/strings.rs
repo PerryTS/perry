@@ -1097,6 +1097,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
+    module.declare_function("js_object_get_own_property_descriptors", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_get_own_property_names", DOUBLE, &[DOUBLE]);
     // Symbol runtime (perry-runtime/src/symbol.rs)
     module.declare_function("js_symbol_new", DOUBLE, &[DOUBLE]);

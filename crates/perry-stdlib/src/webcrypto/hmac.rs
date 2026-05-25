@@ -27,59 +27,74 @@ pub unsafe extern "C" fn js_webcrypto_sign(
     let data_bytes = bytes_from_jsvalue(data_bits.to_bits());
     let sig = if algo_upper == "HMAC" {
         if mat.algo != KeyAlgo::Hmac || mat.kind != KeyKind::Secret {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
         }
         match compute_hmac(mat.hash, &key_bytes, &data_bytes) {
             Some(s) => s,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if algo_upper == "ECDSA" {
         if mat.algo != KeyAlgo::EcdsaP256 || mat.kind != KeyKind::Private {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
         }
         let signing_key = match P256EcdsaSigningKey::from_slice(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let sig: P256EcdsaSignature = signing_key.sign(&data_bytes);
         sig.to_bytes().as_slice().to_vec()
     } else if algo_upper == "ED25519" {
         if mat.algo != KeyAlgo::Ed25519 || mat.kind != KeyKind::Private {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
         }
         let secret: [u8; 32] = match key_bytes.as_slice().try_into() {
             Ok(s) => s,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
         use ed25519_dalek::Signer as _;
         signing_key.sign(&data_bytes).to_bytes().to_vec()
     } else if algo_upper == "RSASSA-PKCS1-V1_5" {
         if mat.algo != KeyAlgo::RsassaPkcs1 || mat.kind != KeyKind::Private {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
         }
         let private_key = match RsaPrivateKey::from_pkcs8_der(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         match rsa_pkcs1_sign(mat.hash, private_key, &data_bytes) {
             Some(s) => s,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if algo_upper == "RSA-PSS" {
         if mat.algo != KeyAlgo::RsaPss || mat.kind != KeyKind::Private {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
         }
         let salt_len = object_field_bits(algo_bits.to_bits(), b"saltLength")
             .and_then(number_from_bits)
             .unwrap_or(32) as usize;
         let private_key = match RsaPrivateKey::from_pkcs8_der(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         match rsa_pss_sign(mat.hash, private_key, &data_bytes, salt_len) {
             Some(s) => s,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else {
         return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name");
@@ -114,20 +129,26 @@ pub unsafe extern "C" fn js_webcrypto_verify(
     let provided_sig = bytes_from_jsvalue(sig_bits.to_bits());
     let ok = if algo_upper == "HMAC" {
         if mat.algo != KeyAlgo::Hmac || mat.kind != KeyKind::Secret {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
         }
         let expected_sig = match compute_hmac(mat.hash, &key_bytes, &data_bytes) {
             Some(s) => s,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         constant_time_eq(&expected_sig, &provided_sig)
     } else if algo_upper == "ECDSA" {
         if mat.algo != KeyAlgo::EcdsaP256 || mat.kind != KeyKind::Public {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
         }
         let verifying_key = match P256EcdsaVerifyingKey::from_sec1_bytes(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let sig = match P256EcdsaSignature::from_slice(&provided_sig) {
             Ok(s) => s,
@@ -136,15 +157,18 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         verifying_key.verify(&data_bytes, &sig).is_ok()
     } else if algo_upper == "ED25519" {
         if mat.algo != KeyAlgo::Ed25519 || mat.kind != KeyKind::Public {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
         }
         let public: [u8; 32] = match key_bytes.as_slice().try_into() {
             Ok(p) => p,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let verifying_key = match ed25519_dalek::VerifyingKey::from_bytes(&public) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let signature = match ed25519_dalek::Signature::try_from(provided_sig.as_slice()) {
             Ok(sig) => sig,
@@ -154,23 +178,29 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         verifying_key.verify(&data_bytes, &signature).is_ok()
     } else if algo_upper == "RSASSA-PKCS1-V1_5" {
         if mat.algo != KeyAlgo::RsassaPkcs1 || mat.kind != KeyKind::Public {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
         }
         let public_key = match RsaPublicKey::from_public_key_der(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         rsa_pkcs1_verify(mat.hash, public_key, &data_bytes, &provided_sig).unwrap_or(false)
     } else if algo_upper == "RSA-PSS" {
         if mat.algo != KeyAlgo::RsaPss || mat.kind != KeyKind::Public {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
         }
         let salt_len = object_field_bits(algo_bits.to_bits(), b"saltLength")
             .and_then(number_from_bits)
             .unwrap_or(32) as usize;
         let public_key = match RsaPublicKey::from_public_key_der(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         rsa_pss_verify(mat.hash, public_key, &data_bytes, &provided_sig, salt_len).unwrap_or(false)
     } else {
@@ -319,3 +349,4 @@ unsafe fn kdf_derive_bytes(algo_bits: u64, base_key_bits: u64, byte_len: usize) 
     }
     None
 }
+

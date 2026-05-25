@@ -145,6 +145,7 @@ impl SH for Expr {
             Expr::FinalizationRegistryUnregister { registry, token } => { tag(h, 107); registry.as_ref().hash(h); token.as_ref().hash(h); }
             Expr::ObjectDefineProperty(a, b, c) => { tag(h, 108); a.as_ref().hash(h); b.as_ref().hash(h); c.as_ref().hash(h); }
             Expr::ObjectGetOwnPropertyDescriptor(a, b) => { tag(h, 109); a.as_ref().hash(h); b.as_ref().hash(h); }
+            Expr::ObjectGetOwnPropertyDescriptors(e) => { tag(h, 11237); e.as_ref().hash(h); }
             Expr::ObjectGetOwnPropertyNames(e) => { tag(h, 110); e.as_ref().hash(h); }
             Expr::ObjectCreate(e) => { tag(h, 111); e.as_ref().hash(h); }
             Expr::ObjectFreeze(e) => { tag(h, 112); e.as_ref().hash(h); }
