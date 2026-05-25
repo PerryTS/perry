@@ -220,6 +220,38 @@ pub(crate) unsafe fn resolve_proto_chain_field(
     None
 }
 
+/// #1758: symbol-keyed analogue of [`resolve_proto_chain_field`]. Walks the
+/// `CLASS_PROTOTYPE_OBJECTS` / `get_parent_class_id` chain and, at each
+/// prototype object (a POINTER class-object), looks up its OWN symbol property
+/// via `js_object_get_symbol_property`. Lets a subclass whose parent is a
+/// class-expression value inherit the parent's static *symbol* statics — e.g.
+/// effect's `class BigIntFromSelf extends make(bigIntKeyword) {}` inheriting
+/// `static [TypeId]`, which `Predicate.hasProperty(.., TypeId)` (`isSchema`)
+/// and `u[TypeId]` both read. Returns the first defined value found.
+pub(crate) unsafe fn resolve_proto_chain_symbol(class_id: u32, sym_f64: f64) -> Option<f64> {
+    let mut cid = class_id;
+    let mut depth = 0usize;
+    while depth < 32 {
+        let proto_obj = class_prototype_object(cid);
+        if !proto_obj.is_null() {
+            let proto_f64 = f64::from_bits(JSValue::pointer(proto_obj as *const u8).bits());
+            // OWN lookup only — this fn IS the chain walk, so recursing into
+            // the full chain-walking getter would re-walk per prototype.
+            if let Some(v) = crate::symbol::own_symbol_property(proto_f64, sym_f64) {
+                return Some(v);
+            }
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    None
+}
+
 /// Lookup the synthetic class id for a function value, if one was
 /// registered via `js_set_function_prototype`.
 #[inline]
