@@ -241,6 +241,8 @@ for raw in sys.stdin:
         sed -E '/^\(node:[0-9]+\) \[DEP[0-9]+\] DeprecationWarning:/d' | \
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: Type Stripping is an experimental feature/d' | \
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: glob is an experimental feature/d' | \
+        sed -E '/^\(node:[0-9]+\) TimeoutOverflowWarning:/d' | \
+        sed -E '/^Timeout duration was set to [0-9]+\.$/d' | \
         sed -E '/^\(Use `node --trace-deprecation/d' | \
         sed -E '/^Reparsing as ES module because module syntax was detected/d' | \
         sed -E '/^To eliminate this warning, add "type": "module"/d' | \

@@ -9,6 +9,7 @@
 
 use crate::promise::{js_promise_new, js_promise_resolve, Promise};
 use std::collections::HashMap;
+use std::os::raw::c_int;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -198,6 +199,26 @@ static CALLBACK_TIMERS: Mutex<Vec<CallbackTimer>> = Mutex::new(Vec::new());
 // clobber an unrelated Timeout with the same numeric id.
 static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
 static TIMER_REF_STATES: Mutex<Option<HashMap<i64, bool>>> = Mutex::new(None);
+
+fn timer_handle_value(id: i64) -> f64 {
+    f64::from_bits(crate::value::JSValue::pointer(id as *mut u8).bits())
+}
+
+fn with_timer_uncaught_trap<F: FnOnce()>(f: F) {
+    let trap_buf = crate::exception::js_try_push();
+    // SAFETY: this setjmp frame is active only for the synchronous timer
+    // callback invocation below. `js_throw` longjmps back here before the
+    // frame is popped, matching the promise microtask runner's trap shape.
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+    if jumped == 0 {
+        f();
+    } else {
+        let exc = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        crate::os::emit_process_uncaught_exception(exc);
+    }
+    crate::exception::js_try_end();
+}
 
 fn next_timer_id() -> i64 {
     let mut next = NEXT_TIMER_ID.lock().unwrap();
@@ -415,41 +436,45 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
             crate::async_hooks::before(timer.async_id, timer.trigger_async_id);
             let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
             let cb = cb_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
-            match a.len() {
-                0 => {
-                    js_closure_call0(cb);
+            let prev_this = crate::object::js_implicit_this_set(timer_handle_value(timer.id));
+            with_timer_uncaught_trap(|| {
+                match a.len() {
+                    0 => {
+                        js_closure_call0(cb);
+                    }
+                    1 => {
+                        js_closure_call1(cb, a[0]);
+                    }
+                    2 => {
+                        js_closure_call2(cb, a[0], a[1]);
+                    }
+                    3 => {
+                        js_closure_call3(cb, a[0], a[1], a[2]);
+                    }
+                    4 => {
+                        js_closure_call4(cb, a[0], a[1], a[2], a[3]);
+                    }
+                    5 => {
+                        js_closure_call5(cb, a[0], a[1], a[2], a[3], a[4]);
+                    }
+                    6 => {
+                        js_closure_call6(cb, a[0], a[1], a[2], a[3], a[4], a[5]);
+                    }
+                    7 => {
+                        js_closure_call7(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+                    }
+                    8 => {
+                        js_closure_call8(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+                    }
+                    _ => {
+                        // >= 9 args: clamp to 9. Real-world setTimeout
+                        // rarely exceeds 1-2 trailing args; this is a
+                        // conservative safety net rather than spec coverage.
+                        js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
+                    }
                 }
-                1 => {
-                    js_closure_call1(cb, a[0]);
-                }
-                2 => {
-                    js_closure_call2(cb, a[0], a[1]);
-                }
-                3 => {
-                    js_closure_call3(cb, a[0], a[1], a[2]);
-                }
-                4 => {
-                    js_closure_call4(cb, a[0], a[1], a[2], a[3]);
-                }
-                5 => {
-                    js_closure_call5(cb, a[0], a[1], a[2], a[3], a[4]);
-                }
-                6 => {
-                    js_closure_call6(cb, a[0], a[1], a[2], a[3], a[4], a[5]);
-                }
-                7 => {
-                    js_closure_call7(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
-                }
-                8 => {
-                    js_closure_call8(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
-                }
-                _ => {
-                    // >= 9 args: clamp to 9. Real-world setTimeout
-                    // rarely exceeds 1-2 trailing args; this is a
-                    // conservative safety net rather than spec coverage.
-                    js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
-                }
-            }
+            });
+            crate::object::js_implicit_this_set(prev_this);
             crate::async_hooks::after(timer.async_id);
             crate::async_hooks::destroy(timer.async_id);
             crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
@@ -526,6 +551,14 @@ pub extern "C" fn clearTimeout(timer_id: i64) {
     intervals.retain(|t| !t.cleared);
 }
 
+/// Clear an immediate by ID. Node tolerates cross-clears between timeout and
+/// immediate handles, so this shares the callback timer queue with
+/// `clearTimeout`.
+#[no_mangle]
+pub extern "C" fn clearImmediate(timer_id: i64) {
+    clearTimeout(timer_id);
+}
+
 /// Resolve a `clearTimeout`/`clearInterval` argument to a timer id. Accepts
 /// both the Timeout/Immediate handle (POINTER_TAG, lower 48 bits = id) and the
 /// primitive numeric id (`+timeout`), so `clearTimeout(+t)` works (#1213).
@@ -537,6 +570,12 @@ fn arg_to_timer_id(arg: f64) -> Option<i64> {
     } else if v.is_number() {
         let n = v.as_number();
         n.is_finite().then_some(n as i64)
+    } else if let Some(s) = crate::node_submodules::diagnostics::decode_string_value(arg) {
+        if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) {
+            s.parse::<i64>().ok()
+        } else {
+            None
+        }
     } else if v.is_pointer() {
         Some((arg.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64)
     } else {
@@ -560,6 +599,14 @@ pub extern "C" fn js_clear_interval_value(arg: f64) {
     }
 }
 
+/// `clearImmediate(handleOrId)` — accepts the Immediate handle or primitive id.
+#[no_mangle]
+pub extern "C" fn js_clear_immediate_value(arg: f64) {
+    if let Some(id) = arg_to_timer_id(arg) {
+        clearImmediate(id);
+    }
+}
+
 // ============================================================================
 // setInterval / clearInterval support
 // ============================================================================
@@ -574,6 +621,8 @@ struct IntervalTimer {
     interval_ms: u64,
     /// When this interval should next fire
     next_deadline: Instant,
+    /// Trailing arguments to forward to the interval callback.
+    args: Vec<f64>,
     /// AsyncLocalStorage context captured when the interval was scheduled.
     context: crate::async_context::AsyncContextSnapshot,
     /// Whether this interval has been cleared
@@ -590,6 +639,10 @@ static INTERVAL_TIMERS: Mutex<Vec<IntervalTimer>> = Mutex::new(Vec::new());
 /// Returns an interval ID that can be used with clearInterval
 #[no_mangle]
 pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {
+    schedule_interval_timer(callback, interval_ms, Vec::new())
+}
+
+fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i64 {
     ensure_initialized();
 
     let interval = interval_ms.max(0.0) as u64;
@@ -602,12 +655,28 @@ pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {
         callback,
         interval_ms: interval,
         next_deadline,
+        args,
         context: crate::async_context::capture_context(),
         cleared: false,
     });
     set_timer_ref_state(id, true);
 
     id
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_set_interval_callback_args(
+    callback: i64,
+    interval_ms: f64,
+    args_ptr: *const f64,
+    n_args: i32,
+) -> i64 {
+    let args: Vec<f64> = if args_ptr.is_null() || n_args <= 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(args_ptr, n_args as usize).to_vec()
+    };
+    schedule_interval_timer(callback, interval_ms, args)
 }
 
 /// Clear an interval timer by ID. Also clears the callback-timer queue
@@ -639,18 +708,31 @@ pub extern "C" fn clearInterval(interval_id: i64) {
 /// Returns the number of callbacks that were called
 #[no_mangle]
 pub extern "C" fn js_interval_timer_tick() -> i32 {
-    use crate::closure::js_closure_call0;
+    use crate::closure::{
+        js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3, js_closure_call4,
+        js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
+    };
 
     let now = Instant::now();
 
     // Collect callbacks to call and update deadlines
-    let callbacks_to_call: Vec<(i64, crate::async_context::AsyncContextSnapshot)> = {
+    let callbacks_to_call: Vec<(
+        i64,
+        i64,
+        Vec<f64>,
+        crate::async_context::AsyncContextSnapshot,
+    )> = {
         let mut timers = INTERVAL_TIMERS.lock().unwrap();
         let mut callbacks = Vec::new();
 
         for timer in timers.iter_mut() {
             if !timer.cleared && timer.next_deadline <= now {
-                callbacks.push((timer.callback, timer.context.clone()));
+                callbacks.push((
+                    timer.id,
+                    timer.callback,
+                    timer.args.clone(),
+                    timer.context.clone(),
+                ));
                 timer.next_deadline = now + Duration::from_millis(timer.interval_ms);
             }
         }
@@ -662,14 +744,32 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
 
     let mut fired = 0;
     // Call the callbacks outside of the lock
-    for (callback, context) in callbacks_to_call {
+    for (id, callback, args, context) in callbacks_to_call {
         let scope = crate::gc::RuntimeHandleScope::new();
         let callback_handle =
             scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
+        let arg_handles = scope.root_nanbox_f64_slice(&args);
         let previous = crate::async_context::enter_context(&context);
         let mut previous = previous;
         let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
-        js_closure_call0(callback_handle.get_raw_const_ptr());
+        let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+        let cb = callback_handle.get_raw_const_ptr();
+        let prev_this = crate::object::js_implicit_this_set(timer_handle_value(id));
+        with_timer_uncaught_trap(|| {
+            match a.len() {
+                0 => js_closure_call0(cb),
+                1 => js_closure_call1(cb, a[0]),
+                2 => js_closure_call2(cb, a[0], a[1]),
+                3 => js_closure_call3(cb, a[0], a[1], a[2]),
+                4 => js_closure_call4(cb, a[0], a[1], a[2], a[3]),
+                5 => js_closure_call5(cb, a[0], a[1], a[2], a[3], a[4]),
+                6 => js_closure_call6(cb, a[0], a[1], a[2], a[3], a[4], a[5]),
+                7 => js_closure_call7(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6]),
+                8 => js_closure_call8(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]),
+                _ => js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]),
+            };
+        });
+        crate::object::js_implicit_this_set(prev_this);
         crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
         crate::async_context::restore_context(previous);
         fired += 1;
@@ -745,6 +845,9 @@ pub fn scan_timer_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
                 visitor.visit_nanbox_f64_slot(arg);
             }
             crate::async_context::scan_snapshot_roots_mut(&mut timer.context, visitor);
+            for arg in &mut timer.args {
+                visitor.visit_nanbox_f64_slot(arg);
+            }
         }
     }
 
@@ -808,6 +911,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
         callback,
         interval_ms: 86_400_000,
         next_deadline: deadline,
+        args: Vec::new(),
         context,
         cleared: false,
     });

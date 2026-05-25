@@ -248,6 +248,7 @@ pub unsafe extern "C" fn js_native_call_method(
                     "close" => {
                         crate::timer::clearTimeout(id);
                         crate::timer::clearInterval(id);
+                        crate::timer::clearImmediate(id);
                         return object;
                     }
                     // `__perry_dispose__` is the class-member form; the
@@ -256,6 +257,7 @@ pub unsafe extern "C" fn js_native_call_method(
                     "__perry_dispose__" | "@@__perry_wk_dispose" => {
                         crate::timer::clearTimeout(id);
                         crate::timer::clearInterval(id);
+                        crate::timer::clearImmediate(id);
                         return f64::from_bits(JSValue::undefined().bits());
                     }
                     "@@__perry_wk_toPrimitive" | "valueOf" => return id as f64,

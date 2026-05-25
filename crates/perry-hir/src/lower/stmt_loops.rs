@@ -59,6 +59,24 @@ pub(crate) fn lower_stmt_for_of(
     };
     let needs_await = for_of_stmt.is_await || callee_is_async_gen;
 
+    let is_timer_promises_interval_call = for_of_stmt.is_await
+        && if let ast::Expr::Call(call) = &*for_of_stmt.right {
+            if let ast::Callee::Expr(callee_expr) = &call.callee {
+                match &**callee_expr {
+                    ast::Expr::Ident(ident) => ident.sym.as_ref() == "setInterval",
+                    ast::Expr::Member(member) => matches!(
+                        &member.prop,
+                        ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "setInterval"
+                    ),
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
     // Also detect: for (const x of new Range(...)) where Range
     // defines `*[Symbol.iterator]()`. We lowered that method as
     // a synthesized top-level generator function taking `this`
@@ -76,7 +94,7 @@ pub(crate) fn lower_stmt_for_of(
             None
         };
 
-    if is_generator_call || iter_from_class.is_some() {
+    if is_generator_call || iter_from_class.is_some() || is_timer_promises_interval_call {
         // Lower to iterator protocol:
         //   let __iter = genFunc(...);                     // generator-fn path
         //   let __iter = __perry_iter_Range(new Range(...));  // class path

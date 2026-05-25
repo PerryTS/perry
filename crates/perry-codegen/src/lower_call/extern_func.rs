@@ -167,6 +167,36 @@ pub fn try_lower_extern_func_call(
             );
             return Ok(Some(nanbox_pointer_inline(blk, &id)));
         }
+        "setInterval" if args.len() >= 3 => {
+            let cb_box = lower_expr(ctx, &args[0])?;
+            let delay_box = lower_expr(ctx, &args[1])?;
+            let n = args.len() - 2;
+            let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+            for (i, a) in args.iter().skip(2).enumerate() {
+                let v = lower_expr(ctx, a)?;
+                let blk = ctx.block();
+                let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+                blk.store(DOUBLE, &v, &slot);
+            }
+            let ptr_reg = ctx.block().next_reg();
+            ctx.block().emit_raw(format!(
+                "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                ptr_reg, n, buf
+            ));
+            let blk = ctx.block();
+            let cb_handle = unbox_to_i64(blk, &cb_box);
+            let id = blk.call(
+                I64,
+                "js_set_interval_callback_args",
+                &[
+                    (I64, &cb_handle),
+                    (DOUBLE, &delay_box),
+                    (crate::types::PTR, &ptr_reg),
+                    (I32, &n.to_string()),
+                ],
+            );
+            return Ok(Some(nanbox_pointer_inline(blk, &id)));
+        }
         "clearTimeout" if args.len() == 1 => {
             // Pass the raw NaN-boxed arg so the runtime accepts both the
             // handle and its primitive numeric id (`clearTimeout(+t)`, #1213).
@@ -185,12 +215,10 @@ pub fn try_lower_extern_func_call(
                 crate::nanbox::TAG_UNDEFINED,
             ))));
         }
-        // #1454: clearImmediate(handle) — immediates live in the shared timer
-        // pool, so the timeout-clear helper retains-out the immediate too.
         "clearImmediate" if args.len() == 1 => {
             let id_box = lower_expr(ctx, &args[0])?;
             ctx.block()
-                .call_void("js_clear_timeout_value", &[(DOUBLE, &id_box)]);
+                .call_void("js_clear_immediate_value", &[(DOUBLE, &id_box)]);
             return Ok(Some(double_literal(f64::from_bits(
                 crate::nanbox::TAG_UNDEFINED,
             ))));

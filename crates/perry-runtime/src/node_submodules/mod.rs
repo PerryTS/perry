@@ -35,7 +35,7 @@ use crate::object::{
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
 
-mod diagnostics;
+pub(crate) mod diagnostics;
 pub use diagnostics::*;
 
 /// One entry per named export of one submodule.
@@ -142,10 +142,10 @@ use fs_promises::{
 };
 use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from_ptr};
 use timers::{
-    thunk_timers_scheduler, thunk_timers_setInterval, timers_ns_clear_immediate,
-    timers_ns_clear_interval, timers_ns_clear_timeout, timers_ns_set_immediate,
-    timers_ns_set_interval, timers_ns_set_timeout, timers_promises_set_immediate,
-    timers_promises_set_timeout,
+    timers_ns_clear_immediate, timers_ns_clear_interval, timers_ns_clear_timeout,
+    timers_ns_set_immediate, timers_ns_set_interval, timers_ns_set_timeout,
+    timers_promises_scheduler, timers_promises_scheduler_wait, timers_promises_scheduler_yield,
+    timers_promises_set_immediate, timers_promises_set_interval, timers_promises_set_timeout,
 };
 
 // node:sys is a deprecated alias for node:util — point each export at
@@ -186,15 +186,15 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "setTimeout",
-                thunk: ExportThunk::Fn2(timers_ns_set_timeout),
+                thunk: ExportThunk::Fn3(timers_ns_set_timeout),
             },
             ExportSpec {
                 name: "setInterval",
-                thunk: ExportThunk::Fn2(timers_ns_set_interval),
+                thunk: ExportThunk::Fn3(timers_ns_set_interval),
             },
             ExportSpec {
                 name: "setImmediate",
-                thunk: ExportThunk::Fn1(timers_ns_set_immediate),
+                thunk: ExportThunk::Fn2(timers_ns_set_immediate),
             },
             ExportSpec {
                 name: "clearTimeout",
@@ -215,7 +215,7 @@ const SUBMODULES: &[SubmoduleSpec] = &[
         exports: &[
             ExportSpec {
                 name: "setTimeout",
-                thunk: ExportThunk::Fn2(timers_promises_set_timeout),
+                thunk: ExportThunk::Fn3(timers_promises_set_timeout),
             },
             ExportSpec {
                 name: "setImmediate",
@@ -223,11 +223,11 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             },
             ExportSpec {
                 name: "setInterval",
-                thunk: ExportThunk::Fn1(thunk_timers_setInterval),
+                thunk: ExportThunk::Fn3(timers_promises_set_interval),
             },
             ExportSpec {
                 name: "scheduler",
-                thunk: ExportThunk::Fn1(thunk_timers_scheduler),
+                thunk: ExportThunk::Fn1(timers_promises_scheduler),
             },
         ],
     },
@@ -653,6 +653,23 @@ fn ensure_export_singleton(
     // pads missing args with undefined for variadic-friendly thunks. This
     // replaces the per-submodule arity tables in earlier revisions.
     crate::closure::js_register_closure_arity(thunk_ptr, export.thunk.arity());
+    if submod.key == "timers_promises" && export.name == "scheduler" {
+        let wait = js_closure_alloc(timers_promises_scheduler_wait as *const u8, 0);
+        crate::closure::js_register_closure_arity(timers_promises_scheduler_wait as *const u8, 2);
+        crate::closure::closure_set_dynamic_prop(
+            allocated as usize,
+            "wait",
+            f64::from_bits(JSValue::pointer(wait as *const u8).bits()),
+        );
+
+        let yield_fn = js_closure_alloc(timers_promises_scheduler_yield as *const u8, 0);
+        crate::closure::js_register_closure_arity(timers_promises_scheduler_yield as *const u8, 0);
+        crate::closure::closure_set_dynamic_prop(
+            allocated as usize,
+            "yield",
+            f64::from_bits(JSValue::pointer(yield_fn as *const u8).bits()),
+        );
+    }
     EXPORT_SINGLETONS.with(|m| {
         m.borrow_mut().insert(key, allocated);
     });

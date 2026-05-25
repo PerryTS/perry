@@ -889,6 +889,24 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             };
             let needs_await = for_of_stmt.is_await || callee_is_async_gen;
 
+            let is_timer_promises_interval_call = for_of_stmt.is_await
+                && if let ast::Expr::Call(call) = &*for_of_stmt.right {
+                    if let ast::Callee::Expr(callee_expr) = &call.callee {
+                        match &**callee_expr {
+                            ast::Expr::Ident(ident) => ident.sym.as_ref() == "setInterval",
+                            ast::Expr::Member(member) => matches!(
+                                &member.prop,
+                                ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "setInterval"
+                            ),
+                            _ => false,
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
             let iter_from_class: Option<perry_types::FuncId> =
                 if let ast::Expr::New(new_expr) = &*for_of_stmt.right {
                     if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
@@ -901,7 +919,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     None
                 };
 
-            if is_generator_call || iter_from_class.is_some() {
+            if is_generator_call || iter_from_class.is_some() || is_timer_promises_interval_call {
                 let scope_mark = ctx.push_block_scope();
                 let iter_expr_raw = lower_expr(ctx, &for_of_stmt.right)?;
                 let iter_expr = if let Some(iter_fn_id) = iter_from_class {

@@ -30,15 +30,6 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
 
     ran += crate::async_hooks::drain_gc_destroy_queue();
 
-    // First, tick timers to resolve any expired timer promises
-    ran += crate::timer::js_timer_tick();
-
-    // Process callback timers (setTimeout with callbacks)
-    ran += crate::timer::js_callback_timer_tick();
-
-    // Process interval timers (setInterval)
-    ran += crate::timer::js_interval_timer_tick();
-
     // Process any scheduled resolutions (simulates async completions)
     ran += super::combinators::process_scheduled_resolves();
 
@@ -565,6 +556,15 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
             }
         }
     }
+
+    // Timers run after already-queued promise/queueMicrotask jobs, matching
+    // Node's turn ordering (`Promise.resolve().then(...)` before
+    // `setTimeout(..., 0)`). Timer callbacks may enqueue more microtasks;
+    // those drain on the next pump iteration before newly due timers.
+    ran += crate::timer::js_timer_tick();
+    ran += crate::timer::js_callback_timer_tick();
+    crate::builtins::js_drain_queued_microtasks();
+    ran += crate::timer::js_interval_timer_tick();
 
     crate::exception::js_try_end();
 
