@@ -59,6 +59,7 @@ pub mod string;
 pub mod symbol;
 pub mod text;
 pub mod timer;
+pub mod typed_feedback;
 pub mod typedarray;
 pub mod url;
 pub mod value;

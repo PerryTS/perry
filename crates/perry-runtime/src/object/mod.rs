@@ -1499,7 +1499,7 @@ pub(crate) fn extends_builtin_error(class_id: u32) -> bool {
 /// the floor here is safe because the obj_type validation does the
 /// work.
 #[inline(always)]
-fn is_valid_obj_ptr(ptr: *const u8) -> bool {
+pub(crate) fn is_valid_obj_ptr(ptr: *const u8) -> bool {
     let addr = ptr as u64;
     #[cfg(any(
         target_os = "android",

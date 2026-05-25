@@ -46,6 +46,56 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_object_set_unboxed_f64_field", VOID, &[I64, I32, DOUBLE]);
     module.declare_function("js_object_get_unboxed_f64_field", DOUBLE, &[I64, I32]);
     module.declare_function("js_object_set_field_by_name", VOID, &[I64, I64, DOUBLE]);
+    module.declare_function(
+        "js_typed_feedback_register_site",
+        VOID,
+        &[
+            I64, I32, PTR, I64, PTR, I64, PTR, I64, PTR, I64, PTR, I64, PTR, I64,
+        ],
+    );
+    module.declare_function("js_typed_feedback_record_guard_pass", VOID, &[I64]);
+    module.declare_function("js_typed_feedback_record_guard_fail", VOID, &[I64]);
+    module.declare_function("js_typed_feedback_record_fallback_call", VOID, &[I64]);
+    module.declare_function(
+        "js_typed_feedback_observe_property_get",
+        VOID,
+        &[I64, I64, I64],
+    );
+    module.declare_function(
+        "js_typed_feedback_observe_property_set",
+        VOID,
+        &[I64, I64, I64],
+    );
+    module.declare_function(
+        "js_typed_feedback_object_get_field_by_name_f64",
+        DOUBLE,
+        &[I64, I64, I64],
+    );
+    module.declare_function(
+        "js_typed_feedback_object_set_field_by_name",
+        VOID,
+        &[I64, I64, I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_typed_feedback_native_call_method",
+        DOUBLE,
+        &[I64, DOUBLE, PTR, I64, PTR, I64],
+    );
+    module.declare_function(
+        "js_typed_feedback_native_call_method_apply",
+        DOUBLE,
+        &[I64, DOUBLE, PTR, I64, I64],
+    );
+    module.declare_function(
+        "js_typed_feedback_object_set_unboxed_f64_field",
+        VOID,
+        &[I64, I64, I32, I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_typed_feedback_observe_helper_return",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
     // Closes #471: polymorphic numeric-key set/get used by the IndexSet/Get
     // fallback when the receiver type isn't statically narrowed to an array.
     // Dispatches by GC type to either the array setter/getter (preserving
@@ -83,6 +133,57 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_array_alloc_with_length", I64, &[I32]);
     // Unchecked array set (plain array, no buffer/Set/Map dispatch).
     module.declare_function("js_array_set_f64_unchecked", VOID, &[I64, I32, DOUBLE]);
+    module.declare_function("js_typed_feedback_array_get_f64", DOUBLE, &[I64, I64, I32]);
+    module.declare_function(
+        "js_typed_feedback_plain_array_index_get_guard",
+        I32,
+        &[I64, DOUBLE, DOUBLE, I32, I32],
+    );
+    module.declare_function(
+        "js_typed_feedback_array_index_get_fallback_boxed",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_typed_feedback_array_set_f64",
+        VOID,
+        &[I64, I64, I32, DOUBLE],
+    );
+    module.declare_function(
+        "js_typed_feedback_array_set_f64_extend",
+        I64,
+        &[I64, I64, I32, DOUBLE],
+    );
+    module.declare_function(
+        "js_typed_feedback_plain_array_index_set_guard",
+        I32,
+        &[I64, DOUBLE, I32, DOUBLE, I32],
+    );
+    module.declare_function(
+        "js_typed_feedback_array_index_set_fallback_boxed",
+        DOUBLE,
+        &[I64, DOUBLE, I32, DOUBLE],
+    );
+    module.declare_function(
+        "js_typed_feedback_observe_array_element",
+        VOID,
+        &[I64, I64, I32],
+    );
+    module.declare_function(
+        "js_typed_feedback_array_set_string_key",
+        I64,
+        &[I64, I64, I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_typed_feedback_array_set_index_or_string",
+        I64,
+        &[I64, I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_typed_feedback_object_set_index_polymorphic",
+        VOID,
+        &[I64, I64, DOUBLE, DOUBLE],
+    );
 
     // --- Proxy / Reflect ---
     module.declare_function("js_proxy_new", DOUBLE, &[DOUBLE, DOUBLE]);
