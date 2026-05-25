@@ -11,6 +11,7 @@ pub mod dynamic_import;
 pub mod egress;
 pub(crate) mod enums;
 pub mod error;
+pub mod eval_classifier;
 pub mod ir;
 pub mod js_transform;
 pub(crate) mod jsx;
@@ -33,6 +34,9 @@ pub use dynamic_import::{
 };
 pub use egress::{audit_module_egress, EgressRefusalReason, EgressViolation};
 pub use enums::fix_imported_enums;
+pub use eval_classifier::{
+    classify as classify_eval_surface, EvalBucket, EvalClassification, EvalSurface,
+};
 pub use ir::*;
 pub use js_transform::{
     fix_cross_module_native_instances, fix_local_native_instances, transform_js_imports,

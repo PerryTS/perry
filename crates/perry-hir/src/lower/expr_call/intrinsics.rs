@@ -69,6 +69,52 @@ pub(super) fn try_require_literal_bail(ctx: &LoweringContext, call: &ast::CallEx
     Ok(())
 }
 
+/// #1678 (Phase 0 of #1677) — classify a bare `Function(...)` /
+/// `eval(...)` call. The `Function('return this')()` globalThis fold runs
+/// before this (in `lower_call_inner`) and short-circuits, so its inner
+/// `Function('return this')` never reaches here.
+///
+/// Returns `Err` (span-tagged) only for the runtime-unknown bucket —
+/// const-foldable (string-literal body) and known-codegen-library sites
+/// log under `PERRY_EVAL_DIAG` and fall through to the existing lowering
+/// (a bare `Function`/`eval` ident → `GlobalGet(0)` sentinel) unchanged,
+/// to be picked up by later phases. `Ok(())` means proceed.
+pub(super) fn check_eval_function_call(ctx: &LoweringContext, call: &ast::CallExpr) -> Result<()> {
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return Ok(());
+    };
+    let mut callee = callee_expr.as_ref();
+    while let ast::Expr::Paren(p) = callee {
+        callee = p.expr.as_ref();
+    }
+    let ast::Expr::Ident(ident) = callee else {
+        return Ok(());
+    };
+    let name = ident.sym.as_ref();
+    let surface = match name {
+        "eval" => crate::eval_classifier::EvalSurface::Eval,
+        "Function" => crate::eval_classifier::EvalSurface::FunctionCall,
+        _ => return Ok(()),
+    };
+    // A local/func/imported binding named `eval`/`Function` shadows the
+    // builtin — leave those alone.
+    if ctx.lookup_local(name).is_some()
+        || ctx.lookup_func(name).is_some()
+        || ctx.lookup_imported_func(name).is_some()
+    {
+        return Ok(());
+    }
+    // Body argument: the only arg for `eval(code)`, the last arg for
+    // `Function(p1, p2, body)`. A spread in the body position yields a
+    // non-constant inner expr → the classifier buckets it runtime-unknown.
+    let body_arg = match surface {
+        crate::eval_classifier::EvalSurface::Eval => call.args.first(),
+        _ => call.args.last(),
+    }
+    .map(|a| a.expr.as_ref());
+    crate::eval_classifier::check_site(surface, body_arg, &ctx.source_file_path, call.span)
+}
+
 /// Issue #76 — `embedWasm("./file.wasm")` from `perry/build` is a
 /// compile-time intrinsic that bakes the file's bytes directly into the
 /// produced binary. Resolves the path relative to the current source

@@ -145,6 +145,26 @@ pub fn clear_current_module_source() {
     CURRENT_MODULE_SOURCE.with(|c| *c.borrow_mut() = None);
 }
 
+/// #1678: resolve `byte_offset` to a 1-based line number in the
+/// currently-installed module source (the same `CURRENT_MODULE_SOURCE`
+/// the dynamic-dispatch check uses). Returns `None` when no source is
+/// installed or the offset is out of range. Used by the eval/Function
+/// classifier to print `file:line` provenance in its refusal diagnostic
+/// and `--diag` instrumentation without threading a `SourceMap` into
+/// HIR lowering.
+pub fn current_module_line_at(byte_offset: u32) -> Option<usize> {
+    CURRENT_MODULE_SOURCE.with(|cell| {
+        let borrowed = cell.borrow();
+        let src = borrowed.as_ref()?;
+        let offset = byte_offset as usize;
+        if offset > src.len() {
+            return None;
+        }
+        // Line number = 1 + count of newlines before the offset.
+        Some(1 + src[..offset].bytes().filter(|&b| b == b'\n').count())
+    })
+}
+
 /// #503: look up `// @perry-allow-dynamic` near `byte_offset` in the
 /// currently-installed module source. Returns true if the annotation
 /// appears on the same line as the offending site, or on any of the

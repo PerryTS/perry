@@ -56,8 +56,8 @@ use globals::try_global_builtins;
 use imported_array_methods::try_imported_array_methods;
 use inline_array_methods::try_inline_array_methods;
 use intrinsics::{
-    try_bare_regexp_call, try_embed_wasm, try_function_return_this, try_iife_call_rewrite,
-    try_native_module_method_apply_call, try_require_literal_bail,
+    check_eval_function_call, try_bare_regexp_call, try_embed_wasm, try_function_return_this,
+    try_iife_call_rewrite, try_native_module_method_apply_call, try_require_literal_bail,
 };
 use local_array_methods::try_local_array_methods;
 use module_class_static::try_module_class_static;
@@ -158,6 +158,10 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     if let Some(expr) = try_function_return_this(ctx, call, has_spread) {
         return Ok(expr);
     }
+    // #1678: classify `Function(...)` / `eval(...)` (after the
+    // `Function('return this')()` fold above has had its chance). Bails on
+    // the runtime-unknown bucket; otherwise logs + falls through.
+    check_eval_function_call(ctx, call)?;
     if let Some(expr) = try_bare_regexp_call(ctx, call, has_spread)? {
         return Ok(expr);
     }

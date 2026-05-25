@@ -186,6 +186,33 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
         ast::Expr::Ident(ident) => {
             let class_name = ident.sym.to_string();
 
+            // #1678 (Phase 0 of #1677): classify `new Function(...)` before
+            // it reaches the unknown-class fall-through (which silently
+            // lowers to a class_id=0 empty-object placeholder). The
+            // runtime-unknown bucket is refused with a precise diagnostic;
+            // const-foldable / known-codegen sites are logged under
+            // `PERRY_EVAL_DIAG` and keep their existing placeholder lowering
+            // for later phases of #1677. Skip when `Function` is shadowed.
+            if class_name == "Function"
+                && ctx.lookup_local("Function").is_none()
+                && ctx.lookup_func("Function").is_none()
+                && ctx.lookup_class("Function").is_none()
+            {
+                // Body is the last argument (`new Function(p1, p2, body)`);
+                // earlier args are parameter names.
+                let body_arg = new_expr
+                    .args
+                    .as_ref()
+                    .and_then(|args| args.last())
+                    .map(|a| a.expr.as_ref());
+                crate::eval_classifier::check_site(
+                    crate::eval_classifier::EvalSurface::NewFunction,
+                    body_arg,
+                    &ctx.source_file_path,
+                    new_expr.span,
+                )?;
+            }
+
             // #1691: an inline `new Request(...)` / `new Response(...)` / etc.
             // whose result is consumed immediately (never bound to a local)
             // skips the var-decl detection in destructuring/var_decl.rs, so
