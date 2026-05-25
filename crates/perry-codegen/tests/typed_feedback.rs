@@ -225,6 +225,47 @@ fn typed_feedback_guards_direct_class_field_specialization() {
 }
 
 #[test]
+fn typed_feedback_guards_direct_class_method_specialization() {
+    let mut point = class(103, "Point", vec![field("x", Type::Number)]);
+    point.methods.push(Function {
+        id: 7,
+        name: "inc".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(2, "n", Type::Number)],
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(Expr::LocalGet(2)))],
+        is_async: false,
+        is_generator: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    let ir = ir_for(module_with_classes(
+        "typed_feedback_class_method.ts",
+        vec![point],
+        vec![param(1, "p", Type::Named("Point".to_string()))],
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "inc".to_string(),
+            }),
+            args: vec![Expr::Number(5.0)],
+            type_args: Vec::new(),
+        }))],
+    ));
+
+    assert!(ir.contains("method_direct_call_guard"));
+    assert!(ir.contains("js_typed_feedback_method_direct_call_guard"));
+    assert!(ir.contains("method_direct.fast"));
+    assert!(ir.contains("method_direct.fallback"));
+    assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
+    assert!(ir.contains("call double @js_native_call_method"));
+}
+
+#[test]
 fn typed_feedback_guards_direct_closure_call_specialization() {
     let closure_ty = Type::Function(FunctionType {
         params: vec![("x".to_string(), Type::Number, false)],

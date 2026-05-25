@@ -11,6 +11,10 @@ extern "C" fn test_class_field_setter(_this: f64, value: f64) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+extern "C" fn test_direct_method(_this: f64, value: f64) -> f64 {
+    value
+}
+
 extern "C" fn test_direct_closure(
     _closure: *const crate::closure::ClosureHeader,
     arg: f64,
@@ -20,6 +24,10 @@ extern "C" fn test_direct_closure(
 
 fn test_direct_closure_ptr() -> *const u8 {
     test_direct_closure as *const () as *const u8
+}
+
+fn test_direct_method_ptr() -> *const u8 {
+    test_direct_method as *const () as *const u8
 }
 
 fn register(site_id: u64, kind: TypedFeedbackSiteKind, op: &'static str) {
@@ -64,6 +72,16 @@ fn class_instance(
     let keys = unsafe { (*obj).keys_array };
     let receiver = crate::value::js_nanbox_pointer(obj as i64);
     (obj, keys, key, receiver)
+}
+
+unsafe fn register_test_method(class_id: u32, name: &'static [u8]) {
+    crate::object::js_register_class_method(
+        class_id as i64,
+        name.as_ptr(),
+        name.len() as i64,
+        test_direct_method as *const () as usize as i64,
+        1,
+    );
 }
 
 fn plain_object_with_key(
@@ -543,6 +561,177 @@ fn typed_feedback_object_set_fast_falls_back_for_uncached_dynamic_key() {
     assert_eq!(site.guard_passes, 0);
     assert_eq!(site.guard_failures, 1);
     assert_eq!(site.fallback_calls, 1);
+}
+
+#[test]
+fn typed_feedback_method_direct_guard_passes_for_exact_registered_method() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(61, TypedFeedbackSiteKind::MethodCall, "obj.m()");
+
+    let class_id = 0x7EED_0061;
+    let (_, keys, _, receiver) = class_instance(class_id, b"x");
+    unsafe { register_test_method(class_id, b"m") };
+
+    let guard = unsafe {
+        js_typed_feedback_method_direct_call_guard(
+            61,
+            receiver,
+            class_id,
+            keys,
+            b"m".as_ptr() as *const i8,
+            1,
+            test_direct_method_ptr(),
+        )
+    };
+    assert_eq!(guard, 1);
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_failures, 0);
+    assert_eq!(site.fallback_calls, 0);
+    assert_eq!(site.state, "monomorphic");
+}
+
+#[test]
+fn typed_feedback_method_direct_guard_fails_for_own_method_replacement() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(62, TypedFeedbackSiteKind::MethodCall, "obj.m()");
+
+    let class_id = 0x7EED_0062;
+    let (obj, keys, _, receiver) = class_instance(class_id, b"x");
+    unsafe { register_test_method(class_id, b"m") };
+    let key_m = crate::string::js_string_from_bytes(b"m".as_ptr(), 1);
+    crate::object::js_object_set_field_by_name(obj, key_m, 123.0);
+
+    let guard = unsafe {
+        js_typed_feedback_method_direct_call_guard(
+            62,
+            receiver,
+            class_id,
+            keys,
+            b"m".as_ptr() as *const i8,
+            1,
+            test_direct_method_ptr(),
+        )
+    };
+    assert_eq!(guard, 0);
+    js_typed_feedback_record_fallback_call(62);
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 0);
+    assert_eq!(site.guard_failures, 1);
+    assert_eq!(site.fallback_calls, 1);
+}
+
+#[test]
+fn typed_feedback_method_direct_guard_fails_for_prototype_method_registration() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(63, TypedFeedbackSiteKind::MethodCall, "obj.m()");
+
+    let class_id = 0x7EED_0063;
+    let (_, keys, _, receiver) = class_instance(class_id, b"x");
+    unsafe {
+        register_test_method(class_id, b"m");
+        crate::object::js_register_prototype_method(
+            class_id,
+            b"m".as_ptr(),
+            1,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+    }
+
+    let guard = unsafe {
+        js_typed_feedback_method_direct_call_guard(
+            63,
+            receiver,
+            class_id,
+            keys,
+            b"m".as_ptr() as *const i8,
+            1,
+            test_direct_method_ptr(),
+        )
+    };
+    assert_eq!(guard, 0);
+    js_typed_feedback_record_fallback_call(63);
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 0);
+    assert_eq!(site.guard_failures, 1);
+    assert_eq!(site.fallback_calls, 1);
+}
+
+#[test]
+fn typed_feedback_method_direct_guard_fails_for_native_receiver() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(64, TypedFeedbackSiteKind::MethodCall, "native.m()");
+
+    let native = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 0);
+    let receiver = crate::value::js_nanbox_pointer(native as i64);
+
+    let guard = unsafe {
+        js_typed_feedback_method_direct_call_guard(
+            64,
+            receiver,
+            crate::object::NATIVE_MODULE_CLASS_ID,
+            std::ptr::null(),
+            b"m".as_ptr() as *const i8,
+            1,
+            test_direct_method_ptr(),
+        )
+    };
+    assert_eq!(guard, 0);
+    js_typed_feedback_record_fallback_call(64);
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_failures, 1);
+    assert_eq!(site.fallback_calls, 1);
+}
+
+#[test]
+fn typed_feedback_method_direct_guard_fails_after_megamorphic_site() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(65, TypedFeedbackSiteKind::MethodCall, "obj.m()");
+    for i in 0..=POLYMORPHIC_CAP {
+        observe(
+            65,
+            TypedFeedbackSiteKind::MethodCall,
+            Observation {
+                source: ObservationSource::Method,
+                object_addr: 0,
+                shape_addr: 0x1000 + i,
+                key_hash: i as u64,
+                class_id: i as u32 + 1,
+                heap_type: crate::gc::GC_TYPE_OBJECT as u16,
+                aux: i as u64,
+                value_tag: STABLE_VALUE_POINTER,
+            },
+        );
+    }
+
+    let class_id = 0x7EED_0065;
+    let (_, keys, _, receiver) = class_instance(class_id, b"x");
+    unsafe { register_test_method(class_id, b"m") };
+    let guard = unsafe {
+        js_typed_feedback_method_direct_call_guard(
+            65,
+            receiver,
+            class_id,
+            keys,
+            b"m".as_ptr() as *const i8,
+            1,
+            test_direct_method_ptr(),
+        )
+    };
+    assert_eq!(guard, 0);
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.state, "megamorphic");
+    assert_eq!(site.guard_failures, 1);
 }
 
 #[test]

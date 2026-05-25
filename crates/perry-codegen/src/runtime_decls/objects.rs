@@ -102,6 +102,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[I64, DOUBLE, PTR, I64, I64],
     );
     module.declare_function(
+        "js_typed_feedback_method_direct_call_guard",
+        I32,
+        &[I64, DOUBLE, I32, I64, PTR, I64, PTR],
+    );
+    module.declare_function(
         "js_typed_feedback_closure_direct_call_guard",
         I32,
         &[I64, DOUBLE, PTR, I32, I32],

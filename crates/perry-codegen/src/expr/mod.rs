@@ -1061,6 +1061,10 @@ impl TypedFeedbackContract {
         Self::new("method_call_guard", "js_native_call_method")
     }
 
+    pub(crate) const fn method_direct_call() -> Self {
+        Self::new("method_direct_call_guard", "js_native_call_method")
+    }
+
     pub(crate) const fn method_apply_call() -> Self {
         Self::new("method_call_guard", "js_native_call_method_apply")
     }

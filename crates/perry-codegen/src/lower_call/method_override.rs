@@ -5,9 +5,11 @@
 //! guard before a static class-method dispatch so a `this.method = X`
 //! own-property override (or `class X { method = fn; }`) is honored.
 
-use crate::expr::FnCtx;
+use crate::expr::{
+    emit_typed_feedback_register_site, FnCtx, TypedFeedbackContract, TypedFeedbackKind,
+};
 use crate::nanbox::double_literal;
-use crate::types::{DOUBLE, I64};
+use crate::types::{DOUBLE, I32, I64};
 
 /// Issue #620: emit a runtime check before the static class-method dispatch.
 /// If the receiver has an own-property override at `property` (set via
@@ -121,4 +123,119 @@ pub(super) fn emit_own_method_override_check(
             (v_static.as_str(), after_static.as_str()),
         ],
     )
+}
+
+/// Emit a typed-feedback runtime guard before a known class-method direct call.
+///
+/// The guard validates that the receiver still has the expected class shape,
+/// has no own-property method replacement, and still resolves the method name
+/// to the direct function pointer in the runtime vtable. Failures branch to the
+/// existing dynamic method dispatcher and record a fallback once.
+pub(super) fn emit_guarded_direct_method_call(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    receiver_class_name: &str,
+    property: &str,
+    direct_fn: &str,
+    direct_arg_slices: &[(crate::types::LlvmType, &str)],
+    fallback_user_args: &[String],
+) -> Option<String> {
+    let expected_class_id = *ctx.class_ids.get(receiver_class_name)?;
+    let keys_global_name = ctx.class_keys_globals.get(receiver_class_name)?.clone();
+
+    let key_idx = ctx.strings.intern(property);
+    let entry = ctx.strings.entry(key_idx);
+    let bytes_global = format!("@{}", entry.bytes_global);
+    let name_len_str = entry.byte_len.to_string();
+    let expected_class_id_str = expected_class_id.to_string();
+
+    let site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::MethodCall,
+        property,
+        TypedFeedbackContract::method_direct_call(),
+    );
+    let expected_keys_slot = ctx.func.entry_init_load_global(&keys_global_name, I64);
+    let expected_keys = ctx.block().load(I64, &expected_keys_slot);
+
+    let guard_idx = ctx.new_block("method_direct.guard");
+    let fast_idx = ctx.new_block("method_direct.fast");
+    let fallback_idx = ctx.new_block("method_direct.fallback");
+    let merge_idx = ctx.new_block("method_direct.merge");
+    let guard_label = ctx.block_label(guard_idx);
+    let fast_label = ctx.block_label(fast_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().br(&guard_label);
+
+    ctx.current_block = guard_idx;
+    let guard_ok = ctx.block().call(
+        I32,
+        "js_typed_feedback_method_direct_call_guard",
+        &[
+            (I64, &site_id),
+            (DOUBLE, recv_box),
+            (I32, &expected_class_id_str),
+            (I64, &expected_keys),
+            (crate::types::PTR, &bytes_global),
+            (I64, &name_len_str),
+            (crate::types::PTR, &format!("@{}", direct_fn)),
+        ],
+    );
+    let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
+    ctx.block()
+        .cond_br(&guard_pass, &fast_label, &fallback_label);
+
+    ctx.current_block = fast_idx;
+    let fast_value = ctx.block().call(DOUBLE, direct_fn, direct_arg_slices);
+    let after_fast = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = fallback_idx;
+    let (args_ptr, args_len) = if fallback_user_args.is_empty() {
+        ("null".to_string(), "0".to_string())
+    } else {
+        let n = fallback_user_args.len();
+        let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+        for (i, a_val) in fallback_user_args.iter().enumerate() {
+            let slot = ctx
+                .block()
+                .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+            ctx.block().store(DOUBLE, a_val, &slot);
+        }
+        let ptr_reg = ctx.block().next_reg();
+        ctx.block().emit_raw(format!(
+            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+            ptr_reg, n, buf_reg
+        ));
+        (ptr_reg, n.to_string())
+    };
+    ctx.block()
+        .call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
+    let fallback_value = ctx.block().call(
+        DOUBLE,
+        "js_native_call_method",
+        &[
+            (DOUBLE, recv_box),
+            (crate::types::PTR, &bytes_global),
+            (I64, &name_len_str),
+            (crate::types::PTR, &args_ptr),
+            (I64, &args_len),
+        ],
+    );
+    let after_fallback = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = merge_idx;
+    Some(ctx.block().phi(
+        DOUBLE,
+        &[
+            (fast_value.as_str(), after_fast.as_str()),
+            (fallback_value.as_str(), after_fallback.as_str()),
+        ],
+    ))
 }

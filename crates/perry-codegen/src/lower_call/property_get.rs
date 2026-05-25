@@ -16,7 +16,8 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I32, I64};
 
 use super::{
-    emit_own_method_override_check, lower_abort_controller_call, lower_fetch_native_method,
+    emit_guarded_direct_method_call, emit_own_method_override_check, lower_abort_controller_call,
+    lower_fetch_native_method,
 };
 
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
@@ -1384,11 +1385,13 @@ pub fn try_lower_property_get_method_call(
             }
 
             let recv_box = lower_expr(ctx, object)?;
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len() + 1);
-            lowered_args.push(recv_box.clone());
+            let mut fallback_user_args: Vec<String> = Vec::with_capacity(args.len());
             for a in args {
-                lowered_args.push(lower_expr(ctx, a)?);
+                fallback_user_args.push(lower_expr(ctx, a)?);
             }
+            let mut lowered_args: Vec<String> = Vec::with_capacity(fallback_user_args.len() + 1);
+            lowered_args.push(recv_box.clone());
+            lowered_args.extend(fallback_user_args.iter().cloned());
             // Issue #235: pad lowered_args with TAG_UNDEFINED so the
             // callee's default-param desugaring fires when the call site
             // passed fewer args than the method declares. Same approach
@@ -1479,6 +1482,20 @@ pub fn try_lower_property_get_method_call(
             }
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 lowered_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
+
+            if !method_has_rest {
+                if let Some(guarded) = emit_guarded_direct_method_call(
+                    ctx,
+                    &recv_box,
+                    &class_name,
+                    property,
+                    &fallback_fn,
+                    &arg_slices,
+                    &fallback_user_args,
+                ) {
+                    return Ok(Some(guarded));
+                }
+            }
 
             if overrides.is_empty() {
                 // Issue #620: before falling through to the static method,

@@ -137,6 +137,7 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
                     .as_mut()
                     .unwrap()
                     .insert(existing, proto_ptr as usize);
+                crate::typed_feedback::invalidate_method_change(existing);
                 return existing;
             }
         }
@@ -159,6 +160,7 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
     // Register the synthetic id so REGISTERED_CLASS_IDS-gated paths
     // (e.g., the #687 ClassRef-as-receiver short-circuit) recognize it.
     unsafe { js_register_class_id(new_cid) };
+    crate::typed_feedback::invalidate_method_change(new_cid);
     new_cid
 }
 
@@ -446,6 +448,7 @@ pub unsafe extern "C" fn js_register_prototype_method(
     // classes that only get extended via `Class.prototype.m = fn`
     // wouldn't otherwise reach js_register_class_id.
     js_register_class_id(class_id);
+    crate::typed_feedback::invalidate_method_change(class_id);
 }
 
 /// Issue #838 followup (b): function-classic prototype-method dispatch.
@@ -533,6 +536,7 @@ pub unsafe extern "C" fn js_register_function_prototype_method(
         .or_insert_with(HashMap::new)
         .insert(name, value.to_bits());
     js_register_class_id(cid);
+    crate::typed_feedback::invalidate_method_change(cid);
     cid
 }
 

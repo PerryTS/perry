@@ -53,7 +53,7 @@ mod ui_tables;
 use buffer_intrinsic::try_emit_buffer_read_intrinsic;
 use builtin::lower_builtin_new;
 use jsx::try_rewrite_perry_tui_jsx_intrinsic;
-use method_override::emit_own_method_override_check;
+use method_override::{emit_guarded_direct_method_call, emit_own_method_override_check};
 // `options/` (#1099): the options-object-literal lowering family,
 // split by native-API surface (notification / abort / fetch) under
 // `options/`. Bring the per-surface entry points + shared helpers
