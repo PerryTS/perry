@@ -5,10 +5,13 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{LazyLock, Mutex};
+use std::thread::ThreadId;
 
 use crate::closure::ClosureHeader;
 use crate::object::ObjectHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
+use crate::thread::SerializedValue;
 use crate::value::JSValue;
 
 use super::*;
@@ -49,7 +52,7 @@ pub(crate) const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 pub(crate) const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 #[derive(Hash, Eq, PartialEq, Clone)]
-enum DiagChannelKey {
+pub(crate) enum DiagChannelKey {
     String(String),
     Symbol(u64),
 }
@@ -66,6 +69,158 @@ pub(crate) struct DiagTracingState {
     pub(crate) events: [i64; 5],
 }
 
+/// Cross-thread activity count keyed by channel name.
+///
+/// The concrete JS channel objects and subscriber closures remain
+/// thread-local because they point into the allocating thread's arena. This
+/// map intentionally stores only Rust-owned keys + counts, so workers can
+/// observe process-global subscriber state without touching foreign JS
+/// pointers.
+static DIAG_GLOBAL_ACTIVE_COUNTS: LazyLock<Mutex<HashMap<DiagChannelKey, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Publish events produced by `perry/thread` workers for subscribers owned
+/// by the main/event-loop thread. The payload is arena-independent; it is
+/// deserialized only when the event-loop pump drains this queue.
+static DIAG_PENDING_PUBLISHES: LazyLock<Mutex<Vec<PendingDiagPublish>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+struct PendingDiagPublish {
+    key: DiagChannelKey,
+    data: SerializedValue,
+    origin_thread: ThreadId,
+    local_delivered: bool,
+}
+
+fn cross_thread_key(key: &DiagChannelKey) -> Option<DiagChannelKey> {
+    match key {
+        DiagChannelKey::String(_) => Some(key.clone()),
+        // Symbols are arena/runtime objects in Perry today. Treat them as
+        // thread-local until the runtime has a real cross-thread symbol table.
+        DiagChannelKey::Symbol(_) => None,
+    }
+}
+
+fn global_active_count(key: &DiagChannelKey) -> usize {
+    let Some(key) = cross_thread_key(key) else {
+        return 0;
+    };
+    DIAG_GLOBAL_ACTIVE_COUNTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&key)
+        .copied()
+        .unwrap_or(0)
+}
+
+fn adjust_global_active_count_for_name(name: f64, delta: isize) {
+    let Some(key) = channel_key(name).and_then(|k| cross_thread_key(&k)) else {
+        return;
+    };
+    let mut counts = DIAG_GLOBAL_ACTIVE_COUNTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let entry = counts.entry(key.clone()).or_insert(0);
+    if delta >= 0 {
+        *entry = entry.saturating_add(delta as usize);
+    } else {
+        *entry = entry.saturating_sub(delta.unsigned_abs());
+    }
+    if *entry == 0 {
+        counts.remove(&key);
+    }
+}
+
+fn adjust_global_active_count_for_channel(id: i64, delta: isize) {
+    let name = DIAG_CHANNELS.with(|m| m.borrow().get(&id).map(|c| c.name));
+    if let Some(name) = name {
+        adjust_global_active_count_for_name(name, delta);
+    }
+}
+
+fn enqueue_cross_thread_publish(key: DiagChannelKey, data: f64, local_delivered: bool) {
+    let Some(key) = cross_thread_key(&key) else {
+        return;
+    };
+    let data = unsafe { crate::thread::serialize_nanbox_for_thread(data.to_bits()) };
+    let origin_thread = std::thread::current().id();
+    {
+        let mut pending = DIAG_PENDING_PUBLISHES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.push(PendingDiagPublish {
+            key,
+            data,
+            origin_thread,
+            local_delivered,
+        });
+    }
+    crate::event_pump::js_notify_main_thread();
+}
+
+pub fn diagnostics_channel_has_pending_publishes() -> bool {
+    !DIAG_PENDING_PUBLISHES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_empty()
+}
+
+/// Drain worker-originated diagnostics publishes on the current event-loop
+/// thread. This must be called from a thread whose local diagnostics registry
+/// owns the subscriber closures; in the normal executable this is the main
+/// thread's microtask/event-loop pump.
+///
+/// TODO(#1310 follow-up): if a future persistent worker runtime can keep a
+/// worker-local subscriber alive, it also needs its own pump or destination
+/// routing. Today `perry/thread::spawn` workers do not run an event loop, so
+/// retained items for worker-only subscribers may remain pending until a
+/// broader cross-thread diagnostics registry exists.
+pub fn diagnostics_channel_process_pending() -> i32 {
+    let current_thread = std::thread::current().id();
+    let pending = {
+        let mut pending = DIAG_PENDING_PUBLISHES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::mem::take(&mut *pending)
+    };
+    let mut delivered = 0i32;
+    let mut retained = Vec::new();
+    for item in pending {
+        if item.local_delivered && item.origin_thread == current_thread {
+            // The publishing thread already invoked its local subscribers
+            // synchronously. Dropping this copy prevents a later same-thread
+            // pump from delivering the event twice; any cross-thread delivery
+            // remains the responsibility of another thread's pump.
+            continue;
+        }
+        let id = DIAG_CHANNEL_BY_KEY.with(|m| m.borrow().get(&item.key).copied());
+        let Some(id) = id else {
+            // This thread does not own a channel object for the publish. Keep
+            // the item queued so a later main/event-loop-thread drain can
+            // deliver it instead of silently swallowing worker-originated
+            // publishes.
+            retained.push(item);
+            continue;
+        };
+        let data = unsafe { crate::thread::deserialize_nanbox_on_current_thread(&item.data) };
+        publish_channel_local(id, f64::from_bits(data));
+        delivered += 1;
+    }
+    if !retained.is_empty() {
+        let mut pending = DIAG_PENDING_PUBLISHES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Preserve retained items ahead of publishes that arrived while this
+        // drain was running. There is no total ordering guarantee between
+        // producer threads; keeping undelivered items at the front avoids
+        // starving an older event that was merely observed by the wrong
+        // thread first.
+        retained.append(&mut *pending);
+        *pending = retained;
+    }
+    delivered
+}
+
 // Known follow-ups for the thread-local state below:
 //
 // * #1309 — channels used to be pinned for the process lifetime. A soft
@@ -76,10 +231,9 @@ pub(crate) struct DiagTracingState {
 //   channel the moment no user reference and no subscriber remain) still
 //   needs a GC post-sweep hook or a weak-ref primitive.
 //
-// * #1310 — these maps are `thread_local!`, so `parallelMap`/`spawn`
-//   workers see an empty world. A `publish` from a worker thread
-//   silently no-ops against subscribers registered on the main
-//   thread, diverging from Node's process-global model.
+// * #1310 — the JS-owning maps remain `thread_local!`, but worker publishes
+//   now enqueue arena-independent payloads for the main/event-loop thread
+//   when a process-global subscriber count exists for a string channel.
 thread_local! {
     pub(crate) static DIAG_CHANNEL_BY_KEY: RefCell<HashMap<DiagChannelKey, i64>> = RefCell::new(HashMap::new());
     pub(crate) static DIAG_CHANNELS: RefCell<HashMap<i64, DiagChannelState>> = RefCell::new(HashMap::new());
@@ -364,7 +518,11 @@ pub(crate) fn with_implicit_this<F: FnOnce() -> f64>(this_arg: f64, f: F) -> f64
 pub(crate) fn update_channel_active(id: i64) {
     DIAG_CHANNELS.with(|channels| {
         if let Some(ch) = channels.borrow_mut().get_mut(&id) {
-            let active = !ch.subscribers.is_empty() || !ch.stores.is_empty();
+            let active = !ch.subscribers.is_empty()
+                || !ch.stores.is_empty()
+                || channel_key(ch.name)
+                    .as_ref()
+                    .is_some_and(|key| global_active_count(key) > 0);
             set_field_value(ch.obj, "hasSubscribers", bool_value(active));
         }
     });
@@ -451,8 +609,9 @@ pub(crate) fn ensure_channel(name: f64) -> i64 {
     evict_inactive_diag_channels_if_needed();
     let id = next_diag_id();
     let obj = js_object_alloc(0, 9);
+    let has_global_subscribers = global_active_count(&key) > 0;
     set_field_value(obj, "name", name);
-    set_field_value(obj, "hasSubscribers", bool_value(false));
+    set_field_value(obj, "hasSubscribers", bool_value(has_global_subscribers));
     set_field_value(
         obj,
         "subscribe",
@@ -514,11 +673,16 @@ pub(crate) fn add_subscriber(id: i64, subscriber: f64) {
     if !valid_closure_value(subscriber) {
         throw_invalid_arg();
     }
+    let mut inserted = false;
     DIAG_CHANNELS.with(|m| {
         if let Some(c) = m.borrow_mut().get_mut(&id) {
             c.subscribers.push(subscriber);
+            inserted = true;
         }
     });
+    if inserted {
+        adjust_global_active_count_for_channel(id, 1);
+    }
     update_channel_active(id);
 }
 
@@ -534,12 +698,13 @@ pub(crate) fn remove_subscriber(id: i64, subscriber: f64) -> bool {
         false
     });
     if removed {
+        adjust_global_active_count_for_channel(id, -1);
         update_channel_active(id);
     }
     removed
 }
 
-pub(crate) fn publish_channel(id: i64, data: f64) {
+pub(crate) fn publish_channel_local(id: i64, data: f64) {
     // Fast path: no subscribers means publish is a no-op. Avoid the
     // Vec clone entirely. `console.*` hits this path on every call when
     // nobody is subscribed to a `console.{method}` channel.
@@ -561,6 +726,29 @@ pub(crate) fn publish_channel(id: i64, data: f64) {
         if let Err(err) = catch_js(|| js_closure_call2(cb, data, name)) {
             schedule_uncaught(err);
         }
+    }
+}
+
+pub(crate) fn publish_channel(id: i64, data: f64) {
+    let (name, local_active_count, has_local_subscribers) = DIAG_CHANNELS.with(|m| {
+        let m = m.borrow();
+        match m.get(&id) {
+            Some(c) => (
+                c.name,
+                c.subscribers.len().saturating_add(c.stores.len()),
+                !c.subscribers.is_empty(),
+            ),
+            None => (undefined(), 0, false),
+        }
+    });
+    if has_local_subscribers {
+        publish_channel_local(id, data);
+    }
+    let Some(key) = channel_key(name) else {
+        return;
+    };
+    if global_active_count(&key) > local_active_count {
+        enqueue_cross_thread_publish(key, data, has_local_subscribers);
     }
 }
 
@@ -683,6 +871,7 @@ pub(crate) extern "C" fn diag_channel_bind_store(
     } else {
         None
     };
+    let mut inserted = false;
     DIAG_CHANNELS.with(|m| {
         if let Some(c) = m.borrow_mut().get_mut(&id) {
             if let Some(slot) = c
@@ -693,9 +882,13 @@ pub(crate) extern "C" fn diag_channel_bind_store(
                 slot.1 = transform;
             } else {
                 c.stores.push((store, transform));
+                inserted = true;
             }
         }
     });
+    if inserted {
+        adjust_global_active_count_for_channel(id, 1);
+    }
     update_channel_active(id);
     undefined()
 }
@@ -719,6 +912,7 @@ pub(crate) extern "C" fn diag_channel_unbind_store(
         false
     });
     if removed {
+        adjust_global_active_count_for_channel(id, -1);
         update_channel_active(id);
     }
     bool_value(removed)
@@ -850,6 +1044,9 @@ pub(crate) extern "C" fn thunk_diag_has_subscribers(
         Some(k) => k,
         None => return bool_value(false),
     };
+    if global_active_count(&key) > 0 {
+        return bool_value(true);
+    }
     let active = DIAG_CHANNEL_BY_KEY.with(|by_key| {
         by_key
             .borrow()

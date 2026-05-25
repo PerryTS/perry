@@ -42,6 +42,9 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
     // Process any scheduled resolutions (simulates async completions)
     ran += super::combinators::process_scheduled_resolves();
 
+    // Process diagnostics_channel publishes queued by perry/thread workers.
+    ran += crate::node_submodules::diagnostics_channel_process_pending();
+
     // Process pending thread results (from perry/thread spawn)
     ran += crate::thread::js_thread_process_pending();
 
