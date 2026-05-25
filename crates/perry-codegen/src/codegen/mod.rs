@@ -444,9 +444,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // allocation path.
     //
     // Per-class init data:
-    // (global_name, packed_keys_string, total_field_count, pointer_mask_words).
+    // (global_name, packed_keys_string, total_field_count, raw_f64_mask_words,
+    // pointer_mask_words).
     // Used by emit_string_pool to emit the build-call sequence.
-    let mut class_keys_init_data: Vec<(String, String, u32, Vec<u64>)> = Vec::new();
+    let mut class_keys_init_data: Vec<(String, String, u32, Vec<u64>, Vec<u64>)> = Vec::new();
     let mut class_keys_globals_map: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     for c in &hir.classes {
@@ -531,13 +532,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 .entry(alias.clone())
                 .or_insert_with(|| global_name.clone());
         }
-        let (_typed_slot_count, typed_mask_words) =
-            crate::typed_shape::class_typed_layout(&class_table, &c.name);
+        let typed_layout = crate::typed_shape::class_typed_layout(&class_table, &c.name);
         class_keys_init_data.push((
             global_name,
             packed_keys,
             total_field_count,
-            typed_mask_words,
+            typed_layout.raw_f64_mask_words,
+            typed_layout.pointer_mask_words,
         ));
     }
     // Same naming convention for IMPORTED class stubs. Pack the field
@@ -610,13 +611,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             packed_keys.push_str(&f.name);
             packed_keys.push('\0');
         }
-        let (_typed_slot_count, typed_mask_words) =
-            crate::typed_shape::class_typed_layout(&class_table, &c.name);
+        let typed_layout = crate::typed_shape::class_typed_layout(&class_table, &c.name);
         class_keys_init_data.push((
             global_name,
             packed_keys,
             total_field_count,
-            typed_mask_words,
+            typed_layout.raw_f64_mask_words,
+            typed_layout.pointer_mask_words,
         ));
     }
 

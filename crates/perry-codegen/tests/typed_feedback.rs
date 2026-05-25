@@ -213,12 +213,15 @@ fn typed_feedback_guards_direct_class_field_specialization() {
 
     assert!(ir.contains("class_field_set_guard"));
     assert!(ir.contains("class_field_get_guard"));
+    assert!(ir.contains("@perry_typed_shape_raw_f64_mask_"));
     assert!(ir.contains("js_typed_feedback_class_field_set_guard"));
     assert!(ir.contains("js_typed_feedback_class_field_get_guard"));
     assert!(ir.contains("class_field_set.fast"));
     assert!(ir.contains("class_field_set.fallback"));
     assert!(ir.contains("class_field_get.fast"));
     assert!(ir.contains("class_field_get.fallback"));
+    assert!(ir.contains("store double"));
+    assert!(!ir.contains("call void @js_gc_note_slot_layout"));
     assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
     assert!(ir.contains("call void @js_object_set_field_by_name"));
     assert!(ir.contains("call double @js_object_get_field_by_name_f64"));
@@ -332,12 +335,110 @@ fn typed_feedback_guards_array_index_specialization() {
         ],
     ));
 
-    assert!(ir.contains("plain_array_index_set_guard"));
-    assert!(ir.contains("plain_array_index_get_guard"));
-    assert!(ir.contains("js_typed_feedback_plain_array_index_set_guard"));
+    assert!(ir.contains("numeric_array_index_set_guard"));
+    assert!(ir.contains("numeric_array_index_get_guard"));
+    assert!(ir.contains("js_typed_feedback_numeric_array_index_set_guard"));
     assert!(ir.contains("js_typed_feedback_array_index_set_fallback_boxed"));
-    assert!(ir.contains("js_typed_feedback_plain_array_index_get_guard"));
+    assert!(ir.contains("js_typed_feedback_numeric_array_index_get_guard"));
     assert!(ir.contains("js_typed_feedback_array_index_get_fallback_boxed"));
+    assert!(ir.contains("js_array_numeric_set_f64_unboxed"));
+    assert!(ir.contains("js_array_numeric_get_f64_unboxed"));
+}
+
+#[test]
+fn typed_feedback_guards_numeric_array_push_specialization() {
+    let array_ty = Type::Array(Box::new(Type::Number));
+    let ir = ir_for(module(
+        "typed_feedback_array_push.ts",
+        vec![],
+        array_ty.clone(),
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "xs".to_string(),
+                ty: array_ty,
+                mutable: true,
+                init: Some(Expr::Array(Vec::new())),
+            },
+            Stmt::Expr(Expr::ArrayPush {
+                array_id: 1,
+                value: Box::new(Expr::Number(7.0)),
+            }),
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+    ));
+
+    assert!(ir.contains("numeric_array_push_guard"));
+    assert!(ir.contains("js_typed_feedback_numeric_array_push_guard"));
+    assert!(ir.contains("js_array_numeric_push_f64_unboxed"));
+    assert!(ir.contains("js_typed_feedback_record_fallback_call"));
+    assert!(ir.contains("call i64 @js_array_push_f64"));
+}
+
+#[test]
+fn typed_feedback_marks_numeric_array_literals() {
+    let numeric_ir = ir_for(module(
+        "typed_feedback_numeric_array_literal.ts",
+        Vec::new(),
+        Type::Any,
+        vec![Stmt::Return(Some(Expr::Array(vec![
+            Expr::Number(1.0),
+            Expr::Integer(2),
+            Expr::Binary {
+                op: perry_hir::BinaryOp::Mul,
+                left: Box::new(Expr::Number(3.0)),
+                right: Box::new(Expr::Number(4.0)),
+            },
+        ])))],
+    ));
+
+    assert!(numeric_ir.contains("call i32 @js_array_mark_numeric_f64_layout"));
+
+    let mixed_ir = ir_for(module(
+        "typed_feedback_mixed_array_literal.ts",
+        Vec::new(),
+        Type::Any,
+        vec![Stmt::Return(Some(Expr::Array(vec![
+            Expr::Number(1.0),
+            Expr::String("x".to_string()),
+        ])))],
+    ));
+
+    assert!(!mixed_ir.contains("call i32 @js_array_mark_numeric_f64_layout"));
+}
+
+#[test]
+fn typed_feedback_inline_array_writes_note_numeric_downgrade() {
+    let array_ty = Type::Array(Box::new(Type::Number));
+    let ir = ir_for(module(
+        "typed_feedback_array_numeric_downgrade.ts",
+        Vec::new(),
+        Type::Any,
+        vec![
+            Stmt::Let {
+                id: 2,
+                name: "xs".to_string(),
+                ty: array_ty,
+                mutable: true,
+                init: Some(Expr::Array(vec![Expr::Number(1.0)])),
+            },
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(2)),
+                index: Box::new(Expr::Number(0.0)),
+                value: Box::new(Expr::String("not-number".to_string())),
+            }),
+            Stmt::Expr(Expr::ArrayPush {
+                array_id: 2,
+                value: Box::new(Expr::String("still-not-number".to_string())),
+            }),
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+    ));
+
+    assert!(ir.contains("call void @js_array_note_numeric_write"));
+    assert!(ir.contains("plain_array_index_set_guard"));
+    assert!(ir.contains("js_typed_feedback_plain_array_index_set_guard"));
+    assert!(!ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"));
 }
 
 #[test]

@@ -6,7 +6,8 @@
 
 use super::*;
 use crate::{
-    array::ArrayHeader, js_array_alloc, js_array_push, js_string_from_bytes, JSValue, StringHeader,
+    array::{note_array_slot_layout_only, ArrayHeader},
+    js_array_alloc, js_array_push, js_string_from_bytes, JSValue, StringHeader,
 };
 
 // ─── Direct JSON parser ────────────────────────────────────────────────────────
@@ -136,7 +137,7 @@ impl<'a> DirectParser<'a> {
             // JSON.parse suppresses GC and writes only into arrays allocated
             // by the same parse, so a generational write barrier is redundant.
             // Keep the layout note so tracing still sees the element slot.
-            crate::gc::layout_note_slot(arr as usize, length as usize, value_bits);
+            note_array_slot_layout_only(arr, length as usize, value_bits);
             (*arr).length = length + 1;
             arr
         } else {

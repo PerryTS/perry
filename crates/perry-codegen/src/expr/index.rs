@@ -4,8 +4,8 @@
 use anyhow::{anyhow, Result};
 
 use super::{
-    emit_jsvalue_slot_store_on_block, emit_write_barrier_slot_on_block, nanbox_pointer_inline,
-    FnCtx,
+    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
+    emit_write_barrier_slot_on_block, nanbox_pointer_inline, FnCtx,
 };
 use crate::block::LlBlock;
 use crate::nanbox::POINTER_MASK_I64;
@@ -70,6 +70,8 @@ pub(crate) fn lower_index_set_fast(
     local_id: u32,
     layout_note_needed: bool,
     write_barrier_needed: bool,
+    value_is_numeric: bool,
+    require_numeric_layout: bool,
     feedback_site_id: &str,
 ) -> Result<()> {
     // Capture the local slot for the realloc path.
@@ -107,9 +109,14 @@ pub(crate) fn lower_index_set_fast(
     // semantics and writes the returned receiver back to the local slot.
     let guard_ok = {
         let blk = ctx.block();
+        let guard_fn = if require_numeric_layout {
+            "js_typed_feedback_numeric_array_index_set_guard"
+        } else {
+            "js_typed_feedback_plain_array_index_set_guard"
+        };
         let guard_i32 = blk.call(
             I32,
-            "js_typed_feedback_plain_array_index_set_guard",
+            guard_fn,
             &[
                 (I64, feedback_site_id),
                 (DOUBLE, arr_box),
@@ -160,18 +167,30 @@ pub(crate) fn lower_index_set_fast(
     ctx.current_block = inbounds_idx;
     {
         let blk = ctx.block();
-        let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
-        emit_jsvalue_slot_store_on_block(
-            blk,
-            &element_ptr,
-            val_double,
-            &arr_handle,
-            &idx_i32,
-            layout_note_needed,
-            &arr_handle,
-            &element_addr,
-            write_barrier_needed,
-        );
+        if require_numeric_layout {
+            blk.call(
+                I32,
+                "js_array_numeric_set_f64_unboxed",
+                &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, val_double)],
+            );
+        } else {
+            let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
+            let value_bits = emit_jsvalue_slot_store_on_block(
+                blk,
+                &element_ptr,
+                val_double,
+                &arr_handle,
+                &idx_i32,
+                layout_note_needed,
+                &arr_handle,
+                &element_addr,
+                write_barrier_needed,
+            )
+            .unwrap_or_else(|| blk.bitcast_double_to_i64(val_double));
+            if !value_is_numeric {
+                emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
+            }
+        }
         blk.br(&merge_label);
     }
 
@@ -193,7 +212,7 @@ pub(crate) fn lower_index_set_fast(
     {
         let blk = ctx.block();
         let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
-        emit_jsvalue_slot_store_on_block(
+        let value_bits = emit_jsvalue_slot_store_on_block(
             blk,
             &element_ptr,
             val_double,
@@ -203,7 +222,11 @@ pub(crate) fn lower_index_set_fast(
             &arr_handle,
             &element_addr,
             write_barrier_needed,
-        );
+        )
+        .unwrap_or_else(|| blk.bitcast_double_to_i64(val_double));
+        if !value_is_numeric {
+            emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
+        }
         // Bump length: store idx+1 to arr_ptr+0.
         let new_len = blk.add(I32, &idx_i32, "1");
         let len_ptr = blk.inttoptr(I64, &arr_handle); // length is at offset 0

@@ -33,15 +33,22 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // alloc + N×push_f64. See `js_array_alloc_literal` in perry-runtime/src/array.rs.
     module.declare_function("js_array_alloc_literal", I64, &[I32]);
     module.declare_function("js_array_push_f64", I64, &[I64, DOUBLE]);
+    module.declare_function("js_array_numeric_push_f64_unboxed", I64, &[I64, DOUBLE]);
     // Refs #488: bulk push for `arr.push(...src)` spread call.
     module.declare_function("js_array_push_spread_f64", I64, &[I64, I64]);
     module.declare_function("js_array_get_f64", DOUBLE, &[I64, I32]);
+    module.declare_function("js_array_numeric_get_f64_unboxed", DOUBLE, &[I64, I32]);
     module.declare_function("js_array_set_f64", VOID, &[I64, I32, DOUBLE]);
+    module.declare_function("js_array_numeric_set_f64_unboxed", I32, &[I64, I32, DOUBLE]);
     // Extending variant: returns a possibly-realloc'd pointer that the
     // caller must write back to the local slot.
     module.declare_function("js_array_set_f64_extend", I64, &[I64, I32, DOUBLE]);
     module.declare_function("js_array_set_string_key", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_array_set_index_or_string", I64, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_array_mark_numeric_f64_layout", I32, &[I64]);
+    module.declare_function("js_array_is_numeric_f64_layout", I32, &[I64]);
+    module.declare_function("js_array_clear_numeric_layout", VOID, &[I64]);
+    module.declare_function("js_array_note_numeric_write", VOID, &[I64, I64]);
     module.declare_function("js_array_length", I32, &[I64]);
     // Array.isArray runtime dispatch for values with indeterminate
     // static type (e.g. JSON.parse results, closure captures, any/
@@ -74,12 +81,16 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     //   js_write_barrier(parent_bits: u64, child_bits: u64)
     //   js_write_barrier_slot(parent_bits: u64, slot_addr: u64, child_bits: u64)
     //   js_gc_note_slot_layout(parent_bits: u64, slot_index: u32, value_bits: u64)
-    //   js_gc_init_typed_shape_layout(obj: u64, slot_count: u32, mask_words: *const u64, mask_word_count: u32)
+    //   js_gc_init_typed_shape_layout(obj: u64, slot_count: u32, raw_f64_mask_words: *const u64, raw_f64_mask_word_count: u32, pointer_mask_words: *const u64, pointer_mask_word_count: u32)
     //   js_gc_init_unboxed_object_layout(obj: u64, slot_count: u32, raw_f64_mask: u64, pointer_mask: u64)
     module.declare_function("js_write_barrier", VOID, &[I64, I64]);
     module.declare_function("js_write_barrier_slot", VOID, &[I64, I64, I64]);
     module.declare_function("js_gc_note_slot_layout", VOID, &[I64, I32, I64]);
-    module.declare_function("js_gc_init_typed_shape_layout", VOID, &[I64, I32, PTR, I32]);
+    module.declare_function(
+        "js_gc_init_typed_shape_layout",
+        VOID,
+        &[I64, I32, PTR, I32, PTR, I32],
+    );
     module.declare_function(
         "js_gc_init_unboxed_object_layout",
         VOID,

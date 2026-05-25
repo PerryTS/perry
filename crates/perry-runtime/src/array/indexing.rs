@@ -85,7 +85,7 @@ pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32
         if index >= length {
             return TAG_UNDEFINED_F64;
         }
-        if length > 100000 {
+        if length > 100_000_000 {
             return TAG_UNDEFINED_F64;
         }
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -98,6 +98,16 @@ pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32
         }
         raw
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_numeric_get_f64_unboxed(arr: *mut ArrayHeader, index: u32) -> f64 {
+    unsafe {
+        if let Some(value) = array_numeric_raw_f64_get(arr, index) {
+            return value;
+        }
+    }
+    js_array_get_f64(arr, index)
 }
 
 /// Get an element from an array by index (returns f64)
@@ -191,7 +201,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             return TAG_UNDEFINED_F64;
         }
         // Guard: corrupted arrays with unreasonably large length
-        if length > 100000 {
+        if length > 100_000_000 {
             return TAG_UNDEFINED_F64;
         }
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -223,6 +233,20 @@ pub extern "C" fn js_array_set_f64_unchecked(arr: *mut ArrayHeader, index: u32, 
         ptr::write(elements_ptr.add(index as usize), value);
         note_array_slot(arr, index as usize, value.to_bits());
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_numeric_set_f64_unboxed(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+) -> i32 {
+    unsafe {
+        if array_numeric_raw_f64_set_inbounds(arr, index, value) {
+            return 1;
+        }
+    }
+    0
 }
 
 /// Set an element in an array by index

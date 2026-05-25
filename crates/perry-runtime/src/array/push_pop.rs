@@ -117,6 +117,23 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
     }
 }
 
+#[no_mangle]
+pub extern "C" fn js_array_numeric_push_f64_unboxed(
+    arr: *mut ArrayHeader,
+    value: f64,
+) -> *mut ArrayHeader {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return js_array_alloc(0);
+    }
+    unsafe {
+        if array_numeric_raw_f64_push_inbounds(arr, value) {
+            return arr;
+        }
+    }
+    js_array_push_f64(arr, value)
+}
+
 #[cold]
 unsafe fn js_array_push_f64_grow(
     arr: *mut ArrayHeader,
@@ -249,6 +266,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 note_array_slot(arr, i as usize, TAG_UNDEFINED_F64.to_bits());
             }
             (*arr).length = n;
+            refresh_array_numeric_layout(arr);
         } else if n > cur {
             // Extend: pad with TAG_UNDEFINED. Past-capacity extensions go
             // through `js_array_grow` which installs a forwarding pointer at

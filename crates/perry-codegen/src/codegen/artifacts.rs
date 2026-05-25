@@ -70,7 +70,7 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub closure_synthetic_arguments: &'a std::collections::HashSet<u32>,
     pub closure_arities: &'a HashMap<u32, u32>,
     pub closures: &'a [(perry_types::FuncId, perry_hir::Expr)],
-    pub class_keys_init_data: &'a [(String, String, u32, Vec<u64>)],
+    pub class_keys_init_data: &'a [(String, String, u32, Vec<u64>, Vec<u64>)],
     pub imported_class_stubs: &'a [perry_hir::Class],
     pub cross_module: &'a CrossModuleCtx,
 }

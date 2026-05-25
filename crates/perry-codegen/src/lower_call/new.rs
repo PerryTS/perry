@@ -789,11 +789,19 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     }
 
     if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
-        let (typed_slot_count, typed_mask_words) =
-            crate::typed_shape::class_typed_layout(ctx.classes, class_name);
-        let slot_count_str = typed_slot_count.to_string();
-        let mask_word_count_str = typed_mask_words.len().to_string();
-        let mask_ref = if typed_mask_words.is_empty() {
+        let typed_layout = crate::typed_shape::class_typed_layout(ctx.classes, class_name);
+        let slot_count_str = typed_layout.slot_count.to_string();
+        let raw_mask_word_count_str = typed_layout.raw_f64_mask_words.len().to_string();
+        let pointer_mask_word_count_str = typed_layout.pointer_mask_words.len().to_string();
+        let raw_mask_ref = if typed_layout.raw_f64_mask_words.is_empty() {
+            "null".to_string()
+        } else {
+            format!(
+                "@{}",
+                crate::typed_shape::raw_f64_mask_global_name_from_keys_global(&keys_global_name)
+            )
+        };
+        let pointer_mask_ref = if typed_layout.pointer_mask_words.is_empty() {
             "null".to_string()
         } else {
             format!(
@@ -806,8 +814,10 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             &[
                 (I64, &obj_handle),
                 (I32, &slot_count_str),
-                (PTR, &mask_ref),
-                (I32, &mask_word_count_str),
+                (PTR, &raw_mask_ref),
+                (I32, &raw_mask_word_count_str),
+                (PTR, &pointer_mask_ref),
+                (I32, &pointer_mask_word_count_str),
             ],
         );
     }

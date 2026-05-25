@@ -1023,6 +1023,52 @@ mod tests {
             "TapeEntry grew beyond 12 bytes — check padding"
         );
     }
+
+    #[test]
+    fn force_materialize_numeric_lazy_array_preserves_raw_payload() {
+        let input = br#"[1,2.5,3]"#;
+        let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let lazy = with_built_tape(input, |tape| unsafe {
+            alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
+        })
+        .expect("valid JSON should build a tape");
+
+        let arr = unsafe { force_materialize_lazy(lazy) };
+
+        assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 1);
+        assert_eq!(crate::array::js_array_numeric_get_f64_unboxed(arr, 0), 1.0);
+        assert_eq!(crate::array::js_array_numeric_get_f64_unboxed(arr, 1), 2.5);
+        assert_eq!(crate::array::js_array_numeric_get_f64_unboxed(arr, 2), 3.0);
+        assert_eq!(
+            crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn force_materialize_lazy_array_cache_downgrades_for_pointer_values() {
+        let input = br#"[1,2,3]"#;
+        let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let lazy = with_built_tape(input, |tape| unsafe {
+            alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
+        })
+        .expect("valid JSON should build a tape");
+
+        unsafe {
+            let cached = crate::string::js_string_from_bytes(b"cached".as_ptr(), 6);
+            *(*lazy).materialized_elements.add(1) =
+                JSValue::string_ptr(cached as *mut crate::StringHeader);
+            *(*lazy).materialized_bitmap |= 1u64 << 1;
+        }
+
+        let arr = unsafe { force_materialize_lazy(lazy) };
+
+        assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 0);
+        assert_eq!(
+            crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
+            Some(1)
+        );
+    }
 }
 
 impl PartialEq for TapeEntry {

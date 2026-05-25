@@ -1491,15 +1491,14 @@ run_target_collector_pointer_free_trace() {
     return 1
 }
 
-run_unboxed_object_fields_codegen_semantics() {
-    local label="unboxed object field semantics"
-    local bin="$TMPDIR/unboxed_object_fields_codegen_semantics"
-    local compile_output="$TMPDIR/unboxed_object_fields_compile.$$.$RANDOM"
-    local expected_output="$TMPDIR/unboxed_object_fields_expected.$$.$RANDOM"
-    local diff_output="$TMPDIR/unboxed_object_fields_diff.$$.$RANDOM"
+run_raw_numeric_object_fields_codegen_semantics() {
+    local label="raw numeric object field semantics"
+    local bin="$TMPDIR/raw_numeric_object_fields_codegen_semantics"
+    local compile_output="$TMPDIR/raw_numeric_object_fields_compile.$$.$RANDOM"
+    local expected_output="$TMPDIR/raw_numeric_object_fields_expected.$$.$RANDOM"
+    local diff_output="$TMPDIR/raw_numeric_object_fields_diff.$$.$RANDOM"
 
-    if ! env PERRY_UNBOXED_OBJECT_FIELDS=1 \
-        $PERRY compile --no-cache tests/unboxed_object_fields.ts -o "$bin" \
+    if ! $PERRY compile --no-cache tests/raw_numeric_object_fields.ts -o "$bin" \
         >"$compile_output" 2>&1; then
         printf "  FAIL [target-gc] %-40s compile failed\n" "$label"
         sed 's/^/    /' "$compile_output"
@@ -1517,10 +1516,26 @@ run_unboxed_object_fields_codegen_semantics() {
     fi
 
     printf '%s\n' \
-        '{"x":3.5,"y":4.25}' \
-        '33.8125' \
-        '{"x":{"label":"heap"},"y":4.25}' \
-        'heap' >"$expected_output"
+        '{"x":3.5,"y":4.25,"negZero":0,"nan":null,"wide":2147483648.5}' \
+        'true' \
+        'true' \
+        '2147483648.5' \
+        '7.75' \
+        '{"x":3.5,"y":4.25,"negZero":0,"nan":null,"wide":2147483648.5}' \
+        '6.25' \
+        '{"x":{"label":"callback"},"y":6.25,"negZero":0,"nan":null,"wide":2147483648.5}' \
+        'callback' \
+        '{"value":7.75}' \
+        '{"value":{"label":"boxed"}}' \
+        '3.75' \
+        '{"value":{"label":"class-transition"},"other":"boxed"}' \
+        'class-transition' \
+        'frozen-write-error' \
+        '9.5' \
+        'sealed-extra-error' \
+        '{"value":12.5}' \
+        '44' \
+        '15.5' >"$expected_output"
 
     if ! diff -u "$expected_output" "$LAST_STDOUT_FILE" >"$diff_output"; then
         printf "  FAIL [target-gc] %-40s stdout mismatch\n" "$label"
@@ -1793,7 +1808,7 @@ run_canary "unboxed object canaries" \
     cargo test -p perry-runtime --release test_unboxed_object
 run_canary "typed/unboxed codegen layout installers" \
     cargo test -p perry-codegen --release --test typed_shape_descriptor --test typed_shape_descriptors -- --test-threads=1
-run_unboxed_object_fields_codegen_semantics
+run_raw_numeric_object_fields_codegen_semantics
 run_canary "managed string allocation" \
     cargo test -p perry-runtime --release test_small_js_string_alloc_uses_managed_nursery_page
 run_canary "managed closure allocation" \

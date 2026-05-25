@@ -30,8 +30,9 @@ pub use self::flat_clone::{
     js_array_values,
 };
 pub use self::header::{
-    js_tagged_template_register_raw, js_template_raw, scan_template_raw_roots,
-    scan_template_raw_roots_mut, ArrayHeader,
+    js_array_clear_numeric_layout, js_array_is_numeric_f64_layout,
+    js_array_mark_numeric_f64_layout, js_array_note_numeric_write, js_tagged_template_register_raw,
+    js_template_raw, scan_template_raw_roots, scan_template_raw_roots_mut, ArrayHeader,
 };
 pub use self::immutable::{
     js_array_copy_within, js_array_to_reversed, js_array_to_sorted_default,
@@ -39,7 +40,8 @@ pub use self::immutable::{
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
-    js_array_get_length, js_array_length, js_array_set_f64, js_array_set_f64_extend,
+    js_array_get_length, js_array_length, js_array_numeric_get_f64_unboxed,
+    js_array_numeric_set_f64_unboxed, js_array_set_f64, js_array_set_f64_extend,
     js_array_set_f64_unchecked, js_array_set_index_or_string, js_array_set_string_key,
 };
 pub use self::is_array::js_array_is_array;
@@ -54,8 +56,9 @@ pub use self::jsvalue_api::{
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,
 };
 pub use self::push_pop::{
-    js_array_delete, js_array_grow, js_array_pop_f64, js_array_push_f64, js_array_push_spread_f64,
-    js_array_set_length, js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue,
+    js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
+    js_array_push_f64, js_array_push_spread_f64, js_array_set_length, js_array_shift_f64,
+    js_array_unshift_f64, js_array_unshift_jsvalue,
 };
 pub use self::reduce_right::js_array_reduce_right;
 pub use self::search::{
@@ -67,9 +70,13 @@ pub use self::splice_slice::{js_array_slice, js_array_splice};
 
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
 pub(crate) use self::header::{
-    array_byte_size, clean_arr_ptr, clean_arr_ptr_mut, gc_element_slot_range,
-    mark_array_layout_unknown, note_array_slot, rebuild_array_layout, rebuild_array_layout_exact,
-    replay_array_growth_write_barriers, store_array_slot, MIN_ARRAY_CAPACITY,
+    array_byte_size, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
+    array_numeric_raw_f64_set_inbounds, clean_arr_ptr, clean_arr_ptr_mut,
+    clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
+    mark_array_layout_unknown, note_array_slot, note_array_slot_layout_only, rebuild_array_layout,
+    rebuild_array_layout_exact, refresh_array_numeric_layout, replay_array_growth_write_barriers,
+    set_array_numeric_layout, store_array_slot, transfer_array_numeric_layout, NumericArrayLayout,
+    MIN_ARRAY_CAPACITY,
 };
 
 #[cfg(test)]

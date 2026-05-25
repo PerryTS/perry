@@ -265,22 +265,15 @@ fn number_typed_local_array_push_keeps_layout_note_and_barrier() {
     );
 
     let ir = ir_for(module);
-    let inbounds_pos = ir
-        .find("\napush.inbounds.")
-        .expect("local array push should emit an optimized in-bounds block");
-    let push_ir = &ir[inbounds_pos + 1..];
-    let inbounds_end = push_ir
-        .find("\napush.realloc.")
-        .expect("in-bounds push block should precede the realloc block");
-    let inbounds_ir = &push_ir[..inbounds_end];
 
     assert!(
-        inbounds_ir.contains("call void @js_gc_note_slot_layout"),
-        "number-typed LocalGet stores must keep runtime layout notes"
+        ir.contains("call i32 @js_typed_feedback_numeric_array_push_guard"),
+        "number-typed array pushes should validate the runtime value before the numeric path"
     );
     assert!(
-        inbounds_ir.contains("call void @js_write_barrier_slot"),
-        "number-typed LocalGet stores must keep write barriers"
+        ir.contains("call void @js_typed_feedback_record_fallback_call")
+            && ir.contains("call i64 @js_array_push_f64"),
+        "wrong runtime values must keep a boxed runtime push fallback"
     );
 }
 
@@ -333,11 +326,11 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
     );
 
     let ir = ir_for(module);
-    let body_ir = block_between(&ir, "\nfor.body.", "\nfor.update.");
+    let body_ir = block_between(&ir, "\nidxset.bounded_fast.", "\nidxset.bounded_fallback.");
 
     assert!(
-        body_ir.contains("store double"),
-        "bounded array store should emit a direct element store"
+        body_ir.contains("call i32 @js_array_numeric_set_f64_unboxed"),
+        "bounded numeric array store should route through the raw-f64 payload helper"
     );
     assert!(
         !body_ir.contains("call void @js_gc_note_slot_layout"),
@@ -394,11 +387,11 @@ fn integer_arithmetic_array_push_omits_inbounds_layout_note_and_barrier() {
     );
 
     let ir = ir_for(module);
-    let inbounds_ir = block_between(&ir, "\napush.inbounds.", "\napush.realloc.");
+    let inbounds_ir = block_between(&ir, "\napush.numeric_fast.", "\napush.numeric_fallback.");
 
     assert!(
-        inbounds_ir.contains("store double"),
-        "optimized push should emit a direct in-bounds store"
+        inbounds_ir.contains("call i64 @js_array_numeric_push_f64_unboxed"),
+        "optimized numeric push should route through the raw-f64 payload helper"
     );
     assert!(
         !inbounds_ir.contains("call void @js_gc_note_slot_layout"),
@@ -515,8 +508,16 @@ fn typed_object_literal_stable_path_installs_pointer_mask_descriptor() {
         "fixture should use the stable object-literal shape allocator"
     );
     assert!(
-        ir.contains("@perry_typed_obj_shape_mask_"),
+        ir.contains("@perry_typed_obj_shape_raw_f64_mask_"),
+        "typed object literal should emit a raw-f64 mask constant"
+    );
+    assert!(
+        ir.contains("@perry_typed_obj_shape_ptr_mask_"),
         "typed object literal should emit a pointer-mask constant"
+    );
+    assert!(
+        ir.contains("constant [1 x i64] [i64 1]"),
+        "only the id slot (slot 0) should be raw-f64"
     );
     assert!(
         ir.contains("constant [1 x i64] [i64 4]"),
@@ -524,7 +525,7 @@ fn typed_object_literal_stable_path_installs_pointer_mask_descriptor() {
     );
 
     let mask_call_pos = ir
-        .find("ptr @perry_typed_obj_shape_mask_")
+        .find("ptr @perry_typed_obj_shape_ptr_mask_")
         .expect("typed descriptor call should reference the object-literal mask");
     let before_mask_call = &ir[..mask_call_pos];
     let alloc_pos = before_mask_call
@@ -561,8 +562,12 @@ fn typed_object_literal_pointer_free_descriptor_precedes_dynamic_mutation() {
 
     let ir = ir_for(module);
     let descriptor_pos = ir
-        .find(", i32 1, ptr null, i32 0)")
+        .find("call void @js_gc_init_typed_shape_layout")
         .expect("number-only object type should install a pointer-free descriptor");
+    assert!(
+        ir.contains("@perry_typed_obj_shape_raw_f64_mask_"),
+        "number-only object type should install a raw-f64 descriptor mask"
+    );
     assert_typed_feedback_setter_after(
         &ir,
         descriptor_pos,
@@ -632,6 +637,8 @@ fn unboxed_point_literal_gate_off_uses_existing_typed_shape_path() {
     assert!(ir.contains("call i64 @js_object_alloc_with_shape"));
     assert!(ir.contains("call void @js_object_set_field"));
     assert!(ir.contains("call void @js_gc_init_typed_shape_layout"));
+    assert!(ir.contains("@perry_typed_obj_shape_raw_f64_mask_"));
+    assert!(ir.contains("constant [1 x i64] [i64 3]"));
     assert!(!ir.contains("call void @js_object_set_unboxed_f64_field"));
     assert!(!ir.contains("call void @js_gc_init_unboxed_object_layout"));
 }

@@ -245,6 +245,7 @@ fn class_field_get_contract(
     expected_keys: *const ArrayHeader,
     key: *const crate::StringHeader,
     expected_field_index: u32,
+    require_raw_f64: bool,
 ) -> (usize, u32, u16, bool) {
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
     if object_addr == 0 || expected_class_id == 0 || expected_keys.is_null() {
@@ -276,6 +277,11 @@ fn class_field_get_contract(
             && expected_field_index < (*obj).field_count
             && plain_array_index_guard(expected_keys, expected_field_index, true)
             && object_key_matches_field(obj, key, expected_field_index)
+            && (!require_raw_f64
+                || crate::gc::layout_typed_raw_f64_slot_for_user(
+                    object_addr,
+                    expected_field_index as usize,
+                ))
             && !class_getter_in_chain(class_id, &key_name)
             && !descriptor_blocks_class_field_get(object_addr, class_id, &key_name);
         (shape_addr, class_id, gc_type, valid)
@@ -290,6 +296,7 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
     expected_keys: *const ArrayHeader,
     key: *const crate::StringHeader,
     expected_field_index: u32,
+    require_raw_f64: i32,
 ) -> i32 {
     let (shape_addr, class_id, gc_type, contract_valid) = class_field_get_contract(
         receiver,
@@ -297,6 +304,7 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
         expected_keys,
         key,
         expected_field_index,
+        require_raw_f64 != 0,
     );
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
     let observation = Observation {
@@ -364,6 +372,8 @@ fn class_field_set_contract(
     expected_keys: *const ArrayHeader,
     key: *const crate::StringHeader,
     expected_field_index: u32,
+    require_raw_f64: bool,
+    value_bits: u64,
 ) -> (usize, u32, u16, bool) {
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
     if object_addr == 0 || expected_class_id == 0 || expected_keys.is_null() {
@@ -398,6 +408,12 @@ fn class_field_set_contract(
             && expected_field_index < (*obj).field_count
             && plain_array_index_guard(expected_keys, expected_field_index, true)
             && object_key_matches_field(obj, key, expected_field_index)
+            && (!require_raw_f64
+                || (is_plain_number_bits(value_bits)
+                    && crate::gc::layout_typed_raw_f64_slot_for_user(
+                        object_addr,
+                        expected_field_index as usize,
+                    )))
             && !class_setter_in_chain(class_id, &key_name)
             && !descriptor_blocks_class_field_set(object_addr, class_id, &key_name);
         (shape_addr, class_id, gc_type, valid)
@@ -413,13 +429,17 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
     key: *const crate::StringHeader,
     expected_field_index: u32,
     value: f64,
+    require_raw_f64: i32,
 ) -> i32 {
+    let value_bits = value.to_bits();
     let (shape_addr, class_id, gc_type, contract_valid) = class_field_set_contract(
         receiver,
         expected_class_id,
         expected_keys,
         key,
         expected_field_index,
+        require_raw_f64 != 0,
+        value_bits,
     );
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
     let observation = Observation {
@@ -430,7 +450,7 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
         class_id,
         heap_type: gc_type,
         aux: expected_field_index as u64,
-        value_tag: stable_value_kind(value.to_bits()),
+        value_tag: stable_value_kind(value_bits),
     };
     if guard_observe(
         site_id,

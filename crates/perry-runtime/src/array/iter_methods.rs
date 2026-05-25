@@ -76,7 +76,7 @@ pub extern "C" fn js_array_map(
                 // allocating), this path needs the full barrier helper
                 // because subsequent stores would miss the remembered
                 // set. The 64-element cap keeps that probability low.
-                crate::gc::layout_note_slot(result as usize, i, mapped_bits);
+                note_array_slot_layout_only(result, i, mapped_bits);
             } else {
                 note_array_slot(result, i, mapped_bits);
             }

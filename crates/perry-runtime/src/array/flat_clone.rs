@@ -336,6 +336,7 @@ pub extern "C" fn js_array_entries(arr: *const ArrayHeader) -> *mut ArrayHeader 
         let len = (*arr).length;
         let result = js_array_alloc(len);
         (*result).length = len;
+        clear_array_numeric_layout(result);
         let src_elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let dst_elements = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         for i in 0..len as usize {

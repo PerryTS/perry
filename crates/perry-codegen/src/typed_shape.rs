@@ -20,6 +20,17 @@ pub(crate) fn type_is_pointer_bearing(ty: &Type) -> bool {
     }
 }
 
+pub(crate) fn type_is_raw_f64_candidate(ty: &Type) -> bool {
+    matches!(ty, Type::Number)
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TypedShapeLayout {
+    pub(crate) slot_count: u32,
+    pub(crate) raw_f64_mask_words: Vec<u64>,
+    pub(crate) pointer_mask_words: Vec<u64>,
+}
+
 pub(crate) fn trim_mask_words(mut words: Vec<u64>) -> Vec<u64> {
     while words.last().copied() == Some(0) {
         words.pop();
@@ -27,34 +38,12 @@ pub(crate) fn trim_mask_words(mut words: Vec<u64>) -> Vec<u64> {
     words
 }
 
-pub(crate) fn mask_words_for_fields<'a, I>(fields: I) -> Vec<u64>
-where
-    I: IntoIterator<Item = &'a perry_hir::ClassField>,
-{
-    let mut words = Vec::new();
-    let mut slot = 0usize;
-    for field in fields {
-        if field.key_expr.is_some() {
-            continue;
-        }
-        if type_is_pointer_bearing(&field.ty) {
-            let word = slot / 64;
-            if words.len() <= word {
-                words.resize(word + 1, 0);
-            }
-            words[word] |= 1u64 << (slot % 64);
-        }
-        slot += 1;
-    }
-    trim_mask_words(words)
-}
-
 pub(crate) fn class_typed_layout(
     classes: &std::collections::HashMap<String, &perry_hir::Class>,
     class_name: &str,
-) -> (u32, Vec<u64>) {
+) -> TypedShapeLayout {
     let Some(class) = classes.get(class_name).copied() else {
-        return (0, Vec::new());
+        return TypedShapeLayout::default();
     };
     let mut chain: Vec<&perry_hir::Class> = Vec::new();
     let mut cur = Some(class);
@@ -72,13 +61,36 @@ pub(crate) fn class_typed_layout(
     }
     chain.reverse();
 
-    let slot_count = chain
-        .iter()
-        .flat_map(|class| class.fields.iter())
-        .filter(|field| field.key_expr.is_none())
-        .count() as u32;
-    let mask_words = mask_words_for_fields(chain.iter().flat_map(|class| class.fields.iter()));
-    (slot_count, mask_words)
+    let mut raw_f64_mask_words = Vec::new();
+    let mut pointer_mask_words = Vec::new();
+    let mut slot_count = 0u32;
+    for field in chain.iter().flat_map(|class| class.fields.iter()) {
+        if field.key_expr.is_some() {
+            continue;
+        }
+        let slot = slot_count as usize;
+        if type_is_raw_f64_candidate(&field.ty) {
+            let word = slot / 64;
+            if raw_f64_mask_words.len() <= word {
+                raw_f64_mask_words.resize(word + 1, 0);
+            }
+            raw_f64_mask_words[word] |= 1u64 << (slot % 64);
+        }
+        if type_is_pointer_bearing(&field.ty) {
+            let word = slot / 64;
+            if pointer_mask_words.len() <= word {
+                pointer_mask_words.resize(word + 1, 0);
+            }
+            pointer_mask_words[word] |= 1u64 << (slot % 64);
+        }
+        slot_count += 1;
+    }
+
+    TypedShapeLayout {
+        slot_count,
+        raw_f64_mask_words: trim_mask_words(raw_f64_mask_words),
+        pointer_mask_words: trim_mask_words(pointer_mask_words),
+    }
 }
 
 pub(crate) fn mask_global_name_from_keys_global(keys_global_name: &str) -> String {
@@ -86,4 +98,11 @@ pub(crate) fn mask_global_name_from_keys_global(keys_global_name: &str) -> Strin
         .strip_prefix("perry_class_keys_")
         .map(|suffix| format!("perry_typed_shape_mask_{}", suffix))
         .unwrap_or_else(|| format!("perry_typed_shape_mask_{}", keys_global_name))
+}
+
+pub(crate) fn raw_f64_mask_global_name_from_keys_global(keys_global_name: &str) -> String {
+    keys_global_name
+        .strip_prefix("perry_class_keys_")
+        .map(|suffix| format!("perry_typed_shape_raw_f64_mask_{}", suffix))
+        .unwrap_or_else(|| format!("perry_typed_shape_raw_f64_mask_{}", keys_global_name))
 }

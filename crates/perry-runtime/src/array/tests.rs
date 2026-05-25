@@ -4,10 +4,27 @@ use std::ptr;
 
 use super::*;
 
+extern "C" fn test_map_to_string(
+    _closure: *const crate::closure::ClosureHeader,
+    _element: f64,
+    _index: f64,
+) -> f64 {
+    let str_ptr = crate::string::js_string_from_bytes(b"mapped".as_ptr(), 6);
+    f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK))
+}
+
 fn gc_collection_count_for_tests() -> u64 {
     let mut collections = 0;
     crate::gc::js_gc_stats(&mut collections, ptr::null_mut(), ptr::null_mut());
     collections
+}
+
+fn assert_numeric_raw_values(arr: *mut ArrayHeader, expected: &[f64]) {
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+    assert_eq!(js_array_length(arr), expected.len() as u32);
+    for (index, value) in expected.iter().enumerate() {
+        assert_eq!(js_array_numeric_get_f64_unboxed(arr, index as u32), *value);
+    }
 }
 
 #[test]
@@ -205,6 +222,363 @@ fn test_array_push_f64_grow_path_preserves_value_and_forwarding() {
     assert_eq!(
         js_array_get_f64(initial, capacity).to_bits(),
         str_value.to_bits()
+    );
+}
+
+#[test]
+fn test_numeric_array_layout_metadata_preserves_and_downgrades_on_writes() {
+    let mut arr = js_array_alloc(4);
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+
+    arr = js_array_push_f64(arr, 1.25);
+    arr = js_array_push_f64(arr, f64::NAN);
+    arr = js_array_push_f64(arr, -0.0);
+
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
+        Some(0)
+    );
+
+    let str_ptr = crate::string::js_string_from_bytes(b"not-number".as_ptr(), 10);
+    let str_value =
+        f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK));
+    arr = js_array_push_f64(arr, str_value);
+
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 0);
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(arr as usize, 4),
+        Some(1)
+    );
+
+    js_array_set_f64(arr, 0, 99.0);
+    assert_eq!(
+        js_array_is_numeric_f64_layout(arr),
+        0,
+        "numeric writes do not silently re-specialize a downgraded mixed array"
+    );
+}
+
+#[test]
+fn test_numeric_array_layout_mark_rejects_holes_and_accepts_dense_numbers() {
+    let arr = js_array_alloc_with_length(2);
+
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 0);
+    assert_eq!(
+        js_array_mark_numeric_f64_layout(arr),
+        0,
+        "hole-filled arrays cannot be treated as dense numeric payloads"
+    );
+
+    js_array_set_f64(arr, 0, 3.5);
+    js_array_set_f64(arr, 1, -0.0);
+
+    assert_eq!(js_array_mark_numeric_f64_layout(arr), 1);
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(arr as usize, 2),
+        Some(0)
+    );
+
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    js_array_set_f64(arr, 1, undefined);
+
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 0);
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(arr as usize, 2),
+        Some(0),
+        "undefined downgrades numeric metadata but remains pointer-free for GC"
+    );
+}
+
+#[test]
+fn test_numeric_array_raw_f64_payload_tracks_sets_and_downgrades() {
+    let mut arr = js_array_alloc(2);
+    arr = js_array_push_f64(arr, 1.5);
+    arr = js_array_push_f64(arr, 2.5);
+
+    assert_eq!(js_array_mark_numeric_f64_layout(arr), 1);
+    assert_eq!(js_array_numeric_get_f64_unboxed(arr, 0), 1.5);
+    assert_eq!(js_array_numeric_set_f64_unboxed(arr, 1, 7.25), 1);
+    assert_eq!(js_array_get_f64(arr, 1), 7.25);
+    assert_eq!(js_array_numeric_get_f64_unboxed(arr, 1), 7.25);
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+
+    let str_ptr = crate::string::js_string_from_bytes(b"boxed".as_ptr(), 5);
+    let str_value =
+        f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK));
+    js_array_set_f64(arr, 1, str_value);
+
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 0);
+    assert_eq!(
+        js_array_numeric_get_f64_unboxed(arr, 1).to_bits(),
+        str_value.to_bits(),
+        "unboxed helper falls back to boxed slots after downgrade"
+    );
+}
+
+#[test]
+fn test_numeric_array_raw_f64_payload_push_helper_preserves_and_downgrades() {
+    let mut arr = js_array_alloc(2);
+
+    assert_eq!(js_array_mark_numeric_f64_layout(arr), 1);
+    arr = js_array_numeric_push_f64_unboxed(arr, 1.0);
+    arr = js_array_numeric_push_f64_unboxed(arr, 2.0);
+
+    assert_eq!(js_array_length(arr), 2);
+    assert_eq!(js_array_numeric_get_f64_unboxed(arr, 0), 1.0);
+    assert_eq!(js_array_numeric_get_f64_unboxed(arr, 1), 2.0);
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+
+    let grown = js_array_numeric_push_f64_unboxed(arr, 3.0);
+    assert_eq!(js_array_length(grown), 3);
+    assert_eq!(js_array_numeric_get_f64_unboxed(grown, 2), 3.0);
+    assert_eq!(js_array_is_numeric_f64_layout(grown), 1);
+
+    let str_ptr = crate::string::js_string_from_bytes(b"push-boxed".as_ptr(), 10);
+    let str_value =
+        f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK));
+    let mixed = js_array_numeric_push_f64_unboxed(grown, str_value);
+
+    assert_eq!(js_array_get_f64(mixed, 3).to_bits(), str_value.to_bits());
+    assert_eq!(js_array_is_numeric_f64_layout(mixed), 0);
+}
+
+#[test]
+fn test_numeric_array_layout_transfers_across_growth_forwarding() {
+    let mut arr = js_array_alloc(0);
+    let original = arr;
+    let capacity = unsafe { (*arr).capacity };
+
+    for i in 0..capacity {
+        arr = js_array_push_f64(arr, i as f64);
+    }
+
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+
+    let grown = js_array_push_f64(arr, capacity as f64);
+
+    assert_ne!(grown, arr);
+    assert_eq!(js_array_is_numeric_f64_layout(grown), 1);
+    assert_eq!(
+        js_array_is_numeric_f64_layout(original),
+        1,
+        "stale pointers should follow growth forwarding before checking metadata"
+    );
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(grown as usize, (capacity + 1) as usize),
+        Some(0)
+    );
+}
+
+#[test]
+fn test_numeric_array_raw_f64_payload_rebuilds_after_growth_forwarding() {
+    let mut arr = js_array_alloc(0);
+    let original = arr;
+    let capacity = unsafe { (*arr).capacity };
+
+    for i in 0..capacity {
+        arr = js_array_push_f64(arr, i as f64);
+    }
+
+    assert_eq!(js_array_mark_numeric_f64_layout(arr), 1);
+    assert_eq!(
+        js_array_numeric_get_f64_unboxed(arr, capacity - 1),
+        (capacity - 1) as f64
+    );
+
+    let grown = js_array_push_f64(arr, capacity as f64);
+
+    assert_ne!(grown, arr);
+    assert_eq!(
+        js_array_numeric_get_f64_unboxed(grown, capacity),
+        capacity as f64
+    );
+    assert_eq!(
+        js_array_numeric_get_f64_unboxed(original, capacity),
+        capacity as f64,
+        "stale forwarded handles rebuild the moved raw payload before reading"
+    );
+}
+
+#[test]
+fn test_numeric_array_layout_query_recovers_dense_numeric_metadata() {
+    let mut arr = js_array_alloc(0);
+    arr = js_array_push_f64(arr, 1.0);
+    arr = js_array_push_f64(arr, 2.0);
+
+    js_array_clear_numeric_layout(arr);
+
+    assert_eq!(
+        js_array_is_numeric_f64_layout(arr),
+        1,
+        "numeric layout metadata can be rebuilt from dense numeric slots"
+    );
+}
+
+#[test]
+fn test_array_get_f64_large_dense_array_preserves_values() {
+    let arr = js_array_alloc_with_length(100_001);
+    js_array_set_f64(arr, 100_000, 42.0);
+
+    assert_eq!(js_array_get_f64(arr, 100_000), 42.0);
+    assert_eq!(js_array_get_f64_unchecked(arr, 100_000), 42.0);
+}
+
+#[test]
+fn test_numeric_array_layout_bulk_rebuild_preserves_and_downgrades() {
+    let values = [1.0, 2.0, 3.0, 4.0];
+    let src = js_array_from_f64(values.as_ptr(), values.len() as u32);
+
+    assert_eq!(js_array_is_numeric_f64_layout(src), 1);
+
+    let sliced = js_array_slice(src, 1, 3);
+    assert_numeric_raw_values(sliced, &[2.0, 3.0]);
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(sliced as usize, 2),
+        Some(0)
+    );
+
+    let concatenated = js_array_concat(js_array_alloc(0), src);
+    assert_numeric_raw_values(concatenated, &values);
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(concatenated as usize, values.len()),
+        Some(0)
+    );
+
+    let str_ptr = crate::string::js_string_from_bytes(b"bulk-mixed".as_ptr(), 10);
+    let str_value =
+        f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK));
+    js_array_fill(concatenated, str_value);
+
+    assert_eq!(js_array_is_numeric_f64_layout(concatenated), 0);
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(concatenated as usize, values.len()),
+        Some(values.len())
+    );
+}
+
+#[test]
+fn test_numeric_array_layout_length_and_delete_transitions() {
+    let mut arr = js_array_alloc(4);
+    arr = js_array_push_f64(arr, 1.0);
+    arr = js_array_push_f64(arr, 2.0);
+    arr = js_array_push_f64(arr, 3.0);
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+
+    js_array_set_length(arr, 2.0);
+
+    assert_eq!(js_array_length(arr), 2);
+    assert_eq!(
+        js_array_is_numeric_f64_layout(arr),
+        1,
+        "truncation should preserve dense numeric layout for the reachable prefix"
+    );
+
+    js_array_set_length(arr, 4.0);
+
+    assert_eq!(js_array_length(arr), 4);
+    assert_eq!(
+        js_array_is_numeric_f64_layout(arr),
+        0,
+        "extension pads with undefined and must downgrade numeric layout"
+    );
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(arr as usize, 4),
+        Some(0)
+    );
+
+    let mut dense = js_array_alloc(4);
+    dense = js_array_push_f64(dense, 10.0);
+    dense = js_array_push_f64(dense, 20.0);
+    assert_eq!(js_array_is_numeric_f64_layout(dense), 1);
+
+    assert_eq!(js_array_delete(dense, 0), 1);
+    assert_eq!(
+        js_array_is_numeric_f64_layout(dense),
+        0,
+        "delete creates an undefined slot and downgrades dense numeric layout"
+    );
+}
+
+#[test]
+fn test_numeric_array_layout_immutable_helpers_preserve_or_downgrade() {
+    let values = [10.0, 2.0, 30.0];
+    let src = js_array_from_f64(values.as_ptr(), values.len() as u32);
+    assert_numeric_raw_values(src, &values);
+
+    let reversed = js_array_to_reversed(src);
+    assert_numeric_raw_values(reversed, &[30.0, 2.0, 10.0]);
+
+    let sorted = js_array_to_sorted_default(src);
+    assert_numeric_raw_values(sorted, &[10.0, 2.0, 30.0]);
+
+    let numeric_replaced = js_array_with(src, 1.0, 99.0);
+    assert_numeric_raw_values(numeric_replaced, &[10.0, 99.0, 30.0]);
+
+    let insert = [7.0, 8.0];
+    let spliced = js_array_to_spliced(src, 1.0, 1.0, insert.as_ptr(), insert.len() as u32);
+    assert_numeric_raw_values(spliced, &[10.0, 7.0, 8.0, 30.0]);
+
+    let str_ptr = crate::string::js_string_from_bytes(b"immutable-mixed".as_ptr(), 15);
+    let str_value =
+        f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK));
+    let mixed = js_array_with(src, 1.0, str_value);
+
+    assert_eq!(js_array_is_numeric_f64_layout(mixed), 0);
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(mixed as usize, values.len()),
+        Some(1)
+    );
+}
+
+#[test]
+fn test_numeric_array_layout_map_fast_path_downgrades_mapped_pointers() {
+    let mut arr = js_array_alloc(4);
+    arr = js_array_push_f64(arr, 1.0);
+    arr = js_array_push_f64(arr, 2.0);
+    arr = js_array_push_f64(arr, 3.0);
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+
+    let callback = crate::closure::js_closure_alloc(test_map_to_string as *const u8, 0);
+    let mapped = js_array_map(arr, callback);
+
+    assert_eq!(js_array_length(mapped), 3);
+    assert_eq!(
+        js_array_is_numeric_f64_layout(mapped),
+        0,
+        "small map() results use a layout-only fast path and must still downgrade"
+    );
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(mapped as usize, 3),
+        Some(3)
+    );
+}
+
+#[test]
+fn test_numeric_array_layout_entries_outer_downgrades_inner_pairs_preserve() {
+    let values = [4.0, 5.0];
+    let src = js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let entries = js_array_entries(src);
+
+    assert_eq!(
+        js_array_is_numeric_f64_layout(entries),
+        0,
+        "entries() outer array stores pair pointers, not raw numeric slots"
+    );
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(entries as usize, values.len()),
+        Some(values.len())
+    );
+
+    let pair_box = js_array_get_f64(entries, 0);
+    let pair = (pair_box.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
+    assert_eq!(js_array_is_numeric_f64_layout(pair), 1);
+    assert_eq!(js_array_numeric_get_f64_unboxed(pair, 0), 0.0);
+    assert_eq!(js_array_numeric_get_f64_unboxed(pair, 1), 4.0);
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(pair as usize, 2),
+        Some(0)
     );
 }
 

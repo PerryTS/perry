@@ -148,8 +148,12 @@ fn typed_class_emits_pointer_mask_and_descriptor_install() {
     let ir = compile_ir(&module);
 
     assert!(ir.contains("@perry_typed_shape_mask_"));
+    assert!(ir.contains("@perry_typed_shape_raw_f64_mask_"));
+    assert!(ir.contains("private unnamed_addr constant [1 x i64] [i64 1]"));
     assert!(ir.contains("private unnamed_addr constant [1 x i64] [i64 6]"));
-    assert!(ir.contains("declare void @js_gc_init_typed_shape_layout(i64, i32, ptr, i32)"));
+    assert!(
+        ir.contains("declare void @js_gc_init_typed_shape_layout(i64, i32, ptr, i32, ptr, i32)")
+    );
     assert!(ir.contains("call void @js_gc_init_typed_shape_layout"));
 }
 
@@ -167,6 +171,8 @@ fn synthesized_closed_shape_emits_pointer_mask_and_descriptor_install() {
     let ir = compile_ir(&module);
 
     assert!(ir.contains("@perry_typed_shape_mask_"));
+    assert!(ir.contains("@perry_typed_shape_raw_f64_mask_"));
+    assert!(ir.contains("private unnamed_addr constant [1 x i64] [i64 1]"));
     assert!(ir.contains("private unnamed_addr constant [1 x i64] [i64 2]"));
     assert!(ir.contains("call void @js_gc_init_typed_shape_layout"));
 }

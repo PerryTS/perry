@@ -68,7 +68,7 @@ if [[ $QUICK_MODE -eq 1 ]]; then
   BENCHMARKS="02_loop_overhead.ts 05_fibonacci.ts 06_math_intensive.ts 10_nested_loops.ts 13_factorial.ts"
 elif [[ $FULL_MODE -eq 1 ]]; then
   # Full suite including the regression-probe benchmarks added for performance tracking
-  BENCHMARKS="02_loop_overhead.ts 03_array_write.ts 04_array_read.ts 05_fibonacci.ts 06_math_intensive.ts 07_object_create.ts 08_string_concat.ts 09_method_calls.ts 10_nested_loops.ts 11_prime_sieve.ts 12_binary_trees.ts 13_factorial.ts 14_closure.ts 15_mandelbrot.ts 16_matrix_multiply.ts bench_gc_pressure.ts bench_json_roundtrip.ts bench_object_property.ts bench_int_arithmetic.ts bench_buffer_readwrite.ts bench_array_grow.ts bench_string_heavy.ts"
+  BENCHMARKS="02_loop_overhead.ts 03_array_write.ts 04_array_read.ts 05_fibonacci.ts 06_math_intensive.ts 07_object_create.ts 08_string_concat.ts 09_method_calls.ts 10_nested_loops.ts 11_prime_sieve.ts 12_binary_trees.ts 13_factorial.ts 14_closure.ts 15_mandelbrot.ts 16_matrix_multiply.ts bench_gc_pressure.ts bench_json_roundtrip.ts bench_object_property.ts bench_int_arithmetic.ts bench_buffer_readwrite.ts bench_array_grow.ts bench_string_heavy.ts bench_numeric_array_numeric.ts bench_numeric_array_downgrade.ts"
 else
   BENCHMARKS="02_loop_overhead.ts 03_array_write.ts 04_array_read.ts 05_fibonacci.ts 06_math_intensive.ts 07_object_create.ts 08_string_concat.ts 09_method_calls.ts 10_nested_loops.ts 11_prime_sieve.ts 12_binary_trees.ts 13_factorial.ts 14_closure.ts 15_mandelbrot.ts 16_matrix_multiply.ts"
 fi
@@ -553,6 +553,7 @@ cd "$SUITE_DIR" && rm -f 01_startup 02_loop_overhead 03_array_write 04_array_rea
   06_math_intensive 07_object_create 08_string_concat 09_method_calls 10_nested_loops \
   11_prime_sieve 12_binary_trees 13_factorial 14_closure 15_mandelbrot 16_matrix_multiply \
   bench_gc_pressure bench_json_roundtrip bench_object_property bench_int_arithmetic \
-  bench_buffer_readwrite bench_array_grow bench_string_heavy 2>/dev/null
+  bench_buffer_readwrite bench_array_grow bench_string_heavy bench_numeric_array_numeric \
+  bench_numeric_array_downgrade 2>/dev/null
 
 exit ${COMPARE_EXIT:-0}

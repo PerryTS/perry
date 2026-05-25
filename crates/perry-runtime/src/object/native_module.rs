@@ -1721,7 +1721,7 @@ unsafe fn http_methods_array() -> f64 {
             crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
         );
         *elements_ptr.add(i) = nanboxed;
-        crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
+        crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
     }
     let value = crate::value::js_nanbox_pointer(arr as i64);
     // GC_STORE_AUDIT(ROOT): HTTP_METHODS_CACHE is a mutable root visited by scan_object_cache_roots_mut.

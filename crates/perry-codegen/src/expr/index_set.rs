@@ -32,10 +32,12 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 #[allow(unused_imports)]
 use super::{
     array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
-    can_lower_expr_as_i32, emit_jsvalue_slot_store_on_block, emit_layout_note_slot_on_block,
-    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
+    can_lower_expr_as_i32, emit_array_numeric_write_note_on_block,
+    emit_jsvalue_slot_store_on_block, emit_layout_note_slot_on_block, emit_shadow_slot_clear,
+    emit_shadow_slot_update_for_expr, emit_string_literal_global,
     emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
-    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    emit_write_barrier, emit_write_barrier_slot_on_block,
+    expr_has_numeric_pointer_free_array_layout, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
@@ -216,6 +218,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }) {
                         let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
                         let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
+                        let value_is_numeric = is_numeric_expr(ctx, value);
+                        let require_numeric_layout = value_is_numeric
+                            && expr_has_numeric_pointer_free_array_layout(ctx, object);
                         let arr_box = lower_expr(ctx, object)?;
                         let val_double = lower_expr(ctx, value)?;
                         // Grab i32 slot name before mutably borrowing ctx for block().
@@ -229,29 +234,45 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let blk = ctx.block();
                         let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                        // ptr = arr_handle + 8 + idx*8
-                        let idx_i64 = blk.zext(I32, &idx_i32, I64);
-                        let byte_offset = blk.shl(I64, &idx_i64, "3");
-                        let with_header = blk.add(I64, &byte_offset, "8");
-                        let element_addr = blk.add(I64, &arr_handle, &with_header);
-                        let element_ptr = blk.inttoptr(I64, &element_addr);
-                        emit_jsvalue_slot_store_on_block(
-                            blk,
-                            &element_ptr,
-                            &val_double,
-                            &arr_handle,
-                            &idx_i32,
-                            layout_note_needed,
-                            &arr_handle,
-                            &element_addr,
-                            write_barrier_needed,
-                        );
+                        if require_numeric_layout {
+                            blk.call(
+                                I32,
+                                "js_array_numeric_set_f64_unboxed",
+                                &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, &val_double)],
+                            );
+                        } else {
+                            // ptr = arr_handle + 8 + idx*8
+                            let idx_i64 = blk.zext(I32, &idx_i32, I64);
+                            let byte_offset = blk.shl(I64, &idx_i64, "3");
+                            let with_header = blk.add(I64, &byte_offset, "8");
+                            let element_addr = blk.add(I64, &arr_handle, &with_header);
+                            let element_ptr = blk.inttoptr(I64, &element_addr);
+                            let value_bits = emit_jsvalue_slot_store_on_block(
+                                blk,
+                                &element_ptr,
+                                &val_double,
+                                &arr_handle,
+                                &idx_i32,
+                                layout_note_needed,
+                                &arr_handle,
+                                &element_addr,
+                                write_barrier_needed,
+                            );
+                            if !value_is_numeric {
+                                let value_bits =
+                                    value_bits.unwrap_or_else(|| blk.bitcast_double_to_i64(&val_double));
+                                emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
+                            }
+                        }
                         return Ok(val_double);
                     }
                 }
 
                 let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
                 let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
+                let value_is_numeric = is_numeric_expr(ctx, value);
+                let require_numeric_layout =
+                    value_is_numeric && expr_has_numeric_pointer_free_array_layout(ctx, object);
                 let arr_box = lower_expr(ctx, object)?;
                 let idx_double = lower_expr(ctx, index)?;
                 let val_double = lower_expr(ctx, value)?;
@@ -264,7 +285,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx,
                     TypedFeedbackKind::ArrayElement,
                     "array[index]=",
-                    TypedFeedbackContract::array_set_index(),
+                    if require_numeric_layout {
+                        TypedFeedbackContract::numeric_array_set_index()
+                    } else {
+                        TypedFeedbackContract::array_set_index()
+                    },
                 );
                 // Use the fast inlined IndexSet path only when the
                 // receiver is a local that's actually in ctx.locals
@@ -288,6 +313,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             id,
                             layout_note_needed,
                             write_barrier_needed,
+                            value_is_numeric,
+                            require_numeric_layout,
                             &feedback_site_id,
                         )?;
                     } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {

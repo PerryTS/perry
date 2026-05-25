@@ -34,7 +34,8 @@ use super::{
     buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
     emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
     emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
-    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    emit_write_barrier, emit_write_barrier_slot_on_block,
+    expr_has_numeric_pointer_free_array_layout, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
@@ -52,12 +53,18 @@ fn lower_guarded_array_index_get(
     idx_box: &str,
     idx_i32: &str,
     block_prefix: &str,
+    require_numeric_layout: bool,
 ) -> Result<String> {
+    let contract = if require_numeric_layout {
+        TypedFeedbackContract::numeric_array_get_index()
+    } else {
+        TypedFeedbackContract::array_get_index()
+    };
     let feedback_site_id = emit_typed_feedback_register_site(
         ctx,
         TypedFeedbackKind::ArrayElement,
         "array[index]",
-        TypedFeedbackContract::array_get_index(),
+        contract,
     );
     let fast_idx = ctx.new_block(&format!("{}.fast", block_prefix));
     let fallback_idx = ctx.new_block(&format!("{}.fallback", block_prefix));
@@ -68,9 +75,14 @@ fn lower_guarded_array_index_get(
 
     let guard_ok = {
         let blk = ctx.block();
+        let guard_fn = if require_numeric_layout {
+            "js_typed_feedback_numeric_array_index_get_guard"
+        } else {
+            "js_typed_feedback_plain_array_index_get_guard"
+        };
         let guard_i32 = blk.call(
             I32,
-            "js_typed_feedback_plain_array_index_get_guard",
+            guard_fn,
             &[
                 (I64, &feedback_site_id),
                 (DOUBLE, arr_box),
@@ -100,18 +112,26 @@ fn lower_guarded_array_index_get(
     let fast_blk = ctx.block();
     let arr_bits = fast_blk.bitcast_double_to_i64(arr_box);
     let arr_handle = fast_blk.and(I64, &arr_bits, POINTER_MASK_I64);
-    let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
-    let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
-    let with_header = fast_blk.add(I64, &byte_offset, "8");
-    let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
-    let element_ptr = fast_blk.inttoptr(I64, &element_addr);
-    let fast_raw = fast_blk.load(DOUBLE, &element_ptr);
-    // `new Array(n)` slots are TAG_HOLE internally; JavaScript reads expose
-    // `undefined`.
-    let fast_raw_bits = fast_blk.bitcast_double_to_i64(&fast_raw);
-    let is_hole = fast_blk.icmp_eq(I64, &fast_raw_bits, crate::nanbox::TAG_HOLE_I64);
-    let undef_d = fast_blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
-    let fast_val = fast_blk.select(I1, &is_hole, DOUBLE, &undef_d, &fast_raw);
+    let fast_val = if require_numeric_layout {
+        fast_blk.call(
+            DOUBLE,
+            "js_array_numeric_get_f64_unboxed",
+            &[(I64, &arr_handle), (I32, idx_i32)],
+        )
+    } else {
+        let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
+        let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
+        let with_header = fast_blk.add(I64, &byte_offset, "8");
+        let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
+        let element_ptr = fast_blk.inttoptr(I64, &element_addr);
+        let fast_raw = fast_blk.load(DOUBLE, &element_ptr);
+        // `new Array(n)` slots are TAG_HOLE internally; JavaScript reads expose
+        // `undefined`.
+        let fast_raw_bits = fast_blk.bitcast_double_to_i64(&fast_raw);
+        let is_hole = fast_blk.icmp_eq(I64, &fast_raw_bits, crate::nanbox::TAG_HOLE_I64);
+        let undef_d = fast_blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
+        fast_blk.select(I1, &is_hole, DOUBLE, &undef_d, &fast_raw)
+    };
     let fast_end_label = fast_blk.label.clone();
     fast_blk.br(&merge_label);
 
@@ -405,6 +425,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //   3. Anything else → fall back to dynamic object field
             //      access by stringifying the index at runtime
             if is_array_expr(ctx, object) {
+                let require_numeric_layout =
+                    expr_has_numeric_pointer_free_array_layout(ctx, object);
                 // Bounded-index fast path (mirrors the IndexSet
                 // optimization in the same file): if the surrounding
                 // for-loop registered `(counter_id, arr_id)` as
@@ -437,7 +459,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if !matches!(index.as_ref(), Expr::Integer(_) | Expr::Number(_)) {
                     return lower_legacy_array_index_get(ctx, &arr_box, &idx_i32);
                 }
-                return lower_guarded_array_index_get(ctx, &arr_box, &idx_double, &idx_i32, "arr");
+                return lower_guarded_array_index_get(
+                    ctx,
+                    &arr_box,
+                    &idx_double,
+                    &idx_i32,
+                    "arr",
+                    require_numeric_layout,
+                );
             }
             // Generic dynamic object access: stringify the index (no-op
             // for already-string keys, format for numeric keys) and

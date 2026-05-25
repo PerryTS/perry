@@ -225,7 +225,7 @@ pub extern "C" fn js_build_class_keys_array(
         unsafe {
             // GC_STORE_AUDIT(BARRIERED): cached method-name array records layout immediately after.
             *elements_ptr.add(i) = nanboxed;
-            crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
+            crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
         }
     }
     shape_cache_insert(shape_id, arr);
@@ -303,7 +303,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
             unsafe {
                 // GC_STORE_AUDIT(BARRIERED): cached keys array slot is reflected into layout metadata.
                 *elements_ptr.add(i) = nanboxed;
-                crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
+                crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
             }
         }
         shape_cache_insert(shape_id, arr);
@@ -376,7 +376,7 @@ pub extern "C" fn js_object_alloc_with_shape(
             unsafe {
                 // GC_STORE_AUDIT(BARRIERED): cached keys array slot is reflected into layout metadata.
                 *elements_ptr.add(i) = nanboxed;
-                crate::gc::layout_note_slot(arr as usize, i, nanboxed.to_bits());
+                crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
             }
         }
         shape_cache_insert(shape_id, arr);

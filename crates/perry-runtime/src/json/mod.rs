@@ -322,7 +322,7 @@ pub(crate) unsafe fn parse_shape_keys_array(
         for (i, &key_ptr) in keys.iter().enumerate() {
             let bits = crate::value::STRING_TAG | (key_ptr as u64 & crate::value::POINTER_MASK);
             *elements_ptr.add(i) = f64::from_bits(bits);
-            crate::gc::layout_note_slot(arr as usize, i, bits);
+            crate::array::note_array_slot_layout_only(arr, i, bits);
         }
         let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
@@ -547,6 +547,39 @@ mod tests {
         assert_eq!(
             unsafe { str_from_header(output).unwrap() },
             std::str::from_utf8(input).unwrap()
+        );
+    }
+
+    #[test]
+    fn direct_parse_array_numeric_layout_preserves_and_downgrades() {
+        let numeric_input = br#"[1,2,3]"#;
+        let numeric_text = js_string_from_bytes(numeric_input.as_ptr(), numeric_input.len() as u32);
+        let numeric_value = unsafe { js_json_parse(numeric_text) };
+        let numeric_arr = (numeric_value.bits() & POINTER_MASK) as *mut crate::ArrayHeader;
+
+        assert_eq!(crate::array::js_array_is_numeric_f64_layout(numeric_arr), 1);
+        assert_eq!(
+            crate::array::js_array_numeric_get_f64_unboxed(numeric_arr, 0),
+            1.0
+        );
+        assert_eq!(
+            crate::array::js_array_numeric_get_f64_unboxed(numeric_arr, 2),
+            3.0
+        );
+        assert_eq!(
+            crate::gc::test_layout_pointer_slot_count(numeric_arr as usize, 3),
+            Some(0)
+        );
+
+        let mixed_input = br#"[1,"longer",3]"#;
+        let mixed_text = js_string_from_bytes(mixed_input.as_ptr(), mixed_input.len() as u32);
+        let mixed_value = unsafe { js_json_parse(mixed_text) };
+        let mixed_arr = (mixed_value.bits() & POINTER_MASK) as *mut crate::ArrayHeader;
+
+        assert_eq!(crate::array::js_array_is_numeric_f64_layout(mixed_arr), 0);
+        assert_eq!(
+            crate::gc::test_layout_pointer_slot_count(mixed_arr as usize, 3),
+            Some(1)
         );
     }
 

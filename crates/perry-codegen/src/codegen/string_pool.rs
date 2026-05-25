@@ -19,7 +19,7 @@ pub(super) fn emit_string_pool(
     llmod: &mut LlModule,
     strings: &StringPool,
     module_prefix: &str,
-    class_keys_init_data: &[(String, String, u32, Vec<u64>)],
+    class_keys_init_data: &[(String, String, u32, Vec<u64>, Vec<u64>)],
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
     closure_rest_params: &HashMap<u32, usize>,
@@ -70,7 +70,9 @@ pub(super) fn emit_string_pool(
     // Naming: `@perry_class_keys_packed_<modprefix>__<idx>` so we
     // don't collide with anything else.
     let mut packed_global_names: Vec<String> = Vec::with_capacity(class_keys_init_data.len());
-    for (idx, (_global_name, packed, _fc, _mask_words)) in class_keys_init_data.iter().enumerate() {
+    for (idx, (_global_name, packed, _fc, _raw_mask_words, _pointer_mask_words)) in
+        class_keys_init_data.iter().enumerate()
+    {
         if packed.is_empty() {
             packed_global_names.push(String::new());
             continue;
@@ -132,27 +134,43 @@ pub(super) fn emit_string_pool(
         }
     }
 
-    // Emit per-class typed-shape pointer-mask globals. Empty mask = nothing
-    // to emit (no typed slots in this class shape). Must run BEFORE
+    // Emit per-class typed-shape raw-f64 and pointer-mask globals. Empty masks
+    // emit no storage. Must run BEFORE
     // `init_fn = llmod.define_function(...)` because that call holds a
     // mutable borrow of `llmod` for the lifetime of the function/block
     // used by everything below.
-    for (global_name, _packed, _field_count, mask_words) in class_keys_init_data.iter() {
-        if mask_words.is_empty() {
-            continue;
+    for (global_name, _packed, _field_count, raw_mask_words, pointer_mask_words) in
+        class_keys_init_data.iter()
+    {
+        if !raw_mask_words.is_empty() {
+            let mask_global =
+                crate::typed_shape::raw_f64_mask_global_name_from_keys_global(global_name);
+            let words = raw_mask_words
+                .iter()
+                .map(|word| format!("i64 {}", word))
+                .collect::<Vec<_>>()
+                .join(", ");
+            llmod.add_raw_global(format!(
+                "@{} = private unnamed_addr constant [{} x i64] [{}]",
+                mask_global,
+                raw_mask_words.len(),
+                words
+            ));
         }
-        let mask_global = crate::typed_shape::mask_global_name_from_keys_global(global_name);
-        let words = mask_words
-            .iter()
-            .map(|word| format!("i64 {}", word))
-            .collect::<Vec<_>>()
-            .join(", ");
-        llmod.add_raw_global(format!(
-            "@{} = private unnamed_addr constant [{} x i64] [{}]",
-            mask_global,
-            mask_words.len(),
-            words
-        ));
+        if !pointer_mask_words.is_empty() {
+            let mask_global = crate::typed_shape::mask_global_name_from_keys_global(global_name);
+            let words = pointer_mask_words
+                .iter()
+                .map(|word| format!("i64 {}", word))
+                .collect::<Vec<_>>()
+                .join(", ");
+            llmod.add_raw_global(format!(
+                "@{} = private unnamed_addr constant [{} x i64] [{}]",
+                mask_global,
+                pointer_mask_words.len(),
+                words
+            ));
+        }
     }
 
     let init_name = format!("__perry_init_strings_{}", module_prefix);
@@ -198,7 +216,7 @@ pub(super) fn emit_string_pool(
     // module init; every `new ClassName()` call from then on does a
     // single global load + inline allocator call (no SHAPE_CACHE
     // lookup, no js_build_class_keys_array overhead).
-    for (idx, (global_name, packed, field_count, _mask_words)) in
+    for (idx, (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words)) in
         class_keys_init_data.iter().enumerate()
     {
         // Resolve class id from the global name. The global name is

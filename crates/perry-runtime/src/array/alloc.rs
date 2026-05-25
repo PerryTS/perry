@@ -18,6 +18,7 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
         // Initialize header
         (*ptr).length = 0;
         (*ptr).capacity = actual_capacity;
+        set_array_numeric_layout(ptr, NumericArrayLayout::RawF64);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
@@ -62,6 +63,7 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
         for i in 0..capacity as usize {
             std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
         }
+        clear_array_numeric_layout(ptr);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
@@ -88,6 +90,7 @@ pub extern "C" fn js_array_alloc_with_length_longlived(capacity: u32) -> *mut Ar
     unsafe {
         (*ptr).length = capacity;
         (*ptr).capacity = capacity;
+        clear_array_numeric_layout(ptr);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
@@ -132,6 +135,7 @@ pub(crate) unsafe fn js_array_from_arraylike(
     };
     let arr = js_array_alloc(len);
     (*arr).length = len;
+    clear_array_numeric_layout(arr);
     let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     let undefined = f64::from_bits(TAG_UNDEFINED);
@@ -145,6 +149,7 @@ pub(crate) unsafe fn js_array_from_arraylike(
         *elements.add(i as usize) = v;
         note_array_slot(arr, i as usize, v.to_bits());
     }
+    refresh_array_numeric_layout(arr);
     arr
 }
 
@@ -173,6 +178,7 @@ pub(crate) unsafe fn js_array_from_string_codepoints(
     let cp_count = src.chars().count() as u32;
     let arr = js_array_alloc(cp_count);
     (*arr).length = cp_count;
+    clear_array_numeric_layout(arr);
     let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
     for (i, ch) in src.chars().enumerate() {
         let mut buf = [0u8; 4];
@@ -209,6 +215,7 @@ pub extern "C" fn js_array_alloc_literal(capacity: u32) -> *mut ArrayHeader {
     unsafe {
         (*ptr).length = capacity;
         (*ptr).capacity = capacity;
+        clear_array_numeric_layout(ptr);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
     ptr

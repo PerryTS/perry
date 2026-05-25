@@ -147,19 +147,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(val_double);
                 }
                 // Fast path: known class instance + plain instance field.
-                // Mirrors the PropertyGet fast path. NOTE: this bypasses
-                // the runtime's `Object.freeze` / per-key writable: false
-                // check that `js_object_set_field_by_name` does. That's
-                // OK for class methods on user types because:
-                //   1. The fast path only fires when the receiver type
-                //      is statically known to be a Named class — which
-                //      means the user has typed it as such.
-                //   2. Object.freeze on user-class instances is rare in
-                //      practice; freezing a Counter and then calling
-                //      .increment() would silently succeed instead of
-                //      silently failing — both are non-standard.
-                //   3. The dynamic `obj["foo"] = ...` path still goes
-                //      through the runtime helper and honors freeze.
+                // The runtime guard checks the receiver's class/shape and
+                // descriptor state before this block touches the raw slot.
                 if let Some(field_index) =
                     crate::type_analysis::class_field_global_index(ctx, &class_name, property)
                 {
@@ -180,6 +169,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         );
                         let field_idx_str = field_index.to_string();
                         let expected_class_id_str = expected_class_id.to_string();
+                        let requires_raw_f64 = crate::type_analysis::class_field_declared_type(
+                            ctx,
+                            &class_name,
+                            property,
+                        )
+                        .as_ref()
+                        .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+                        let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
                         let (key_raw, guard_ok) = {
                             let blk = ctx.block();
                             let key_box = blk.load(DOUBLE, &key_handle_global);
@@ -197,6 +194,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     (I64, &key_raw),
                                     (I32, &field_idx_str),
                                     (DOUBLE, &val_double),
+                                    (I32, requires_raw_f64_str),
                                 ],
                             );
                             (key_raw, guard_ok)
@@ -219,18 +217,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let header_skip = "24".to_string();
                         let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
                         let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
-                        let field_addr = blk.ptrtoint(&field_ptr, I64);
-                        emit_jsvalue_slot_store_on_block(
-                            blk,
-                            &field_ptr,
-                            &val_double,
-                            &obj_handle,
-                            &field_idx_str,
-                            true,
-                            &obj_bits,
-                            &field_addr,
-                            true,
-                        );
+                        if requires_raw_f64 {
+                            // Guarded raw-f64 slots are pointer-free by typed
+                            // shape descriptor; non-number writes miss the
+                            // guard and use the boxed setter fallback.
+                            blk.store(DOUBLE, &val_double, &field_ptr);
+                        } else {
+                            let field_addr = blk.ptrtoint(&field_ptr, I64);
+                            emit_jsvalue_slot_store_on_block(
+                                blk,
+                                &field_ptr,
+                                &val_double,
+                                &obj_handle,
+                                &field_idx_str,
+                                true,
+                                &obj_bits,
+                                &field_addr,
+                                true,
+                            );
+                        }
                         blk.br(&merge_label);
 
                         ctx.current_block = fallback_idx;

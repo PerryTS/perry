@@ -1400,6 +1400,28 @@ pub(crate) fn class_field_global_index(
     walk(ctx, class_name, property, 0)
 }
 
+pub(crate) fn class_field_declared_type(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    property: &str,
+) -> Option<HirType> {
+    let mut current = ctx.classes.get(class_name).copied();
+    while let Some(cls) = current {
+        if let Some(field) = cls
+            .fields
+            .iter()
+            .find(|field| field.key_expr.is_none() && field.name == property)
+        {
+            return Some(field.ty.clone());
+        }
+        current = cls
+            .extends_name
+            .as_deref()
+            .and_then(|parent| ctx.classes.get(parent).copied());
+    }
+    None
+}
+
 /// If the expression is a known instance of a Named class type, return
 /// the class name. Used by the class method dispatch in lower_call to
 /// pick the right `perry_method_<class>_<name>` function.

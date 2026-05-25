@@ -909,6 +909,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         );
                         let field_idx_str = field_index.to_string();
                         let expected_class_id_str = expected_class_id.to_string();
+                        let requires_raw_f64 = crate::type_analysis::class_field_declared_type(
+                            ctx,
+                            &class_name,
+                            property,
+                        )
+                        .as_ref()
+                        .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+                        let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
                         let (obj_bits, obj_handle, key_raw, guard_ok) = {
                             let blk = ctx.block();
                             let obj_bits = blk.bitcast_double_to_i64(&recv_box);
@@ -927,6 +935,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     (I64, &expected_keys),
                                     (I64, &key_raw),
                                     (I32, &field_idx_str),
+                                    (I32, requires_raw_f64_str),
                                 ],
                             );
                             (obj_bits, obj_handle, key_raw, guard_ok)

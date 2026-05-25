@@ -314,17 +314,20 @@ pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
         m.borrow_mut().remove(&(user_ptr as usize));
     });
     if state == GC_LAYOUT_POINTER_FREE {
+        crate::typed_feedback::invalidate_representation_change(user_ptr as usize);
         return;
     }
     LAYOUT_SLOT_MASKS.with(|m| {
         m.borrow_mut().remove(&(user_ptr as usize));
     });
+    crate::typed_feedback::invalidate_representation_change(user_ptr as usize);
 }
 
 pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
     if user_ptr == 0 {
         return;
     }
+    crate::array::clear_array_numeric_layout_ptr(user_ptr);
     LAYOUT_SLOT_MASKS.with(|m| {
         m.borrow_mut().remove(&user_ptr);
     });
@@ -348,6 +351,7 @@ pub(super) unsafe fn layout_set_typed_unknown(header: *mut GcHeader, user_ptr: u
     LAYOUT_SLOT_MASKS.with(|m| {
         m.borrow_mut().remove(&user_ptr);
     });
+    crate::typed_feedback::invalidate_representation_change(user_ptr);
 }
 
 pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits: u64) {
@@ -417,12 +421,74 @@ pub extern "C" fn js_gc_note_slot_layout(parent: u64, slot_index: u32, value_bit
     layout_note_slot(parent_user, slot_index as usize, value_bits);
 }
 
+unsafe fn init_typed_shape_layout(
+    user_ptr: usize,
+    slot_count: usize,
+    raw_f64_words: &[u64],
+    pointer_words: &[u64],
+) {
+    let Some(header) = layout_header_for_user(user_ptr) else {
+        return;
+    };
+    if gc_type_layout_slot_kind((*header).obj_type) != GcLayoutSlotKind::ObjectFields {
+        return;
+    }
+    let obj_header = user_ptr as *const crate::object::ObjectHeader;
+    let object_slot_count = (*obj_header).field_count as usize;
+    if object_slot_count != slot_count {
+        layout_set_typed_unknown(header, user_ptr);
+        return;
+    }
+
+    let raw_f64_mask = LayoutSlotMask::from_words(raw_f64_words);
+    let pointer_mask = LayoutSlotMask::from_words(pointer_words);
+
+    if slot_count != 0 {
+        let fields = (obj_header as *const u8)
+            .add(std::mem::size_of::<crate::object::ObjectHeader>())
+            as *const u64;
+        for i in 0..slot_count {
+            let bits = *fields.add(i);
+            if raw_f64_mask.contains_slot(i) && !layout_raw_f64_bits(bits) {
+                layout_set_typed_unknown(header, user_ptr);
+                return;
+            }
+            if layout_pointer_bearing_bits(bits) && !pointer_mask.contains_slot(i) {
+                layout_set_typed_unknown(header, user_ptr);
+                return;
+            }
+        }
+    }
+
+    let descriptor = TypedLayoutDescriptor {
+        slot_count,
+        raw_f64_mask,
+        pointer_mask: pointer_mask.clone(),
+    };
+    TYPED_LAYOUTS.with(|m| {
+        m.borrow_mut().insert(user_ptr, descriptor);
+    });
+    if pointer_mask.is_empty() {
+        set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+        LAYOUT_SLOT_MASKS.with(|m| {
+            m.borrow_mut().remove(&user_ptr);
+        });
+    } else {
+        set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+        LAYOUT_SLOT_MASKS.with(|m| {
+            m.borrow_mut().insert(user_ptr, pointer_mask);
+        });
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_gc_init_typed_shape_layout(
     obj: u64,
     slot_count: u32,
-    mask_words: *const u64,
-    mask_word_count: u32,
+    raw_f64_mask_words: *const u64,
+    raw_f64_mask_word_count: u32,
+    pointer_mask_words: *const u64,
+    pointer_mask_word_count: u32,
 ) {
     let user_ptr = strip_nanbox_user_ptr(obj);
     let slot_count = slot_count as usize;
@@ -430,58 +496,18 @@ pub extern "C" fn js_gc_init_typed_shape_layout(
         return;
     }
     unsafe {
-        let Some(header) = layout_header_for_user(user_ptr) else {
-            return;
-        };
-        if gc_type_layout_slot_kind((*header).obj_type) != GcLayoutSlotKind::ObjectFields {
-            return;
-        }
-        let obj_header = user_ptr as *const crate::object::ObjectHeader;
-        let object_slot_count = (*obj_header).field_count as usize;
-        if object_slot_count != slot_count {
-            layout_set_typed_unknown(header, user_ptr);
-            return;
-        }
-
-        let words: &[u64] = if mask_words.is_null() || mask_word_count == 0 {
+        let raw_words: &[u64] = if raw_f64_mask_words.is_null() || raw_f64_mask_word_count == 0 {
             &[]
         } else {
-            std::slice::from_raw_parts(mask_words, mask_word_count as usize)
+            std::slice::from_raw_parts(raw_f64_mask_words, raw_f64_mask_word_count as usize)
         };
-        let pointer_mask = LayoutSlotMask::from_words(words);
-
-        if slot_count != 0 {
-            let fields = (obj_header as *const u8)
-                .add(std::mem::size_of::<crate::object::ObjectHeader>())
-                as *const u64;
-            for i in 0..slot_count {
-                let bits = *fields.add(i);
-                if layout_pointer_bearing_bits(bits) && !pointer_mask.contains_slot(i) {
-                    layout_set_typed_unknown(header, user_ptr);
-                    return;
-                }
-            }
-        }
-
-        let descriptor = TypedLayoutDescriptor {
-            slot_count,
-            raw_f64_mask: LayoutSlotMask::Inline(0),
-            pointer_mask: pointer_mask.clone(),
-        };
-        TYPED_LAYOUTS.with(|m| {
-            m.borrow_mut().insert(user_ptr, descriptor);
-        });
-        if pointer_mask.is_empty() {
-            set_layout_state(header, GC_LAYOUT_POINTER_FREE);
-            LAYOUT_SLOT_MASKS.with(|m| {
-                m.borrow_mut().remove(&user_ptr);
-            });
+        let pointer_words: &[u64] = if pointer_mask_words.is_null() || pointer_mask_word_count == 0
+        {
+            &[]
         } else {
-            set_layout_state(header, GC_LAYOUT_SIDE_MASK);
-            LAYOUT_SLOT_MASKS.with(|m| {
-                m.borrow_mut().insert(user_ptr, pointer_mask);
-            });
-        }
+            std::slice::from_raw_parts(pointer_mask_words, pointer_mask_word_count as usize)
+        };
+        init_typed_shape_layout(user_ptr, slot_count, raw_words, pointer_words);
     }
 }
 
@@ -625,6 +651,11 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     };
     let state = (*old_header)._reserved & GC_LAYOUT_STATE_MASK;
     set_layout_state(new_header, state);
+    if (*old_header).obj_type == GC_TYPE_ARRAY && (*new_header).obj_type == GC_TYPE_ARRAY {
+        crate::array::transfer_array_numeric_layout(old_user as usize, new_user as usize);
+    } else {
+        crate::array::clear_array_numeric_layout_ptr(new_user as usize);
+    }
     TYPED_LAYOUTS.with(|m| {
         let mut typed = m.borrow_mut();
         typed.remove(&(new_user as usize));
@@ -672,6 +703,17 @@ pub(crate) fn layout_visit_pointer_slots_for_user<F: FnMut(usize)>(
     visit: F,
 ) -> bool {
     layout_visit_pointer_slots(user_ptr, slot_count, visit)
+}
+
+pub(crate) fn layout_typed_raw_f64_slot_for_user(user_ptr: usize, slot_index: usize) -> bool {
+    TYPED_LAYOUTS.with(|m| {
+        m.borrow()
+            .get(&user_ptr)
+            .map(|layout| {
+                slot_index < layout.slot_count && layout.raw_f64_mask.contains_slot(slot_index)
+            })
+            .unwrap_or(false)
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

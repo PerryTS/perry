@@ -57,6 +57,17 @@ pub(crate) fn emit_layout_note_slot_on_block(
     );
 }
 
+pub(crate) fn emit_array_numeric_write_note_on_block(
+    blk: &mut LlBlock,
+    array_bits: &str,
+    value_bits: &str,
+) {
+    blk.call_void(
+        "js_array_note_numeric_write",
+        &[(I64, array_bits), (I64, value_bits)],
+    );
+}
+
 pub(crate) fn emit_jsvalue_slot_store_on_block(
     blk: &mut LlBlock,
     slot_ptr: &str,

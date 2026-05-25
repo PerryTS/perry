@@ -15,6 +15,20 @@ thread_local! {
     /// Both pointers are GC-rooted via `scan_template_raw_roots`.
     static TEMPLATE_RAW_MAP: RefCell<HashMap<usize, *mut ArrayHeader>> =
         RefCell::new(HashMap::new());
+    static NUMERIC_ARRAY_LAYOUTS: RefCell<HashMap<usize, NumericArrayState>> =
+        RefCell::new(HashMap::new());
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NumericArrayLayout {
+    RawF64 = 1,
+}
+
+#[derive(Clone, Debug)]
+struct NumericArrayState {
+    layout: NumericArrayLayout,
+    raw_f64: Option<Vec<f64>>,
 }
 
 /// Register the (cooked, raw) pair for a tagged-template call. Returns
@@ -267,6 +281,338 @@ pub struct ArrayHeader {
     pub capacity: u32,
 }
 
+#[inline]
+pub(crate) fn value_bits_are_numeric(value_bits: u64) -> bool {
+    value_bits_to_number(value_bits).is_some()
+}
+
+#[inline]
+pub(crate) fn value_bits_to_number(value_bits: u64) -> Option<f64> {
+    if (value_bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
+        let lower = (value_bits & crate::value::INT32_MASK) as u32;
+        return Some((lower as i32) as f64);
+    }
+    let upper = value_bits >> 48;
+    if (0x7FF9..=0x7FFF).contains(&upper) {
+        return None;
+    }
+    Some(f64::from_bits(value_bits))
+}
+
+#[inline]
+unsafe fn array_slot_bits(arr: *const ArrayHeader, index: usize) -> u64 {
+    let slot = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+    *slot.add(index)
+}
+
+#[inline]
+unsafe fn array_slots_are_numeric(arr: *const ArrayHeader) -> bool {
+    if arr.is_null() {
+        return false;
+    }
+    let length = (*arr).length as usize;
+    let capacity = (*arr).capacity as usize;
+    if length > capacity || length > 16_000_000 {
+        return false;
+    }
+    for i in 0..length {
+        if value_bits_to_number(array_slot_bits(arr, i)).is_none() {
+            return false;
+        }
+    }
+    true
+}
+
+unsafe fn rebuild_array_numeric_raw_f64(arr: *mut ArrayHeader) -> bool {
+    if arr.is_null() {
+        return false;
+    }
+    let length = (*arr).length as usize;
+    let capacity = (*arr).capacity as usize;
+    if length > capacity || length > 16_000_000 {
+        clear_array_numeric_layout(arr);
+        return false;
+    }
+
+    let mut raw = Vec::with_capacity(length);
+    for i in 0..length {
+        let Some(number) = value_bits_to_number(array_slot_bits(arr, i)) else {
+            clear_array_numeric_layout(arr);
+            return false;
+        };
+        raw.push(number);
+    }
+
+    NUMERIC_ARRAY_LAYOUTS.with(|m| {
+        m.borrow_mut().insert(
+            arr as usize,
+            NumericArrayState {
+                layout: NumericArrayLayout::RawF64,
+                raw_f64: Some(raw),
+            },
+        );
+    });
+    crate::gc::layout_init_pointer_free(arr as *mut u8);
+    true
+}
+
+#[inline]
+pub(crate) unsafe fn set_array_numeric_layout(arr: *mut ArrayHeader, layout: NumericArrayLayout) {
+    if arr.is_null() {
+        return;
+    }
+    NUMERIC_ARRAY_LAYOUTS.with(|m| {
+        m.borrow_mut().insert(
+            arr as usize,
+            NumericArrayState {
+                layout,
+                raw_f64: None,
+            },
+        );
+    });
+    crate::gc::layout_init_pointer_free(arr as *mut u8);
+}
+
+#[inline]
+pub(crate) unsafe fn clear_array_numeric_layout(arr: *const ArrayHeader) {
+    if arr.is_null() {
+        return;
+    }
+    NUMERIC_ARRAY_LAYOUTS.with(|m| {
+        m.borrow_mut().remove(&(arr as usize));
+    });
+}
+
+#[inline]
+pub(crate) fn clear_array_numeric_layout_ptr(user_ptr: usize) {
+    if user_ptr == 0 {
+        return;
+    }
+    NUMERIC_ARRAY_LAYOUTS.with(|m| {
+        m.borrow_mut().remove(&user_ptr);
+    });
+}
+
+#[inline]
+pub(crate) fn transfer_array_numeric_layout(old_user: usize, new_user: usize) {
+    if old_user == 0 || new_user == 0 || old_user == new_user {
+        return;
+    }
+    NUMERIC_ARRAY_LAYOUTS.with(|m| {
+        let mut layouts = m.borrow_mut();
+        layouts.remove(&new_user);
+        if let Some(state) = layouts.remove(&old_user) {
+            layouts.insert(new_user, state);
+        }
+    });
+}
+
+#[inline]
+pub(crate) unsafe fn array_numeric_layout(arr: *const ArrayHeader) -> Option<NumericArrayLayout> {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return None;
+    }
+    NUMERIC_ARRAY_LAYOUTS.with(|m| m.borrow().get(&(arr as usize)).map(|state| state.layout))
+}
+
+#[inline]
+pub(crate) unsafe fn note_array_numeric_write(arr: *mut ArrayHeader, value_bits: u64) {
+    if !value_bits_are_numeric(value_bits) {
+        clear_array_numeric_layout(arr);
+        return;
+    }
+    NUMERIC_ARRAY_LAYOUTS.with(|m| {
+        if let Some(state) = m.borrow_mut().get_mut(&(arr as usize)) {
+            state.raw_f64 = None;
+        }
+    });
+}
+
+#[inline]
+pub(crate) unsafe fn note_array_numeric_index_write(
+    arr: *mut ArrayHeader,
+    index: usize,
+    value_bits: u64,
+) {
+    let Some(number) = value_bits_to_number(value_bits) else {
+        clear_array_numeric_layout(arr);
+        return;
+    };
+    NUMERIC_ARRAY_LAYOUTS.with(|m| {
+        if let Some(state) = m.borrow_mut().get_mut(&(arr as usize)) {
+            if let Some(raw) = state.raw_f64.as_mut() {
+                if index < raw.len() {
+                    raw[index] = number;
+                } else {
+                    state.raw_f64 = None;
+                }
+            }
+        }
+    });
+}
+
+#[inline]
+pub(crate) unsafe fn ensure_array_numeric_raw_f64(arr: *mut ArrayHeader) -> bool {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return false;
+    }
+    let length = (*arr).length as usize;
+    let capacity = (*arr).capacity as usize;
+    if length > capacity || length > 16_000_000 {
+        clear_array_numeric_layout(arr);
+        return false;
+    }
+    let ready = NUMERIC_ARRAY_LAYOUTS.with(|m| {
+        m.borrow()
+            .get(&(arr as usize))
+            .and_then(|state| state.raw_f64.as_ref())
+            .is_some_and(|raw| raw.len() == length)
+    });
+    if ready {
+        return true;
+    }
+    rebuild_array_numeric_raw_f64(arr)
+}
+
+#[inline]
+pub(crate) unsafe fn array_numeric_raw_f64_get(arr: *mut ArrayHeader, index: u32) -> Option<f64> {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return None;
+    }
+    if index >= (*arr).length {
+        return None;
+    }
+    if !ensure_array_numeric_raw_f64(arr) {
+        return None;
+    }
+    NUMERIC_ARRAY_LAYOUTS.with(|m| {
+        m.borrow()
+            .get(&(arr as usize))
+            .and_then(|state| state.raw_f64.as_ref())
+            .and_then(|raw| raw.get(index as usize).copied())
+    })
+}
+
+#[inline]
+pub(crate) unsafe fn array_numeric_raw_f64_set_inbounds(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+) -> bool {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() || index >= (*arr).length {
+        return false;
+    }
+    let value_bits = value.to_bits();
+    let elements_ptr = array_elements_ptr(arr) as *mut f64;
+    std::ptr::write(elements_ptr.add(index as usize), value);
+    note_array_numeric_index_write(arr, index as usize, value_bits);
+    crate::gc::layout_note_slot(arr as usize, index as usize, value_bits);
+    value_bits_are_numeric(value_bits)
+}
+
+#[inline]
+pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds(
+    arr: *mut ArrayHeader,
+    value: f64,
+) -> bool {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() || !ensure_array_numeric_raw_f64(arr) {
+        return false;
+    }
+    let length = (*arr).length;
+    let capacity = (*arr).capacity;
+    if length >= capacity || length > 16_000_000 || capacity > 16_000_000 {
+        return false;
+    }
+
+    let value_bits = value.to_bits();
+    let Some(number) = value_bits_to_number(value_bits) else {
+        return false;
+    };
+    let elements_ptr = array_elements_ptr(arr) as *mut f64;
+    std::ptr::write(elements_ptr.add(length as usize), value);
+    NUMERIC_ARRAY_LAYOUTS.with(|m| {
+        if let Some(state) = m.borrow_mut().get_mut(&(arr as usize)) {
+            match state.raw_f64.as_mut() {
+                Some(raw) if raw.len() == length as usize => raw.push(number),
+                Some(_) => state.raw_f64 = None,
+                None => {}
+            }
+        }
+    });
+    crate::gc::layout_note_slot(arr as usize, length as usize, value_bits);
+    (*arr).length = length + 1;
+    true
+}
+
+#[inline]
+pub(crate) unsafe fn refresh_array_numeric_layout(arr: *mut ArrayHeader) {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return;
+    }
+    if array_slots_are_numeric(arr) {
+        rebuild_array_numeric_raw_f64(arr);
+    } else {
+        clear_array_numeric_layout(arr);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_mark_numeric_f64_layout(arr: *mut ArrayHeader) -> i32 {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return 0;
+    }
+    unsafe {
+        if !array_slots_are_numeric(arr) {
+            clear_array_numeric_layout(arr);
+            return 0;
+        }
+        rebuild_array_numeric_raw_f64(arr);
+    }
+    1
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_clear_numeric_layout(arr: *mut ArrayHeader) {
+    let arr = clean_arr_ptr_mut(arr);
+    unsafe {
+        clear_array_numeric_layout(arr);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_note_numeric_write(arr: *mut ArrayHeader, value_bits: u64) {
+    let arr = clean_arr_ptr_mut(arr);
+    unsafe {
+        note_array_numeric_write(arr, value_bits);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_is_numeric_f64_layout(arr: *const ArrayHeader) -> i32 {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return 0;
+    }
+    unsafe {
+        if array_numeric_layout(arr) == Some(NumericArrayLayout::RawF64) {
+            return 1;
+        }
+        if array_slots_are_numeric(arr) {
+            rebuild_array_numeric_raw_f64(arr as *mut ArrayHeader);
+            return 1;
+        }
+        clear_array_numeric_layout(arr);
+    }
+    0
+}
+
 /// Calculate the byte size for an array with N elements capacity
 #[inline]
 pub(crate) fn array_byte_size(capacity: usize) -> usize {
@@ -297,13 +643,25 @@ pub(crate) unsafe fn gc_element_slot_range(
 
 #[inline]
 pub(crate) unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
+    note_array_numeric_index_write(arr, index, value_bits);
     crate::gc::layout_note_slot(arr as usize, index, value_bits);
     let slot = array_elements_ptr(arr).add(index) as usize;
     crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
 }
 
 #[inline]
+pub(crate) unsafe fn note_array_slot_layout_only(
+    arr: *mut ArrayHeader,
+    index: usize,
+    value_bits: u64,
+) {
+    note_array_numeric_index_write(arr, index, value_bits);
+    crate::gc::layout_note_slot(arr as usize, index, value_bits);
+}
+
+#[inline]
 pub(crate) unsafe fn store_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
+    note_array_numeric_index_write(arr, index, value_bits);
     let slot = array_elements_ptr(arr).add(index) as usize;
     crate::gc::runtime_store_jsvalue_slot(arr as usize, slot, index, value_bits);
 }
@@ -316,10 +674,12 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
     let length = (*arr).length as usize;
     let capacity = (*arr).capacity as usize;
     if length > capacity || length > 16_000_000 {
+        clear_array_numeric_layout(arr);
         crate::gc::layout_mark_unknown(arr as *mut u8);
         return;
     }
     crate::gc::layout_rebuild_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
+    refresh_array_numeric_layout(arr);
     if crate::arena::pointer_in_old_gen(arr as usize) {
         let slots = array_elements_ptr(arr);
         for i in 0..length {
@@ -337,10 +697,12 @@ pub(crate) unsafe fn rebuild_array_layout_exact(arr: *mut ArrayHeader) {
     let length = (*arr).length as usize;
     let capacity = (*arr).capacity as usize;
     if length > capacity || length > 16_000_000 {
+        clear_array_numeric_layout(arr);
         crate::gc::layout_mark_unknown(arr as *mut u8);
         return;
     }
     crate::gc::layout_rebuild_exact_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
+    refresh_array_numeric_layout(arr);
     if crate::arena::pointer_in_old_gen(arr as usize) {
         let slots = array_elements_ptr(arr);
         for i in 0..length {
@@ -377,6 +739,7 @@ pub(crate) unsafe fn replay_array_growth_write_barriers(arr: *mut ArrayHeader) {
 
 #[inline]
 pub(crate) unsafe fn mark_array_layout_unknown(arr: *mut ArrayHeader) {
+    clear_array_numeric_layout(arr);
     crate::gc::layout_mark_unknown(arr as *mut u8);
 }
 

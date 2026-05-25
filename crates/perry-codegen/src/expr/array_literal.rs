@@ -8,6 +8,7 @@ use super::{
     emit_jsvalue_slot_store_on_block, expr_produces_non_pointer_bits_by_construction, lower_expr,
     nanbox_pointer_inline, FnCtx,
 };
+use crate::type_analysis::is_numeric_expr;
 use crate::types::{I32, I64, I8, PTR};
 
 /// Lower an array literal `[a, b, c, …]`.
@@ -36,6 +37,7 @@ use crate::types::{I32, I64, I8, PTR};
 /// allocations lower to SSA values pinned by conservative stack scanning.
 pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Result<String> {
     let n = elements.len();
+    let all_numeric_elements = elements.iter().all(|e| is_numeric_expr(ctx, e));
 
     // Empty literal: no elements to worry about, keep the simple path.
     if n == 0 {
@@ -181,6 +183,14 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
             );
         }
 
+        if all_numeric_elements {
+            blk.call(
+                I32,
+                "js_array_mark_numeric_f64_layout",
+                &[(I64, &user_ptr_as_i64)],
+            );
+        }
+
         return Ok(nanbox_pointer_inline(ctx.block(), &user_ptr_as_i64));
     }
 
@@ -213,6 +223,11 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
             &elem_addr,
             layout_notes_needed[i],
         );
+    }
+
+    if all_numeric_elements {
+        ctx.block()
+            .call(I32, "js_array_mark_numeric_f64_layout", &[(I64, &arr)]);
     }
 
     Ok(nanbox_pointer_inline(ctx.block(), &arr))

@@ -311,7 +311,14 @@ fn test_typed_shape_descriptor_preserves_pointer_slots_after_non_pointer_overwri
 
     let obj = crate::object::js_object_alloc(0, 2);
     let mask = [0b10u64];
-    js_gc_init_typed_shape_layout(obj as u64, 2, mask.as_ptr(), mask.len() as u32);
+    js_gc_init_typed_shape_layout(
+        obj as u64,
+        2,
+        std::ptr::null(),
+        0,
+        mask.as_ptr(),
+        mask.len() as u32,
+    );
 
     assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), Some(1));
     assert_eq!(test_heap_child_slot_count(obj as *mut u8), 1);
@@ -334,7 +341,14 @@ fn test_typed_shape_descriptor_pointer_write_to_non_pointer_slot_falls_back() {
     let child_header = unsafe { header_from_user_ptr(child as *mut u8) };
     let obj = crate::object::js_object_alloc(0, 2);
     let mask = [0b10u64];
-    js_gc_init_typed_shape_layout(obj as u64, 2, mask.as_ptr(), mask.len() as u32);
+    js_gc_init_typed_shape_layout(
+        obj as u64,
+        2,
+        std::ptr::null(),
+        0,
+        mask.as_ptr(),
+        mask.len() as u32,
+    );
 
     crate::object::js_object_set_field(obj, 0, crate::value::JSValue::string_ptr(child));
 
@@ -360,6 +374,52 @@ fn test_typed_shape_descriptor_pointer_write_to_non_pointer_slot_falls_back() {
 }
 
 #[test]
+fn test_typed_shape_descriptor_tracks_raw_numeric_slots() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let obj = crate::object::js_object_alloc(0, 2);
+    crate::object::js_object_set_unboxed_f64_field(obj, 0, 1.5);
+    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(2.5));
+    let raw_mask = [0b01u64];
+    js_gc_init_typed_shape_layout(
+        obj as u64,
+        2,
+        raw_mask.as_ptr(),
+        raw_mask.len() as u32,
+        std::ptr::null(),
+        0,
+    );
+
+    assert!(layout_typed_raw_f64_slot_for_user(obj as usize, 0));
+    assert!(!layout_typed_raw_f64_slot_for_user(obj as usize, 1));
+    assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), Some(0));
+
+    let child = crate::string::js_string_from_bytes(b"raw-child".as_ptr(), 9);
+    let child_header = unsafe { header_from_user_ptr(child as *mut u8) };
+    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::string_ptr(child));
+
+    assert!(
+        !layout_typed_raw_f64_slot_for_user(obj as usize, 0),
+        "non-number writes must clear the exact raw-f64 descriptor"
+    );
+    assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), None);
+
+    let valid_ptrs = build_valid_pointer_set();
+    assert!(try_mark_value(
+        POINTER_TAG | (obj as u64 & POINTER_MASK),
+        &valid_ptrs
+    ));
+    trace_marked_objects(&valid_ptrs);
+    unsafe {
+        assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+    }
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
+#[test]
 fn test_typed_shape_descriptor_growing_new_field_falls_back() {
     clear_marks();
     clear_mark_seeds();
@@ -372,7 +432,7 @@ fn test_typed_shape_descriptor_growing_new_field_falls_back() {
         packed_keys.len() as u32,
     );
     let obj = crate::object::js_object_alloc_class_inline_keys(65_001, 0, 1, keys);
-    js_gc_init_typed_shape_layout(obj as u64, 1, std::ptr::null(), 0);
+    js_gc_init_typed_shape_layout(obj as u64, 1, std::ptr::null(), 0, std::ptr::null(), 0);
 
     let extra_key = crate::string::js_string_from_bytes(b"extra".as_ptr(), 5);
     crate::object::js_object_set_field_by_name(obj, extra_key, 42.0);
@@ -394,7 +454,14 @@ fn test_typed_shape_descriptor_transfers_on_object_move() {
     let src = crate::object::js_object_alloc(0, 2);
     let dst = crate::object::js_object_alloc(0, 2);
     let mask = [0b10u64];
-    js_gc_init_typed_shape_layout(src as u64, 2, mask.as_ptr(), mask.len() as u32);
+    js_gc_init_typed_shape_layout(
+        src as u64,
+        2,
+        std::ptr::null(),
+        0,
+        mask.as_ptr(),
+        mask.len() as u32,
+    );
 
     unsafe {
         layout_transfer(src as *mut u8, dst as *mut u8);
@@ -914,6 +981,44 @@ fn test_numeric_array_push_heap_value_transitions_and_traces() {
 }
 
 #[test]
+fn test_numeric_array_layout_metadata_matches_gc_scan_state() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let mut arr = crate::array::js_array_alloc(4);
+    arr = crate::array::js_array_push_f64(arr, 1.0);
+    arr = crate::array::js_array_push_f64(arr, 2.0);
+
+    assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 1);
+    assert_numeric_array_trace_free(arr, 2);
+
+    let child = crate::string::js_string_from_bytes(b"layout-child".as_ptr(), 12) as *mut u8;
+    let child_header = unsafe { header_from_user_ptr(child) };
+    let child_box = f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK));
+    arr = crate::array::js_array_push_f64(arr, child_box);
+
+    assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 0);
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 3), Some(1));
+
+    clear_marks();
+    clear_mark_seeds();
+    let valid_ptrs = build_valid_pointer_set();
+    assert!(try_mark_value(
+        POINTER_TAG | (arr as u64 & POINTER_MASK),
+        &valid_ptrs
+    ));
+    test_reset_trace_slot_reads();
+    trace_marked_objects(&valid_ptrs);
+    assert_eq!(test_trace_slot_reads(), 1);
+    unsafe {
+        assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+    }
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
+#[test]
 fn test_trace_object_uses_pointer_layout_mask() {
     clear_marks();
     clear_mark_seeds();
@@ -973,7 +1078,14 @@ fn test_typed_shape_descriptor_scans_only_declared_pointer_slots() {
     crate::object::js_object_set_field(obj, 2, crate::value::JSValue::number(3.0));
 
     let mask = [1u64 << 1];
-    js_gc_init_typed_shape_layout(obj as u64, 3, mask.as_ptr(), mask.len() as u32);
+    js_gc_init_typed_shape_layout(
+        obj as u64,
+        3,
+        std::ptr::null(),
+        0,
+        mask.as_ptr(),
+        mask.len() as u32,
+    );
 
     assert_eq!(test_layout_pointer_slot_count(obj as usize, 3), Some(1));
     assert_eq!(test_heap_child_slot_count(obj as *mut u8), 1);
@@ -1002,7 +1114,7 @@ fn test_typed_shape_descriptor_dynamic_pointer_mutation_falls_back_to_unknown_la
     let obj = crate::object::js_object_alloc(0, 2);
     crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.0));
     crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(2.0));
-    js_gc_init_typed_shape_layout(obj as u64, 2, std::ptr::null(), 0);
+    js_gc_init_typed_shape_layout(obj as u64, 2, std::ptr::null(), 0, std::ptr::null(), 0);
     assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), Some(0));
 
     let child = crate::string::js_string_from_bytes(b"fallback-child".as_ptr(), 14);

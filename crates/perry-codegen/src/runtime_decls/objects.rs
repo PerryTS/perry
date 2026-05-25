@@ -84,12 +84,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_typed_feedback_class_field_set_guard",
         I32,
-        &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE],
+        &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE, I32],
     );
     module.declare_function(
         "js_typed_feedback_class_field_get_guard",
         I32,
-        &[I64, DOUBLE, I32, I64, I64, I32],
+        &[I64, DOUBLE, I32, I64, I64, I32, I32],
     );
     module.declare_function(
         "js_typed_feedback_native_call_method",
@@ -165,6 +165,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[I64, DOUBLE, DOUBLE, I32, I32],
     );
     module.declare_function(
+        "js_typed_feedback_numeric_array_index_get_guard",
+        I32,
+        &[I64, DOUBLE, DOUBLE, I32, I32],
+    );
+    module.declare_function(
         "js_typed_feedback_array_index_get_fallback_boxed",
         DOUBLE,
         &[I64, DOUBLE, DOUBLE],
@@ -183,6 +188,16 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         "js_typed_feedback_plain_array_index_set_guard",
         I32,
         &[I64, DOUBLE, I32, DOUBLE, I32],
+    );
+    module.declare_function(
+        "js_typed_feedback_numeric_array_index_set_guard",
+        I32,
+        &[I64, DOUBLE, I32, DOUBLE, I32],
+    );
+    module.declare_function(
+        "js_typed_feedback_numeric_array_push_guard",
+        I32,
+        &[I64, DOUBLE, DOUBLE],
     );
     module.declare_function(
         "js_typed_feedback_array_index_set_fallback_boxed",

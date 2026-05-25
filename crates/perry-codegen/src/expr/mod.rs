@@ -92,8 +92,9 @@ pub(crate) use v8_interop::{
     emit_v8_export_call, emit_v8_member_method_call, import_origin_suffix, try_static_class_name,
 };
 pub(crate) use write_barrier::{
-    emit_jsvalue_slot_store_on_block, emit_layout_note_slot_on_block, emit_write_barrier,
-    emit_write_barrier_slot_on_block, lower_stream_super_init,
+    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
+    emit_layout_note_slot_on_block, emit_write_barrier, emit_write_barrier_slot_on_block,
+    lower_stream_super_init,
 };
 
 /// Per-function codegen context. Held briefly during lowering, never stored.
@@ -1080,6 +1081,13 @@ impl TypedFeedbackContract {
         )
     }
 
+    pub(crate) const fn numeric_array_get_index() -> Self {
+        Self::new(
+            "numeric_array_index_get_guard",
+            "js_typed_feedback_array_index_get_fallback_boxed",
+        )
+    }
+
     pub(crate) const fn array_set_index() -> Self {
         Self::new("plain_array_index_set_guard", "js_array_set_f64_extend")
     }
@@ -1089,6 +1097,21 @@ impl TypedFeedbackContract {
             "plain_array_index_set_guard",
             "js_typed_feedback_array_index_set_fallback_boxed",
         )
+    }
+
+    pub(crate) const fn numeric_array_set_index() -> Self {
+        Self::new("numeric_array_index_set_guard", "js_array_set_f64_extend")
+    }
+
+    pub(crate) const fn bounded_numeric_array_set_index() -> Self {
+        Self::new(
+            "numeric_array_index_set_guard",
+            "js_typed_feedback_array_index_set_fallback_boxed",
+        )
+    }
+
+    pub(crate) const fn numeric_array_push() -> Self {
+        Self::new("numeric_array_push_guard", "js_array_push_f64")
     }
 
     pub(crate) const fn array_set_string_key() -> Self {

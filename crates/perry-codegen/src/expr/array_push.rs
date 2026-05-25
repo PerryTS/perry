@@ -32,10 +32,12 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 #[allow(unused_imports)]
 use super::{
     array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
-    can_lower_expr_as_i32, emit_jsvalue_slot_store_on_block, emit_layout_note_slot_on_block,
-    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
-    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    can_lower_expr_as_i32, emit_array_numeric_write_note_on_block,
+    emit_jsvalue_slot_store_on_block, emit_layout_note_slot_on_block, emit_shadow_slot_clear,
+    emit_shadow_slot_update_for_expr, emit_string_literal_global,
+    emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
+    emit_write_barrier, emit_write_barrier_slot_on_block,
+    expr_has_numeric_pointer_free_array_layout, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
@@ -44,7 +46,7 @@ use super::{
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
     try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
     unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
-    I18nLowerCtx,
+    I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -57,8 +59,77 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let array_expr = Expr::LocalGet(*array_id);
             let layout_note_needed = array_store_needs_layout_note(ctx, &array_expr, value);
             let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
+            let value_is_numeric = is_numeric_expr(ctx, value);
+            let require_numeric_layout =
+                value_is_numeric && expr_has_numeric_pointer_free_array_layout(ctx, &array_expr);
             let v = lower_expr(ctx, value)?;
             let arr_box = lower_expr(ctx, &array_expr)?;
+
+            if require_numeric_layout
+                && !ctx.boxed_vars.contains(array_id)
+                && !ctx.closure_captures.contains_key(array_id)
+                && ctx.locals.contains_key(array_id)
+            {
+                let slot = ctx.locals.get(array_id).cloned().unwrap();
+                let feedback_site_id = emit_typed_feedback_register_site(
+                    ctx,
+                    TypedFeedbackKind::ArrayElement,
+                    "array.push",
+                    TypedFeedbackContract::numeric_array_push(),
+                );
+                let fast_idx = ctx.new_block("apush.numeric_fast");
+                let fallback_idx = ctx.new_block("apush.numeric_fallback");
+                let merge_idx = ctx.new_block("apush.numeric_merge");
+                let fast_label = ctx.block_label(fast_idx);
+                let fallback_label = ctx.block_label(fallback_idx);
+                let merge_label = ctx.block_label(merge_idx);
+
+                let guard_ok = {
+                    let blk = ctx.block();
+                    let guard_i32 = blk.call(
+                        I32,
+                        "js_typed_feedback_numeric_array_push_guard",
+                        &[(I64, &feedback_site_id), (DOUBLE, &arr_box), (DOUBLE, &v)],
+                    );
+                    blk.icmp_ne(I32, &guard_i32, "0")
+                };
+                ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+
+                ctx.current_block = fast_idx;
+                {
+                    let blk = ctx.block();
+                    let arr_handle = unbox_to_i64(blk, &arr_box);
+                    let new_handle = blk.call(
+                        I64,
+                        "js_array_numeric_push_f64_unboxed",
+                        &[(I64, &arr_handle), (DOUBLE, &v)],
+                    );
+                    let new_box = nanbox_pointer_inline(blk, &new_handle);
+                    blk.store(DOUBLE, &new_box, &slot);
+                    blk.br(&merge_label);
+                }
+
+                ctx.current_block = fallback_idx;
+                {
+                    let blk = ctx.block();
+                    blk.call_void(
+                        "js_typed_feedback_record_fallback_call",
+                        &[(I64, &feedback_site_id)],
+                    );
+                    let arr_handle = unbox_to_i64(blk, &arr_box);
+                    let new_handle = blk.call(
+                        I64,
+                        "js_array_push_f64",
+                        &[(I64, &arr_handle), (DOUBLE, &v)],
+                    );
+                    let new_box = nanbox_pointer_inline(blk, &new_handle);
+                    blk.store(DOUBLE, &new_box, &slot);
+                    blk.br(&merge_label);
+                }
+
+                ctx.current_block = merge_idx;
+                return Ok(arr_box);
+            }
 
             // Fast path: local-bound, non-captured, non-boxed array.
             // This is the canonical hot shape — `out.push(...)` over a
@@ -158,7 +229,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let with_header = blk.add(I64, &byte_offset, "8");
                     let element_addr = blk.add(I64, &arr_handle, &with_header);
                     let element_ptr = blk.inttoptr(I64, &element_addr);
-                    emit_jsvalue_slot_store_on_block(
+                    let value_bits = emit_jsvalue_slot_store_on_block(
                         blk,
                         &element_ptr,
                         &v,
@@ -169,6 +240,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &element_addr,
                         write_barrier_needed,
                     );
+                    if !value_is_numeric {
+                        let value_bits =
+                            value_bits.unwrap_or_else(|| blk.bitcast_double_to_i64(&v));
+                        emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
+                    }
                     let new_length = blk.add(I32, &length, "1");
                     let arr_ptr = blk.inttoptr(I64, &arr_handle);
                     // GC_STORE_AUDIT(POINTER_FREE): array length header update has no child pointer.
