@@ -168,6 +168,26 @@ unsafe fn coerce_to_string(value: f64) -> String {
     header_to_string(ptr)
 }
 
+/// Decode a JSValue to an owned `String` iff it actually *is* a string,
+/// accepting BOTH heap `STRING_TAG` pointers and inline `SHORT_STRING_TAG`
+/// (SSO) values. Returns `None` for non-strings.
+///
+/// #1781: `is_string()` is STRING_TAG-only, so the old
+/// `v.is_string() { header_to_string(v.as_string_ptr()) }` shape silently
+/// dropped every short mark/measure/type name — and the common literals
+/// `"mark"` (4 bytes) and observer `entryTypes: ["mark"]` are inline SSO.
+unsafe fn string_of(v: JSValue) -> Option<String> {
+    if v.is_string() {
+        Some(header_to_string(v.as_string_ptr()))
+    } else if v.is_short_string() {
+        let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = v.short_string_to_buf(&mut buf);
+        Some(std::str::from_utf8(&buf[..n]).unwrap_or("").to_string())
+    } else {
+        None
+    }
+}
+
 /// Read a JS value as an f64 if it is numeric, accepting both the int32 and
 /// double NaN-box representations (`is_number()` alone misses int32 since
 /// INT32_TAG falls inside the tagged range). Returns `None` otherwise.
@@ -253,8 +273,7 @@ unsafe fn resolve_option_endpoint(
 unsafe fn resolve_endpoint_value(v: JSValue) -> f64 {
     if let Some(n) = num_of(v) {
         n
-    } else if v.is_string() {
-        let name = header_to_string(v.as_string_ptr());
+    } else if let Some(name) = string_of(v) {
         lookup_mark_start(&name).unwrap_or(0.0)
     } else {
         0.0
@@ -268,8 +287,7 @@ unsafe fn resolve_endpoint_value(v: JSValue) -> f64 {
 unsafe fn resolve_positional_endpoint(v: JSValue) -> f64 {
     if let Some(n) = num_of(v) {
         n
-    } else if v.is_string() {
-        let name = header_to_string(v.as_string_ptr());
+    } else if let Some(name) = string_of(v) {
         match lookup_mark_start(&name) {
             Some(t) => t,
             None => throw_type_error(&format!("The \"{name}\" performance mark has not been set")),
@@ -414,11 +432,11 @@ pub extern "C" fn js_perf_measure(name_val: f64, arg2: f64, arg3: f64) -> f64 {
 
             let detail_bits = option_detail_bits(opts);
             return finish_measure(name, start_time, duration, detail_bits);
-        } else if arg2_jv.is_string() {
+        } else if arg2_jv.is_any_string() {
             // Positional form: measure(name, startMark, endMark?)
             let start = resolve_positional_endpoint(arg2_jv);
             let arg3_jv = JSValue::from_bits(arg3.to_bits());
-            let end = if arg3_jv.is_string() || arg3_jv.is_number() {
+            let end = if arg3_jv.is_any_string() || arg3_jv.is_number() {
                 resolve_positional_endpoint(arg3_jv)
             } else {
                 perf_now()
@@ -506,8 +524,8 @@ pub extern "C" fn js_perf_get_entries_by_name(name_val: f64, type_val: f64) -> f
     unsafe {
         let want_name = coerce_to_string(name_val);
         let type_jv = JSValue::from_bits(type_val.to_bits());
-        let want_type: Option<u8> = if type_jv.is_string() {
-            match header_to_string(type_jv.as_string_ptr()).as_str() {
+        let want_type: Option<u8> = if let Some(t) = string_of(type_jv) {
+            match t.as_str() {
                 "mark" => Some(ENTRY_TYPE_MARK),
                 "measure" => Some(ENTRY_TYPE_MEASURE),
                 _ => Some(255),
@@ -791,8 +809,8 @@ pub extern "C" fn js_perf_observer_observe(obs_val: f64, opts: f64) -> f64 {
                 let len = crate::array::js_array_length(arr);
                 for i in 0..len {
                     let el = crate::array::js_array_get(arr, i);
-                    if el.is_string() {
-                        if let Some(code) = entry_type_code(&header_to_string(el.as_string_ptr())) {
+                    if let Some(s) = string_of(el) {
+                        if let Some(code) = entry_type_code(&s) {
                             types.push(code);
                         }
                     }
@@ -802,8 +820,8 @@ pub extern "C" fn js_perf_observer_observe(obs_val: f64, opts: f64) -> f64 {
             let tkey = b"type";
             let tkp = crate::string::js_string_from_bytes(tkey.as_ptr(), tkey.len() as u32);
             let t_v = js_object_get_field_by_name(opts_obj, tkp);
-            if t_v.is_string() {
-                if let Some(code) = entry_type_code(&header_to_string(t_v.as_string_ptr())) {
+            if let Some(s) = string_of(t_v) {
+                if let Some(code) = entry_type_code(&s) {
                     types.push(code);
                 }
             }
@@ -1073,4 +1091,61 @@ pub extern "C" fn js_perf_histogram_noop() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_perf_histogram_percentile(_p: f64) -> f64 {
     0.0
+}
+
+#[cfg(test)]
+mod sso_tests_1781 {
+    use super::*;
+
+    /// #1781: perf entry-type/name strings are frequently <= 5 bytes — the
+    /// literal `"mark"` (4 bytes) and observer `entryTypes: ["mark"]` are
+    /// inline SSO values. `is_string()` (STRING_TAG-only) missed them, so
+    /// mark/measure resolution, type filters and observer registration all
+    /// silently dropped short names. `string_of` is the shared SSO-aware
+    /// decoder every one of those sites now routes through.
+    #[test]
+    fn string_of_decodes_sso_and_heap_strings() {
+        unsafe {
+            let sso = JSValue::try_short_string(b"mark").unwrap();
+            assert!(sso.is_short_string());
+            assert_eq!(string_of(sso).as_deref(), Some("mark"));
+
+            let heap =
+                JSValue::string_ptr(crate::string::js_string_from_bytes(b"measure".as_ptr(), 7));
+            assert_eq!(string_of(heap).as_deref(), Some("measure"));
+
+            // non-strings (undefined / number) return None.
+            assert_eq!(
+                string_of(JSValue::from_bits(crate::value::TAG_UNDEFINED)),
+                None
+            );
+            assert_eq!(string_of(JSValue::from_bits(3.0f64.to_bits())), None);
+        }
+    }
+
+    /// End-to-end: `getEntriesByName(name, "mark")` with the SSO literal
+    /// `"mark"` must still filter to the mark entry (site #509).
+    #[test]
+    fn get_entries_by_name_filters_on_sso_type() {
+        unsafe {
+            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let name =
+                JSValue::string_ptr(crate::string::js_string_from_bytes(b"phase".as_ptr(), 5));
+            let name_f = f64::from_bits(name.bits());
+            js_perf_mark(name_f, undef);
+
+            // "mark" (4 bytes) is an inline SSO type filter.
+            let ty = JSValue::try_short_string(b"mark").unwrap();
+            assert!(ty.is_short_string());
+            let arr = js_perf_get_entries_by_name(name_f, f64::from_bits(ty.bits()));
+            let arr_ptr =
+                crate::value::js_nanbox_get_pointer(arr) as *const crate::array::ArrayHeader;
+            assert!(!arr_ptr.is_null());
+            assert_eq!(
+                crate::array::js_array_length(arr_ptr),
+                1,
+                "SSO type filter 'mark' should match the mark entry"
+            );
+        }
+    }
 }

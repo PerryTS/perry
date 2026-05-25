@@ -14,10 +14,15 @@ pub extern "C" fn js_dynamic_array_get(value: f64, index: i32) -> f64 {
     let bits = value.to_bits();
     let jsval = JSValue::from_bits(bits);
 
-    // Check if this is a NaN-boxed string
-    if jsval.is_string() {
+    // Check if this is a NaN-boxed string. #1781: accept inline SSO short
+    // strings too — `is_string()` is STRING_TAG-only, so `(s as any)[0]`
+    // for a <=5-char `s` previously fell through to the pointer path
+    // (js_nanbox_get_pointer returns 0 for SSO) and yielded `undefined`
+    // instead of the character. Materialize SSO bytes to a heap header so
+    // the existing char-at logic applies unchanged.
+    if jsval.is_any_string() {
         // String character access
-        let str_ptr = jsval.as_string_ptr();
+        let str_ptr = js_get_string_pointer_unified(value) as *const crate::string::StringHeader;
         if !str_ptr.is_null() && index >= 0 {
             let result_ptr = crate::string::js_string_char_at(str_ptr, index);
             if !result_ptr.is_null() {
@@ -161,4 +166,34 @@ pub extern "C" fn js_dynamic_array_findIndex(
 
     // Use the native array findIndex and convert to f64
     crate::array::js_array_findIndex(ptr as *const crate::array::ArrayHeader, callback) as f64
+}
+
+#[cfg(test)]
+mod sso_tests_1781 {
+    use super::*;
+
+    /// #1781: `(s as any)[i]` for a string `s` of length <= 5 — `s` is an
+    /// inline SSO value that `is_string()` (STRING_TAG-only) misses, so it
+    /// fell past the char-access branch to the pointer path
+    /// (js_nanbox_get_pointer returns 0 for SSO) and yielded `undefined`
+    /// instead of the character at `i`.
+    #[test]
+    fn dynamic_array_get_indexes_sso_string_chars() {
+        let v = JSValue::try_short_string(b"abc").expect("len 3 -> inline SSO");
+        assert!(v.is_short_string());
+        let value = f64::from_bits(v.bits());
+        for (i, expect) in [(0i32, "a"), (1, "b"), (2, "c")] {
+            let r = js_dynamic_array_get(value, i);
+            let rj = JSValue::from_bits(r.to_bits());
+            assert!(rj.is_any_string(), "char {i} not a string");
+            let ptr = js_get_string_pointer_unified(r) as *const crate::string::StringHeader;
+            let got = unsafe {
+                let len = (*ptr).byte_len as usize;
+                let data =
+                    (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+                std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap()
+            };
+            assert_eq!(got, expect, "char at {i}");
+        }
+    }
 }

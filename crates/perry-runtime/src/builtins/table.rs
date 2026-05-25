@@ -28,17 +28,11 @@ fn format_table_cell(value: f64) -> String {
             "null".to_string()
         } else if jsval.is_bool() {
             jsval.as_bool().to_string()
-        } else if jsval.is_string() {
-            let ptr = jsval.as_string_ptr();
-            if ptr.is_null() {
-                "''".to_string()
-            } else {
-                let len = (*ptr).byte_len as usize;
-                let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                let bytes = std::slice::from_raw_parts(data, len);
-                let s = std::str::from_utf8(bytes).unwrap_or("[invalid utf8]");
-                format!("'{}'", s)
-            }
+        } else if let Some(s) = read_string_from_jsvalue(jsval) {
+            // #1781: covers both heap STRING_TAG and inline SSO short
+            // strings — without the SSO branch a <=5-char cell fell through
+            // to the numeric arm and rendered as "NaN".
+            format!("'{}'", s)
         } else if jsval.is_int32() {
             jsval.as_int32().to_string()
         } else if jsval.is_pointer() {
@@ -69,8 +63,19 @@ fn format_table_cell(value: f64) -> String {
     }
 }
 
-/// Read a string out of a NaN-boxed string JSValue.
+/// Read a string out of a NaN-boxed string JSValue. SSO-aware (#1781):
+/// accepts both heap `STRING_TAG` pointers and inline `SHORT_STRING_TAG`
+/// values; returns `None` for non-strings.
 unsafe fn read_string_from_jsvalue(jsval: JSValue) -> Option<String> {
+    if jsval.is_short_string() {
+        let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = jsval.short_string_to_buf(&mut buf);
+        return Some(
+            std::str::from_utf8(&buf[..n])
+                .unwrap_or("[invalid utf8]")
+                .to_string(),
+        );
+    }
     if !jsval.is_string() {
         return None;
     }
@@ -568,4 +573,31 @@ unsafe fn build_temp_string_header(s: &str) -> *const StringHeader {
 
 unsafe fn free_temp_string_header(_ptr: *const StringHeader) {
     // No-op: GC-allocated, will be collected.
+}
+
+#[cfg(test)]
+mod sso_tests_1781 {
+    use super::*;
+
+    /// #1781: `console.table` cells/headers that are strings <= 5 bytes are
+    /// inline SSO values. `is_string()` (STRING_TAG-only) missed them, so a
+    /// short cell fell through to the numeric arm and rendered as "NaN", and
+    /// a short header decoded to None.
+    #[test]
+    fn read_string_from_jsvalue_handles_sso() {
+        for s in ["", "a", "id", "abc", "hello"] {
+            let v = JSValue::try_short_string(s.as_bytes()).expect("len <= 5 -> SSO");
+            let got = unsafe { read_string_from_jsvalue(v) };
+            assert_eq!(got.as_deref(), Some(s), "header decode mismatch for {s:?}");
+        }
+    }
+
+    #[test]
+    fn format_table_cell_quotes_sso_string() {
+        let v = JSValue::try_short_string(b"abc").expect("SSO");
+        assert_eq!(format_table_cell(f64::from_bits(v.bits())), "'abc'");
+        // empty SSO string renders as ''
+        let empty = JSValue::try_short_string(b"").expect("SSO");
+        assert_eq!(format_table_cell(f64::from_bits(empty.bits())), "''");
+    }
 }

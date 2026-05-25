@@ -109,6 +109,23 @@ impl JSValue {
     /// `*mut StringHeader`. Keeping this strict avoids a massive
     /// audit during the SSO rollout; use `is_any_string()` when
     /// you want to accept both representations.
+    ///
+    /// ⚠ #1781 footgun — do NOT write
+    /// `if v.is_string() { /* read ptr */ } else { /* treat as pointer
+    /// / number / array */ }`. An inline SSO short string (len 0..=5,
+    /// `SHORT_STRING_TAG = 0x7FF9`) fails this STRICT check and falls into
+    /// the else-branch, where its payload bytes get masked to 48 bits and
+    /// dereferenced (SIGSEGV — the fault address spells the string) or
+    /// silently produce a wrong result. This blind spot has been patched
+    /// piecemeal at least five times (Buffer.from, querystring, str.replace,
+    /// js_is_truthy, the #1781 batch). When a value can be *any* runtime
+    /// string, branch on [`is_any_string`](Self::is_any_string) +
+    /// [`is_short_string`](Self::is_short_string) (decode via
+    /// [`short_string_to_buf`](Self::short_string_to_buf)), or route the
+    /// whole value through `js_get_string_pointer_unified`, which
+    /// materializes SSO bytes onto the heap so downstream `*StringHeader`
+    /// code is unchanged. Reading keys out of a `keys_array` is the one
+    /// safe exception: stored keys are always heap `STRING_TAG`.
     #[inline]
     pub fn is_string(&self) -> bool {
         (self.bits & !POINTER_MASK) == STRING_TAG

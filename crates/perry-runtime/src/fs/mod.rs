@@ -689,6 +689,15 @@ fn chown_path_value(path_value: f64, uid_value: f64, gid_value: f64, follow: boo
 /// cost that follows.
 unsafe fn decode_path_value(path_value: f64) -> Option<String> {
     let jsval = crate::value::JSValue::from_bits(path_value.to_bits());
+    // #1781: a path <= 5 bytes ("a.ts", "x", ".", "..", "/tmp") is an
+    // inline SSO value that `is_string()` (STRING_TAG-only) misses,
+    // so short relative paths silently decoded to None. Read the inline
+    // bytes directly.
+    if jsval.is_short_string() {
+        let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = jsval.short_string_to_buf(&mut buf);
+        return std::str::from_utf8(&buf[..n]).ok().map(|s| s.to_string());
+    }
     if jsval.is_string() {
         let path_ptr = jsval.as_string_ptr();
         if path_ptr.is_null() {
@@ -1602,5 +1611,24 @@ unsafe fn fs_callback_write_parent_error(path_value: f64, syscall: &'static str)
             Some(build_fs_error_value(&err, syscall, &path))
         }
         Err(err) => Some(build_fs_error_value(&err, syscall, &path)),
+    }
+}
+
+#[cfg(test)]
+mod sso_tests_1781 {
+    use super::*;
+
+    /// #1781: a path <= 5 bytes ("x", ".", "..", "a.ts", "/tmp") is an inline
+    /// SSO value that `is_string()` (STRING_TAG-only) misses, so short
+    /// relative paths silently decoded to None and the fs op failed.
+    #[test]
+    fn decode_path_value_handles_sso_short_paths() {
+        for p in ["x", ".", "..", "a.ts", "/tmp"] {
+            let v = crate::value::JSValue::try_short_string(p.as_bytes())
+                .expect("path <= 5 bytes encodes as inline SSO");
+            assert!(v.is_short_string(), "{p:?} should be an inline SSO value");
+            let got = unsafe { decode_path_value(f64::from_bits(v.bits())) };
+            assert_eq!(got.as_deref(), Some(p), "path decode mismatch for {p:?}");
+        }
     }
 }

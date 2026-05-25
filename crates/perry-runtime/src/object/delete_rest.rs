@@ -133,9 +133,14 @@ pub extern "C" fn js_object_delete_field(
 pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> i32 {
     let key_val = JSValue::from_bits(key.to_bits());
 
-    // If the key is a string, use js_object_delete_field
-    if key_val.is_string() {
-        let key_str = key_val.as_string_ptr();
+    // If the key is a string, use js_object_delete_field. #1781: accept
+    // inline SSO short keys — `delete obj["abc"]` for a <=5-char key arrives
+    // as a SHORT_STRING_TAG value that is_string() rejects, so the delete
+    // silently no-op'd (fell through to "succeeds vacuously"). Materialize
+    // the key to a heap header so js_object_delete_field can match it.
+    if key_val.is_any_string() {
+        let key_str =
+            crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
         return js_object_delete_field(obj, key_str);
     }
 
@@ -231,5 +236,48 @@ pub extern "C" fn js_object_rest(
         }
 
         rest_obj
+    }
+}
+
+#[cfg(test)]
+mod sso_tests_1781 {
+    use super::*;
+
+    /// #1781: `delete obj["id"]` for a key <= 5 bytes — the dynamic key
+    /// arrives as an inline SSO value that `is_string()` (STRING_TAG-only)
+    /// rejected, so the delete silently no-op'd (fell through to "succeeds
+    /// vacuously") and the property stayed put.
+    #[test]
+    fn delete_dynamic_removes_property_via_sso_key() {
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 0);
+            let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
+            crate::object::js_object_set_field_by_name(obj, key, 42.0);
+
+            let obj_box = crate::value::js_nanbox_pointer(obj as i64);
+            let sso = crate::value::JSValue::try_short_string(b"id").unwrap();
+            assert!(sso.is_short_string());
+            // present before delete
+            assert_ne!(
+                crate::value::js_is_truthy(crate::object::js_object_has_property(
+                    obj_box,
+                    f64::from_bits(sso.bits())
+                )),
+                0
+            );
+
+            let ok = js_object_delete_dynamic(obj, f64::from_bits(sso.bits()));
+            assert_eq!(ok, 1, "delete should report success");
+
+            // gone after delete
+            assert_eq!(
+                crate::value::js_is_truthy(crate::object::js_object_has_property(
+                    obj_box,
+                    f64::from_bits(sso.bits())
+                )),
+                0,
+                "SSO key should be removed after delete"
+            );
+        }
     }
 }

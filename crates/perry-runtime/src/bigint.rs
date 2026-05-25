@@ -159,9 +159,14 @@ pub extern "C" fn js_bigint_from_f64(value: f64) -> *mut BigIntHeader {
         return js_bigint_from_i64(int_value);
     }
 
-    // If it's a string, parse as BigInt (e.g., BigInt("1000000"))
-    if jsval.is_string() {
-        let ptr = jsval.as_string_ptr();
+    // If it's a string, parse as BigInt (e.g., BigInt("1000000")).
+    // #1781: accept inline SSO short strings too — `BigInt("123")` is a
+    // 3-byte SSO value that `is_string()` (STRING_TAG-only) would reject,
+    // dropping it to the `value as i64` fallback (NaN → 0n). Route through
+    // the unified decoder, which materializes SSO bytes onto the heap.
+    if jsval.is_any_string() {
+        let ptr = crate::value::js_get_string_pointer_unified(value)
+            as *const crate::string::StringHeader;
         if !ptr.is_null() {
             unsafe {
                 let len = (*ptr).byte_len;
@@ -1424,6 +1429,36 @@ mod tests {
                 fits_in_i64(&(*beyond).limbs).is_none(),
                 "i64::MAX + 1 should not fit in i64"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod sso_tests_1781 {
+    use super::*;
+
+    /// #1781: `BigInt("123")` — a numeric string <= 5 bytes is an inline SSO
+    /// value (tag 0x7FF9). `is_string()` is STRING_TAG-only, so pre-fix it
+    /// fell through to the `value as i64` arm (the SSO f64 is NaN → 0), and
+    /// `BigInt("123")` produced `0n`. Route through the unified decoder.
+    #[test]
+    fn bigint_from_f64_parses_sso_numeric_strings() {
+        for s in ["0", "1", "42", "123", "12345"] {
+            let v = crate::value::JSValue::try_short_string(s.as_bytes())
+                .expect("numeric string <= 5 bytes encodes as inline SSO");
+            assert!(v.is_short_string(), "{s:?} should be an inline SSO value");
+            let bi = js_bigint_from_f64(f64::from_bits(v.bits()));
+            assert!(!bi.is_null(), "null BigInt for {s:?}");
+            let out = js_bigint_to_string(bi);
+            let got = unsafe {
+                let len = (*out).byte_len as usize;
+                let data =
+                    (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+                std::str::from_utf8(std::slice::from_raw_parts(data, len))
+                    .unwrap()
+                    .to_string()
+            };
+            assert_eq!(got, s, "BigInt({s:?}) mismatch");
         }
     }
 }

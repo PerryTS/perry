@@ -687,10 +687,15 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // handle property dispatcher whether the property resolves to a real
     // value.
     if obj_addr > 0 && obj_addr < 0x100000 {
-        if key_val.is_string() {
+        // #1781: accept inline SSO short keys (`"id" in handle`) — is_string()
+        // is STRING_TAG-only, so a <=5-char key skipped the handle dispatcher
+        // and `in` wrongly returned false. Materialize SSO bytes to a heap
+        // header before reading name_ptr/name_len.
+        if key_val.is_any_string() {
             unsafe {
                 if let Some(dispatch) = super::class_registry::handle_property_dispatch() {
-                    let key_ptr = key_val.as_string_ptr();
+                    let key_ptr = crate::value::js_get_string_pointer_unified(key)
+                        as *const crate::StringHeader;
                     let name_ptr =
                         (key_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                     let name_len = (*key_ptr).byte_len as usize;
@@ -765,11 +770,15 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         }
     }
 
-    if !key_val.is_string() {
+    // #1781: accept inline SSO short keys here too — `"abc" in obj` for a
+    // <=5-char key arrives as a SHORT_STRING_TAG value that is_string()
+    // rejects, so `in` wrongly returned false. Materialize to a heap header
+    // (stored keys in keys_array are always heap, so js_string_equals works).
+    if !key_val.is_any_string() {
         return nanbox_false;
     }
 
-    let key_str = key_val.as_string_ptr();
+    let key_str = crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
 
     unsafe {
         let keys = (*obj_ptr).keys_array;
@@ -2137,3 +2146,40 @@ pub extern "C" fn js_object_get_field_ic_miss(
 // than touching object field storage directly, so they were split out
 // of this module. See `polymorphic_index.rs` for the implementations
 // and the #471 fix notes.
+
+#[cfg(test)]
+mod sso_tests_1781 {
+    use super::*;
+
+    /// #1781: `"id" in obj` for a key <= 5 bytes — the lookup key arrives as
+    /// an inline SSO value (tag 0x7FF9). `is_string()` (STRING_TAG-only)
+    /// rejected it, so `js_object_has_property` returned false even though the
+    /// object had the key (stored keys are always heap, so materializing the
+    /// SSO lookup key lets js_string_equals match).
+    #[test]
+    fn in_operator_finds_object_key_via_sso_lookup() {
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 0);
+            let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
+            crate::object::js_object_set_field_by_name(obj, key, 42.0);
+
+            let obj_box = crate::value::js_nanbox_pointer(obj as i64);
+            let sso = crate::value::JSValue::try_short_string(b"id").unwrap();
+            assert!(sso.is_short_string());
+            let present = js_object_has_property(obj_box, f64::from_bits(sso.bits()));
+            assert_ne!(
+                crate::value::js_is_truthy(present),
+                0,
+                "SSO key 'id' should be found via `in`"
+            );
+
+            let missing = crate::value::JSValue::try_short_string(b"zz").unwrap();
+            let absent = js_object_has_property(obj_box, f64::from_bits(missing.bits()));
+            assert_eq!(
+                crate::value::js_is_truthy(absent),
+                0,
+                "absent SSO key 'zz' should not be found"
+            );
+        }
+    }
+}

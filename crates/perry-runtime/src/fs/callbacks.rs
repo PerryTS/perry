@@ -606,6 +606,15 @@ pub(crate) unsafe fn open_flag_is_read_only(flags_value: f64) -> bool {
 
 pub(crate) unsafe fn decode_flags_string(value: f64) -> Option<String> {
     let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    // #1781: fs flag strings ("r", "r+", "w", "a", "wx", …) are ALL
+    // <= 5 bytes, so they are inline SSO values and `is_string()`
+    // (STRING_TAG-only) rejects every one of them. Decode the inline
+    // bytes directly before falling through to the heap-string path.
+    if jsval.is_short_string() {
+        let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = jsval.short_string_to_buf(&mut buf);
+        return std::str::from_utf8(&buf[..n]).ok().map(|s| s.to_string());
+    }
     if !jsval.is_string() {
         return None;
     }
@@ -952,4 +961,35 @@ pub extern "C" fn js_fs_copy_file_callback(
     let _ = js_fs_copy_file_sync_flags(from_value, to_value, flags);
     call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
+}
+
+#[cfg(test)]
+mod sso_tests_1781 {
+    use super::*;
+
+    /// #1781: fs flag strings ("r", "r+", "w", "a", "wx", …) are all <= 5
+    /// bytes, so they are inline SSO values (tag 0x7FF9). `is_string()` is
+    /// STRING_TAG-only and rejected every one — `decode_flags_string`
+    /// returned None for all flags, breaking the read-only fast-path probe.
+    #[test]
+    fn decode_flags_string_handles_sso_flags() {
+        for flag in ["r", "r+", "w", "w+", "a", "a+", "wx", "ax", "as"] {
+            let v = crate::value::JSValue::try_short_string(flag.as_bytes())
+                .expect("flag <= 5 bytes encodes as inline SSO");
+            assert!(
+                v.is_short_string(),
+                "{flag:?} should be an inline SSO value"
+            );
+            let got = unsafe { decode_flags_string(f64::from_bits(v.bits())) };
+            assert_eq!(got.as_deref(), Some(flag), "decode mismatch for {flag:?}");
+        }
+    }
+
+    #[test]
+    fn open_flag_is_read_only_recognizes_sso_flags() {
+        let r = crate::value::JSValue::try_short_string(b"r").unwrap();
+        assert!(unsafe { open_flag_is_read_only(f64::from_bits(r.bits())) });
+        let w = crate::value::JSValue::try_short_string(b"w").unwrap();
+        assert!(!unsafe { open_flag_is_read_only(f64::from_bits(w.bits())) });
+    }
 }

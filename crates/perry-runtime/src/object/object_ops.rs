@@ -219,11 +219,18 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
         return f64::from_bits(TAG_FALSE);
     }
 
-    // For strings, do content comparison
-    if a_jsval.is_string() && b_jsval.is_string() {
+    // For strings, do content comparison. #1781: accept inline SSO short
+    // strings on either side. Two SSO operands with equal content already
+    // match via the bit-pattern fallback below, but a mixed SSO/heap pair
+    // (same content, different representation — e.g. a JSON-parsed value vs
+    // a heap literal) would not. Materialize via the unified decoder so the
+    // comparison is representation-independent.
+    if a_jsval.is_any_string() && b_jsval.is_any_string() {
         let result = crate::string::js_string_equals(
-            a_jsval.as_string_ptr() as *const crate::StringHeader,
-            b_jsval.as_string_ptr() as *const crate::StringHeader,
+            crate::value::js_get_string_pointer_unified(f64::from_bits(a_bits))
+                as *const crate::StringHeader,
+            crate::value::js_get_string_pointer_unified(f64::from_bits(b_bits))
+                as *const crate::StringHeader,
         );
         if result != 0 {
             return f64::from_bits(TAG_TRUE);
@@ -1276,5 +1283,47 @@ pub extern "C" fn js_create_namespace(
         obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let bits = (obj as u64) | 0x7FFD_0000_0000_0000;
         f64::from_bits(bits)
+    }
+}
+
+#[cfg(test)]
+mod sso_tests_1781 {
+    use super::*;
+
+    /// #1781: `Object.is` content-compares strings only when both sides pass
+    /// `is_string()` (STRING_TAG-only). Two SSO operands match via the
+    /// bit-pattern fallback, but a mixed SSO/heap pair with equal content
+    /// (e.g. a JSON-parsed value vs a heap literal) did not — `Object.is`
+    /// wrongly returned false. Now representation-independent.
+    #[test]
+    fn object_is_compares_sso_and_mixed_strings() {
+        let truthy = |v: f64| crate::value::js_is_truthy(v) != 0;
+        let a = JSValue::try_short_string(b"abc").unwrap();
+        let b = JSValue::try_short_string(b"abc").unwrap();
+        assert!(
+            truthy(js_object_is(
+                f64::from_bits(a.bits()),
+                f64::from_bits(b.bits())
+            )),
+            "two equal SSO strings"
+        );
+
+        let heap = JSValue::string_ptr(crate::string::js_string_from_bytes(b"abc".as_ptr(), 3));
+        assert!(
+            truthy(js_object_is(
+                f64::from_bits(a.bits()),
+                f64::from_bits(heap.bits())
+            )),
+            "mixed SSO/heap, equal content"
+        );
+
+        let c = JSValue::try_short_string(b"xyz").unwrap();
+        assert!(
+            !truthy(js_object_is(
+                f64::from_bits(a.bits()),
+                f64::from_bits(c.bits())
+            )),
+            "different content"
+        );
     }
 }
