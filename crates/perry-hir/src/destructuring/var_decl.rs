@@ -1241,8 +1241,20 @@ pub(crate) fn lower_var_decl_with_destructuring(
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
             let id = if let Some(pid) = pre_id {
                 pid
-            } else if ctx.pre_registered_module_vars.remove(&name) {
-                // Reuse pre-registered LocalId from module-level forward-declaration pass
+            } else if ctx.scope_depth == 0
+                && ctx.inside_block_scope == 0
+                && ctx.pre_registered_module_vars.remove(&name)
+            {
+                // Reuse pre-registered LocalId from module-level forward-declaration pass.
+                // #1758: gated on MODULE scope — a nested local of the same name
+                // (`function helper() { const zipWith = ... }` where the module also
+                // declares `const zipWith`) must NOT consume the module var's
+                // pre-registered id, or it conflates the two: the nested local and
+                // the module binding share one id, the real module value lands on a
+                // fresh id, and a sibling closure that referenced the module name
+                // resolves to the wrong (uninitialised) slot → `value is not a
+                // function`. effect's `layer.merge` (refs module `zipWith` at L1191)
+                // broke this way because a local `zipWith` (L1180) precedes it.
                 let id = ctx.lookup_local(&name).unwrap();
                 // Update the type now that we have full inference
                 if let Some((_, _, existing_ty)) =
@@ -1497,7 +1509,11 @@ pub(crate) fn lower_var_decl_with_destructuring(
             let name = get_binding_name(&decl.name)?;
             let ty = extract_binding_type(&decl.name);
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
-            let id = if ctx.pre_registered_module_vars.remove(&name) {
+            let id = if ctx.scope_depth == 0
+                && ctx.inside_block_scope == 0
+                && ctx.pre_registered_module_vars.remove(&name)
+            {
+                // #1758: module-scope only — see the sibling guard above.
                 let id = ctx.lookup_local(&name).unwrap();
                 if let Some((_, _, existing_ty)) =
                     ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
