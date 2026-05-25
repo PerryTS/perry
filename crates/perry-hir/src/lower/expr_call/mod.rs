@@ -158,9 +158,15 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     if let Some(expr) = try_function_return_this(ctx, call, has_spread) {
         return Ok(expr);
     }
-    // #1678: classify `Function(...)` / `eval(...)` (after the
-    // `Function('return this')()` fold above has had its chance). Bails on
-    // the runtime-unknown bucket; otherwise logs + falls through.
+    // #1679 (Phase 1): const-fold a literal `Function(...)` body into a
+    // native function, and fold the `(0, eval)('this')` globalThis idiom.
+    // Runs after the `Function('return this')()` fold; before the Phase 0
+    // refusal so const-foldable sites compile instead of being classified.
+    if let Some(expr) = super::const_fold_fn::try_eval_function_call_fold(ctx, call)? {
+        return Ok(expr);
+    }
+    // #1678: classify `Function(...)` / `eval(...)`. Bails on the
+    // runtime-unknown bucket; otherwise logs + falls through.
     check_eval_function_call(ctx, call)?;
     if let Some(expr) = try_bare_regexp_call(ctx, call, has_spread)? {
         return Ok(expr);

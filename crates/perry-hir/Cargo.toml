@@ -9,6 +9,11 @@ description = "High-level intermediate representation for Perry"
 perry-types.workspace = true
 perry-diagnostics.workspace = true
 perry-api-manifest.workspace = true
+# #1679: HIR lowering parses synthesized function-literal source for
+# const-foldable `new Function(...)` bodies, so the parser is a regular
+# (not dev-only) dependency. No cycle: perry-parser does not depend on
+# perry-hir.
+perry-parser.workspace = true
 swc_ecma_ast.workspace = true
 swc_common.workspace = true
 
@@ -16,6 +21,3 @@ thiserror.workspace = true
 anyhow.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-[dev-dependencies]
-perry-parser.workspace = true

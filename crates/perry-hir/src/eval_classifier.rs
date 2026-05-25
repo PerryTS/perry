@@ -176,7 +176,10 @@ impl EvalClassification {
 /// Peel parens and return the constant string value of `expr` if it is a
 /// string literal or a substitution-free template literal. `None` for any
 /// other shape (a variable, concatenation, call result, …).
-fn const_string_of(expr: &ast::Expr) -> Option<String> {
+///
+/// Public so Phase 1 (#1679) const-folding decides constness the *same*
+/// way the Phase 0 classifier does — the fold must agree with the bucket.
+pub fn const_string_of(expr: &ast::Expr) -> Option<String> {
     let mut e = expr;
     while let ast::Expr::Paren(p) = e {
         e = p.expr.as_ref();

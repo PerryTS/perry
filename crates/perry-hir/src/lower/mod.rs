@@ -55,6 +55,7 @@ pub(crate) use misc::*;
 mod pre_scan;
 pub(crate) use pre_scan::*;
 mod closure_analysis;
+mod const_fold_fn;
 pub(crate) use closure_analysis::*;
 mod decorators;
 pub(crate) use decorators::*;

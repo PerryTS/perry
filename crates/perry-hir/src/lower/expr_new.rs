@@ -186,25 +186,30 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
         ast::Expr::Ident(ident) => {
             let class_name = ident.sym.to_string();
 
-            // #1678 (Phase 0 of #1677): classify `new Function(...)` before
-            // it reaches the unknown-class fall-through (which silently
-            // lowers to a class_id=0 empty-object placeholder). The
-            // runtime-unknown bucket is refused with a precise diagnostic;
-            // const-foldable / known-codegen sites are logged under
-            // `PERRY_EVAL_DIAG` and keep their existing placeholder lowering
-            // for later phases of #1677. Skip when `Function` is shadowed.
+            // #1677 `new Function(...)` handling, when `Function` is not
+            // shadowed. Phase 1 (#1679) first: when every argument is a
+            // compile-time-constant string, fold the call into a real
+            // native function. Otherwise Phase 0 (#1678): refuse the
+            // runtime-unknown bucket with a precise diagnostic; log the
+            // const/known-codegen buckets and fall through to the existing
+            // placeholder lowering.
             if class_name == "Function"
                 && ctx.lookup_local("Function").is_none()
                 && ctx.lookup_func("Function").is_none()
                 && ctx.lookup_class("Function").is_none()
             {
-                // Body is the last argument (`new Function(p1, p2, body)`);
-                // earlier args are parameter names.
-                let body_arg = new_expr
-                    .args
-                    .as_ref()
-                    .and_then(|args| args.last())
-                    .map(|a| a.expr.as_ref());
+                let args_slice = new_expr.args.as_deref().unwrap_or(&[]);
+                if let Some(folded) = super::const_fold_fn::try_const_fold_function_construct(
+                    ctx,
+                    args_slice,
+                    crate::eval_classifier::EvalSurface::NewFunction,
+                    new_expr.span,
+                )? {
+                    return Ok(folded);
+                }
+                // Not fully const-foldable — body is the last argument
+                // (`new Function(p1, p2, body)`); earlier args are param names.
+                let body_arg = args_slice.last().map(|a| a.expr.as_ref());
                 crate::eval_classifier::check_site(
                     crate::eval_classifier::EvalSurface::NewFunction,
                     body_arg,
