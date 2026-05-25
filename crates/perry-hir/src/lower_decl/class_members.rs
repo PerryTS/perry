@@ -151,17 +151,38 @@ pub fn lower_constructor(
     // In TypeScript, `constructor(public name: string)` automatically assigns
     // `this.name = name` at the start of the constructor body.
     if !param_prop_assignments.is_empty() {
-        let mut synthetic_stmts: Vec<Stmt> = Vec::new();
-        for (param_id, field_name) in &param_prop_assignments {
-            synthetic_stmts.push(Stmt::Expr(Expr::PropertySet {
-                object: Box::new(Expr::This),
-                property: field_name.clone(),
-                value: Box::new(Expr::LocalGet(*param_id)),
-            }));
+        let assignments: Vec<Stmt> = param_prop_assignments
+            .iter()
+            .map(|(param_id, field_name)| {
+                Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::This),
+                    property: field_name.clone(),
+                    value: Box::new(Expr::LocalGet(*param_id)),
+                })
+            })
+            .collect();
+        // For a derived class, `this` is unusable until `super()` runs, so TS
+        // emits the param-property assignments immediately AFTER the super()
+        // call — not at the top. Prepending them (the historical behavior)
+        // dropped the derived class's own param-props: e.g. SchemaAST's
+        // `class OptionalType extends Type { constructor(type, readonly
+        // isOptional, ...) { super(type, ...) } }` left `this.isOptional`
+        // undefined, which cascaded into `typeAST(undefined)` reading `._tag`
+        // during effect Schema init (#1758). Base classes (no super() call)
+        // keep prepending. The default-param / destructuring prologues below
+        // touch only params (not `this`), so they stay at the very top.
+        if let Some(super_pos) = body
+            .iter()
+            .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_))))
+        {
+            let tail = body.split_off(super_pos + 1);
+            body.extend(assignments);
+            body.extend(tail);
+        } else {
+            let mut synthetic_stmts = assignments;
+            synthetic_stmts.append(&mut body);
+            body = synthetic_stmts;
         }
-        // Prepend synthetic assignments before the user-written constructor body
-        synthetic_stmts.append(&mut body);
-        body = synthetic_stmts;
     }
 
     // Issue #572: prepend destructuring extractions for ctor params (the
