@@ -655,3 +655,23 @@ pub extern "C" fn js_typed_feedback_closure_direct_call_guard(
         0
     }
 }
+
+// #1764 (follow-up): the guard helpers in this submodule are codegen-emitted
+// `#[no_mangle]` exports with no Rust-side caller, so the auto-optimize
+// whole-program thin-LTO + `strip=true` build internalizes + dead-strips them
+// — dangling the codegen call at final link (`Undefined symbols:
+// _js_typed_feedback_class_field_set_guard` for any class-field program).
+// `typed_feedback.rs`'s `#[used]` block covers the helpers defined there;
+// these typed fn-pointer statics extend the same `@llvm.used` retention to the
+// guard helpers defined here. (A `usize`/`*const()` cast does NOT survive
+// thin-LTO — only individual typed fn-pointer statics keep the symbol
+// external.) The statics must mirror each guard's exact signature, so keep
+// them in sync if a guard's parameter list changes.
+#[rustfmt::skip]
+mod keep_guard_symbols {
+    use super::*;
+    #[used] static G0: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, i32) -> i32 = js_typed_feedback_class_field_get_guard;
+    #[used] static G1: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) -> i32 = js_typed_feedback_class_field_set_guard;
+    #[used] static G2: unsafe extern "C" fn(u64, f64, u32, *const ArrayHeader, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
+    #[used] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
+}

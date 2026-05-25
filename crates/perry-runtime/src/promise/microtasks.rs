@@ -516,6 +516,26 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                 } else {
                     f64::from_bits(0x7FFC_0000_0000_0003) // TAG_FALSE
                 };
+                // #789: bracket the await continuation with async_hooks
+                // before/after so `executionAsyncId()` reflects the async
+                // function's resource id during its resumed body and the
+                // before/after hooks fire — mirroring the `Task::Promise`
+                // arm above. Capture the result promise's ids as plain
+                // values BEFORE the callback (a re-entrant drain can move
+                // `next` via GC, #1663) and feed the same id to `after()`.
+                // `before`/`after` early-return on id 0, so this is a no-op
+                // when async_hooks are inactive.
+                let step_async_id = if next.is_null() {
+                    0
+                } else {
+                    unsafe { (*next).async_id }
+                };
+                let step_trigger_id = if next.is_null() {
+                    0
+                } else {
+                    unsafe { (*next).trigger_async_id }
+                };
+                crate::async_hooks::before(step_async_id, step_trigger_id);
                 let result = call_async_step_direct(step_closure, value, is_error_bits);
                 CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                 if let Some(t) = t1 {
@@ -530,6 +550,9 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                             as usize,
                     })
                 });
+                // #789: pair the `before()` above — fires the after hook and
+                // pops the execution-id stack using the captured id.
+                crate::async_hooks::after(step_async_id);
                 CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
 
                 let t2 = if prof {

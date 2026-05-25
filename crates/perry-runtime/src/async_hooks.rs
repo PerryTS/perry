@@ -131,6 +131,15 @@ fn box_ptr(ptr: *const u8) -> f64 {
     f64::from_bits(POINTER_TAG | (ptr as u64 & POINTER_MASK))
 }
 
+/// NaN-box a `StringHeader` pointer with `STRING_TAG` so JS sees a real
+/// string (#789): the `init` hook's `type` argument is a string like
+/// `"PROMISE"` — boxing it as a generic `POINTER_TAG` made the callback
+/// observe `[object Object]` instead.
+#[inline]
+fn box_string(ptr: *const u8) -> f64 {
+    f64::from_bits(STRING_TAG | (ptr as u64 & POINTER_MASK))
+}
+
 fn ptr_from_nanboxed(value: f64) -> *const u8 {
     let bits = value.to_bits();
     let tag = bits & TAG_MASK;
@@ -312,7 +321,7 @@ fn emit_init(async_id: u64, type_name: &str, trigger_async_id: u64, resource: f6
     let scope = crate::gc::RuntimeHandleScope::new();
     let resource_handle = scope.root_nanbox_f64(resource);
     let type_ptr = js_string_from_bytes(type_name.as_ptr(), type_name.len() as u32);
-    let type_value_handle = scope.root_nanbox_f64(box_ptr(type_ptr as *const u8));
+    let type_value_handle = scope.root_nanbox_f64(box_string(type_ptr as *const u8));
     with_hook_callbacks(|callbacks| {
         if !callbacks.init.is_null() {
             let callback_handle = scope.root_raw_const_ptr(callbacks.init);
