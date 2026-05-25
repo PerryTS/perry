@@ -28,9 +28,10 @@ pub enum TypedFeedbackSiteKind {
     PropertyGet = 0,
     PropertySet = 1,
     MethodCall = 2,
-    ArrayElement = 3,
-    NumericFieldWrite = 4,
-    HelperReturn = 5,
+    ClosureCall = 3,
+    ArrayElement = 4,
+    NumericFieldWrite = 5,
+    HelperReturn = 6,
 }
 
 impl TypedFeedbackSiteKind {
@@ -38,9 +39,10 @@ impl TypedFeedbackSiteKind {
         match raw {
             1 => Self::PropertySet,
             2 => Self::MethodCall,
-            3 => Self::ArrayElement,
-            4 => Self::NumericFieldWrite,
-            5 => Self::HelperReturn,
+            3 => Self::ClosureCall,
+            4 => Self::ArrayElement,
+            5 => Self::NumericFieldWrite,
+            6 => Self::HelperReturn,
             _ => Self::PropertyGet,
         }
     }
@@ -50,6 +52,7 @@ impl TypedFeedbackSiteKind {
             Self::PropertyGet => "property_get",
             Self::PropertySet => "property_set",
             Self::MethodCall => "method_call",
+            Self::ClosureCall => "closure_call",
             Self::ArrayElement => "array_element",
             Self::NumericFieldWrite => "numeric_field_write",
             Self::HelperReturn => "helper_return",
@@ -80,6 +83,7 @@ impl TypedFeedbackState {
 enum ObservationSource {
     Property,
     Method,
+    Closure,
     Array,
     NumericWrite,
     HelperReturn,
@@ -115,6 +119,11 @@ impl Observation {
                     && self.class_id == other.class_id
                     && self.heap_type == other.heap_type
                     && self.aux == other.aux
+                    && self.value_tag == other.value_tag
+            }
+            ObservationSource::Closure => {
+                self.aux == other.aux
+                    && self.heap_type == other.heap_type
                     && self.value_tag == other.value_tag
             }
             ObservationSource::Array | ObservationSource::HelperReturn => {
@@ -1417,6 +1426,63 @@ pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply(
         record_fallback_call(site_id);
     }
     crate::object::js_native_call_method_apply(object, method_name_ptr, method_name_len, args_array)
+}
+
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_closure_direct_call_guard(
+    site_id: u64,
+    closure_value: f64,
+    expected_func_ptr: *const u8,
+    expected_arity: u32,
+    call_arity: u32,
+) -> i32 {
+    let bits = closure_value.to_bits();
+    let raw_ptr = if (bits & TAG_MASK) == POINTER_TAG {
+        (bits & POINTER_MASK) as *const crate::closure::ClosureHeader
+    } else if (bits >> 48) == 0 && bits >= 0x10000 {
+        bits as *const crate::closure::ClosureHeader
+    } else {
+        std::ptr::null()
+    };
+    let closure_ptr = crate::closure::clean_closure_ptr(raw_ptr);
+    let func_ptr = crate::closure::get_valid_func_ptr(closure_ptr);
+    let has_rest = !func_ptr.is_null() && crate::closure::lookup_closure_rest(func_ptr).is_some();
+    let declared = if func_ptr.is_null() {
+        None
+    } else {
+        crate::closure::lookup_closure_arity(func_ptr)
+    };
+    let contract_valid = !expected_func_ptr.is_null()
+        && !func_ptr.is_null()
+        && func_ptr == expected_func_ptr
+        && func_ptr != crate::closure::BOUND_METHOD_FUNC_PTR
+        && !has_rest
+        && declared.unwrap_or(expected_arity) == expected_arity
+        && expected_arity == call_arity;
+    let observation = Observation {
+        source: ObservationSource::Closure,
+        object_addr: 0,
+        shape_addr: 0,
+        key_hash: 0,
+        class_id: 0,
+        heap_type: if func_ptr.is_null() {
+            0
+        } else {
+            crate::gc::GC_TYPE_CLOSURE as u16
+        },
+        aux: func_ptr as u64,
+        value_tag: stable_value_kind(bits),
+    };
+    if guard_observe(
+        site_id,
+        TypedFeedbackSiteKind::ClosureCall,
+        observation,
+        contract_valid,
+    ) {
+        1
+    } else {
+        0
+    }
 }
 
 fn observe_array(site_id: u64, arr: *const ArrayHeader, index: u32) {

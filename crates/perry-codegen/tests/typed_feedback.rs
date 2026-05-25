@@ -1,6 +1,6 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
-use perry_types::Type;
+use perry_types::{FunctionType, Type};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -222,6 +222,53 @@ fn typed_feedback_guards_direct_class_field_specialization() {
     assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
     assert!(ir.contains("call void @js_object_set_field_by_name"));
     assert!(ir.contains("call double @js_object_get_field_by_name_f64"));
+}
+
+#[test]
+fn typed_feedback_guards_direct_closure_call_specialization() {
+    let closure_ty = Type::Function(FunctionType {
+        params: vec![("x".to_string(), Type::Number, false)],
+        return_type: Box::new(Type::Number),
+        is_async: false,
+        is_generator: false,
+    });
+    let ir = ir_for(module(
+        "typed_feedback_closure_call.ts",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 2,
+                name: "cb".to_string(),
+                ty: closure_ty,
+                mutable: false,
+                init: Some(Expr::Closure {
+                    func_id: 44,
+                    params: vec![param(3, "x", Type::Number)],
+                    return_type: Type::Number,
+                    body: vec![Stmt::Return(Some(Expr::LocalGet(3)))],
+                    captures: Vec::new(),
+                    mutable_captures: Vec::new(),
+                    captures_this: false,
+                    enclosing_class: None,
+                    is_async: false,
+                }),
+            },
+            Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::LocalGet(2)),
+                args: vec![Expr::Number(9.0)],
+                type_args: Vec::new(),
+            })),
+        ],
+    ));
+
+    assert!(ir.contains("closure_direct_call_guard"));
+    assert!(ir.contains("js_typed_feedback_closure_direct_call_guard"));
+    assert!(ir.contains("closure_direct.fast"));
+    assert!(ir.contains("closure_direct.fallback"));
+    assert!(ir.contains("call double @perry_closure_"));
+    assert!(ir.contains("call double @js_closure_call1"));
+    assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
 }
 
 #[test]

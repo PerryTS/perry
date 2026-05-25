@@ -161,8 +161,14 @@ pub(crate) fn lower_let(
 
     // Track closure func_id → local_id mapping so the closure
     // call site in lower_call can look up rest param info.
-    if let Some(perry_hir::Expr::Closure { func_id: cfid, .. }) = init {
+    if let Some(perry_hir::Expr::Closure {
+        func_id: cfid,
+        params,
+        ..
+    }) = init
+    {
         ctx.local_closure_func_ids.insert(id, *cfid);
+        ctx.local_closure_param_counts.insert(id, params.len());
     }
 
     // Scalar replacement: if this Let binds a non-escaping array

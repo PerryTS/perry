@@ -11,6 +11,17 @@ extern "C" fn test_class_field_setter(_this: f64, value: f64) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+extern "C" fn test_direct_closure(
+    _closure: *const crate::closure::ClosureHeader,
+    arg: f64,
+) -> f64 {
+    arg
+}
+
+fn test_direct_closure_ptr() -> *const u8 {
+    test_direct_closure as *const () as *const u8
+}
+
 fn register(site_id: u64, kind: TypedFeedbackSiteKind, op: &'static str) {
     js_typed_feedback_register_site(
         site_id,
@@ -255,6 +266,7 @@ fn typed_feedback_tracks_all_site_categories() {
         TypedFeedbackSiteKind::PropertyGet,
         TypedFeedbackSiteKind::PropertySet,
         TypedFeedbackSiteKind::MethodCall,
+        TypedFeedbackSiteKind::ClosureCall,
         TypedFeedbackSiteKind::ArrayElement,
         TypedFeedbackSiteKind::NumericFieldWrite,
         TypedFeedbackSiteKind::HelperReturn,
@@ -531,6 +543,29 @@ fn typed_feedback_object_set_fast_falls_back_for_uncached_dynamic_key() {
     assert_eq!(site.guard_passes, 0);
     assert_eq!(site.guard_failures, 1);
     assert_eq!(site.fallback_calls, 1);
+}
+
+#[test]
+fn typed_feedback_closure_direct_guard_passes_and_rejects_bound_sentinel() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(66, TypedFeedbackSiteKind::ClosureCall, "cb()");
+
+    let fn_ptr = test_direct_closure_ptr();
+    crate::closure::js_register_closure_arity(fn_ptr, 1);
+    let closure = crate::closure::js_closure_alloc_singleton(fn_ptr);
+    let closure_value = crate::value::js_nanbox_pointer(closure as i64);
+    let pass = js_typed_feedback_closure_direct_call_guard(66, closure_value, fn_ptr, 1, 1);
+    assert_eq!(pass, 1);
+
+    let bound = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 0);
+    let bound_value = crate::value::js_nanbox_pointer(bound as i64);
+    let fail = js_typed_feedback_closure_direct_call_guard(66, bound_value, fn_ptr, 1, 1);
+    assert_eq!(fail, 0);
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_failures, 1);
 }
 
 #[test]

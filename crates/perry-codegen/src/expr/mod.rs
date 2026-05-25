@@ -322,6 +322,10 @@ pub(crate) struct FnCtx<'a> {
     /// Used by the closure call site in `lower_call` to look up the
     /// callee's rest param info from `closure_rest_params`.
     pub local_closure_func_ids: std::collections::HashMap<u32, u32>,
+    /// LocalId → closure declared parameter count. Paired with
+    /// `local_closure_func_ids` for guarded direct closure calls: direct
+    /// calls only fire when the static arity exactly matches the call site.
+    pub local_closure_param_counts: std::collections::HashMap<u32, usize>,
 
     // ── Cross-module import plumbing (Phase F) ──────────────────────
     /// Locals that are namespace imports (`import * as X from "./mod"`).
@@ -1014,6 +1018,7 @@ pub(crate) enum TypedFeedbackKind {
     PropertyGet,
     PropertySet,
     MethodCall,
+    ClosureCall,
     ArrayElement,
     NumericFieldWrite,
     HelperReturn,
@@ -1058,6 +1063,10 @@ impl TypedFeedbackContract {
 
     pub(crate) const fn method_apply_call() -> Self {
         Self::new("method_call_guard", "js_native_call_method_apply")
+    }
+
+    pub(crate) const fn closure_direct_call() -> Self {
+        Self::new("closure_direct_call_guard", "js_closure_callN")
     }
 
     pub(crate) const fn array_get_index() -> Self {
@@ -1107,9 +1116,10 @@ impl TypedFeedbackKind {
             Self::PropertyGet => 0,
             Self::PropertySet => 1,
             Self::MethodCall => 2,
-            Self::ArrayElement => 3,
-            Self::NumericFieldWrite => 4,
-            Self::HelperReturn => 5,
+            Self::ClosureCall => 3,
+            Self::ArrayElement => 4,
+            Self::NumericFieldWrite => 5,
+            Self::HelperReturn => 6,
         }
     }
 
@@ -1118,6 +1128,7 @@ impl TypedFeedbackKind {
             Self::PropertyGet => "property_get",
             Self::PropertySet => "property_set",
             Self::MethodCall => "method_call",
+            Self::ClosureCall => "closure_call",
             Self::ArrayElement => "array_element",
             Self::NumericFieldWrite => "numeric_field_write",
             Self::HelperReturn => "helper_return",

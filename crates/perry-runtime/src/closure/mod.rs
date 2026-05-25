@@ -32,12 +32,12 @@ pub use registry::{
 };
 
 pub use dispatch::{
-    dispatch_bound_method, get_valid_func_ptr, js_closure_call0, js_closure_call1,
-    js_closure_call10, js_closure_call11, js_closure_call12, js_closure_call13, js_closure_call14,
-    js_closure_call15, js_closure_call16, js_closure_call2, js_closure_call3, js_closure_call4,
-    js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
-    js_closure_call_apply_with_spread, js_closure_call_array, js_native_call_value,
-    throw_not_callable,
+    clean_closure_ptr, dispatch_bound_method, get_valid_func_ptr, js_closure_call0,
+    js_closure_call1, js_closure_call10, js_closure_call11, js_closure_call12, js_closure_call13,
+    js_closure_call14, js_closure_call15, js_closure_call16, js_closure_call2, js_closure_call3,
+    js_closure_call4, js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8,
+    js_closure_call9, js_closure_call_apply_with_spread, js_closure_call_array,
+    js_native_call_value, throw_not_callable,
 };
 pub(crate) use dispatch::{reset_throw_not_callable_counter, resolve_call2_direct};
 

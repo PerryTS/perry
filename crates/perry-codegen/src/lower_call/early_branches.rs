@@ -14,8 +14,11 @@ use anyhow::{bail, Result};
 use perry_hir::Expr;
 use perry_types::Type as HirType;
 
-use crate::expr::{lower_expr, unbox_to_i64, FnCtx};
-use crate::types::{DOUBLE, I64};
+use crate::expr::{
+    emit_typed_feedback_register_site, lower_expr, unbox_to_i64, FnCtx, TypedFeedbackContract,
+    TypedFeedbackKind,
+};
+use crate::types::{DOUBLE, I32, I64};
 
 pub fn try_lower_native_chain_method_call(
     ctx: &mut FnCtx<'_>,
@@ -192,14 +195,92 @@ pub fn try_lower_closure_typed_local_call(
                     lowered_args.len()
                 );
             }
-            let blk = ctx.block();
-            let closure_handle = unbox_to_i64(blk, &recv_box);
+            let closure_handle = {
+                let blk = ctx.block();
+                unbox_to_i64(blk, &recv_box)
+            };
+            if let Some(func_id) = ctx.local_closure_func_ids.get(id).copied() {
+                let declared_count = ctx
+                    .local_closure_param_counts
+                    .get(id)
+                    .copied()
+                    .unwrap_or(lowered_args.len());
+                let has_rest = ctx.closure_rest_params.contains_key(&func_id);
+                if !has_rest && declared_count == lowered_args.len() {
+                    let closure_fn =
+                        format!("perry_closure_{}__{}", ctx.strings.module_prefix(), func_id);
+                    let site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::ClosureCall,
+                        &format!("closure:{}", func_id),
+                        TypedFeedbackContract::closure_direct_call(),
+                    );
+                    let expected_arity = declared_count.to_string();
+                    let call_arity = lowered_args.len().to_string();
+                    let guard_ok = ctx.block().call(
+                        I32,
+                        "js_typed_feedback_closure_direct_call_guard",
+                        &[
+                            (I64, &site_id),
+                            (DOUBLE, &recv_box),
+                            (crate::types::PTR, &format!("@{}", closure_fn)),
+                            (I32, &expected_arity),
+                            (I32, &call_arity),
+                        ],
+                    );
+                    let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
+                    let fast_idx = ctx.new_block("closure_direct.fast");
+                    let fallback_idx = ctx.new_block("closure_direct.fallback");
+                    let merge_idx = ctx.new_block("closure_direct.merge");
+                    let fast_label = ctx.block_label(fast_idx);
+                    let fallback_label = ctx.block_label(fallback_idx);
+                    let merge_label = ctx.block_label(merge_idx);
+                    ctx.block()
+                        .cond_br(&guard_pass, &fast_label, &fallback_label);
+
+                    ctx.current_block = fast_idx;
+                    let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
+                        vec![(I64, &closure_handle)];
+                    for v in &lowered_args {
+                        direct_args.push((DOUBLE, v.as_str()));
+                    }
+                    let fast_value = ctx.block().call(DOUBLE, &closure_fn, &direct_args);
+                    let after_fast = ctx.block().label.clone();
+                    if !ctx.block().is_terminated() {
+                        ctx.block().br(&merge_label);
+                    }
+
+                    ctx.current_block = fallback_idx;
+                    ctx.block()
+                        .call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
+                    let runtime_fn = format!("js_closure_call{}", lowered_args.len());
+                    let mut fallback_args: Vec<(crate::types::LlvmType, &str)> =
+                        vec![(I64, &closure_handle)];
+                    for v in &lowered_args {
+                        fallback_args.push((DOUBLE, v.as_str()));
+                    }
+                    let fallback_value = ctx.block().call(DOUBLE, &runtime_fn, &fallback_args);
+                    let after_fallback = ctx.block().label.clone();
+                    if !ctx.block().is_terminated() {
+                        ctx.block().br(&merge_label);
+                    }
+
+                    ctx.current_block = merge_idx;
+                    return Ok(Some(ctx.block().phi(
+                        DOUBLE,
+                        &[
+                            (fast_value.as_str(), after_fast.as_str()),
+                            (fallback_value.as_str(), after_fallback.as_str()),
+                        ],
+                    )));
+                }
+            }
             let runtime_fn = format!("js_closure_call{}", lowered_args.len());
             let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
             for v in &lowered_args {
                 call_args.push((DOUBLE, v.as_str()));
             }
-            return Ok(Some(blk.call(DOUBLE, &runtime_fn, &call_args)));
+            return Ok(Some(ctx.block().call(DOUBLE, &runtime_fn, &call_args)));
         }
     }
     Ok(None)

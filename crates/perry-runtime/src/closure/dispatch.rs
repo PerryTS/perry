@@ -83,6 +83,45 @@ pub(crate) fn reset_throw_not_callable_counter() {
     THROW_NOT_CALLABLE_COUNT.with(|c| c.set(0));
 }
 
+/// Resolve a closure pointer through any GC forwarding stubs left behind by
+/// copied-minor or evacuation. Generated code may still hold a raw closure
+/// local across an explicit `gc()` call; the shadow root is rewritten, but the
+/// local alloca is not. Following the stub here keeps dynamic function calls
+/// coherent after closures move from the nursery.
+#[inline(always)]
+pub fn clean_closure_ptr(mut closure: *const ClosureHeader) -> *const ClosureHeader {
+    for _ in 0..64 {
+        let addr = closure as u64;
+        if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
+            return closure;
+        }
+        let type_tag =
+            unsafe { std::ptr::read_volatile((closure as *const u8).add(12) as *const u32) };
+        if type_tag != CLOSURE_MAGIC {
+            return closure;
+        }
+        if addr < crate::gc::GC_HEADER_SIZE as u64 {
+            return closure;
+        }
+        let header = unsafe {
+            (closure as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader
+        };
+        unsafe {
+            if (*header).obj_type != crate::gc::GC_TYPE_CLOSURE
+                || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            {
+                return closure;
+            }
+            let next = crate::gc::forwarding_address(header) as *const ClosureHeader;
+            if next.is_null() || next == closure {
+                return closure;
+            }
+            closure = next;
+        }
+    }
+    closure
+}
+
 /// Validate a closure pointer and return its func_ptr if the closure is valid.
 ///
 /// Uses `read_volatile` for type_tag + `compiler_fence` to GUARANTEE that:
