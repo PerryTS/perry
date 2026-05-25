@@ -56,7 +56,11 @@ cargo test --release --workspace \
   --exclude perry-ui-gtk4   # Run tests (exclude cross-host UI crates on macOS)
 cargo run --release -- file.ts -o output && ./output    # Compile and run TypeScript
 cargo run --release -- file.ts --print-hir              # Debug: print HIR
+cargo run --release -- file.ts --trace hir --focus fnName  # Debug: focused HIR for one fn (use to localize a miscompile)
+cargo run --release -- file.ts --trace llvm             # Debug: dump per-module LLVM IR to .perry-trace/llvm/
 ```
+
+When debugging a "compiled to the wrong thing" bug, reach for `--trace hir --focus <name>` to dump just the offending function's lowered HIR (functions/methods/classes matching the substring; import/init noise suppressed) instead of scrolling a full `--print-hir`. `--trace llvm` writes per-module `.ll` (it forces a no-cache rebuild so codegen actually runs). See `docs/src/cli/flags.md`.
 
 ## Architecture
 
