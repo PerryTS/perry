@@ -779,6 +779,14 @@ pub fn try_lower_property_get_method_call(
     ) -> Option<String> {
         match expr {
             Expr::ClassRef(name) => Some(name.clone()),
+            // #1787: a class EXPRESSION value (`make(a) => class { ... }`,
+            // lowered to `ClassExprFresh`) is a heap class object stamped
+            // with the compile-time `template`'s class_id. A static-method
+            // call on it (`make(a).pipe()`, the inlined factory result)
+            // resolves the method through `template`'s static chain, and the
+            // receiver-box selection below uses the actual object so `this`
+            // carries the per-evaluation own static fields.
+            Expr::ClassExprFresh { template, .. } => Some(template.clone()),
             Expr::LocalGet(id) => local_id_to_name
                 .get(id)
                 .and_then(|name| local_class_aliases.get(name).cloned()),
@@ -854,6 +862,22 @@ pub fn try_lower_property_get_method_call(
                 Expr::ClassRef(_) => lower_expr(ctx, object)?,
                 Expr::Call { .. } => lower_expr(ctx, object)?,
                 Expr::Sequence(_) => lower_expr(ctx, object)?,
+                // #1787: a class-expression value is a real heap class
+                // object whose per-evaluation static fields are OWN
+                // properties. Use the actual lowered object as `this` (NOT a
+                // synthesized ClassRef) so `this.ast` inside the static body
+                // reads this evaluation's own field rather than the shared
+                // template's static-field global.
+                Expr::ClassExprFresh { .. } => lower_expr(ctx, object)?,
+                // #1787: `const C = make(...); C.staticMethod()`. The local
+                // holds the class-expression's heap object (or, for a
+                // top-level-class alias like `const F = Foo`, the same
+                // INT32 ClassRef the synthesized fallback would produce).
+                // Loading the actual stored value preserves the
+                // per-evaluation own static fields a synthesized ClassRef
+                // would discard, and is value-identical for the ClassRef
+                // case — so `this.<field>` resolves correctly either way.
+                Expr::LocalGet(_) => lower_expr(ctx, object)?,
                 _ => {
                     // Synthesize a ClassRef NaN-box from the resolved class.
                     let cid = ctx.class_ids.get(&cls_name).copied().unwrap_or(0);

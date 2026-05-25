@@ -60,6 +60,17 @@ pub(crate) fn lower_let(
             ctx.local_class_aliases
                 .insert(name.to_string(), class_name.clone());
         }
+        // #1787: `const C = make(...)` where the factory body is a class
+        // EXPRESSION (lowered to `ClassExprFresh`, often inlined into the
+        // Let init). Register `C` as an alias of the compile-time template
+        // so a later `C.staticMethod(...)` resolves through the template's
+        // static chain; the static-dispatch site uses the actual object
+        // value as `this`, so `this.<field>` reads this evaluation's own
+        // static field.
+        Some(perry_hir::Expr::ClassExprFresh { template, .. }) => {
+            ctx.local_class_aliases
+                .insert(name.to_string(), template.clone());
+        }
         Some(perry_hir::Expr::LocalGet(other_id)) => {
             if let Some(other_name) = ctx.local_id_to_name.get(other_id).cloned() {
                 if let Some(resolved) = ctx.local_class_aliases.get(&other_name).cloned() {
