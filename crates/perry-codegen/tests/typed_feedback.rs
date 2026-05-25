@@ -1,5 +1,5 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
-use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
+use perry_hir::{BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
 use perry_types::{FunctionType, Type};
 
 fn empty_opts() -> CompileOptions {
@@ -338,4 +338,27 @@ fn typed_feedback_guards_array_index_specialization() {
     assert!(ir.contains("js_typed_feedback_array_index_set_fallback_boxed"));
     assert!(ir.contains("js_typed_feedback_plain_array_index_get_guard"));
     assert!(ir.contains("js_typed_feedback_array_index_get_fallback_boxed"));
+}
+
+#[test]
+fn typed_feedback_skips_array_index_guard_for_computed_numeric_hot_path() {
+    let array_ty = Type::Array(Box::new(Type::Number));
+    let ir = ir_for(module(
+        "typed_feedback_computed_array.ts",
+        vec![param(1, "xs", array_ty), param(2, "i", Type::Number)],
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::Binary {
+                op: BinaryOp::Mod,
+                left: Box::new(Expr::LocalGet(2)),
+                right: Box::new(Expr::Integer(64)),
+            }),
+        }))],
+    ));
+
+    assert!(!ir.contains("call i32 @js_typed_feedback_plain_array_index_get_guard"));
+    assert!(!ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
+    assert!(ir.contains("call double @js_array_get_f64"));
+    assert!(ir.contains("load double"));
 }

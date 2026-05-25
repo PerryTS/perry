@@ -226,84 +226,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let idx_double = lower_expr(ctx, index)?;
                             ctx.block().fptosi(DOUBLE, &idx_double, I32)
                         };
-                        let feedback_site_id = emit_typed_feedback_register_site(
-                            ctx,
-                            TypedFeedbackKind::ArrayElement,
-                            "array[index]=",
-                            TypedFeedbackContract::bounded_array_set_index(),
+                        let blk = ctx.block();
+                        let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                        // ptr = arr_handle + 8 + idx*8
+                        let idx_i64 = blk.zext(I32, &idx_i32, I64);
+                        let byte_offset = blk.shl(I64, &idx_i64, "3");
+                        let with_header = blk.add(I64, &byte_offset, "8");
+                        let element_addr = blk.add(I64, &arr_handle, &with_header);
+                        let element_ptr = blk.inttoptr(I64, &element_addr);
+                        emit_jsvalue_slot_store_on_block(
+                            blk,
+                            &element_ptr,
+                            &val_double,
+                            &arr_handle,
+                            &idx_i32,
+                            layout_note_needed,
+                            &arr_handle,
+                            &element_addr,
+                            write_barrier_needed,
                         );
-                        let fast_idx = ctx.new_block("idxset.bounded_fast");
-                        let fallback_idx = ctx.new_block("idxset.bounded_fallback");
-                        let merge_idx = ctx.new_block("idxset.bounded_merge");
-                        let fast_label = ctx.block_label(fast_idx);
-                        let fallback_label = ctx.block_label(fallback_idx);
-                        let merge_label = ctx.block_label(merge_idx);
-                        let guard_ok = {
-                            let blk = ctx.block();
-                            let guard_i32 = blk.call(
-                                I32,
-                                "js_typed_feedback_plain_array_index_set_guard",
-                                &[
-                                    (I64, &feedback_site_id),
-                                    (DOUBLE, &arr_box),
-                                    (I32, &idx_i32),
-                                    (DOUBLE, &val_double),
-                                    (I32, "1"),
-                                ],
-                            );
-                            blk.icmp_ne(I32, &guard_i32, "0")
-                        };
-                        ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
-
-                        ctx.current_block = fast_idx;
-                        {
-                            let blk = ctx.block();
-                            let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                            // ptr = arr_handle + 8 + idx*8
-                            let idx_i64 = blk.zext(I32, &idx_i32, I64);
-                            let byte_offset = blk.shl(I64, &idx_i64, "3");
-                            let with_header = blk.add(I64, &byte_offset, "8");
-                            let element_addr = blk.add(I64, &arr_handle, &with_header);
-                            let element_ptr = blk.inttoptr(I64, &element_addr);
-                            emit_jsvalue_slot_store_on_block(
-                                blk,
-                                &element_ptr,
-                                &val_double,
-                                &arr_handle,
-                                &idx_i32,
-                                layout_note_needed,
-                                &arr_handle,
-                                &element_addr,
-                                write_barrier_needed,
-                            );
-                            blk.br(&merge_label);
-                        }
-
-                        ctx.current_block = fallback_idx;
-                        {
-                            let fallback_box = ctx.block().call(
-                                DOUBLE,
-                                "js_typed_feedback_array_index_set_fallback_boxed",
-                                &[
-                                    (I64, &feedback_site_id),
-                                    (DOUBLE, &arr_box),
-                                    (I32, &idx_i32),
-                                    (DOUBLE, &val_double),
-                                ],
-                            );
-                            if let Some(slot) = ctx.locals.get(arr_id).cloned() {
-                                ctx.block().store(DOUBLE, &fallback_box, &slot);
-                            } else if let Some(global_name) =
-                                ctx.module_globals.get(arr_id).cloned()
-                            {
-                                let g_ref = format!("@{}", global_name);
-                                ctx.block().store(DOUBLE, &fallback_box, &g_ref);
-                            }
-                            ctx.block().br(&merge_label);
-                        }
-
-                        ctx.current_block = merge_idx;
                         return Ok(val_double);
                     }
                 }
