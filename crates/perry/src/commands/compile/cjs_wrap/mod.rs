@@ -246,6 +246,41 @@ module.exports = inner;
     }
 
     #[test]
+    fn issue_1721_blanks_adopted_alias_require_in_body() {
+        // #1721: `const c = require('./common')` adopts `c` as the import
+        // local name (so `import c from './common'`). The original body line
+        // MUST be blanked — otherwise it redeclares `c` inside the IIFE and
+        // the synthetic `require` (which returns `c`) resolves to that inner,
+        // not-yet-initialized binding, so the consumer's
+        // `const c = require('./common')` lands `undefined`. Regression:
+        // before the fix this only happened when hoisting classes.
+        let src = "const c = require('./common');\nconsole.log(c.x);";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
+        assert!(
+            wrapped.contains("import c from './common';"),
+            "expected hoisted import using the alias, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("require('./common')") || !wrapped.contains("const c = require"),
+            "adopted-alias body line must be blanked so it can't shadow the \
+             import inside the IIFE, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("console.log(c.x);"),
+            "body references to the binding must survive, got:\n{}",
+            wrapped
+        );
+        // Sanity: the rewritten module still parses.
+        assert!(
+            perry_parser::parse_typescript(&wrapped, "test.js").is_ok(),
+            "wrapped module must parse, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
     fn wrap_falls_back_to_req_n_when_alias_unsafe() {
         // Reserved internal names (`_cjs`, `module`, `exports`, `require`)
         // and `_req_<N>` aliases must not become import locals — fall back

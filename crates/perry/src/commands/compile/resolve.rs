@@ -1385,7 +1385,14 @@ pub(super) fn resolve_import(
                         false
                     }
                 });
-            let kind = if is_js_file(&canonical) && !in_compile_pkg {
+            // #1721 / #668: a *user* `.js` (outside node_modules) compiles
+            // natively now — mirrors collect_modules' `should_use_js_runtime`.
+            // Its import edge MUST be NativeCompiled so the importer wires
+            // `perry_fn_<prefix>__*` symbols; leaving it Interpreted routes to
+            // the (removed, post-#1696) V8 bridge and the default/named export
+            // symbols never link.
+            let in_node_modules = canonical.to_string_lossy().contains("node_modules");
+            let kind = if is_js_file(&canonical) && !in_compile_pkg && in_node_modules {
                 ModuleKind::Interpreted
             } else {
                 ModuleKind::NativeCompiled
@@ -1399,12 +1406,15 @@ pub(super) fn resolve_import(
     if import_source.starts_with('/') {
         let resolved = PathBuf::from(import_source);
         if let Some(path) = resolve_with_extensions(&resolved) {
-            let kind = if is_js_file(&path) {
+            let canonical = path.canonicalize().ok()?;
+            // #1721: same node_modules-gated rule as relative imports.
+            let in_node_modules = canonical.to_string_lossy().contains("node_modules");
+            let kind = if is_js_file(&canonical) && in_node_modules {
                 ModuleKind::Interpreted
             } else {
                 ModuleKind::NativeCompiled
             };
-            return Some((path.canonicalize().ok()?, kind));
+            return Some((canonical, kind));
         }
         return None;
     }
@@ -1525,12 +1535,13 @@ pub(super) fn resolve_import(
                         ));
                     }
                 }
-                // Same `.ts` / `.tsx` → NativeCompiled rule as the
-                // node_modules fallback above. Keeps `file:` deps that
-                // ship TypeScript source aligned with `collect_modules`'s
-                // recursive native walk.
+                // `.ts`/`.tsx` → NativeCompiled, as the node_modules fallback
+                // above. #1721: `file:` deps live outside node_modules (user
+                // code), so their `.js` also compiles natively; only genuine
+                // node_modules JS stays Interpreted.
                 let canonical = entry.canonicalize().ok()?;
-                let kind = if is_ts_file(&canonical) {
+                let in_node_modules = canonical.to_string_lossy().contains("node_modules");
+                let kind = if is_ts_file(&canonical) || !in_node_modules {
                     ModuleKind::NativeCompiled
                 } else {
                     ModuleKind::Interpreted

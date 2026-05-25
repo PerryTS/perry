@@ -102,6 +102,27 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
         chosen_alias_per_spec.insert(spec.clone());
     }
 
+    // #1721: ranges of `const <alias> = require(<spec>)` lines whose alias we
+    // ADOPTED as the import local name above (`import_local_names[idx] == alias`).
+    // The synthetic `require` returns that name, and the hoisted `import <alias>`
+    // already binds it at module scope — so the original body line would
+    // *redeclare* `<alias>` inside the IIFE and shadow the import. Under
+    // function scope the IIFE's `require` then returns the inner, not-yet-
+    // initialized binding → the consumer's `const x = require('./m')` lands
+    // `undefined`. We blank these body lines (below) so both the require-case
+    // return and the body references resolve to the module-scope import via
+    // closure. (Previously this blanking only happened when hoisting classes.)
+    let adopted_alias_strip_ranges: Vec<(usize, usize)> = raw_aliases
+        .iter()
+        .filter(|(alias, spec, _)| {
+            require_specs
+                .iter()
+                .position(|s| s == spec)
+                .is_some_and(|idx| import_local_names[idx] == *alias)
+        })
+        .map(|(_, _, range)| *range)
+        .collect();
+
     let imports = require_specs
         .iter()
         .zip(import_local_names.iter())
@@ -250,7 +271,11 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
     // resolve via the outer `const import_X` through closure scope, so
     // non-hoisted code paths are unaffected.
     let (import_aliases, alias_strip_ranges) = if hoisted_class_block.is_empty() {
-        (String::new(), Vec::new())
+        // No hoisted classes: we don't need to surface module-scope `const
+        // alias = _req_N;` lines (body references resolve to the imports via
+        // closure), but we MUST still blank any adopted-alias `const alias =
+        // require(spec)` lines so they don't shadow the hoisted import (#1721).
+        (String::new(), adopted_alias_strip_ranges)
     } else {
         let aliases = extract_require_aliases_with_ranges(source);
         let lines = aliases
@@ -278,13 +303,17 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
         (lines, ranges)
     };
 
-    let body_for_iife = if hoisted_class_block.is_empty() {
-        source.to_string()
-    } else {
-        // Start from the source with hoisted classes already blanked, then
-        // also blank the surfaced `var import_X = require(...)` lines so
-        // they don't shadow the module-scope aliases when the IIFE runs.
-        let mut s = source_without_hoists;
+    // Start from the source (with hoisted classes already blanked when there
+    // are any), then blank the `<kw> alias = require(...)` lines collected in
+    // `alias_strip_ranges` so they don't shadow the module-scope import/alias
+    // when the IIFE runs. Applies in both cases now: with classes it strips the
+    // surfaced aliases (#665), without classes it strips adopted aliases (#1721).
+    let body_for_iife = {
+        let mut s = if hoisted_class_block.is_empty() {
+            source.to_string()
+        } else {
+            source_without_hoists
+        };
         for (start, end) in alias_strip_ranges.into_iter().rev() {
             let original = &source[start..end];
             let blanked: String = original
