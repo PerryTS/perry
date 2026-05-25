@@ -3619,5 +3619,11 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: promises.finished({signal}) — abort doesn't reject with AbortError. Flips to PASS when #1532 lands."
+  },
+  "node-suite/stream/consumers/buffer-byte-exact": {
+    "issue": "1532",
+    "added": "2026-05-25",
+    "category": "bug-open",
+    "reason": "node:stream/consumers: buffer() from raw-byte Buffer chunks — byte sequence or Array.from output differs from Node. Flips to PASS when #1532 lands."
   }
 }
