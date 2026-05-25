@@ -341,10 +341,6 @@ fn resolve_with_bits(bits: u64) -> *mut Promise {
     js_promise_resolved(f64::from_bits(bits))
 }
 
-fn resolve_undefined() -> *mut Promise {
-    js_promise_resolved(f64::from_bits(0x7FFC_0000_0000_0001))
-}
-
 /// Construct a DOMException-shaped object (`{ name, message, stack: "" }`)
 /// and return a rejected Promise carrying it. WebCrypto spec demands
 /// `DOMException` instances on subtle.* error paths (`OperationError`,
@@ -355,7 +351,7 @@ fn resolve_undefined() -> *mut Promise {
 unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mut Promise {
     let obj = js_object_alloc(0, 3);
     if obj.is_null() {
-        return resolve_undefined();
+        return perry_runtime::js_promise_rejected(f64::from_bits(0x7FFC_0000_0000_0001));
     }
     let name_key = perry_runtime::js_string_from_bytes(b"name".as_ptr(), 4);
     let message_key = perry_runtime::js_string_from_bytes(b"message".as_ptr(), 7);
@@ -377,7 +373,7 @@ unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mut Promise {
 unsafe fn resolve_with_bytes(bytes: &[u8]) -> *mut Promise {
     let buf = alloc_uint8array_from_slice(bytes);
     if buf.is_null() {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     let val = JSValue::pointer(buf as *const u8).bits();
     resolve_with_bits(val)
@@ -638,7 +634,7 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     {
         let hash = match extract_hmac_hash(algo_bits.to_bits()) {
             Some(h) => h,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         (KeyAlgo::Hmac, hash, KeyKind::Secret)
     } else if algo_upper == "HKDF" && format_lower == "raw" {
@@ -663,11 +659,11 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     } else if algo_upper == "ECDSA" && (format_lower == "raw" || format_lower == "jwk") {
         let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let curve_upper = curve.to_ascii_uppercase();
         if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         let kind =
             if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
@@ -679,11 +675,11 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     } else if algo_upper == "ECDH" && (format_lower == "raw" || format_lower == "jwk") {
         let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let curve_upper = curve.to_ascii_uppercase();
         if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         let kind =
             if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
@@ -752,12 +748,12 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
             P256SecretKey::from_slice(&key_bytes).is_ok()
         };
         if !ok {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
     }
     if matches!(key_algo, KeyAlgo::Ed25519 | KeyAlgo::X25519) {
         if key_bytes.len() != 32 {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         if key_algo == KeyAlgo::Ed25519 {
             let ok = if kind == KeyKind::Private {
@@ -772,7 +768,7 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
                     .is_some()
             };
             if !ok {
-                return resolve_undefined();
+                return reject_with_dom_exception("OperationError", "The operation failed");
             }
         }
     }
@@ -786,12 +782,12 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
             RsaPrivateKey::from_pkcs8_der(&key_bytes).is_ok()
         };
         if !ok {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
     }
     let buf = alloc_uint8array_from_slice(&key_bytes);
     if buf.is_null() {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     register_crypto_key(
         buf as usize,
@@ -830,7 +826,7 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
         }
     };
     if format_lower == "raw" && mat.kind == KeyKind::Private {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     if format_lower == "jwk"
         && mat.kind != KeyKind::Secret
@@ -845,20 +841,20 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
                 | KeyAlgo::X25519
         )
     {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     if format_lower == "spki" && mat.kind != KeyKind::Public {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     if format_lower == "pkcs8" && mat.kind != KeyKind::Private {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     if format_lower != "raw"
         && format_lower != "spki"
         && format_lower != "pkcs8"
         && format_lower != "jwk"
     {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
     if format_lower == "jwk" {
@@ -866,7 +862,7 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
             let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&key_bytes);
             let obj = js_object_alloc(0, 2);
             if obj.is_null() {
-                return resolve_undefined();
+                return reject_with_dom_exception("OperationError", "The operation failed");
             }
             set_object_string_field(obj, b"kty", "oct");
             set_object_string_field(obj, b"k", &encoded);
@@ -878,25 +874,25 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
         ) {
             let obj = match rsa_jwk_export_object(&key_bytes, mat) {
                 Some(o) => o,
-                None => return resolve_undefined(),
+                None => return reject_with_dom_exception("OperationError", "The operation failed"),
             };
             return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
         }
         if matches!(mat.algo, KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256) {
             let obj = match ec_p256_jwk_export_object(&key_bytes, mat) {
                 Some(o) => o,
-                None => return resolve_undefined(),
+                None => return reject_with_dom_exception("OperationError", "The operation failed"),
             };
             return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
         }
         if matches!(mat.algo, KeyAlgo::Ed25519 | KeyAlgo::X25519) {
             let obj = match okp_jwk_export_object(&key_bytes, mat) {
                 Some(o) => o,
-                None => return resolve_undefined(),
+                None => return reject_with_dom_exception("OperationError", "The operation failed"),
             };
             return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
         }
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     resolve_with_bytes(&key_bytes)
 }
@@ -1226,59 +1222,74 @@ pub unsafe extern "C" fn js_webcrypto_sign(
     let data_bytes = bytes_from_jsvalue(data_bits.to_bits());
     let sig = if algo_upper == "HMAC" {
         if mat.algo != KeyAlgo::Hmac || mat.kind != KeyKind::Secret {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
         }
         match compute_hmac(mat.hash, &key_bytes, &data_bytes) {
             Some(s) => s,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if algo_upper == "ECDSA" {
         if mat.algo != KeyAlgo::EcdsaP256 || mat.kind != KeyKind::Private {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
         }
         let signing_key = match P256EcdsaSigningKey::from_slice(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let sig: P256EcdsaSignature = signing_key.sign(&data_bytes);
         sig.to_bytes().as_slice().to_vec()
     } else if algo_upper == "ED25519" {
         if mat.algo != KeyAlgo::Ed25519 || mat.kind != KeyKind::Private {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
         }
         let secret: [u8; 32] = match key_bytes.as_slice().try_into() {
             Ok(s) => s,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
         use ed25519_dalek::Signer as _;
         signing_key.sign(&data_bytes).to_bytes().to_vec()
     } else if algo_upper == "RSASSA-PKCS1-V1_5" {
         if mat.algo != KeyAlgo::RsassaPkcs1 || mat.kind != KeyKind::Private {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
         }
         let private_key = match RsaPrivateKey::from_pkcs8_der(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         match rsa_pkcs1_sign(mat.hash, private_key, &data_bytes) {
             Some(s) => s,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if algo_upper == "RSA-PSS" {
         if mat.algo != KeyAlgo::RsaPss || mat.kind != KeyKind::Private {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
         }
         let salt_len = object_field_bits(algo_bits.to_bits(), b"saltLength")
             .and_then(number_from_bits)
             .unwrap_or(32) as usize;
         let private_key = match RsaPrivateKey::from_pkcs8_der(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         match rsa_pss_sign(mat.hash, private_key, &data_bytes, salt_len) {
             Some(s) => s,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else {
         return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name");
@@ -1313,20 +1324,26 @@ pub unsafe extern "C" fn js_webcrypto_verify(
     let provided_sig = bytes_from_jsvalue(sig_bits.to_bits());
     let ok = if algo_upper == "HMAC" {
         if mat.algo != KeyAlgo::Hmac || mat.kind != KeyKind::Secret {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
         }
         let expected_sig = match compute_hmac(mat.hash, &key_bytes, &data_bytes) {
             Some(s) => s,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         constant_time_eq(&expected_sig, &provided_sig)
     } else if algo_upper == "ECDSA" {
         if mat.algo != KeyAlgo::EcdsaP256 || mat.kind != KeyKind::Public {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
         }
         let verifying_key = match P256EcdsaVerifyingKey::from_sec1_bytes(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let sig = match P256EcdsaSignature::from_slice(&provided_sig) {
             Ok(s) => s,
@@ -1335,15 +1352,18 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         verifying_key.verify(&data_bytes, &sig).is_ok()
     } else if algo_upper == "ED25519" {
         if mat.algo != KeyAlgo::Ed25519 || mat.kind != KeyKind::Public {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
         }
         let public: [u8; 32] = match key_bytes.as_slice().try_into() {
             Ok(p) => p,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let verifying_key = match ed25519_dalek::VerifyingKey::from_bytes(&public) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let signature = match ed25519_dalek::Signature::try_from(provided_sig.as_slice()) {
             Ok(sig) => sig,
@@ -1353,23 +1373,29 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         verifying_key.verify(&data_bytes, &signature).is_ok()
     } else if algo_upper == "RSASSA-PKCS1-V1_5" {
         if mat.algo != KeyAlgo::RsassaPkcs1 || mat.kind != KeyKind::Public {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
         }
         let public_key = match RsaPublicKey::from_public_key_der(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         rsa_pkcs1_verify(mat.hash, public_key, &data_bytes, &provided_sig).unwrap_or(false)
     } else if algo_upper == "RSA-PSS" {
         if mat.algo != KeyAlgo::RsaPss || mat.kind != KeyKind::Public {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
         }
         let salt_len = object_field_bits(algo_bits.to_bits(), b"saltLength")
             .and_then(number_from_bits)
             .unwrap_or(32) as usize;
         let public_key = match RsaPublicKey::from_public_key_der(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         rsa_pss_verify(mat.hash, public_key, &data_bytes, &provided_sig, salt_len).unwrap_or(false)
     } else {
@@ -1530,21 +1556,21 @@ pub unsafe extern "C" fn js_webcrypto_derive_bits(
 ) -> *mut Promise {
     let bit_len = match number_from_bits(length_bits.to_bits()) {
         Some(n) => n,
-        None => return resolve_undefined(),
+        None => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
     if bit_len % 8 != 0 {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     let byte_len = (bit_len / 8) as usize;
     if let Some(bytes) = kdf_derive_bytes(algo_bits.to_bits(), base_key_bits.to_bits(), byte_len) {
         return resolve_with_bytes(&bytes);
     }
     if bit_len > 256 {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     let shared = match ecdh_shared_secret_bytes(algo_bits.to_bits(), base_key_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
     resolve_with_bytes(&shared[..byte_len])
 }
@@ -1570,7 +1596,7 @@ pub unsafe extern "C" fn js_webcrypto_derive_key(
     let (key_algo, hash, bit_len) = if derived_upper == "HMAC" {
         let hash = match extract_hmac_hash(derived_algo_bits.to_bits()) {
             Some(h) => h,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let length = object_field_number(derived_algo_bits.to_bits(), b"length").unwrap_or(256);
         (KeyAlgo::Hmac, hash, length)
@@ -1587,10 +1613,10 @@ pub unsafe extern "C" fn js_webcrypto_derive_key(
         let length = object_field_number(derived_algo_bits.to_bits(), b"length").unwrap_or(256);
         (KeyAlgo::AesCtr, HashAlgo::Sha256, length)
     } else {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     };
     if bit_len % 8 != 0 || bit_len == 0 || bit_len > 256 {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     let byte_len = (bit_len / 8) as usize;
     let key_bytes = if let Some(bytes) =
@@ -1600,16 +1626,16 @@ pub unsafe extern "C" fn js_webcrypto_derive_key(
     } else {
         let shared = match ecdh_shared_secret_bytes(algo_bits.to_bits(), base_key_bits.to_bits()) {
             Some(s) => s,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         if byte_len > shared.len() {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         shared[..byte_len].to_vec()
     };
     let buf = alloc_uint8array_from_slice(&key_bytes);
     if buf.is_null() {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     register_crypto_key(
         buf as usize,
@@ -1927,61 +1953,114 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
         let key_addr = strip_ptr(key_bits.to_bits());
         let mat = match lookup_crypto_key(key_addr) {
             Some(m) => m,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "InvalidAccessError",
+                    "Key is not a valid CryptoKey",
+                )
+            }
         };
         if mat.algo != KeyAlgo::RsaOaep || mat.kind != KeyKind::Public {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
         let public_key = match RsaPublicKey::from_public_key_der(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let data = bytes_from_jsvalue(data_bits.to_bits());
         let ciphertext = match rsa_oaep_encrypt(mat.hash, &public_key, &data) {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         return resolve_with_bytes(&ciphertext);
     }
     if algo_name.eq_ignore_ascii_case("AES-CBC") {
+        let key_addr = strip_ptr(key_bits.to_bits());
+        let mat = match lookup_crypto_key(key_addr) {
+            Some(m) => m,
+            None => {
+                return reject_with_dom_exception(
+                    "InvalidAccessError",
+                    "Key is not a valid CryptoKey",
+                )
+            }
+        };
+        if mat.algo != KeyAlgo::AesCbc {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
         let (key, iv, data) = match extract_aes_cbc_args(
             algo_bits.to_bits(),
             key_bits.to_bits(),
             data_bits.to_bits(),
         ) {
             Some(t) => t,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let ciphertext = match aes_cbc_encrypt(&key, &iv, &data) {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         return resolve_with_bytes(&ciphertext);
     }
     if algo_name.eq_ignore_ascii_case("AES-CTR") {
+        let key_addr = strip_ptr(key_bits.to_bits());
+        let mat = match lookup_crypto_key(key_addr) {
+            Some(m) => m,
+            None => {
+                return reject_with_dom_exception(
+                    "InvalidAccessError",
+                    "Key is not a valid CryptoKey",
+                )
+            }
+        };
+        if mat.algo != KeyAlgo::AesCtr {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
         let (key, counter, length, data) = match extract_aes_ctr_args(
             algo_bits.to_bits(),
             key_bits.to_bits(),
             data_bits.to_bits(),
         ) {
             Some(t) => t,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let ciphertext = match aes_ctr_apply(&key, &counter, length, &data) {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         return resolve_with_bytes(&ciphertext);
+    }
+    let key_addr = strip_ptr(key_bits.to_bits());
+    let mat = match lookup_crypto_key(key_addr) {
+        Some(m) => m,
+        None => {
+            return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey")
+        }
+    };
+    if mat.algo != KeyAlgo::AesGcm {
+        return reject_with_dom_exception(
+            "InvalidAccessError",
+            "The requested operation is not valid for the provided key",
+        );
     }
     let (key, iv, aad, data) =
         match extract_aes_gcm_args(algo_bits.to_bits(), key_bits.to_bits(), data_bits.to_bits()) {
             Some(t) => t,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
     let ciphertext = match aes_gcm_encrypt(&key, &iv, &aad, &data) {
         Some(c) => c,
-        None => return resolve_undefined(),
+        None => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
     resolve_with_bytes(&ciphertext)
 }
@@ -2004,61 +2083,114 @@ pub unsafe extern "C" fn js_webcrypto_decrypt(
         let key_addr = strip_ptr(key_bits.to_bits());
         let mat = match lookup_crypto_key(key_addr) {
             Some(m) => m,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "InvalidAccessError",
+                    "Key is not a valid CryptoKey",
+                )
+            }
         };
         if mat.algo != KeyAlgo::RsaOaep || mat.kind != KeyKind::Private {
-            return resolve_undefined();
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
         let private_key = match RsaPrivateKey::from_pkcs8_der(&key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let data = bytes_from_jsvalue(data_bits.to_bits());
         let plaintext = match rsa_oaep_decrypt(mat.hash, &private_key, &data) {
             Some(p) => p,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         return resolve_with_bytes(&plaintext);
     }
     if algo_name.eq_ignore_ascii_case("AES-CBC") {
+        let key_addr = strip_ptr(key_bits.to_bits());
+        let mat = match lookup_crypto_key(key_addr) {
+            Some(m) => m,
+            None => {
+                return reject_with_dom_exception(
+                    "InvalidAccessError",
+                    "Key is not a valid CryptoKey",
+                )
+            }
+        };
+        if mat.algo != KeyAlgo::AesCbc {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
         let (key, iv, data) = match extract_aes_cbc_args(
             algo_bits.to_bits(),
             key_bits.to_bits(),
             data_bits.to_bits(),
         ) {
             Some(t) => t,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let plaintext = match aes_cbc_decrypt(&key, &iv, &data) {
             Some(p) => p,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         return resolve_with_bytes(&plaintext);
     }
     if algo_name.eq_ignore_ascii_case("AES-CTR") {
+        let key_addr = strip_ptr(key_bits.to_bits());
+        let mat = match lookup_crypto_key(key_addr) {
+            Some(m) => m,
+            None => {
+                return reject_with_dom_exception(
+                    "InvalidAccessError",
+                    "Key is not a valid CryptoKey",
+                )
+            }
+        };
+        if mat.algo != KeyAlgo::AesCtr {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
         let (key, counter, length, data) = match extract_aes_ctr_args(
             algo_bits.to_bits(),
             key_bits.to_bits(),
             data_bits.to_bits(),
         ) {
             Some(t) => t,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let plaintext = match aes_ctr_apply(&key, &counter, length, &data) {
             Some(p) => p,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         return resolve_with_bytes(&plaintext);
+    }
+    let key_addr = strip_ptr(key_bits.to_bits());
+    let mat = match lookup_crypto_key(key_addr) {
+        Some(m) => m,
+        None => {
+            return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey")
+        }
+    };
+    if mat.algo != KeyAlgo::AesGcm {
+        return reject_with_dom_exception(
+            "InvalidAccessError",
+            "The requested operation is not valid for the provided key",
+        );
     }
     let (key, iv, aad, data) =
         match extract_aes_gcm_args(algo_bits.to_bits(), key_bits.to_bits(), data_bits.to_bits()) {
             Some(t) => t,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
     let plaintext = match aes_gcm_decrypt(&key, &iv, &aad, &data) {
         Some(p) => p,
-        None => return resolve_undefined(),
+        None => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
     resolve_with_bytes(&plaintext)
 }
@@ -2136,22 +2268,22 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         let mut rng = rand::rngs::OsRng;
         let private_key = match RsaPrivateKey::new(&mut rng, 2048) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let public_key = RsaPublicKey::from(&private_key);
         let private_der = match private_key.to_pkcs8_der() {
             Ok(der) => der.as_bytes().to_vec(),
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let public_der = match public_key.to_public_key_der() {
             Ok(der) => der.as_bytes().to_vec(),
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
 
         let private_buf = alloc_uint8array_from_slice(&private_der);
         let public_buf = alloc_uint8array_from_slice(&public_der);
         if private_buf.is_null() || public_buf.is_null() {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         register_crypto_key(
             private_buf as usize,
@@ -2172,7 +2304,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
 
         let obj = js_object_alloc(0, 2);
         if obj.is_null() {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
         let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
@@ -2197,7 +2329,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         let private_buf = alloc_uint8array_from_slice(&seed);
         let public_buf = alloc_uint8array_from_slice(&public_bytes);
         if private_buf.is_null() || public_buf.is_null() {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         register_crypto_key(
             private_buf as usize,
@@ -2218,7 +2350,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
 
         let obj = js_object_alloc(0, 2);
         if obj.is_null() {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
         let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
@@ -2245,7 +2377,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         let private_buf = alloc_uint8array_from_slice(&private_bytes);
         let public_buf = alloc_uint8array_from_slice(&public_bytes);
         if private_buf.is_null() || public_buf.is_null() {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         register_crypto_key(
             private_buf as usize,
@@ -2266,7 +2398,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
 
         let obj = js_object_alloc(0, 2);
         if obj.is_null() {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
         let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
@@ -2285,15 +2417,15 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
     if algo_upper == "ECDH" {
         let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let curve_upper = curve.to_ascii_uppercase();
         if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         let private_key = match generate_p256_secret_key() {
             Some(k) => k,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let private_bytes = private_key.to_bytes().as_slice().to_vec();
         let public_bytes = private_key
@@ -2305,7 +2437,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         let private_buf = alloc_uint8array_from_slice(&private_bytes);
         let public_buf = alloc_uint8array_from_slice(&public_bytes);
         if private_buf.is_null() || public_buf.is_null() {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         register_crypto_key(
             private_buf as usize,
@@ -2326,7 +2458,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
 
         let obj = js_object_alloc(0, 2);
         if obj.is_null() {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
         let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
@@ -2345,15 +2477,15 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
     if algo_upper == "ECDSA" {
         let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let curve_upper = curve.to_ascii_uppercase();
         if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         let signing_key = match generate_p256_signing_key() {
             Some(k) => k,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let private_bytes = signing_key.to_bytes().as_slice().to_vec();
         let public_bytes = signing_key
@@ -2365,7 +2497,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         let private_buf = alloc_uint8array_from_slice(&private_bytes);
         let public_buf = alloc_uint8array_from_slice(&public_bytes);
         if private_buf.is_null() || public_buf.is_null() {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         register_crypto_key(
             private_buf as usize,
@@ -2386,7 +2518,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
 
         let obj = js_object_alloc(0, 2);
         if obj.is_null() {
-            return resolve_undefined();
+            return reject_with_dom_exception("OperationError", "The operation failed");
         }
         let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
         let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
@@ -2408,7 +2540,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         && algo_upper != "AES-CBC"
         && algo_upper != "AES-CTR"
     {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     // Read `length` from the algorithm object; default to 256 for the
     // string-shorthand form.
@@ -2417,7 +2549,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         (_, 128) => 16,
         ("AES-GCM" | "AES-KW" | "AES-CBC" | "AES-CTR", 192) => 24,
         (_, 256) => 32,
-        _ => return resolve_undefined(),
+        _ => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
     // Pull cryptographically strong random bytes for the key.
     let mut key_bytes = vec![0u8; byte_len];
@@ -2428,7 +2560,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
     // the importKey/encrypt/decrypt path works on the result.
     let buf = alloc_uint8array_from_slice(&key_bytes);
     if buf.is_null() {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     register_crypto_key(
         buf as usize,
@@ -2574,12 +2706,15 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
     }
     let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
     let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
-    if lookup_crypto_key(wrapping_key_addr).is_none() {
-        return reject_with_dom_exception(
-            "InvalidAccessError",
-            "Wrapping key is not a valid CryptoKey",
-        );
-    }
+    let wrapping_mat = match lookup_crypto_key(wrapping_key_addr) {
+        Some(m) => m,
+        None => {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Wrapping key is not a valid CryptoKey",
+            )
+        }
+    };
     let wrapping_key_bytes = bytes_from_jsvalue(wrapping_key_bits.to_bits());
 
     let upper = match wrap_algo_name(wrap_algo_bits.to_bits()) {
@@ -2592,68 +2727,102 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
         }
     };
     let wrapped = if upper == "AES-KW" {
+        if wrapping_mat.algo != KeyAlgo::AesKw {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
         match aes_kw_wrap(&wrapping_key_bytes, &key_bytes) {
             Some(w) => w,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "AES-GCM" {
+        if wrapping_mat.algo != KeyAlgo::AesGcm {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
         let (iv, aad) = match resolve_aes_gcm_iv_aad(wrap_algo_bits.to_bits()) {
             Some(t) => t,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize wrap algorithm parameters",
+                )
+            }
         };
         match aes_gcm_encrypt(&wrapping_key_bytes, &iv, &aad, &key_bytes) {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "AES-CBC" {
-        let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
-        if !matches!(lookup_crypto_key(wrapping_key_addr), Some(m) if m.algo == KeyAlgo::AesCbc) {
-            return resolve_undefined();
+        if wrapping_mat.algo != KeyAlgo::AesCbc {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let iv = match object_field_bytes(wrap_algo_bits.to_bits(), b"iv") {
             Some(v) => v,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize wrap algorithm parameters",
+                )
+            }
         };
         match aes_cbc_encrypt(&wrapping_key_bytes, &iv, &key_bytes) {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "AES-CTR" {
-        let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
-        if !matches!(lookup_crypto_key(wrapping_key_addr), Some(m) if m.algo == KeyAlgo::AesCtr) {
-            return resolve_undefined();
+        if wrapping_mat.algo != KeyAlgo::AesCtr {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let counter = match object_field_bytes(wrap_algo_bits.to_bits(), b"counter") {
             Some(v) => v,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize wrap algorithm parameters",
+                )
+            }
         };
         let length = match object_field_number(wrap_algo_bits.to_bits(), b"length") {
             Some(v) => v,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize wrap algorithm parameters",
+                )
+            }
         };
         match aes_ctr_apply(&wrapping_key_bytes, &counter, length, &key_bytes) {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "RSA-OAEP" {
-        let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
-        let mat = match lookup_crypto_key(wrapping_key_addr) {
-            Some(m) => m,
-            None => return resolve_undefined(),
-        };
-        if mat.algo != KeyAlgo::RsaOaep || mat.kind != KeyKind::Public {
-            return resolve_undefined();
+        if wrapping_mat.algo != KeyAlgo::RsaOaep || wrapping_mat.kind != KeyKind::Public {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let public_key = match RsaPublicKey::from_public_key_der(&wrapping_key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        match rsa_oaep_encrypt(mat.hash, &public_key, &key_bytes) {
+        match rsa_oaep_encrypt(wrapping_mat.hash, &public_key, &key_bytes) {
             Some(c) => c,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else {
-        return resolve_undefined();
+        return reject_with_dom_exception("NotSupportedError", "Unrecognized wrap-algorithm name");
     };
     resolve_with_bytes(&wrapped)
 }
@@ -2690,12 +2859,15 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
     }
     let wrapped_bytes = bytes_from_jsvalue(wrapped_key_bits.to_bits());
     let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
-    if lookup_crypto_key(unwrapping_key_addr).is_none() {
-        return reject_with_dom_exception(
-            "InvalidAccessError",
-            "Unwrapping key is not a valid CryptoKey",
-        );
-    }
+    let unwrapping_mat = match lookup_crypto_key(unwrapping_key_addr) {
+        Some(m) => m,
+        None => {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unwrapping key is not a valid CryptoKey",
+            )
+        }
+    };
     let unwrapping_key_bytes = bytes_from_jsvalue(unwrapping_key_bits.to_bits());
 
     let upper = match wrap_algo_name(unwrap_algo_bits.to_bits()) {
@@ -2708,86 +2880,128 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
         }
     };
     let recovered = if upper == "AES-KW" {
+        if unwrapping_mat.algo != KeyAlgo::AesKw {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
         match aes_kw_unwrap(&unwrapping_key_bytes, &wrapped_bytes) {
             Some(r) => r,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "AES-GCM" {
+        if unwrapping_mat.algo != KeyAlgo::AesGcm {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
         let (iv, aad) = match resolve_aes_gcm_iv_aad(unwrap_algo_bits.to_bits()) {
             Some(t) => t,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize unwrap algorithm parameters",
+                )
+            }
         };
         match aes_gcm_decrypt(&unwrapping_key_bytes, &iv, &aad, &wrapped_bytes) {
             Some(p) => p,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "AES-CBC" {
-        let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
-        if !matches!(lookup_crypto_key(unwrapping_key_addr), Some(m) if m.algo == KeyAlgo::AesCbc) {
-            return resolve_undefined();
+        if unwrapping_mat.algo != KeyAlgo::AesCbc {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let iv = match object_field_bytes(unwrap_algo_bits.to_bits(), b"iv") {
             Some(v) => v,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize unwrap algorithm parameters",
+                )
+            }
         };
         match aes_cbc_decrypt(&unwrapping_key_bytes, &iv, &wrapped_bytes) {
             Some(p) => p,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "AES-CTR" {
-        let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
-        if !matches!(lookup_crypto_key(unwrapping_key_addr), Some(m) if m.algo == KeyAlgo::AesCtr) {
-            return resolve_undefined();
+        if unwrapping_mat.algo != KeyAlgo::AesCtr {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let counter = match object_field_bytes(unwrap_algo_bits.to_bits(), b"counter") {
             Some(v) => v,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize unwrap algorithm parameters",
+                )
+            }
         };
         let length = match object_field_number(unwrap_algo_bits.to_bits(), b"length") {
             Some(v) => v,
-            None => return resolve_undefined(),
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize unwrap algorithm parameters",
+                )
+            }
         };
         match aes_ctr_apply(&unwrapping_key_bytes, &counter, length, &wrapped_bytes) {
             Some(p) => p,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if upper == "RSA-OAEP" {
-        let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
-        let mat = match lookup_crypto_key(unwrapping_key_addr) {
-            Some(m) => m,
-            None => return resolve_undefined(),
-        };
-        if mat.algo != KeyAlgo::RsaOaep || mat.kind != KeyKind::Private {
-            return resolve_undefined();
+        if unwrapping_mat.algo != KeyAlgo::RsaOaep || unwrapping_mat.kind != KeyKind::Private {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
         }
         let private_key = match RsaPrivateKey::from_pkcs8_der(&unwrapping_key_bytes) {
             Ok(k) => k,
-            Err(_) => return resolve_undefined(),
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        match rsa_oaep_decrypt(mat.hash, &private_key, &wrapped_bytes) {
+        match rsa_oaep_decrypt(unwrapping_mat.hash, &private_key, &wrapped_bytes) {
             Some(p) => p,
-            None => return resolve_undefined(),
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else {
-        return resolve_undefined();
+        return reject_with_dom_exception(
+            "NotSupportedError",
+            "Unrecognized unwrap-algorithm name",
+        );
     };
 
     // Register the recovered bytes as a CryptoKey under the requested
     // unwrappedKeyAlgorithm.
     let unwrapped_name = match wrap_algo_name(unwrapped_algo_bits.to_bits()) {
         Some(s) => s,
-        None => return resolve_undefined(),
+        None => {
+            return reject_with_dom_exception(
+                "NotSupportedError",
+                "Unrecognized unwrapped-key algorithm name",
+            )
+        }
     };
     let key_algo = match unwrapped_name.as_str() {
         "AES-GCM" => KeyAlgo::AesGcm,
         "AES-KW" => KeyAlgo::AesKw,
         "AES-CBC" => KeyAlgo::AesCbc,
         "AES-CTR" => KeyAlgo::AesCtr,
-        _ => return resolve_undefined(),
+        _ => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
     let buf = alloc_uint8array_from_slice(&recovered);
     if buf.is_null() {
-        return resolve_undefined();
+        return reject_with_dom_exception("OperationError", "The operation failed");
     }
     register_crypto_key(
         buf as usize,
