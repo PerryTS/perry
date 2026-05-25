@@ -180,6 +180,15 @@ pub struct LoweringContext {
     pub(crate) uses_fetch: bool,
     /// Issue #76 — set when any `WebAssembly.*` HIR variant is lowered.
     pub(crate) uses_webassembly: bool,
+    /// #1723 — one-shot flag set by an enclosing `ns[dynamicKey].staticMember`
+    /// access to tell the *immediately-nested* computed-member lowering to skip
+    /// the #503 dynamic-stdlib-dispatch refusal. The dynamic index there only
+    /// selects a stdlib SUB-namespace (e.g. `path.win32` / `path.posix`) and the
+    /// actual member is a source-visible static name, so it is auditable — not
+    /// the `ns[runtimeVar]()` obfuscation #503 targets. The guard consumes
+    /// (clears) it on read so a dynamic key *inside the index* (`ns[fs[evil]]`)
+    /// is still refused.
+    pub(crate) suppress_stdlib_dispatch_guard_once: bool,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,

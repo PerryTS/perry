@@ -109,7 +109,14 @@ use wasm_exports::try_wasm_instance_exports;
 /// `(res)` for any later use in the outer body.
 pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<Expr> {
     let ni_mark = ctx.native_instances.len();
+    // #1723: snapshot/restore the one-shot #503 suppression flag around the
+    // whole call. `lower_call_inner` may set it (for a `ns[dynamicKey].method()`
+    // receiver) but a dispatch arm could `return` before the receiver is
+    // lowered, leaving the flag set. Restoring here keeps it from leaking into
+    // a sibling expression.
+    let prev_suppress = ctx.suppress_stdlib_dispatch_guard_once;
     let result = lower_call_inner(ctx, call);
+    ctx.suppress_stdlib_dispatch_guard_once = prev_suppress;
     // Restore: drop any native-instance tags this call's pre-scans
     // added (and anything nested calls left above the mark — those
     // are likewise out of scope once we unwind past their owning
@@ -153,6 +160,29 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         .iter()
         .map(|arg| lower_expr(ctx, &arg.expr))
         .collect::<Result<Vec<_>>>()?;
+
+    // #1723: `<stdlib-ns>[dynamicKey].method(args)` — a method call whose
+    // receiver is a dynamic stdlib SUB-namespace selection (`path.win32` /
+    // `path.posix`) and whose method is a source-visible static name. The
+    // method-call dispatch below lowers the receiver `ns[dynamicKey]` directly
+    // — it never routes the `.method` part through `lower_member` — so the #503
+    // guard would fire on the receiver. Mark the *next* `ns[dynamicKey]`
+    // lowering auditable (same carve-out as the member-access form: the method
+    // name is in plaintext, not the `ns[runtimeVar]()` obfuscation). The flag
+    // is set AFTER the arguments above are lowered, so a dynamic stdlib key in
+    // an ARGUMENT (`ns[dyn].m(fs[evil])`) is still refused; it is consumed by
+    // the first guarded access (the receiver) and restored by `lower_call`.
+    if let ast::Callee::Expr(callee_expr) = &call.callee {
+        let mut callee = callee_expr.as_ref();
+        while let ast::Expr::Paren(p) = callee {
+            callee = p.expr.as_ref();
+        }
+        if let ast::Expr::Member(callee_member) = callee {
+            if super::expr_member::stdlib_ns_subnamespace_static_access(ctx, callee_member) {
+                ctx.suppress_stdlib_dispatch_guard_once = true;
+            }
+        }
+    }
 
     // Post-args dispatch hooks: proxy apply/revoke, `Object.<static>`
     // aliased calls, and `Object.prototype.<method>.call(...)` rewrites.

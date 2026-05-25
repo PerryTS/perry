@@ -70,6 +70,7 @@ impl LoweringContext {
             module_native_instances: Vec::new(),
             uses_fetch: false,
             uses_webassembly: false,
+            suppress_stdlib_dispatch_guard_once: false,
             var_hoisted_ids: HashSet::new(),
             functions_index: HashMap::new(),
             classes_index: HashMap::new(),

@@ -18,6 +18,32 @@ use crate::ir::Expr;
 use super::{lower_expr, LoweringContext};
 
 pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Result<Expr> {
+    // #1723: when THIS access is the auditable `ns[dynamicKey].staticMember`
+    // shape — a dynamic stdlib SUB-namespace selection (`path.win32` /
+    // `path.posix`) followed by a source-visible static member — mark the
+    // immediately-nested `ns[dynamicKey]` computed access as auditable so the
+    // #503 refusal does not fire on it (the method/property name is in
+    // plaintext, not the `ns[runtimeVar]()` obfuscation the guard targets). The
+    // flag must be set HERE, before the many early-return arms below that lower
+    // `member.obj` themselves — otherwise the receiver `ns[dynamicKey]` is
+    // lowered through one of those arms and trips the guard. It is a one-shot
+    // consumed by the first guarded access, so a dynamic key *inside the index*
+    // (`ns[fs[evil]].x`) is still refused. Save/restore the prior value so the
+    // flag never leaks past this member, and only touch it when our own
+    // detection fires (a method-call receiver sets the flag via `lower_call`
+    // instead, and that must survive into the bare `ns[dynamicKey]` lowering).
+    let suppress_for_obj = stdlib_ns_subnamespace_static_access(ctx, member);
+    if !suppress_for_obj {
+        return lower_member_inner(ctx, member);
+    }
+    let prev_suppress = ctx.suppress_stdlib_dispatch_guard_once;
+    ctx.suppress_stdlib_dispatch_guard_once = true;
+    let result = lower_member_inner(ctx, member);
+    ctx.suppress_stdlib_dispatch_guard_once = prev_suppress;
+    result
+}
+
+fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Result<Expr> {
     // Issue #444: `import.meta.<prop>` folds directly to a literal at
     // lowering time. Routing through the bare-`import.meta` Object
     // synthesis hits a long-standing module-level NaN-boxing bug where
@@ -1167,7 +1193,12 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
             //     package on the per-package allow-list, and
             //   - there is no `// @perry-allow-dynamic` line annotation on
             //     or immediately above the offending site.
-            if crate::ir::refuse_dynamic_stdlib_dispatch_enabled() {
+            // #1723: an enclosing `ns[dynamicKey].staticMember` access may have
+            // marked THIS computed access as auditable sub-namespace selection.
+            // Consume the one-shot flag (so a dynamic key in the index position
+            // is still refused) and skip the refusal for exactly this access.
+            let suppressed_by_parent = std::mem::take(&mut ctx.suppress_stdlib_dispatch_guard_once);
+            if !suppressed_by_parent && crate::ir::refuse_dynamic_stdlib_dispatch_enabled() {
                 if let Some(ns) = stdlib_namespace_receiver(ctx, member.obj.as_ref()) {
                     if !matches!(*computed.expr, ast::Expr::Lit(ast::Lit::Str(_))) {
                         let pkg = crate::ir::package_name_for_source_path(&ctx.source_file_path);
@@ -1298,6 +1329,69 @@ const STDLIB_NAMESPACE_NAMES: &[&str] = &[
     "tty",
     "worker_threads",
 ];
+
+/// #1723 — is `member` the auditable `ns[dynamicKey].staticMember` shape, where
+/// the dynamic index merely selects a stdlib SUB-namespace (e.g. `path.win32` /
+/// `path.posix`) and the member actually used is a *source-visible* static name?
+///
+/// This is the legit counterpart of the #503 obfuscation pattern
+/// `ns[runtimeVar]()` — which HIDES the called method behind a runtime string.
+/// Here the method name is in plaintext (`.matchesGlob`, or a literal-string
+/// key that folds to a static property), and the dynamic index only picks among
+/// a namespace's tiny, known set of sub-namespaces, every one of which exposes
+/// the same API surface the static member already names. So nothing is hidden,
+/// and the #503 refusal should not fire on the nested `ns[dynamicKey]`. The
+/// discriminator is the *enclosing access shape*, not the binding origin, so
+/// `require()`, `import * as`, and default-import forms all behave identically.
+///
+/// Returns true only when:
+///   - `member.prop` is static — an `Ident` or a computed STRING-LITERAL key
+///     (a numeric/dynamic key would not be auditable), AND
+///   - `member.obj` (transparent TS/paren wrappers peeled) is `recv[<nonLiteral>]`
+///     where `recv` resolves to a stdlib namespace.
+///
+/// `ns[d1][d2]` (chained dynamic — the enclosing prop is a non-literal computed
+/// key) is NOT matched and stays refused. Surfaced by the #800 node-core radar:
+/// `test-path-glob.js` does `path[platform].matchesGlob(path, glob)`.
+pub(super) fn stdlib_ns_subnamespace_static_access(
+    ctx: &super::LoweringContext,
+    member: &ast::MemberExpr,
+) -> bool {
+    // Enclosing access must name a STATIC (auditable) property.
+    let prop_is_static = match &member.prop {
+        ast::MemberProp::Ident(_) => true,
+        ast::MemberProp::Computed(c) => matches!(*c.expr, ast::Expr::Lit(ast::Lit::Str(_))),
+        _ => false,
+    };
+    if !prop_is_static {
+        return false;
+    }
+    // Object must be `<stdlib-ns>[<nonLiteralKey>]`.
+    let mut obj = member.obj.as_ref();
+    loop {
+        match obj {
+            ast::Expr::Paren(p) => obj = p.expr.as_ref(),
+            ast::Expr::TsAs(a) => obj = a.expr.as_ref(),
+            ast::Expr::TsNonNull(a) => obj = a.expr.as_ref(),
+            ast::Expr::TsTypeAssertion(a) => obj = a.expr.as_ref(),
+            ast::Expr::TsConstAssertion(a) => obj = a.expr.as_ref(),
+            ast::Expr::TsSatisfies(a) => obj = a.expr.as_ref(),
+            _ => break,
+        }
+    }
+    let inner = match obj {
+        ast::Expr::Member(m) => m,
+        _ => return false,
+    };
+    let inner_is_dynamic = match &inner.prop {
+        ast::MemberProp::Computed(c) => !matches!(*c.expr, ast::Expr::Lit(ast::Lit::Str(_))),
+        _ => false,
+    };
+    if !inner_is_dynamic {
+        return false;
+    }
+    stdlib_namespace_receiver(ctx, inner.obj.as_ref()).is_some()
+}
 
 /// #503 — does the given AST receiver expression resolve to a known
 /// stdlib namespace? Recognised shapes:

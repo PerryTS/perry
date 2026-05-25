@@ -210,6 +210,93 @@ fn package_name_extraction() {
 }
 
 #[test]
+fn allows_stdlib_subnamespace_static_method() {
+    // #1723: `path[platform].matchesGlob(...)` — the dynamic key selects a
+    // stdlib SUB-namespace (`path.win32` / `path.posix`) and the method is a
+    // source-visible static ident. The method name is in plaintext, so this is
+    // NOT the `ns[runtimeVar]()` obfuscation #503 targets (which HIDES the
+    // method). Must compile. This is exactly Node's own `test-path-glob.js`
+    // shape, the #800 node-core radar's only compile-fail.
+    let src = r#"
+        import * as path from "path";
+        const platform: string = "win32";
+        const r = path[platform].matchesGlob("foo/bar", "foo/*");
+    "#;
+    try_lower(src, "/tmp/host.ts").expect("auditable sub-namespace dispatch must compile");
+}
+
+#[test]
+fn allows_stdlib_subnamespace_literal_key_method() {
+    // `path[platform]["matchesGlob"](...)` — the terminal key is a string
+    // literal (folds to a static property), so the method name is still
+    // auditable. Allowed for the same reason as the dotted form.
+    let src = r#"
+        import * as path from "path";
+        const platform: string = "posix";
+        const r = path[platform]["matchesGlob"]("foo/bar", "foo/*");
+    "#;
+    try_lower(src, "/tmp/host.ts").expect("literal-key method on sub-namespace must compile");
+}
+
+#[test]
+fn refuses_chained_dynamic_dispatch() {
+    // `fs[a][b]` — BOTH keys dynamic, so the terminal member name is hidden:
+    // the #1723 carve-out only covers a STATIC enclosing member, so this stays
+    // refused as the obfuscation pattern.
+    let src = r#"
+        import fs from "fs";
+        const a: string = "promises";
+        const b: string = "readFile";
+        // @ts-ignore
+        (fs as any)[a][b]("/tmp/x");
+    "#;
+    let err = try_lower(src, "/tmp/host.ts").expect_err("chained dynamic dispatch must be refused");
+    assert!(
+        err.contains("dynamic dispatch on stdlib namespace `fs`"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn refuses_dynamic_key_inside_subnamespace_index() {
+    // `path[fs[evil]].matchesGlob(...)` — the OUTER access is the auditable
+    // `ns[dyn].static` shape, but the INDEX hides an `fs[runtimeVar]` dispatch.
+    // The one-shot suppression must NOT leak into the index, so `fs[evil]` is
+    // still refused (regression guard for the flag's scoping).
+    let src = r#"
+        import * as path from "path";
+        import fs from "fs";
+        const evil: string = "readFileSync";
+        // @ts-ignore
+        const r = path[(fs as any)[evil]].matchesGlob("a", "b");
+    "#;
+    let err = try_lower(src, "/tmp/host.ts").expect_err("dynamic key inside index must be refused");
+    assert!(
+        err.contains("dynamic dispatch on stdlib namespace `fs`"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn refuses_terminal_dynamic_subselect() {
+    // `const sub = path[platform];` — no static member follows, so the
+    // dynamically-selected value is bound opaquely (you can't tell from source
+    // what gets read off it later). Stays refused.
+    let src = r#"
+        import * as path from "path";
+        const platform: string = "win32";
+        // @ts-ignore
+        const sub = (path as any)[platform];
+    "#;
+    let err =
+        try_lower(src, "/tmp/host.ts").expect_err("terminal dynamic sub-select must be refused");
+    assert!(
+        err.contains("dynamic dispatch on stdlib namespace `path`"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn diagnostic_names_the_namespace() {
     // The error message must name the offending namespace so reviewers
     // grepping CI logs can attribute the failure without reading the
