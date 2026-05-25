@@ -194,7 +194,13 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                 lpfnWndProc: Some(wnd_proc),
                 hInstance: HINSTANCE::from(hinstance),
                 hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                hbrBackground: HBRUSH(std::ptr::null_mut()),
+                // Default window-color class brush (matches the secondary-window
+                // class in window.rs). A null brush erases nothing, so any client
+                // area not covered by a child renders black after a resize (#1542).
+                // The WM_ERASEBKGND handler still returns early for explicit
+                // .background() colors/gradients, so this only affects the
+                // no-background case.
+                hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as *mut _),
                 lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
                 ..Default::default()
             };

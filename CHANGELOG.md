@@ -2,6 +2,14 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1027 — fix(windows): #1542 black areas on window resize + restore Windows source build
+
+Two Windows-only fixes.
+
+**#1542 — black areas after enlarging a `perry/ui` window.** Enlarging an `App` window beyond its initial size left the newly-exposed client area (and the gaps between intrinsic-sized children) rendering solid black, with stale/torn copies of the original layout left behind. Root cause: the main `App` window class (`crates/perry-ui-windows/src/app.rs`) and the `PerryVStack` / `PerryHStack` container classes (`widgets/vstack.rs`, `widgets/hstack.rs`) all registered `hbrBackground: HBRUSH(null)`. Their `WM_ERASEBKGND` handlers only fill a background when an explicit `.background()` color or gradient is set on the widget (or an ancestor); with no background set they fall through to `DefWindowProcW`, which — with a null class brush — erases *nothing*. Combined with `CS_HREDRAW | CS_VREDRAW` invalidating the whole client area on every resize, the unpainted regions showed black and intermediate paints were never cleared. Fix: register those three classes with the idiomatic default window-color brush `HBRUSH((COLOR_WINDOW.0 + 1))` — the same brush the secondary-window class in `window.rs` already used. Explicit colors/gradients are unaffected because their handlers still return before the class brush is consulted; only the no-background case changes from "black" to the system window color. Verified on Windows 11 @ 100% DPI: black coverage of the enlarged window dropped from ~51% to ~1% (residual is the window frame edge), content fills correctly, and the stale duplicate render is gone.
+
+**Restore Windows source build.** `crates/perry-runtime/src/fs/cp.rs`'s `copy_preserve_timestamps` called `set_path_times`, which is `#[cfg(unix)]` (`fs/mod.rs`), unconditionally — so `perry-runtime` failed to compile on Windows (`error[E0425]: cannot find function set_path_times`). CI did not catch this because `cargo-test` runs on Linux/macOS. Gated the call behind `#[cfg(unix)]` with a non-unix no-op, matching the existing convention used by the `utimesSync` / `lutimesSync` callers (timestamp preservation on `cpSync` is best-effort and already a no-op on non-unix targets).
+
 ## v0.5.1026 — release sweep: timers epic + perf_hooks fan-out + lazy-tape fixes
 
 Rolls up 22 PRs that merged to `main` post-v0.5.1025 without version

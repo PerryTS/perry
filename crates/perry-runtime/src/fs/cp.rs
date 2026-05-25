@@ -65,7 +65,12 @@ pub(crate) fn copy_preserve_timestamps(src: &Path, dst: &Path, follow: bool) {
     };
     let (atime, mtime, _, _) = metadata_times_ms(&meta);
     let dst_string = dst.to_string_lossy();
+    // `set_path_times` is unix-only (utimensat); on other targets timestamp
+    // preservation is a no-op, matching the cfg-gated callers in fs/mod.rs.
+    #[cfg(unix)]
     let _ = set_path_times(&dst_string, atime / 1000.0, mtime / 1000.0, !follow);
+    #[cfg(not(unix))]
+    let _ = (&dst_string, atime, mtime, follow);
 }
 
 pub(crate) fn lexical_normalize_path(path: PathBuf) -> PathBuf {

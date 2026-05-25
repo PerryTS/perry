@@ -4,7 +4,7 @@
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, FillRect, SetBkMode, HBRUSH, HDC, TRANSPARENT,
+    CreateSolidBrush, FillRect, SetBkMode, COLOR_WINDOW, HBRUSH, HDC, TRANSPARENT,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -32,7 +32,13 @@ fn ensure_class_registered() {
                 style: CS_HREDRAW | CS_VREDRAW,
                 lpfnWndProc: Some(container_wnd_proc),
                 hInstance: HINSTANCE::from(hinstance),
-                hbrBackground: HBRUSH(std::ptr::null_mut()), // transparent
+                // Default window-color class brush. With a null brush, the
+                // gaps between intrinsic-sized children and any area exposed by
+                // enlarging the window erase to nothing → black (#1542). The
+                // WM_ERASEBKGND handler below still fills an explicit/ancestor
+                // .background() color or gradient and returns early, so this
+                // class brush is only used when no background is set anywhere.
+                hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as *mut _),
                 lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
                 ..Default::default()
             };
