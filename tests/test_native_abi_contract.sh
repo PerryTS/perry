@@ -8,11 +8,26 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PERRY="$SCRIPT_DIR/../target/release/perry"
-[ ! -f "$PERRY" ] && PERRY="$SCRIPT_DIR/../target/debug/perry"
-if [ ! -f "$PERRY" ]; then
-  echo "SKIP: perry binary not found (build with cargo build --release)"
-  exit 0
+PERRY_PROVIDED=0
+if [ -n "${PERRY:-}" ]; then
+  PERRY_PROVIDED=1
+else
+  PERRY="$SCRIPT_DIR/../target/release/perry"
+  [ ! -f "$PERRY" ] && PERRY="$SCRIPT_DIR/../target/debug/perry"
+  if [ ! -f "$PERRY" ]; then
+    echo "SKIP: perry binary not found (build with cargo build --release)"
+    exit 0
+  fi
+fi
+
+case "$PERRY" in
+  /*) ;;
+  *) PERRY="$(pwd)/$PERRY" ;;
+esac
+
+if [ "$PERRY_PROVIDED" -eq 1 ] && [ ! -x "$PERRY" ]; then
+  echo "FAIL: perry binary not found at $PERRY"
+  exit 1
 fi
 
 if ! command -v cc >/dev/null 2>&1; then

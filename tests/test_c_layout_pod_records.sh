@@ -21,6 +21,11 @@ if [ -z "${PERRY:-}" ]; then
   PERRY="$REPO_ROOT/target/debug/perry"
 fi
 
+case "$PERRY" in
+  /*) ;;
+  *) PERRY="$(pwd)/$PERRY" ;;
+esac
+
 if [ ! -x "$PERRY" ]; then
   echo "FAIL: perry binary not found at $PERRY"
   exit 1
