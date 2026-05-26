@@ -85,7 +85,9 @@ pub(crate) fn lower_native_method_call(
     if module == "util/types" && class_name.is_none() && object.is_none() {
         let runtime = match method {
             "isPromise" => Some("js_util_types_is_promise"),
-            "isArrayBuffer" | "isAnyArrayBuffer" => Some("js_util_types_is_array_buffer"),
+            "isArrayBuffer" => Some("js_util_types_is_array_buffer"),
+            "isSharedArrayBuffer" => Some("js_util_types_is_shared_array_buffer"),
+            "isAnyArrayBuffer" => Some("js_util_types_is_any_array_buffer"),
             "isArrayBufferView" => Some("js_util_types_is_array_buffer_view"),
             "isTypedArray" => Some("js_util_types_is_typed_array"),
             "isUint8Array" => Some("js_util_types_is_uint8_array"),

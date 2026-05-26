@@ -695,8 +695,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
                     ) != 0,
             )
         }
-        ("util", "isArrayBuffer") | ("util", "isAnyArrayBuffer") => {
-            bool_tag(crate::buffer::is_array_buffer(ptr_addr(arg(0))))
+        ("util", "isArrayBuffer") => bool_tag(crate::buffer::is_array_buffer(ptr_addr(arg(0)))),
+        ("util", "isSharedArrayBuffer") => {
+            bool_tag(crate::buffer::is_shared_array_buffer(ptr_addr(arg(0))))
+        }
+        ("util", "isAnyArrayBuffer") => {
+            bool_tag(crate::buffer::is_any_array_buffer(ptr_addr(arg(0))))
         }
         ("util", "isArrayBufferView") => {
             let addr = ptr_addr(arg(0));
@@ -728,8 +732,14 @@ pub(crate) unsafe fn dispatch_native_module_method(
                     ) != 0,
             )
         }
-        ("util.types", "isArrayBuffer") | ("util.types", "isAnyArrayBuffer") => {
+        ("util.types", "isArrayBuffer") => {
             bool_tag(crate::buffer::is_array_buffer(ptr_addr(arg(0))))
+        }
+        ("util.types", "isSharedArrayBuffer") => {
+            bool_tag(crate::buffer::is_shared_array_buffer(ptr_addr(arg(0))))
+        }
+        ("util.types", "isAnyArrayBuffer") => {
+            bool_tag(crate::buffer::is_any_array_buffer(ptr_addr(arg(0))))
         }
         ("util.types", "isArrayBufferView") => {
             let addr = ptr_addr(arg(0));
@@ -774,8 +784,14 @@ pub(crate) unsafe fn dispatch_native_module_method(
                     ) != 0,
             )
         }
-        ("util/types", "isArrayBuffer") | ("util/types", "isAnyArrayBuffer") => {
+        ("util/types", "isArrayBuffer") => {
             bool_tag(crate::buffer::is_array_buffer(ptr_addr(arg(0))))
+        }
+        ("util/types", "isSharedArrayBuffer") => {
+            bool_tag(crate::buffer::is_shared_array_buffer(ptr_addr(arg(0))))
+        }
+        ("util/types", "isAnyArrayBuffer") => {
+            bool_tag(crate::buffer::is_any_array_buffer(ptr_addr(arg(0))))
         }
         ("util/types", "isArrayBufferView") => {
             let addr = ptr_addr(arg(0));

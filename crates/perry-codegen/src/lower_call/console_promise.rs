@@ -40,7 +40,9 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
     }
     let Some(runtime) = (match method.as_str() {
         "isPromise" => Some("js_util_types_is_promise"),
-        "isArrayBuffer" | "isAnyArrayBuffer" => Some("js_util_types_is_array_buffer"),
+        "isArrayBuffer" => Some("js_util_types_is_array_buffer"),
+        "isSharedArrayBuffer" => Some("js_util_types_is_shared_array_buffer"),
+        "isAnyArrayBuffer" => Some("js_util_types_is_any_array_buffer"),
         "isArrayBufferView" => Some("js_util_types_is_array_buffer_view"),
         "isTypedArray" => Some("js_util_types_is_typed_array"),
         "isUint8Array" => Some("js_util_types_is_uint8_array"),

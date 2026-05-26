@@ -2220,6 +2220,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("util", "types"),
     method("util/types", "isPromise", false, None),
     method("util/types", "isArrayBuffer", false, None),
+    method("util/types", "isSharedArrayBuffer", false, None),
     method("util/types", "isAnyArrayBuffer", false, None),
     method("util/types", "isArrayBufferView", false, None),
     method("util/types", "isTypedArray", false, None),
