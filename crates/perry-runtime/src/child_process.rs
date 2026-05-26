@@ -1187,6 +1187,90 @@ pub extern "C" fn js_child_process_exec_file_sync(
     }
 }
 
+// ============================================================================
+// util.promisify(child_process.exec / execFile) — #1857
+// ============================================================================
+//
+// Node attaches a custom `util.promisify` hook to exec/execFile so the
+// promisified form resolves to `{ stdout, stderr }` (not just stdout). The
+// `("util","promisify")` dispatch arm detects the bound exec/execFile export
+// and routes here; we return a wrapper closure that runs the command (Perry's
+// synchronous model) and yields an already-resolved Promise of
+// `{ stdout, stderr }` (or a rejected Promise on failure).
+
+#[inline]
+fn cp_box_string_bytes(bytes: &[u8]) -> f64 {
+    let p = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    crate::value::js_nanbox_string(p as i64)
+}
+
+#[inline]
+fn cp_error_value(msg: &str) -> f64 {
+    let mp = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_error_new_with_message(mp);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+fn cp_exec_result_promise(output: std::io::Result<std::process::Output>) -> f64 {
+    match output {
+        Ok(o) => {
+            let stdout_b = cp_box_string_bytes(&o.stdout);
+            let stderr_b = cp_box_string_bytes(&o.stderr);
+            let obj = unsafe { make_two_field_object("stdout", stdout_b, "stderr", stderr_b) };
+            let obj_val = cp_box_ptr(obj as *const u8);
+            let promise = if o.status.success() {
+                crate::promise::js_promise_resolved(obj_val)
+            } else {
+                // Node rejects with an Error carrying .stdout/.stderr; the
+                // minimal shape (an Error) is enough for the supported cases.
+                crate::promise::js_promise_rejected(cp_error_value("Command failed"))
+            };
+            crate::value::js_nanbox_pointer(promise as i64)
+        }
+        Err(e) => {
+            let promise = crate::promise::js_promise_rejected(cp_error_value(&e.to_string()));
+            crate::value::js_nanbox_pointer(promise as i64)
+        }
+    }
+}
+
+extern "C" fn cp_promisified_exec(_closure: *const ClosureHeader, cmd_val: f64, _opts: f64) -> f64 {
+    let cmd = cp_value_to_string(cmd_val).unwrap_or_default();
+    #[cfg(unix)]
+    let output = Command::new("sh").arg("-c").arg(&cmd).output();
+    #[cfg(windows)]
+    let output = Command::new("cmd").arg("/C").arg(&cmd).output();
+    cp_exec_result_promise(output)
+}
+
+extern "C" fn cp_promisified_exec_file(
+    _closure: *const ClosureHeader,
+    file_val: f64,
+    args_val: f64,
+) -> f64 {
+    let file = cp_value_to_string(file_val).unwrap_or_default();
+    let arg_strs = cp_args_from_value(args_val);
+    cp_exec_result_promise(Command::new(&file).args(&arg_strs).output())
+}
+
+/// Build the wrapper function returned by `util.promisify(child_process.exec)`
+/// / `promisify(execFile)` — `method` is `"exec"` or `"execFile"`. Node's
+/// custom-promisify hook resolves these to `{ stdout, stderr }`, which the
+/// general `util.promisify` path (resolving the single first-result value)
+/// can't reproduce; `util_promisify::js_util_promisify` detects the bound
+/// export and delegates here. #1857.
+pub(crate) fn make_promisified_child_process(method: &str) -> f64 {
+    let func: *const u8 = if method == "execFile" {
+        js_register_closure_arity(cp_promisified_exec_file as *const u8, 2);
+        cp_promisified_exec_file as *const u8
+    } else {
+        js_register_closure_arity(cp_promisified_exec as *const u8, 2);
+        cp_promisified_exec as *const u8
+    };
+    let closure = js_closure_alloc(func, 0);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

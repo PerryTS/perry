@@ -2340,6 +2340,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("child_process", "spawn", false, None),
     method("child_process", "spawnSync", false, None),
     method("child_process", "fork", false, None),
+    // #1856: `ChildProcess` is the streaming-subprocess constructor; reading
+    // it as a value yields `[Function: ChildProcess]`. `Stream` is not a real
+    // `child_process` export (Node returns `undefined`) — registered so the
+    // value-read passes the #463 surface gate and resolves to `undefined`.
+    class("child_process", "ChildProcess"),
+    property("child_process", "Stream"),
     // --- tty (only `isatty` is implemented; ReadStream / WriteStream
     //     are wrapped via process.stdin / process.stdout) ---
     method("tty", "isatty", false, None),

@@ -353,6 +353,13 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
+            // #1856: `child_process.ChildProcess` reads as `[Function: ChildProcess]`.
+            | ("child_process", "ChildProcess")
+            // #1857: exec/execFile read as functions so `typeof child_process.exec
+            // === "function"` and `util.promisify(child_process.exec)` can detect
+            // and wrap them (see the `("util","promisify")` dispatch arm).
+            | ("child_process", "exec")
+            | ("child_process", "execFile")
             | ("events", "EventEmitter")
             | ("events", "on")
             | ("string_decoder", "StringDecoder")

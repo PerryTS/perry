@@ -134,12 +134,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:buffer` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_child_process": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:child_process` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_crypto": {
     "issue": "793",
     "added": "2026-05-15",

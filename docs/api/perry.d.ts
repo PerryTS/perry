@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1265 entries across 81 modules
+// Coverage: 1267 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -197,6 +197,10 @@ declare module "cheerio" {
 }
 
 declare module "child_process" {
+  /** stdlib */
+  export class ChildProcess { [key: string]: any; }
+  /** stdlib */
+  export const Stream: any;
   /** stdlib */
   export function exec(...args: any[]): any;
   /** stdlib */

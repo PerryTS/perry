@@ -214,26 +214,6 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
     if closure_ptr.is_null() {
         return "[Function (anonymous)]".to_string();
     }
-    let label = unsafe {
-        let func_ptr = (*closure_ptr).func_ptr;
-        if !func_ptr.is_null() {
-            if let Ok(map) = function_name_registry().lock() {
-                if let Some(name) = map.get(&(func_ptr as usize)) {
-                    if !name.is_empty() {
-                        format!("[Function: {}]", name)
-                    } else {
-                        "[Function (anonymous)]".to_string()
-                    }
-                } else {
-                    "[Function (anonymous)]".to_string()
-                }
-            } else {
-                "[Function (anonymous)]".to_string()
-            }
-        } else {
-            "[Function (anonymous)]".to_string()
-        }
-    };
 
     // Snapshot user-attached own properties and filter out the built-in
     // function slots that Node hides from `util.inspect`. Node prints
@@ -241,6 +221,39 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
     // `name` are runtime-allocated on every function, so always hiding
     // them yields parity for the common case (`f.x = 1`).
     let props = crate::closure::closure_dynamic_props_snapshot(closure_ptr as usize);
+
+    // The function name: prefer the codegen-registered name keyed by the
+    // function pointer (real named declarations), then fall back to the
+    // closure's own `name` property. Bound native-module exports
+    // (`child_process.ChildProcess`, `tty.ReadStream`, `events.EventEmitter`,
+    // …) all share one `BOUND_METHOD_FUNC_PTR`, so they carry no per-pointer
+    // registry name — their identity lives in the `name` prop set by
+    // `set_bound_native_closure_name`. Reading it here makes them print
+    // `[Function: ChildProcess]` instead of `[Function (anonymous)]`,
+    // matching Node. #1856.
+    let registry_name: Option<String> = unsafe {
+        let func_ptr = (*closure_ptr).func_ptr;
+        if func_ptr.is_null() {
+            None
+        } else {
+            function_name_registry()
+                .lock()
+                .ok()
+                .and_then(|map| map.get(&(func_ptr as usize)).map(|n| n.to_string()))
+                .filter(|n| !n.is_empty())
+        }
+    };
+    let label = match registry_name.or_else(|| {
+        props
+            .iter()
+            .find(|(k, _)| k == "name")
+            .and_then(|(_, v)| jsvalue_string_content(*v))
+            .filter(|n| !n.is_empty())
+    }) {
+        Some(name) => format!("[Function: {name}]"),
+        None => "[Function (anonymous)]".to_string(),
+    };
+
     let user_props: Vec<(String, f64)> = props
         .into_iter()
         .filter(|(k, _)| {

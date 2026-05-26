@@ -86,6 +86,19 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
     if tag != POINTER_TAG {
         return fn_value;
     }
+
+    // #1857: `child_process.exec` / `execFile` carry a Node custom-promisify
+    // hook that resolves to `{ stdout, stderr }` — not the single first-result
+    // value the general wrapper below yields. Detect the bound export and hand
+    // off to the child_process-specific wrapper.
+    if let Some((module, method)) =
+        unsafe { crate::object::bound_native_callable_module_and_method(fn_value) }
+    {
+        if module == "child_process" && (method == "exec" || method == "execFile") {
+            return crate::child_process::make_promisified_child_process(&method);
+        }
+    }
+
     register_thunks_once();
 
     let scope = crate::gc::RuntimeHandleScope::new();
