@@ -1129,10 +1129,60 @@ pub extern "C" fn js_map_values(map: *const MapHeader) -> *mut crate::array::Arr
     }
 }
 
-/// Create a new Map from an array of [key, value] pair arrays.
-/// Used for `new Map([["a", 1], ["b", 2]])` construction.
+/// Copy all entries of a source Map into a freshly-allocated Map.
+/// Used by `js_map_from_array` for the `new Map(otherMap)` case: a Map is
+/// itself iterable in JS and yields `[key, value]` pairs, so cloning must
+/// preserve every entry rather than treat the MapHeader bytes as an
+/// ArrayHeader (which read `size`/`capacity` as `length`/`capacity` and
+/// produced an empty Map — the root cause of effect's `FiberRefs.updateAs`
+/// dropping every fiber-ref except the one being set; see #33/#321).
+fn copy_map_into_new(src: *const MapHeader) -> *mut MapHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let src = clean_map_ptr(src);
+    if src.is_null() {
+        return js_map_alloc(4);
+    }
+    let src_handle = scope.root_raw_const_ptr(src);
+    let size = unsafe {
+        let s = src_handle.get_raw_const_ptr::<MapHeader>();
+        (*s).size as usize
+    };
+    let map = js_map_alloc(size.max(4) as u32);
+    let map_handle = scope.root_raw_mut_ptr(map);
+    for i in 0..size {
+        let (key, value) = unsafe {
+            let s = src_handle.get_raw_const_ptr::<MapHeader>();
+            if i >= (*s).size as usize {
+                break;
+            }
+            let entries = entries_ptr(s);
+            (
+                ptr::read(entries.add(i * 2)),
+                ptr::read(entries.add(i * 2 + 1)),
+            )
+        };
+        let map = map_handle.get_raw_mut_ptr::<MapHeader>();
+        js_map_set(map, key, value);
+    }
+    map_handle.get_raw_mut_ptr::<MapHeader>()
+}
+
+/// Create a new Map from an iterable source. Two shapes are supported:
+/// - an array of `[key, value]` pair arrays (`new Map([["a", 1]])`), and
+/// - another Map (`new Map(otherMap)`), whose entries are copied directly.
+///
+/// The Map case is detected first because a MapHeader and an ArrayHeader
+/// share the same `(u32, u32)` prefix but mean different things, so casting
+/// a Map to ArrayHeader silently mis-reads it. Codegen passes the raw
+/// (unboxed) pointer here for both `Expr::MapNewFromArray` shapes.
 #[no_mangle]
 pub extern "C" fn js_map_from_array(arr: *const crate::array::ArrayHeader) -> *mut MapHeader {
+    // `new Map(otherMap)`: a Map is iterable and yields [k, v] pairs. The
+    // registry check (GcHeader.obj_type fast-path + MAP_REGISTRY) is robust
+    // against false positives from the shared header prefix.
+    if !arr.is_null() && crate::map::is_registered_map(arr as usize) {
+        return copy_map_into_new(arr as *const MapHeader);
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = if arr.is_null() {
         None
