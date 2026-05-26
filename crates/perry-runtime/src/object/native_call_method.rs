@@ -174,6 +174,12 @@ pub unsafe extern "C" fn js_native_call_method(
     let _depth_guard = match CallMethodDepthGuard::enter(method_name) {
         Some(g) => g,
         None => {
+            crate::object::class_registry::report_dispatch_miss(
+                "call-method (recursion-depth guard)",
+                object,
+                method_name,
+                "empty object",
+            );
             let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
             return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
         }
@@ -2085,6 +2091,17 @@ pub unsafe extern "C" fn js_native_call_method(
     // the surrounding async path). Now we throw the standard `<prop>
     // is not a function` TypeError, which `try`/`catch` catches (per
     // #596's exception-routing fix).
+    // Even though this path throws a catchable TypeError, frameworks with broad
+    // `try`/`catch` (effect's fiber runtime) swallow it into a die defect that
+    // surfaces far downstream as a stray `{}` — hiding the real call site. Print
+    // a located report first so `PERRY_DISPATCH_DIAG=1` names the missing
+    // method+receiver before the throw is caught.
+    crate::object::class_registry::report_dispatch_miss(
+        "call-method (no method/field/proto match)",
+        object,
+        method_name,
+        "throws \"<m> is not a function\"",
+    );
     crate::error::js_throw_type_error_not_a_function(
         std::ptr::null(),
         0,

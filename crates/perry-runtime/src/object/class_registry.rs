@@ -313,6 +313,76 @@ pub fn class_name_for_id(class_id: u32) -> Option<String> {
     guard.as_ref()?.get(&class_id).cloned()
 }
 
+/// Whether dynamic-dispatch miss diagnostics are enabled (`PERRY_DISPATCH_DIAG`,
+/// any non-empty/non-falsey value). Cached on first read.
+///
+/// When a dynamic dispatch falls through every resolution tower (vtable,
+/// static-method, static-field, prototype, field-scan, namespace, symbol), the
+/// runtime returns a *silent placeholder* — the receiver class ref, an empty
+/// object, `undefined`, etc. — rather than throwing, because some of those
+/// placeholders are load-bearing (effect's `.pipe()` chains yield the class ref
+/// during module init, #687). The upside is no spurious crashes; the downside
+/// is a typo'd / unsupported member surfaces far downstream as a stray
+/// `{}`/`1`/`[]`/function, turning each one into a multi-hour localization.
+///
+/// This flag doesn't change behavior — it just prints a located, typed report
+/// at the moment of the miss, so the bug surfaces at its true call site.
+pub(crate) fn dispatch_diag_enabled() -> bool {
+    use std::sync::OnceLock;
+    static EN: OnceLock<bool> = OnceLock::new();
+    *EN.get_or_init(|| {
+        std::env::var("PERRY_DISPATCH_DIAG")
+            .map(|v| !v.is_empty() && v != "0" && v != "off" && v != "false")
+            .unwrap_or(false)
+    })
+}
+
+/// Best-effort one-line description of a dispatch receiver for diagnostics:
+/// class refs resolve to their registered name, pointers/primitives to a tag.
+fn describe_dispatch_receiver(recv: f64) -> String {
+    let bits = recv.to_bits();
+    let top16 = bits >> 48;
+    if top16 == 0x7FFE {
+        let cid = (bits & 0xFFFF_FFFF) as u32;
+        return match class_name_for_id(cid) {
+            Some(n) => format!("class-ref `{}` (id {})", n, cid),
+            None => format!("class-ref (id {})", cid),
+        };
+    }
+    if top16 == 0x7FFF || top16 == 0x7FF9 {
+        return "string".to_string();
+    }
+    if top16 == 0x7FFD {
+        return "object/pointer".to_string();
+    }
+    match bits {
+        x if x == crate::value::TAG_UNDEFINED => "undefined".to_string(),
+        0x7FFC_0000_0000_0002 => "null".to_string(),
+        0x7FFC_0000_0000_0003 => "false".to_string(),
+        0x7FFC_0000_0000_0004 => "true".to_string(),
+        _ if !recv.is_nan() => format!("number {}", recv),
+        _ => "value".to_string(),
+    }
+}
+
+/// Report a true dynamic-dispatch miss to stderr (only when
+/// `PERRY_DISPATCH_DIAG` is set). `tower` names which resolution path fell
+/// through; `returning` is the silent placeholder the runtime is about to hand
+/// back. No-op (and near-zero cost) when the flag is off.
+pub(crate) fn report_dispatch_miss(tower: &str, recv: f64, name: &str, returning: &str) {
+    if !dispatch_diag_enabled() {
+        return;
+    }
+    eprintln!(
+        "[perry dispatch-miss] {tower}: {}.{:?} did not resolve \u{2192} returning {returning}. \
+         A dynamic dispatch fell through every tower; downstream this usually surfaces as a stray \
+         {{}}/1/[]/function. Check the call site for {:?}.",
+        describe_dispatch_receiver(recv),
+        name,
+        name
+    );
+}
+
 /// Resolve a closure-typed JSValue back to a built-in constructor name
 /// (`"Date"`/`"Array"`/`"Object"`/...) when it matches one of the
 /// singleton-installed thunks. Returns `None` for closures that aren't
@@ -1723,6 +1793,16 @@ pub unsafe extern "C" fn js_class_static_method_call(
             depth += 1;
         }
     }
+    // True miss: no static method and no callable static field resolved on the
+    // class chain. We hand back the receiver (load-bearing for effect's
+    // `.pipe()`-during-init chains, #687) — but that silent class-ref is exactly
+    // what surfaces downstream as a stray `1`. Surface it at the call site.
+    report_dispatch_miss(
+        "static-member-call",
+        receiver,
+        name,
+        "the receiver (class ref)",
+    );
     receiver
 }
 
