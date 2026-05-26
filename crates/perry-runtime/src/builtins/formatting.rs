@@ -99,6 +99,26 @@ pub(crate) fn format_finite_number_js(value: f64) -> String {
     }
 }
 
+fn format_util_number(value: f64) -> String {
+    if value.is_nan() {
+        "NaN".to_string()
+    } else if value.is_infinite() {
+        if value.is_sign_negative() {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        }
+    } else if value == 0.0 {
+        if value.is_sign_negative() {
+            "-0".to_string()
+        } else {
+            "0".to_string()
+        }
+    } else {
+        format_finite_number_js(value)
+    }
+}
+
 /// Decode the textual content of any string-shaped JSValue (heap
 /// `STRING_TAG` or inline `SHORT_STRING_TAG`) into a fresh `String`.
 /// Returns `None` for non-string values. SSO values are decoded
@@ -1205,9 +1225,9 @@ fn escape_string(s: &str) -> String {
 /// rest are substitution values. Returns a NaN-boxed string.
 ///
 /// Placeholder support mirrors Node's `util.format` for the substrings
-/// most callers care about: `%s` (string-coerce), `%d`/`%i` (integer),
-/// `%f` (float), `%j` (JSON), `%o`/`%O` (object inspect), `%%` (literal
-/// percent). Anything else is left as-is. Trailing args without a
+/// most callers care about: `%s` (string-coerce), `%d` (Number-coerce),
+/// `%i` (integer), `%f` (float), `%j` (JSON), `%o`/`%O` (object inspect),
+/// `%%` (literal percent). Anything else is left as-is. Trailing args without a
 /// matching placeholder are appended space-separated, again matching
 /// Node.
 ///
@@ -1315,9 +1335,23 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                 b's' => {
                     out.push_str(&jsvalue_as_owned_string(val));
                 }
-                b'd' | b'i' => {
-                    // Node preserves the BigInt `n` suffix for `%d` / `%i`
-                    // (e.g. `util.format("%d", 5n)` → `"5n"`).
+                b'd' => {
+                    // Node's `%d` uses Number(value), except BigInt keeps the
+                    // literal `n` suffix.
+                    if jv.is_bigint() {
+                        out.push_str(&format_bigint_literal(val));
+                    } else {
+                        let f = if jv.is_int32() {
+                            jv.as_int32() as f64
+                        } else {
+                            js_number_coerce(val)
+                        };
+                        out.push_str(&format_util_number(f));
+                    }
+                }
+                b'i' => {
+                    // Node preserves the BigInt `n` suffix for `%i`
+                    // (e.g. `util.format("%i", 5n)` → `"5n"`).
                     if jv.is_bigint() {
                         out.push_str(&format_bigint_literal(val));
                     } else {
