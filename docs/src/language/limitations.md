@@ -94,12 +94,28 @@ Object.setPrototypeOf(obj, proto);
 for class/prototype inspection patterns, but `Object.setPrototypeOf(...)` /
 `Reflect.setPrototypeOf(...)` do not mutate Perry's fixed class layout.
 
-## Weak References Are Not GC-Accurate
+## Weak References Retain Their Targets
 
-`WeakMap`, `WeakSet`, `WeakRef`, and `FinalizationRegistry` expose the expected
-API shape, but their weak-reference semantics are pragmatic, not GC-accurate:
-`WeakRef` keeps a strong reference internally, and `FinalizationRegistry`
-records registrations but does not run cleanup callbacks after collection.
+`WeakMap`, `WeakSet`, `WeakRef`, and `FinalizationRegistry` are implemented and
+their APIs behave as expected — `set` / `get` / `has` / `delete`, `add`,
+`deref()`, and `register` / `unregister` all work and return the right values.
+`WeakMap` and `WeakSet` use **reference** equality, so two distinct objects
+never collide on the same slot.
+
+The one caveat is that Perry's garbage collector does not yet treat these
+references as *weak*, so targets are **retained rather than collected**. In
+practice:
+
+- `WeakRef.deref()` always returns the original target (it is never reported as
+  collected).
+- `FinalizationRegistry` records registrations but never fires its cleanup
+  callback.
+- `WeakMap` / `WeakSet` keep their keys alive (they behave like a
+  reference-keyed `Map` / `Set`).
+
+This is safe for **correctness** — code that reads through these APIs gets the
+right values. It only matters if you depend on collection *timing* to reclaim
+memory or to run finalizer side effects.
 
 ## Limited Proxy Trapping
 
