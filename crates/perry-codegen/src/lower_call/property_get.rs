@@ -776,9 +776,30 @@ pub fn try_lower_property_get_method_call(
         local_id_to_name: &std::collections::HashMap<u32, String>,
         local_class_aliases: &std::collections::HashMap<String, String>,
         func_returns_class: &std::collections::HashMap<u32, String>,
+        class_ids: &std::collections::HashMap<String, u32>,
     ) -> Option<String> {
         match expr {
             Expr::ClassRef(name) => Some(name.clone()),
+            // #1787 / #321: a cross-module class accessed via a direct named
+            // import (`import { Union }; Union.make(...)`) lowers the receiver
+            // to `ExternFuncRef("Union")`. When the name is a known class,
+            // treat it as a static-dispatch receiver so `Class.staticMember(...)`
+            // routes through the static tower (the imported class's stub has
+            // empty static_methods/fields here, so it falls to the runtime
+            // `js_class_static_method_call`, which resolves via the class_id
+            // registries).
+            Expr::ExternFuncRef { name, .. } if class_ids.contains_key(name) => Some(name.clone()),
+            // ...and via a namespace import (`import * as AST; AST.Union.make(...)`),
+            // which lowers to `PropertyGet { object: <namespace>, property:
+            // "Union" }`. effect's `AST.Union.make([...])` is exactly this.
+            // Gate on the property being a known class to avoid intercepting
+            // ordinary instance method calls.
+            Expr::PropertyGet { object, property }
+                if matches!(object.as_ref(), Expr::ExternFuncRef { .. })
+                    && class_ids.contains_key(property) =>
+            {
+                Some(property.clone())
+            }
             // #1787: a class EXPRESSION value (`make(a) => class { ... }`,
             // lowered to `ClassExprFresh`) is a heap class object stamped
             // with the compile-time `template`'s class_id. A static-method
@@ -800,6 +821,7 @@ pub fn try_lower_property_get_method_call(
                     local_id_to_name,
                     local_class_aliases,
                     func_returns_class,
+                    class_ids,
                 )
             }),
             _ => None,
@@ -810,6 +832,7 @@ pub fn try_lower_property_get_method_call(
         &ctx.local_id_to_name,
         &ctx.local_class_aliases,
         ctx.func_returns_class,
+        &ctx.class_ids,
     );
     if let Some(cls_name) = static_dispatch_cls {
         // (fn_name, is_static, declared_param_count, has_rest, is_synthetic_arguments)
@@ -943,6 +966,75 @@ pub fn try_lower_property_get_method_call(
                 .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &prev_this)]);
             return Ok(Some(result));
         }
+        // #1787 / #321: the call target is a static FIELD holding a callable,
+        // not a static METHOD — e.g. effect's
+        // `static make = (types) => ...` / `static unify = ...` on
+        // `SchemaAST.Union`. The static-method walk above misses it (it's a
+        // field), and the `js_class_static_method_call` fallback below returns
+        // the receiver class ref on a method miss (an INT32 class id, which is
+        // why `Union.make([...])` came back as `1`/undefined and Schema decode
+        // died reading `_tag`). Detect a string-named static field on the
+        // class's chain, read its value (the installed closure) via
+        // `StaticFieldGet`, and invoke it with the call args. Static-field
+        // arrows don't use dynamic `this`, so a plain closure call is correct.
+        {
+            let mut field_owner: Option<String> = None;
+            let mut fc = Some(cls_name.clone());
+            while let Some(c) = fc {
+                if let Some(ci) = ctx.classes.get(&c) {
+                    if ci
+                        .static_fields
+                        .iter()
+                        .any(|f| f.key_expr.is_none() && f.name == *property)
+                    {
+                        field_owner = Some(c.clone());
+                        break;
+                    }
+                }
+                fc = ctx.classes.get(&c).and_then(|cc| cc.extends_name.clone());
+            }
+            if let Some(owner) = field_owner {
+                let callee_val = lower_expr(
+                    ctx,
+                    &Expr::StaticFieldGet {
+                        class_name: owner,
+                        field_name: property.clone(),
+                    },
+                )?;
+                let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+                for a in args {
+                    lowered_args.push(lower_expr(ctx, a)?);
+                }
+                let (args_ptr_i64, args_len) = if lowered_args.is_empty() {
+                    ("0".to_string(), "0".to_string())
+                } else {
+                    let n = lowered_args.len();
+                    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+                    for (i, v) in lowered_args.iter().enumerate() {
+                        let slot = ctx
+                            .block()
+                            .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                        ctx.block().store(DOUBLE, v, &slot);
+                    }
+                    let ptr_reg = ctx.block().next_reg();
+                    ctx.block().emit_raw(format!(
+                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                        ptr_reg, n, buf_reg
+                    ));
+                    let ptr_i64 = ctx.block().ptrtoint(&ptr_reg, I64);
+                    (ptr_i64, n.to_string())
+                };
+                return Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_native_call_value",
+                    &[
+                        (DOUBLE, &callee_val),
+                        (I64, &args_ptr_i64),
+                        (I64, &args_len),
+                    ],
+                )));
+            }
+        }
         // No static method resolved through the class's statically-visible
         // chain. #1788: a subclass of a class-expression value
         // (`class Sub extends make(...) {}`) inherits the parent's static
@@ -952,7 +1044,20 @@ pub fn try_lower_property_get_method_call(
         // The helper returns the receiver unchanged on a genuine miss, which
         // preserves the prior "yield the class ref for a chained `.pipe()`
         // during module init" behavior for truly-absent methods.
-        if matches!(object.as_ref(), Expr::ClassRef(_)) {
+        //
+        // #1787 / #321: also route imported-class receivers
+        // (`ExternFuncRef("C")` from `import { C }`, or a `namespace.Class`
+        // PropertyGet — effect's `AST.Union.make`). Their class stub has empty
+        // compile-time static methods/fields, so resolution above misses; the
+        // runtime call resolves both static methods AND static fields from the
+        // class_id registries. `resolve_static_dispatch_cls` already gated
+        // these on known-class membership, so reaching here means the receiver
+        // really is a class.
+        let receiver_is_dispatchable_class = matches!(object.as_ref(), Expr::ClassRef(_))
+            || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name))
+            || matches!(object.as_ref(), Expr::PropertyGet { object: inner, property }
+                if matches!(inner.as_ref(), Expr::ExternFuncRef { .. }) && ctx.class_ids.contains_key(property));
+        if receiver_is_dispatchable_class {
             let recv_box = lower_expr(ctx, object)?;
             let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
             for a in args {

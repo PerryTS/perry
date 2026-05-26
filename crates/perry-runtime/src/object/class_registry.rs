@@ -1697,6 +1697,32 @@ pub unsafe extern "C" fn js_class_static_method_call(
         crate::object::js_implicit_this_set(prev_this);
         return result;
     }
+    // #1787 / #321: not a static METHOD — try a static FIELD holding a
+    // callable (effect's `static make = (...) => ...` / `static unify = ...`
+    // on `SchemaAST.Union`). Walk the class_id chain in CLASS_DYNAMIC_PROPS
+    // (where `js_class_register_static_field` records each static field) and,
+    // if `name` resolves to a non-nullish value, invoke it as a closure with
+    // the call args. Static-field arrows capture lexical `this` (the class) and
+    // don't read dynamic `this`, so a plain closure call is correct. Without
+    // this, `Class.staticField(args)` fell through to `receiver` (the class
+    // ref / INT32 class id), which is why `Union.make([...])` returned `1`/
+    // undefined and Schema decode died reading `_tag`.
+    {
+        let mut cid = class_id;
+        let mut depth = 0u32;
+        while cid != 0 && depth < 64 {
+            let field_val = CLASS_DYNAMIC_PROPS
+                .with(|m| m.borrow().get(&cid).and_then(|f| f.get(name).copied()));
+            if let Some(v) = field_val {
+                let fv = crate::value::JSValue::from_bits(v.to_bits());
+                if !fv.is_undefined() && !fv.is_null() {
+                    return crate::closure::js_native_call_value(v, args_ptr, args_len);
+                }
+            }
+            cid = get_parent_class_id(cid).unwrap_or(0);
+            depth += 1;
+        }
+    }
     receiver
 }
 
