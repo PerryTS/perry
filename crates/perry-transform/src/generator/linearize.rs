@@ -48,12 +48,27 @@ pub fn linearize_body(
                 let del_iter_id = alloc_local(next_local_id);
                 let del_result_id = alloc_local(next_local_id);
 
+                // Initial pull: `__del_iter.next()` with no argument (the value
+                // passed to the *first* `next()` of a generator is discarded per
+                // spec).
                 let next_call = Expr::Call {
                     callee: Box::new(Expr::PropertyGet {
                         object: Box::new(Expr::LocalGet(del_iter_id)),
                         property: "next".to_string(),
                     }),
                     args: vec![],
+                    type_args: vec![],
+                };
+                // #1832: in-loop pull must forward the value the *outer* generator
+                // was resumed with (`outer.next(v)` → stored in `sent_id`) into the
+                // delegated iterator's `next(v)`, so `yield*`-delegated two-way
+                // communication matches spec. Argless here silently dropped it.
+                let next_call_resumed = Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(del_iter_id)),
+                        property: "next".to_string(),
+                    }),
+                    args: vec![Expr::LocalGet(sent_id)],
                     type_args: vec![],
                 };
 
@@ -64,7 +79,7 @@ pub fn linearize_body(
                 )));
                 current.push(Stmt::Expr(Expr::LocalSet(
                     del_result_id,
-                    Box::new(next_call.clone()),
+                    Box::new(next_call),
                 )));
 
                 // Build the while loop with yield
@@ -76,7 +91,7 @@ pub fn linearize_body(
                         })),
                         delegate: false,
                     }),
-                    Stmt::Expr(Expr::LocalSet(del_result_id, Box::new(next_call))),
+                    Stmt::Expr(Expr::LocalSet(del_result_id, Box::new(next_call_resumed))),
                 ];
 
                 let while_stmt = Stmt::While {
@@ -647,12 +662,22 @@ pub fn linearize_body(
                 let del_iter_id = alloc_local(next_local_id);
                 let del_result_id = alloc_local(next_local_id);
 
+                // Initial pull: argless (first `next()` value is discarded per spec).
                 let next_call = Expr::Call {
                     callee: Box::new(Expr::PropertyGet {
                         object: Box::new(Expr::LocalGet(del_iter_id)),
                         property: "next".to_string(),
                     }),
                     args: vec![],
+                    type_args: vec![],
+                };
+                // #1832: in-loop pull forwards the outer resume value (`sent_id`).
+                let next_call_resumed = Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(del_iter_id)),
+                        property: "next".to_string(),
+                    }),
+                    args: vec![Expr::LocalGet(sent_id)],
                     type_args: vec![],
                 };
 
@@ -662,7 +687,7 @@ pub fn linearize_body(
                 )));
                 current.push(Stmt::Expr(Expr::LocalSet(
                     del_result_id,
-                    Box::new(next_call.clone()),
+                    Box::new(next_call),
                 )));
 
                 let while_body = vec![
@@ -673,7 +698,7 @@ pub fn linearize_body(
                         })),
                         delegate: false,
                     }),
-                    Stmt::Expr(Expr::LocalSet(del_result_id, Box::new(next_call))),
+                    Stmt::Expr(Expr::LocalSet(del_result_id, Box::new(next_call_resumed))),
                 ];
 
                 let while_stmt = Stmt::While {
