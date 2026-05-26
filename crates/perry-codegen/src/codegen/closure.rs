@@ -275,6 +275,7 @@ pub(super) fn compile_closure(
         type_aliases: &cross_module.type_aliases,
         imported_func_param_counts: &cross_module.imported_func_param_counts,
         imported_func_has_rest: &cross_module.imported_func_has_rest,
+        imported_func_synthetic_arguments: &cross_module.imported_func_synthetic_arguments,
         method_param_counts: &cross_module.method_param_counts,
         method_has_rest: &cross_module.method_has_rest,
         imported_func_return_types: &cross_module.imported_func_return_types,

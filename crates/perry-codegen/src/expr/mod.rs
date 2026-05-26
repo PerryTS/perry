@@ -364,6 +364,9 @@ pub(crate) struct FnCtx<'a> {
     /// parameter. The cross-module call site uses this to pack trailing
     /// args into a real rest array before the call.
     pub imported_func_has_rest: &'a std::collections::HashSet<String>,
+    /// #1816 — imported functions whose trailing param is the synthesized
+    /// `arguments` rest; the cross-module call bundles ALL args into it.
+    pub imported_func_synthetic_arguments: &'a std::collections::HashSet<String>,
     /// Imported function return types, keyed by local function name.
     /// Used for type-aware dispatch on cross-module call results.
     pub imported_func_return_types: &'a std::collections::HashMap<String, perry_types::Type>,

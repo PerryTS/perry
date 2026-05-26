@@ -225,6 +225,10 @@ pub struct CompileOptions {
     /// rest array before the call so the callee's rest binding is a real
     /// array, not the raw arg in disguise. Sparse set (only `true` entries).
     pub imported_func_has_rest: std::collections::HashSet<String>,
+    /// #1816 — imported function names whose trailing param is the synthesized
+    /// `arguments` rest. The cross-module call bundles ALL args into it (not
+    /// just trailing), matching `arguments.length` semantics.
+    pub imported_func_synthetic_arguments: std::collections::HashSet<String>,
     /// Imported function return types, keyed by local function name.
     pub imported_func_return_types: std::collections::HashMap<String, perry_types::Type>,
     /// Names of imports that are exported VARIABLES (not functions). When an
@@ -526,6 +530,10 @@ pub(crate) struct CrossModuleCtx {
     /// has a trailing `...rest` parameter. Used by the cross-module call
     /// site in `lower_call.rs` to pack trailing args into a rest array.
     pub imported_func_has_rest: std::collections::HashSet<String>,
+    /// #1816 — imported function names whose trailing param is the synthesized
+    /// `arguments` rest. The cross-module call bundles ALL args into it (not
+    /// just trailing), matching `arguments.length` semantics.
+    pub imported_func_synthetic_arguments: std::collections::HashSet<String>,
     pub imported_func_return_types: std::collections::HashMap<String, perry_types::Type>,
     /// Refs #915 (gap 3 / #321 follow-up): function ids in THIS module
     /// whose body unconditionally returns a `ClassRef` (or transitively

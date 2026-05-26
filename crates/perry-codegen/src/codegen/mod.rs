@@ -805,6 +805,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         namespace_node_submodules: opts.namespace_node_submodules.clone(),
         namespace_v8_specifiers: opts.namespace_v8_specifiers.clone(),
         imported_func_has_rest: opts.imported_func_has_rest,
+        imported_func_synthetic_arguments: opts.imported_func_synthetic_arguments,
         imported_func_return_types: opts.imported_func_return_types,
         func_returns_class: func_returns_class_map,
         method_param_counts,

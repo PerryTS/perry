@@ -593,6 +593,12 @@ pub fn run_with_parse_cache(
     // emits a 2-arg call whose callee reads `params` as the raw 2nd arg
     // instead of `[x]`. Sparse map (only `true` entries stored).
     let mut exported_func_has_rest: BTreeMap<(String, String), bool> = BTreeMap::new();
+    // #1816: exported functions whose trailing param is the HIR-synthesized
+    // `arguments` rest (a body that references `arguments`). These need the
+    // cross-module call to bundle ALL passed args into that param (matching
+    // `arguments.length` spec semantics), not just the trailing ones — distinct
+    // from a real `...rest`. effect's `pipe`/`dual` are the load-bearing case.
+    let mut exported_func_synthetic_arguments: BTreeSet<(String, String)> = BTreeSet::new();
     // Build a map of all exported functions with their return types from all modules
     let mut exported_func_return_types: BTreeMap<(String, String), perry_types::Type> =
         BTreeMap::new();
@@ -617,6 +623,13 @@ pub fn run_with_parse_cache(
                 if func.params.last().is_some_and(|p| p.is_rest) {
                     exported_func_has_rest.insert((path_str.clone(), func.name.clone()), true);
                 }
+                if func
+                    .params
+                    .last()
+                    .is_some_and(|p| p.is_rest && p.name == "arguments")
+                {
+                    exported_func_synthetic_arguments.insert((path_str.clone(), func.name.clone()));
+                }
             }
         }
         // Also register exported_functions aliases (e.g., "default" → actual function)
@@ -634,7 +647,14 @@ pub fn run_with_parse_cache(
                     exported_async_funcs.insert(key.clone());
                 }
                 if func.params.last().is_some_and(|p| p.is_rest) {
-                    exported_func_has_rest.entry(key).or_insert(true);
+                    exported_func_has_rest.entry(key.clone()).or_insert(true);
+                }
+                if func
+                    .params
+                    .last()
+                    .is_some_and(|p| p.is_rest && p.name == "arguments")
+                {
+                    exported_func_synthetic_arguments.insert(key);
                 }
             }
         }
@@ -1969,6 +1989,11 @@ pub fn run_with_parse_cache(
             // single rest array. Sparse set (only `true` entries stored).
             let mut imported_has_rest: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
+            // #1816: imported functions whose trailing param is the synthesized
+            // `arguments` rest — the cross-module call must bundle ALL args into
+            // it, not just trailing. Built alongside `imported_has_rest`.
+            let mut imported_synthetic_arguments: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             let mut imported_vars: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
 
@@ -2110,6 +2135,9 @@ pub fn run_with_parse_cache(
                                 }
                                 if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
                                     imported_has_rest.insert(export_name.clone());
+                                }
+                                if exported_func_synthetic_arguments.contains(&key) {
+                                    imported_synthetic_arguments.insert(export_name.clone());
                                 }
                                 // Issue #636: namespace-imported vars must
                                 // route through the zero-arg getter at
@@ -2288,6 +2316,9 @@ pub fn run_with_parse_cache(
                                     }
                                     if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
                                         imported_has_rest.insert(export_name.clone());
+                                    }
+                                    if exported_func_synthetic_arguments.contains(&key) {
+                                        imported_synthetic_arguments.insert(export_name.clone());
                                     }
                                     // Issue #321: NamespaceReExport members
                                     // that are var-shaped exports (the
@@ -2659,6 +2690,12 @@ pub fn run_with_parse_cache(
                         imported_has_rest.insert(exported_name.clone());
                         if local_name != exported_name {
                             imported_has_rest.insert(local_name.clone());
+                        }
+                    }
+                    if exported_func_synthetic_arguments.contains(&key) {
+                        imported_synthetic_arguments.insert(exported_name.clone());
+                        if local_name != exported_name {
+                            imported_synthetic_arguments.insert(local_name.clone());
                         }
                     }
 
@@ -3467,6 +3504,7 @@ pub fn run_with_parse_cache(
                 type_aliases: type_alias_map,
                 imported_func_param_counts: imported_param_counts,
                 imported_func_has_rest: imported_has_rest,
+                imported_func_synthetic_arguments: imported_synthetic_arguments,
                 imported_func_return_types: imported_return_types,
                 imported_vars,
 

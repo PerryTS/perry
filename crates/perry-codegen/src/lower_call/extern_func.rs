@@ -650,6 +650,14 @@ pub fn try_lower_extern_func_call(
         .copied()
         .unwrap_or(args.len());
     let has_rest = ctx.imported_func_has_rest.contains(name);
+    // #1816: the trailing rest is the HIR-synthesized `arguments` param (the
+    // callee's body references `arguments`). Unlike a real `...rest` (which
+    // binds only the trailing args), `arguments` must reflect ALL passed args,
+    // so bundle every arg — matching the same-module path in
+    // `func_ref.rs` and JS `arguments.length` semantics. effect's `pipe`/`dual`
+    // (used everywhere) hit this; without it cross-package calls returned
+    // undefined.
+    let has_synthetic_args = ctx.imported_func_synthetic_arguments.contains(name);
     // Issue #608: when the imported callee declares a trailing
     // `...rest` parameter, the LLVM signature has exactly
     // `declared_count` doubles (rest counts as one slot — a
@@ -683,10 +691,13 @@ pub fn try_lower_extern_func_call(
         }
         // Materialize the rest array (always — even when zero
         // trailing args, the callee's rest binding must be `[]`).
-        let rest_count = args.len().saturating_sub(fixed_count);
+        // #1816: for a synthetic `arguments` param, bundle ALL args (from 0),
+        // not just the trailing ones, so `arguments.length` is correct.
+        let bundle_from = if has_synthetic_args { 0 } else { fixed_count };
+        let rest_count = args.len().saturating_sub(bundle_from);
         let cap = (rest_count as u32).to_string();
         let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-        for a in args.iter().skip(fixed_count) {
+        for a in args.iter().skip(bundle_from) {
             let v = lower_expr(ctx, a)?;
             let blk = ctx.block();
             current = blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
