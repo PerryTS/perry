@@ -1150,6 +1150,36 @@ where
                 f(c);
             }
         }
+        Expr::ChildProcessExecFile {
+            file,
+            args,
+            options,
+            callback,
+        } => {
+            f(file);
+            if let Some(a) = args {
+                f(a);
+            }
+            if let Some(o) = options {
+                f(o);
+            }
+            if let Some(c) = callback {
+                f(c);
+            }
+        }
+        Expr::ChildProcessExecFileSync {
+            file,
+            args,
+            options,
+        } => {
+            f(file);
+            if let Some(a) = args {
+                f(a);
+            }
+            if let Some(o) = options {
+                f(o);
+            }
+        }
         Expr::ChildProcessSpawnBackground {
             command,
             args,

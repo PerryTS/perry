@@ -602,6 +602,36 @@ fn collect_used_new_fields_in_expr(
                 collect_used_new_fields_in_expr(callback, non_escaping_news, used);
             }
         }
+        Expr::ChildProcessExecFile {
+            file,
+            args,
+            options,
+            callback,
+        } => {
+            collect_used_new_fields_in_expr(file, non_escaping_news, used);
+            if let Some(args) = args {
+                collect_used_new_fields_in_expr(args, non_escaping_news, used);
+            }
+            if let Some(options) = options {
+                collect_used_new_fields_in_expr(options, non_escaping_news, used);
+            }
+            if let Some(callback) = callback {
+                collect_used_new_fields_in_expr(callback, non_escaping_news, used);
+            }
+        }
+        Expr::ChildProcessExecFileSync {
+            file,
+            args,
+            options,
+        } => {
+            collect_used_new_fields_in_expr(file, non_escaping_news, used);
+            if let Some(args) = args {
+                collect_used_new_fields_in_expr(args, non_escaping_news, used);
+            }
+            if let Some(options) = options {
+                collect_used_new_fields_in_expr(options, non_escaping_news, used);
+            }
+        }
         Expr::ChildProcessSpawnBackground {
             command,
             args,

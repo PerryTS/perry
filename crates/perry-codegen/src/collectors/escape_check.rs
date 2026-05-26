@@ -794,6 +794,36 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(c, candidates, classes, escaped);
             }
         }
+        Expr::ChildProcessExecFile {
+            file,
+            args,
+            options,
+            callback,
+        } => {
+            check_escapes_in_expr(file, candidates, classes, escaped);
+            if let Some(a) = args {
+                check_escapes_in_expr(a, candidates, classes, escaped);
+            }
+            if let Some(o) = options {
+                check_escapes_in_expr(o, candidates, classes, escaped);
+            }
+            if let Some(c) = callback {
+                check_escapes_in_expr(c, candidates, classes, escaped);
+            }
+        }
+        Expr::ChildProcessExecFileSync {
+            file,
+            args,
+            options,
+        } => {
+            check_escapes_in_expr(file, candidates, classes, escaped);
+            if let Some(a) = args {
+                check_escapes_in_expr(a, candidates, classes, escaped);
+            }
+            if let Some(o) = options {
+                check_escapes_in_expr(o, candidates, classes, escaped);
+            }
+        }
         Expr::ChildProcessSpawnBackground {
             command,
             args,

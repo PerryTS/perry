@@ -399,6 +399,34 @@ pub(super) fn try_global_builtins(
                             }));
                         }
                     }
+                    "execFile" => {
+                        if !args.is_empty() {
+                            let mut args_iter = args.into_iter();
+                            let file = args_iter.next().unwrap();
+                            let file_args = args_iter.next().map(Box::new);
+                            let options = args_iter.next().map(Box::new);
+                            let callback = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessExecFile {
+                                file: Box::new(file),
+                                args: file_args,
+                                options,
+                                callback,
+                            }));
+                        }
+                    }
+                    "execFileSync" => {
+                        if !args.is_empty() {
+                            let mut args_iter = args.into_iter();
+                            let file = args_iter.next().unwrap();
+                            let file_args = args_iter.next().map(Box::new);
+                            let options = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessExecFileSync {
+                                file: Box::new(file),
+                                args: file_args,
+                                options,
+                            }));
+                        }
+                    }
                     "spawnBackground" => {
                         if args.len() >= 3 {
                             let mut args_iter = args.into_iter();

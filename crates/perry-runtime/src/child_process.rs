@@ -8,8 +8,17 @@ use std::sync::{
     Mutex,
 };
 
-use crate::object::ObjectHeader;
+use crate::closure::{
+    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_native_call_value,
+    js_register_closure_arity, ClosureHeader,
+};
+use crate::object::{
+    js_implicit_this_get, js_implicit_this_set, js_object_alloc_with_shape,
+    js_object_get_field_by_name_f64, js_object_set_field, js_object_set_field_by_name,
+    ObjectHeader,
+};
 use crate::string::{js_string_from_bytes, StringHeader};
+use crate::value::JSValue;
 
 // ============================================================================
 // Background Process Registry
@@ -523,6 +532,659 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
     };
     crate::closure::js_closure_call3(cb, err_val, stdout_box, stderr_box);
     f64::from_bits(TAG_UNDEFINED_BITS)
+}
+
+// ============================================================================
+// Streaming spawn — a real ChildProcess (EventEmitter + Readable stdout/stderr)
+// ============================================================================
+//
+// `spawn(cmd, args)` runs the command, buffers its stdout/stderr, and returns a
+// heap ChildProcess object whose methods are real closures (the closure-fields
+// pattern from `node_stream.rs::build_object`). Event delivery (`spawn` /
+// `data` / `end` / `exit` / `close`) is deferred to a `setImmediate` macrotask,
+// so handlers registered synchronously after the `spawn()` call — e.g. inside a
+// Promise executor before the first `await`, as the parity test does — are
+// present when the events fire.
+//
+// Perry has no async subprocess reactor, so the child's output is captured
+// synchronously at spawn time. For the short-lived commands these APIs are used
+// with, that is observationally identical to Node's async pipe model once the
+// deferred emission runs on the next event-loop tick. #1780.
+
+// Shape-id band kept clear of node_stream (0x7FFF_FE60+), fs streams
+// (0x7FFF_FE40), and weakref (0x7FFF_FE10+).
+const CP_SHAPE_ID: u32 = 0x7FFF_FD00;
+const CP_READABLE_SHAPE_ID: u32 = 0x7FFF_FD40;
+const CP_WRITABLE_SHAPE_ID: u32 = 0x7FFF_FD80;
+
+#[inline]
+fn cp_undefined() -> f64 {
+    f64::from_bits(TAG_UNDEFINED_BITS)
+}
+
+#[inline]
+fn cp_box_ptr(ptr: *const u8) -> f64 {
+    f64::from_bits(JSValue::pointer(ptr).bits())
+}
+
+/// Recover the host object value captured in closure slot 0 by `cp_build_object`.
+#[inline]
+fn cp_this(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return js_implicit_this_get();
+    }
+    f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64)
+}
+
+/// Resolve a NaN-boxed value to an `ObjectHeader*` iff it is a heap object.
+fn cp_object_ptr(value: f64) -> Option<*mut ObjectHeader> {
+    let bits = value.to_bits();
+    if !JSValue::from_bits(bits).is_pointer() {
+        return None;
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if raw < 0x10000 || crate::buffer::is_registered_buffer(raw) {
+        return None;
+    }
+    unsafe {
+        let header =
+            (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return None;
+        }
+    }
+    Some(raw as *mut ObjectHeader)
+}
+
+/// Resolve a NaN-boxed value to an `ArrayHeader*` iff it is a heap array.
+fn cp_array_ptr(value: f64) -> Option<*mut crate::array::ArrayHeader> {
+    let bits = value.to_bits();
+    if !JSValue::from_bits(bits).is_pointer() {
+        return None;
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if raw < 0x10000 {
+        return None;
+    }
+    unsafe {
+        let header =
+            (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let t = (*header).obj_type;
+        if t == crate::gc::GC_TYPE_ARRAY || t == crate::gc::GC_TYPE_LAZY_ARRAY {
+            Some(raw as *mut crate::array::ArrayHeader)
+        } else {
+            None
+        }
+    }
+}
+
+#[inline]
+fn cp_str_key(bytes: &[u8]) -> *mut StringHeader {
+    js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+fn cp_get_field(value: f64, name: &[u8]) -> f64 {
+    match cp_object_ptr(value) {
+        Some(obj) => js_object_get_field_by_name_f64(obj, cp_str_key(name)),
+        None => cp_undefined(),
+    }
+}
+
+fn cp_set_field(value: f64, name: &[u8], field_value: f64) {
+    if let Some(obj) = cp_object_ptr(value) {
+        js_object_set_field_by_name(obj, cp_str_key(name), field_value);
+    }
+}
+
+#[inline]
+fn cp_box_string(s: &str) -> f64 {
+    let sh = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    crate::value::js_nanbox_string(sh as i64)
+}
+
+/// SSO-safe extraction of a JS string value to an owned Rust string. The fixed
+/// child_process event names (`data`/`end`/`exit`/`close`/`spawn`/`error`) and
+/// many argv entries are ≤5 bytes — i.e. SSO short strings — which the file's
+/// `extract_string_from_nanboxed` (STRING_TAG + StringHeader only) misses, so
+/// route through the unified accessor which materializes SSO bytes.
+fn cp_value_to_string(value: f64) -> Option<String> {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return None;
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        std::str::from_utf8(std::slice::from_raw_parts(data, len))
+            .ok()
+            .map(|s| s.to_string())
+    }
+}
+
+/// Hidden field key holding the listener array for `event`.
+fn cp_listener_key(event: &str) -> Vec<u8> {
+    let mut k = b"__cpL_".to_vec();
+    k.extend_from_slice(event.as_bytes());
+    k
+}
+
+/// Append a listener closure to `target`'s `event` list (the `.on` body).
+fn cp_register(target: f64, event: f64, cb: f64) {
+    let name = match cp_value_to_string(event) {
+        Some(n) => n,
+        None => return,
+    };
+    let key = cp_listener_key(&name);
+    let arr = match cp_array_ptr(cp_get_field(target, &key)) {
+        Some(a) => a,
+        None => crate::array::js_array_alloc(2),
+    };
+    let arr = crate::array::js_array_push_f64(arr, cb);
+    cp_set_field(target, &key, cp_box_ptr(arr as *const u8));
+}
+
+/// Invoke every listener registered on `target` for `event`. Returns whether
+/// any fired. The listener array is re-read each iteration so a moving GC
+/// during a handler call can't strand us on a stale array pointer.
+fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
+    let key = cp_listener_key(event);
+    let mut i: u32 = 0;
+    let mut fired = false;
+    loop {
+        let arr = match cp_array_ptr(cp_get_field(target, &key)) {
+            Some(a) => a,
+            None => break,
+        };
+        if i >= crate::array::js_array_length(arr) {
+            break;
+        }
+        let cb = crate::array::js_array_get_f64(arr, i);
+        let prev = js_implicit_this_set(target);
+        unsafe {
+            let _ = js_native_call_value(cb, args.as_ptr(), args.len());
+        }
+        js_implicit_this_set(prev);
+        fired = true;
+        i += 1;
+    }
+    fired
+}
+
+fn cp_signal_name(sig: i32) -> &'static str {
+    match sig {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        6 => "SIGABRT",
+        9 => "SIGKILL",
+        11 => "SIGSEGV",
+        15 => "SIGTERM",
+        _ => "SIGTERM",
+    }
+}
+
+// ----- method bodies (each receives the closure; slot 0 = host `this`) -----
+
+extern "C" fn cp_method_on(closure: *const ClosureHeader, event: f64, cb: f64) -> f64 {
+    let this = cp_this(closure);
+    cp_register(this, event, cb);
+    this
+}
+extern "C" fn cp_method_emit(closure: *const ClosureHeader, event: f64, arg: f64) -> f64 {
+    let this = cp_this(closure);
+    let name = match cp_value_to_string(event) {
+        Some(n) => n,
+        None => return TAG_FALSE_F64,
+    };
+    if cp_emit(this, &name, &[arg]) {
+        TAG_TRUE_F64
+    } else {
+        TAG_FALSE_F64
+    }
+}
+extern "C" fn cp_method_this0(closure: *const ClosureHeader) -> f64 {
+    cp_this(closure)
+}
+extern "C" fn cp_method_this1(closure: *const ClosureHeader, _a: f64) -> f64 {
+    cp_this(closure)
+}
+extern "C" fn cp_method_this2(closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
+    cp_this(closure)
+}
+extern "C" fn cp_method_kill(closure: *const ClosureHeader, _signal: f64) -> f64 {
+    cp_set_field(cp_this(closure), b"killed", TAG_TRUE_F64);
+    TAG_TRUE_F64
+}
+extern "C" fn cp_method_read(_closure: *const ClosureHeader, _n: f64) -> f64 {
+    TAG_NULL_F64
+}
+extern "C" fn cp_method_pipe(_closure: *const ClosureHeader, dest: f64) -> f64 {
+    dest
+}
+extern "C" fn cp_method_write2(_closure: *const ClosureHeader, _chunk: f64, _enc: f64) -> f64 {
+    TAG_TRUE_F64
+}
+
+/// Deferred emission body, scheduled via `setImmediate` from `spawn`. Slot 0
+/// captures the ChildProcess value.
+extern "C" fn cp_emit_all(closure: *const ClosureHeader) -> f64 {
+    let cp = cp_this(closure);
+
+    // A spawn failure (e.g. ENOENT) surfaces as a single `error` event; Node
+    // never fires `spawn`/`exit` in that case.
+    let err = cp_get_field(cp, b"__cpError");
+    if !JSValue::from_bits(err.to_bits()).is_undefined() {
+        cp_emit(cp, "error", &[err]);
+        return cp_undefined();
+    }
+
+    cp_emit(cp, "spawn", &[]);
+
+    // Flush each output stream: a single `data` chunk (when non-empty) then `end`.
+    for field in [b"stdout".as_slice(), b"stderr".as_slice()] {
+        let stream = cp_get_field(cp, field);
+        if cp_object_ptr(stream).is_none() {
+            continue;
+        }
+        let chunk = cp_get_field(stream, b"__cpChunk");
+        if !JSValue::from_bits(chunk.to_bits()).is_undefined() {
+            cp_emit(stream, "data", &[chunk]);
+        }
+        cp_emit(stream, "end", &[]);
+    }
+
+    // Node populates `exitCode`/`signalCode` before emitting `exit`, then `close`.
+    let code = cp_get_field(cp, b"__cpExitCode");
+    let signal = cp_get_field(cp, b"__cpSignal");
+    cp_set_field(cp, b"exitCode", code);
+    cp_set_field(cp, b"signalCode", signal);
+    cp_emit(cp, "exit", &[code, signal]);
+    cp_emit(cp, "close", &[code, signal]);
+    cp_undefined()
+}
+
+// ----- object construction -----
+
+type CpFn = unsafe extern "C" fn();
+#[allow(clippy::missing_transmute_annotations)]
+fn cp_cast0(f: extern "C" fn(*const ClosureHeader) -> f64) -> CpFn {
+    unsafe { std::mem::transmute(f) }
+}
+#[allow(clippy::missing_transmute_annotations)]
+fn cp_cast1(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> CpFn {
+    unsafe { std::mem::transmute(f) }
+}
+#[allow(clippy::missing_transmute_annotations)]
+fn cp_cast2(f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) -> CpFn {
+    unsafe { std::mem::transmute(f) }
+}
+
+fn cp_register_arities() {
+    js_register_closure_arity(cp_method_on as *const u8, 2);
+    js_register_closure_arity(cp_method_emit as *const u8, 2);
+    js_register_closure_arity(cp_method_this0 as *const u8, 0);
+    js_register_closure_arity(cp_method_this1 as *const u8, 1);
+    js_register_closure_arity(cp_method_this2 as *const u8, 2);
+    js_register_closure_arity(cp_method_kill as *const u8, 1);
+    js_register_closure_arity(cp_method_read as *const u8, 1);
+    js_register_closure_arity(cp_method_pipe as *const u8, 1);
+    js_register_closure_arity(cp_method_write2 as *const u8, 2);
+    js_register_closure_arity(cp_emit_all as *const u8, 0);
+}
+
+/// Allocate a heap object whose method-name fields each hold a closure capturing
+/// the object itself in slot 0 (so method bodies recover `this`).
+fn cp_build_object(methods: &[(&str, CpFn)], shape_id: u32) -> *mut ObjectHeader {
+    let mut packed: Vec<u8> = Vec::new();
+    for (name, _) in methods {
+        packed.extend_from_slice(name.as_bytes());
+        packed.push(0);
+    }
+    let obj = js_object_alloc_with_shape(
+        shape_id,
+        methods.len() as u32,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    let this_bits = JSValue::pointer(obj as *const u8).bits();
+    for (i, (_name, func)) in methods.iter().enumerate() {
+        let closure = js_closure_alloc(*func as *const u8, 1);
+        js_closure_set_capture_ptr(closure, 0, this_bits as i64);
+        js_object_set_field(obj, i as u32, JSValue::pointer(closure as *const u8));
+    }
+    obj
+}
+
+/// Build a stdout/stderr Readable-shaped EventEmitter.
+fn cp_build_readable() -> f64 {
+    let methods: [(&str, CpFn); 13] = [
+        ("on", cp_cast2(cp_method_on)),
+        ("once", cp_cast2(cp_method_on)),
+        ("addListener", cp_cast2(cp_method_on)),
+        ("prependListener", cp_cast2(cp_method_on)),
+        ("off", cp_cast2(cp_method_this2)),
+        ("removeListener", cp_cast2(cp_method_this2)),
+        ("emit", cp_cast2(cp_method_emit)),
+        ("pause", cp_cast0(cp_method_this0)),
+        ("resume", cp_cast0(cp_method_this0)),
+        ("destroy", cp_cast0(cp_method_this0)),
+        ("setEncoding", cp_cast1(cp_method_this1)),
+        ("read", cp_cast1(cp_method_read)),
+        ("pipe", cp_cast1(cp_method_pipe)),
+    ];
+    let obj = cp_build_object(&methods, CP_READABLE_SHAPE_ID + methods.len() as u32);
+    let val = cp_box_ptr(obj as *const u8);
+    cp_set_field(val, b"readable", TAG_TRUE_F64);
+    cp_set_field(val, b"destroyed", TAG_FALSE_F64);
+    val
+}
+
+/// Build a stdin Writable-shaped EventEmitter.
+fn cp_build_writable() -> f64 {
+    let methods: [(&str, CpFn); 11] = [
+        ("on", cp_cast2(cp_method_on)),
+        ("once", cp_cast2(cp_method_on)),
+        ("addListener", cp_cast2(cp_method_on)),
+        ("removeListener", cp_cast2(cp_method_this2)),
+        ("off", cp_cast2(cp_method_this2)),
+        ("emit", cp_cast2(cp_method_emit)),
+        ("write", cp_cast2(cp_method_write2)),
+        ("end", cp_cast1(cp_method_this1)),
+        ("destroy", cp_cast0(cp_method_this0)),
+        ("cork", cp_cast0(cp_method_this0)),
+        ("uncork", cp_cast0(cp_method_this0)),
+    ];
+    let obj = cp_build_object(&methods, CP_WRITABLE_SHAPE_ID + methods.len() as u32);
+    let val = cp_box_ptr(obj as *const u8);
+    cp_set_field(val, b"writable", TAG_TRUE_F64);
+    cp_set_field(val, b"destroyed", TAG_FALSE_F64);
+    val
+}
+
+/// NaN-boxed `Buffer` value holding `bytes`.
+fn cp_make_buffer(bytes: &[u8]) -> f64 {
+    let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
+    if buf.is_null() {
+        return cp_undefined();
+    }
+    unsafe {
+        let data = (buf as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
+        (*buf).length = bytes.len() as u32;
+    }
+    cp_box_ptr(buf as *const u8)
+}
+
+unsafe fn cp_read_string_header(ptr: i64) -> String {
+    if ptr == 0 {
+        return String::new();
+    }
+    let sh = ptr as *const StringHeader;
+    let len = (*sh).byte_len as usize;
+    let data = (sh as *const u8).add(std::mem::size_of::<StringHeader>());
+    String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+}
+
+unsafe fn cp_read_arg_strings(args_ptr: i64) -> Vec<String> {
+    let mut out = Vec::new();
+    if args_ptr == 0 {
+        return out;
+    }
+    let arr = args_ptr as *const crate::array::ArrayHeader;
+    let n = (*arr).length as usize;
+    let data =
+        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+    for i in 0..n {
+        if let Some(s) = cp_value_to_string(*data.add(i)) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// `child_process.spawn(command[, args][, options])` — returns a streaming
+/// ChildProcess. `cmd_ptr`/`args_ptr` are raw (unboxed) `StringHeader` /
+/// `ArrayHeader` pointers; `opts_ptr` is currently unused (no shell, default
+/// stdio). #1780.
+#[no_mangle]
+pub extern "C" fn js_child_process_spawn_streams(
+    cmd_ptr: i64,
+    args_ptr: i64,
+    _opts_ptr: i64,
+) -> f64 {
+    cp_register_arities();
+
+    let (cmd_str, arg_strs) = unsafe {
+        (
+            cp_read_string_header(cmd_ptr),
+            cp_read_arg_strings(args_ptr),
+        )
+    };
+
+    // Run the command directly (no shell — matches Node's spawn) and collect its
+    // output synchronously.
+    let mut command = Command::new(&cmd_str);
+    command.args(&arg_strs);
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+
+    let (pid, stdout_bytes, stderr_bytes, exit_code, signal_opt, spawn_err) = match command.spawn()
+    {
+        Ok(child) => {
+            let pid = child.id();
+            match child.wait_with_output() {
+                Ok(out) => {
+                    let code = out.status.code();
+                    #[cfg(unix)]
+                    let sig = {
+                        use std::os::unix::process::ExitStatusExt;
+                        out.status.signal()
+                    };
+                    #[cfg(not(unix))]
+                    let sig: Option<i32> = None;
+                    (Some(pid), out.stdout, out.stderr, code, sig, None)
+                }
+                Err(e) => (
+                    Some(pid),
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                    Some(e.to_string()),
+                ),
+            }
+        }
+        Err(e) => (
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            Some(e.to_string()),
+        ),
+    };
+
+    // stdout/stderr Readable + stdin Writable sub-objects.
+    let stdout_obj = cp_build_readable();
+    let stderr_obj = cp_build_readable();
+    let stdin_obj = cp_build_writable();
+    if !stdout_bytes.is_empty() {
+        cp_set_field(stdout_obj, b"__cpChunk", cp_make_buffer(&stdout_bytes));
+    }
+    if !stderr_bytes.is_empty() {
+        cp_set_field(stderr_obj, b"__cpChunk", cp_make_buffer(&stderr_bytes));
+    }
+
+    // spawnargs = [command, ...args]
+    let mut spawnargs = crate::array::js_array_alloc((arg_strs.len() + 1) as u32);
+    spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(&cmd_str));
+    for a in &arg_strs {
+        spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(a));
+    }
+
+    let cp_methods: [(&str, CpFn); 11] = [
+        ("on", cp_cast2(cp_method_on)),
+        ("once", cp_cast2(cp_method_on)),
+        ("addListener", cp_cast2(cp_method_on)),
+        ("prependListener", cp_cast2(cp_method_on)),
+        ("removeListener", cp_cast2(cp_method_this2)),
+        ("off", cp_cast2(cp_method_this2)),
+        ("removeAllListeners", cp_cast1(cp_method_this1)),
+        ("emit", cp_cast2(cp_method_emit)),
+        ("kill", cp_cast1(cp_method_kill)),
+        ("ref", cp_cast0(cp_method_this0)),
+        ("unref", cp_cast0(cp_method_this0)),
+    ];
+    let cp_obj = cp_build_object(&cp_methods, CP_SHAPE_ID + cp_methods.len() as u32);
+    let cp = cp_box_ptr(cp_obj as *const u8);
+
+    cp_set_field(cp, b"stdout", stdout_obj);
+    cp_set_field(cp, b"stderr", stderr_obj);
+    cp_set_field(cp, b"stdin", stdin_obj);
+
+    let mut stdio = crate::array::js_array_alloc(3);
+    stdio = crate::array::js_array_push_f64(stdio, stdin_obj);
+    stdio = crate::array::js_array_push_f64(stdio, stdout_obj);
+    stdio = crate::array::js_array_push_f64(stdio, stderr_obj);
+    cp_set_field(cp, b"stdio", cp_box_ptr(stdio as *const u8));
+
+    cp_set_field(
+        cp,
+        b"pid",
+        match pid {
+            Some(p) => p as f64,
+            None => cp_undefined(),
+        },
+    );
+    cp_set_field(cp, b"exitCode", TAG_NULL_F64);
+    cp_set_field(cp, b"signalCode", TAG_NULL_F64);
+    cp_set_field(cp, b"killed", TAG_FALSE_F64);
+    cp_set_field(cp, b"connected", TAG_FALSE_F64);
+    cp_set_field(cp, b"spawnargs", cp_box_ptr(spawnargs as *const u8));
+    cp_set_field(cp, b"spawnfile", cp_box_string(&cmd_str));
+
+    // Hidden state consumed by the deferred emission.
+    cp_set_field(
+        cp,
+        b"__cpExitCode",
+        match exit_code {
+            Some(c) => c as f64,
+            None => TAG_NULL_F64,
+        },
+    );
+    cp_set_field(
+        cp,
+        b"__cpSignal",
+        match signal_opt {
+            Some(s) => cp_box_string(cp_signal_name(s)),
+            None => TAG_NULL_F64,
+        },
+    );
+    if let Some(msg) = spawn_err {
+        let mp = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_error_new_with_message(mp);
+        cp_set_field(
+            cp,
+            b"__cpError",
+            crate::value::js_nanbox_pointer(err as i64),
+        );
+    }
+
+    // Defer spawn/data/end/exit/close until the next tick so handlers registered
+    // synchronously after this call are present when the events fire.
+    let emit_closure = js_closure_alloc(cp_emit_all as *const u8, 1);
+    js_closure_set_capture_ptr(emit_closure, 0, cp.to_bits() as i64);
+    crate::timer::js_set_immediate_callback(emit_closure as i64);
+
+    cp
+}
+
+/// Collect a NaN-boxed args value (array of strings) into owned Rust strings.
+fn cp_args_from_value(value: f64) -> Vec<String> {
+    match cp_array_ptr(value) {
+        Some(arr) => {
+            let n = unsafe { (*arr).length };
+            let mut out = Vec::with_capacity(n as usize);
+            for i in 0..n {
+                if let Some(s) = cp_value_to_string(crate::array::js_array_get_f64(arr, i)) {
+                    out.push(s);
+                }
+            }
+            out
+        }
+        None => Vec::new(),
+    }
+}
+
+/// `child_process.execFile(file[, args][, options][, callback])` — like `exec`
+/// but runs `file` directly (no shell). The callback fires with
+/// `(err, stdout, stderr)`; with no callback the stdout string is returned.
+/// The callback may sit in the options slot (`execFile(file, args, cb)`), so it
+/// is located the same way `exec` disambiguates. #1780.
+#[no_mangle]
+pub extern "C" fn js_child_process_exec_file(
+    file_ptr: i64,
+    args_val: f64,
+    opts_val: f64,
+    cb_val: f64,
+) -> f64 {
+    use crate::fs::extract_closure_ptr;
+    let cb = {
+        let c = extract_closure_ptr(cb_val);
+        if !c.is_null() {
+            c
+        } else {
+            extract_closure_ptr(opts_val)
+        }
+    };
+    let box_string = |bytes: &[u8]| -> f64 {
+        let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        crate::value::js_nanbox_string(ptr as i64)
+    };
+
+    let file_str = unsafe { cp_read_string_header(file_ptr) };
+    let arg_strs = cp_args_from_value(args_val);
+
+    let (stdout_bytes, stderr_bytes, success) =
+        match Command::new(&file_str).args(&arg_strs).output() {
+            Ok(o) => (o.stdout, o.stderr, o.status.success()),
+            Err(e) => (Vec::new(), e.to_string().into_bytes(), false),
+        };
+
+    let stdout_box = box_string(&stdout_bytes);
+    if cb.is_null() {
+        return stdout_box;
+    }
+    let stderr_box = box_string(&stderr_bytes);
+    let err_val = if success {
+        TAG_NULL_F64
+    } else {
+        let msg = "Command failed";
+        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
+        crate::value::js_nanbox_pointer(err_ptr as i64)
+    };
+    crate::closure::js_closure_call3(cb, err_val, stdout_box, stderr_box);
+    f64::from_bits(TAG_UNDEFINED_BITS)
+}
+
+/// `child_process.execFileSync(file[, args][, options])` — runs `file`
+/// directly (no shell) and returns its stdout. #1780.
+#[no_mangle]
+pub extern "C" fn js_child_process_exec_file_sync(
+    file_ptr: i64,
+    args_val: f64,
+    _opts_val: f64,
+) -> *mut StringHeader {
+    let file_str = unsafe { cp_read_string_header(file_ptr) };
+    if file_str.is_empty() {
+        return js_string_from_bytes(b"".as_ptr(), 0);
+    }
+    let arg_strs = cp_args_from_value(args_val);
+    match Command::new(&file_str).args(&arg_strs).output() {
+        Ok(o) => js_string_from_bytes(o.stdout.as_ptr(), o.stdout.len() as u32),
+        Err(_) => js_string_from_bytes(b"".as_ptr(), 0),
+    }
 }
 
 #[cfg(test)]

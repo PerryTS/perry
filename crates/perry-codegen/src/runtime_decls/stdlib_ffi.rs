@@ -390,6 +390,19 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[DOUBLE, I64, DOUBLE, DOUBLE],
     );
     module.declare_function("js_child_process_spawn_sync", I64, &[I64, I64, I64]);
+    // #1780: streaming spawn → NaN-boxed ChildProcess pointer (returns DOUBLE).
+    module.declare_function("js_child_process_spawn_streams", DOUBLE, &[I64, I64, I64]);
+    // #1780: execFile (file, args, options, callback) + execFileSync (file, args, options).
+    module.declare_function(
+        "js_child_process_exec_file",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_child_process_exec_file_sync",
+        I64,
+        &[I64, DOUBLE, DOUBLE],
+    );
 
     // ========== cheerio ==========
     module.declare_function("js_cheerio_load", I64, &[I64]);

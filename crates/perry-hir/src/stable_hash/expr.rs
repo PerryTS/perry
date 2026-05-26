@@ -295,6 +295,8 @@ impl SH for Expr {
             Expr::ChildProcessSpawnSync { command, args, options, } => { tag(h, 237); command.as_ref().hash(h); args.hash(h); options.hash(h); }
             Expr::ChildProcessSpawn { command, args, options, } => { tag(h, 238); command.as_ref().hash(h); args.hash(h); options.hash(h); }
             Expr::ChildProcessExec { command, options, callback, } => { tag(h, 239); command.as_ref().hash(h); options.hash(h); callback.hash(h); }
+            Expr::ChildProcessExecFile { file, args, options, callback, } => { tag(h, 11239); file.as_ref().hash(h); args.hash(h); options.hash(h); callback.hash(h); }
+            Expr::ChildProcessExecFileSync { file, args, options, } => { tag(h, 11240); file.as_ref().hash(h); args.hash(h); options.hash(h); }
             Expr::ChildProcessSpawnBackground { command, args, log_file, env_json, } => { tag(h, 240); command.as_ref().hash(h); args.hash(h); log_file.as_ref().hash(h); env_json.hash(h); }
             Expr::ChildProcessGetProcessStatus(e) => { tag(h, 241); e.as_ref().hash(h); }
             Expr::ChildProcessKillProcess(e) => { tag(h, 242); e.as_ref().hash(h); }

@@ -1903,6 +1903,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ChildProcessSpawnBackground { .. }
         | Expr::ChildProcessSpawn { .. }
         | Expr::ChildProcessExec { .. }
+        | Expr::ChildProcessExecFile { .. }
+        | Expr::ChildProcessExecFileSync { .. }
         | Expr::ChildProcessGetProcessStatus(..)
         | Expr::ChildProcessKillProcess(..) => child_proc::lower(ctx, expr),
         Expr::FileURLToPath(..)

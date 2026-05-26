@@ -1073,6 +1073,19 @@ pub enum Expr {
         options: Option<Box<Expr>>,
         callback: Option<Box<Expr>>,
     },
+    ChildProcessExecFile {
+        // execFile(file, args?, opts?, callback?) -> ChildProcess
+        file: Box<Expr>,
+        args: Option<Box<Expr>>,
+        options: Option<Box<Expr>>,
+        callback: Option<Box<Expr>>,
+    },
+    ChildProcessExecFileSync {
+        // execFileSync(file, args?, opts?) -> Buffer | string
+        file: Box<Expr>,
+        args: Option<Box<Expr>>,
+        options: Option<Box<Expr>>,
+    },
     ChildProcessSpawnBackground {
         // child_process.spawnBackground(cmd, args, logFile, envJson?) -> {pid, handleId}
         command: Box<Expr>,
