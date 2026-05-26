@@ -443,27 +443,72 @@ for.body.11:
                     )
                 )
 
-    def test_loop_data_dependent_requires_runtime_api_fallback_reasons(self):
+    def test_numeric_arrays_requires_runtime_api_fallback_reasons(self):
         numeric_ir = """
 define i32 @main() {
 entry:
-  br label %for.body.11
-for.body.11:
-  %x = fmul double %a, %b
-  %y = fadd double %x, %c
-  br label %for.body.11
+  call i64 @js_array_numeric_push_f64_unboxed(i64 1, double 2.0)
+  call double @js_array_numeric_get_f64_unboxed(i64 1, i32 0)
+  call i32 @js_array_numeric_set_f64_unboxed(i64 1, i32 0, double 3.0)
+  ret i32 0
 }
 """
-        records = loop_data_dependent_native_records()
+        records = [
+            native_record(
+                rep="f64",
+                expr_kind="NumericArrayPush",
+                consumer="js_array_numeric_push_f64_unboxed",
+                access_mode="checked_native",
+                bounds_state={"guarded": {"guard_id": "numeric_array_push_guard"}},
+            ),
+            native_record(
+                rep="js_value",
+                expr_kind="NumericArrayPush",
+                consumer="js_array_push_f64",
+                access_mode="dynamic_fallback",
+                bounds_state="unknown",
+                materialization_reason="runtime_api",
+            ),
+            native_record(
+                rep="f64",
+                expr_kind="NumericArrayIndexGet",
+                consumer="js_array_numeric_get_f64_unboxed",
+                access_mode="checked_native",
+                bounds_state={"guarded": {"guard_id": "numeric_array_index_get_guard"}},
+            ),
+            native_record(
+                rep="js_value",
+                expr_kind="NumericArrayIndexGet",
+                consumer="js_typed_feedback_array_index_get_fallback_boxed",
+                access_mode="dynamic_fallback",
+                bounds_state="unknown",
+                materialization_reason="runtime_api",
+            ),
+            native_record(
+                rep="f64",
+                expr_kind="NumericArrayIndexSet",
+                consumer="js_array_numeric_set_f64_unboxed",
+                access_mode="checked_native",
+                bounds_state={"guarded": {"guard_id": "numeric_array_index_set_guard"}},
+            ),
+            native_record(
+                rep="js_value",
+                expr_kind="NumericArrayIndexSet",
+                consumer="js_typed_feedback_array_index_set_fallback_boxed",
+                access_mode="dynamic_fallback",
+                bounds_state="unknown",
+                materialization_reason="runtime_api",
+            ),
+        ]
         for record in records:
             if record.get("access_mode") == "dynamic_fallback":
                 record["materialization_reason"] = None
         report = HARNESS.verify_artifacts(
-            workload="loop_data_dependent",
+            workload="numeric_arrays",
             ir_before=numeric_ir,
             ir_after=numeric_ir,
             assembly="main:\n  retq\n",
-            benchmark=None,
+            benchmark={"runs": [{"exit_code": 0, "stdout_first": "25\n"}]},
             vectorization={
                 "vectorized_count": 0,
                 "missed_count": 0,
@@ -474,7 +519,7 @@ for.body.11:
         self.assertEqual(report["status"], "fail")
         self.assertTrue(
             any(
-                "native_reps_required_loop_array_get_dynamic_fallback" in error
+                "native_reps_required_numeric_array_get_dynamic_fallback" in error
                 for error in report["errors"]
             )
         )
