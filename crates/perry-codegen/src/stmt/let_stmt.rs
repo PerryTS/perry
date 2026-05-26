@@ -1205,46 +1205,6 @@ fn const_i64_expr(expr: &perry_hir::Expr) -> Option<i64> {
     }
 }
 
-fn maybe_bind_local_object_shape(
-    ctx: &mut FnCtx<'_>,
-    id: u32,
-    init_expr: &perry_hir::Expr,
-    refined_ty: &perry_types::Type,
-    value: &str,
-) {
-    let perry_hir::Expr::Object(props) = init_expr else {
-        return;
-    };
-    let Some(shape) =
-        crate::expr::typed_object_literal_heap_shape_info(ctx, props, Some(refined_ty))
-    else {
-        return;
-    };
-    if !shape.fields.values().any(|field| field.raw_f64) {
-        return;
-    }
-
-    let expected_keys_slot = ctx.func.alloca_entry(I64);
-    ctx.func
-        .entry_allocas_push_store(I64, "0", &expected_keys_slot);
-    let blk = ctx.block();
-    let obj_bits = blk.bitcast_double_to_i64(value);
-    let obj_handle = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
-    let obj_ptr = blk.inttoptr(I64, &obj_handle);
-    let keys_addr = blk.gep(I8, &obj_ptr, &[(I64, "16")]);
-    let expected_keys = blk.load(I64, &keys_addr);
-    blk.store(I64, &expected_keys, &expected_keys_slot);
-
-    ctx.local_object_shapes.insert(
-        id,
-        crate::expr::LocalObjectShapeInfo {
-            expected_keys_slot,
-            field_count: shape.field_count,
-            fields: shape.fields,
-        },
-    );
-}
-
 fn length_source_from_expr(expr: &perry_hir::Expr) -> Option<LengthSource> {
     match expr {
         perry_hir::Expr::Integer(n) => Some(LengthSource::Constant(*n)),
