@@ -77,37 +77,47 @@ pub fn try_lower_index_get_call(
     // walks the class vtable chain (parent inheritance included). Refs
     // #420 / #618 followup.
     if let Expr::IndexGet { object, index } = callee {
-        if matches!(index.as_ref(), Expr::String(_))
+        // Don't intercept array/typed-array element calls keyed by a numeric
+        // expression — those have dedicated lowering and aren't method
+        // dispatch. Only string-ish or unknown (Any) keys route here.
+        if crate::type_analysis::is_numeric_expr(ctx, index) {
+            return Ok(None);
+        }
+        let is_static_string = matches!(index.as_ref(), Expr::String(_))
             || crate::type_analysis::is_string_expr(ctx, index)
-            || crate::type_analysis::is_definitely_string_expr(ctx, index)
-        {
-            let recv_box = lower_expr(ctx, object)?;
-            let name_box = lower_expr(ctx, index)?;
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for a in args {
-                lowered_args.push(lower_expr(ctx, a)?);
+            || crate::type_analysis::is_definitely_string_expr(ctx, index);
+
+        let recv_box = lower_expr(ctx, object)?;
+        let key_box = lower_expr(ctx, index)?;
+        let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+        for a in args {
+            lowered_args.push(lower_expr(ctx, a)?);
+        }
+        let n = lowered_args.len();
+        let (args_ptr, args_len) = if n == 0 {
+            ("null".to_string(), "0".to_string())
+        } else {
+            let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+            for (i, v) in lowered_args.iter().enumerate() {
+                let slot = ctx
+                    .block()
+                    .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                ctx.block().store(DOUBLE, v, &slot);
             }
-            let n = lowered_args.len();
+            let ptr_reg = ctx.block().next_reg();
+            ctx.block().emit_raw(format!(
+                "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                ptr_reg, n, buf_reg
+            ));
+            (ptr_reg, n.to_string())
+        };
+
+        if is_static_string {
+            // Statically-known string key: extract the string handle and use
+            // the str-key entry (`this` bound by the dispatch tower).
             let name_handle = {
                 let blk = ctx.block();
-                crate::expr::unbox_str_handle(blk, &name_box)
-            };
-            let (args_ptr, args_len) = if n == 0 {
-                ("null".to_string(), "0".to_string())
-            } else {
-                let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
-                for (i, v) in lowered_args.iter().enumerate() {
-                    let slot = ctx
-                        .block()
-                        .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                    ctx.block().store(DOUBLE, v, &slot);
-                }
-                let ptr_reg = ctx.block().next_reg();
-                ctx.block().emit_raw(format!(
-                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                    ptr_reg, n, buf_reg
-                ));
-                (ptr_reg, n.to_string())
+                crate::expr::unbox_str_handle(blk, &key_box)
             };
             return Ok(Some(ctx.block().call(
                 DOUBLE,
@@ -120,6 +130,23 @@ pub fn try_lower_index_get_call(
                 ],
             )));
         }
+
+        // Dynamic key (`this[(cur)._op](cur)`, `obj[k]()` where `k` is a
+        // runtime value): pass the key value through, the runtime branches on
+        // its type and binds `this = obj` either way. Refs #321 (effect
+        // FiberRuntime op dispatch) — pre-fix this fell through to a plain
+        // closure-call that dropped `this`, so a method stored as a class
+        // field reached by dynamic key read `this === undefined`.
+        return Ok(Some(ctx.block().call(
+            DOUBLE,
+            "js_native_call_method_value",
+            &[
+                (DOUBLE, &recv_box),
+                (DOUBLE, &key_box),
+                (crate::types::PTR, &args_ptr),
+                (I64, &args_len),
+            ],
+        )));
     }
     Ok(None)
 }

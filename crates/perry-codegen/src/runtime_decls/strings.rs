@@ -1552,6 +1552,15 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, I64, PTR, I64],
     );
+    // #321: dispatch obj[key](args) for a runtime-value key (not statically a
+    // string). Binds `this = obj` for any key type — string keys go through
+    // the full dispatch tower, symbol/other keys read the property then call
+    // with `this` bound. (object, key, args_ptr, args_len) -> result.
+    module.declare_function(
+        "js_native_call_method_value",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, PTR, I64],
+    );
     module.declare_function("js_promise_resolve", VOID, &[I64, DOUBLE]);
     module.declare_function("js_promise_reject", VOID, &[I64, DOUBLE]);
     module.declare_function("js_promise_resolved", I64, &[DOUBLE]);

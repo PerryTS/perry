@@ -253,6 +253,27 @@ pub fn lower_class_decl(
                 if method.function.body.is_none() {
                     continue;
                 }
+                // Generic computed-key methods (`[OpCodes.OP_SYNC](op) {...}`,
+                // not a well-known symbol / iterator / inspect key) can't be
+                // reduced to a static vtable name — install them as a
+                // per-instance closure field keyed by the runtime-evaluated key
+                // (`this[expr] = function (...) {...}`). Refs #321 (effect
+                // FiberRuntime op dispatch `this[(cur)._op](cur)`). Scoped to
+                // instance methods: static computed-key *methods* need
+                // closure-valued static-field dispatch that codegen doesn't
+                // wire up yet, so they stay on the legacy path below.
+                if matches!(method.kind, ast::MethodKind::Method) && !method.is_static {
+                    if let ast::PropName::Computed(computed) = &method.key {
+                        if !is_symbol_iterator_key(&computed.expr)
+                            && !is_inspect_custom_key(ctx, &computed.expr)
+                            && symbol_well_known_key(&computed.expr).is_none()
+                        {
+                            let field = lower_computed_key_method_as_field(ctx, method, computed)?;
+                            fields.push(field);
+                            continue;
+                        }
+                    }
+                }
                 // Get the property name for getters/setters. Computed
                 // keys are accepted for `[Symbol.iterator]` (registered
                 // under `@@iterator`), and for `[Symbol.hasInstance]` /
@@ -933,6 +954,20 @@ pub fn lower_class_from_ast(
                 // Skip TypeScript overload declarations (no body)
                 if method.function.body.is_none() {
                     continue;
+                }
+                // Generic computed-key methods → per-instance closure field
+                // (see lower_class_decl above; instance-only). Refs #321.
+                if matches!(method.kind, ast::MethodKind::Method) && !method.is_static {
+                    if let ast::PropName::Computed(computed) = &method.key {
+                        if !is_symbol_iterator_key(&computed.expr)
+                            && !is_inspect_custom_key(ctx, &computed.expr)
+                            && symbol_well_known_key(&computed.expr).is_none()
+                        {
+                            let field = lower_computed_key_method_as_field(ctx, method, computed)?;
+                            fields.push(field);
+                            continue;
+                        }
+                    }
                 }
                 let prop_name = match &method.key {
                     ast::PropName::Ident(ident) => ident.sym.to_string(),

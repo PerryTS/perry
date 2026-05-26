@@ -38,6 +38,7 @@ mod context;
 mod expr_assign;
 mod expr_call;
 mod expr_function;
+pub(crate) use expr_function::lower_fn_expr;
 mod expr_member;
 mod expr_misc;
 mod expr_new;

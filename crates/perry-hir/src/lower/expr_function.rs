@@ -271,7 +271,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     })
 }
 
-pub(super) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Result<Expr> {
+pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Result<Expr> {
     // Lower function expression to a closure (similar to arrow but
     // without `this` capture — function expressions have their own
     // `this` binding determined by how they're called).

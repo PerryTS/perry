@@ -44,6 +44,60 @@ pub unsafe extern "C" fn js_native_call_method_str_key(
     js_native_call_method(object, bytes_ptr, bytes_len, args_ptr, args_len)
 }
 
+/// Dispatch `obj[key](args)` where `key` is a *runtime value* whose static type
+/// is not provably a string (`cur._op`, `arr[i]`, a `let`-rebound key, etc.).
+///
+/// JS binds `this = obj` for any `obj[k](...)` call regardless of how `k` is
+/// computed. The static-string fast path (`js_native_call_method_str_key`)
+/// covers literal/typed-string keys; this is the dynamic-key sibling. Without
+/// it, codegen fell through to a plain closure-call that dropped `this`, so a
+/// method stored as a class *field* (or any property closure) reached via a
+/// dynamic key read `this === undefined`. This is the dispatch half of #321 —
+/// effect's `FiberRuntime` op loop is exactly `this[(cur)._op](cur)`.
+///
+/// String keys delegate to the full `js_native_call_method` dispatch tower
+/// (own-field scan + prototype/class-id chain, all `this`-binding). Symbol
+/// keys read the symbol property; other keys go through the polymorphic index
+/// read. In every case the resolved callable is invoked with `this` bound.
+#[no_mangle]
+pub unsafe extern "C" fn js_native_call_method_value(
+    object: f64,
+    key: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let key_jsval = JSValue::from_bits(key.to_bits());
+
+    // String key (incl. SSO short strings): forward to the dispatch tower,
+    // which both finds own-field closures and binds `this`.
+    if key_jsval.is_any_string() {
+        let str_ptr =
+            crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+        if !str_ptr.is_null() {
+            let bytes_ptr = (str_ptr as *const i8).add(std::mem::size_of::<crate::StringHeader>());
+            let bytes_len = (*str_ptr).byte_len as usize;
+            return js_native_call_method(object, bytes_ptr, bytes_len, args_ptr, args_len);
+        }
+    }
+
+    // Non-string key: read the property value, then invoke it with `this`
+    // bound to the receiver (the codegen `Expr::This` fallback reads
+    // `IMPLICIT_THIS` when there's no lexical `this`).
+    let field = if crate::symbol::js_is_symbol(key) != 0 {
+        crate::symbol::js_object_get_symbol_property(object, key)
+    } else {
+        crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, key)
+    };
+    let fv = JSValue::from_bits(field.to_bits());
+    if fv.is_undefined() || fv.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+    let result = crate::closure::js_native_call_value(field, args_ptr, args_len);
+    IMPLICIT_THIS.with(|c| c.set(prev_this));
+    result
+}
+
 /// every regular + spread arg already concatenated by codegen), materialises
 /// the f64 elements into a temporary `Vec<f64>`, and forwards to
 /// `js_native_call_method`. Lets the caller use a single uniform shape for

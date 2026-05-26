@@ -778,6 +778,55 @@ pub fn lower_setter_method(
     })
 }
 
+/// Lower a generic computed-key method (`[expr](args) { body }`, where `expr`
+/// is *not* a well-known symbol or a key we special-case) into a per-instance
+/// closure field keyed by the runtime-evaluated key expression.
+///
+/// We can't reduce `expr` to a static vtable name at compile time — it may be a
+/// cross-module const (`[OpCodes.OP_ON_SUCCESS]` resolves to `"OnSuccess"` only
+/// at runtime). Instead we desugar to `this[expr] = function (args) { body }`:
+/// the field's `key_expr` is evaluated at construction and the method body is
+/// lowered as a plain function-expression closure so `this` binds dynamically
+/// to the receiver when called via `recv[k](...)`. This is exactly what
+/// effect's `FiberRuntime` op-dispatch (`this[(cur)._op](cur)`) needs. Refs
+/// #321 — the fiber-runtime op-handler dispatch was an infinite loop because
+/// these methods were silently dropped (`c["myOp"]` read `undefined`).
+pub fn lower_computed_key_method_as_field(
+    ctx: &mut LoweringContext,
+    method: &ast::ClassMethod,
+    computed: &ast::ComputedPropName,
+) -> Result<ClassField> {
+    // Key expression evaluated at construction time (e.g. `OpCodes.OP_SYNC`).
+    let key = lower_expr(ctx, &computed.expr)?;
+
+    // Lower the method's function as a function-expression closure: this
+    // reuses the full fn-expr path (params, default params, destructuring,
+    // synthetic `arguments`, capture analysis) and crucially leaves `this`
+    // dynamically bound (`captures_this: false`) so a `recv[k]()` call binds
+    // `this` to `recv` — matching how the method would behave on the vtable.
+    let fn_expr = ast::FnExpr {
+        ident: None,
+        function: method.function.clone(),
+    };
+    let closure = crate::lower::lower_fn_expr(ctx, &fn_expr)?;
+
+    // Synthetic name for HIR identity; the real key is `key_expr`.
+    let synth = format!(
+        "__computed_method_{}_{}",
+        computed.span.lo.0, computed.span.hi.0
+    );
+
+    Ok(ClassField {
+        name: synth,
+        key_expr: Some(key),
+        ty: Type::Any,
+        init: Some(closure),
+        is_private: false,
+        is_readonly: false,
+        decorators: Vec::new(),
+    })
+}
+
 pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Result<ClassField> {
     // Computed property keys (`[Symbol.for("k")]`, `[Parent.Symbol.X]`, etc.)
     // can't be reduced to a string at compile time — the key expression is
