@@ -152,12 +152,11 @@ pub(crate) fn collect_native_region_fact_graph(
         super::escape_news::collect_non_escaping_new_used_fields(stmts, &non_escaping_news);
     let non_escaping_arrays =
         super::escape_arrays::collect_non_escaping_arrays(stmts, boxed_vars, module_globals);
-    let non_escaping_object_literals =
-        super::escape_objects::collect_non_escaping_object_literals(
-            stmts,
-            boxed_vars,
-            module_globals,
-        );
+    let non_escaping_object_literals = super::escape_objects::collect_non_escaping_object_literals(
+        stmts,
+        boxed_vars,
+        module_globals,
+    );
     let scalar_replaceable_object_locals = non_escaping_news
         .keys()
         .chain(non_escaping_object_literals.keys())
@@ -426,7 +425,10 @@ mod tests {
         pure_helpers.insert(7);
 
         let graph = collect_native_region_fact_graph(
-            &[const_let(1, Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(8)))))],
+            &[const_let(
+                1,
+                Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(8)))),
+            )],
             &HashSet::new(),
             &pure_helpers,
             &HashSet::new(),

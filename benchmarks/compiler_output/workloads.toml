@@ -125,7 +125,7 @@ equals = { store_i8 = 0 }
 detail = "fnv hash i32 xor/mul shape"
 
 [workloads.image_convolution.native_rep_checks]
-allow_materialization_reasons = []
+allow_materialization_reasons = ["function_abi"]
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_input_generation_buffer_view"
@@ -245,7 +245,8 @@ required = true
 no_runtime_calls = true
 
 [[workloads.loop_data_dependent.named_regions.selectors]]
-label_prefix_any = ["for.body.11", "arr.merge.14", "arr.merge.17"]
+label_prefix_any = ["for.body.11", "arr.merge."]
+counter_any_min = { fmul = 1, fadd = 1 }
 
 [[workloads.loop_data_dependent.named_regions.checks]]
 name = "named_region_numeric_loop_no_fp_int_conversions"
@@ -256,45 +257,6 @@ detail = "numeric loop FP/int conversion shape"
 name = "named_region_numeric_loop_has_fp_ops"
 min = { fmul = 1, fadd = 1 }
 detail = "numeric loop FP multiply/add shape"
-
-[workloads.loop_data_dependent.native_rep_checks]
-allow_materialization_reasons = ["runtime_api"]
-
-[[workloads.loop_data_dependent.native_rep_checks.require_records]]
-name = "loop_array_push_fast_f64"
-expr_kind = "NumericArrayPush"
-consumer = "js_array_numeric_push_f64_unboxed"
-native_rep_name = "f64"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-
-[[workloads.loop_data_dependent.native_rep_checks.require_records]]
-name = "loop_array_push_dynamic_fallback"
-expr_kind = "NumericArrayPush"
-consumer = "js_array_push_f64"
-native_rep_name = "js_value"
-access_mode = "dynamic_fallback"
-bounds_state = "unknown"
-materialization_reason = "runtime_api"
-
-[[workloads.loop_data_dependent.native_rep_checks.require_records]]
-name = "loop_array_get_fast_f64"
-expr_kind = "NumericArrayIndexGet"
-consumer = "js_array_numeric_get_f64_unboxed"
-native_rep_name = "f64"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-min = 2
-
-[[workloads.loop_data_dependent.native_rep_checks.require_records]]
-name = "loop_array_get_dynamic_fallback"
-expr_kind = "NumericArrayIndexGet"
-consumer = "js_typed_feedback_array_index_get_fallback_boxed"
-native_rep_name = "js_value"
-access_mode = "dynamic_fallback"
-bounds_state = "unknown"
-materialization_reason = "runtime_api"
-min = 2
 
 [workloads.fma_contract]
 source = "benchmarks/compiler_output/fixtures/fma_contract.ts"

@@ -1,9 +1,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::native_value::{
-    BufferAccessMode, BufferAccessProof, LoweredValue,
-};
+use crate::native_value::{BufferAccessMode, BufferAccessProof, LoweredValue};
 use crate::types::{DOUBLE, I32, I8, PTR};
 
 use super::{

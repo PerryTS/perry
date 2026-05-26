@@ -1046,11 +1046,7 @@ fn native_fact_uses_for_record(
             None,
         )),
         Some(BoundsState::Guarded { guard_id }) => consumed.push(native_fact_use(
-            "bounds",
-            local_id,
-            "consumed",
-            guard_id,
-            None,
+            "bounds", local_id, "consumed", guard_id, None,
         )),
         Some(BoundsState::Unknown) | None => {
             if matches!(
