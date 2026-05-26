@@ -211,3 +211,69 @@ pub fn shadow_stack_depth() -> usize {
 pub(crate) fn shadow_stack_has_active_frame() -> bool {
     SHADOW.with(|cell| unsafe { (*cell.get()).frame_top != usize::MAX })
 }
+
+/// A snapshot of the shadow stack's depth at a point in time. Captured
+/// when a `try` block is established and replayed on the exception
+/// unwind path (issue #1830).
+///
+/// Why this exists: exception unwinding uses `longjmp` (see
+/// `crate::exception`), which restores the native SP/registers to the
+/// `setjmp` site WITHOUT running the epilogues of the functions being
+/// unwound past. Those functions emitted `js_shadow_frame_pop` before
+/// their `ret`, so on a normal return the shadow stack stays balanced —
+/// but a `longjmp` jumps straight over every skipped pop. The shadow
+/// stack's `frame_top` is then left pointing at the deepest (now-dead)
+/// callee frame. Until the unwinding function eventually returns, any GC
+/// that scans roots (`visit_shadow_stack_root_slots`) would walk those
+/// orphaned frames, reading — and, on the copying/evacuating path,
+/// *writing back into* — `slot_ptrs` that point into stack memory that
+/// has already been unwound and is being reused by the catch body.
+#[derive(Copy, Clone)]
+pub(crate) struct ShadowSavepoint {
+    frame_top: usize,
+    len: usize,
+}
+
+impl ShadowSavepoint {
+    /// Identity savepoint for an empty shadow stack — used to
+    /// zero-initialize the per-try-depth savepoint table.
+    pub(crate) const EMPTY: ShadowSavepoint = ShadowSavepoint {
+        frame_top: usize::MAX,
+        len: 0,
+    };
+}
+
+/// Capture the current shadow-stack depth so it can be restored after a
+/// non-local exit. Call at `js_try_push` time, before the protected
+/// region can push any callee frames.
+pub(crate) fn shadow_stack_savepoint() -> ShadowSavepoint {
+    SHADOW.with(|cell| unsafe {
+        let s = &*cell.get();
+        ShadowSavepoint {
+            frame_top: s.frame_top,
+            len: s.stack.len(),
+        }
+    })
+}
+
+/// Restore the shadow stack to a previously-captured savepoint, dropping
+/// any frames pushed after it. Called on the exception unwind path
+/// (before `longjmp`) so the orphaned shadow frames of the functions
+/// being unwound past are never scanned by a later GC (issue #1830).
+///
+/// A `longjmp` can only have *added* frames relative to the savepoint
+/// (the protected region runs strictly deeper than the `try`), so the
+/// saved length is `<=` the current length in the well-formed case. The
+/// `<=` guard is purely defensive against a corrupted savepoint; we
+/// always reset `frame_top` because it is the value the scanner reads.
+pub(crate) fn shadow_stack_restore(sp: ShadowSavepoint) {
+    SHADOW.with(|cell| unsafe {
+        let s = &mut *cell.get();
+        if sp.len <= s.stack.len() {
+            s.stack.truncate(sp.len);
+            s.slot_ptrs.truncate(sp.len);
+            s.active.truncate(sp.len);
+        }
+        s.frame_top = sp.frame_top;
+    });
+}

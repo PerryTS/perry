@@ -19,6 +19,7 @@ pub use shadow_stack::{
     js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_bind, js_shadow_slot_get,
     js_shadow_slot_set, shadow_stack_depth, SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS,
 };
+pub(crate) use shadow_stack::{shadow_stack_restore, shadow_stack_savepoint, ShadowSavepoint};
 
 pub type MutableRootScanner = for<'a> fn(&mut RuntimeRootVisitor<'a>);
 

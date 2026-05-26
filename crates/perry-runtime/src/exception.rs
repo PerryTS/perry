@@ -31,6 +31,8 @@ impl JmpBuf {
     }
 }
 
+use crate::gc::{shadow_stack_restore, shadow_stack_savepoint, ShadowSavepoint};
+
 extern "C" {
     fn longjmp(env: *mut i32, val: i32) -> !;
 }
@@ -47,6 +49,11 @@ const MAX_TRY_DEPTH: usize = 128;
 /// corrupt under any concurrent throw.
 struct ExceptionState {
     jump_buffers: [JmpBuf; MAX_TRY_DEPTH],
+    /// Shadow-stack depth captured when each `try` block was pushed, so the
+    /// unwind path can drop the orphaned frames `longjmp` leaves behind (see
+    /// `js_throw` / issue #1830). Indexed by try-depth, in lockstep with
+    /// `jump_buffers`.
+    shadow_savepoints: [ShadowSavepoint; MAX_TRY_DEPTH],
     try_depth: usize,
     current_exception: f64,
     has_exception: bool,
@@ -57,6 +64,7 @@ impl ExceptionState {
     const fn new() -> Self {
         ExceptionState {
             jump_buffers: [JmpBuf::new(); MAX_TRY_DEPTH],
+            shadow_savepoints: [ShadowSavepoint::EMPTY; MAX_TRY_DEPTH],
             try_depth: 0,
             current_exception: 0.0,
             has_exception: false,
@@ -84,6 +92,10 @@ pub extern "C" fn js_try_push() -> *mut i32 {
             panic!("Try block nesting too deep");
         }
         let depth = (*s).try_depth;
+        // Capture the shadow-stack depth now, before the protected region
+        // can push any callee frames, so the unwind path can restore to
+        // exactly this point and drop the frames `longjmp` orphans (#1830).
+        (*s).shadow_savepoints[depth] = shadow_stack_savepoint();
         (*s).try_depth += 1;
         (*s).jump_buffers[depth].as_mut_ptr()
     })
@@ -121,6 +133,13 @@ pub extern "C" fn js_throw(value: f64) -> ! {
         }
 
         let depth = (*s).try_depth - 1;
+        // Drop the shadow-stack frames of the functions we are about to
+        // unwind past. `longjmp` skips their epilogues (and therefore their
+        // `js_shadow_frame_pop` calls), so without this the next GC would
+        // scan — and the copying collector would rewrite — slots living in
+        // already-unwound stack frames (#1830). Restore to the depth captured
+        // when this `try` was pushed.
+        shadow_stack_restore((*s).shadow_savepoints[depth]);
         (*s).jump_buffers[depth].as_mut_ptr()
     });
     unsafe { longjmp(jb_ptr, 1) }
@@ -297,4 +316,72 @@ pub(crate) fn test_set_exception(value: f64) {
         (*s).current_exception = value;
         (*s).has_exception = true;
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_try_depth() -> usize {
+    with_exception_state(|s| unsafe { (*s).try_depth })
+}
+
+/// Replay the shadow-stack restore that `js_throw` performs for the
+/// innermost open `try`, without the `longjmp` (which can't return in a
+/// unit test). Lets tests exercise the real #1830 savepoint/restore path
+/// recorded by `js_try_push`.
+#[cfg(test)]
+pub(crate) fn test_unwind_innermost_shadow_restore() {
+    with_exception_state(|s| unsafe {
+        assert!((*s).try_depth > 0, "no open try to unwind");
+        let depth = (*s).try_depth - 1;
+        shadow_stack_restore((*s).shadow_savepoints[depth]);
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gc::{
+        js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_set, shadow_stack_depth,
+    };
+
+    // Issue #1830: js_try_push must capture a shadow-stack savepoint, and the
+    // unwind path (js_throw, here replayed without the longjmp) must restore
+    // it so the orphaned frames of the functions being unwound past are
+    // dropped before any later GC scans roots. All assertions are relative to
+    // the entry state so this is robust under `--test-threads=1` (shared TLS).
+    #[test]
+    fn js_throw_path_restores_shadow_stack_across_unwound_frames() {
+        let base_depth = shadow_stack_depth();
+        let base_try = test_try_depth();
+
+        // Establish run()'s frame.
+        let run_frame = js_shadow_frame_push(1);
+        js_shadow_slot_set(0, 0x7FFD_0000_0000_0001);
+        let depth_at_try = shadow_stack_depth();
+
+        // try { ... } — js_try_push records the savepoint at this depth.
+        let _jb = js_try_push();
+        assert_eq!(test_try_depth(), base_try + 1);
+
+        // Callees push frames and the innermost throws (their pops skipped).
+        let _f1 = js_shadow_frame_push(1);
+        js_shadow_slot_set(0, 0x7FFD_0000_0000_00A1);
+        let _f2 = js_shadow_frame_push(2);
+        js_shadow_slot_set(0, 0x7FFD_0000_0000_00B1);
+        assert_eq!(shadow_stack_depth(), depth_at_try + 2);
+
+        // Replay js_throw's shadow restore (the longjmp itself can't return in
+        // a unit test), then the catch path's js_try_end().
+        test_unwind_innermost_shadow_restore();
+        js_try_end();
+
+        assert_eq!(test_try_depth(), base_try);
+        assert_eq!(
+            shadow_stack_depth(),
+            depth_at_try,
+            "unwind dropped the orphaned callee frames"
+        );
+
+        js_shadow_frame_pop(run_frame);
+        assert_eq!(shadow_stack_depth(), base_depth);
+    }
 }

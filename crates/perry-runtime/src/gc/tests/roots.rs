@@ -689,3 +689,99 @@ fn test_shadow_stack_root_scanner_zero_slot_frames() {
     js_shadow_frame_pop(b);
     js_shadow_frame_pop(a);
 }
+
+// Issue #1830: a `throw` unwinds via `longjmp`, which skips the
+// `js_shadow_frame_pop` epilogues of the functions being unwound past, so
+// `frame_top` is left pointing at orphaned (now-dead) callee frames. A GC in
+// the catch body would then scan — and the copying collector would rewrite —
+// slots in stack frames that no longer exist. `js_try_push` captures a
+// `ShadowSavepoint` and `js_throw` restores it before the `longjmp` so the
+// orphaned frames are dropped first. This exercises the savepoint/restore pair.
+#[test]
+fn test_shadow_stack_savepoint_restore_drops_orphaned_frames() {
+    reset_shadow_stack();
+
+    // run()'s frame: two live pointer slots.
+    let run_frame = js_shadow_frame_push(2);
+    js_shadow_slot_set(0, 0x7FFD_0000_1111_1111);
+    js_shadow_slot_set(1, 0x7FFD_0000_2222_2222);
+
+    // js_try_push captures the savepoint here, before any callee frame.
+    let sp = shadow_stack_savepoint();
+
+    // Inlined/called deep1 -> deep2 -> deep3 each push a frame; deep3 throws,
+    // so none of their pops run.
+    let _d1 = js_shadow_frame_push(1);
+    js_shadow_slot_set(0, 0x7FFD_0000_AAAA_AAAA);
+    let _d2 = js_shadow_frame_push(1);
+    js_shadow_slot_set(0, 0x7FFD_0000_BBBB_BBBB);
+    let _d3 = js_shadow_frame_push(2);
+    js_shadow_slot_set(0, 0x7FFD_0000_CCCC_CCCC);
+    js_shadow_slot_set(1, 0x7FFD_0000_DDDD_DDDD);
+
+    // Pre-restore (the #1830 bug): a GC scans the orphaned deep frames too.
+    let mut before: Vec<u64> = Vec::new();
+    shadow_stack_root_scanner(&mut |v| before.push(v.to_bits()));
+    assert_eq!(shadow_stack_depth(), 4);
+    assert_eq!(before.len(), 6);
+    assert!(before.contains(&0x7FFD_0000_AAAA_AAAA));
+    assert!(before.contains(&0x7FFD_0000_CCCC_CCCC));
+
+    // js_throw restores to the savepoint before longjmp.
+    shadow_stack_restore(sp);
+
+    // Post-fix: only run()'s frame remains; orphaned frames are gone.
+    let mut after: Vec<u64> = Vec::new();
+    shadow_stack_root_scanner(&mut |v| after.push(v.to_bits()));
+    assert_eq!(shadow_stack_depth(), 1, "restored to run()'s frame");
+    assert_eq!(after.len(), 2);
+    assert!(after.contains(&0x7FFD_0000_1111_1111));
+    assert!(after.contains(&0x7FFD_0000_2222_2222));
+    assert!(
+        !after.contains(&0x7FFD_0000_CCCC_CCCC),
+        "orphaned callee slot must no longer be scanned"
+    );
+
+    // The restored frame still pops cleanly with its original handle.
+    js_shadow_frame_pop(run_frame);
+    assert_eq!(shadow_stack_depth(), 0);
+}
+
+// Issue #1830, bound-slot variant: a callee that binds a shadow slot to its
+// real local alloca (`js_shadow_slot_bind`) is the dangerous case — the
+// copying collector reads AND writes back through `slot_ptrs`, so an orphaned
+// bound slot points into already-unwound stack. After restore, the scanner
+// reads neither the value nor the pointer of the dropped callee slot.
+#[test]
+fn test_shadow_stack_restore_drops_orphaned_bound_slots() {
+    reset_shadow_stack();
+
+    let run_frame = js_shadow_frame_push(1);
+    let mut run_local: u64 = 0x7FFD_0000_5555_5555;
+    js_shadow_slot_bind(0, &mut run_local as *mut u64);
+
+    let sp = shadow_stack_savepoint();
+
+    // Callee binds a slot to a local that becomes dead stack after unwind.
+    let _callee = js_shadow_frame_push(1);
+    let mut callee_local: u64 = 0x7FFD_0000_6666_6666;
+    js_shadow_slot_bind(0, &mut callee_local as *mut u64);
+
+    // Pre-restore: the scanner reads through the (soon-dead) callee binding.
+    let mut before: Vec<u64> = Vec::new();
+    shadow_stack_root_scanner(&mut |v| before.push(v.to_bits()));
+    assert!(before.contains(&0x7FFD_0000_6666_6666));
+    assert!(before.contains(&0x7FFD_0000_5555_5555));
+
+    shadow_stack_restore(sp);
+
+    // Post-restore: only the surviving run() binding is read.
+    let mut after: Vec<u64> = Vec::new();
+    shadow_stack_root_scanner(&mut |v| after.push(v.to_bits()));
+    assert_eq!(after.len(), 1);
+    assert!(after.contains(&0x7FFD_0000_5555_5555));
+    assert!(!after.contains(&0x7FFD_0000_6666_6666));
+
+    js_shadow_frame_pop(run_frame);
+    assert_eq!(shadow_stack_depth(), 0);
+}
