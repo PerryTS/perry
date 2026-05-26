@@ -168,3 +168,23 @@ pub(crate) fn is_known_string_prototype_method(name: &str) -> bool {
         | "isWellFormed" | "toWellFormed"
     )
 }
+
+/// Names of `Array.prototype.<name>` instance methods that Perry's runtime
+/// implements (or short-circuits) — used by the `typeof Array.prototype.<m>`
+/// / `typeof [].<m>` AST fold (#1777) so feature detection and the indirect
+/// prototype-borrow idiom (`[].slice.call(args)`) see callable values.
+pub(crate) fn is_known_array_prototype_method(name: &str) -> bool {
+    matches!(
+        name,
+        // mutators
+        "push" | "pop" | "shift" | "unshift" | "splice" | "sort" | "reverse"
+        | "fill" | "copyWithin"
+        // accessors / iteration
+        | "concat" | "slice" | "join" | "indexOf" | "lastIndexOf" | "includes"
+        | "find" | "findIndex" | "findLast" | "findLastIndex" | "at"
+        | "forEach" | "map" | "filter" | "reduce" | "reduceRight" | "some"
+        | "every" | "flat" | "flatMap" | "keys" | "values" | "entries"
+        | "toString" | "toLocaleString" | "with" | "toReversed" | "toSorted"
+        | "toSpliced"
+    )
+}

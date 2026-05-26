@@ -756,6 +756,57 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             return Ok(Expr::String("function".to_string()));
                         }
                     }
+                    // #1777: `typeof Array.prototype.slice` / `typeof [].slice`
+                    // (and String/Number/Boolean prototypes). The method value
+                    // read lowers to `undefined` today, so typeof was
+                    // "undefined" — but these are real functions in Node and the
+                    // `.call`/`.apply` dispatch is now wired (see
+                    // `try_builtin_prototype_method_apply_call`). Fold to
+                    // "function" for known prototype methods so feature
+                    // detection (`typeof X.slice === "function"`) agrees.
+                    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                        let prop_name = prop_ident.sym.as_ref();
+                        // `<Ctor>.prototype.<method>`
+                        if let ast::Expr::Member(proto) = member.obj.as_ref() {
+                            if let (ast::Expr::Ident(base), ast::MemberProp::Ident(proto_prop)) =
+                                (proto.obj.as_ref(), &proto.prop)
+                            {
+                                let ctor = base.sym.as_ref();
+                                if proto_prop.sym.as_ref() == "prototype"
+                                    && ctx.lookup_local(ctor).is_none()
+                                {
+                                    let is_fn = match ctor {
+                                        "Array" => is_known_array_prototype_method(prop_name),
+                                        "String" => is_known_string_prototype_method(prop_name),
+                                        // Number/Boolean prototypes: the handful of
+                                        // real methods are all functions in Node.
+                                        "Number" => matches!(
+                                            prop_name,
+                                            "toFixed"
+                                                | "toPrecision"
+                                                | "toExponential"
+                                                | "toString"
+                                                | "valueOf"
+                                                | "toLocaleString"
+                                        ),
+                                        "Boolean" => {
+                                            matches!(prop_name, "toString" | "valueOf")
+                                        }
+                                        _ => false,
+                                    };
+                                    if is_fn {
+                                        return Ok(Expr::String("function".to_string()));
+                                    }
+                                }
+                            }
+                        }
+                        // `[].<method>` — array-literal prototype borrow.
+                        if matches!(member.obj.as_ref(), ast::Expr::Array(_))
+                            && is_known_array_prototype_method(prop_name)
+                        {
+                            return Ok(Expr::String("function".to_string()));
+                        }
+                    }
                 }
             }
             let operand = Box::new(lower_expr(ctx, &unary.arg)?);

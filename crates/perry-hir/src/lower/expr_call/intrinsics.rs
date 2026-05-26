@@ -479,6 +479,152 @@ pub(super) fn try_native_module_method_apply_call(
     Ok(Some(super::lower_call(ctx, &synth_call)?))
 }
 
+/// Issue #1777 — `<builtinProto>.<method>.{call,apply}(thisArg, …)` where the
+/// receiver is a **builtin prototype** (`Array.prototype`, `String.prototype`,
+/// …) or an array/string literal (`[].slice.call(…)`, `"".charAt.call(…)`).
+///
+/// This is the general case of #1722. A builtin prototype method read as a
+/// *value* — `Array.prototype.slice`, `[].slice` — lowers to `undefined`, so
+/// `Array.prototype.slice.call(arguments, 1)` / `[].slice.call(arguments)`
+/// throws `TypeError: Cannot read properties of undefined (reading 'call')`.
+/// The arguments-to-array idiom (`[].slice.call(arguments)`) and prototype
+/// borrowing (`Array.prototype.map.call(arrayLike, fn)`) are pervasive in
+/// real-world JS and in the node-core test harness (`mustCall`/`mustSucceed`),
+/// the single largest runtime-fail cluster in the #800 radar.
+///
+/// Unlike the namespace case (#1722, where `this` is irrelevant), here the
+/// first argument **is** the receiver: `Proto.method.call(thisArg, ...rest)`
+/// is semantically `thisArg.method(...rest)`. We rewrite to that direct
+/// member call and re-dispatch through `lower_call`, so the normal
+/// type-directed method dispatch picks the right native impl based on
+/// `thisArg`'s runtime value (perry materializes `arguments` as a real
+/// array, so `arguments.slice(1)` dispatches to Array.prototype.slice — the
+/// exact behavior the idiom wants).
+///
+/// Conservative scope:
+///   - `.call(thisArg, a, b, …)`        → `thisArg.method(a, b, …)`
+///   - `.apply(thisArg)` / `.apply()`   → `thisArg.method()`
+///   - `.apply(thisArg, [a, b, …])`     → `thisArg.method(a, b, …)` — only a
+///     clean array *literal* (no holes/spreads); a non-literal apply-args
+///     array can't be statically expanded, so it falls through unchanged.
+///
+/// `Object.prototype.{toString,hasOwnProperty}.call(…)` is intentionally NOT
+/// matched here — the post-args hooks `try_object_prototype_call` /
+/// `try_object_has_own_call` rewrite those to dedicated runtime helpers
+/// (`js_object_to_string` / `js_object_has_own`), so `Object.prototype` is
+/// excluded from the receiver guard below to preserve that path. This hook
+/// only ever fires on a shape that currently *throws* (the method value reads
+/// `undefined`), so it cannot regress working code.
+pub(super) fn try_builtin_prototype_method_apply_call(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    has_spread: bool,
+) -> Result<Option<Expr>> {
+    if has_spread {
+        return Ok(None);
+    }
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return Ok(None);
+    };
+    // Outer member: `<inner>.apply` / `<inner>.call`.
+    let ast::Expr::Member(outer) = callee_expr.as_ref() else {
+        return Ok(None);
+    };
+    let ast::MemberProp::Ident(outer_prop) = &outer.prop else {
+        return Ok(None);
+    };
+    let is_apply = match outer_prop.sym.as_ref() {
+        "apply" => true,
+        "call" => false,
+        _ => return Ok(None),
+    };
+    // Inner member: `<recv>.<method>` where `<method>` is a plain name and
+    // `<recv>` is a builtin-prototype reference or array/string literal.
+    let ast::Expr::Member(inner) = outer.obj.as_ref() else {
+        return Ok(None);
+    };
+    if !matches!(&inner.prop, ast::MemberProp::Ident(_)) {
+        return Ok(None);
+    }
+    if !is_builtin_prototype_receiver(ctx, inner.obj.as_ref()) {
+        return Ok(None);
+    }
+
+    // `.call`/`.apply` need at least the `thisArg` (the new receiver). A
+    // spread in the `thisArg` slot can't be statically resolved to a receiver.
+    let Some(this_arg) = call.args.first() else {
+        return Ok(None);
+    };
+    if this_arg.spread.is_some() {
+        return Ok(None);
+    }
+    let this_arg = this_arg.clone();
+
+    // Build the synthesized positional argument list (everything after thisArg).
+    let rest_args: Vec<ast::ExprOrSpread> = if is_apply {
+        match call.args.get(1) {
+            None => Vec::new(),
+            Some(arr_arg) => match arr_arg.expr.as_ref() {
+                ast::Expr::Array(arr) => {
+                    let clean = arr
+                        .elems
+                        .iter()
+                        .all(|e| matches!(e, Some(eos) if eos.spread.is_none()));
+                    if !clean {
+                        return Ok(None);
+                    }
+                    arr.elems.iter().filter_map(|e| e.clone()).collect()
+                }
+                // Non-literal apply-args array — can't statically expand.
+                _ => return Ok(None),
+            },
+        }
+    } else {
+        call.args.iter().skip(1).cloned().collect()
+    };
+
+    // Synthesize `(thisArg).<method>(rest_args)`: keep the original method
+    // name, swap the prototype/literal receiver for the real `thisArg`, drop
+    // the `.apply`/`.call` wrapper, and re-dispatch.
+    let mut synth_member = inner.clone();
+    synth_member.obj = this_arg.expr.clone();
+    let mut synth_call = call.clone();
+    synth_call.callee = ast::Callee::Expr(Box::new(ast::Expr::Member(synth_member)));
+    synth_call.args = rest_args;
+    Ok(Some(super::lower_call(ctx, &synth_call)?))
+}
+
+/// True when `recv` is a builtin constructor's `.prototype` (and that
+/// constructor name is not shadowed by a local/function binding) or an
+/// array/string literal — the receiver shapes whose prototype-method *values*
+/// currently lower to `undefined`. `Object` is deliberately excluded; see
+/// `try_builtin_prototype_method_apply_call`.
+fn is_builtin_prototype_receiver(ctx: &LoweringContext, recv: &ast::Expr) -> bool {
+    match recv {
+        // `Array.prototype` / `String.prototype` / … (not `Object`).
+        ast::Expr::Member(m) => {
+            let ast::MemberProp::Ident(p) = &m.prop else {
+                return false;
+            };
+            if p.sym.as_ref() != "prototype" {
+                return false;
+            }
+            let ast::Expr::Ident(base) = m.obj.as_ref() else {
+                return false;
+            };
+            let name = base.sym.as_ref();
+            matches!(name, "Array" | "String" | "Number" | "Boolean" | "Function")
+                && ctx.lookup_local(name).is_none()
+                && ctx.lookup_func(name).is_none()
+        }
+        // `[].slice.call(…)` / `[1,2,3].map.call(…)`.
+        ast::Expr::Array(_) => true,
+        // `"".charAt.call(…)`.
+        ast::Expr::Lit(ast::Lit::Str(_)) => true,
+        _ => false,
+    }
+}
+
 /// Followup to #957 / PR #959 — `Function('return this')()`.
 ///
 /// Every CJS/UMD-shaped library (lodash, underscore, Effect, …)

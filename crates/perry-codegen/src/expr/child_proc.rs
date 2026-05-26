@@ -175,24 +175,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             options,
             callback,
         } => {
+            // `exec(cmd[, options], callback)` — runs synchronously and fires
+            // the callback with `(err, stdout, stderr)` (see
+            // `js_child_process_exec`). The callback may sit in the options
+            // slot (`exec(cmd, cb)`), so pass both `options` and `callback` as
+            // NaN-boxed f64 and let the runtime locate the closure. With no
+            // callback the runtime returns the stdout string (legacy shape).
+            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let cmd_box = lower_expr(ctx, command)?;
-            let blk = ctx.block();
-            let cmd_str = unbox_to_i64(blk, &cmd_box);
-            let opts_str = if let Some(o) = options {
-                let v = lower_expr(ctx, o)?;
-                unbox_to_i64(ctx.block(), &v)
+            let cmd_str = unbox_to_i64(ctx.block(), &cmd_box);
+            let arg1 = if let Some(o) = options {
+                lower_expr(ctx, o)?
             } else {
-                "0".to_string()
+                undef.clone()
             };
-            if let Some(cb) = callback {
-                let _ = lower_expr(ctx, cb)?;
-            }
+            let arg2 = if let Some(cb) = callback {
+                lower_expr(ctx, cb)?
+            } else {
+                undef.clone()
+            };
             let result = ctx.block().call(
-                I64,
-                "js_child_process_exec_sync",
-                &[(I64, &cmd_str), (I64, &opts_str)],
+                DOUBLE,
+                "js_child_process_exec",
+                &[(I64, &cmd_str), (DOUBLE, &arg1), (DOUBLE, &arg2)],
             );
-            Ok(nanbox_string_inline(ctx.block(), &result))
+            Ok(result)
         }
 
         Expr::ChildProcessGetProcessStatus(handle) => {

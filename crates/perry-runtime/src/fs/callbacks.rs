@@ -217,6 +217,17 @@ pub extern "C" fn js_fs_exists_callback(path_value: f64, callback: f64) -> f64 {
 pub extern "C" fn js_fs_readdir_callback(path_value: f64, arg1: f64, arg2: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    // `fs.readdir(path, callback)` puts the callback in `arg1`; only
+    // `fs.readdir(path, options, callback)` carries real options there. Passing
+    // the callback closure to `js_fs_readdir_sync` as `options` (the old bug)
+    // made it read garbage out of the closure object and halt the program
+    // before the callback ever fired. Disambiguate the same way the stat/lstat
+    // callbacks do: a closure in `arg1` means there are no options.
+    let options = if extract_closure_ptr(arg1).is_null() {
+        arg1
+    } else {
+        f64::from_bits(TAG_UNDEFINED)
+    };
     let cb = last_callback(&[arg1, arg2]);
     unsafe {
         if let Some(err_val) = fs_callback_read_error(path_value, "scandir") {
@@ -224,7 +235,7 @@ pub extern "C" fn js_fs_readdir_callback(path_value: f64, arg1: f64, arg2: f64) 
             return f64::from_bits(TAG_UNDEFINED);
         }
     }
-    let entries = js_fs_readdir_sync(path_value, arg1);
+    let entries = js_fs_readdir_sync(path_value, options);
     let entries =
         f64::from_bits(crate::value::JSValue::pointer(entries.to_bits() as *const u8).bits());
     if !cb.is_null() {

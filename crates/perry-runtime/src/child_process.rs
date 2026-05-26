@@ -445,17 +445,84 @@ pub extern "C" fn js_child_process_spawn(
     std::ptr::null_mut()
 }
 
-/// Execute a command asynchronously with shell
-/// Note: This returns a simplified handle for now
+/// `child_process.exec(command[, options], callback)`.
+///
+/// In Node this runs on the libuv threadpool and fires the callback on a
+/// later tick. Perry has no subprocess streaming / event-loop integration for
+/// child_process yet (full `spawn` with piped stdout/stderr + EventEmitter is
+/// still unimplemented — see #1780), but the dominant
+/// `exec(cmd, (err, stdout, stderr) => …)` shape only needs the *buffered*
+/// result. Run the command synchronously through the shell (like `execSync`)
+/// and invoke the callback immediately with `(err, stdout, stderr)` — the same
+/// immediate-callback model the async fs wrappers use. `exec` defaults to utf8
+/// encoding, so stdout/stderr are passed as strings.
+///
+/// `arg1`/`arg2` carry `(options, callback)`. The callback can sit in either
+/// slot — `exec(cmd, cb)` puts it in `arg1`, `exec(cmd, options, cb)` in
+/// `arg2` — so it's located the same way the fs callbacks disambiguate. With
+/// no callback we preserve the legacy behavior of returning the stdout string.
 #[no_mangle]
-pub extern "C" fn js_child_process_exec(
-    _cmd_ptr: *const StringHeader,
-    _options_ptr: *const ObjectHeader,
-    _callback_ptr: *const crate::closure::ClosureHeader,
-) -> *mut ObjectHeader {
-    // TODO: Implement async exec with callback
-    // For now, return null - async child processes need event loop integration
-    std::ptr::null_mut()
+pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64, arg2: f64) -> f64 {
+    use crate::fs::extract_closure_ptr;
+    // The callback is whichever argument is a closure; prefer the later slot.
+    let cb = {
+        let c2 = extract_closure_ptr(arg2);
+        if !c2.is_null() {
+            c2
+        } else {
+            extract_closure_ptr(arg1)
+        }
+    };
+
+    let box_string = |bytes: &[u8]| -> f64 {
+        let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        crate::value::js_nanbox_string(ptr as i64)
+    };
+
+    if cmd_ptr.is_null() {
+        if cb.is_null() {
+            return box_string(b"");
+        }
+        crate::closure::js_closure_call3(cb, TAG_NULL_F64, box_string(b""), box_string(b""));
+        return f64::from_bits(TAG_UNDEFINED_BITS);
+    }
+
+    let (stdout_bytes, stderr_bytes, success) = unsafe {
+        let len = (*cmd_ptr).byte_len as usize;
+        let data_ptr = (cmd_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let cmd_bytes = std::slice::from_raw_parts(data_ptr, len);
+        match std::str::from_utf8(cmd_bytes) {
+            Ok(cmd_str) => {
+                #[cfg(unix)]
+                let output = Command::new("sh").arg("-c").arg(cmd_str).output();
+                #[cfg(windows)]
+                let output = Command::new("cmd").arg("/C").arg(cmd_str).output();
+                match output {
+                    Ok(o) => (o.stdout, o.stderr, o.status.success()),
+                    Err(e) => (Vec::new(), e.to_string().into_bytes(), false),
+                }
+            }
+            Err(_) => (Vec::new(), Vec::new(), false),
+        }
+    };
+
+    let stdout_box = box_string(&stdout_bytes);
+    if cb.is_null() {
+        // Legacy no-callback shape — return the stdout string.
+        return stdout_box;
+    }
+
+    let stderr_box = box_string(&stderr_bytes);
+    let err_val = if success {
+        TAG_NULL_F64
+    } else {
+        let msg = "Command failed";
+        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
+        crate::value::js_nanbox_pointer(err_ptr as i64)
+    };
+    crate::closure::js_closure_call3(cb, err_val, stdout_box, stderr_box);
+    f64::from_bits(TAG_UNDEFINED_BITS)
 }
 
 #[cfg(test)]
