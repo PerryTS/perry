@@ -389,6 +389,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // ObjectHeader, and the outer PropertyGet routes through
             // `js_object_get_field_by_name`'s NATIVE_MODULE_CLASS_ID arm.
             if let Expr::NativeModuleRef(module_name) = object.as_ref() {
+                if module_name == "process" && property == "version" {
+                    let blk = ctx.block();
+                    let handle = blk.call(I64, "js_process_version", &[]);
+                    return Ok(nanbox_string_inline(blk, &handle));
+                }
                 let mod_idx = ctx.strings.intern(module_name);
                 let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
                 let mod_len_str = module_name.len().to_string();
