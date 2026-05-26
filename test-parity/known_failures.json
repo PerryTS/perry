@@ -1568,12 +1568,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: TransformStream readable.cancel() does not propagate to writable — writes still succeed after cancel. Flips to PASS when #1545 lands."
   },
-  "node-suite/perf_hooks/shapes/to-string-tag": {
-    "issue": "1479",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: Object.prototype.toString.call(performance) yields the generic object tag instead of '[object Performance]'. Flips to PASS when #1479 lands."
-  },
   "node-suite/console/dir/depth-options": {
     "issue": "1199",
     "added": "2026-05-20",
