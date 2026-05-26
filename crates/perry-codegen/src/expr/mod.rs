@@ -68,8 +68,9 @@ pub(crate) use buffer_access::{
 pub(crate) use buffer_views::{
     alias_buffer_view_slot, attach_native_owned_view_fact, buffer_access_materialization_reason,
     buffer_view_lowered_value, downgrade_buffer_alias, downgrade_buffer_aliases_in_expr,
-    invalidate_native_owned_views_for_owner, native_owned_fact_for_view,
-    update_buffer_view_for_assignment,
+    invalidate_native_owned_views_for_dispose, invalidate_native_owned_views_for_owner,
+    native_arena_canonical_owner_id, native_owned_fact_for_view,
+    record_native_arena_owner_assignment, update_buffer_view_for_assignment,
 };
 #[allow(unused_imports)] // ChannelReduction kept reachable for surface stability
 pub(crate) use channel::{
@@ -784,6 +785,9 @@ pub(crate) struct FnCtx<'a> {
     /// exist with `AliasState::Unknown`, while noalias metadata requires a
     /// proven/guarded alias state at the consumer.
     pub buffer_view_slots: std::collections::HashMap<u32, BufferViewSlot>,
+    /// Local owner-handle aliases for native arenas. Values are canonical
+    /// owner local ids used by native-owned typed-array view proof state.
+    pub native_arena_owner_aliases: std::collections::HashMap<u32, u32>,
     /// Benchmark/debug switch that forces tracked buffers through the existing
     /// helper fallback instead of native GEP/load/store lowering.
     pub disable_buffer_fast_path: bool,

@@ -8,6 +8,31 @@ use crate::types::{I32, I64, I8, PTR};
 
 use super::{unbox_to_i64, FnCtx};
 
+pub(crate) fn native_arena_canonical_owner_id(ctx: &FnCtx<'_>, owner_id: u32) -> u32 {
+    ctx.native_arena_owner_aliases
+        .get(&owner_id)
+        .copied()
+        .unwrap_or(owner_id)
+}
+
+pub(crate) fn record_native_arena_owner_assignment(ctx: &mut FnCtx<'_>, id: u32, value: &Expr) {
+    match value {
+        Expr::NativeArenaAlloc(_) => {
+            ctx.native_arena_owner_aliases.insert(id, id);
+        }
+        Expr::LocalGet(source_id) => {
+            if let Some(owner_id) = ctx.native_arena_owner_aliases.get(source_id).copied() {
+                ctx.native_arena_owner_aliases.insert(id, owner_id);
+            } else {
+                ctx.native_arena_owner_aliases.remove(&id);
+            }
+        }
+        _ => {
+            ctx.native_arena_owner_aliases.remove(&id);
+        }
+    }
+}
+
 pub(crate) fn buffer_view_lowered_value(
     data_ptr: &str,
     length: &str,
@@ -58,30 +83,65 @@ pub(crate) fn invalidate_native_owned_views_for_owner(
 ) {
     let mut invalidated = Vec::new();
     for (view_id, view) in ctx.buffer_view_slots.iter_mut() {
-        let Some(native) = view.native_owned.as_mut() else {
+        let Some(native) = view.native_owned.as_ref() else {
             continue;
         };
         if native.owner_local_id != owner_id {
             continue;
         }
-        view.alias = AliasState::MayAlias;
-        view.scope_idx = None;
-        match reason {
-            MaterializationReason::UseAfterDispose => {
-                native.disposed = true;
-            }
-            MaterializationReason::MissingOwnerRoot
-            | MaterializationReason::Reassignment
-            | MaterializationReason::UnknownCallEscape
-            | MaterializationReason::ClosureCapture => {
-                native.owner_rooted = false;
-            }
-            _ => {}
-        }
+        invalidate_native_owned_view(view, &reason);
         invalidated.push(*view_id);
     }
     for view_id in invalidated {
         ctx.buffer_hazard_reasons.insert(view_id, reason.clone());
+    }
+}
+
+pub(crate) fn invalidate_native_owned_views_for_dispose(ctx: &mut FnCtx<'_>, owner: &Expr) {
+    match owner {
+        Expr::LocalGet(owner_id) => {
+            let owner_id = native_arena_canonical_owner_id(ctx, *owner_id);
+            invalidate_native_owned_views_for_owner(
+                ctx,
+                owner_id,
+                MaterializationReason::UseAfterDispose,
+            );
+        }
+        _ => invalidate_all_native_owned_views(ctx, MaterializationReason::UseAfterDispose),
+    }
+}
+
+fn invalidate_all_native_owned_views(ctx: &mut FnCtx<'_>, reason: MaterializationReason) {
+    let mut invalidated = Vec::new();
+    for (view_id, view) in ctx.buffer_view_slots.iter_mut() {
+        if view.native_owned.is_none() {
+            continue;
+        }
+        invalidate_native_owned_view(view, &reason);
+        invalidated.push(*view_id);
+    }
+    for view_id in invalidated {
+        ctx.buffer_hazard_reasons.insert(view_id, reason.clone());
+    }
+}
+
+fn invalidate_native_owned_view(view: &mut BufferViewSlot, reason: &MaterializationReason) {
+    let Some(native) = view.native_owned.as_mut() else {
+        return;
+    };
+    view.alias = AliasState::MayAlias;
+    view.scope_idx = None;
+    match reason {
+        MaterializationReason::UseAfterDispose => {
+            native.disposed = true;
+        }
+        MaterializationReason::MissingOwnerRoot
+        | MaterializationReason::Reassignment
+        | MaterializationReason::UnknownCallEscape
+        | MaterializationReason::ClosureCapture => {
+            native.owner_rooted = false;
+        }
+        _ => {}
     }
 }
 

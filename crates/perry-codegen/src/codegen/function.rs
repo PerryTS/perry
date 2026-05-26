@@ -249,6 +249,7 @@ pub(super) fn compile_function(
         typed_parse_counter: 0,
         buffer_data_slots: HashMap::new(),
         buffer_view_slots: HashMap::new(),
+        native_arena_owner_aliases: HashMap::new(),
         disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
         min_length_bounds: HashMap::new(),
         bounded_buffer_index_pairs: Vec::new(),

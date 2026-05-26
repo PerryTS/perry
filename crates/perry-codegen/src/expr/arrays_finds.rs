@@ -851,13 +851,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let owner_handle = unbox_to_i64(blk, &owner_value);
             blk.call_void("js_native_arena_dispose", &[(I64, &owner_handle)]);
-            if let Expr::LocalGet(owner_id) = owner.as_ref() {
-                super::invalidate_native_owned_views_for_owner(
-                    ctx,
-                    *owner_id,
-                    MaterializationReason::UseAfterDispose,
-                );
-            }
+            super::invalidate_native_owned_views_for_dispose(ctx, owner);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
 

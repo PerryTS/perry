@@ -938,6 +938,7 @@ pub(crate) fn lower_let(
                 ctx.block().store(I32, &v_i32, &i32_slot);
             }
         }
+        crate::expr::record_native_arena_owner_assignment(ctx, id, init_expr);
         // Buffer data-pointer slot for local (non-global) const buffers. The
         // HIR fact layer owns the source-shape decision; lowering only consumes
         // the stable local-id fact and emits the ptr slot used by
@@ -1039,14 +1040,17 @@ fn register_noalias_buffer_view(
     ctx.buffer_data_slots
         .insert(id, (data_slot.clone(), scope_idx));
     let native_owned = match init.native_owner_local_id {
-        Some(owner_local_id) => Some(NativeOwnedViewSlot {
-            owner_local_id,
-            byte_offset: init.native_byte_offset,
-            byte_length: init.native_byte_length,
-            owner_rooted: true,
-            disposed: false,
-            pointer_free_backing: true,
-        }),
+        Some(owner_local_id) => {
+            let owner_local_id = crate::expr::native_arena_canonical_owner_id(ctx, owner_local_id);
+            Some(NativeOwnedViewSlot {
+                owner_local_id,
+                byte_offset: init.native_byte_offset,
+                byte_length: init.native_byte_length,
+                owner_rooted: true,
+                disposed: false,
+                pointer_free_backing: true,
+            })
+        }
         None => None,
     };
     ctx.buffer_view_slots.insert(

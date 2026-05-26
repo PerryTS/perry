@@ -400,6 +400,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::LocalSet(id, value) => {
             super::invalidate_local_write_facts(ctx, *id);
             if let Some(v) = lower_pod_local_reassignment(ctx, *id, value)? {
+                super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
                 return Ok(v);
             }
             // Detect the `x = x + y` self-append pattern.
@@ -429,6 +430,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         if left_id == id {
                             let v = lower_string_self_append(ctx, *id, right)?;
                             emit_shadow_slot_update_for_expr(ctx, *id, &v, value);
+                            super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
                             return Ok(v);
                         }
                     }
@@ -477,6 +479,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Some(slot_idx) = ctx.shadow_slot_map.get(id).copied() {
                         emit_shadow_slot_clear(ctx, slot_idx);
                     }
+                    super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
                     super::record_int_facts_for_local_set(ctx, *id, value);
                     return Ok(v_dbl);
                 }
@@ -550,6 +553,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
                 ctx.block().store(DOUBLE, &v, &g_ref);
             }
+            super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
             if ctx.buffer_view_slots.contains_key(id)
                 || matches!(
                     value.as_ref(),

@@ -340,6 +340,16 @@ fn native_arena_view_let(
     }
 }
 
+fn native_arena_owner_alias_let(id: u32, name: &str, owner_id: u32, mutable: bool) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Any,
+        mutable,
+        init: Some(local(owner_id)),
+    }
+}
+
 fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
     Stmt::Let {
         id,
@@ -984,6 +994,111 @@ fn artifact_records_native_owned_typed_array_facts() {
         "expected native-owned f64 typed-array store record:\n{artifact:#}"
     );
     assert_eq!(artifact["summary"]["native_owned_view_count"], 4);
+}
+
+#[test]
+fn native_owned_typed_array_owner_alias_dispose_invalidates_views() {
+    let dispose_through_alias = compile_artifact_json(
+        "artifact_native_owned_dispose_through_alias.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            native_arena_owner_alias_let(3, "alias", 1, false),
+            Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(3)))),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert!(
+        dispose_through_alias["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["expr_kind"] == "TypedArrayGet"
+                    && record["consumer"] == "TypedArrayGet.slow_path"
+                    && record["access_mode"] == "dynamic_fallback"
+                    && record["materialization_reason"] == "use_after_dispose"
+                    && record["fallback_reason"] == "use_after_dispose"
+            }),
+        "expected dispose-through-alias to invalidate the native-owned view:\n{dispose_through_alias:#}"
+    );
+
+    let view_through_alias = compile_artifact_json(
+        "artifact_native_owned_view_through_alias_dispose_owner.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_owner_alias_let(3, "alias", 1, false),
+            native_arena_view_let(
+                2,
+                "view",
+                3,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(1)))),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert!(
+        view_through_alias["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["expr_kind"] == "TypedArrayGet"
+                    && record["consumer"] == "TypedArrayGet.slow_path"
+                    && record["access_mode"] == "dynamic_fallback"
+                    && record["materialization_reason"] == "use_after_dispose"
+                    && record["fallback_reason"] == "use_after_dispose"
+            }),
+        "expected aliased owner view to share dispose invalidation with the owner:\n{view_through_alias:#}"
+    );
+
+    let reassigned_alias = compile_artifact_json(
+        "artifact_native_owned_reassigned_alias_not_stale.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            native_arena_owner_alias_let(3, "alias", 1, true),
+            Stmt::Expr(Expr::LocalSet(3, Box::new(int(0)))),
+            Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(3)))),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    let records = reassigned_alias["records"].as_array().unwrap();
+    assert!(
+        !records.iter().any(|record| {
+            record["expr_kind"] == "TypedArrayGet"
+                && record["materialization_reason"] == "use_after_dispose"
+        }),
+        "reassigned owner alias should not keep a stale dispose link to the old owner:\n{reassigned_alias:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "TypedArrayGet"
+                && record["consumer"] == "TypedArrayGet.native_f64"
+                && record["access_mode"] == "unchecked_native"
+        }),
+        "live owner view should remain eligible for the unchecked native path:\n{reassigned_alias:#}"
+    );
 }
 
 #[test]
