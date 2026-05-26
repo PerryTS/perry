@@ -247,6 +247,7 @@ fn collect_used_new_fields_in_expr(
         | Expr::JsonParse(operand)
         | Expr::JsonStringify(operand)
         | Expr::IteratorToArray(operand)
+        | Expr::GetIterator(operand)
         | Expr::WeakRefNew(operand)
         | Expr::WeakRefDeref(operand)
         | Expr::FinalizationRegistryNew(operand)

@@ -73,9 +73,13 @@ pub fn linearize_body(
                 };
 
                 // Add hoisted var declarations to current (they'll be emitted in the state body)
+                // #1831: resolve the iterator. For a generator *call* the result
+                // already is its iterator; for an arbitrary iterable (effect,
+                // custom `[Symbol.iterator]`) `js_get_iterator` invokes the
+                // well-known-symbol method to obtain one.
                 current.push(Stmt::Expr(Expr::LocalSet(
                     del_iter_id,
-                    Box::new(*inner.clone()),
+                    Box::new(Expr::GetIterator(Box::new(*inner.clone()))),
                 )));
                 current.push(Stmt::Expr(Expr::LocalSet(
                     del_result_id,
@@ -681,9 +685,13 @@ pub fn linearize_body(
                     type_args: vec![],
                 };
 
+                // #1831: resolve the iterator. For a generator *call* the result
+                // already is its iterator; for an arbitrary iterable (effect,
+                // custom `[Symbol.iterator]`) `js_get_iterator` invokes the
+                // well-known-symbol method to obtain one.
                 current.push(Stmt::Expr(Expr::LocalSet(
                     del_iter_id,
-                    Box::new(*inner.clone()),
+                    Box::new(Expr::GetIterator(Box::new(*inner.clone()))),
                 )));
                 current.push(Stmt::Expr(Expr::LocalSet(
                     del_result_id,

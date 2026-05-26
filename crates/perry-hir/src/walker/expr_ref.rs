@@ -225,6 +225,7 @@ where
         | Expr::ArrayIsArray(v)
         | Expr::ArrayFrom(v)
         | Expr::IteratorToArray(v)
+        | Expr::GetIterator(v)
         | Expr::ObjectRest { object: v, .. }
         | Expr::ProxyRevoke(v)
         | Expr::ReflectOwnKeys(v)

@@ -472,6 +472,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let arr_ptr = blk.call(I64, "js_iterator_to_array", &[(DOUBLE, &iter_box)]);
             Ok(nanbox_pointer_inline(blk, &arr_ptr))
         }
+        Expr::GetIterator(o) => {
+            // #1831: `yield*` iterator resolution. `js_get_iterator` returns the
+            // operand's `Symbol.iterator` result when iterable (effect, custom
+            // iterables) or the operand unchanged when it is already an iterator
+            // (a perry generator object). Returns a NaN-boxed JSValue directly.
+            let v = lower_expr(ctx, o)?;
+            Ok(ctx.block().call(DOUBLE, "js_get_iterator", &[(DOUBLE, &v)]))
+        }
         Expr::WeakRefDeref(o) => {
             // `ref.deref()` — returns the wrapped target (or undefined if
             // collected; GC never clears the stub slot, so always returns

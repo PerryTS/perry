@@ -741,6 +741,41 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     f64::from_bits(TAG_UNDEFINED)
 }
 
+/// #1831: resolve the iterator for a `yield*` operand.
+///
+/// `yield* X` must drive `X[Symbol.iterator]()` — for a generator **call** the
+/// result already *is* its iterator (perry's generator object is
+/// `{next,return,throw}` with no `Symbol.iterator`), but for an arbitrary
+/// iterable (effect's `EffectPrimitive`, custom `[Symbol.iterator]` objects)
+/// the iterator must first be obtained by invoking the well-known-symbol
+/// method. This helper returns that iterator, or `val` unchanged when `val` is
+/// already an iterator / not iterable.
+///
+/// Arrays are intentionally returned unchanged: perry has no real array
+/// iterator object (`Array.prototype.values` yields an array, not a
+/// `.next`-bearing iterator, and for-of over arrays is special-cased), so
+/// `yield* [..]` is a separate follow-up (#1831 array sub-case) — handling it
+/// here would route through `values` and mis-drive.
+#[no_mangle]
+pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
+    if crate::array::js_array_is_array(val_f64).to_bits() == crate::value::TAG_TRUE {
+        return val_f64;
+    }
+    let iter_wk = well_known_symbol("iterator");
+    if !iter_wk.is_null() {
+        let sym_f64 = f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+        let iter_fn = unsafe { js_object_get_symbol_property(val_f64, sym_f64) };
+        if iter_fn.to_bits() != TAG_UNDEFINED {
+            let fn_ptr = crate::value::js_nanbox_get_pointer(iter_fn)
+                as *const crate::closure::ClosureHeader;
+            if !fn_ptr.is_null() {
+                return crate::closure::js_closure_call0(fn_ptr);
+            }
+        }
+    }
+    val_f64
+}
+
 /// `Object.getOwnPropertySymbols(obj)` — returns an array of symbol keys on
 /// the object. Looks up the side table populated by
 /// `js_object_set_symbol_property`.

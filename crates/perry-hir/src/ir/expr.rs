@@ -1744,6 +1744,10 @@ pub enum Expr {
     /// semantics `[].raw === undefined`).
     TemplateRaw(Box<Expr>),
     IteratorToArray(Box<Expr>), // collect iterator (.next() loop) into array
+    /// #1831: resolve the iterator of a `yield*` operand —
+    /// `operand[Symbol.iterator]()` when iterable, else the operand itself (a
+    /// generator object already *is* its iterator). Lowers to `js_get_iterator`.
+    GetIterator(Box<Expr>),
     /// Array.from(iterable, mapFn) -> Array
     /// Creates a new array by applying mapFn to each element of the iterable.
     ArrayFromMapped {
