@@ -326,14 +326,9 @@ mod tests {
 
     unsafe fn dispatch_random_fill_sync(view: *mut NativeTypedViewHeader) -> f64 {
         let module = b"crypto";
-        let ns =
-            crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
+        let ns = crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
         let ns_obj = crate::value::js_nanbox_get_pointer(ns) as *const crate::object::ObjectHeader;
-        let args = [
-            boxed_ptr(view as *const u8),
-            undefined(),
-            undefined(),
-        ];
+        let args = [boxed_ptr(view as *const u8), undefined(), undefined()];
         crate::object::dispatch_native_module_method(
             ns_obj,
             "randomFillSync",

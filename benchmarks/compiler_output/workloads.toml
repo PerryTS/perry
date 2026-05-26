@@ -522,6 +522,8 @@ allowed_hot_loop_runtime_calls = [
   "js_closure_call1",
   "js_dyn_index_get",
   "js_number_coerce",
+  "js_uint8array_get",
+  "js_uint8array_set",
 ]
 
 [workloads.h1_buffer_alias_negative.vectorization]
