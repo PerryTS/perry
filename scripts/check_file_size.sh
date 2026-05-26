@@ -75,6 +75,13 @@ crates/perry-codegen/src/expr/calls.rs
 # limit by the 7-line WeakMap/WeakSet dispatch hook in #1757/#1758. Splitting
 # per receiver-kind family tracked alongside #1435.
 crates/perry-runtime/src/object/native_call_method.rs
+# Codegen driver: `compile_module` is a single ~2,100-LOC function (module
+# setup -> per-class field-layout -> per-fn codegen -> link). It crossed the
+# limit after #26's cross-module same-named-class disambiguation (the
+# class_field_counts / class_init_chains build, interleaved with the per-class
+# loop). Extracting that pass is high-risk surgery deferred to the codegen
+# split tracked under #1435.
+crates/perry-codegen/src/codegen/mod.rs
 EOF
 )
 
