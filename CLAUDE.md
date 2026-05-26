@@ -129,7 +129,7 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 
 ## Known Limitations
 
-- **No runtime type checking**: Types erased at compile time. `typeof` via NaN-boxing tags. `instanceof` via class ID chain.
+- **No runtime type *validation***: declared TS types aren't enforced at runtime (a `string` param accepts a number, no throw). Annotations are mostly erased — the exception is `emitDecoratorMetadata`, which retains `design:type`/`design:paramtypes` from annotations on decorated members (see `docs/src/language/decorators.md`). Runtime type *discrimination* does exist: `typeof` via NaN-boxing tags, `instanceof` via class ID chain.
 - **No shared mutable state across threads**: No `SharedArrayBuffer` or `Atomics`.
 
 ## Common Pitfalls & Patterns

@@ -2,15 +2,21 @@
 
 Perry compiles a practical subset of TypeScript. This page documents what's not supported or works differently from Node.js/tsc.
 
-## No Runtime Type Checking
+## No Runtime Type Validation
 
-Types are erased at compile time. There is no runtime type system — Perry doesn't generate type guards or runtime type metadata.
+Declared TypeScript types are not enforced at runtime — Perry doesn't generate
+type guards from annotations, so a parameter typed `string` will accept a number
+without throwing.
 
 ```typescript
 {{#include ../../examples/language/limitations.ts:erased-types}}
 ```
 
-Use explicit `typeof` checks where runtime type discrimination is needed.
+Annotations are mostly erased, with one exception: when `emitDecoratorMetadata`
+applies, the `design:type` / `design:paramtypes` reflection metadata is derived
+from the annotations on decorated members and survives to runtime (see
+[Decorators](decorators.md)). Runtime type *discrimination* is available via
+explicit `typeof` checks and `instanceof`.
 
 ## No eval() or Dynamic Code
 
