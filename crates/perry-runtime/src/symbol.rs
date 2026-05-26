@@ -735,10 +735,76 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                 if let Some(v) = crate::object::resolve_proto_chain_symbol(cid, sym_f64) {
                     return v;
                 }
+                // #1838: a class can define a computed well-known-symbol METHOD
+                // (`[Symbol.iterator]() {}`) — class lowering names it
+                // `@@iterator` in the vtable (class_members.rs), NOT as a symbol
+                // property, so the proto-chain symbol walk above misses it. Map
+                // the well-known symbol back to its `@@name`, and if the class
+                // (or an ancestor) has that method, return it bound to the
+                // instance. This is how effect's `EffectPrimitive` exposes
+                // `Symbol.iterator` (→ `SingleShotGen`), so `yield* effectValue`
+                // / `Symbol.iterator in effectValue` resolve.
+                if let Some(at_name) = well_known_symbol_method_key(sym_f64) {
+                    if class_chain_has_method(cid, at_name) {
+                        return crate::object::js_class_method_bind(
+                            obj_f64,
+                            at_name.as_ptr(),
+                            at_name.len(),
+                        );
+                    }
+                }
             }
         }
     }
     f64::from_bits(TAG_UNDEFINED)
+}
+
+/// #1838: map a well-known symbol value to the synthetic `@@<name>` vtable key
+/// that class lowering assigns to a computed `[Symbol.X]() {}` method (see
+/// `lower_decl/class_members.rs`). Returns `None` for symbols that don't name a
+/// class method (or non-symbol values). `dispose`/`asyncDispose` use distinct
+/// `__perry_*__` names and are dispatched via the using-block desugarer, so
+/// they're deliberately excluded here.
+unsafe fn well_known_symbol_method_key(sym_f64: f64) -> Option<&'static str> {
+    let sk = sym_key_from_f64(sym_f64);
+    if sk == 0 {
+        return None;
+    }
+    for (short, at_name) in [
+        ("iterator", "@@iterator"),
+        ("asyncIterator", "@@asyncIterator"),
+        ("hasInstance", "@@hasInstance"),
+        ("toPrimitive", "@@toPrimitive"),
+        ("toStringTag", "@@toStringTag"),
+    ] {
+        let wk = well_known_symbol(short);
+        if !wk.is_null() {
+            let wk_f64 = f64::from_bits(crate::value::JSValue::pointer(wk as *const u8).bits());
+            if sym_key_from_f64(wk_f64) == sk {
+                return Some(at_name);
+            }
+        }
+    }
+    None
+}
+
+/// #1838: does `class_id` or any ancestor define a vtable method named `name`?
+fn class_chain_has_method(class_id: u32, name: &str) -> bool {
+    let mut cid = class_id;
+    let mut depth = 0usize;
+    while depth < 32 && cid != 0 {
+        if crate::object::class_has_own_method(cid, name) {
+            return true;
+        }
+        match crate::object::get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    false
 }
 
 /// #1831: resolve the iterator for a `yield*` operand.
