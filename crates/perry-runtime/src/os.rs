@@ -1171,13 +1171,14 @@ pub fn scan_process_stream_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
 fn build_stream_object_with_write(
     write_stub: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64,
     fd: f64,
+    writable: f64,
 ) -> *mut crate::object::ObjectHeader {
     use crate::closure::js_closure_alloc;
     use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::JSValue;
 
-    let packed = b"write\0fd\0emit\0on\0once\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF22, 5, packed.as_ptr(), packed.len() as u32);
+    let packed = b"write\0fd\0emit\0on\0once\0writable\0";
+    let obj = js_object_alloc_with_shape(0x7FFF_FF22, 6, packed.as_ptr(), packed.len() as u32);
     let closure = js_closure_alloc(write_stub as *const u8, 0);
     let cval = JSValue::pointer(closure as *const u8);
     js_object_set_field(obj, 0, cval);
@@ -1188,6 +1189,7 @@ fn build_stream_object_with_write(
     js_object_set_field(obj, 3, JSValue::pointer(on as *const u8));
     let once = js_closure_alloc(process_stream_on_once_stub as *const u8, 0);
     js_object_set_field(obj, 4, JSValue::pointer(once as *const u8));
+    js_object_set_field(obj, 5, JSValue::from_bits(writable.to_bits()));
     obj
 }
 
@@ -1200,7 +1202,11 @@ pub extern "C" fn js_process_stdin() -> f64 {
     let obj = STDIN_STREAM_SINGLETON.with(|slot| {
         let mut slot = slot.borrow_mut();
         if *slot == 0 {
-            *slot = build_stream_object_with_write(process_stdin_write_noop_stub, 0.0) as usize;
+            *slot = build_stream_object_with_write(
+                process_stdin_write_noop_stub,
+                0.0,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            ) as usize;
         }
         *slot as *mut crate::object::ObjectHeader
     });
@@ -1215,7 +1221,11 @@ pub extern "C" fn js_process_stdout() -> f64 {
     let obj = STDOUT_STREAM_SINGLETON.with(|slot| {
         let mut slot = slot.borrow_mut();
         if *slot == 0 {
-            *slot = build_stream_object_with_write(process_stdout_write_stub, 1.0) as usize;
+            *slot = build_stream_object_with_write(
+                process_stdout_write_stub,
+                1.0,
+                f64::from_bits(crate::value::TAG_TRUE),
+            ) as usize;
         }
         *slot as *mut crate::object::ObjectHeader
     });
@@ -1230,7 +1240,11 @@ pub extern "C" fn js_process_stderr() -> f64 {
     let obj = STDERR_STREAM_SINGLETON.with(|slot| {
         let mut slot = slot.borrow_mut();
         if *slot == 0 {
-            *slot = build_stream_object_with_write(process_stderr_write_stub, 2.0) as usize;
+            *slot = build_stream_object_with_write(
+                process_stderr_write_stub,
+                2.0,
+                f64::from_bits(crate::value::TAG_TRUE),
+            ) as usize;
         }
         *slot as *mut crate::object::ObjectHeader
     });
