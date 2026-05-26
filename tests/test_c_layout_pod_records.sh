@@ -41,8 +41,10 @@ type Packet = PerryPod<{
 
 let packet: Packet = { tag: 7, gain: 1.5, total: 2.25, count: 4 };
 let lied: Packet = { tag: 7, gain: 1.5, total: 2.25, count: 4 };
+let inexact: Packet = { tag: (-1 as any), gain: (1.1 as any), total: 2.25, count: ("x" as any) };
 
 console.log("read=" + packet.tag + "," + packet.gain + "," + packet.total + "," + packet.count);
+console.log("init=" + inexact.tag + "," + inexact.count + "," + inexact.gain);
 (lied as any).tag = "x";
 console.log("lie=" + lied.tag);
 packet.tag = 9;
@@ -61,6 +63,15 @@ function ret(): Packet {
 }
 
 console.log("return=" + ret().count);
+
+function makeGetter(): any {
+  let captured: Packet = { tag: 7, gain: 1.5, total: 2.25, count: 4 };
+  const get = () => captured.tag;
+  captured = { tag: 8, gain: 1.5, total: 2.25, count: 4 };
+  return get;
+}
+
+console.log("capture=" + makeGetter()());
 EOF
 
 ARTIFACT_DIR="$TMPDIR/native-reps"
@@ -76,7 +87,7 @@ COMPILE_OUTPUT=$(PERRY_NATIVE_REPS=1 \
   exit 1
 }
 
-EXPECTED=$'read=7,1.5,2.25,4\nlie=x\nafter=9,2.5,11\nreturn=4'
+EXPECTED=$'read=7,1.5,2.25,4\ninit=-1,x,1.1\nlie=x\nafter=9,2.5,11\nreturn=4\ncapture=8'
 RUN_OUTPUT=$(./test_bin 2>&1)
 if [ "$RUN_OUTPUT" != "$EXPECTED" ]; then
   echo "FAIL: JS-visible POD behavior changed"

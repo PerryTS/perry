@@ -641,6 +641,62 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
 }
 
 #[test]
+fn artifact_schema_v6_rejects_inexact_pod_initializer_values() {
+    let packet_ty = pod_type(&[
+        ("tag", Type::Named("PerryU32".to_string())),
+        ("gain", Type::Named("PerryF32".to_string())),
+        ("count", Type::Named("PerryBufferLen".to_string())),
+    ]);
+    let body = vec![
+        pod_let(
+            1,
+            "packet",
+            packet_ty,
+            vec![
+                ("tag", int(-1)),
+                ("gain", number(1.1)),
+                ("count", Expr::String("x".to_string())),
+            ],
+        ),
+        Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(local(1)),
+            property: "tag".to_string(),
+        })),
+    ];
+
+    let artifact = compile_artifact_json("artifact_c_layout_pod_init_reject.ts", body);
+    assert_eq!(artifact["schema_version"], 6);
+    assert_eq!(artifact["summary"]["pod_layout_count"], 0);
+    assert_eq!(artifact["summary"]["pod_record_count"], 0);
+    assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
+    assert!(
+        !artifact["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| record["native_rep_name"] == "pod_record"),
+        "inexact POD initializer must not emit pod_record storage:\n{artifact:#}"
+    );
+    assert!(
+        artifact["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["expr_kind"] == "PodRecordRejected"
+                    && record["fallback_reason"] == "pod_unsupported"
+                    && record["notes"].as_array().is_some_and(|notes| {
+                        notes.iter().any(|note| {
+                            note.as_str()
+                                .is_some_and(|note| note.contains("inexact_or_dynamic_initializer"))
+                        })
+                    })
+            }),
+        "expected explicit POD initializer rejection record:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
     let invalid_ty = pod_type(&[
         ("tag", Type::Named("PerryU32".to_string())),

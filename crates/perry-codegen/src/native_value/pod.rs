@@ -107,7 +107,7 @@ pub(crate) fn validate_exact_init(
         ));
     }
     let mut seen = std::collections::HashSet::new();
-    for ((actual_name, _), expected) in init_fields.fields.iter().zip(layout.fields.iter()) {
+    for ((actual_name, value), expected) in init_fields.fields.iter().zip(layout.fields.iter()) {
         if !seen.insert(actual_name.as_str()) {
             return Err(format!("duplicate_field:{}", actual_name));
         }
@@ -117,8 +117,88 @@ pub(crate) fn validate_exact_init(
                 expected.name, actual_name
             ));
         }
+        if !pod_init_value_roundtrips_exact(&expected.native_rep, value) {
+            return Err(format!(
+                "field:{}:inexact_or_dynamic_initializer:{}",
+                expected.name,
+                expected.native_rep.name()
+            ));
+        }
     }
     Ok(())
+}
+
+fn pod_init_value_roundtrips_exact(rep: &NativeRep, value: &Expr) -> bool {
+    match rep {
+        NativeRep::I32 => {
+            literal_i64(value).is_some_and(|n| i32::try_from(n).is_ok())
+                || literal_f64(value).is_some_and(|n| {
+                    int_roundtrips_exact(n, i32::MIN as f64, (i32::MAX as f64) + 1.0)
+                })
+        }
+        NativeRep::I64 => {
+            literal_i64(value).is_some_and(|n| {
+                let as_f64 = n as f64;
+                int_roundtrips_exact(as_f64, i64::MIN as f64, 9_223_372_036_854_775_808.0)
+                    && (as_f64 as i64) == n
+            }) || literal_f64(value).is_some_and(|n| {
+                int_roundtrips_exact(n, i64::MIN as f64, 9_223_372_036_854_775_808.0)
+            })
+        }
+        NativeRep::U32 | NativeRep::BufferLen => {
+            literal_i64(value).is_some_and(|n| u32::try_from(n).is_ok())
+                || literal_f64(value).is_some_and(|n| uint_roundtrips_exact(n, 4_294_967_296.0))
+        }
+        NativeRep::U64 | NativeRep::USize => {
+            literal_i64(value).is_some_and(|n| {
+                if n < 0 {
+                    return false;
+                }
+                let as_f64 = n as f64;
+                uint_roundtrips_exact(as_f64, 18_446_744_073_709_551_616.0)
+                    && (as_f64 as u64) == n as u64
+            }) || literal_f64(value)
+                .is_some_and(|n| uint_roundtrips_exact(n, 18_446_744_073_709_551_616.0))
+        }
+        NativeRep::F64 => matches!(value, Expr::Integer(_) | Expr::Number(_)),
+        NativeRep::F32 => literal_f64(value).is_some_and(f32_roundtrips_exact),
+        _ => false,
+    }
+}
+
+fn literal_i64(value: &Expr) -> Option<i64> {
+    match value {
+        Expr::Integer(n) => Some(*n),
+        _ => None,
+    }
+}
+
+fn literal_f64(value: &Expr) -> Option<f64> {
+    match value {
+        Expr::Integer(n) => Some(*n as f64),
+        Expr::Number(n) => Some(*n),
+        _ => None,
+    }
+}
+
+fn int_roundtrips_exact(number: f64, min_inclusive: f64, max_exclusive: f64) -> bool {
+    number.is_finite()
+        && number >= min_inclusive
+        && number < max_exclusive
+        && number.trunc() == number
+        && !(number == 0.0 && number.is_sign_negative())
+}
+
+fn uint_roundtrips_exact(number: f64, max_exclusive: f64) -> bool {
+    number.is_finite()
+        && number >= 0.0
+        && number < max_exclusive
+        && number.trunc() == number
+        && !(number == 0.0 && number.is_sign_negative())
+}
+
+fn f32_roundtrips_exact(number: f64) -> bool {
+    !number.is_nan() && ((number as f32) as f64).to_bits() == number.to_bits()
 }
 
 pub(crate) fn field_expected_rep(field: &PodLayoutField) -> ExpectedNativeRep {

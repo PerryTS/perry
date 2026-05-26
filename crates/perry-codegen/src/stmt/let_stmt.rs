@@ -185,6 +185,15 @@ pub(crate) fn lower_let(
 
     if let Some(init_expr) = init {
         match crate::native_value::layout_decision_for_type(ctx, &refined_ty) {
+            PodLayoutDecision::Layout(_)
+                if ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id) =>
+            {
+                record_pod_rejection(
+                    ctx,
+                    id,
+                    "boxed_capture_requires_js_object_storage".to_string(),
+                );
+            }
             PodLayoutDecision::Layout(layout) => {
                 match crate::native_value::collect_pod_init_fields(ctx, init_expr).and_then(
                     |fields| {
