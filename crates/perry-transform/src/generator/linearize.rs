@@ -144,6 +144,110 @@ pub fn linearize_body(
                 });
             }
 
+            // #34: `return yield* inner` — delegation in return position.
+            // The earlier catch-all arm (`Return(Some(Yield { .. }))`) ignored
+            // the `delegate` flag and yielded `inner` itself as a single
+            // (non-delegated) value, so the outer generator handed the raw
+            // delegated object straight to its consumer. For `yield* effect`
+            // that consumer is effect's `yieldWrapGet`, which expects a
+            // `YieldWrap` (produced by the effect's `[Symbol.iterator]`) and
+            // threw "BUG: yieldWrapGet" on the bare effect. Desugar identically
+            // to the `Let`-initializer delegation arm (drive the inner
+            // iterator, re-yielding each value through the iterator protocol),
+            // then `return { value: <final>, done: true }` so the iterator's
+            // completion value becomes the generator's return value.
+            Stmt::Return(Some(Expr::Yield {
+                value: Some(inner),
+                delegate: true,
+            })) => {
+                let del_iter_id = alloc_local(next_local_id);
+                let del_result_id = alloc_local(next_local_id);
+
+                // Initial pull: argless (the first `next()` value is discarded
+                // per spec).
+                let next_call = Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(del_iter_id)),
+                        property: "next".to_string(),
+                    }),
+                    args: vec![],
+                    type_args: vec![],
+                };
+                // #1832: in-loop pull forwards the outer resume value (`sent_id`).
+                let next_call_resumed = Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(del_iter_id)),
+                        property: "next".to_string(),
+                    }),
+                    args: vec![Expr::LocalGet(sent_id)],
+                    type_args: vec![],
+                };
+
+                // #1831: resolve the iterator (effect / custom `[Symbol.iterator]`
+                // operands need `js_get_iterator` to invoke the well-known-symbol
+                // method; a generator call already is its iterator).
+                current.push(Stmt::Expr(Expr::LocalSet(
+                    del_iter_id,
+                    Box::new(Expr::GetIterator(Box::new(*inner.clone()))),
+                )));
+                current.push(Stmt::Expr(Expr::LocalSet(
+                    del_result_id,
+                    Box::new(next_call),
+                )));
+
+                let while_body = vec![
+                    Stmt::Expr(Expr::Yield {
+                        value: Some(Box::new(Expr::PropertyGet {
+                            object: Box::new(Expr::LocalGet(del_result_id)),
+                            property: "value".to_string(),
+                        })),
+                        delegate: false,
+                    }),
+                    Stmt::Expr(Expr::LocalSet(del_result_id, Box::new(next_call_resumed))),
+                ];
+
+                let while_stmt = Stmt::While {
+                    condition: Expr::Unary {
+                        op: UnaryOp::Not,
+                        operand: Box::new(Expr::PropertyGet {
+                            object: Box::new(Expr::LocalGet(del_result_id)),
+                            property: "done".to_string(),
+                        }),
+                    },
+                    body: while_body,
+                };
+
+                linearize_body(
+                    &[while_stmt],
+                    states,
+                    current,
+                    state_num,
+                    state_id,
+                    next_local_id,
+                    sent_id,
+                    catches,
+                );
+
+                // After the loop, the iterator's final `value` (from
+                // {value, done:true}) is the value of `yield* inner`, which is
+                // exactly what `return yield* inner` returns. Wrap it as the
+                // generator's terminal {value, done:true} and flush a Done state.
+                current.push(Stmt::Return(Some(make_iter_result(
+                    Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(del_result_id)),
+                        property: "value".to_string(),
+                    },
+                    true,
+                ))));
+                let cont_state = *state_num;
+                *state_num += 1;
+                states.push(State {
+                    num: cont_state,
+                    body: std::mem::take(current),
+                    exit: StateExit::Done,
+                });
+            }
+
             // return (yield expr)  — i.e. `return await x` after async→generator rewrite
             // The yield must be emitted as a real yield state so the async-step driver can
             // await the expression; the continuation state then returns {value: __sent, done: true}
