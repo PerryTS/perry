@@ -207,6 +207,17 @@ pub(super) fn is_generator_call_expr(ctx: &LoweringContext, expr: &Expr) -> bool
                 }
             }
         }
+        // #321: a generator function EXPRESSION bound to a name (`const range =
+        // function*(){}`) lowers `range()` to `Call { callee: LocalGet(id) }`,
+        // not a `FuncRef`. Resolve the local's name and check the same set the
+        // for-of path registers into (see destructuring/var_decl.rs).
+        if let Expr::LocalGet(local_id) = callee.as_ref() {
+            if let Some((name, _, _)) = ctx.locals.iter().find(|(_, id, _)| id == local_id) {
+                if ctx.generator_func_names.contains(name) {
+                    return true;
+                }
+            }
+        }
     }
     false
 }

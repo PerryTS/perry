@@ -76,6 +76,7 @@ fn closure(params: Vec<Param>, body: Vec<Stmt>) -> Expr {
         captures_this: false,
         enclosing_class: None,
         is_async: false,
+        is_generator: false,
     }
 }
 

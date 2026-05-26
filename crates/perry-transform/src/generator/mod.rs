@@ -63,6 +63,204 @@ pub fn transform_generators(module: &mut Module) {
             transform_generator_function(func, &mut next_local_id, &mut next_func_id);
         }
     }
+
+    // #321: generator function EXPRESSIONS (`function*(){}`, e.g. effect's
+    // `Effect.gen(function*(){...})`) lower to `Expr::Closure { is_generator:
+    // true }`. Apply the SAME state-machine transform to each, using the
+    // captures-aware path so the closure's outer captures are threaded into the
+    // generated next/return/throw step closures. After the transform the
+    // closure's body returns a `{next,return,throw}` object when called — the
+    // same contract as a named `function* g(){}`.
+    for func in &mut module.functions {
+        let mut body = std::mem::take(&mut func.body);
+        transform_generator_closures_in_stmts(&mut body, &mut next_local_id, &mut next_func_id);
+        func.body = body;
+    }
+    // Top-level statements live in `module.init`, not `module.functions` — a
+    // `const g = function*(){...}` at module scope (and effect's `Effect.gen(
+    // function*(){...})`) is here.
+    {
+        let mut init = std::mem::take(&mut module.init);
+        transform_generator_closures_in_stmts(&mut init, &mut next_local_id, &mut next_func_id);
+        module.init = init;
+    }
+    // Class method / constructor / accessor bodies can also hold generator
+    // expressions (effect's classes do).
+    for class in &mut module.classes {
+        if let Some(ctor) = &mut class.constructor {
+            let mut b = std::mem::take(&mut ctor.body);
+            transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
+            ctor.body = b;
+        }
+        for m in class
+            .methods
+            .iter_mut()
+            .chain(class.static_methods.iter_mut())
+            .chain(class.getters.iter_mut().map(|(_, f)| f))
+            .chain(class.setters.iter_mut().map(|(_, f)| f))
+        {
+            let mut b = std::mem::take(&mut m.body);
+            transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
+            m.body = b;
+        }
+    }
+}
+
+fn transform_generator_closures_in_stmts(
+    stmts: &mut [Stmt],
+    next_local_id: &mut LocalId,
+    next_func_id: &mut FuncId,
+) {
+    for s in stmts.iter_mut() {
+        transform_generator_closures_in_stmt(s, next_local_id, next_func_id);
+    }
+}
+
+fn transform_generator_closures_in_stmt(
+    stmt: &mut Stmt,
+    next_local_id: &mut LocalId,
+    next_func_id: &mut FuncId,
+) {
+    match stmt {
+        Stmt::Let { init: Some(e), .. } => {
+            transform_generator_closures_in_expr(e, next_local_id, next_func_id)
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => {
+            transform_generator_closures_in_expr(e, next_local_id, next_func_id)
+        }
+        Stmt::Return(Some(e)) => {
+            transform_generator_closures_in_expr(e, next_local_id, next_func_id)
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            transform_generator_closures_in_expr(condition, next_local_id, next_func_id);
+            transform_generator_closures_in_stmts(then_branch, next_local_id, next_func_id);
+            if let Some(eb) = else_branch {
+                transform_generator_closures_in_stmts(eb, next_local_id, next_func_id);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            transform_generator_closures_in_expr(condition, next_local_id, next_func_id);
+            transform_generator_closures_in_stmts(body, next_local_id, next_func_id);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                transform_generator_closures_in_stmt(i, next_local_id, next_func_id);
+            }
+            if let Some(c) = condition {
+                transform_generator_closures_in_expr(c, next_local_id, next_func_id);
+            }
+            if let Some(u) = update {
+                transform_generator_closures_in_expr(u, next_local_id, next_func_id);
+            }
+            transform_generator_closures_in_stmts(body, next_local_id, next_func_id);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            transform_generator_closures_in_stmts(body, next_local_id, next_func_id);
+            if let Some(c) = catch {
+                transform_generator_closures_in_stmts(&mut c.body, next_local_id, next_func_id);
+            }
+            if let Some(f) = finally {
+                transform_generator_closures_in_stmts(f, next_local_id, next_func_id);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            transform_generator_closures_in_expr(discriminant, next_local_id, next_func_id);
+            for case in cases.iter_mut() {
+                if let Some(t) = &mut case.test {
+                    transform_generator_closures_in_expr(t, next_local_id, next_func_id);
+                }
+                transform_generator_closures_in_stmts(&mut case.body, next_local_id, next_func_id);
+            }
+        }
+        Stmt::Labeled { body, .. } => {
+            transform_generator_closures_in_stmt(body, next_local_id, next_func_id)
+        }
+        _ => {}
+    }
+}
+
+fn transform_generator_closures_in_expr(
+    expr: &mut Expr,
+    next_local_id: &mut LocalId,
+    next_func_id: &mut FuncId,
+) {
+    // Bottom-up: descend into this closure's own body (the expr-children walker
+    // deliberately does NOT visit Closure bodies), then into all sub-exprs, so
+    // nested generator closures are transformed before their enclosing one.
+    if let Expr::Closure { body, .. } = expr {
+        transform_generator_closures_in_stmts(body, next_local_id, next_func_id);
+    }
+    perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
+        transform_generator_closures_in_expr(child, next_local_id, next_func_id);
+    });
+
+    // Now transform THIS closure if it's a generator expression.
+    if let Expr::Closure {
+        is_generator,
+        params,
+        body,
+        captures,
+        mutable_captures,
+        captures_this,
+        enclosing_class,
+        is_async,
+        ..
+    } = expr
+    {
+        if *is_generator {
+            let synth_id = {
+                let id = *next_func_id;
+                *next_func_id += 1;
+                id
+            };
+            let mut synth = Function {
+                id: synth_id,
+                name: "__gen_closure_body".to_string(),
+                type_params: Vec::new(),
+                params: params.clone(),
+                return_type: Type::Any,
+                body: std::mem::take(body),
+                is_async: *is_async,
+                is_generator: true,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            };
+            transform_generator_function_with_extra_captures(
+                &mut synth,
+                next_local_id,
+                next_func_id,
+                captures,
+                mutable_captures,
+                *captures_this,
+                enclosing_class.clone(),
+            );
+            *body = synth.body;
+            // The closure now returns a {next,return,throw} object when called;
+            // it is no longer a generator (and not async — the transform handles
+            // the async-generator Promise-wrapping internally for `async function*`).
+            *is_generator = false;
+            *is_async = false;
+        }
+    }
 }
 
 /// Issue #1021: apply the same generator + async-step-driver transform that

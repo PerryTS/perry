@@ -473,6 +473,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     captures_this: false,
                     enclosing_class: None,
                     is_async: fn_decl.function.is_async,
+                    is_generator: false,
                 };
                 result.push(Stmt::Let {
                     id: local_id,

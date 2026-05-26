@@ -1239,6 +1239,23 @@ pub(crate) fn lower_var_decl_with_destructuring(
             };
 
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
+            // #321: a generator function EXPRESSION bound to a name (`const g =
+            // function*(){}`) — register the name so `for (x of g())` / `[...g()]`
+            // take the iterator-protocol path, matching named `function* g(){}`
+            // declarations. (`.next()`-driving already works via the lifted
+            // generator transform; this covers the for-of/spread call sites,
+            // whose detection in stmt_loops.rs is name-based.)
+            if let Some(Expr::Closure {
+                is_generator: true,
+                is_async,
+                ..
+            }) = &init
+            {
+                ctx.generator_func_names.insert(name.clone());
+                if *is_async {
+                    ctx.async_generator_func_names.insert(name.clone());
+                }
+            }
             let id = if let Some(pid) = pre_id {
                 pid
             } else if ctx.scope_depth == 0
@@ -1509,6 +1526,23 @@ pub(crate) fn lower_var_decl_with_destructuring(
             let name = get_binding_name(&decl.name)?;
             let ty = extract_binding_type(&decl.name);
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
+            // #321: a generator function EXPRESSION bound to a name (`const g =
+            // function*(){}`) — register the name so `for (x of g())` / `[...g()]`
+            // take the iterator-protocol path, matching named `function* g(){}`
+            // declarations. (`.next()`-driving works regardless via the lifted
+            // generator transform; this covers the for-of/spread call sites,
+            // whose detection in stmt_loops.rs is name-based.)
+            if let Some(Expr::Closure {
+                is_generator: true,
+                is_async,
+                ..
+            }) = &init
+            {
+                ctx.generator_func_names.insert(name.clone());
+                if *is_async {
+                    ctx.async_generator_func_names.insert(name.clone());
+                }
+            }
             let id = if ctx.scope_depth == 0
                 && ctx.inside_block_scope == 0
                 && ctx.pre_registered_module_vars.remove(&name)

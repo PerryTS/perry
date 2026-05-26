@@ -898,6 +898,7 @@ fn try_rewrite_foreach(
         captures_this: false,
         enclosing_class: None,
         is_async: false,
+        is_generator: false,
     };
     Some(Expr::Call {
         callee: Box::new(closure),
@@ -1090,6 +1091,7 @@ fn try_rewrite_navstack(
         captures_this: false,
         enclosing_class: None,
         is_async: false,
+        is_generator: false,
     };
     Some(Expr::Call {
         callee: Box::new(closure),
@@ -1325,6 +1327,7 @@ mod tests {
                     captures_this: false,
                     enclosing_class: None,
                     is_async: false,
+                    is_generator: false,
                 },
             ],
         })

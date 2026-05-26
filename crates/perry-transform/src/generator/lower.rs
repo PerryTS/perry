@@ -429,6 +429,7 @@ pub fn transform_generator_function_with_extra_captures(
         captures_this,
         enclosing_class: enclosing_class.clone(),
         is_async: false,
+        is_generator: false,
     };
 
     // Build .throw(error) closure.
@@ -552,6 +553,7 @@ pub fn transform_generator_function_with_extra_captures(
         captures_this,
         enclosing_class: enclosing_class.clone(),
         is_async: false,
+        is_generator: false,
     };
 
     if func.was_plain_async {
@@ -627,6 +629,7 @@ pub fn transform_generator_function_with_extra_captures(
             captures_this,
             enclosing_class: enclosing_class.clone(),
             is_async: false,
+            is_generator: false,
         };
         let iter_obj = Expr::Object(vec![
             ("next".to_string(), next_closure),
@@ -888,6 +891,7 @@ pub fn build_async_step_driver_direct(
         captures_this,
         enclosing_class: enclosing_class.clone(),
         is_async: false,
+        is_generator: false,
     };
 
     // Outer wrapper:

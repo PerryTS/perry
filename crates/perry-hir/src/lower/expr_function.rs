@@ -268,6 +268,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         captures_this,
         enclosing_class,
         is_async: arrow.is_async,
+        is_generator: false,
     })
 }
 
@@ -537,6 +538,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         captures_this: false,
         enclosing_class: None,
         is_async: fn_expr.function.is_async,
+        is_generator: fn_expr.function.is_generator,
     })
 }
 

@@ -62,6 +62,7 @@ fn closure_stub() -> Expr {
         captures_this: false,
         enclosing_class: None,
         is_async: false,
+        is_generator: false,
     }
 }
 
@@ -629,6 +630,7 @@ fn for_each_lowers_array_map_in_vstack() {
             captures_this: false,
             enclosing_class: None,
             is_async: false,
+            is_generator: false,
         }),
     };
     m.init.push(app_with_body(nmc(
@@ -885,6 +887,7 @@ fn navstack_set_in_closure_rewrites_to_settext() {
                 captures_this: false,
                 enclosing_class: None,
                 is_async: false,
+                is_generator: false,
             },
         ],
     );
@@ -993,6 +996,7 @@ fn state_set_in_closure_rewrites_to_settext() {
         captures_this: false,
         enclosing_class: None,
         is_async: false,
+        is_generator: false,
     };
     m.init.push(app_with_body(nmc(
         "Button",
@@ -1162,6 +1166,7 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
             captures_this: false,
             enclosing_class: None,
             is_async: false,
+            is_generator: false,
         }),
     };
     m.init
@@ -1467,6 +1472,7 @@ fn media_call_inside_button_closure_also_triggers_glue() {
         captures_this: false,
         enclosing_class: None,
         is_async: false,
+        is_generator: false,
     };
     m.init.push(app_with_body(nmc(
         "Button",
@@ -1953,6 +1959,7 @@ fn phase2_v35_widget_set_hidden_in_closure_emits_state_binding() {
         captures_this: false,
         enclosing_class: None,
         is_async: false,
+        is_generator: false,
     };
     m.init.push(let_widget(
         body_id,
