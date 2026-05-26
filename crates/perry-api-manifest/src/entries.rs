@@ -1783,6 +1783,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // #1367: X509Certificate — `new X509Certificate(pem|der)` + read-only
     // subject/issuer/validFrom/validTo/serialNumber/fingerprint/ca props.
     class("crypto", "X509Certificate"),
+    // Legacy Netscape SPKAC helper namespace:
+    // crypto.Certificate.{verifySpkac,exportPublicKey,exportChallenge}.
+    property("crypto", "Certificate"),
     method("crypto", "createECDH", false, None),
     method("crypto", "createDiffieHellman", false, None),
     method("crypto", "createDiffieHellmanGroup", false, None),

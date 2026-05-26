@@ -1347,6 +1347,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_crypto_create_hash_options", DOUBLE, &[I64, DOUBLE]);
     // #1367: `new X509Certificate(pem|der)` — parses to a NaN-boxed handle.
     module.declare_function("js_crypto_x509_new", DOUBLE, &[I64]);
+    module.declare_function("js_crypto_certificate_verify_spkac", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_crypto_certificate_export_public_key", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_crypto_certificate_export_challenge", DOUBLE, &[DOUBLE]);
     module.declare_function("js_crypto_create_sign", DOUBLE, &[I64]);
     module.declare_function("js_crypto_create_verify", DOUBLE, &[I64]);
     module.declare_function("js_crypto_create_ecdh", DOUBLE, &[I64]);

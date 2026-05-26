@@ -133,6 +133,9 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         // Node: randomInt(max) → [0,max); randomInt(min,max) → [min,max).
         "randomInt" if args_len >= 2 => js_crypto_random_int(arg(0), arg(1)),
         "randomInt" => js_crypto_random_int(0.0, arg(0)),
+        "Certificate.verifySpkac" => js_crypto_certificate_verify_spkac(arg(0)),
+        "Certificate.exportPublicKey" => js_crypto_certificate_export_public_key(arg(0)),
+        "Certificate.exportChallenge" => js_crypto_certificate_export_challenge(arg(0)),
         _ => undefined,
     }
 }

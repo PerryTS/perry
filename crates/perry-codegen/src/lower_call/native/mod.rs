@@ -147,6 +147,28 @@ pub(crate) fn lower_native_method_call(
         ));
     }
 
+    if module == "crypto"
+        && class_name == Some("Certificate")
+        && matches!(
+            method,
+            "verifySpkac" | "exportPublicKey" | "exportChallenge"
+        )
+        && object.is_none()
+    {
+        let input = if let Some(arg) = args.first() {
+            lower_expr(ctx, arg)?
+        } else {
+            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+        };
+        let runtime = match method {
+            "verifySpkac" => "js_crypto_certificate_verify_spkac",
+            "exportPublicKey" => "js_crypto_certificate_export_public_key",
+            "exportChallenge" => "js_crypto_certificate_export_challenge",
+            _ => unreachable!(),
+        };
+        return Ok(ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &input)]));
+    }
+
     // `perry/ui.App({ title, width, height, body, icon? })` — minimum-viable
     // dispatch so a perry/ui app actually launches an NSApplication and
     // shows a window. Pre-v0.5.10 this fell into the receiver-less early-

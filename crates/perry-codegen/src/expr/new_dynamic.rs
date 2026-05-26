@@ -156,6 +156,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // `new crypto.Certificate()` is a legacy constructor in Node, but
+            // the implementation is a stateless namespace over the same SPKAC
+            // helper methods as `crypto.Certificate.*`. Represent instances as
+            // the `crypto.Certificate` native namespace so method calls dispatch
+            // through the existing native-module path.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if property == "Certificate" && args.is_empty() {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "crypto" {
+                            let module_name = "crypto.Certificate";
+                            let mod_idx = ctx.strings.intern(module_name);
+                            let mod_bytes_global =
+                                format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
+                            let mod_len_str = module_name.len().to_string();
+                            return Ok(ctx.block().call(
+                                DOUBLE,
+                                "js_create_native_module_namespace",
+                                &[(PTR, &mod_bytes_global), (I64, &mod_len_str)],
+                            ));
+                        }
+                    }
+                }
+            }
+
             // `new (PerformanceObserver as any)(cb?)` — the `as any` cast
             // (used because no-arg construction is a TS type error) strips the
             // bare identifier, so the constructor arrives as

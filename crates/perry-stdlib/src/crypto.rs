@@ -8,6 +8,7 @@
 //!
 //! `util` declares shared imports, helpers, and private types that are
 //! re-exported only inside this module for sibling shards.
+mod certificate;
 mod cipher;
 mod ecdh;
 mod handles;
@@ -24,12 +25,12 @@ mod x509;
 #[allow(unused_imports)]
 // Private imports keep sibling modules able to share `pub(super)` helpers.
 use self::{
-    cipher::*, ecdh::*, handles::*, hash::*, hash_handles::*, kdf::*, keys::*, prime::*, random::*,
-    sign::*, util::*, x509::*,
+    certificate::*, cipher::*, ecdh::*, handles::*, hash::*, hash_handles::*, kdf::*, keys::*,
+    prime::*, random::*, sign::*, util::*, x509::*,
 };
 
 // Public re-exports preserve the parent module surface for FFI entry points.
 pub use self::{
-    cipher::*, ecdh::*, handles::*, hash::*, hash_handles::*, kdf::*, keys::*, prime::*, random::*,
-    sign::*, x509::*,
+    certificate::*, cipher::*, ecdh::*, handles::*, hash::*, hash_handles::*, kdf::*, keys::*,
+    prime::*, random::*, sign::*, x509::*,
 };
