@@ -650,6 +650,41 @@ pub extern "C" fn js_fs_lchown_sync(path_value: f64, uid_value: f64, gid_value: 
     chown_path_value(path_value, uid_value, gid_value, false)
 }
 
+/// `fs.lchmodSync(path, mode)` — chmod a symlink itself (not its target).
+/// Implemented via `lchmod(2)` on macOS/BSD; on Linux the syscall is absent so
+/// we surface failure (return 0) the same way the callback path then reports
+/// ENOSYS-equivalent. No-op success on non-unix.
+#[no_mangle]
+pub extern "C" fn js_fs_lchmod_sync(path_value: f64, mode: f64) -> i32 {
+    #[cfg(all(unix, any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly")))]
+    unsafe {
+        // `libc` 0.2 doesn't expose `lchmod` uniformly across BSD targets,
+        // so declare it directly. Signature matches POSIX:
+        //   int lchmod(const char *path, mode_t mode);
+        extern "C" {
+            fn lchmod(path: *const libc::c_char, mode: libc::mode_t) -> libc::c_int;
+        }
+        let Some(path) = decode_path_value(path_value) else {
+            return 0;
+        };
+        let Ok(path) = std::ffi::CString::new(path) else {
+            return 0;
+        };
+        let rc = lchmod(path.as_ptr(), mode as libc::mode_t);
+        if rc == 0 { 1 } else { 0 }
+    }
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))))]
+    {
+        let _ = (path_value, mode);
+        0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path_value, mode);
+        1
+    }
+}
+
 fn chown_path_value(path_value: f64, uid_value: f64, gid_value: f64, follow: bool) -> i32 {
     #[cfg(unix)]
     unsafe {

@@ -130,7 +130,8 @@ pub use consumers::js_register_stream_consumer_callbacks;
 use fs_promises::{
     thunk_fs_promises_access, thunk_fs_promises_appendFile, thunk_fs_promises_chmod,
     thunk_fs_promises_chown, thunk_fs_promises_copyFile, thunk_fs_promises_cp,
-    thunk_fs_promises_glob, thunk_fs_promises_lchown, thunk_fs_promises_link,
+    thunk_fs_promises_glob, thunk_fs_promises_lchmod, thunk_fs_promises_lchown,
+    thunk_fs_promises_link,
     thunk_fs_promises_lstat, thunk_fs_promises_lutimes, thunk_fs_promises_mkdir,
     thunk_fs_promises_mkdtemp, thunk_fs_promises_open, thunk_fs_promises_opendir,
     thunk_fs_promises_readFile, thunk_fs_promises_readdir, thunk_fs_promises_readlink,
@@ -261,6 +262,10 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             ExportSpec {
                 name: "lchown",
                 thunk: ExportThunk::Fn3(thunk_fs_promises_lchown),
+            },
+            ExportSpec {
+                name: "lchmod",
+                thunk: ExportThunk::Fn2(thunk_fs_promises_lchmod),
             },
             ExportSpec {
                 name: "mkdir",

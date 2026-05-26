@@ -237,6 +237,13 @@
                 );
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
+            "lchmodSync" if args.len() >= 2 => {
+                let p = lower_expr(ctx, &args[0])?;
+                let m = lower_expr(ctx, &args[1])?;
+                ctx.block()
+                    .call_void("js_fs_lchmod_sync", &[(DOUBLE, &p), (DOUBLE, &m)]);
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
             "fchownSync" if args.len() >= 3 => {
                 let fd = lower_expr(ctx, &args[0])?;
                 let uid = lower_expr(ctx, &args[1])?;

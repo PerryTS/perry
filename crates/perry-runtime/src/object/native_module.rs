@@ -439,6 +439,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "link")
             | ("fs", "lchown")
             | ("fs", "lchownSync")
+            | ("fs", "lchmod")
+            | ("fs", "lchmodSync")
             | ("fs", "lutimes")
             | ("fs", "lutimesSync")
             | ("fs", "mkdir")

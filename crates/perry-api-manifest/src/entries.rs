@@ -2080,6 +2080,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "chown", false, None),
     method("fs", "lchownSync", false, None),
     method("fs", "lchown", false, None),
+    method("fs", "lchmodSync", false, None),
+    method("fs", "lchmod", false, None),
     method("fs", "truncateSync", false, None),
     method("fs", "truncate", false, None),
     method("fs", "linkSync", false, None),

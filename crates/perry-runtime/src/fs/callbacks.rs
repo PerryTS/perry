@@ -430,6 +430,22 @@ pub extern "C" fn js_fs_lchown_callback(
     f64::from_bits(TAG_UNDEFINED)
 }
 
+/// `fs.lchmod(path, mode, callback)`. macOS/BSD-only; Linux reports an error.
+#[no_mangle]
+pub extern "C" fn js_fs_lchmod_callback(path_value: f64, mode_value: f64, callback: f64) -> f64 {
+    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let cb = last_callback(&[callback]);
+    unsafe {
+        if let Some(err_val) = fs_callback_lstat_error(path_value, "lchmod") {
+            call_cb_err1(cb, err_val);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
+    let _ = js_fs_lchmod_sync(path_value, mode_value);
+    call_cb0(cb);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 /// `fs.truncate(path, len, callback)`.
 #[no_mangle]
 pub extern "C" fn js_fs_truncate_callback(path_value: f64, len_value: f64, callback: f64) -> f64 {

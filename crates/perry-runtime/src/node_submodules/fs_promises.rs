@@ -98,6 +98,15 @@ pub(crate) extern "C" fn thunk_fs_promises_lchown(
     promise_undefined()
 }
 
+pub(crate) extern "C" fn thunk_fs_promises_lchmod(
+    _closure: *const ClosureHeader,
+    path: f64,
+    mode: f64,
+) -> f64 {
+    let _ = crate::fs::js_fs_lchmod_sync(path, mode);
+    promise_undefined()
+}
+
 pub(crate) extern "C" fn thunk_fs_promises_mkdir(
     _closure: *const ClosureHeader,
     path: f64,

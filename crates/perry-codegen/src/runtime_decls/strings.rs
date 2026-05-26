@@ -336,6 +336,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_chmod_sync", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_chown_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_fs_lchown_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_lchmod_sync", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_truncate_sync", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_ftruncate_sync", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_fsync_sync", I32, &[DOUBLE]);
