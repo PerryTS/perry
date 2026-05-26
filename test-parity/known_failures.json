@@ -1616,18 +1616,6 @@
     "category": "bug-open",
     "reason": "node:process: process.exitCode = N does not round-trip via read (same root as exit-code-default). Flips to PASS when #1350 lands."
   },
-  "node-suite/perf_hooks/mark/detail-circular": {
-    "issue": "1512",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: mark detail with a circular reference should be accepted (structuredClone handles cycles). Perry throws. Flips to PASS when #1512 lands."
-  },
-  "node-suite/perf_hooks/mark/detail-function-throws": {
-    "issue": "1513",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: mark detail with a Function value should throw DataCloneError (structuredClone refuses). Perry silently accepts. Flips to PASS when #1513 lands."
-  },
   "node-suite/stream/imports/promises-ns": {
     "issue": "1533",
     "added": "2026-05-23",
