@@ -253,7 +253,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Some(if let Some(slot) = this_slot {
                     ctx.block().load(DOUBLE, &slot)
                 } else {
-                    double_literal(0.0)
+                    // Issue #1845: empty `this_stack` => dynamically-bound
+                    // `this` (computed-key method / function-expression
+                    // receiver). Capture the runtime's `IMPLICIT_THIS`, not
+                    // a 0.0 sentinel. See the matching comment on the
+                    // post-create patch path below.
+                    ctx.block().call(DOUBLE, "js_implicit_this_get", &[])
                 })
             } else {
                 None
@@ -316,17 +321,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // topmost entry on `this_stack`; load and write that into
             // the reserved capture slot. Without this, the closure's
             // `Expr::This` reads back 0.0 and any `this.field` access in
-            // the body crashes. Module-level / function-level call sites
-            // have an empty `this_stack` — keep the 0.0 sentinel there
-            // (matches the previous behavior for top-level arrow expressions
-            // that legitimately have no `this` binding).
+            // the body crashes.
+            //
+            // Issue #1845: when `this_stack` is empty the enclosing
+            // function still has a dynamically-bound `this` — this is the
+            // case for a computed-key method (`[expr](){…}`) which lowers
+            // to a function-expression closure field (see
+            // `lower_computed_key_method_as_field`): its body reads `this`
+            // via the runtime's `IMPLICIT_THIS` (set by `recv[k]()`
+            // dispatch), NOT via `this_stack`. A direct `Expr::This` in
+            // such a body already falls back to `js_implicit_this_get`
+            // (see `this_super_call.rs`); a *nested* arrow that captures
+            // `this` must capture that same dynamic receiver, otherwise it
+            // snapshots a bogus 0.0 sentinel. effect's fiber-runtime
+            // op-dispatch hit this: `[OP_WITH_RUNTIME](op){ internalCall(()
+            // => op.i0(this, …)) }` passed `this = 0.0` (a raw number) into
+            // the WithRuntime handler, so `fiber.currentContext` read
+            // `undefined` and `Effect.all`/`Effect.forEach` died with a
+            // `{}` FiberFailure. Falling back to `js_implicit_this_get`
+            // here matches the direct-read path exactly: top-level arrows
+            // that legitimately have no `this` see `undefined` (the
+            // `IMPLICIT_THIS` default), not 0.0 — both are non-crashing.
             if *captures_this {
                 let this_idx = auto_captures.len().to_string();
                 let this_slot = ctx.this_stack.last().cloned();
                 let this_value = if let Some(slot) = this_slot {
                     ctx.block().load(DOUBLE, &slot)
                 } else {
-                    double_literal(0.0)
+                    ctx.block().call(DOUBLE, "js_implicit_this_get", &[])
                 };
                 let blk = ctx.block();
                 blk.call_void(
