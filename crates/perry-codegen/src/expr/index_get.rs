@@ -425,6 +425,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //   3. Anything else → fall back to dynamic object field
             //      access by stringifying the index at runtime
             if is_array_expr(ctx, object) {
+                // #321: a symbol-keyed array read (`arr[Symbol.iterator]`) must
+                // NOT take the numeric fast path below — `fptosi` on the symbol
+                // value yields a garbage index (returned a number). Route symbol
+                // keys to the symbol-property resolver, which exposes the array
+                // iterator for `Symbol.iterator`.
+                if matches!(index.as_ref(), Expr::SymbolFor(_)) {
+                    let obj_box = lower_expr(ctx, object)?;
+                    let key_box = lower_expr(ctx, index)?;
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_object_get_symbol_property",
+                        &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
+                    ));
+                }
                 let require_numeric_layout =
                     expr_has_numeric_pointer_free_array_layout(ctx, object);
                 // Bounded-index fast path (mirrors the IndexSet

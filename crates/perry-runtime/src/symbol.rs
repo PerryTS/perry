@@ -703,6 +703,25 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;
     }
+    // #321: arrays expose `Symbol.iterator`. perry has no standalone array
+    // iterator object (for-of is special-cased), but `arr[Symbol.iterator]`
+    // must resolve to a callable so `Symbol.iterator in arr` is true
+    // (effect's `Predicate.isIterable`) and `typeof arr[Symbol.iterator]` is
+    // "function". Bind the array's `values` method as that callable. Pre-fix
+    // the symbol key fell through to the numeric/string paths and read back a
+    // number, so `isIterable([...])` was false and `Effect.all`'s
+    // predicate-`dual` `forEach` went data-last (returned a function).
+    if crate::array::js_array_is_array(obj_f64).to_bits() == crate::value::TAG_TRUE {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
+                let mname = b"values";
+                return crate::object::js_class_method_bind(obj_f64, mname.as_ptr(), mname.len());
+            }
+        }
+    }
     // #1758: a POINTER class-object whose OWN symbol props miss may inherit
     // the symbol through its class_id prototype chain. (The SYMBOL_PROPERTIES
     // lock is released above before recursing into the resolver, which takes
