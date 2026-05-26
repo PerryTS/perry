@@ -679,6 +679,12 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::perf_hooks::scan_perf_entries_roots_mut);
     gc_register_mutable_root_scanner(transition_cache_mutable_root_scanner);
     gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
+    // Issue #1813: the implicit-`this` cell holds the live receiver across a
+    // dynamically-dispatched method body. A moving GC triggered from inside
+    // that body (e.g. @perryts/mysql Pool.acquire → handshake → nativeScramble
+    // under concurrent load) must rewrite the cell, or the body's next
+    // `this`-derived dispatch derefs a relocated receiver → SIGSEGV.
+    gc_register_mutable_root_scanner(crate::object::scan_implicit_this_roots_mut);
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     gc_register_mutable_root_scanner(intern_table_mutable_root_scanner);
     gc_register_mutable_root_scanner(small_int_cache_mutable_root_scanner);

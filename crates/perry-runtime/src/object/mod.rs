@@ -277,6 +277,38 @@ pub extern "C" fn js_implicit_this_set(value: f64) -> f64 {
     IMPLICIT_THIS.with(|c| f64::from_bits(c.replace(value.to_bits())))
 }
 
+/// GC mutable-root scanner for the implicit-`this` cell (issue #1813).
+///
+/// `IMPLICIT_THIS` holds the NaN-boxed receiver for the duration of a
+/// dynamically-dispatched non-arrow method body — set then restored by
+/// `js_native_call_method` and by the codegen `js_implicit_this_set`
+/// save/restore around `js_native_call_value`. That receiver is a live
+/// heap object for the whole call, but the cell is plain thread-local
+/// storage, so before this scanner it was invisible to GC: not a root.
+///
+/// When a moving GC runs *during* the method body — e.g. a nested stdlib
+/// pump draining network IO for `@perryts/mysql`'s `Pool.acquire` →
+/// handshake → `nativeScramble` under concurrent load — the receiver is
+/// evacuated/copied. Without a root slot to rewrite, the cell kept the
+/// stale pre-move pointer and the body's next `this`-derived dispatch
+/// dereferenced freed/relocated memory: the concurrent-load SIGSEGV in
+/// `js_native_call_method` reported in #1813. (It only surfaced under
+/// memory pressure because nursery copying / old-gen evacuation only move
+/// objects then — hence the load-dependent heisenbug.)
+///
+/// Marking also keeps `this` reachable when the cell is its only root.
+/// Non-pointer tags (the `TAG_UNDEFINED` default, plus null/int/bool)
+/// flow through `visit_nanbox_bits` as no-ops, so scanning the idle cell
+/// is safe.
+pub fn scan_implicit_this_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    IMPLICIT_THIS.with(|c| {
+        let mut bits = c.get();
+        if visitor.visit_nanbox_u64_slot(&mut bits) {
+            c.set(bits);
+        }
+    });
+}
+
 /// Read the u64 bits stored at `field_index` for `obj`, or `None` if absent.
 /// Positions never written are stored as `TAG_UNDEFINED`; this helper reports
 /// them as `None` so callers can return JS `undefined` uniformly with the

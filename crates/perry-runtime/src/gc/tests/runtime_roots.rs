@@ -264,6 +264,62 @@ fn test_runtime_root_visitor_marks_and_rewrites_nanbox_slot() {
 }
 
 #[test]
+fn test_implicit_this_root_scanner_marks_and_rewrites() {
+    // Regression for #1813. The implicit-`this` cell holds the NaN-boxed
+    // receiver across a dynamically-dispatched non-arrow method body. Under a
+    // moving GC triggered from inside that body (the @perryts/mysql
+    // Pool.acquire → handshake → nativeScramble path under concurrent load)
+    // the receiver relocates. The scanner must (a) MARK it so it is not swept
+    // when the cell is its only root, and (b) REWRITE the cell to the moved
+    // copy so the body's next `this`-derived dispatch derefs live memory
+    // instead of the stale slot (the reported SIGSEGV in js_native_call_method).
+    clear_marks();
+    clear_mark_seeds();
+    let prev_this = crate::object::js_implicit_this_get();
+
+    let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    let valid_ptrs = build_valid_pointer_set();
+    let old_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+    let nursery_hdr = unsafe { header_from_user_ptr(nursery_user) as *mut GcHeader };
+
+    crate::object::js_implicit_this_set(f64::from_bits(ptr_bits(nursery_user as usize)));
+
+    // Mark phase: the live receiver must be discovered as a root.
+    crate::object::scan_implicit_this_roots_mut(&mut RuntimeRootVisitor::for_mark(&valid_ptrs));
+    unsafe {
+        assert_ne!(
+            (*nursery_hdr).gc_flags & GC_FLAG_MARKED,
+            0,
+            "IMPLICIT_THIS scanner must mark the receiver so GC does not sweep `this`"
+        );
+    }
+
+    // Rewrite phase: the cell must follow the forwarding pointer.
+    unsafe {
+        set_forwarding_address(nursery_hdr, old_user);
+    }
+    crate::object::scan_implicit_this_roots_mut(&mut RuntimeRootVisitor::for_rewrite(&valid_ptrs));
+    assert_eq!(
+        crate::object::js_implicit_this_get().to_bits(),
+        ptr_bits(old_user as usize),
+        "IMPLICIT_THIS must be rewritten to the receiver's relocated copy (#1813)"
+    );
+
+    // Idle / undefined cell must be a no-op (the default state between calls).
+    crate::object::js_implicit_this_set(f64::from_bits(crate::value::TAG_UNDEFINED));
+    crate::object::scan_implicit_this_roots_mut(&mut RuntimeRootVisitor::for_rewrite(&valid_ptrs));
+    assert_eq!(
+        crate::object::js_implicit_this_get().to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "scanning the idle implicit-`this` cell must leave TAG_UNDEFINED untouched"
+    );
+
+    crate::object::js_implicit_this_set(prev_this);
+    clear_marks();
+    clear_mark_seeds();
+}
+
+#[test]
 fn test_runtime_root_visitor_rewrites_raw_pointer_slots() {
     let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     let valid_ptrs = build_valid_pointer_set();
