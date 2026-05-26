@@ -196,20 +196,22 @@ pub extern "C" fn js_crypto_random_fill_sync(
         // TypedArrayHeader path (Uint8Array, Uint32Array, Float32Array, …).
         if perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some() {
             let ta = raw as *mut perry_runtime::typedarray::TypedArrayHeader;
-            let len = (*ta).length as usize;
-            let elem_size = (*ta).elem_size as usize;
-            // Node interprets offset/size for TypedArray inputs in elements,
-            // not bytes. Convert the resolved element range back to byte
-            // offsets before filling the underlying storage.
-            let (start_elem, end_elem) = resolve_range(len, offset_arg, size_arg);
-            let start = start_elem.saturating_mul(elem_size);
-            let end = end_elem.saturating_mul(elem_size);
-            if end > start {
-                let data = (raw as *mut u8).add(std::mem::size_of::<
-                    perry_runtime::typedarray::TypedArrayHeader,
-                >());
-                let slice = std::slice::from_raw_parts_mut(data.add(start), end - start);
-                rand::thread_rng().fill_bytes(slice);
+            if let Some(data) = perry_runtime::typedarray::typed_array_bytes_mut(ta) {
+                let elem_size = (*ta).elem_size as usize;
+                let len = if elem_size == 0 {
+                    0
+                } else {
+                    data.len() / elem_size
+                };
+                // Node interprets offset/size for TypedArray inputs in elements,
+                // not bytes. Convert the resolved element range back to byte
+                // offsets before filling the underlying storage.
+                let (start_elem, end_elem) = resolve_range(len, offset_arg, size_arg);
+                let start = start_elem.saturating_mul(elem_size);
+                let end = end_elem.saturating_mul(elem_size).min(data.len());
+                if end > start {
+                    rand::thread_rng().fill_bytes(&mut data[start..end]);
+                }
             }
             return buf_bits;
         }
@@ -439,4 +441,85 @@ pub(super) fn generate_prime_u128(
         return Some(n);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::raw::c_int;
+
+    fn boxed_ptr(ptr: *const u8) -> f64 {
+        f64::from_bits(perry_runtime::JSValue::pointer(ptr).bits())
+    }
+
+    fn undefined() -> f64 {
+        f64::from_bits(perry_runtime::JSValue::undefined().bits())
+    }
+
+    fn catch_runtime_throw(f: impl FnOnce()) -> bool {
+        let env = perry_runtime::exception::js_try_push();
+        let jumped = unsafe { perry_runtime::ffi::setjmp::setjmp(env as *mut c_int) };
+        if jumped == 0 {
+            f();
+            perry_runtime::exception::js_try_end();
+            false
+        } else {
+            perry_runtime::exception::js_try_end();
+            perry_runtime::exception::js_clear_exception();
+            true
+        }
+    }
+
+    #[test]
+    fn random_fill_sync_native_uint8_view_preserves_metadata() {
+        let owner = perry_runtime::native_arena::js_native_arena_alloc(96);
+        let view = perry_runtime::native_arena::js_native_arena_view(
+            owner as u64,
+            perry_runtime::typedarray::KIND_UINT8 as i32,
+            8,
+            64,
+        );
+        let target = boxed_ptr(view as *const u8);
+        let before = unsafe {
+            (
+                (*view).owner,
+                (*view).data,
+                (*view).byte_offset,
+                (*view).byte_length,
+                (*view).generation,
+            )
+        };
+
+        let returned = js_crypto_random_fill_sync(target, undefined(), undefined());
+        assert_eq!(returned.to_bits(), target.to_bits());
+        unsafe {
+            assert_eq!((*view).owner, before.0);
+            assert_eq!((*view).data, before.1);
+            assert_eq!((*view).byte_offset, before.2);
+            assert_eq!((*view).byte_length, before.3);
+            assert_eq!((*view).generation, before.4);
+            let bytes = std::slice::from_raw_parts((*view).data, (*view).byte_length as usize);
+            assert!(
+                bytes.iter().any(|&byte| byte != 0),
+                "randomFillSync should mutate native view backing bytes"
+            );
+        }
+        perry_runtime::native_arena::js_native_arena_dispose(owner as u64);
+    }
+
+    #[test]
+    fn random_fill_sync_disposed_native_uint8_view_throws() {
+        let owner = perry_runtime::native_arena::js_native_arena_alloc(16);
+        let view = perry_runtime::native_arena::js_native_arena_view(
+            owner as u64,
+            perry_runtime::typedarray::KIND_UINT8 as i32,
+            0,
+            16,
+        );
+        let target = boxed_ptr(view as *const u8);
+        perry_runtime::native_arena::js_native_arena_dispose(owner as u64);
+        assert!(catch_runtime_throw(|| {
+            let _ = js_crypto_random_fill_sync(target, undefined(), undefined());
+        }));
+    }
 }

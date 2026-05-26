@@ -1,8 +1,85 @@
 //! `Stmt::If` lowering.
 
+use std::collections::{HashMap, HashSet};
+
 use super::*;
 
 use crate::lower_conditional::lower_truthy;
+
+#[derive(Clone)]
+struct NativeArenaOwnerAliasSnapshot {
+    known: HashMap<u32, u32>,
+    ambiguous: HashSet<u32>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum NativeArenaOwnerAliasState {
+    Known(u32),
+    Ambiguous,
+    None,
+}
+
+impl NativeArenaOwnerAliasSnapshot {
+    fn capture(ctx: &FnCtx<'_>) -> Self {
+        Self {
+            known: ctx.native_arena_owner_aliases.clone(),
+            ambiguous: ctx.native_arena_ambiguous_owner_aliases.clone(),
+        }
+    }
+
+    fn restore(&self, ctx: &mut FnCtx<'_>) {
+        ctx.native_arena_owner_aliases = self.known.clone();
+        ctx.native_arena_ambiguous_owner_aliases = self.ambiguous.clone();
+    }
+
+    fn state_for(&self, id: u32) -> NativeArenaOwnerAliasState {
+        if let Some(owner_id) = self.known.get(&id).copied() {
+            NativeArenaOwnerAliasState::Known(owner_id)
+        } else if self.ambiguous.contains(&id) {
+            NativeArenaOwnerAliasState::Ambiguous
+        } else {
+            NativeArenaOwnerAliasState::None
+        }
+    }
+}
+
+fn merge_native_arena_owner_aliases(ctx: &mut FnCtx<'_>, exits: &[NativeArenaOwnerAliasSnapshot]) {
+    if exits.len() == 1 {
+        exits[0].restore(ctx);
+        return;
+    }
+
+    let mut known = HashMap::new();
+    let mut ambiguous = HashSet::new();
+    let mut ids = HashSet::new();
+    for exit in exits {
+        ids.extend(exit.known.keys().copied());
+        ids.extend(exit.ambiguous.iter().copied());
+    }
+
+    for id in ids {
+        let first = exits
+            .first()
+            .map(|exit| exit.state_for(id))
+            .unwrap_or(NativeArenaOwnerAliasState::None);
+        if exits.iter().all(|exit| exit.state_for(id) == first) {
+            match first {
+                NativeArenaOwnerAliasState::Known(owner_id) => {
+                    known.insert(id, owner_id);
+                }
+                NativeArenaOwnerAliasState::Ambiguous => {
+                    ambiguous.insert(id);
+                }
+                NativeArenaOwnerAliasState::None => {}
+            }
+        } else {
+            ambiguous.insert(id);
+        }
+    }
+
+    ctx.native_arena_owner_aliases = known;
+    ctx.native_arena_ambiguous_owner_aliases = ambiguous;
+}
 
 /// If-else lowering using explicit then/else/merge blocks.
 ///
@@ -84,6 +161,7 @@ pub(crate) fn lower_if(
 
     let cond_val = lower_expr(ctx, condition)?;
     let i1 = lower_truthy(ctx, &cond_val, condition);
+    let alias_entry_snapshot = NativeArenaOwnerAliasSnapshot::capture(ctx);
 
     let then_idx = ctx.new_block("if.then");
     let else_idx = ctx.new_block("if.else");
@@ -104,20 +182,34 @@ pub(crate) fn lower_if(
     lower_stmts(ctx, then_branch)?;
     ctx.guarded_buffer_index_pairs
         .retain(|fact| fact.scope_id != guard_scope_id);
-    if !ctx.block().is_terminated() {
+    let then_aliases = NativeArenaOwnerAliasSnapshot::capture(ctx);
+    let then_reaches_merge = !ctx.block().is_terminated();
+    if then_reaches_merge {
         ctx.block().br(&merge_label);
     }
 
     // Compile else branch. If there's no explicit else, the else block is
     // still created so both sides of the condBr have a valid target — it
     // just branches immediately to merge.
+    alias_entry_snapshot.restore(ctx);
     ctx.current_block = else_idx;
     if let Some(else_stmts) = else_branch {
         lower_stmts(ctx, else_stmts)?;
     }
-    if !ctx.block().is_terminated() {
+    let else_aliases = NativeArenaOwnerAliasSnapshot::capture(ctx);
+    let else_reaches_merge = !ctx.block().is_terminated();
+    if else_reaches_merge {
         ctx.block().br(&merge_label);
     }
+
+    let mut alias_exits = Vec::new();
+    if then_reaches_merge {
+        alias_exits.push(then_aliases);
+    }
+    if else_reaches_merge {
+        alias_exits.push(else_aliases);
+    }
+    merge_native_arena_owner_aliases(ctx, &alias_exits);
 
     // Continue emitting subsequent statements into the merge block.
     ctx.current_block = merge_idx;

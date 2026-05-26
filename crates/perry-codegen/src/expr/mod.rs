@@ -788,6 +788,10 @@ pub(crate) struct FnCtx<'a> {
     /// Local owner-handle aliases for native arenas. Values are canonical
     /// owner local ids used by native-owned typed-array view proof state.
     pub native_arena_owner_aliases: std::collections::HashMap<u32, u32>,
+    /// Owner-handle aliases whose canonical owner is path-dependent after
+    /// control-flow merge. Hazards through these locals conservatively
+    /// invalidate every native-owned view.
+    pub native_arena_ambiguous_owner_aliases: std::collections::HashSet<u32>,
     /// Benchmark/debug switch that forces tracked buffers through the existing
     /// helper fallback instead of native GEP/load/store lowering.
     pub disable_buffer_fast_path: bool,

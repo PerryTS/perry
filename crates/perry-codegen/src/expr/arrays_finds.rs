@@ -81,7 +81,7 @@ pub(crate) fn lower_uint8array_get_i32(
     let a = lower_expr(ctx, array)?;
     let blk = ctx.block();
     let handle = unbox_to_i64(blk, &a);
-    let byte_i32 = blk.call(I32, "js_buffer_get", &[(I64, &handle), (I32, &idx_i32)]);
+    let byte_i32 = blk.call(I32, "js_uint8array_get", &[(I64, &handle), (I32, &idx_i32)]);
     let slow = LoweredValue {
         semantic: SemanticKind::JsNumber,
         rep: NativeRep::I32,
@@ -627,16 +627,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let v = lower_expr(ctx, value)?;
                 ctx.block().fptosi(DOUBLE, &v, I32)
             };
-            // Issue #1205 slow path: route the indexed store through
-            // `js_buffer_set` so a view receiver propagates the write
-            // to its backing buffer (and any sister views).  Fast
-            // path above stays direct — `buffer_data_slots` only
-            // tracks `Buffer.alloc` locals, which are never views.
+            // Slow path accepts either BufferHeader-backed Uint8Arrays or
+            // NativeArena typed views.
             let a = lower_expr(ctx, array)?;
             let blk = ctx.block();
             let handle = unbox_to_i64(blk, &a);
             blk.call_void(
-                "js_buffer_set",
+                "js_uint8array_set",
                 &[(I64, &handle), (I32, &idx_i32), (I32, &val_i32)],
             );
             let reason = buffer_access_materialization_reason(ctx, array);

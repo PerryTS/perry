@@ -8,27 +8,58 @@ use crate::types::{I32, I64, I8, PTR};
 
 use super::{unbox_to_i64, FnCtx};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NativeArenaOwnerAliasResolution {
+    Known(u32),
+    Ambiguous,
+    None,
+}
+
+pub(crate) fn native_arena_owner_alias_resolution(
+    ctx: &FnCtx<'_>,
+    owner_id: u32,
+) -> NativeArenaOwnerAliasResolution {
+    if let Some(owner_id) = ctx.native_arena_owner_aliases.get(&owner_id).copied() {
+        NativeArenaOwnerAliasResolution::Known(owner_id)
+    } else if ctx.native_arena_ambiguous_owner_aliases.contains(&owner_id) {
+        NativeArenaOwnerAliasResolution::Ambiguous
+    } else {
+        NativeArenaOwnerAliasResolution::None
+    }
+}
+
 pub(crate) fn native_arena_canonical_owner_id(ctx: &FnCtx<'_>, owner_id: u32) -> u32 {
-    ctx.native_arena_owner_aliases
-        .get(&owner_id)
-        .copied()
-        .unwrap_or(owner_id)
+    match native_arena_owner_alias_resolution(ctx, owner_id) {
+        NativeArenaOwnerAliasResolution::Known(owner_id) => owner_id,
+        NativeArenaOwnerAliasResolution::Ambiguous | NativeArenaOwnerAliasResolution::None => {
+            owner_id
+        }
+    }
 }
 
 pub(crate) fn record_native_arena_owner_assignment(ctx: &mut FnCtx<'_>, id: u32, value: &Expr) {
     match value {
         Expr::NativeArenaAlloc(_) => {
             ctx.native_arena_owner_aliases.insert(id, id);
+            ctx.native_arena_ambiguous_owner_aliases.remove(&id);
         }
-        Expr::LocalGet(source_id) => {
-            if let Some(owner_id) = ctx.native_arena_owner_aliases.get(source_id).copied() {
+        Expr::LocalGet(source_id) => match native_arena_owner_alias_resolution(ctx, *source_id) {
+            NativeArenaOwnerAliasResolution::Known(owner_id) => {
                 ctx.native_arena_owner_aliases.insert(id, owner_id);
-            } else {
-                ctx.native_arena_owner_aliases.remove(&id);
+                ctx.native_arena_ambiguous_owner_aliases.remove(&id);
             }
-        }
+            NativeArenaOwnerAliasResolution::Ambiguous => {
+                ctx.native_arena_owner_aliases.remove(&id);
+                ctx.native_arena_ambiguous_owner_aliases.insert(id);
+            }
+            NativeArenaOwnerAliasResolution::None => {
+                ctx.native_arena_owner_aliases.remove(&id);
+                ctx.native_arena_ambiguous_owner_aliases.remove(&id);
+            }
+        },
         _ => {
             ctx.native_arena_owner_aliases.remove(&id);
+            ctx.native_arena_ambiguous_owner_aliases.remove(&id);
         }
     }
 }
@@ -73,7 +104,36 @@ pub(crate) fn downgrade_buffer_alias(ctx: &mut FnCtx<'_>, id: u32, reason: Mater
         }
     }
     ctx.buffer_hazard_reasons.insert(id, effective_reason);
-    invalidate_native_owned_views_for_owner(ctx, id, reason);
+    invalidate_native_owned_views_for_owner_alias(
+        ctx,
+        id,
+        owner_alias_invalidation_reason(&reason),
+    );
+}
+
+fn owner_alias_invalidation_reason(reason: &MaterializationReason) -> MaterializationReason {
+    match reason {
+        MaterializationReason::UnknownCallEscape => MaterializationReason::MissingOwnerRoot,
+        _ => reason.clone(),
+    }
+}
+
+fn invalidate_native_owned_views_for_owner_alias(
+    ctx: &mut FnCtx<'_>,
+    owner_id: u32,
+    reason: MaterializationReason,
+) {
+    match native_arena_owner_alias_resolution(ctx, owner_id) {
+        NativeArenaOwnerAliasResolution::Known(owner_id) => {
+            invalidate_native_owned_views_for_owner(ctx, owner_id, reason)
+        }
+        NativeArenaOwnerAliasResolution::Ambiguous => {
+            invalidate_all_native_owned_views(ctx, reason)
+        }
+        NativeArenaOwnerAliasResolution::None => {
+            invalidate_native_owned_views_for_owner(ctx, owner_id, reason)
+        }
+    }
 }
 
 pub(crate) fn invalidate_native_owned_views_for_owner(
@@ -99,14 +159,11 @@ pub(crate) fn invalidate_native_owned_views_for_owner(
 
 pub(crate) fn invalidate_native_owned_views_for_dispose(ctx: &mut FnCtx<'_>, owner: &Expr) {
     match owner {
-        Expr::LocalGet(owner_id) => {
-            let owner_id = native_arena_canonical_owner_id(ctx, *owner_id);
-            invalidate_native_owned_views_for_owner(
-                ctx,
-                owner_id,
-                MaterializationReason::UseAfterDispose,
-            );
-        }
+        Expr::LocalGet(owner_id) => invalidate_native_owned_views_for_owner_alias(
+            ctx,
+            *owner_id,
+            MaterializationReason::UseAfterDispose,
+        ),
         _ => invalidate_all_native_owned_views(ctx, MaterializationReason::UseAfterDispose),
     }
 }

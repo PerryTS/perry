@@ -3,7 +3,7 @@ use perry_hir::{
     BinaryOp, Class, ClassField, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt,
     UpdateOp,
 };
-use perry_types::{ObjectType, PropertyInfo, Type};
+use perry_types::{FunctionType, ObjectType, PropertyInfo, Type};
 
 static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -170,6 +170,26 @@ fn compile_artifact_json_for_module_with_opts(
         parsed.push(value["module"].clone());
     }
     panic!("native reps artifact for {name} not found in {dir:?}; saw modules {parsed:?}");
+}
+
+fn assert_typed_array_get_fallback_reason(artifact: &serde_json::Value, reason: &str) {
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "TypedArrayGet"
+                && record["consumer"] == "TypedArrayGet.slow_path"
+                && record["access_mode"] == "dynamic_fallback"
+                && record["materialization_reason"] == reason
+                && record["fallback_reason"] == reason
+        }),
+        "expected typed-array get fallback reason {reason}:\n{artifact:#}"
+    );
+    assert!(
+        !records.iter().any(|record| {
+            record["expr_kind"] == "TypedArrayGet" && record["access_mode"] == "unchecked_native"
+        }),
+        "final typed-array get must not use unchecked native access:\n{artifact:#}"
+    );
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
@@ -348,6 +368,23 @@ fn native_arena_owner_alias_let(id: u32, name: &str, owner_id: u32, mutable: boo
         mutable,
         init: Some(local(owner_id)),
     }
+}
+
+fn runtime_condition(cond_id: u32) -> Expr {
+    Expr::Compare {
+        op: CompareOp::Ne,
+        left: Box::new(local(cond_id)),
+        right: Box::new(int(0)),
+    }
+}
+
+fn closure_type(return_type: Type) -> Type {
+    Type::Function(FunctionType {
+        params: Vec::new(),
+        return_type: Box::new(return_type),
+        is_async: false,
+        is_generator: false,
+    })
 }
 
 fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
@@ -1098,6 +1135,206 @@ fn native_owned_typed_array_owner_alias_dispose_invalidates_views() {
                 && record["access_mode"] == "unchecked_native"
         }),
         "live owner view should remain eligible for the unchecked native path:\n{reassigned_alias:#}"
+    );
+}
+
+#[test]
+fn native_owned_conditional_owner_alias_reassignment_invalidates_views() {
+    let artifact = compile_artifact_json_for_module(module_with_classes_and_params(
+        "artifact_native_owned_conditional_alias_reassignment.ts",
+        Vec::new(),
+        vec![param(10, "cond", Type::Number)],
+        Type::Number,
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            native_arena_owner_alias_let(3, "alias", 1, true),
+            native_arena_owner_let(4, "other", int(64), false),
+            Stmt::If {
+                condition: runtime_condition(10),
+                then_branch: vec![Stmt::Expr(Expr::LocalSet(3, Box::new(local(4))))],
+                else_branch: None,
+            },
+            Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(3)))),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    ));
+    assert_typed_array_get_fallback_reason(&artifact, "use_after_dispose");
+}
+
+#[test]
+fn native_owned_branch_local_owner_alias_removal_invalidates_views() {
+    let artifact = compile_artifact_json_for_module(module_with_classes_and_params(
+        "artifact_native_owned_branch_local_alias_removal.ts",
+        Vec::new(),
+        vec![param(10, "cond", Type::Number)],
+        Type::Number,
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            native_arena_owner_alias_let(3, "alias", 1, true),
+            Stmt::If {
+                condition: runtime_condition(10),
+                then_branch: vec![Stmt::Expr(Expr::LocalSet(3, Box::new(int(0))))],
+                else_branch: None,
+            },
+            Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(3)))),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    ));
+    assert_typed_array_get_fallback_reason(&artifact, "use_after_dispose");
+}
+
+#[test]
+fn native_owned_unknown_call_escape_through_owner_alias_invalidates_views() {
+    let artifact = compile_artifact_json(
+        "artifact_native_owned_unknown_escape_through_alias.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            native_arena_owner_alias_let(3, "alias", 1, false),
+            Stmt::Expr(extern_call(
+                "unknown_owner_escape",
+                vec![local(3)],
+                Type::Number,
+            )),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert_typed_array_get_fallback_reason(&artifact, "missing_owner_root");
+}
+
+#[test]
+fn native_owned_closure_capture_through_owner_alias_invalidates_views() {
+    let artifact = compile_artifact_json(
+        "artifact_native_owned_closure_capture_through_alias.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            native_arena_owner_alias_let(3, "alias", 1, false),
+            Stmt::Let {
+                id: 4,
+                name: "f".to_string(),
+                ty: closure_type(Type::Number),
+                mutable: false,
+                init: Some(Expr::Closure {
+                    func_id: 90,
+                    params: Vec::new(),
+                    return_type: Type::Number,
+                    body: vec![
+                        Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(3)))),
+                        Stmt::Return(Some(int(0))),
+                    ],
+                    captures: vec![3],
+                    mutable_captures: Vec::new(),
+                    captures_this: false,
+                    enclosing_class: None,
+                    is_async: false,
+                    is_generator: false,
+                }),
+            },
+            Stmt::Expr(call(local(4), Vec::new())),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert_typed_array_get_fallback_reason(&artifact, "closure_capture");
+}
+
+#[test]
+fn native_owned_uint8array_get_fallback_uses_uint8array_helper() {
+    let ir = compile_ir(
+        "native_owned_uint8array_get_disposed_fallback.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(16), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Uint8Array",
+                perry_hir::TYPED_ARRAY_KIND_UINT8,
+                int(0),
+                int(16),
+            ),
+            Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(1)))),
+            Stmt::Return(Some(Expr::Uint8ArrayGet {
+                array: Box::new(local(2)),
+                index: Box::new(int(0)),
+            })),
+        ],
+    );
+    assert!(
+        ir.contains("call i32 @js_uint8array_get"),
+        "disposed native Uint8Array fallback should call js_uint8array_get:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_buffer_get"),
+        "native Uint8Array fallback must not use BufferHeader layout:\n{ir}"
+    );
+}
+
+#[test]
+fn native_owned_uint8array_set_fallback_uses_uint8array_helper() {
+    let ir = compile_ir(
+        "native_owned_uint8array_set_disposed_fallback.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(16), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Uint8Array",
+                perry_hir::TYPED_ARRAY_KIND_UINT8,
+                int(0),
+                int(16),
+            ),
+            Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(1)))),
+            Stmt::Expr(Expr::Uint8ArraySet {
+                array: Box::new(local(2)),
+                index: Box::new(int(0)),
+                value: Box::new(int(7)),
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+    assert!(
+        ir.contains("call void @js_uint8array_set"),
+        "disposed native Uint8Array fallback should call js_uint8array_set:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @js_buffer_set"),
+        "native Uint8Array fallback must not use BufferHeader layout:\n{ir}"
     );
 }
 

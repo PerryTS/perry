@@ -300,6 +300,47 @@ pub(crate) unsafe fn finalize_native_typed_view_for_gc(view: *mut NativeTypedVie
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::raw::c_int;
+
+    fn boxed_ptr(ptr: *const u8) -> f64 {
+        f64::from_bits(crate::value::JSValue::pointer(ptr).bits())
+    }
+
+    fn undefined() -> f64 {
+        f64::from_bits(crate::value::JSValue::undefined().bits())
+    }
+
+    fn catch_runtime_throw(f: impl FnOnce()) -> bool {
+        let env = crate::exception::js_try_push();
+        let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut c_int) };
+        if jumped == 0 {
+            f();
+            crate::exception::js_try_end();
+            false
+        } else {
+            crate::exception::js_try_end();
+            crate::exception::js_clear_exception();
+            true
+        }
+    }
+
+    unsafe fn dispatch_random_fill_sync(view: *mut NativeTypedViewHeader) -> f64 {
+        let module = b"crypto";
+        let ns =
+            crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
+        let ns_obj = crate::value::js_nanbox_get_pointer(ns) as *const crate::object::ObjectHeader;
+        let args = [
+            boxed_ptr(view as *const u8),
+            undefined(),
+            undefined(),
+        ];
+        crate::object::dispatch_native_module_method(
+            ns_obj,
+            "randomFillSync",
+            args.as_ptr(),
+            args.len(),
+        )
+    }
 
     #[test]
     fn native_arena_alloc_view_roundtrip_u32() {
@@ -330,5 +371,79 @@ mod tests {
             finalize_native_typed_view_for_gc(view);
             finalize_native_arena_owner_for_gc(owner);
         }
+    }
+
+    #[test]
+    fn native_uint8array_helpers_read_and_write_backing_bytes() {
+        let owner = js_native_arena_alloc(8);
+        let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT8 as i32, 0, 8);
+        let ta = view as *mut TypedArrayHeader;
+        unsafe {
+            *(*owner).data.add(3) = 41;
+        }
+        assert_eq!(crate::typedarray::js_uint8array_get(ta, 3), 41);
+        assert_eq!(crate::typedarray::js_uint8array_get(ta, 99), 0);
+
+        crate::typedarray::js_uint8array_set(ta, 4, 300);
+        unsafe {
+            assert_eq!(*(*owner).data.add(4), 44);
+            assert_eq!(*(*owner).data.add(7), 0);
+        }
+        crate::typedarray::js_uint8array_set(ta, 99, 11);
+        unsafe {
+            assert_eq!(*(*owner).data.add(7), 0);
+        }
+        js_native_arena_dispose(owner as u64);
+    }
+
+    #[test]
+    fn random_fill_sync_native_uint8_view_preserves_metadata() {
+        let owner = js_native_arena_alloc(96);
+        let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT8 as i32, 8, 64);
+        let target = boxed_ptr(view as *const u8);
+        let before = unsafe {
+            (
+                (*view).owner,
+                (*view).data,
+                (*view).byte_offset,
+                (*view).byte_length,
+                (*view).generation,
+            )
+        };
+
+        let returned = unsafe { dispatch_random_fill_sync(view) };
+        assert_eq!(returned.to_bits(), target.to_bits());
+
+        unsafe {
+            assert_eq!((*view).owner, before.0);
+            assert_eq!((*view).data, before.1);
+            assert_eq!((*view).byte_offset, before.2);
+            assert_eq!((*view).byte_length, before.3);
+            assert_eq!((*view).generation, before.4);
+            let bytes = std::slice::from_raw_parts((*view).data, (*view).byte_length as usize);
+            assert!(
+                bytes.iter().any(|&byte| byte != 0),
+                "randomFillSync should mutate native view backing bytes"
+            );
+        }
+        js_native_arena_dispose(owner as u64);
+    }
+
+    #[test]
+    fn disposed_native_uint8_views_throw_in_fallback_paths() {
+        let owner = js_native_arena_alloc(16);
+        let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT8 as i32, 0, 16);
+        let ta = view as *mut TypedArrayHeader;
+        js_native_arena_dispose(owner as u64);
+
+        assert!(catch_runtime_throw(|| {
+            let _ = crate::typedarray::js_uint8array_get(ta, 0);
+        }));
+        assert!(catch_runtime_throw(|| {
+            crate::typedarray::js_uint8array_set(ta, 0, 1);
+        }));
+        assert!(catch_runtime_throw(|| unsafe {
+            let _ = dispatch_random_fill_sync(view);
+        }));
     }
 }

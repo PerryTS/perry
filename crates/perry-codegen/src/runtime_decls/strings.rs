@@ -1028,6 +1028,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_typed_array_get", DOUBLE, &[I64, I32]);
     module.declare_function("js_typed_array_at", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_typed_array_set", VOID, &[I64, I32, DOUBLE]);
+    module.declare_function("js_uint8array_get", I32, &[I64, I32]);
+    module.declare_function("js_uint8array_set", VOID, &[I64, I32, I32]);
     module.declare_function("js_native_arena_alloc", I64, &[I64]);
     module.declare_function("js_native_arena_view", I64, &[I64, I32, I64, I64]);
     module.declare_function("js_native_arena_dispose", VOID, &[I64]);

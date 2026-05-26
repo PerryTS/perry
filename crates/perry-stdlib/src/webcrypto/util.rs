@@ -189,20 +189,12 @@ pub(super) unsafe fn bytes_from_jsvalue(bits: u64) -> Vec<u8> {
         return std::slice::from_raw_parts(buffer_payload(buf), len).to_vec();
     }
     if let Some(_kind) = perry_runtime::typedarray::lookup_typed_array_kind(raw) {
-        // TypedArrayHeader: 16-byte header, payload follows. Read raw
-        // bytes — for Uint8Array this is what the caller wants. For
-        // wider element kinds the caller's intent is ambiguous; we
-        // return the raw byte view (length × elem_size) which matches
-        // the spec ("BufferSource" can be any TypedArray and digest
-        // hashes the raw underlying bytes).
+        // BufferSource can be any TypedArray. Native arena views keep their
+        // bytes out-of-line, so route through the typed-array byte helper.
         let ta = raw as *const perry_runtime::typedarray::TypedArrayHeader;
-        let len = (*ta).length as usize;
-        let elem_size = (*ta).elem_size as usize;
-        let total = len * elem_size;
-        let data = (raw as *const u8).add(std::mem::size_of::<
-            perry_runtime::typedarray::TypedArrayHeader,
-        >());
-        return std::slice::from_raw_parts(data, total).to_vec();
+        if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(ta) {
+            return bytes.to_vec();
+        }
     }
     if top16 == 0x7FFF {
         let hdr = raw as *const StringHeader;

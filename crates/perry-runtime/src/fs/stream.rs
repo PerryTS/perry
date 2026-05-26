@@ -96,14 +96,10 @@ pub(crate) fn bytes_from_value(v: f64) -> Vec<u8> {
         } else {
             bits as usize
         };
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-            let elem_size = crate::typedarray::elem_size_for_kind(kind);
+        if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
             let ta = addr as *const crate::typedarray::TypedArrayHeader;
-            if !ta.is_null() {
-                let len = (*ta).length as usize * elem_size;
-                let data = (ta as *const u8)
-                    .add(std::mem::size_of::<crate::typedarray::TypedArrayHeader>());
-                return std::slice::from_raw_parts(data, len).to_vec();
+            if let Some(bytes) = crate::typedarray::typed_array_bytes(ta) {
+                return bytes.to_vec();
             }
         }
         let ptr = extract_string_ptr(v);

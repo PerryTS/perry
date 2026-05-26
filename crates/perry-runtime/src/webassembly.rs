@@ -84,12 +84,9 @@ fn extract_bytes(jsval: f64) -> Option<(*const u8, usize)> {
         // as raw u8.
         if crate::typedarray::elem_size_for_kind(kind) == 1 {
             let header = addr as *const crate::typedarray::TypedArrayHeader;
-            let len = unsafe { (*header).length as usize };
-            let data = unsafe {
-                (header as *const u8)
-                    .add(std::mem::size_of::<crate::typedarray::TypedArrayHeader>())
-            };
-            return Some((data, len));
+            if let Some(bytes) = unsafe { crate::typedarray::typed_array_bytes(header) } {
+                return Some((bytes.as_ptr(), bytes.len()));
+            }
         }
     }
 

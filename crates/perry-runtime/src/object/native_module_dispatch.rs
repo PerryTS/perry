@@ -202,16 +202,19 @@ pub(crate) unsafe fn dispatch_native_module_method(
             };
             if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
                 let ta = addr as *mut crate::typedarray::TypedArrayHeader;
-                let len = (*ta).length as usize;
-                let elem_size = (*ta).elem_size as usize;
-                let (start_elem, end_elem) = range(len);
-                let start = start_elem.saturating_mul(elem_size);
-                let end = end_elem.saturating_mul(elem_size);
-                if end > start {
-                    let data = (addr as *mut u8)
-                        .add(std::mem::size_of::<crate::typedarray::TypedArrayHeader>());
-                    rand::thread_rng()
-                        .fill_bytes(std::slice::from_raw_parts_mut(data.add(start), end - start));
+                if let Some(data) = crate::typedarray::typed_array_bytes_mut(ta) {
+                    let elem_size = (*ta).elem_size as usize;
+                    let len = if elem_size == 0 {
+                        0
+                    } else {
+                        data.len() / elem_size
+                    };
+                    let (start_elem, end_elem) = range(len);
+                    let start = start_elem.saturating_mul(elem_size);
+                    let end = end_elem.saturating_mul(elem_size).min(data.len());
+                    if end > start {
+                        rand::thread_rng().fill_bytes(&mut data[start..end]);
+                    }
                 }
                 target
             } else if crate::buffer::is_registered_buffer(addr) {
