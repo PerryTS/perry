@@ -133,6 +133,7 @@ mod ui_harmonyos_stubs;
 /// target-aware branching. UI crates register their handlers here at
 /// startup. See module docs for the ohos-napi gating story.
 pub mod ui_text_registry;
+pub mod util_promisify;
 #[cfg(all(target_os = "watchos", feature = "watchos-game-loop"))]
 pub mod watchos_game_loop;
 pub mod weakref;

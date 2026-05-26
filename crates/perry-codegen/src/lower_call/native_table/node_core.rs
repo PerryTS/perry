@@ -721,6 +721,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         ret: NR_F64,
     },
     NativeModSig {
+        module: "util",
+        has_receiver: false,
+        method: "promisify",
+        class_filter: None,
+        runtime: "js_util_promisify",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
         module: "util/types",
         has_receiver: false,
         method: "isPromise",

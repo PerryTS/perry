@@ -490,6 +490,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_inspect", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_promisify", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_number_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_string_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_boolean_new", DOUBLE, &[DOUBLE]);
