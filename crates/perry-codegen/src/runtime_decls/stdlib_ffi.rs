@@ -378,6 +378,10 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
 
     // ========== child_process ==========
     module.declare_function("js_child_process_exec_sync", I64, &[I64, I64]);
+    // exec(cmd, options?, callback?): cmd string ptr (I64), options + callback
+    // as NaN-boxed f64 in either slot; returns undefined (callback form) or the
+    // stdout string (no-callback form). See `js_child_process_exec`.
+    module.declare_function("js_child_process_exec", DOUBLE, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_child_process_get_process_status", I64, &[DOUBLE]);
     module.declare_function("js_child_process_kill_process", I32, &[DOUBLE]);
     module.declare_function(

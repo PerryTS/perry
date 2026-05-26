@@ -78,8 +78,8 @@ pub(crate) use typed_parse::{extract_typed_parse_source_order, resolve_typed_par
 
 mod array_fold;
 pub(crate) use array_fold::{
-    is_known_array_static_method, is_known_object_static_method, is_known_string_prototype_method,
-    try_fold_array_method_call,
+    is_known_array_prototype_method, is_known_array_static_method, is_known_object_static_method,
+    is_known_string_prototype_method, try_fold_array_method_call,
 };
 
 mod lower_module_fn;
