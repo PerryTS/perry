@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1252 entries across 81 modules
+// Coverage: 1254 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -576,6 +576,10 @@ declare module "fs" {
   export function glob(...args: any[]): any;
   /** stdlib */
   export function globSync(...args: any[]): any;
+  /** stdlib */
+  export function lchmod(...args: any[]): any;
+  /** stdlib */
+  export function lchmodSync(...args: any[]): any;
   /** stdlib */
   export function lchown(...args: any[]): any;
   /** stdlib */

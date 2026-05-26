@@ -656,7 +656,17 @@ pub extern "C" fn js_fs_lchown_sync(path_value: f64, uid_value: f64, gid_value: 
 /// ENOSYS-equivalent. No-op success on non-unix.
 #[no_mangle]
 pub extern "C" fn js_fs_lchmod_sync(path_value: f64, mode: f64) -> i32 {
-    #[cfg(all(unix, any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly")))]
+    #[cfg(all(
+        unix,
+        any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "dragonfly"
+        )
+    ))]
     unsafe {
         // `libc` 0.2 doesn't expose `lchmod` uniformly across BSD targets,
         // so declare it directly. Signature matches POSIX:
@@ -671,9 +681,23 @@ pub extern "C" fn js_fs_lchmod_sync(path_value: f64, mode: f64) -> i32 {
             return 0;
         };
         let rc = lchmod(path.as_ptr(), mode as libc::mode_t);
-        if rc == 0 { 1 } else { 0 }
+        if rc == 0 {
+            1
+        } else {
+            0
+        }
     }
-    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))))]
+    #[cfg(all(
+        unix,
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "dragonfly"
+        ))
+    ))]
     {
         let _ = (path_value, mode);
         0
