@@ -95,6 +95,17 @@ try {
 }
 console.log(JSON.stringify(sealed));
 
+const nonExtensible = new GuardedCounter();
+Object.preventExtensions(nonExtensible);
+nonExtensible.value = 13.5;
+try {
+  (nonExtensible as any).extra = 101;
+  console.log("prevent-extra-ok");
+} catch (e) {
+  console.log("prevent-extra-error");
+}
+console.log(JSON.stringify(nonExtensible));
+
 let accessorSeen = 0;
 function readAccessor(): number {
   return 44;

@@ -678,6 +678,10 @@ pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
 // (`GC_COPY_SURVIVAL_AGE_MASK = 0x0038`) and bits 14..15 the layout state,
 // so 0x08 would be clobbered on every minor GC. Bits 6..13 are free.
 pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
+/// Array payload is stored as canonical raw `f64` values, not NaN-boxed
+/// `JSValue` slots. This is only meaningful for `GC_TYPE_ARRAY`; object
+/// flags share the same `_reserved` word but never inspect this bit.
+pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
 
 pub(super) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub(super) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;

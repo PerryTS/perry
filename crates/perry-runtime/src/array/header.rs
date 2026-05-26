@@ -15,20 +15,12 @@ thread_local! {
     /// Both pointers are GC-rooted via `scan_template_raw_roots`.
     static TEMPLATE_RAW_MAP: RefCell<HashMap<usize, *mut ArrayHeader>> =
         RefCell::new(HashMap::new());
-    static NUMERIC_ARRAY_LAYOUTS: RefCell<HashMap<usize, NumericArrayState>> =
-        RefCell::new(HashMap::new());
 }
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NumericArrayLayout {
     RawF64 = 1,
-}
-
-#[derive(Clone, Debug)]
-struct NumericArrayState {
-    layout: NumericArrayLayout,
-    raw_f64: Option<Vec<f64>>,
 }
 
 /// Register the (cooked, raw) pair for a tagged-template call. Returns
@@ -296,7 +288,16 @@ pub(crate) fn value_bits_to_number(value_bits: u64) -> Option<f64> {
     if (0x7FF9..=0x7FFF).contains(&upper) {
         return None;
     }
-    Some(f64::from_bits(value_bits))
+    Some(canonical_raw_f64(f64::from_bits(value_bits)))
+}
+
+#[inline]
+fn canonical_raw_f64(value: f64) -> f64 {
+    if value.is_nan() {
+        f64::NAN
+    } else {
+        value
+    }
 }
 
 #[inline]
@@ -344,6 +345,42 @@ unsafe fn array_slots_are_numeric(arr: *const ArrayHeader) -> bool {
     true
 }
 
+#[inline]
+unsafe fn array_gc_header(arr: *const ArrayHeader) -> Option<*mut crate::gc::GcHeader> {
+    if arr.is_null() || (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        return None;
+    }
+    Some(header)
+}
+
+#[inline]
+unsafe fn array_has_raw_f64_layout_flag(arr: *const ArrayHeader) -> bool {
+    array_gc_header(arr)
+        .is_some_and(|header| (*header)._reserved & crate::gc::GC_ARRAY_RAW_F64_LAYOUT != 0)
+}
+
+#[inline]
+unsafe fn set_array_raw_f64_layout_flag(arr: *const ArrayHeader) {
+    if let Some(header) = array_gc_header(arr) {
+        (*header)._reserved |= crate::gc::GC_ARRAY_RAW_F64_LAYOUT;
+    }
+}
+
+#[inline]
+unsafe fn clear_array_raw_f64_layout_flag(arr: *const ArrayHeader) {
+    if let Some(header) = array_gc_header(arr) {
+        let had_raw_layout = (*header)._reserved & crate::gc::GC_ARRAY_RAW_F64_LAYOUT != 0;
+        (*header)._reserved &= !crate::gc::GC_ARRAY_RAW_F64_LAYOUT;
+        if had_raw_layout {
+            crate::typed_feedback::invalidate_representation_change(arr as usize);
+        }
+    }
+}
+
 unsafe fn rebuild_array_numeric_raw_f64(arr: *mut ArrayHeader) -> bool {
     if arr.is_null() {
         return false;
@@ -355,30 +392,17 @@ unsafe fn rebuild_array_numeric_raw_f64(arr: *mut ArrayHeader) -> bool {
         return false;
     }
 
-    let mut raw = Vec::with_capacity(length);
-    let elements_ptr = array_elements_ptr(arr);
+    let elements = array_elements_ptr(arr);
     for i in 0..length {
         let slot_bits = array_slot_bits(arr, i);
         let Some(number) = value_bits_to_number(slot_bits) else {
             clear_array_numeric_layout(arr);
             return false;
         };
-        let canonical_bits = number.to_bits();
-        if slot_bits != canonical_bits {
-            std::ptr::write(elements_ptr.add(i), canonical_bits);
-        }
-        raw.push(number);
+        std::ptr::write(elements.add(i) as *mut f64, number);
     }
 
-    NUMERIC_ARRAY_LAYOUTS.with(|m| {
-        m.borrow_mut().insert(
-            arr as usize,
-            NumericArrayState {
-                layout: NumericArrayLayout::RawF64,
-                raw_f64: Some(raw),
-            },
-        );
-    });
+    set_array_raw_f64_layout_flag(arr);
     crate::gc::layout_init_pointer_free(arr as *mut u8);
     true
 }
@@ -388,15 +412,9 @@ pub(crate) unsafe fn set_array_numeric_layout(arr: *mut ArrayHeader, layout: Num
     if arr.is_null() {
         return;
     }
-    NUMERIC_ARRAY_LAYOUTS.with(|m| {
-        m.borrow_mut().insert(
-            arr as usize,
-            NumericArrayState {
-                layout,
-                raw_f64: None,
-            },
-        );
-    });
+    match layout {
+        NumericArrayLayout::RawF64 => set_array_raw_f64_layout_flag(arr),
+    }
     crate::gc::layout_init_pointer_free(arr as *mut u8);
 }
 
@@ -405,9 +423,7 @@ pub(crate) unsafe fn clear_array_numeric_layout(arr: *const ArrayHeader) {
     if arr.is_null() {
         return;
     }
-    NUMERIC_ARRAY_LAYOUTS.with(|m| {
-        m.borrow_mut().remove(&(arr as usize));
-    });
+    clear_array_raw_f64_layout_flag(arr);
 }
 
 #[inline]
@@ -415,9 +431,9 @@ pub(crate) fn clear_array_numeric_layout_ptr(user_ptr: usize) {
     if user_ptr == 0 {
         return;
     }
-    NUMERIC_ARRAY_LAYOUTS.with(|m| {
-        m.borrow_mut().remove(&user_ptr);
-    });
+    unsafe {
+        clear_array_raw_f64_layout_flag(user_ptr as *const ArrayHeader);
+    }
 }
 
 #[inline]
@@ -425,13 +441,13 @@ pub(crate) fn transfer_array_numeric_layout(old_user: usize, new_user: usize) {
     if old_user == 0 || new_user == 0 || old_user == new_user {
         return;
     }
-    NUMERIC_ARRAY_LAYOUTS.with(|m| {
-        let mut layouts = m.borrow_mut();
-        layouts.remove(&new_user);
-        if let Some(state) = layouts.remove(&old_user) {
-            layouts.insert(new_user, state);
+    unsafe {
+        if array_has_raw_f64_layout_flag(old_user as *const ArrayHeader) {
+            set_array_raw_f64_layout_flag(new_user as *const ArrayHeader);
+        } else {
+            clear_array_raw_f64_layout_flag(new_user as *const ArrayHeader);
         }
-    });
+    }
 }
 
 #[inline]
@@ -440,20 +456,14 @@ pub(crate) unsafe fn array_numeric_layout(arr: *const ArrayHeader) -> Option<Num
     if arr.is_null() {
         return None;
     }
-    NUMERIC_ARRAY_LAYOUTS.with(|m| m.borrow().get(&(arr as usize)).map(|state| state.layout))
+    array_has_raw_f64_layout_flag(arr).then_some(NumericArrayLayout::RawF64)
 }
 
 #[inline]
 pub(crate) unsafe fn note_array_numeric_write(arr: *mut ArrayHeader, value_bits: u64) {
     if !value_bits_are_numeric(value_bits) {
         clear_array_numeric_layout(arr);
-        return;
     }
-    NUMERIC_ARRAY_LAYOUTS.with(|m| {
-        if let Some(state) = m.borrow_mut().get_mut(&(arr as usize)) {
-            state.raw_f64 = None;
-        }
-    });
 }
 
 #[inline]
@@ -461,24 +471,17 @@ pub(crate) unsafe fn note_array_numeric_index_write(
     arr: *mut ArrayHeader,
     index: usize,
     value_bits: u64,
-) {
+) -> u64 {
     let Some(number) = value_bits_to_number(value_bits) else {
         clear_array_numeric_layout(arr);
-        return;
+        return value_bits;
     };
-    NUMERIC_ARRAY_LAYOUTS.with(|m| {
-        if let Some(state) = m.borrow_mut().get_mut(&(arr as usize)) {
-            if let Some(raw) = state.raw_f64.as_mut() {
-                if index < raw.len() {
-                    raw[index] = number;
-                } else if index == raw.len() {
-                    raw.push(number);
-                } else {
-                    state.raw_f64 = None;
-                }
-            }
-        }
-    });
+    if array_has_raw_f64_layout_flag(arr) && index < (*arr).length as usize {
+        let elements = array_elements_ptr(arr) as *mut f64;
+        std::ptr::write(elements.add(index), number);
+        return number.to_bits();
+    }
+    value_bits
 }
 
 #[inline]
@@ -493,13 +496,7 @@ pub(crate) unsafe fn ensure_array_numeric_raw_f64(arr: *mut ArrayHeader) -> bool
         clear_array_numeric_layout(arr);
         return false;
     }
-    let ready = NUMERIC_ARRAY_LAYOUTS.with(|m| {
-        m.borrow()
-            .get(&(arr as usize))
-            .and_then(|state| state.raw_f64.as_ref())
-            .is_some_and(|raw| raw.len() == length)
-    });
-    if ready {
+    if array_has_raw_f64_layout_flag(arr) {
         return true;
     }
     rebuild_array_numeric_raw_f64(arr)
@@ -517,12 +514,8 @@ pub(crate) unsafe fn array_numeric_raw_f64_get(arr: *mut ArrayHeader, index: u32
     if !ensure_array_numeric_raw_f64(arr) {
         return None;
     }
-    NUMERIC_ARRAY_LAYOUTS.with(|m| {
-        m.borrow()
-            .get(&(arr as usize))
-            .and_then(|state| state.raw_f64.as_ref())
-            .and_then(|raw| raw.get(index as usize).copied())
-    })
+    let elements = array_elements_ptr(arr) as *const f64;
+    Some(*elements.add(index as usize))
 }
 
 #[inline]
@@ -538,6 +531,9 @@ pub(crate) unsafe fn array_numeric_raw_f64_set_inbounds(
     let original_bits = value.to_bits();
     let value_bits = canonicalize_array_numeric_store_bits(arr, original_bits);
     let value = f64::from_bits(value_bits);
+    if !ensure_array_numeric_raw_f64(arr) {
+        return false;
+    }
     let elements_ptr = array_elements_ptr(arr) as *mut f64;
     std::ptr::write(elements_ptr.add(index as usize), value);
     note_array_numeric_index_write(arr, index as usize, value_bits);
@@ -560,24 +556,13 @@ pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds(
         return false;
     }
 
-    let value_bits = value.to_bits();
-    let Some(number) = value_bits_to_number(value_bits) else {
+    let Some(number) = value_bits_to_number(value.to_bits()) else {
+        clear_array_numeric_layout(arr);
         return false;
     };
-    let value_bits = number.to_bits();
-    let value = f64::from_bits(value_bits);
     let elements_ptr = array_elements_ptr(arr) as *mut f64;
-    std::ptr::write(elements_ptr.add(length as usize), value);
-    NUMERIC_ARRAY_LAYOUTS.with(|m| {
-        if let Some(state) = m.borrow_mut().get_mut(&(arr as usize)) {
-            match state.raw_f64.as_mut() {
-                Some(raw) if raw.len() == length as usize => raw.push(number),
-                Some(_) => state.raw_f64 = None,
-                None => {}
-            }
-        }
-    });
-    crate::gc::layout_note_slot(arr as usize, length as usize, value_bits);
+    std::ptr::write(elements_ptr.add(length as usize), number);
+    crate::gc::layout_note_slot(arr as usize, length as usize, number.to_bits());
     (*arr).length = length + 1;
     true
 }
@@ -701,7 +686,18 @@ pub(crate) unsafe fn store_array_slot(arr: *mut ArrayHeader, index: usize, value
     let value_bits = canonicalize_array_numeric_store_bits(arr, value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
     let slot = array_elements_ptr(arr).add(index) as usize;
-    crate::gc::runtime_store_jsvalue_slot(arr as usize, slot, index, value_bits);
+    let stored_bits = if array_has_raw_f64_layout_flag(arr) {
+        match value_bits_to_number(value_bits) {
+            Some(number) => number.to_bits(),
+            None => {
+                clear_array_numeric_layout(arr);
+                value_bits
+            }
+        }
+    } else {
+        value_bits
+    };
+    crate::gc::runtime_store_jsvalue_slot(arr as usize, slot, index, stored_bits);
 }
 
 #[inline]

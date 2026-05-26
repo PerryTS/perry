@@ -321,6 +321,29 @@ def _matches_state(actual: Any, expected: Any, *, state_kind: str) -> bool:
     return actual_name == expected_name
 
 
+def _fact_matches(fact: Any, *, kind: Any = None, state: Any = None) -> bool:
+    if not isinstance(fact, dict):
+        return False
+    if kind is not None and str(fact.get("kind") or "") != str(kind):
+        return False
+    if state is not None and str(fact.get("state") or "") != str(state):
+        return False
+    return True
+
+
+def _record_has_fact(
+    record: dict[str, Any],
+    field: str,
+    *,
+    kind: Any = None,
+    state: Any = None,
+) -> bool:
+    facts = record.get(field) or []
+    if not isinstance(facts, list):
+        return False
+    return any(_fact_matches(fact, kind=kind, state=state) for fact in facts)
+
+
 def _record_matches_required(record: dict[str, Any], spec: dict[str, Any]) -> bool:
     exact_fields = (
         "expr_kind",
@@ -363,6 +386,32 @@ def _record_matches_required(record: dict[str, Any], spec: dict[str, Any]) -> bo
         return False
     if "alias_state" in spec and not _matches_state(
         record.get("alias_state"), spec["alias_state"], state_kind="alias"
+    ):
+        return False
+    if "consumed_fact_kind" in spec and not _record_has_fact(
+        record,
+        "consumed_facts",
+        kind=spec.get("consumed_fact_kind"),
+        state=spec.get("consumed_fact_state"),
+    ):
+        return False
+    if "consumed_fact_state" in spec and "consumed_fact_kind" not in spec and not _record_has_fact(
+        record,
+        "consumed_facts",
+        state=spec.get("consumed_fact_state"),
+    ):
+        return False
+    if "rejected_fact_kind" in spec and not _record_has_fact(
+        record,
+        "rejected_facts",
+        kind=spec.get("rejected_fact_kind"),
+        state=spec.get("rejected_fact_state"),
+    ):
+        return False
+    if "rejected_fact_state" in spec and "rejected_fact_kind" not in spec and not _record_has_fact(
+        record,
+        "rejected_facts",
+        state=spec.get("rejected_fact_state"),
     ):
         return False
     return True

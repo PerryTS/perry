@@ -21,7 +21,9 @@ use crate::lower_string_method::{
 };
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
-use crate::native_value::{BoundsState, BufferAccessMode, LoweredValue, MaterializationReason};
+use crate::native_value::{
+    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
+};
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -45,9 +47,10 @@ use super::{
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_typed_array_store, lower_url_string_getter, materialize_js_value, nanbox_bigint_inline,
     nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
-    try_flat_const_2d_int, try_lower_flat_const_index_get, try_match_channel_reduction,
-    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
-    FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
+    raw_f64_layout_fact, try_flat_const_2d_int, try_lower_flat_const_index_get,
+    try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
+    variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract,
+    TypedFeedbackKind,
 };
 
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
@@ -266,42 +269,161 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let idx_double = lower_expr(ctx, index)?;
                             ctx.block().fptosi(DOUBLE, &idx_double, I32)
                         };
+                        if require_numeric_layout {
+                            let feedback_site_id = emit_typed_feedback_register_site(
+                                ctx,
+                                TypedFeedbackKind::ArrayElement,
+                                "array[index]=",
+                                TypedFeedbackContract::numeric_array_set_index(),
+                            );
+                            let fast_idx = ctx.new_block("idxset.bounded_numeric_fast");
+                            let fallback_idx = ctx.new_block("idxset.bounded_numeric_fallback");
+                            let merge_idx = ctx.new_block("idxset.bounded_numeric_merge");
+                            let fast_label = ctx.block_label(fast_idx);
+                            let fallback_label = ctx.block_label(fallback_idx);
+                            let merge_label = ctx.block_label(merge_idx);
+
+                            let guard_ok = {
+                                let blk = ctx.block();
+                                let guard_i32 = blk.call(
+                                    I32,
+                                    "js_typed_feedback_numeric_array_index_set_guard",
+                                    &[
+                                        (I64, &feedback_site_id),
+                                        (DOUBLE, &arr_box),
+                                        (I32, &idx_i32),
+                                        (DOUBLE, &val_double),
+                                        (I32, "1"),
+                                    ],
+                                );
+                                blk.icmp_ne(I32, &guard_i32, "0")
+                            };
+                            ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+
+                            ctx.current_block = fallback_idx;
+                            {
+                                let fallback_box = ctx.block().call(
+                                    DOUBLE,
+                                    "js_typed_feedback_array_index_set_fallback_boxed",
+                                    &[
+                                        (I64, &feedback_site_id),
+                                        (DOUBLE, &arr_box),
+                                        (I32, &idx_i32),
+                                        (DOUBLE, &val_double),
+                                    ],
+                                );
+                                if let Some(slot) = ctx.locals.get(arr_id).cloned() {
+                                    ctx.block().store(DOUBLE, &fallback_box, &slot);
+                                }
+                                ctx.block().br(&merge_label);
+                                let fallback = LoweredValue {
+                                    semantic: SemanticKind::JsValue,
+                                    rep: NativeRep::JsValue,
+                                    llvm_ty: DOUBLE,
+                                    value: fallback_box,
+                                };
+                                ctx.record_lowered_value_with_access_mode_and_facts(
+                                    "NumericArrayIndexSet",
+                                    Some(*arr_id),
+                                    "js_typed_feedback_array_index_set_fallback_boxed",
+                                    &fallback,
+                                    Some(BoundsState::Unknown),
+                                    None,
+                                    Some(BufferAccessMode::DynamicFallback),
+                                    Some(MaterializationReason::RuntimeApi),
+                                    None,
+                                    None,
+                                    Vec::new(),
+                                    vec![
+                                        raw_f64_layout_fact(
+                                            Some(*arr_id),
+                                            "rejected",
+                                            "numeric_array_index_set_guard",
+                                            Some(MaterializationReason::RuntimeApi),
+                                        ),
+                                        raw_f64_layout_fact(
+                                            Some(*arr_id),
+                                            "invalidated",
+                                            "runtime_api",
+                                            Some(MaterializationReason::RuntimeApi),
+                                        ),
+                                    ],
+                                    false,
+                                    false,
+                                    Vec::new(),
+                                );
+                            }
+
+                            ctx.current_block = fast_idx;
+                            {
+                                let blk = ctx.block();
+                                let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                                let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                                blk.call(
+                                    I32,
+                                    "js_array_numeric_set_f64_unboxed",
+                                    &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, &val_double)],
+                                );
+                                blk.br(&merge_label);
+                            }
+                            let stored = LoweredValue {
+                                semantic: SemanticKind::JsNumber,
+                                rep: NativeRep::F64,
+                                llvm_ty: DOUBLE,
+                                value: val_double.clone(),
+                            };
+                            ctx.record_lowered_value_with_access_mode_and_facts(
+                                "NumericArrayIndexSet",
+                                Some(*arr_id),
+                                "js_array_numeric_set_f64_unboxed",
+                                &stored,
+                                Some(BoundsState::Guarded {
+                                    guard_id: "numeric_array_index_set_guard".to_string(),
+                                }),
+                                None,
+                                Some(BufferAccessMode::CheckedNative),
+                                None,
+                                None,
+                                None,
+                                vec![raw_f64_layout_fact(
+                                    Some(*arr_id),
+                                    "consumed",
+                                    "numeric_array_index_set_guard",
+                                    None,
+                                )],
+                                Vec::new(),
+                                false,
+                                false,
+                                Vec::new(),
+                            );
+
+                            ctx.current_block = merge_idx;
+                            return Ok(val_double);
+                        }
                         let blk = ctx.block();
                         let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                        if require_numeric_layout {
-                            blk.call(
-                                I32,
-                                "js_array_numeric_set_f64_unboxed",
-                                &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, &val_double)],
-                            );
-                        } else {
-                            // ptr = arr_handle + 8 + idx*8
-                            let idx_i64 = blk.zext(I32, &idx_i32, I64);
-                            let byte_offset = blk.shl(I64, &idx_i64, "3");
-                            let with_header = blk.add(I64, &byte_offset, "8");
-                            let element_addr = blk.add(I64, &arr_handle, &with_header);
-                            let element_ptr = blk.inttoptr(I64, &element_addr);
-                            let value_bits = emit_jsvalue_slot_store_on_block(
-                                blk,
-                                &element_ptr,
-                                &val_double,
-                                &arr_handle,
-                                &idx_i32,
-                                layout_note_needed,
-                                &arr_handle,
-                                &element_addr,
-                                write_barrier_needed,
-                            );
-                            if !value_is_numeric {
-                                let value_bits = value_bits
-                                    .unwrap_or_else(|| blk.bitcast_double_to_i64(&val_double));
-                                emit_array_numeric_write_note_on_block(
-                                    blk,
-                                    &arr_handle,
-                                    &value_bits,
-                                );
-                            }
+                        // ptr = arr_handle + 8 + idx*8
+                        let idx_i64 = blk.zext(I32, &idx_i32, I64);
+                        let byte_offset = blk.shl(I64, &idx_i64, "3");
+                        let with_header = blk.add(I64, &byte_offset, "8");
+                        let element_addr = blk.add(I64, &arr_handle, &with_header);
+                        let element_ptr = blk.inttoptr(I64, &element_addr);
+                        let value_bits = emit_jsvalue_slot_store_on_block(
+                            blk,
+                            &element_ptr,
+                            &val_double,
+                            &arr_handle,
+                            &idx_i32,
+                            layout_note_needed,
+                            &arr_handle,
+                            &element_addr,
+                            write_barrier_needed,
+                        );
+                        if !value_is_numeric {
+                            let value_bits = value_bits
+                                .unwrap_or_else(|| blk.bitcast_double_to_i64(&val_double));
+                            emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
                         }
                         return Ok(val_double);
                     }

@@ -37,6 +37,11 @@ fn assert_canonical_raw_slot(arr: *mut ArrayHeader, index: u32, expected: f64) {
     assert_eq!(js_array_numeric_get_f64_unboxed(arr, index), expected);
 }
 
+unsafe fn raw_slot_bits(arr: *mut ArrayHeader, index: usize) -> u64 {
+    let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+    *elements.add(index)
+}
+
 #[test]
 fn test_array_alloc_and_access() {
     let arr = js_array_alloc(5);
@@ -302,6 +307,30 @@ fn test_numeric_array_layout_mark_rejects_holes_and_accepts_dense_numbers() {
 }
 
 #[test]
+fn test_numeric_array_mark_canonicalizes_int32_and_nan_inline() {
+    let arr = js_array_alloc_with_length(3);
+    let int32_value = f64::from_bits(crate::value::INT32_TAG | ((-17i32 as u32) as u64));
+    let payload_nan = f64::from_bits(0x7FF8_0000_0000_1234);
+
+    js_array_set_f64(arr, 0, int32_value);
+    js_array_set_f64(arr, 1, payload_nan);
+    js_array_set_f64(arr, 2, -0.0);
+
+    assert_eq!(js_array_mark_numeric_f64_layout(arr), 1);
+    assert_eq!(js_array_numeric_get_f64_unboxed(arr, 0), -17.0);
+    assert!(js_array_numeric_get_f64_unboxed(arr, 1).is_nan());
+    assert_eq!(
+        js_array_numeric_get_f64_unboxed(arr, 2).to_bits(),
+        (-0.0f64).to_bits()
+    );
+    unsafe {
+        assert_eq!(raw_slot_bits(arr, 0), (-17.0f64).to_bits());
+        assert_eq!(raw_slot_bits(arr, 1), f64::NAN.to_bits());
+        assert_eq!(raw_slot_bits(arr, 2), (-0.0f64).to_bits());
+    }
+}
+
+#[test]
 fn test_numeric_array_raw_f64_payload_tracks_sets_and_downgrades() {
     let mut arr = js_array_alloc(2);
     arr = js_array_push_f64(arr, 1.5);
@@ -325,6 +354,32 @@ fn test_numeric_array_raw_f64_payload_tracks_sets_and_downgrades() {
         str_value.to_bits(),
         "unboxed helper falls back to boxed slots after downgrade"
     );
+}
+
+#[test]
+fn test_numeric_array_sparse_extend_fills_holes_and_downgrades_raw_layout() {
+    let mut arr = js_array_alloc(8);
+    arr = js_array_push_f64(arr, 1.0);
+    arr = js_array_push_f64(arr, 2.0);
+
+    assert_eq!(js_array_mark_numeric_f64_layout(arr), 1);
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+
+    let extended = js_array_set_f64_extend(arr, 5, 6.0);
+
+    assert_eq!(extended, arr);
+    assert_eq!(js_array_length(extended), 6);
+    assert_eq!(js_array_is_numeric_f64_layout(extended), 0);
+    assert_eq!(js_array_get_f64(extended, 0), 1.0);
+    assert_eq!(js_array_get_f64(extended, 1), 2.0);
+    assert_eq!(
+        js_array_get_f64(extended, 3).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
+    unsafe {
+        assert_eq!(raw_slot_bits(extended, 3), crate::value::TAG_HOLE);
+    }
+    assert_eq!(js_array_get_f64(extended, 5), 6.0);
 }
 
 #[test]

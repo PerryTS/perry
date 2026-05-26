@@ -68,6 +68,7 @@ class TypedFeedbackRuntimeEvidenceTest(unittest.TestCase):
             self.assertTrue(trace_path.exists(), "compiled program did not write typed-feedback trace")
 
             data = json.loads(trace_path.read_text(encoding="utf-8"))
+            self.assertGreaterEqual(data.get("invalidations", {}).get("representation", 0), 1)
             sites = data.get("sites", [])
             self.assertGreater(len(sites), 0)
             required = {
@@ -94,11 +95,25 @@ class TypedFeedbackRuntimeEvidenceTest(unittest.TestCase):
             ]
             self.assertTrue(array_set, sites)
             self.assertTrue(any(site["guard_passes"] >= 1 for site in array_set), array_set)
+            self.assertTrue(any(site["guard_failures"] >= 1 for site in array_set), array_set)
             self.assertTrue(any(site["fallback_calls"] >= 1 for site in array_set), array_set)
+            self.assertTrue(
+                any(site["invalidations"]["representation"] >= 1 for site in array_set),
+                array_set,
+            )
             array_kinds = [kind for site in array_set for kind in site["observed_kinds"]]
             self.assertTrue(any(kind.get("source") == "array" for kind in array_kinds), array_kinds)
             self.assertTrue(any(kind.get("value_kind") == "number" for kind in array_kinds), array_kinds)
             self.assertTrue(any(kind.get("value_kind") == "string" for kind in array_kinds), array_kinds)
+
+            array_get = [
+                site
+                for site in sites
+                if site.get("guard_name") == "numeric_array_index_get_guard"
+            ]
+            self.assertTrue(array_get, sites)
+            self.assertTrue(any(site["guard_failures"] >= 1 for site in array_get), array_get)
+            self.assertTrue(any(site["fallback_calls"] >= 1 for site in array_get), array_get)
 
             raw_set = [
                 site
@@ -107,7 +122,12 @@ class TypedFeedbackRuntimeEvidenceTest(unittest.TestCase):
             ]
             self.assertTrue(raw_set, sites)
             self.assertTrue(any(site["guard_passes"] >= 1 for site in raw_set), raw_set)
+            self.assertTrue(any(site["guard_failures"] >= 1 for site in raw_set), raw_set)
             self.assertTrue(any(site["fallback_calls"] >= 1 for site in raw_set), raw_set)
+            self.assertTrue(
+                any(site["invalidations"]["representation"] >= 1 for site in raw_set),
+                raw_set,
+            )
             raw_kinds = [kind for site in raw_set for kind in site["observed_kinds"]]
             self.assertTrue(
                 any(
@@ -134,6 +154,8 @@ class TypedFeedbackRuntimeEvidenceTest(unittest.TestCase):
                 if site.get("guard_name") == "class_field_get_guard"
             ]
             self.assertTrue(any(site["guard_passes"] >= 1 for site in raw_get), raw_get)
+            self.assertTrue(any(site["guard_failures"] >= 1 for site in raw_get), raw_get)
+            self.assertTrue(any(site["fallback_calls"] >= 1 for site in raw_get), raw_get)
 
 
 if __name__ == "__main__":

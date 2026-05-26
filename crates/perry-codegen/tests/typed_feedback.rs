@@ -467,7 +467,7 @@ fn typed_feedback_inline_array_writes_note_numeric_downgrade() {
 }
 
 #[test]
-fn typed_feedback_skips_array_index_guard_for_computed_numeric_hot_path() {
+fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
     let array_ty = Type::Array(Box::new(Type::Number));
     let ir = ir_for(module(
         "typed_feedback_computed_array.ts",
@@ -483,8 +483,7 @@ fn typed_feedback_skips_array_index_guard_for_computed_numeric_hot_path() {
         }))],
     ));
 
-    assert!(!ir.contains("call i32 @js_typed_feedback_plain_array_index_get_guard"));
-    assert!(!ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
-    assert!(ir.contains("call double @js_array_get_f64"));
-    assert!(ir.contains("load double"));
+    assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"));
+    assert!(ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
+    assert!(ir.contains("call double @js_array_numeric_get_f64_unboxed"));
 }

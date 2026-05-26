@@ -43,10 +43,11 @@ use super::{
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
-    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
-    try_lower_flat_const_index_get, try_lower_pod_field_get, try_match_channel_reduction,
-    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
-    FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
+    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, raw_f64_layout_fact,
+    try_flat_const_2d_int, try_lower_flat_const_index_get, try_lower_pod_field_get,
+    try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
+    variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract,
+    TypedFeedbackKind,
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -1055,7 +1056,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 llvm_ty: DOUBLE,
                                 value: val_fast.clone(),
                             };
-                            ctx.record_lowered_value_with_access_mode(
+                            ctx.record_lowered_value_with_access_mode_and_facts(
                                 "ClassFieldGet",
                                 None,
                                 "class_field_get.raw_f64_load",
@@ -1066,6 +1067,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 None,
                                 Some(BufferAccessMode::CheckedNative),
                                 None,
+                                None,
+                                None,
+                                vec![raw_f64_layout_fact(
+                                    None,
+                                    "consumed",
+                                    "class_field_get_guard",
+                                    None,
+                                )],
+                                Vec::new(),
                                 false,
                                 false,
                                 vec![
@@ -1093,7 +1103,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 llvm_ty: DOUBLE,
                                 value: val_fallback.clone(),
                             };
-                            ctx.record_lowered_value_with_access_mode(
+                            ctx.record_lowered_value_with_access_mode_and_facts(
                                 "ClassFieldGet",
                                 None,
                                 "js_object_get_field_by_name_f64",
@@ -1102,6 +1112,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 None,
                                 Some(BufferAccessMode::DynamicFallback),
                                 Some(MaterializationReason::RuntimeApi),
+                                None,
+                                None,
+                                Vec::new(),
+                                vec![
+                                    raw_f64_layout_fact(
+                                        None,
+                                        "rejected",
+                                        "class_field_get_guard",
+                                        Some(MaterializationReason::RuntimeApi),
+                                    ),
+                                    raw_f64_layout_fact(
+                                        None,
+                                        "invalidated",
+                                        "runtime_api",
+                                        Some(MaterializationReason::RuntimeApi),
+                                    ),
+                                ],
                                 false,
                                 false,
                                 vec![
