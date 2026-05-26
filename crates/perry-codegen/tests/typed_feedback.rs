@@ -297,6 +297,7 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
                     captures_this: false,
                     enclosing_class: None,
                     is_async: false,
+                    is_generator: false,
                 }),
             },
             Stmt::Return(Some(Expr::Call {

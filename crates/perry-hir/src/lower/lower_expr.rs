@@ -1588,6 +1588,7 @@ pub(crate) fn try_desugar_reactive_text(
             captures_this: false,
             enclosing_class: None,
             is_async: false,
+            is_generator: false,
         };
 
         outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
@@ -1625,6 +1626,7 @@ pub(crate) fn try_desugar_reactive_text(
         captures_this: false,
         enclosing_class: None,
         is_async: false,
+        is_generator: false,
     };
 
     Ok(Some(Expr::Call {

@@ -202,6 +202,7 @@ impl LoweringContext {
                     captures_this: false,
                     enclosing_class: None,
                     is_async: false,
+                    is_generator: false,
                 };
             }
         }

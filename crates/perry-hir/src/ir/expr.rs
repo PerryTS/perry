@@ -1638,6 +1638,12 @@ pub enum Expr {
         enclosing_class: Option<String>,
         /// Whether this is an async closure
         is_async: bool,
+        /// Whether this is a generator closure (a `function*(){}` expression).
+        /// Set by `lower_fn_expr`; the generator transform rewrites the body of
+        /// such closures (reusing the captures-aware generator transform) so
+        /// calling the closure returns a `{next,return,throw}` generator, then
+        /// clears the flag. Refs #321 (effect's `Effect.gen(function*(){...})`).
+        is_generator: bool,
     },
 
     // RegExp operations
