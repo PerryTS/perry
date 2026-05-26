@@ -27,6 +27,19 @@ pub(super) fn try_imported_array_methods(
                 let method_name = method_ident.sym.as_ref();
                 if let ast::Expr::Ident(arr_ident) = member.obj.as_ref() {
                     let arr_name = arr_ident.sym.to_string();
+                    // A module namespace import (`import * as NS from "..."`) is
+                    // NOT an array — its `.map`/`.filter`/`.find`/... are member
+                    // functions, e.g. effect's `export const map = core.map`.
+                    // Folding `NS.map(x, f)` to `Expr::ArrayMap { array: NS,
+                    // callback: x }` dispatched `js_array_map(NS, x)` and
+                    // returned `[]` without ever calling the member (#321 —
+                    // `Effect.map(...)` never ran). Skip the fold for
+                    // namespaces; the generic call path invokes the member
+                    // correctly. Named-value imports (`import { CHAIN_NAMES }`)
+                    // are not namespaces, so real imported arrays still fold.
+                    if ctx.namespace_import_locals.contains(&arr_name) {
+                        return Ok(Err(args));
+                    }
                     // Check if this is an imported variable (not a local)
                     if ctx.lookup_local(&arr_name).is_none() {
                         if let Some(orig_name) = ctx.lookup_imported_func(&arr_name) {
