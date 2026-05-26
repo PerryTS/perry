@@ -21,8 +21,8 @@
 
 use perry_runtime::{
     js_array_alloc, js_array_length, js_array_push_f64, js_closure_call0, js_closure_call1,
-    js_nanbox_pointer, js_nanbox_string, js_object_alloc, js_promise_new, js_promise_resolve,
-    js_string_from_bytes, ArrayHeader, ClosureHeader, Promise, StringHeader,
+    js_closure_call2, js_nanbox_pointer, js_nanbox_string, js_object_alloc, js_promise_new,
+    js_promise_resolve, js_string_from_bytes, ArrayHeader, ClosureHeader, Promise, StringHeader,
 };
 use std::collections::HashMap;
 
@@ -151,7 +151,7 @@ impl EventEmitterHandle {
         }
     }
 
-    fn emit_meta_event(&self, meta_name: &str, event_name: &str) {
+    fn emit_meta_event(&self, meta_name: &str, event_name: &str, listener_arg: i64) {
         let snapshot = match self.events.get(meta_name) {
             Some(v) if !v.is_empty() => v.clone(),
             _ => return,
@@ -159,16 +159,17 @@ impl EventEmitterHandle {
         let bytes = event_name.as_bytes();
         let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         let event_arg = js_nanbox_string(str_ptr as i64);
+        let listener_arg = js_nanbox_pointer(listener_arg);
         for l in snapshot {
             if l.callback != 0 {
                 let closure_ptr = l.callback as *const ClosureHeader;
-                js_closure_call1(closure_ptr, event_arg);
+                js_closure_call2(closure_ptr, event_arg, listener_arg);
             }
         }
     }
 
     fn add_listener(&mut self, name: &str, callback: i64, once: bool, prepend: bool) {
-        self.emit_meta_event("newListener", name);
+        self.emit_meta_event("newListener", name, callback);
         self.note_event(name);
         let vec = self.events.entry(name.to_string()).or_default();
         let listener = Listener { callback, once };
@@ -440,7 +441,7 @@ pub unsafe extern "C" fn js_event_emitter_remove_listener(
         }
         if removed {
             emitter.prune_event_if_empty(&event_name);
-            emitter.emit_meta_event("removeListener", &event_name);
+            emitter.emit_meta_event("removeListener", &event_name, callback_ptr);
         }
     }
     handle
@@ -455,33 +456,36 @@ pub unsafe extern "C" fn js_event_emitter_remove_all_listeners(
 ) -> Handle {
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         if event_name_ptr.is_null() {
-            let removed: Vec<String> = emitter
+            let removed: Vec<(String, i64)> = emitter
                 .event_order
                 .iter()
                 .filter(|name| name.as_str() != "removeListener")
                 .flat_map(|name| {
-                    let count = emitter.events.get(name).map(|v| v.len()).unwrap_or(0);
-                    std::iter::repeat(name.clone()).take(count)
+                    emitter.events.get(name).into_iter().flat_map(|listeners| {
+                        listeners
+                            .iter()
+                            .map(|listener| (name.clone(), listener.callback))
+                    })
                 })
                 .collect();
             emitter.events.clear();
             emitter.event_order.clear();
-            for name in removed {
-                emitter.emit_meta_event("removeListener", &name);
+            for (name, callback) in removed {
+                emitter.emit_meta_event("removeListener", &name, callback);
             }
         } else if let Some(event_name) = string_from_header(event_name_ptr) {
-            let removed_count = emitter
+            let removed: Vec<i64> = emitter
                 .events
                 .get(&event_name)
-                .map(|v| v.len())
-                .unwrap_or(0);
+                .map(|listeners| listeners.iter().map(|listener| listener.callback).collect())
+                .unwrap_or_default();
             emitter.events.remove(&event_name);
             if let Some(pos) = emitter.event_order.iter().position(|s| s == &event_name) {
                 emitter.event_order.remove(pos);
             }
             if event_name != "removeListener" {
-                for _ in 0..removed_count {
-                    emitter.emit_meta_event("removeListener", &event_name);
+                for callback in removed {
+                    emitter.emit_meta_event("removeListener", &event_name, callback);
                 }
             }
         }
