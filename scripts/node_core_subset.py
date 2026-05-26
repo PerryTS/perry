@@ -273,6 +273,46 @@ def main() -> int:
         bin_dir = stage / "bin"
         bin_dir.mkdir()
 
+        # #1842: under --auto-optimize, the first compile that needs a given
+        # ext-crate / feature triggers a COLD cargo build of heavy deps
+        # (hyper, tokio, openssl, flate2, ...), which can blow the per-test
+        # compile timeout and mis-bucket real-but-slow http/net/crypto/zlib
+        # tests as compile-fail. Pre-warm ONCE with a kitchen-sink that pulls
+        # in the server/client/crypto/zlib surface, so every subsequent
+        # per-feature relink in the sweep is incremental (fast) — not cold.
+        if args.auto_optimize:
+            warm = parallel_stage / "_prewarm.ts"
+            warm.write_text(
+                "import * as http from 'node:http';\n"
+                "import * as https from 'node:https';\n"
+                "import * as net from 'node:net';\n"
+                "import * as zlib from 'node:zlib';\n"
+                "import * as crypto from 'node:crypto';\n"
+                "http.createServer(() => {});\n"
+                "https.createServer({}, () => {});\n"
+                "net.createServer(() => {});\n"
+                "zlib.createGzip();\n"
+                "crypto.createHash('sha256');\n"
+                "console.log('prewarm');\n"
+            )
+            if not args.quiet:
+                print("  pre-warming ext-crate libs (one cold build; "
+                      "makes per-feature relinks incremental, #1842)...")
+            w_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1")
+            # cwd MUST be the perry workspace: auto-optimize locates the
+            # Cargo workspace from cwd to (re)build the perry-ext-* crates. From
+            # a temp cwd it silently skips the rebuild and link-fails. `.o`
+            # litter in the repo root is gitignored (`*.o`). #1842.
+            wc, _ = run([str(args.perry_bin), "compile", str(warm),
+                         "-o", str(bin_dir / "_prewarm.out")],
+                        w_env, max(args.timeout, 1800), cwd=str(REPO_ROOT))
+            if not args.quiet:
+                print(f"  pre-warm {'done' if wc == 0 else f'exit {wc} (continuing)'}")
+            try:
+                warm.unlink()
+            except OSError:
+                pass
+
         for api in apis:
             tests = resolve_tests(root, api)
             if args.max_per_api > 0:
@@ -308,10 +348,17 @@ def main() -> int:
                 c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1")
                 if not args.auto_optimize:
                     c_env["PERRY_NO_AUTO_OPTIMIZE"] = "1"
+                # Under --auto-optimize, compile from the perry workspace so
+                # auto-optimize can build/link the perry-ext-* crates (it
+                # locates the workspace via cwd; a temp cwd silently skips the
+                # ext-crate rebuild → link-fail). `.o` litter in the repo root
+                # is gitignored. Without auto-optimize, keep cwd=bin_dir so the
+                # `.o` files stay in the disposable stage dir. #1842.
+                compile_cwd = str(REPO_ROOT) if args.auto_optimize else str(bin_dir)
                 c_exit, c_out = run(
                     [str(args.perry_bin), "compile", str(staged),
                      "-o", str(out_bin)],
-                    c_env, compile_timeout, cwd=str(bin_dir))
+                    c_env, compile_timeout, cwd=compile_cwd)
                 if c_exit != 0:
                     buckets["compile-fail"].add(
                         api, test_name, error_line(c_out), args.sample_cap)
