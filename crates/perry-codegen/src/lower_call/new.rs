@@ -122,6 +122,18 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             break;
         }
     }
+    // Issue #26 / #321: prefer the authoritative per-class field count computed
+    // by the source-prefix-disambiguated keys-global builder. The walk above
+    // resolves parents via `ctx.classes` — a name-keyed map that holds only
+    // ONE same-named stub — so when a cross-module parent name collides
+    // (effect's `Type` in SchemaAST.ts vs ParseResult.ts) it counts the wrong
+    // parent's fields. Using the keys-global's count keeps the allocated slot
+    // count and the header `field_count` in lockstep with the keys array,
+    // which `Object.keys()` walks. Falls back to the computed walk when this
+    // class has no keys global (anonymous / no-keys path).
+    if let Some(&authoritative) = ctx.class_field_counts.get(class_name) {
+        field_count = authoritative;
+    }
 
     // Allocate the object with the per-class id and (if applicable)
     // parent class id, so the runtime registers the inheritance
@@ -867,17 +879,35 @@ pub(crate) fn apply_field_initializers_recursive(
     class_name: &str,
     mode: FieldInitMode,
 ) -> Result<()> {
+    // Issue #26 / #321: prefer the authoritative, source-prefix-disambiguated
+    // ancestor chain (built once in `compile_module` alongside the per-class
+    // keys global). Walking `ctx.classes` by `extends_name` mis-resolves
+    // same-named cross-module parents (effect's `Type` in SchemaAST.ts vs
+    // ParseResult.ts) and writes that wrong parent's fields onto the instance
+    // as `undefined`, surfacing as spurious enumerable keys (`_tag,ast,actual,
+    // message` on a `PropertySignature`). The authoritative chain is root →
+    // leaf and carries each ancestor's resolved fields, so we use both its
+    // ORDER (for the mode filter) and its FIELDS (per class below).
+    let mut chain_field_override: std::collections::HashMap<String, Vec<perry_hir::ClassField>> =
+        std::collections::HashMap::new();
     // Collect the inheritance chain from root down.
     let mut chain: Vec<String> = Vec::new();
-    let mut cur = Some(class_name.to_string());
-    while let Some(c) = cur {
-        let Some(class) = ctx.classes.get(&c).copied() else {
-            break;
-        };
-        chain.push(c.clone());
-        cur = class.extends_name.clone();
+    if let Some(auth) = ctx.class_init_chains.get(class_name) {
+        for (name, fields) in auth {
+            chain.push(name.clone());
+            chain_field_override.insert(name.clone(), fields.clone());
+        }
+    } else {
+        let mut cur = Some(class_name.to_string());
+        while let Some(c) = cur {
+            let Some(class) = ctx.classes.get(&c).copied() else {
+                break;
+            };
+            chain.push(c.clone());
+            cur = class.extends_name.clone();
+        }
+        chain.reverse();
     }
-    chain.reverse();
 
     // Apply mode filter:
     //   All: keep entire chain
@@ -936,10 +966,21 @@ pub(crate) fn apply_field_initializers_recursive(
     };
 
     for class_name_in_chain in chain {
-        let class = match ctx.classes.get(&class_name_in_chain).copied() {
-            Some(c) => c,
-            None => continue,
-        };
+        // Issue #26: prefer the authoritative chain's resolved fields for this
+        // class (correct cross-module parent layout); fall back to the
+        // name-keyed `ctx.classes` only when no authoritative entry exists.
+        // Local classes carry their real init exprs here; imported/inherited
+        // fields carry `init: None` (→ `undefined`), exactly as before — just
+        // resolved against the RIGHT parent.
+        let class_fields: Vec<perry_hir::ClassField> =
+            if let Some(fields) = chain_field_override.get(&class_name_in_chain) {
+                fields.clone()
+            } else {
+                match ctx.classes.get(&class_name_in_chain).copied() {
+                    Some(c) => c.fields.clone(),
+                    None => continue,
+                }
+            };
         // Collect (property_name, init_expr) pairs up-front to avoid
         // holding an immutable borrow of ctx.classes across lower_expr.
         // Computed-key fields (`[Symbol.for("k")]` etc.) live in a parallel
@@ -959,7 +1000,7 @@ pub(crate) fn apply_field_initializers_recursive(
         // value into the field slot. Refs #486.
         let mut init_pairs: Vec<(String, Expr)> = Vec::new();
         let mut init_pairs_computed: Vec<(Expr, Expr)> = Vec::new();
-        for field in &class.fields {
+        for field in &class_fields {
             let init = match &field.init {
                 Some(e) => e.clone(),
                 None => Expr::Undefined,

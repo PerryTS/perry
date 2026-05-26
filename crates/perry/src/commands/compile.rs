@@ -3320,12 +3320,34 @@ pub fn run_with_parse_cache(
             // the receiver class at every step of the chain.
             let mut visited_imports: std::collections::HashSet<String> =
                 imported_classes.iter().map(|ic| ic.name.clone()).collect();
-            let mut closure_worklist: Vec<String> = visited_imports.iter().cloned().collect();
-            while let Some(name) = closure_worklist.pop() {
-                let ic_idx = imported_classes.iter().position(|ic| ic.name == name);
-                let Some(idx) = ic_idx else { continue };
+            // Issue #26 / #321: a class's `extends` parent must be resolved in
+            // the CHILD's own source module — same-named classes in different
+            // modules (effect's `Type` in SchemaAST.ts vs ParseResult.ts) are
+            // distinct. The by-NAME `visited_imports` dedup above would import
+            // only the first `Type` seen and skip the SchemaAST one, so
+            // SchemaAST's `OptionalType extends Type` chain loses its real
+            // parent's fields. Track parent additions by (path, name) identity
+            // so the correct-module parent is pulled in even when its bare
+            // name was already visited. Codegen's prefix-disambiguated parent
+            // resolver then picks the right one.
+            let mut visited_parent_paths: std::collections::HashSet<(String, String)> =
+                std::collections::HashSet::new();
+            // Worklist of INDICES into `imported_classes` (not names): a name
+            // can map to several entries (same-named cross-module classes,
+            // refs #26), so we must process the exact entry we added, not the
+            // first by-name match.
+            let mut closure_worklist: Vec<usize> = (0..imported_classes.len()).collect();
+            while let Some(idx) = closure_worklist.pop() {
+                if idx >= imported_classes.len() {
+                    continue;
+                }
                 let field_types_clone = imported_classes[idx].field_types.clone();
                 let parent_name_clone = imported_classes[idx].parent_name.clone();
+                // The child's own canonical source path, used to resolve its
+                // `extends` parent in the child's module scope.
+                let child_src_path: Option<String> = imported_classes[idx]
+                    .source_class_id
+                    .and_then(|cid| class_canonical_path.get(&cid).cloned());
                 // Issue #485: include the class's parent in the transitive
                 // closure too. Without this, `import { Sub } from 'pkg'` where
                 // `Sub extends Base` (and Base lives in another file inside
@@ -3335,19 +3357,23 @@ pub fn run_with_parse_cache(
                 // and the parent's cross-module ctor's `this.field = …`
                 // writes overflow the object header — `f.field` reads
                 // undefined on the importing side.
-                let parent_refs: Vec<String> = parent_name_clone.into_iter().collect();
-                for ref_name in field_types_clone
+                //
+                // `is_parent_ref` marks the entry that came from `extends`
+                // (vs a field-type reference): parent refs get path-aware
+                // resolution + (path,name) dedup so the correct-module parent
+                // is imported even past the bare-name dedup. Field-type refs
+                // keep the legacy by-name behavior.
+                let refs: Vec<(String, bool)> = field_types_clone
                     .iter()
                     .filter_map(|ty| match ty {
                         perry_types::Type::Named(n) => Some(n.clone()),
                         perry_types::Type::Generic { base, .. } => Some(base.clone()),
                         _ => None,
                     })
-                    .chain(parent_refs.into_iter())
-                {
-                    if visited_imports.contains(&ref_name) {
-                        continue;
-                    }
+                    .map(|n| (n, false))
+                    .chain(parent_name_clone.into_iter().map(|n| (n, true)))
+                    .collect();
+                for (ref_name, is_parent_ref) in refs {
                     // Issue #489: pick the canonical defining path for the
                     // parent class (where `class N { ... }` actually lives)
                     // rather than the first BTreeMap match by name (which
@@ -3358,14 +3384,25 @@ pub fn run_with_parse_cache(
                     // and sorts before `query-promise.js`), and the dispatch
                     // table emits `perry_method_<index_js>__QueryPromise__then`
                     // — undefined symbol at link time.
-                    let found = exported_classes
-                        .iter()
-                        .find(|((path, cname), class)| {
-                            cname == &ref_name
-                                && class_canonical_path
-                                    .get(&class.id)
-                                    .map(|cp| cp == path)
-                                    .unwrap_or(true)
+                    //
+                    // Issue #26: for a parent ref, prefer the same-named class
+                    // in the CHILD's own source module before any global match.
+                    let found = is_parent_ref
+                        .then_some(())
+                        .and(child_src_path.as_ref())
+                        .and_then(|cp| {
+                            exported_classes
+                                .iter()
+                                .find(|((path, cname), _)| cname == &ref_name && path == cp)
+                        })
+                        .or_else(|| {
+                            exported_classes.iter().find(|((path, cname), class)| {
+                                cname == &ref_name
+                                    && class_canonical_path
+                                        .get(&class.id)
+                                        .map(|cp| cp == path)
+                                        .unwrap_or(true)
+                            })
                         })
                         .or_else(|| {
                             exported_classes
@@ -3373,6 +3410,26 @@ pub fn run_with_parse_cache(
                                 .find(|((_, cname), _)| cname == &ref_name)
                         })
                         .map(|((path, _), class)| (path.clone(), *class));
+                    // Dedup: parent refs key on (resolved_path, name) so a
+                    // distinct same-named parent in another module is still
+                    // imported; all other refs key on name only (legacy).
+                    if is_parent_ref {
+                        if let Some((src_path, _)) = &found {
+                            if !visited_parent_paths
+                                .insert((src_path.clone(), ref_name.clone()))
+                            {
+                                continue;
+                            }
+                            // Already have an entry under this name from a
+                            // DIFFERENT module: still add this (path,name)
+                            // variant so codegen can disambiguate, but skip
+                            // re-pushing to the worklist by name below.
+                        } else {
+                            continue;
+                        }
+                    } else if visited_imports.contains(&ref_name) {
+                        continue;
+                    }
                     if let Some((src_path, class)) = found {
                         let class_prefix = compute_module_prefix(&src_path, &ctx.project_root);
                         // Issue #485: when the child's `parent_name` doesn't
@@ -3439,7 +3496,9 @@ pub fn run_with_parse_cache(
                             source_class_id: Some(class.id),
                         });
                         visited_imports.insert(ref_name.clone());
-                        closure_worklist.push(ref_name);
+                        // Process the entry we just pushed (by index, so a
+                        // same-named distinct-module class isn't skipped). Refs #26.
+                        closure_worklist.push(imported_classes.len() - 1);
                     }
                 }
             }

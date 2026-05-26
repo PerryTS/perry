@@ -191,6 +191,33 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // metadata for dispatch and the extern LLVM declarations for the
     // linker.
     let mut imported_class_stubs: Vec<perry_hir::Class> = Vec::new();
+    // Issue #26 / #321: the source-module prefix of each entry in
+    // `imported_class_stubs`, kept index-parallel. Effect (and other heavily
+    // modular packages) export same-named classes from different modules —
+    // e.g. `class Type` exists in BOTH `SchemaAST.ts` (fields `type,
+    // annotations`) and `ParseResult.ts` (fields `_tag, ast, actual,
+    // message`). Both arrive here as separate stubs that collide by name.
+    // The packed-keys / field-count chain walks below resolve a class's
+    // parent by name (`.find(|c| c.name == parent)`), which silently picks
+    // whichever same-named stub appears first in the Vec. That makes
+    // `PropertySignature ← OptionalType ← Type` inherit ParseResult.Type's
+    // fields instead of SchemaAST.Type's, polluting the schema AST that
+    // decode/encode/is later walk. A class's `extends` clause resolves in
+    // *its own* module's scope, so we disambiguate by preferring the parent
+    // stub whose source prefix matches the child's.
+    let mut imported_stub_prefixes: Vec<String> = Vec::new();
+    // Issue #26 / #321: imported classes that are shadowed by a same-named
+    // LOCAL class (so they're intentionally kept OUT of `class_table` /
+    // `class_ids` / `imported_class_stubs` to preserve local dispatch
+    // precedence) but are still needed to resolve the parent layout of OTHER
+    // imported classes. Tuple: (name, source_prefix, parent_name, fields).
+    // Consulted only by `resolve_parent`.
+    let mut shadowed_parent_stubs: Vec<(
+        String,
+        String,
+        Option<String>,
+        Vec<perry_hir::ClassField>,
+    )> = Vec::new();
     // Fallback id range for imported classes whose source_class_id is None
     // (legacy callers that didn't populate it). Start above the max local
     // HIR id so we don't collide with local class ids.
@@ -207,6 +234,36 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
 
         // Skip if already defined locally (local definition takes precedence).
         if class_table.contains_key(effective_name) {
+            // Issue #26 / #321: a locally-shadowed import is still needed for
+            // *parent resolution* of OTHER imported classes. Effect's
+            // ParseResult.ts declares its own local `class Type`
+            // (`{_tag,ast,actual,message}`) AND imports SchemaAST's
+            // `OptionalType extends Type`, whose real parent is SchemaAST's
+            // `Type` (`{type,annotations}`). The local `Type` correctly
+            // shadows `class_table`/`class_ids` for ParseResult's own code,
+            // but the imported `OptionalType`'s field layout must still
+            // resolve to SchemaAST's `Type`. Record the shadowed import in a
+            // side list keyed by source prefix so `resolve_parent`
+            // can find it WITHOUT polluting the name-keyed dispatch maps.
+            if !ic.field_names.is_empty() || ic.parent_name.is_some() {
+                shadowed_parent_stubs.push((
+                    effective_name.to_string(),
+                    ic.source_prefix.clone(),
+                    ic.parent_name.clone(),
+                    ic.field_names
+                        .iter()
+                        .map(|name| perry_hir::ClassField {
+                            name: name.clone(),
+                            key_expr: None,
+                            ty: perry_types::Type::Any,
+                            init: None,
+                            is_private: false,
+                            is_readonly: false,
+                            decorators: Vec::new(),
+                        })
+                        .collect::<Vec<_>>(),
+                ));
+            }
             continue;
         }
 
@@ -291,6 +348,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             aliases: Vec::new(),
         };
         imported_class_stubs.push(stub);
+        imported_stub_prefixes.push(ic.source_prefix.clone());
     }
     // Issue #309: break inheritance-chain cycles in imported_class_stubs.
     // Effect (and other heavily-modular TypeScript packages) declare
@@ -450,6 +508,86 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut class_keys_init_data: Vec<(String, String, u32, Vec<u64>, Vec<u64>)> = Vec::new();
     let mut class_keys_globals_map: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
+    // Issue #26 / #321: the authoritative total inline-field count for each
+    // class, as computed by the source-prefix-disambiguated chain walk that
+    // builds the packed-keys global below. The `new ClassName()` site
+    // (`lower_new`) recomputes a field count by walking `ctx.classes`
+    // (a name-keyed map that can only hold ONE same-named parent stub),
+    // which mis-sizes the allocation and stamps a wrong `field_count` in
+    // the object header when same-named parents collide (effect's `Type`).
+    // `lower_new` consults this map first so the allocated slot count and the
+    // header `field_count` match the keys array length the global holds.
+    let mut class_field_counts_map: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+    // Issue #26 / #321: the authoritative, source-prefix-disambiguated
+    // ancestor chain for each class, root → leaf, as `(class_name, fields)`.
+    // `apply_field_initializers_recursive` (lower_new) otherwise walks the
+    // chain via the name-keyed `ctx.classes`, which mis-resolves same-named
+    // cross-module parents (effect's `Type`) and writes that wrong parent's
+    // fields onto the instance as `undefined` — surfacing as spurious
+    // enumerable keys. Consulting this chain makes constructor field-init
+    // write exactly the layout the keys array describes.
+    let mut class_init_chains_map: std::collections::HashMap<
+        String,
+        Vec<(String, Vec<perry_hir::ClassField>)>,
+    > = std::collections::HashMap::new();
+
+    // Issue #26 / #321: resolve a parent class name to its layout, disambiguating
+    // same-named imported classes by source module. A class's `extends` clause
+    // resolves in its OWN module's scope, so when several modules export a
+    // same-named class (effect's `Type` in SchemaAST.ts vs ParseResult.ts), we
+    // prefer the candidate whose source prefix matches the child's. Searches
+    // `imported_class_stubs` first (the live stubs that also populate
+    // `class_table`), then `shadowed_parent_stubs` (imports kept out of
+    // `class_table` because a local class shadows the name — still valid
+    // parents for OTHER imports). Returns `(fields, extends_name, source_prefix)`.
+    // `child_prefix = None` (or no same-prefix hit) falls back to the first
+    // by-name match — the legacy behavior.
+    let resolve_parent = |parent_name: &str,
+                          child_prefix: Option<&str>|
+     -> Option<(Vec<perry_hir::ClassField>, Option<String>, String)> {
+        // Same-prefix preference over the live stubs.
+        if let Some(cp) = child_prefix {
+            if let Some(i) = imported_class_stubs
+                .iter()
+                .enumerate()
+                .position(|(i, cls)| cls.name == parent_name && imported_stub_prefixes[i] == cp)
+            {
+                let s = &imported_class_stubs[i];
+                return Some((
+                    s.fields.clone(),
+                    s.extends_name.clone(),
+                    imported_stub_prefixes[i].clone(),
+                ));
+            }
+            // Same-prefix preference over the shadowed list.
+            if let Some((_, p, ext, fields)) = shadowed_parent_stubs
+                .iter()
+                .find(|(n, p, _, _)| n == parent_name && p == cp)
+            {
+                return Some((fields.clone(), ext.clone(), p.clone()));
+            }
+        }
+        // Fallback: first by-name match in the live stubs.
+        if let Some(i) = imported_class_stubs
+            .iter()
+            .position(|cls| cls.name == parent_name)
+        {
+            let s = &imported_class_stubs[i];
+            return Some((
+                s.fields.clone(),
+                s.extends_name.clone(),
+                imported_stub_prefixes[i].clone(),
+            ));
+        }
+        // Last resort: a shadowed import by name (still better than picking the
+        // local class for a cross-module import's parent).
+        shadowed_parent_stubs
+            .iter()
+            .find(|(n, _, _, _)| n == parent_name)
+            .map(|(_, p, ext, fields)| (fields.clone(), ext.clone(), p.clone()))
+    };
+
     for c in &hir.classes {
         let global_name = format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name),);
         llmod.add_internal_global(&global_name, I64, "0");
@@ -470,7 +608,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             fields.iter().filter(|f| f.key_expr.is_none()).count() as u32
         };
         let mut total_field_count = count_keyable(&c.fields);
-        let mut parent_chain: Vec<String> = Vec::new();
+        // (parent_name, resolved_fields) captured during the chain walk so we
+        // don't re-resolve by name (which could re-pick the wrong same-named
+        // stub). Refs #26.
+        let mut parent_chain: Vec<(String, Vec<perry_hir::ClassField>)> = Vec::new();
         // Resolver that finds a parent's `(fields_vec, next_extends)` either
         // in the local HIR or, failing that, in the imported_class_stubs
         // built earlier in this fn (which carry `ic.field_names` as full
@@ -481,36 +622,73 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // parent's cross-module ctor's `this.field = ...` writes overflow
         // the object header — making `f.field` read undefined on the
         // importing side even though the parent's ctor "ran".
+        // Issue #26 / #321: resolve a parent name to its fields, threading
+        // the child's source prefix so same-named imported stubs disambiguate
+        // by module (effect's duplicate `Type`). Local classes take priority
+        // (they're defined in THIS module). Returns the resolved parent's
+        // `(fields, extends_name, source_prefix)` so the next hop can keep
+        // disambiguating in the right module's scope.
         let lookup_class_chain_link =
-            |name: &str| -> Option<(Vec<perry_hir::ClassField>, Option<String>)> {
-                if let Some(parent) = hir.classes.iter().find(|cls| cls.name == name) {
-                    return Some((parent.fields.clone(), parent.extends_name.clone()));
+            |name: &str,
+             child_prefix: Option<&str>|
+             -> Option<(Vec<perry_hir::ClassField>, Option<String>, Option<String>)> {
+                // Issue #26: if the child belongs to THIS module (child_prefix ==
+                // module_prefix, the common case for a local class's own ancestor
+                // chain), prefer the LOCAL same-named class — that's what its
+                // `extends` clause refers to. Only fall back to the local class
+                // for a cross-module child when no source-matched import exists.
+                let child_is_local = child_prefix
+                    .map(|cp| cp == module_prefix.as_str())
+                    .unwrap_or(true);
+                if child_is_local {
+                    if let Some(parent) = hir.classes.iter().find(|cls| cls.name == name) {
+                        return Some((
+                            parent.fields.clone(),
+                            parent.extends_name.clone(),
+                            Some(module_prefix.clone()),
+                        ));
+                    }
                 }
-                if let Some(stub) = imported_class_stubs.iter().find(|cls| cls.name == name) {
-                    return Some((stub.fields.clone(), stub.extends_name.clone()));
+                if let Some((fields, ext, prefix)) = resolve_parent(name, child_prefix) {
+                    return Some((fields, ext, Some(prefix)));
+                }
+                // Cross-module child with no source-matched import: last resort is
+                // any local same-named class.
+                if let Some(parent) = hir.classes.iter().find(|cls| cls.name == name) {
+                    return Some((
+                        parent.fields.clone(),
+                        parent.extends_name.clone(),
+                        Some(module_prefix.clone()),
+                    ));
                 }
                 None
             };
         let mut p = c.extends_name.clone();
+        // The child here is a local class `c`, so its `extends` resolves in
+        // this module's scope first.
+        let mut child_prefix: Option<String> = Some(module_prefix.clone());
         while let Some(parent_name) = p {
-            if let Some((parent_fields, parent_extends)) = lookup_class_chain_link(&parent_name) {
-                parent_chain.push(parent_name.clone());
+            if let Some((parent_fields, parent_extends, resolved_prefix)) =
+                lookup_class_chain_link(&parent_name, child_prefix.as_deref())
+            {
+                parent_chain.push((parent_name.clone(), parent_fields.clone()));
                 total_field_count += count_keyable(&parent_fields);
                 p = parent_extends;
+                child_prefix = resolved_prefix;
             } else {
                 break;
             }
         }
-        // Walk from deepest ancestor to direct parent.
-        for parent_name in parent_chain.iter().rev() {
-            if let Some((parent_fields, _)) = lookup_class_chain_link(parent_name) {
-                for f in &parent_fields {
-                    if f.key_expr.is_some() {
-                        continue;
-                    }
-                    packed_keys.push_str(&f.name);
-                    packed_keys.push('\0');
+        // Walk from deepest ancestor to direct parent. We captured the exact
+        // resolved fields above, so no second by-name resolution is needed
+        // (which would risk re-picking the wrong same-named stub).
+        for (_parent_name, parent_fields) in parent_chain.iter().rev() {
+            for f in parent_fields {
+                if f.key_expr.is_some() {
+                    continue;
                 }
+                packed_keys.push_str(&f.name);
+                packed_keys.push('\0');
             }
         }
         for f in &c.fields {
@@ -521,6 +699,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             packed_keys.push('\0');
         }
         class_keys_globals_map.insert(c.name.clone(), global_name.clone());
+        // Issue #26: record the authoritative root→leaf init chain. `parent_chain`
+        // was pushed direct-parent-first, so reverse it (deepest ancestor first),
+        // then append the leaf class `c` (with its own fields, init exprs intact).
+        {
+            let mut chain: Vec<(String, Vec<perry_hir::ClassField>)> =
+                parent_chain.iter().rev().cloned().collect();
+            chain.push((c.name.clone(), c.fields.clone()));
+            class_init_chains_map.insert(c.name.clone(), chain.clone());
+            for alias in &c.aliases {
+                class_init_chains_map
+                    .entry(alias.clone())
+                    .or_insert_with(|| chain.clone());
+            }
+        }
         // Refs #486: register self-binding aliases (`_X` from `var X = class _X`)
         // so the inline-alloc fast path at lower_call.rs:2532 finds the keys
         // global when the class is referenced by its inner name. Without this,
@@ -533,6 +725,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 .or_insert_with(|| global_name.clone());
         }
         let typed_layout = crate::typed_shape::class_typed_layout(&class_table, &c.name);
+        class_field_counts_map.insert(c.name.clone(), total_field_count);
+        for alias in &c.aliases {
+            class_field_counts_map
+                .entry(alias.clone())
+                .or_insert(total_field_count);
+        }
         class_keys_init_data.push((
             global_name,
             packed_keys,
@@ -547,7 +745,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // constructor wrote. Without this, the object is allocated 0 inline
     // slots and `this.field = v` in the cross-module constructor writes
     // past the object, while reads on the importing side return undefined.
-    for c in imported_class_stubs.iter() {
+    for (c_idx, c) in imported_class_stubs.iter().enumerate() {
         if hir.classes.iter().any(|local| local.name == c.name) {
             continue;
         }
@@ -573,38 +771,41 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // cross-module ctor's `this.parentField = v` writes past the
         // object header — exactly the same shape collapse the local-
         // class branch above guards against.
-        let mut parent_chain: Vec<String> = Vec::new();
+        //
+        // Issue #26 / #321: capture each ancestor's resolved fields during
+        // the walk and disambiguate same-named parent stubs by the child's
+        // source prefix (effect's duplicate `Type` in SchemaAST.ts vs
+        // ParseResult.ts). `child_prefix` starts as THIS stub's own source
+        // prefix and follows the resolved parent's prefix at each hop, since
+        // each class's `extends` resolves in its own module's scope.
+        let mut parent_chain: Vec<(String, Vec<perry_hir::ClassField>)> = Vec::new();
         let mut p = c.extends_name.clone();
+        let mut child_prefix: Option<String> = Some(imported_stub_prefixes[c_idx].clone());
         while let Some(parent_name) = p {
-            if let Some(parent) = imported_class_stubs
-                .iter()
-                .find(|cls| cls.name == parent_name)
+            // Imported child: resolve the parent among imports first (prefix-
+            // disambiguated, including locally-shadowed imports), so a same-
+            // named LOCAL class does NOT hijack an imported chain (effect's
+            // ParseResult.ts local `Type` vs SchemaAST's `Type`). Refs #26.
+            if let Some((parent_fields, parent_extends, parent_prefix)) =
+                resolve_parent(&parent_name, child_prefix.as_deref())
             {
-                parent_chain.push(parent_name.clone());
-                total_field_count += parent.fields.len() as u32;
-                p = parent.extends_name.clone();
+                parent_chain.push((parent_name.clone(), parent_fields.clone()));
+                total_field_count += parent_fields.len() as u32;
+                p = parent_extends;
+                child_prefix = Some(parent_prefix);
             } else if let Some(parent) = hir.classes.iter().find(|cls| cls.name == parent_name) {
-                parent_chain.push(parent_name.clone());
+                parent_chain.push((parent_name.clone(), parent.fields.clone()));
                 total_field_count += parent.fields.len() as u32;
                 p = parent.extends_name.clone();
+                child_prefix = Some(module_prefix.clone());
             } else {
                 break;
             }
         }
-        for parent_name in parent_chain.iter().rev() {
-            if let Some(parent) = imported_class_stubs
-                .iter()
-                .find(|cls| cls.name == *parent_name)
-            {
-                for f in &parent.fields {
-                    packed_keys.push_str(&f.name);
-                    packed_keys.push('\0');
-                }
-            } else if let Some(parent) = hir.classes.iter().find(|cls| cls.name == *parent_name) {
-                for f in &parent.fields {
-                    packed_keys.push_str(&f.name);
-                    packed_keys.push('\0');
-                }
+        for (_parent_name, parent_fields) in parent_chain.iter().rev() {
+            for f in parent_fields {
+                packed_keys.push_str(&f.name);
+                packed_keys.push('\0');
             }
         }
         for f in &c.fields {
@@ -612,6 +813,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             packed_keys.push('\0');
         }
         let typed_layout = crate::typed_shape::class_typed_layout(&class_table, &c.name);
+        class_field_counts_map
+            .entry(c.name.clone())
+            .or_insert(total_field_count);
+        // Issue #26: authoritative root→leaf init chain for the imported class
+        // (prefix-disambiguated parents + this stub's own fields as the leaf).
+        {
+            let mut chain: Vec<(String, Vec<perry_hir::ClassField>)> =
+                parent_chain.iter().rev().cloned().collect();
+            chain.push((c.name.clone(), c.fields.clone()));
+            class_init_chains_map.entry(c.name.clone()).or_insert(chain);
+        }
         class_keys_init_data.push((
             global_name,
             packed_keys,
@@ -811,6 +1023,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         method_param_counts,
         method_has_rest,
         class_keys_globals: class_keys_globals_map,
+        class_field_counts: class_field_counts_map,
+        class_init_chains: class_init_chains_map,
         imported_class_ctors: opts
             .imported_classes
             .iter()

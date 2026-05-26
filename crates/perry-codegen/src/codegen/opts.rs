@@ -569,6 +569,21 @@ pub(crate) struct CrossModuleCtx {
     /// allocator. See `js_object_alloc_class_inline_keys` in
     /// `perry-runtime/src/object.rs`.
     pub class_keys_globals: std::collections::HashMap<String, String>,
+    /// Issue #26 / #321: authoritative total inline-field count per class,
+    /// computed by the same source-prefix-disambiguated chain walk that
+    /// builds `class_keys_globals`. `lower_new` consults this so its
+    /// allocation size + header `field_count` match the keys-array length,
+    /// instead of recomputing via the name-keyed `ctx.classes` walk (which
+    /// mis-resolves same-named cross-module parents like effect's `Type`).
+    pub class_field_counts: std::collections::HashMap<String, u32>,
+    /// Issue #26 / #321: authoritative, source-prefix-disambiguated ancestor
+    /// chain per class (root → leaf, `(class_name, fields)`), matching the
+    /// keys-global layout. `apply_field_initializers_recursive` walks this
+    /// instead of the name-keyed `ctx.classes` chain, so constructor
+    /// field-init writes exactly the inherited fields the keys array
+    /// describes — not a colliding same-named cross-module parent's fields.
+    pub class_init_chains:
+        std::collections::HashMap<String, Vec<(String, Vec<perry_hir::ClassField>)>>,
     /// Imported class constructor function names. Maps class_name →
     /// full constructor symbol (e.g. "Editor" → "hone_editor_...__Editor_constructor").
     /// Populated from `opts.imported_classes`.

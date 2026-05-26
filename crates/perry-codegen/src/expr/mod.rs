@@ -268,6 +268,18 @@ pub(crate) struct FnCtx<'a> {
     /// map, `compile_new` falls back to the slower
     /// `js_object_alloc_class_with_keys` path.
     pub class_keys_globals: &'a std::collections::HashMap<String, String>,
+    /// Issue #26 / #321: authoritative total inline-field count per class,
+    /// matching the keys-array length the `class_keys_globals` global holds.
+    /// `lower_new` prefers this over the name-keyed `ctx.classes` field-count
+    /// walk, which mis-resolves same-named cross-module parents (effect's
+    /// `Type` in SchemaAST.ts vs ParseResult.ts).
+    pub class_field_counts: &'a std::collections::HashMap<String, u32>,
+    /// Issue #26 / #321: authoritative root→leaf ancestor chain per class
+    /// (prefix-disambiguated). `apply_field_initializers_recursive` uses this
+    /// to write the correct inherited fields instead of walking the name-keyed
+    /// `ctx.classes` chain (which mis-picks same-named cross-module parents).
+    pub class_init_chains:
+        &'a std::collections::HashMap<String, Vec<(String, Vec<perry_hir::ClassField>)>>,
     /// Imported class constructor names: class_name → (ctor_fn_name, param_count).
     pub imported_class_ctors: &'a std::collections::HashMap<String, (String, usize)>,
     /// Per-function param signature: `(declared_param_count,

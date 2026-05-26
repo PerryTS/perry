@@ -186,6 +186,8 @@ pub(super) fn compile_function(
         static_field_globals,
         class_ids,
         class_keys_globals: &cross_module.class_keys_globals,
+        class_field_counts: &cross_module.class_field_counts,
+        class_init_chains: &cross_module.class_init_chains,
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
         func_synthetic_arguments,
