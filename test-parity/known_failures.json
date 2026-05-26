@@ -206,12 +206,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:path` surface. Per-method gaps closed via #741 and #810 (path.posix/win32 sub-namespace). This test now PASSes byte-for-byte; entry retained until the next sweep confirms it can be removed."
   },
-  "test_parity_perf_hooks": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:perf_hooks` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_process": {
     "issue": "793",
     "added": "2026-05-15",
