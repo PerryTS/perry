@@ -55,6 +55,45 @@ pub(crate) struct NativeAbiTransitionRecord {
 pub(crate) type ScalarConversionRecord = NativeAbiTransitionRecord;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NativeAbiDirection {
+    Param,
+    Return,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct NativeAbiTypeRecord {
+    pub canonical_kind: String,
+    pub display: String,
+    pub direction: NativeAbiDirection,
+    pub js_argument_index: Option<usize>,
+    pub abi_slot_index: usize,
+    pub abi_slot_count: usize,
+    pub handle_type: Option<String>,
+    pub promise_result: Option<String>,
+}
+
+impl NativeAbiTypeRecord {
+    pub(crate) fn new(
+        descriptor: &perry_api_manifest::NativeAbiType,
+        direction: NativeAbiDirection,
+        js_argument_index: Option<usize>,
+        abi_slot_index: usize,
+    ) -> Self {
+        Self {
+            canonical_kind: descriptor.canonical_kind().to_string(),
+            display: descriptor.to_string(),
+            direction,
+            js_argument_index,
+            abi_slot_index,
+            abi_slot_count: descriptor.abi_slot_count(),
+            handle_type: descriptor.handle_type().map(str::to_string),
+            promise_result: descriptor.promise_result().map(ToString::to_string),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct PodLayoutPadding {
     pub offset: u32,
     pub size: u32,
@@ -113,6 +152,7 @@ pub(crate) struct NativeRepRecord {
     pub native_value_state: NativeValueState,
     pub native_abi_transition: Option<NativeAbiTransitionRecord>,
     pub scalar_conversion: Option<ScalarConversionRecord>,
+    pub native_abi_type: Option<NativeAbiTypeRecord>,
     pub pod_layout: Option<PodLayoutManifest>,
     pub consumed_facts: Vec<NativeFactUse>,
     pub rejected_facts: Vec<NativeFactUse>,

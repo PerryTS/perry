@@ -19,9 +19,11 @@
 
 mod emit;
 mod entries;
+mod native_abi;
 
 pub use emit::{emit_dts, emit_markdown};
 pub use entries::{API_MANIFEST, NATIVE_MODULES, NODE_SUBMODULES, RUNTIME_ONLY_MODULES};
+pub use native_abi::{NativeAbiParseError, NativeAbiType};
 
 /// One entry in the manifest. Identifies a single named symbol on a
 /// known module — a method, a property, or a class.

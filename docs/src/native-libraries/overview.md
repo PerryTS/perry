@@ -139,6 +139,15 @@ Perry's codegen translates the user's TS-side calls
 calls to these symbols, with the right argument coercion (JsValue
 NaN-box ↔ f64 ABI shim, string-pointer extraction, etc.).
 
+Those manifest entries are native ABI descriptors, not TypeScript
+types. A descriptor like `f32` or `usize` chooses the native slot used
+for the C call and still appears to user code as a JavaScript
+`number`; `buffer+len` consumes one Buffer/Uint8Array-shaped argument
+and emits `(ptr, usize)` native slots; `handle<T>` and `promise<T>`
+carry metadata while remaining opaque runtime handles at the boundary.
+See [`manifest-v1.md`](manifest-v1.md) for the full descriptor
+vocabulary and the legacy string aliases that remain accepted.
+
 ### 4. Linking
 
 The staticlib (`libperry_ext_mysql2.a` for the well-known case, or a

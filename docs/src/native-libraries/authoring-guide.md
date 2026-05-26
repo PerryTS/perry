@@ -53,18 +53,21 @@ Replace it with your bindings — one `#[no_mangle] pub extern "C" fn`
 per TypeScript-visible call, using **only** types from `perry_ffi`:
 
 ```rust
-use perry_ffi::{alloc_string, read_string, JsString, StringHeader};
+use perry_ffi::{alloc_string, StringHeader};
 
 /// `pdf.parse(buf) -> string` — extract text from a PDF buffer.
 ///
 /// # Safety
 ///
-/// `buf_ptr` must be null or a Perry-runtime `BufferHeader`.
+/// `buf_ptr` must be null or valid for `buf_len` bytes. Perry passes
+/// this pair from a `buffer+len` manifest parameter.
 #[no_mangle]
-pub unsafe extern "C" fn js_pdf_parse(buf_ptr: i64) -> *mut StringHeader {
-    let buf_ptr = (buf_ptr as u64 & 0x0000_FFFF_FFFF_FFFF)
-        as *const perry_ffi::BufferHeader;
-    let bytes = perry_ffi::read_buffer_bytes(buf_ptr).unwrap_or(&[]);
+pub unsafe extern "C" fn js_pdf_parse(buf_ptr: *const u8, buf_len: usize) -> *mut StringHeader {
+    let bytes = if buf_ptr.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts(buf_ptr, buf_len)
+    };
     match pdfium_render::Pdfium::default().load_pdf_from_byte_slice(bytes, None) {
         Ok(doc) => {
             let text = doc.pages().iter().map(|p| p.text().unwrap()).collect::<String>();
@@ -116,7 +119,7 @@ The `perry.nativeLibrary` block tells Perry's compiler about every
       "functions": [
         {
           "name": "js_pdf_parse",
-          "params": ["i64"],
+          "params": [{ "kind": "buffer+len" }],
           "returns": "string"
         }
       ],
@@ -134,6 +137,14 @@ Every entry in `functions[]` must:
 - have a `name` matching exactly the symbol the staticlib exports
   (Perry's `perry native validate` verifies this for you)
 - declare `params` and `returns` so codegen knows the calling convention
+
+Manifest descriptors are native ABI descriptors, not TypeScript
+surface types. Existing strings such as `"string"`, `"number"`,
+`"i64"`, and `"void"` still work. Use the explicit vocabulary when
+you need native precision or metadata: `"f32"`, `"u32"`, `"u64"`,
+`"usize"`, `"buffer_len"`, `{ "kind": "buffer+len" }`,
+`{ "kind": "handle", "type": "MyThing" }`, and
+`{ "kind": "promise", "result": "jsvalue" }`.
 
 ## 3. Verify
 

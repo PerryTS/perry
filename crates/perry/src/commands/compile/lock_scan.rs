@@ -46,8 +46,16 @@ pub fn collect_native_archives_for_lock(
         return Ok(Vec::new());
     }
 
+    let mut parse_error = None;
     for_each_native_library_package(&node_modules, &mut |pkg_dir, pkg_name| {
-        if let Some(manifest) = parse_native_library_manifest(pkg_dir, pkg_name, target) {
+        let manifest = match parse_native_library_manifest(pkg_dir, pkg_name, target) {
+            Ok(manifest) => manifest,
+            Err(err) => {
+                parse_error = Some(err);
+                return;
+            }
+        };
+        if let Some(manifest) = manifest {
             if let Some(tc) = manifest.target_config.as_ref() {
                 if let Some(prebuilt) = tc.prebuilt.as_ref() {
                     if prebuilt.exists() {
@@ -61,6 +69,9 @@ pub fn collect_native_archives_for_lock(
             }
         }
     });
+    if let Some(err) = parse_error {
+        return Err(err);
+    }
 
     Ok(archives)
 }

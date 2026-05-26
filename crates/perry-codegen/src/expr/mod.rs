@@ -25,9 +25,9 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
     AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode,
     BufferElem, BufferIndexUnit, BufferViewRep, BufferViewSlot, ExpectedNativeRep,
-    GuardedBufferIndex, LengthSource, LoweredValue, MaterializationReason, NativeFactUse,
-    NativeOwnedViewFact, NativeRep, NativeRepRecord, NativeValueState, ScalarConversionRecord,
-    SemanticKind,
+    GuardedBufferIndex, LengthSource, LoweredValue, MaterializationReason, NativeAbiTypeRecord,
+    NativeFactUse, NativeOwnedViewFact, NativeRep, NativeRepRecord, NativeValueState,
+    ScalarConversionRecord, SemanticKind,
 };
 use crate::strings::StringPool;
 use crate::type_analysis::{
@@ -420,14 +420,20 @@ pub(crate) struct FnCtx<'a> {
     /// of undefined". Same shape as `func_signatures`'s `has_rest`
     /// bit but for class-method dispatch.
     pub method_has_rest: &'a std::collections::HashMap<(String, String), bool>,
-    /// FFI manifest: `name → (param_kinds, return_kind)` from
-    /// `package.json` `nativeLibrary.functions`. Kinds use the native-library
-    /// manifest ABI vocabulary. `lower_call` consults
+    /// FFI manifest: `name -> (params, return)` from `package.json`
+    /// `nativeLibrary.functions`. Descriptors use the shared native-library
+    /// ABI vocabulary. `lower_call` consults
     /// this at native-library call sites so handle-returning functions
     /// (`*mut View`-typed C entries) declare an `i64` LLVM return type that
     /// reads the C ABI's `x0` register. Without it, the call defaults to
     /// `double` (reads `d0`) and observes 0 instead of the real handle.
-    pub ffi_signatures: &'a std::collections::HashMap<String, (Vec<String>, String)>,
+    pub ffi_signatures: &'a std::collections::HashMap<
+        String,
+        (
+            Vec<perry_api_manifest::NativeAbiType>,
+            perry_api_manifest::NativeAbiType,
+        ),
+    >,
     /// Per-module map: local class/binding name → import source spec.
     /// Used by `lower_builtin_new` to disambiguate ambiguously-named
     /// built-in constructors. See issue #602.
@@ -1304,7 +1310,7 @@ impl<'a> FnCtx<'a> {
         emitted_noalias: bool,
         notes: Vec<String>,
     ) {
-        self.record_lowered_value_with_access_mode_and_facts(
+        self.record_lowered_value_full(
             expr_kind,
             local_id,
             consumer,
@@ -1317,6 +1323,7 @@ impl<'a> FnCtx<'a> {
             buffer_access,
             Vec::new(),
             Vec::new(),
+            None,
             emitted_inbounds,
             emitted_noalias,
             notes,
@@ -1337,6 +1344,74 @@ impl<'a> FnCtx<'a> {
         buffer_access: Option<BufferAccessFacts>,
         extra_consumed_facts: Vec<NativeFactUse>,
         extra_rejected_facts: Vec<NativeFactUse>,
+        emitted_inbounds: bool,
+        emitted_noalias: bool,
+        notes: Vec<String>,
+    ) {
+        self.record_lowered_value_full(
+            expr_kind,
+            local_id,
+            consumer,
+            lowered,
+            bounds_state,
+            alias_state,
+            access_mode,
+            materialization_reason,
+            scalar_conversion,
+            buffer_access,
+            extra_consumed_facts,
+            extra_rejected_facts,
+            None,
+            emitted_inbounds,
+            emitted_noalias,
+            notes,
+        );
+    }
+
+    pub fn record_lowered_value_with_native_abi(
+        &mut self,
+        expr_kind: impl Into<String>,
+        consumer: impl Into<String>,
+        lowered: &LoweredValue,
+        native_abi_type: NativeAbiTypeRecord,
+        notes: Vec<String>,
+    ) {
+        self.record_lowered_value_full(
+            expr_kind,
+            None,
+            consumer,
+            lowered,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Some(native_abi_type),
+            false,
+            false,
+            notes,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_lowered_value_full(
+        &mut self,
+        expr_kind: impl Into<String>,
+        local_id: Option<u32>,
+        consumer: impl Into<String>,
+        lowered: &LoweredValue,
+        bounds_state: Option<BoundsState>,
+        alias_state: Option<AliasState>,
+        access_mode: Option<BufferAccessMode>,
+        materialization_reason: Option<MaterializationReason>,
+        scalar_conversion: Option<ScalarConversionRecord>,
+        buffer_access: Option<BufferAccessFacts>,
+        extra_consumed_facts: Vec<NativeFactUse>,
+        extra_rejected_facts: Vec<NativeFactUse>,
+        native_abi_type: Option<NativeAbiTypeRecord>,
         emitted_inbounds: bool,
         emitted_noalias: bool,
         notes: Vec<String>,
@@ -1395,6 +1470,7 @@ impl<'a> FnCtx<'a> {
             native_value_state,
             native_abi_transition: scalar_conversion.clone(),
             scalar_conversion,
+            native_abi_type,
             pod_layout: None,
             consumed_facts,
             rejected_facts,

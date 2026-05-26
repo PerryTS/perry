@@ -28,6 +28,7 @@
 //!   supporting helpers.
 
 use anyhow::{anyhow, Result};
+use perry_api_manifest::NativeAbiType;
 use perry_hir::ModuleKind;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -110,12 +111,20 @@ pub(super) fn parse_native_library_manifest(
     package_dir: &Path,
     module_name: &str,
     target: Option<&str>,
-) -> Option<NativeLibraryManifest> {
+) -> Result<Option<NativeLibraryManifest>> {
     let package_json = package_dir.join("package.json");
-    let content = fs::read_to_string(&package_json).ok()?;
-    let pkg: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let content = match fs::read_to_string(&package_json) {
+        Ok(content) => content,
+        Err(_) => return Ok(None),
+    };
+    let pkg: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(pkg) => pkg,
+        Err(_) => return Ok(None),
+    };
 
-    let native_lib = pkg.get("perry")?.get("nativeLibrary")?;
+    let Some(native_lib) = pkg.get("perry").and_then(|p| p.get("nativeLibrary")) else {
+        return Ok(None);
+    };
 
     // Issue #466 Phase 2: read the `abiVersion` field that wrappers
     // declare to assert which `perry-ffi` ABI they were built
@@ -129,47 +138,7 @@ pub(super) fn parse_native_library_manifest(
         .and_then(|v| v.as_str())
         .map(String::from);
 
-    // Parse functions.
-    //
-    // Valid `returns` values (codegen dispatch in lower_call.rs):
-    //   "string" / "ptr"  → PTR return (*const u8 / *const StringHeader);
-    //                        NaN-boxed as STRING_TAG.  Use when Rust fn is
-    //                        declared `-> *const u8`.
-    //   "i64_str"         → I64 return that IS a *StringHeader address;
-    //                        NaN-boxed as STRING_TAG without sitofp.  Use
-    //                        when Rust fn is declared `-> i64` but the value
-    //                        is a string pointer (closes issue #222).
-    //   "i64"             → I64 return; sitofp → JS number.  Opaque handles,
-    //                        counts, etc.
-    //   "u32" / "u64" /
-    //   "usize" / "f32"  → native scalar ABI return; explicitly
-    //                        materialized to a JS number.
-    //   "buffer_len"      → u32 BufferHeader.length return.
-    //   "handle"          → I64 opaque handle; NaN-boxed as POINTER_TAG.
-    //   "promise"         → I64 promise-boundary handle; NaN-boxed as
-    //                        POINTER_TAG with an explicit transition record.
-    //   "void"            → no return value.
-    //   (anything else)   → treated as f64 (Perry double ABI).
-    //
-    // Param strings use the same lowercase native ABI names where applicable:
-    // "u32", "u64", "usize", "f32", "buffer_len", "handle", and "promise".
-    let functions: Vec<NativeFunctionDecl> = native_lib
-        .get("functions")?
-        .as_array()?
-        .iter()
-        .filter_map(|f| {
-            Some(NativeFunctionDecl {
-                name: f.get("name")?.as_str()?.to_string(),
-                params: f
-                    .get("params")?
-                    .as_array()?
-                    .iter()
-                    .filter_map(|p| p.as_str().map(|s| s.to_string()))
-                    .collect(),
-                returns: f.get("returns")?.as_str()?.to_string(),
-            })
-        })
-        .collect();
+    let functions = parse_native_library_functions(&package_json, native_lib)?;
 
     // Parse target config
     let target_key = match target {
@@ -291,13 +260,210 @@ pub(super) fn parse_native_library_manifest(
             .unwrap_or_default(),
     });
 
-    Some(NativeLibraryManifest {
+    Ok(Some(NativeLibraryManifest {
         module: module_name.to_string(),
         package_dir: package_dir.to_path_buf(),
         abi_version,
         functions,
         target_config,
-    })
+    }))
+}
+
+fn parse_native_library_functions(
+    package_json: &Path,
+    native_lib: &serde_json::Value,
+) -> Result<Vec<NativeFunctionDecl>> {
+    let functions = native_lib
+        .get("functions")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            anyhow!(
+                "{} perry.nativeLibrary.functions must be an array",
+                package_json.display()
+            )
+        })?;
+
+    let mut parsed = Vec::with_capacity(functions.len());
+    for (function_index, function) in functions.iter().enumerate() {
+        let name = function
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                anyhow!(
+                    "{} nativeLibrary.functions[{}] name must be a string",
+                    package_json.display(),
+                    function_index
+                )
+            })?
+            .to_string();
+        let params = function
+            .get("params")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                anyhow!(
+                    "{} nativeLibrary.functions[{}] `{}` params must be an array",
+                    package_json.display(),
+                    function_index,
+                    name
+                )
+            })?;
+        let mut parsed_params = Vec::with_capacity(params.len());
+        for (param_index, param) in params.iter().enumerate() {
+            let descriptor = parse_native_abi_descriptor(
+                package_json,
+                function_index,
+                &name,
+                &format!("params[{param_index}]"),
+                param,
+            )?;
+            if !descriptor.is_valid_param() {
+                return Err(invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    &name,
+                    &format!("params[{param_index}]"),
+                    &descriptor.to_string(),
+                    "void is only valid as a return descriptor",
+                ));
+            }
+            parsed_params.push(descriptor);
+        }
+        let returns_value = function.get("returns").ok_or_else(|| {
+            anyhow!(
+                "{} nativeLibrary.functions[{}] `{}` returns is required",
+                package_json.display(),
+                function_index,
+                name
+            )
+        })?;
+        let returns = parse_native_abi_descriptor(
+            package_json,
+            function_index,
+            &name,
+            "returns",
+            returns_value,
+        )?;
+        if !returns.is_valid_return() {
+            return Err(invalid_native_abi_error(
+                package_json,
+                function_index,
+                &name,
+                "returns",
+                &returns.to_string(),
+                "buffer+len is a parameter-only native ABI convenience",
+            ));
+        }
+        parsed.push(NativeFunctionDecl {
+            name,
+            params: parsed_params,
+            returns,
+        });
+    }
+    Ok(parsed)
+}
+
+fn parse_native_abi_descriptor(
+    package_json: &Path,
+    function_index: usize,
+    function_name: &str,
+    slot: &str,
+    value: &serde_json::Value,
+) -> Result<NativeAbiType> {
+    if let Some(spelling) = value.as_str() {
+        return NativeAbiType::parse_str(spelling).map_err(|err| {
+            invalid_native_abi_error(
+                package_json,
+                function_index,
+                function_name,
+                slot,
+                err.spelling(),
+                err.reason(),
+            )
+        });
+    }
+
+    let Some(object) = value.as_object() else {
+        return Err(invalid_native_abi_error(
+            package_json,
+            function_index,
+            function_name,
+            slot,
+            &value.to_string(),
+            "descriptor must be a string or object",
+        ));
+    };
+    let kind = object.get("kind").and_then(|v| v.as_str()).ok_or_else(|| {
+        invalid_native_abi_error(
+            package_json,
+            function_index,
+            function_name,
+            slot,
+            &value.to_string(),
+            "structured descriptor requires a string `kind` field",
+        )
+    })?;
+
+    match kind {
+        "handle" => {
+            let handle_type = match object.get("type") {
+                Some(v) => Some(v.as_str().filter(|s| !s.trim().is_empty()).ok_or_else(|| {
+                    invalid_native_abi_error(
+                        package_json,
+                        function_index,
+                        function_name,
+                        slot,
+                        &value.to_string(),
+                        "handle descriptor `type` must be a non-empty string",
+                    )
+                })?),
+                None => None,
+            };
+            Ok(NativeAbiType::Handle(handle_type.map(str::to_string)))
+        }
+        "promise" => {
+            let result = match object.get("result") {
+                Some(result) => parse_native_abi_descriptor(
+                    package_json,
+                    function_index,
+                    function_name,
+                    slot,
+                    result,
+                )?,
+                None => NativeAbiType::JsValue,
+            };
+            Ok(NativeAbiType::Promise(Box::new(result)))
+        }
+        "buffer+len" => Ok(NativeAbiType::BufferAndLen),
+        _ => NativeAbiType::parse_str(kind).map_err(|err| {
+            invalid_native_abi_error(
+                package_json,
+                function_index,
+                function_name,
+                slot,
+                err.spelling(),
+                err.reason(),
+            )
+        }),
+    }
+}
+
+fn invalid_native_abi_error(
+    package_json: &Path,
+    function_index: usize,
+    function_name: &str,
+    slot: &str,
+    spelling: &str,
+    reason: &str,
+) -> anyhow::Error {
+    anyhow!(
+        "{} nativeLibrary.functions[{}] `{}` {} invalid ABI {:?}: {}",
+        package_json.display(),
+        function_index,
+        function_name,
+        slot,
+        spelling,
+        reason
+    )
 }
 
 /// Map a Perry target string to the architecture token used in
@@ -555,6 +721,172 @@ mod abi_validation_tests {
 #[cfg(test)]
 mod manifest_parse_tests {
     use super::*;
+    use perry_api_manifest::NativeAbiType;
+
+    fn parse_manifest_from_functions(
+        pkg_dir: &Path,
+        functions: serde_json::Value,
+    ) -> Result<Option<NativeLibraryManifest>> {
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": functions,
+                    "targets": { "macos": { "crate": "rust", "lib": "demo" } }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+        parse_native_library_manifest(pkg_dir, "demo", Some("macos"))
+    }
+
+    fn parse_manifest_error(function: serde_json::Value) -> String {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = parse_manifest_from_functions(dir.path(), serde_json::json!([function]))
+            .expect_err("manifest must be rejected");
+        err.to_string()
+    }
+
+    #[test]
+    fn native_abi_descriptors_parse_strings_and_structured_forms() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parsed = parse_manifest_from_functions(
+            dir.path(),
+            serde_json::json!([
+                {
+                    "name": "all_descriptors",
+                    "params": [
+                        "jsvalue",
+                        "string",
+                        "bool",
+                        "i32",
+                        "i64",
+                        "u32",
+                        "u64",
+                        "usize",
+                        "f32",
+                        "f64",
+                        "number",
+                        "ptr",
+                        "buffer_len",
+                        "buffer+len",
+                        "handle",
+                        "promise",
+                        { "kind": "handle", "type": "MyThing" },
+                        { "kind": "promise", "result": "jsvalue" },
+                        { "kind": "buffer+len" }
+                    ],
+                    "returns": { "kind": "promise", "result": "f64" }
+                },
+                {
+                    "name": "void_return",
+                    "params": [],
+                    "returns": "void"
+                }
+            ]),
+        )
+        .expect("parse manifest")
+        .expect("manifest");
+
+        let function = &parsed.functions[0];
+        let displays: Vec<String> = function.params.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            displays,
+            vec![
+                "jsvalue",
+                "string",
+                "bool",
+                "i32",
+                "i64",
+                "u32",
+                "u64",
+                "usize",
+                "f32",
+                "f64",
+                "f64",
+                "ptr",
+                "buffer_len",
+                "buffer+len",
+                "handle",
+                "promise<jsvalue>",
+                "handle<MyThing>",
+                "promise<jsvalue>",
+                "buffer+len",
+            ]
+        );
+        assert_eq!(function.returns.to_string(), "promise<f64>");
+        assert!(matches!(parsed.functions[1].returns, NativeAbiType::Void));
+    }
+
+    #[test]
+    fn native_abi_unknown_type_reports_package_function_slot_and_spelling() {
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_unknown",
+            "params": ["bogus"],
+            "returns": "void"
+        }));
+        assert!(err.contains("package.json"), "{err}");
+        assert!(err.contains("functions[0]"), "{err}");
+        assert!(err.contains("bad_unknown"), "{err}");
+        assert!(err.contains("params[0]"), "{err}");
+        assert!(err.contains("bogus"), "{err}");
+    }
+
+    #[test]
+    fn native_abi_void_param_is_rejected() {
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_void",
+            "params": ["void"],
+            "returns": "void"
+        }));
+        assert!(err.contains("package.json"), "{err}");
+        assert!(err.contains("bad_void"), "{err}");
+        assert!(err.contains("params[0]"), "{err}");
+        assert!(err.contains("void"), "{err}");
+    }
+
+    #[test]
+    fn native_abi_buffer_and_len_return_is_rejected() {
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_return",
+            "params": [],
+            "returns": "buffer+len"
+        }));
+        assert!(err.contains("package.json"), "{err}");
+        assert!(err.contains("bad_return"), "{err}");
+        assert!(err.contains("returns"), "{err}");
+        assert!(err.contains("buffer+len"), "{err}");
+    }
+
+    #[test]
+    fn native_abi_malformed_handle_string_is_rejected() {
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_handle",
+            "params": ["handle<>"],
+            "returns": "void"
+        }));
+        assert!(err.contains("package.json"), "{err}");
+        assert!(err.contains("bad_handle"), "{err}");
+        assert!(err.contains("params[0]"), "{err}");
+        assert!(err.contains("handle<>"), "{err}");
+    }
+
+    #[test]
+    fn native_abi_malformed_structured_object_is_rejected() {
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_structured",
+            "params": [{ "kind": "handle", "type": 7 }],
+            "returns": "void"
+        }));
+        assert!(err.contains("package.json"), "{err}");
+        assert!(err.contains("bad_structured"), "{err}");
+        assert!(err.contains("params[0]"), "{err}");
+        assert!(err.contains("invalid ABI"), "{err}");
+        assert!(err.contains("handle"), "{err}");
+    }
 
     /// Relative `libDirs` entries must resolve against the package's
     /// own directory, not the user's cwd — otherwise a wrapper that
@@ -586,8 +918,9 @@ mod manifest_parse_tests {
         )
         .expect("write package.json");
 
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
+        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("macos"))
+            .expect("parse manifest")
+            .expect("parsed manifest");
         let tc = parsed.target_config.expect("target_config");
         assert_eq!(tc.lib_dirs.len(), 2);
         assert_eq!(tc.lib_dirs[0], pkg_dir.join("vendor/lib"));
@@ -614,8 +947,9 @@ mod manifest_parse_tests {
         )
         .expect("write package.json");
 
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
+        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("macos"))
+            .expect("parse manifest")
+            .expect("parsed manifest");
         let tc = parsed.target_config.expect("target_config");
         assert!(tc.lib_dirs.is_empty());
     }
@@ -652,8 +986,9 @@ mod manifest_parse_tests {
         // distribution arch (Apple Silicon). x64 entries can still be
         // delivered by passing a different target string in the
         // future; we just need the per-arch lookup to fire.
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
+        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("macos"))
+            .expect("parse manifest")
+            .expect("parsed manifest");
         let tc = parsed.target_config.expect("target_config");
         assert_eq!(tc.lib_name, "arm64_lib");
         assert_eq!(tc.crate_path, pkg_dir.join("rust-arm64"));
@@ -681,8 +1016,9 @@ mod manifest_parse_tests {
         )
         .expect("write package.json");
 
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
+        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("macos"))
+            .expect("parse manifest")
+            .expect("parsed manifest");
         let tc = parsed.target_config.expect("target_config");
         assert_eq!(tc.lib_name, "demo");
         assert!(tc.prebuilt.is_none());
@@ -736,6 +1072,7 @@ mod manifest_parse_tests {
 
         let parsed =
             parse_native_library_manifest(&consumer_pkg, "@bloomengine/engine", Some("macos"))
+                .expect("parse manifest")
                 .expect("parsed manifest");
         let tc = parsed.target_config.expect("target_config");
         let prebuilt = tc.prebuilt.expect("prebuilt path");
@@ -783,8 +1120,9 @@ mod manifest_parse_tests {
         )
         .expect("write package.json");
 
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
+        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("macos"))
+            .expect("parse manifest")
+            .expect("parsed manifest");
         let tc = parsed.target_config.expect("target_config");
         let prebuilt = tc.prebuilt.expect("prebuilt path");
         assert_eq!(prebuilt, pkg_dir.join("./vendor/libfoo.a"));
@@ -819,8 +1157,9 @@ mod manifest_parse_tests {
         )
         .expect("write package.json");
 
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("ios")).expect("parsed manifest");
+        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("ios"))
+            .expect("parse manifest")
+            .expect("parsed manifest");
         let tc = parsed.target_config.expect("target_config");
         assert_eq!(tc.optional_frameworks, vec!["GoogleSignIn"]);
         assert_eq!(
@@ -858,8 +1197,9 @@ mod manifest_parse_tests {
         )
         .expect("write package.json");
 
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("ios")).expect("parsed manifest");
+        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("ios"))
+            .expect("parse manifest")
+            .expect("parsed manifest");
         let tc = parsed.target_config.expect("target_config");
         assert_eq!(tc.optional_frameworks, vec!["GoogleSignIn", "AppAuth"]);
         assert_eq!(tc.frameworks_env.as_deref(), Some("VENDOR_FW_DIR"));
@@ -885,8 +1225,9 @@ mod manifest_parse_tests {
         )
         .expect("write package.json");
 
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("ios")).expect("parsed manifest");
+        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("ios"))
+            .expect("parse manifest")
+            .expect("parsed manifest");
         let tc = parsed.target_config.expect("target_config");
         assert!(tc.optional_frameworks.is_empty());
         assert!(tc.frameworks_env.is_none());

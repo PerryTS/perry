@@ -1526,6 +1526,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_buffer_from_arraybuffer_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_buffer_length", I32, &[I64]);
     module.declare_function("js_buffer_get", I32, &[I64, I32]);
+    module.declare_function("js_native_buffer_data_ptr", PTR, &[DOUBLE]);
+    module.declare_function("js_native_buffer_byte_len", I64, &[DOUBLE]);
     // console.time/count runtime functions.
     module.declare_function("js_console_time", VOID, &[I64]);
     module.declare_function("js_console_time_end", VOID, &[I64]);

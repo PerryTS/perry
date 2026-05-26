@@ -490,8 +490,11 @@ fn native_library_opts(functions: Vec<(&str, Vec<&str>, &str)>) -> CompileOption
         .map(|(name, params, ret)| {
             (
                 name.to_string(),
-                params.into_iter().map(str::to_string).collect(),
-                ret.to_string(),
+                params
+                    .into_iter()
+                    .map(|param| perry_api_manifest::NativeAbiType::parse_str(param).unwrap())
+                    .collect(),
+                perry_api_manifest::NativeAbiType::parse_str(ret).unwrap(),
             )
         })
         .collect();

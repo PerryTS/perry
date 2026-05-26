@@ -6,8 +6,8 @@ mod rep;
 mod verify;
 
 pub(crate) use artifact::{
-    write_native_rep_artifact_if_enabled, NativeFactUse, NativeRepRecord, NativeValueState,
-    PodLayoutField, PodLayoutManifest, ScalarConversionRecord,
+    write_native_rep_artifact_if_enabled, NativeAbiDirection, NativeAbiTypeRecord, NativeFactUse,
+    NativeRepRecord, NativeValueState, PodLayoutField, PodLayoutManifest, ScalarConversionRecord,
 };
 pub(crate) use buffer::{
     AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode,
