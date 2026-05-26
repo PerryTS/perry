@@ -394,8 +394,8 @@ pub(crate) struct FnCtx<'a> {
     /// bit but for class-method dispatch.
     pub method_has_rest: &'a std::collections::HashMap<(String, String), bool>,
     /// FFI manifest: `name → (param_kinds, return_kind)` from
-    /// `package.json` `nativeLibrary.functions`. Each kind is a string like
-    /// `"i64"`, `"f64"`, `"void"`, `"string"`, or `"ptr"`. `lower_call` consults
+    /// `package.json` `nativeLibrary.functions`. Kinds use the native-library
+    /// manifest ABI vocabulary. `lower_call` consults
     /// this at native-library call sites so handle-returning functions
     /// (`*mut View`-typed C entries) declare an `i64` LLVM return type that
     /// reads the C ABI's `x0` register. Without it, the call defaults to

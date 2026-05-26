@@ -401,13 +401,16 @@ pub(crate) fn bounds_for_buffer_access_width(
     index: &Expr,
     width_bytes: u32,
 ) -> BoundsState {
+    let width_bytes = width_bytes.max(1);
     if let Some(index_local_id) = native_index_source_local(ctx, index) {
         if let Some(bounds) = ctx
             .bounded_buffer_index_pairs
             .iter()
             .rev()
             .find(|fact| {
-                fact.index_local_id == index_local_id && fact.buffer_local_id == buffer_local_id
+                fact.index_local_id == index_local_id
+                    && fact.buffer_local_id == buffer_local_id
+                    && width_bytes <= fact.proven_width_bytes.max(1)
             })
             .map(|fact| fact.bounds.clone())
         {
@@ -423,7 +426,7 @@ pub(crate) fn bounds_for_buffer_access_width(
             .as_ref()
             .and_then(|source| length_source_constant(ctx, source));
         if let Some(length) = length {
-            let width = i64::from(width_bytes.max(1));
+            let width = i64::from(width_bytes);
             if index_value >= 0
                 && index_value
                     .checked_add(width)

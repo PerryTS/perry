@@ -95,6 +95,7 @@ pub(crate) struct BoundedBufferIndex {
     pub index_local_id: u32,
     pub buffer_local_id: u32,
     pub scope_id: u32,
+    pub proven_width_bytes: u32,
     pub bounds: BoundsState,
 }
 

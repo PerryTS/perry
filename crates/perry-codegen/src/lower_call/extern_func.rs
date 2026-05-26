@@ -23,7 +23,7 @@ use super::{
 };
 
 fn is_manifest_string_param(kind: Option<&str>) -> bool {
-    matches!(kind, Some("string" | "ptr"))
+    matches!(kind, Some("string"))
 }
 
 fn is_manifest_i64_param(kind: Option<&str>) -> bool {
@@ -43,7 +43,7 @@ fn is_manifest_f32_param(kind: Option<&str>) -> bool {
 }
 
 fn is_manifest_handle_param(kind: Option<&str>) -> bool {
-    matches!(kind, Some("handle" | "promise"))
+    matches!(kind, Some("ptr" | "handle" | "promise"))
 }
 
 pub fn try_lower_extern_func_call(

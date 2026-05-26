@@ -518,6 +518,41 @@ fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
 }
 
 #[test]
+fn loop_length_bound_does_not_prove_multibyte_buffer_read_inbounds() {
+    let body = vec![
+        buffer_let(1, "buf", int(8)),
+        for_loop(
+            2,
+            length(1),
+            vec![Stmt::Expr(call(
+                Expr::PropertyGet {
+                    object: Box::new(local(1)),
+                    property: "readUInt32BE".to_string(),
+                },
+                vec![local(2)],
+            ))],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("loop_bound_multibyte_buffer_read.ts", body.clone());
+    assert!(
+        !ir.contains("getelementptr inbounds i8"),
+        "`i < buf.length` only proves one-byte Buffer access; multi-byte reads must not emit an inbounds GEP:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json("artifact_loop_bound_multibyte_buffer_read.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        !records.iter().any(|record| {
+            record["expr_kind"] == "BufferNumericRead"
+                && record["consumer"] == "BufferNumericRead.native_u32"
+        }),
+        "multi-byte Buffer read must not consume a one-byte loop proof:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn artifact_records_buffer_read_double_as_f64() {
     let body = vec![
         buffer_let(1, "buf", int(8)),
@@ -776,6 +811,7 @@ fn native_library_manifest_lowercase_abi_params_emit_c_abi_signature() {
             "usize",
             "f32",
             "buffer_len",
+            "ptr",
             "handle",
             "promise",
         ],
@@ -794,6 +830,7 @@ fn native_library_manifest_lowercase_abi_params_emit_c_abi_signature() {
                     Expr::Number(5.0),
                     Expr::Number(6.0),
                     Expr::Number(7.0),
+                    Expr::Number(8.0),
                 ],
                 Type::Void,
             )),
@@ -804,7 +841,10 @@ fn native_library_manifest_lowercase_abi_params_emit_c_abi_signature() {
 
     assert!(
         ir.contains("call void @native_abi_args(i32")
-            && ir.contains("declare void @native_abi_args(i32, i64, i64, float, i32, i64, i64)"),
+            && ir.contains(
+                "declare void @native_abi_args(i32, i64, i64, float, i32, i64, i64, i64)"
+            )
+            && !ir.contains("call i64 @js_get_string_pointer_unified"),
         "expected lowercase manifest param kinds to drive LLVM call/declaration ABI:\n{ir}"
     );
 }

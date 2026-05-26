@@ -622,8 +622,8 @@ pub(crate) struct CrossModuleCtx {
     /// lowering can intercept `X[i][j]` / `krow[j]` patterns.
     pub flat_const_arrays: std::collections::HashMap<u32, crate::expr::FlatConstInfo>,
     /// FFI manifest signatures from `package.json`'s `nativeLibrary.functions`.
-    /// Maps function name → (param_kinds, return_kind) where each kind is
-    /// `"i64"`, `"f64"`, `"void"`, `"string"`, or `"ptr"`. Without this map,
+    /// Maps function name → (param_kinds, return_kind) where each kind uses
+    /// the native-library manifest ABI vocabulary. Without this map,
     /// `lower_call` falls back to a heuristic that puts all numeric args/returns
     /// into d-registers (DOUBLE) — incorrect for handle-returning C functions
     /// like `hone_editor_create() -> *mut EditorView` whose actual ABI returns

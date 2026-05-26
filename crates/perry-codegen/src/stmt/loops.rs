@@ -99,6 +99,7 @@ pub(crate) fn lower_for(
                         index_local_id: counter_id,
                         buffer_local_id: arr_id,
                         scope_id: loop_proof_scope_id,
+                        proven_width_bytes: 1,
                         bounds: BoundsState::Proven {
                             proof: BoundsProof::LoopGuard,
                         },
@@ -219,6 +220,7 @@ pub(crate) fn lower_for(
                             index_local_id: counter_id,
                             buffer_local_id,
                             scope_id: loop_proof_scope_id,
+                            proven_width_bytes: 1,
                             bounds: BoundsState::Proven {
                                 proof: BoundsProof::MinLength,
                             },
@@ -241,6 +243,7 @@ pub(crate) fn lower_for(
                     index_local_id: counter_id,
                     buffer_local_id,
                     scope_id: loop_proof_scope_id,
+                    proven_width_bytes: 1,
                     bounds: BoundsState::Proven {
                         proof: BoundsProof::LoopGuard,
                     },
