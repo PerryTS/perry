@@ -71,12 +71,12 @@ pub use self::splice_slice::{js_array_slice, js_array_splice};
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
 pub(crate) use self::header::{
     array_byte_size, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
-    array_numeric_raw_f64_set_inbounds, clean_arr_ptr, clean_arr_ptr_mut,
-    clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
-    mark_array_layout_unknown, note_array_slot, note_array_slot_layout_only, rebuild_array_layout,
-    rebuild_array_layout_exact, refresh_array_numeric_layout, replay_array_growth_write_barriers,
-    set_array_numeric_layout, store_array_slot, transfer_array_numeric_layout, NumericArrayLayout,
-    MIN_ARRAY_CAPACITY,
+    array_numeric_raw_f64_set_inbounds, canonicalize_array_numeric_store_value, clean_arr_ptr,
+    clean_arr_ptr_mut, clear_array_numeric_layout, clear_array_numeric_layout_ptr,
+    gc_element_slot_range, mark_array_layout_unknown, note_array_slot, note_array_slot_layout_only,
+    rebuild_array_layout, rebuild_array_layout_exact, refresh_array_numeric_layout,
+    replay_array_growth_write_barriers, set_array_numeric_layout, store_array_slot,
+    transfer_array_numeric_layout, NumericArrayLayout, MIN_ARRAY_CAPACITY,
 };
 
 #[cfg(test)]

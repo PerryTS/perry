@@ -300,6 +300,27 @@ pub(crate) fn value_bits_to_number(value_bits: u64) -> Option<f64> {
 }
 
 #[inline]
+pub(crate) unsafe fn canonicalize_array_numeric_store_bits(
+    arr: *mut ArrayHeader,
+    value_bits: u64,
+) -> u64 {
+    if array_numeric_layout(arr) == Some(NumericArrayLayout::RawF64) {
+        if let Some(number) = value_bits_to_number(value_bits) {
+            return number.to_bits();
+        }
+    }
+    value_bits
+}
+
+#[inline]
+pub(crate) unsafe fn canonicalize_array_numeric_store_value(
+    arr: *mut ArrayHeader,
+    value: f64,
+) -> f64 {
+    f64::from_bits(canonicalize_array_numeric_store_bits(arr, value.to_bits()))
+}
+
+#[inline]
 unsafe fn array_slot_bits(arr: *const ArrayHeader, index: usize) -> u64 {
     let slot = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
     *slot.add(index)
@@ -335,11 +356,17 @@ unsafe fn rebuild_array_numeric_raw_f64(arr: *mut ArrayHeader) -> bool {
     }
 
     let mut raw = Vec::with_capacity(length);
+    let elements_ptr = array_elements_ptr(arr);
     for i in 0..length {
-        let Some(number) = value_bits_to_number(array_slot_bits(arr, i)) else {
+        let slot_bits = array_slot_bits(arr, i);
+        let Some(number) = value_bits_to_number(slot_bits) else {
             clear_array_numeric_layout(arr);
             return false;
         };
+        let canonical_bits = number.to_bits();
+        if slot_bits != canonical_bits {
+            std::ptr::write(elements_ptr.add(i), canonical_bits);
+        }
         raw.push(number);
     }
 
@@ -444,6 +471,8 @@ pub(crate) unsafe fn note_array_numeric_index_write(
             if let Some(raw) = state.raw_f64.as_mut() {
                 if index < raw.len() {
                     raw[index] = number;
+                } else if index == raw.len() {
+                    raw.push(number);
                 } else {
                     state.raw_f64 = None;
                 }
@@ -506,12 +535,14 @@ pub(crate) unsafe fn array_numeric_raw_f64_set_inbounds(
     if arr.is_null() || index >= (*arr).length {
         return false;
     }
-    let value_bits = value.to_bits();
+    let original_bits = value.to_bits();
+    let value_bits = canonicalize_array_numeric_store_bits(arr, original_bits);
+    let value = f64::from_bits(value_bits);
     let elements_ptr = array_elements_ptr(arr) as *mut f64;
     std::ptr::write(elements_ptr.add(index as usize), value);
     note_array_numeric_index_write(arr, index as usize, value_bits);
     crate::gc::layout_note_slot(arr as usize, index as usize, value_bits);
-    value_bits_are_numeric(value_bits)
+    value_bits_are_numeric(original_bits)
 }
 
 #[inline]
@@ -533,6 +564,8 @@ pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds(
     let Some(number) = value_bits_to_number(value_bits) else {
         return false;
     };
+    let value_bits = number.to_bits();
+    let value = f64::from_bits(value_bits);
     let elements_ptr = array_elements_ptr(arr) as *mut f64;
     std::ptr::write(elements_ptr.add(length as usize), value);
     NUMERIC_ARRAY_LAYOUTS.with(|m| {
@@ -643,6 +676,8 @@ pub(crate) unsafe fn gc_element_slot_range(
 
 #[inline]
 pub(crate) unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
+    let value_bits = canonicalize_array_numeric_store_bits(arr, value_bits);
+    std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
     crate::gc::layout_note_slot(arr as usize, index, value_bits);
     let slot = array_elements_ptr(arr).add(index) as usize;
@@ -655,12 +690,15 @@ pub(crate) unsafe fn note_array_slot_layout_only(
     index: usize,
     value_bits: u64,
 ) {
+    let value_bits = canonicalize_array_numeric_store_bits(arr, value_bits);
+    std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
     crate::gc::layout_note_slot(arr as usize, index, value_bits);
 }
 
 #[inline]
 pub(crate) unsafe fn store_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
+    let value_bits = canonicalize_array_numeric_store_bits(arr, value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
     let slot = array_elements_ptr(arr).add(index) as usize;
     crate::gc::runtime_store_jsvalue_slot(arr as usize, slot, index, value_bits);

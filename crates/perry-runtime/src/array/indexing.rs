@@ -229,9 +229,11 @@ pub extern "C" fn js_array_set_f64_unchecked(arr: *mut ArrayHeader, index: u32, 
         if index >= length {
             return;
         }
+        let value = canonicalize_array_numeric_store_value(arr, value);
+        let value_bits = value.to_bits();
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         ptr::write(elements_ptr.add(index as usize), value);
-        note_array_slot(arr, index as usize, value.to_bits());
+        note_array_slot(arr, index as usize, value_bits);
     }
 }
 
@@ -280,9 +282,11 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
         if index >= length {
             return;
         }
+        let value = canonicalize_array_numeric_store_value(arr, value);
+        let value_bits = value.to_bits();
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         ptr::write(elements_ptr.add(index as usize), value);
-        note_array_slot(arr, index as usize, value.to_bits());
+        note_array_slot(arr, index as usize, value_bits);
     }
 }
 
@@ -325,9 +329,11 @@ pub extern "C" fn js_array_set_f64_extend(
 
         // If index is within bounds, just set it
         if index < length {
+            let value = canonicalize_array_numeric_store_value(arr, value);
+            let value_bits = value.to_bits();
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             ptr::write(elements_ptr.add(index as usize), value);
-            note_array_slot(arr, index as usize, value.to_bits());
+            note_array_slot(arr, index as usize, value_bits);
             return arr;
         }
 
@@ -355,8 +361,10 @@ pub extern "C" fn js_array_set_f64_extend(
         }
 
         // Set the value
+        let value = canonicalize_array_numeric_store_value(arr, value);
+        let value_bits = value.to_bits();
         ptr::write(elements_ptr.add(index as usize), value);
-        note_array_slot(arr, index as usize, value.to_bits());
+        note_array_slot(arr, index as usize, value_bits);
         (*arr).length = new_length;
 
         arr
