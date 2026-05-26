@@ -338,12 +338,6 @@
     "category": "bug-open",
     "reason": "node:stream: PassThrough instance lacks .readable/.writable flags. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/events/end-event": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable end event does not fire — listener never invoked. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/passthrough/echo": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -902,12 +896,6 @@
     "category": "bug-open",
     "reason": "node:stream: drain event after backpressure-overflow doesn't fire. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/pipe/multiple-data-listeners": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: multiple data listeners don't all receive the chunk. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/writable/finish-before-close": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -1027,18 +1015,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: setMaxListeners(Infinity) and (0) not honored on streams. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/empty/from-empty-array": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from([]) does not fire empty-end. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/empty/from-empty-string": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from empty string does not emit + end correctly. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/pipe/four-stage-chain": {
     "issue": "1532",
@@ -1495,12 +1471,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: events.once(stream, 'end') — Promise-returning form does not resolve correctly. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/from-string-single-chunk": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(string) yields char-by-char instead of single chunk (string-as-iterable short-circuit missing). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/events/prepend-listener-order": {
     "issue": "1532",
@@ -2492,12 +2462,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(src, PassThrough) — data not preserved through PT in composite. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/events/end-fires-once-multi-listener": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: 'end' event listeners — fire wrong number of times with multi-listener registration. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/writable/uncork-without-cork": {
     "issue": "1539",
     "added": "2026-05-24",
@@ -2761,12 +2725,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: src.emit('error') during pipe — src or dst error tracking wrong. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/flow/registration-order-emission": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: multi-'data' listeners — fire in wrong order. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/from-iterator-throws": {
     "issue": "1532",
