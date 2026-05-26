@@ -221,18 +221,38 @@ pub(crate) unsafe fn resolve_proto_chain_field(
 }
 
 /// #1758: symbol-keyed analogue of [`resolve_proto_chain_field`]. Walks the
-/// `CLASS_PROTOTYPE_OBJECTS` / `get_parent_class_id` chain and, at each
-/// prototype object (a POINTER class-object), looks up its OWN symbol property
-/// via `js_object_get_symbol_property`. Lets a subclass whose parent is a
-/// class-expression value inherit the parent's static *symbol* statics — e.g.
-/// effect's `class BigIntFromSelf extends make(bigIntKeyword) {}` inheriting
+/// `CLASS_PROTOTYPE_OBJECTS` chain and, at each prototype object (a POINTER
+/// class-object), looks up its OWN symbol property via `own_symbol_property`.
+/// Lets a subclass whose parent is a class-expression value inherit the
+/// parent's static *symbol* statics — e.g. effect's
+/// `class BigIntFromSelf extends make(bigIntKeyword) {}` inheriting
 /// `static [TypeId]`, which `Predicate.hasProperty(.., TypeId)` (`isSchema`)
 /// and `u[TypeId]` both read. Returns the first defined value found.
+///
+/// #26 / #321: the walk must advance along TWO axes, because a synthetic
+/// `Object.create(proto)` class id links to its prototype via the *proto
+/// object's own class id*, not via `parent_class_id` (which only models the
+/// `class A extends B` axis). effect's `Either.right(x)` builds
+/// `Object.create(RightProto)` where `RightProto = Object.create(CommonProto)`
+/// and `CommonProto[TypeId]` carries the brand. With only the
+/// `parent_class_id` axis the walk stopped after the first prototype object
+/// (`RightProto`), so `TypeId in either` / `either[TypeId]` missed the brand
+/// two links up — making `ParseResult.isEither(...)` false for every struct
+/// property parse (`S.is`/`decodeUnknownSync`/`encodeSync` on a `Struct`).
+/// At each node we follow the proto object's own class id (the
+/// `Object.create` prototype link) first, then fall back to
+/// `parent_class_id` (the `extends` link); a `visited` set bounds cycles.
 pub(crate) unsafe fn resolve_proto_chain_symbol(class_id: u32, sym_f64: f64) -> Option<f64> {
     let mut cid = class_id;
     let mut depth = 0usize;
+    let mut visited: [u32; 32] = [0; 32];
     while depth < 32 {
+        if visited[..depth].contains(&cid) {
+            break;
+        }
+        visited[depth] = cid;
         let proto_obj = class_prototype_object(cid);
+        let mut next_cid: u32 = 0;
         if !proto_obj.is_null() {
             let proto_f64 = f64::from_bits(JSValue::pointer(proto_obj as *const u8).bits());
             // OWN lookup only — this fn IS the chain walk, so recursing into
@@ -240,6 +260,15 @@ pub(crate) unsafe fn resolve_proto_chain_symbol(class_id: u32, sym_f64: f64) -> 
             if let Some(v) = crate::symbol::own_symbol_property(proto_f64, sym_f64) {
                 return Some(v);
             }
+            // Prefer the `Object.create` prototype link: the next chain node
+            // is the proto object's own class id (which maps to ITS proto in
+            // CLASS_PROTOTYPE_OBJECTS). Falls back to `parent_class_id` below.
+            next_cid = crate::object::js_object_get_class_id(proto_obj as *const ObjectHeader);
+        }
+        if next_cid != 0 && next_cid != cid {
+            cid = next_cid;
+            depth += 1;
+            continue;
         }
         match get_parent_class_id(cid) {
             Some(p) if p != 0 && p != cid => {
