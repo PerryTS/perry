@@ -24,6 +24,7 @@ fn empty_opts() -> CompileOptions {
         type_aliases: std::collections::HashMap::new(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
+        imported_func_synthetic_arguments: std::collections::HashSet::new(),
         imported_func_return_types: std::collections::HashMap::new(),
         namespace_reexport_named_imports: std::collections::HashSet::new(),
         imported_vars: std::collections::HashSet::new(),
