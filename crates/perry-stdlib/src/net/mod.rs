@@ -833,14 +833,26 @@ pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
     }
 }
 
-// ─── FFI: socket.end() ───────────────────────────────────────────────────────
+// ─── FFI: socket.end([data]) ─────────────────────────────────────────────────
 
-/// `socket.end()` — graceful shutdown: stops further writes, lets reads drain.
-/// Signature matches `{ has_receiver: true, method: "end", args: &[], ret: NR_VOID }`.
+/// `socket.end([data])` — optionally write a final chunk, then graceful
+/// shutdown: stops further writes, lets reads drain.
+///
+/// Issue #1852 — Node's `socket.end(data)` writes `data` then sends FIN.
+/// `chunk_bits` is the full NaN-boxed JS value (NA_JSV); `undefined`/`null`
+/// (the no-arg `socket.end()` form) yields no bytes. Kept in sync with the
+/// live perry-ext-net copy so the `js_net_socket_end` symbol has one
+/// signature regardless of which archive links.
+/// Signature matches `{ has_receiver: true, method: "end", args: &[NA_JSV], ret: NR_VOID }`.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_end(handle: i64) {
+pub unsafe extern "C" fn js_net_socket_end(handle: i64, chunk_bits: i64) {
     let sockets = NET_SOCKETS.lock().unwrap();
     if let Some(s) = sockets.get(&handle) {
+        if let Some(bytes) = jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
+            if !bytes.is_empty() {
+                let _ = s.cmd_tx.send(SocketCommand::Write(bytes));
+            }
+        }
         let _ = s.cmd_tx.send(SocketCommand::End);
     }
 }

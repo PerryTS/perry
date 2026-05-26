@@ -271,7 +271,11 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "end",
         class_filter: Some("Socket"),
         runtime: "js_net_socket_end",
-        args: &[],
+        // Issue #1852 — `socket.end([data])` writes the optional final
+        // chunk before half-closing. NA_JSV carries the full NaN-boxed
+        // value so the runtime can probe Buffer/string/number; the
+        // no-arg `socket.end()` form pads this slot with `undefined`.
+        args: &[NA_JSV],
         ret: NR_VOID,
     },
     NativeModSig {
@@ -291,6 +295,111 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         runtime: "js_net_socket_on",
         args: &[NA_STR, NA_PTR],
         ret: NR_VOID,
+    },
+    // Issue #1852 — chainable no-op `net.Socket` option setters. Perry's
+    // TCP transport doesn't model Nagle/keep-alive/idle-timeout or read
+    // back-pressure yet, but the methods must exist + be callable (pre-fix
+    // they threw "x is not a function" — the radar's "value() missing"
+    // cluster). Each returns the socket handle so chained forms keep
+    // dispatching. `args: &[]` ignores the option arguments.
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "setNoDelay",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "setKeepAlive",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "setTimeout",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "setEncoding",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "pause",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "resume",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "ref",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "unref",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "cork",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "uncork",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "setDefaultEncoding",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_noop_self",
+        args: &[],
+        ret: NR_PTR,
     },
     // upgradeToTLS returns a Promise (handle pointer) — await it to wait
     // for the TLS handshake before sending anything over the upgraded stream.
@@ -352,7 +461,14 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_net_server_address",
         args: &[],
-        ret: NR_PTR,
+        // Issue #1852 — `js_net_server_address` returns a JSON string
+        // (`{"port":…,"address":…,"family":…}` or `"null"`).
+        // NR_OBJ_FROM_JSON_STR pipes it through `js_json_parse_or_null`
+        // so `server.address().port` reads a real number. Pre-fix the
+        // NR_PTR kind NaN-boxed the StringHeader as a POINTER_TAG object,
+        // so `.port` came back `undefined` (the radar's "undefined.address"
+        // cluster).
+        ret: NR_OBJ_FROM_JSON_STR,
     },
     NativeModSig {
         module: "net",
@@ -371,6 +487,36 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         runtime: "js_net_server_on",
         args: &[NA_STR, NA_PTR],
         ret: NR_VOID,
+    },
+    // Issue #1852 — chainable no-op `net.Server` option setters
+    // (`ref`/`unref`/`setTimeout`). Same rationale as the Socket stubs
+    // above: callable + chainable, options ignored.
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "ref",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "unref",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "setTimeout",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_noop_self",
+        args: &[],
+        ret: NR_PTR,
     },
     // ========== node:stream — Readable.from(iterable) (#631) ==========
     // The other stream constructors (`new Readable(opts)` etc.) are wired

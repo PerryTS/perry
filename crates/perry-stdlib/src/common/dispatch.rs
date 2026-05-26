@@ -643,7 +643,12 @@ unsafe fn dispatch_net_socket(handle: i64, method: &str, args: &[f64]) -> f64 {
             f64::from_bits(0x7FFC_0000_0000_0001) // undefined
         }
         "end" => {
-            crate::net::js_net_socket_end(handle);
+            // Issue #1852 — forward the optional `socket.end(data)` chunk.
+            let chunk = args
+                .first()
+                .copied()
+                .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
+            crate::net::js_net_socket_end(handle, chunk.to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
         "destroy" => {
@@ -699,7 +704,9 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
     }
     extern "C" {
         fn js_net_socket_write(handle: i64, buf_ptr: i64);
-        fn js_net_socket_end(handle: i64);
+        // Issue #1852 — `js_net_socket_end` now takes the optional final
+        // chunk (NA_JSV bits) so `socket.end(data)` writes before FIN.
+        fn js_net_socket_end(handle: i64, chunk_bits: i64);
         fn js_net_socket_destroy(handle: i64);
         fn js_net_socket_on(handle: i64, event_ptr: i64, cb_ptr: i64);
         fn js_net_socket_method_connect(handle: i64, port: f64, host_ptr: i64);
@@ -719,7 +726,13 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
         "end" => {
-            js_net_socket_end(handle);
+            // Issue #1852 — forward the optional `socket.end(data)` chunk;
+            // pad with `undefined` for the no-arg `socket.end()` form.
+            let chunk = args
+                .first()
+                .copied()
+                .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
+            js_net_socket_end(handle, chunk.to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
         "destroy" => {

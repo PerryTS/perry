@@ -186,6 +186,9 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_net_server_close",                         OwnerKind::WellKnown("net")),
     ("js_net_server_address",                       OwnerKind::WellKnown("net")),
     ("js_net_server_on",                            OwnerKind::WellKnown("net")),
+    // #1852 — chainable no-op option setters for Socket/Server.
+    ("js_net_socket_noop_self",                     OwnerKind::WellKnown("net")),
+    ("js_net_server_noop_self",                     OwnerKind::WellKnown("net")),
 
     // ── #1724: global Blob/File + URL object-URL helpers ──────────────
     // `new Blob([...])`, `new File([...], name)`, `URL.createObjectURL`,

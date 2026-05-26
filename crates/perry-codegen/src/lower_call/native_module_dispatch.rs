@@ -142,8 +142,19 @@ pub fn lower_native_module_dispatch(
                 ));
                 arg_types.push(DOUBLE);
             }
-            NativeArgKind::StrPtr | NativeArgKind::PtrI64 | NativeArgKind::JsvalI64 => {
+            NativeArgKind::StrPtr | NativeArgKind::PtrI64 => {
                 llvm_args.push((I64, "0".to_string()));
+                arg_types.push(I64);
+            }
+            NativeArgKind::JsvalI64 => {
+                // A missing NA_JSV arg is JS `undefined`, not numeric 0.
+                // NA_JSV slots carry the *raw NaN-box bits* as i64, so a
+                // padded `0` would be read back as the f64 `0.0` (a number)
+                // — issue #1852: `socket.end()` with no args then
+                // stringified `0` and wrote a spurious "0" byte before FIN.
+                // Pad with the TAG_UNDEFINED bit pattern so the callee's
+                // value-probe sees `undefined`.
+                llvm_args.push((I64, (crate::nanbox::TAG_UNDEFINED as i64).to_string()));
                 arg_types.push(I64);
             }
             NativeArgKind::VarArgsAsArray => {

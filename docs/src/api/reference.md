@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1254 entries across 81 modules.
+Total: 1265 entries across 81 modules.
 
 ## Modules
 
@@ -1022,6 +1022,7 @@ Total: 1254 entries across 81 modules.
 - `close` — instance *(class: `Server`)*
 - `connect` — module
 - `connect` — instance *(class: `Socket`)*
+- `cork` — instance *(class: `Socket`)*
 - `createConnection` — module
 - `destroy` — instance *(class: `Socket`)*
 - `end` — instance *(class: `Socket`)*
@@ -1032,8 +1033,18 @@ Total: 1254 entries across 81 modules.
 - `isIPv6` — module
 - `listen` — instance *(class: `Server`)*
 - `on` — instance *(class: `Socket`)*
+- `pause` — instance *(class: `Socket`)*
+- `ref` — instance *(class: `Socket`)*
+- `resume` — instance *(class: `Socket`)*
 - `setDefaultAutoSelectFamily` — module
 - `setDefaultAutoSelectFamilyAttemptTimeout` — module
+- `setDefaultEncoding` — instance *(class: `Socket`)*
+- `setEncoding` — instance *(class: `Socket`)*
+- `setKeepAlive` — instance *(class: `Socket`)*
+- `setNoDelay` — instance *(class: `Socket`)*
+- `setTimeout` — instance *(class: `Socket`)*
+- `uncork` — instance *(class: `Socket`)*
+- `unref` — instance *(class: `Socket`)*
 - `upgradeToTLS` — instance *(class: `Socket`)*
 - `write` — instance *(class: `Socket`)*
 

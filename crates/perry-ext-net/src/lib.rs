@@ -206,6 +206,12 @@ enum SocketCommand {
 enum PendingNetEvent {
     Connect(i64),
     Data(i64, Vec<u8>),
+    /// Issue #1852 — peer half-closed (FIN received, `read()` returned 0).
+    /// Node fires `'end'` on the readable side *before* `'close'`; lots of
+    /// net tests block on `socket.on('end', …)` to learn the peer is done,
+    /// so without this the connection lifecycle never completes and the
+    /// test hangs.
+    End(i64),
     Close(i64),
     Error(i64, String),
     /// Issue #1123 followup — accept-loop on a `net.Server` produced
@@ -985,6 +991,23 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i
                     return;
                 }
             };
+            // Issue #1852 — record the *actual* bound address. The
+            // dominant Node test pattern is `server.listen(0, () =>
+            // client.connect(server.address().port))`: port 0 asks the OS
+            // for an ephemeral port, so the requested `port_u16` (0) is
+            // never what we end up listening on. Read `local_addr()` and
+            // overwrite the stashed port/host BEFORE firing `'listening'`,
+            // so `server.address()` inside the listen callback reports the
+            // real port (pre-fix it returned 0 and every client connected
+            // to port 0 → connection refused → hang).
+            if let Ok(local) = listener.local_addr() {
+                if let Ok(mut servers) = statics::servers().lock() {
+                    if let Some(s) = servers.get_mut(&server_id) {
+                        s.bound_port = local.port();
+                        s.bound_host = local.ip().to_string();
+                    }
+                }
+            }
             // bind succeeded — fire `'listening'`.
             push_event(PendingNetEvent::ServerListening(server_id));
 
@@ -1340,6 +1363,11 @@ async fn run_socket_task(
             read_result = t.read(&mut buf) => {
                 match read_result {
                     Ok(0) => {
+                        // Issue #1852 — peer sent FIN. Fire `'end'` first
+                        // (readable side ended) then `'close'`, matching
+                        // Node's default `allowHalfOpen: false` socket
+                        // teardown order.
+                        push_event(PendingNetEvent::End(id));
                         push_event(PendingNetEvent::Close(id));
                         mark_closed(id);
                         break;
@@ -1438,13 +1466,33 @@ pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
     }
 }
 
-// ─── FFI: socket.end() ───────────────────────────────────────────────────────
+// ─── FFI: socket.end([data]) ─────────────────────────────────────────────────
 
-/// `socket.end()` — graceful shutdown.
+/// `socket.end([data])` — optionally write a final chunk, then half-close
+/// the write side.
+///
+/// Issue #1852 — Node's `socket.end(data)` writes `data` and *then* sends
+/// FIN. The previous signature took no data, so `socket.end("bye")` (a
+/// single-call write+close, common in request/response protocols and echo
+/// tests) silently dropped the payload — the peer never saw the bytes, its
+/// `'data'` listener never fired, and the exchange hung. `chunk_bits` is the
+/// full NaN-boxed JS value (NA_JSV); `undefined`/`null` (the no-arg
+/// `socket.end()` form, where the dispatch table pads the slot with
+/// `TAG_UNDEFINED`) yields `None` and we just send FIN.
+///
+/// # Safety
+///
+/// `chunk_bits` must be a valid NaN-boxed JS value. String / Buffer pointers
+/// must reference live runtime allocations.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_end(handle: i64) {
+pub unsafe extern "C" fn js_net_socket_end(handle: i64, chunk_bits: i64) {
     let sockets = statics::sockets().lock().unwrap();
     if let Some(s) = sockets.get(&handle) {
+        if let Some(bytes) = jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
+            if !bytes.is_empty() {
+                let _ = s.cmd_tx.send(SocketCommand::Write(bytes));
+            }
+        }
         let _ = s.cmd_tx.send(SocketCommand::End);
     }
 }
@@ -1458,6 +1506,39 @@ pub unsafe extern "C" fn js_net_socket_destroy(handle: i64) {
     if let Some(s) = sockets.get(&handle) {
         let _ = s.cmd_tx.send(SocketCommand::Destroy);
     }
+}
+
+// ─── FFI: chainable no-op socket/server options (issue #1852) ────────────────
+//
+// Node's `net.Socket` and `net.Server` expose a family of configuration
+// methods that return the instance (`this`) for chaining — `setNoDelay`,
+// `setKeepAlive`, `setTimeout`, `setEncoding`, `pause`, `resume`, `ref`,
+// `unref`, `cork`, `uncork`, etc. Perry's TCP transport doesn't model TCP
+// socket options (Nagle, keep-alive, idle-timeout) or read-pause yet, but
+// the methods still need to *exist and be callable*: pre-fix, calling any
+// of them threw "x is not a function" (the radar's "value() missing"
+// cluster) and aborted the program before the real I/O ever ran.
+//
+// These two shims accept the receiver handle (the dispatch table declares
+// `args: &[]`, so user-supplied option args are evaluated for the call but
+// not forwarded) and return it unchanged so `sock.setNoDelay(true)` and
+// chained forms like `sock.setKeepAlive().setNoDelay()` both type-check and
+// keep flowing. The codegen NaN-boxes the returned id with POINTER_TAG
+// (NR_PTR), reproducing the original Socket/Server value shape so a
+// subsequent method on the result still dispatches.
+
+/// Chainable no-op for `net.Socket` option setters — returns the socket
+/// handle unchanged.
+#[no_mangle]
+pub extern "C" fn js_net_socket_noop_self(handle: i64) -> i64 {
+    handle
+}
+
+/// Chainable no-op for `net.Server` option setters — returns the server
+/// handle unchanged.
+#[no_mangle]
+pub extern "C" fn js_net_server_noop_self(handle: i64) -> i64 {
+    handle
 }
 
 // ─── FFI: socket.on(event, callback) ─────────────────────────────────────────
@@ -1624,6 +1705,18 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 for cb in cbs {
                     if cb != 0 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(err_f64);
+                    }
+                }
+            }
+            PendingNetEvent::End(id) => {
+                // Issue #1852 — readable side ended (peer FIN). Fire the
+                // `'end'` listeners; the trailing `Close` event (pushed
+                // right after `End` in `run_socket_task`) does the actual
+                // listener-map / socket-map teardown, so don't remove
+                // anything here.
+                for cb in listeners_for(id, "end") {
+                    if cb != 0 {
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
                 }
             }

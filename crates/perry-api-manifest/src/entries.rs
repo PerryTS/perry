@@ -537,6 +537,24 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "destroy", true, Some("Socket")),
     method("net", "on", true, Some("Socket")),
     method("net", "upgradeToTLS", true, Some("Socket")),
+    // Issue #1852 — chainable no-op `net.Socket` option setters. Perry's
+    // TCP transport doesn't model Nagle/keep-alive/idle-timeout or read
+    // back-pressure yet, but the methods must be callable (and return the
+    // socket for chaining) instead of throwing "not a function". These
+    // names also cover the `net.Server` `ref`/`unref`/`setTimeout` rows
+    // below (`module_has_symbol` is name-based), so they unblock the
+    // strict-API gate for both classes.
+    method("net", "setNoDelay", true, Some("Socket")),
+    method("net", "setKeepAlive", true, Some("Socket")),
+    method("net", "setTimeout", true, Some("Socket")),
+    method("net", "setEncoding", true, Some("Socket")),
+    method("net", "setDefaultEncoding", true, Some("Socket")),
+    method("net", "pause", true, Some("Socket")),
+    method("net", "resume", true, Some("Socket")),
+    method("net", "ref", true, Some("Socket")),
+    method("net", "unref", true, Some("Socket")),
+    method("net", "cork", true, Some("Socket")),
+    method("net", "uncork", true, Some("Socket")),
     // Issue #1123 followup — `net.Server` instance methods backing
     // `createServer(...).listen/.close/.address/.on`. Mirrors the
     // shape of the http-server rows at entries.rs:2298. The
