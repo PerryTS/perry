@@ -199,8 +199,14 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
         }
     } else if jsval.is_pointer() {
         // Object/array/closure/symbol pointer - check via the side-table first.
+        // The `>= 0x100000` floor (raised from 0x10000, #1843) skips the deref
+        // for native-module registry handles (net.Socket, zlib stream, crypto,
+        // …) — small ids bit-OR'd with POINTER_TAG, not real heap pointers,
+        // which always live above 0x100000. `typeof aHandle` is "object".
+        // Reading a fake handle's `[ptr+12]` type tag otherwise segfaults
+        // (e.g. zlib's 0x60000 stream base).
         let ptr = jsval.as_pointer::<u8>();
-        if !ptr.is_null() && (ptr as usize) > 0x10000 {
+        if !ptr.is_null() && (ptr as usize) >= 0x100000 {
             // Symbols: registered in SYMBOL_POINTERS (handles both gc_malloc'd
             // and Box-leaked symbols, which have no GcHeader).
             if crate::symbol::is_registered_symbol(ptr as usize) {

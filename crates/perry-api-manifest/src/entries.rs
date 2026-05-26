@@ -250,6 +250,17 @@ const fn p_any(name: &'static str) -> ParamSpec {
     }
 }
 
+/// #1843 — every `zlib.create*` Transform-stream factory shares the same
+/// shape: an optional `options` object in, a stream handle (`Any`) out.
+const ZLIB_STREAM_OPTS: &[ParamSpec] = &[ParamSpec::Named {
+    name: "options",
+    ty: TypeSpec::Any,
+    optional: true,
+}];
+const fn zlib_stream_factory(name: &'static str) -> ApiEntry {
+    method_sig("zlib", name, false, None, ZLIB_STREAM_OPTS, TypeSpec::Any)
+}
+
 /// Source-of-truth manifest. See module-level docs for what feeds it.
 pub static API_MANIFEST: &[ApiEntry] = &[
     // ===========================================================
@@ -1271,23 +1282,52 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // by axios for stream wiring. Values are resolved at runtime by
     // `get_native_module_constant` in `perry-runtime/src/object.rs`.
     property("zlib", "constants"),
-    // `zlib.createBrotliDecompress(options?)` — axios feature-checks this
-    // at module init (the typeof === 'function' shape). The native shim
-    // returns a registered Buffer-shaped handle; the real decode path is
-    // only reached when a server actually replies with
-    // `content-encoding: br`, which we leave for a follow-up.
+    // #1843 — Brotli one-shot compress/decompress (sync + async).
     method_sig(
         "zlib",
-        "createBrotliDecompress",
+        "brotliCompressSync",
         false,
         None,
-        &[ParamSpec::Named {
-            name: "options",
-            ty: TypeSpec::Any,
-            optional: true,
-        }],
+        &[p_str("p0")],
+        TypeSpec::String,
+    ),
+    method_sig(
+        "zlib",
+        "brotliDecompressSync",
+        false,
+        None,
+        &[p_str("p0")],
+        TypeSpec::String,
+    ),
+    method_sig(
+        "zlib",
+        "brotliCompress",
+        false,
+        None,
+        &[p_str("p0")],
         TypeSpec::Any,
     ),
+    method_sig(
+        "zlib",
+        "brotliDecompress",
+        false,
+        None,
+        &[p_str("p0")],
+        TypeSpec::Any,
+    ),
+    // #1843 — Transform-stream factories. Each returns a stream handle
+    // supporting `.write`/`.end`/`.on('data'|'end'|'error')`/`.pipe`.
+    zlib_stream_factory("createGzip"),
+    zlib_stream_factory("createGunzip"),
+    zlib_stream_factory("createDeflate"),
+    zlib_stream_factory("createInflate"),
+    zlib_stream_factory("createDeflateRaw"),
+    zlib_stream_factory("createInflateRaw"),
+    zlib_stream_factory("createUnzip"),
+    zlib_stream_factory("createBrotliCompress"),
+    // `zlib.createBrotliDecompress(options?)` — now a real Transform stream
+    // (still passes axios's `typeof === 'function'` module-init gate).
+    zlib_stream_factory("createBrotliDecompress"),
     method_sig(
         "cron",
         "validate",

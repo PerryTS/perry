@@ -335,6 +335,16 @@ pub(super) fn build_optimized_libs(
             if original_features.contains(&"bundled-net") {
                 features.insert("external-net-pump");
             }
+            // #1843 — when the flip strips `compression` and routes
+            // `node:zlib` to perry-ext-zlib, activate `external-zlib-pump`
+            // so perry-stdlib's main-thread pump + active-handles gate drain
+            // perry-ext-zlib's deferred stream-event queue and route
+            // `gz.write()`/`.on()`/`.pipe()` (lost-static-type) calls into its
+            // `js_ext_zlib_dispatch_method`. Without this the events stay
+            // queued forever (`createGzip().on('data')` never fires).
+            if original_features.contains(&"compression") {
+                features.insert("external-zlib-pump");
+            }
             // Closes #606 — same shape for ws. When the well-known flip
             // strips `bundled-ws` and routes to perry-ext-ws, activate
             // `external-ws-pump` so perry-stdlib's main-thread pump and

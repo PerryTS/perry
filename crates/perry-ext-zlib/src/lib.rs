@@ -9,15 +9,22 @@
 
 use flate2::read::{DeflateDecoder, DeflateEncoder, GzDecoder, GzEncoder};
 use flate2::Compression;
-use perry_ffi::{
-    alloc_buffer, alloc_bytes, read_bytes, spawn_blocking, BufferHeader, JsPromise, JsString,
-    JsValue, Promise, StringHeader,
-};
+use perry_ffi::{alloc_bytes, spawn_blocking, JsPromise, JsValue, Promise, StringHeader};
 use std::io::Read;
 
+// #1843 — Transform-stream objects (`createGzip`/`createDeflate`/… with
+// `.write`/`.end`/`.on`/`.pipe`) and Brotli one-shots. Split into its own
+// module to keep this file under the 2000-line size gate.
+mod stream;
+pub use stream::*;
+
 unsafe fn read_input(ptr: *const StringHeader) -> Option<Vec<u8>> {
-    let handle = JsString::from_raw(ptr as *mut StringHeader);
-    read_bytes(handle).map(|b| b.to_vec())
+    // #1843: route through the buffer-aware reader so `gzipSync` / `gunzipSync`
+    // / `deflateSync` / `inflateSync` accept real Buffers/Uint8Arrays (e.g.
+    // `gunzipSync(Buffer.concat(chunks))`, `gunzipSync(fs.readFileSync(...))`),
+    // not just StringHeader-shaped inputs. Falls back to the StringHeader path
+    // for JS strings / our own `alloc_bytes` outputs.
+    stream::read_input_bytes(ptr)
 }
 
 fn gzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
@@ -102,15 +109,8 @@ pub unsafe extern "C" fn js_zlib_inflate_sync(data_ptr: *const StringHeader) -> 
     }
 }
 
-/// `zlib.createBrotliDecompress(options?)`.
-///
-/// Minimal feature-check shim: return a truthy Buffer-shaped object so package
-/// init paths that probe Brotli support can proceed. Real Brotli stream
-/// decoding remains outside this wrapper's current surface.
-#[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_brotli_decompress(_opts: f64) -> *mut BufferHeader {
-    alloc_buffer(&[])
-}
+// `zlib.createBrotliDecompress` and the other `create*` Transform-stream
+// factories now live in `stream.rs` (returning real stream handles).
 
 // ── async variants ────────────────────────────────────────────
 
@@ -185,7 +185,7 @@ pub unsafe extern "C" fn js_zlib_inflate(data_ptr: *const StringHeader) -> *mut 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use perry_ffi::alloc_string;
+    use perry_ffi::{alloc_string, JsString};
 
     #[test]
     fn gzip_then_gunzip_round_trips_text() {

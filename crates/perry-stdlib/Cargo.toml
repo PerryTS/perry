@@ -131,6 +131,18 @@ bundled-net = ["async-runtime"]
 # extern reference) when perry-ext-net is guaranteed to be linked.
 external-net-pump = ["async-runtime"]
 
+# Activated by `optimized_libs::build_optimized_libs` (#1843) when the
+# well-known flip routes `node:zlib` to perry-ext-zlib and strips
+# `compression`. Tells perry-stdlib's `js_stdlib_process_pending` /
+# `js_stdlib_has_active_handles` to drain perry-ext-zlib's deferred
+# stream-event queue (`js_ext_zlib_process_pending` /
+# `js_ext_zlib_has_active_handles`), and routes lost-static-type
+# `gz.write()` / `.on()` / `.pipe()` calls through
+# `js_ext_zlib_dispatch_method`. Mirrors `external-net-pump`. No async
+# runtime needed (zlib compression is synchronous), but the pump call
+# sites live in the async-bridge module which is `async-runtime`-gated.
+external-zlib-pump = ["async-runtime"]
+
 # Activated by `optimized_libs::build_optimized_libs` (v0.5.714) when
 # the well-known flip routes `node:http` / `node:https` / `node:http2`
 # to perry-ext-http (which bundles perry-ext-http-server). Tells

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1267 entries across 81 modules
+// Coverage: 1279 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -2013,7 +2013,31 @@ declare module "zlib" {
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  export function brotliCompress(p0: string): any;
+  /** stdlib */
+  export function brotliCompressSync(p0: string): string;
+  /** stdlib */
+  export function brotliDecompress(p0: string): any;
+  /** stdlib */
+  export function brotliDecompressSync(p0: string): string;
+  /** stdlib */
+  export function createBrotliCompress(options?: any): any;
+  /** stdlib */
   export function createBrotliDecompress(options?: any): any;
+  /** stdlib */
+  export function createDeflate(options?: any): any;
+  /** stdlib */
+  export function createDeflateRaw(options?: any): any;
+  /** stdlib */
+  export function createGunzip(options?: any): any;
+  /** stdlib */
+  export function createGzip(options?: any): any;
+  /** stdlib */
+  export function createInflate(options?: any): any;
+  /** stdlib */
+  export function createInflateRaw(options?: any): any;
+  /** stdlib */
+  export function createUnzip(options?: any): any;
   /** stdlib */
   export function deflateSync(p0: string): string;
   /** stdlib */

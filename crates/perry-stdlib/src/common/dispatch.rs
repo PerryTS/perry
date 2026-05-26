@@ -293,6 +293,61 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     if crate::net::is_net_socket_handle(handle) {
         return dispatch_net_socket(handle, method_name, &args);
     }
+
+    // zlib Transform streams (#1843): `zlib.createGzip()` etc. return handles
+    // in the 0x60000+ range; their `.write`/`.end`/`.on`/`.pipe`/`.flush`/
+    // `.close` calls lose their static type and route here. Gated on the
+    // registry AND the method vocabulary so a handle-id reused across another
+    // subsystem's registry can't misroute (handle id-spaces aren't unified —
+    // see the long comment above).
+    #[cfg(feature = "compression")]
+    if matches!(
+        method_name,
+        "write" | "end" | "on" | "once" | "pipe" | "flush" | "close" | "destroy"
+    ) && crate::zlib::is_zlib_stream_handle(handle)
+    {
+        // zlib streams are synchronous, so nothing else triggers the pump
+        // registration that async ops (spawn/queue) normally do. Register here
+        // so the event loop's `has_active` gate + pump drain the deferred
+        // 'data'/'end' events instead of exiting before they fire (#1843).
+        crate::common::async_bridge::ensure_pump_registered();
+        return dispatch_zlib_stream(handle, method_name, &args);
+    }
+
+    // External zlib path (#1843): when the well-known flip routes `node:zlib`
+    // to perry-ext-zlib and strips `compression`, the stream handle + dispatch
+    // live in perry-ext-zlib. Same registry-gated contract; the per-method
+    // match runs inside `js_ext_zlib_dispatch_method`.
+    #[cfg(all(feature = "external-zlib-pump", not(feature = "compression")))]
+    if matches!(
+        method_name,
+        "write" | "end" | "on" | "once" | "addListener" | "pipe" | "flush" | "close" | "destroy"
+    ) {
+        extern "C" {
+            fn js_ext_zlib_is_stream_handle(handle: i64) -> i32;
+            fn js_ext_zlib_dispatch_method(
+                handle: i64,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
+        }
+        if unsafe { js_ext_zlib_is_stream_handle(handle) } != 0 {
+            // Register the stdlib pump (#1843) — see the bundled arm above.
+            crate::common::async_bridge::ensure_pump_registered();
+            return unsafe {
+                js_ext_zlib_dispatch_method(
+                    handle,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                )
+            };
+        }
+    }
+
     // External net path (v0.5.581): perry-ext-net registers itself when
     // the well-known flip strips bundled-net. Same dispatch contract,
     // but routes through extern "C" symbols perry-ext-net provides.
@@ -680,6 +735,57 @@ unsafe fn dispatch_net_socket(handle: i64, method: &str, args: &[f64]) -> f64 {
             f64::from_bits(0x7FFD_0000_0000_0000u64 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF))
         }
         _ => f64::from_bits(0x7FFC_0000_0000_0001),
+    }
+}
+
+/// Dispatch a method call on a zlib Transform-stream handle (#1843).
+///
+/// `createGzip()` / `createDeflate()` / `createBrotliCompress()` / … return
+/// handles whose `.write`/`.end`/`.on`/`.pipe`/`.flush`/`.close` lose their
+/// static type and arrive here. Compression is synchronous and buffered in the
+/// runtime: `.write()` accumulates input, `.end()` runs the codec and queues
+/// 'data'/'end' onto the deferred-event pump.
+#[cfg(feature = "compression")]
+unsafe fn dispatch_zlib_stream(handle: i64, method: &str, args: &[f64]) -> f64 {
+    fn unbox_to_i64(v: f64) -> i64 {
+        (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
+    }
+    const UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    const TRUE: u64 = 0x7FFC_0000_0000_0004;
+    // The stream itself, re-boxed as a POINTER_TAG handle (for `.on()` chaining
+    // `s.on('data', …).on('end', …)`).
+    let self_ref =
+        f64::from_bits(0x7FFD_0000_0000_0000u64 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF));
+    match method {
+        "write" if !args.is_empty() => {
+            crate::zlib::zlib_stream_write(handle, args[0]);
+            f64::from_bits(TRUE) // Node's writable.write() returns a boolean
+        }
+        "end" => {
+            let chunk = args.first().copied().unwrap_or(f64::from_bits(UNDEFINED));
+            crate::zlib::zlib_stream_end(handle, chunk);
+            self_ref
+        }
+        "on" | "once" if args.len() >= 2 => {
+            // `args[0]` is the full NaN-boxed event name (SSO-safe extraction
+            // happens inside zlib_stream_on); `args[1]` is the closure pointer.
+            crate::zlib::zlib_stream_on(handle, args[0], unbox_to_i64(args[1]));
+            self_ref
+        }
+        "pipe" if !args.is_empty() => {
+            crate::zlib::zlib_stream_pipe(handle, args[0]);
+            args[0] // Node's `.pipe(dest)` returns `dest` for chaining
+        }
+        "close" | "destroy" => {
+            // Force the codec to run (so 'end' fires) if it hasn't already.
+            crate::zlib::zlib_stream_end(handle, f64::from_bits(UNDEFINED));
+            f64::from_bits(UNDEFINED)
+        }
+        // `.flush([cb])` — with the buffer-until-end model there's nothing to
+        // flush mid-stream (all output emits on `.end()`); accept it as a no-op
+        // so callers don't hit "flush is not a function".
+        "flush" => f64::from_bits(UNDEFINED),
+        _ => f64::from_bits(UNDEFINED),
     }
 }
 

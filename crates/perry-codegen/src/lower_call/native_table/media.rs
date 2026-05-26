@@ -322,11 +322,124 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         args: &[NA_STR],
         ret: NR_PTR,
     },
-    // `zlib.createBrotliDecompress(options?)` — axios feature-checks
-    // this at module init. The runtime stub returns a registered
-    // Buffer-shaped handle (NaN-boxed as a pointer) so callers see
-    // a truthy non-null object; the real Brotli decode path is a
-    // follow-up. `options` is NaN-boxed as f64.
+    // `zlib.brotli{Compress,Decompress}Sync(data)` — one-shot Brotli via the
+    // `brotli` crate (already a `compression`-feature dep). #1843 cluster 2.
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "brotliCompressSync",
+        class_filter: None,
+        runtime: "js_zlib_brotli_compress_sync",
+        args: &[NA_STR],
+        ret: NR_STR,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "brotliDecompressSync",
+        class_filter: None,
+        runtime: "js_zlib_brotli_decompress_sync",
+        args: &[NA_STR],
+        ret: NR_STR,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "brotliCompress",
+        class_filter: None,
+        runtime: "js_zlib_brotli_compress",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "brotliDecompress",
+        class_filter: None,
+        runtime: "js_zlib_brotli_decompress",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    // zlib Transform-stream factories (#1843 cluster 1). Each returns an i64
+    // stream handle (0x60000+ range) NaN-boxed with POINTER_TAG; subsequent
+    // `.write`/`.end`/`.on`/`.pipe`/`.flush`/`.close` lose their static type
+    // and route through HANDLE_METHOD_DISPATCH → `dispatch_zlib_stream`
+    // (crates/perry-stdlib/src/common/dispatch.rs). `options` is NaN-boxed f64.
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "createGzip",
+        class_filter: None,
+        runtime: "js_zlib_create_gzip",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "createGunzip",
+        class_filter: None,
+        runtime: "js_zlib_create_gunzip",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "createDeflate",
+        class_filter: None,
+        runtime: "js_zlib_create_deflate",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "createInflate",
+        class_filter: None,
+        runtime: "js_zlib_create_inflate",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "createDeflateRaw",
+        class_filter: None,
+        runtime: "js_zlib_create_deflate_raw",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "createInflateRaw",
+        class_filter: None,
+        runtime: "js_zlib_create_inflate_raw",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "createUnzip",
+        class_filter: None,
+        runtime: "js_zlib_create_unzip",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "createBrotliCompress",
+        class_filter: None,
+        runtime: "js_zlib_create_brotli_compress",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    // `zlib.createBrotliDecompress(options?)` — now a real Transform-stream
+    // handle (previously a feature-check Buffer stub; axios's
+    // `typeof createBrotliDecompress === 'function'` gate still passes).
     NativeModSig {
         module: "zlib",
         has_receiver: false,

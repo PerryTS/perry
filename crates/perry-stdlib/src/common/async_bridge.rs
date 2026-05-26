@@ -496,6 +496,24 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     // reader's queue and dispatches to question/line/close callbacks.
     count += crate::readline::js_readline_process_pending();
 
+    // Process pending zlib stream events (#1843) — `createGzip()` etc.
+    // buffer input across `.write()` and queue 'data'/'end' on `.end()`;
+    // drained + dispatched to listeners (and forwarded to `.pipe()` dests)
+    // here on the main thread. Bundled path (perry-stdlib's own zlib mod):
+    #[cfg(feature = "compression")]
+    {
+        count += unsafe { crate::zlib::js_zlib_process_pending() };
+    }
+    // External path: the well-known flip routed `node:zlib` to perry-ext-zlib
+    // and stripped `compression`. Drain perry-ext-zlib's queue via its extern.
+    #[cfg(all(feature = "external-zlib-pump", not(feature = "compression")))]
+    {
+        extern "C" {
+            fn js_ext_zlib_process_pending() -> i32;
+        }
+        count += unsafe { js_ext_zlib_process_pending() };
+    }
+
     // Process pending fastify requests. With the bundled-fastify
     // adapter, `app.listen()` used to block the main TS thread inside
     // its own inner event loop forever, so an `await app.listen(...)`
@@ -678,6 +696,26 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
             fn js_fastify_has_active() -> i32;
         }
         if unsafe { js_fastify_has_active() } != 0 {
+            return 1;
+        }
+    }
+    // zlib streams (#1843) — keep the loop alive while `.end()`-queued
+    // 'data'/'end' events are still waiting to be drained, so a purely-
+    // synchronous `createGzip().write(x).end()` program doesn't exit before
+    // its listeners fire. Bundled path:
+    #[cfg(feature = "compression")]
+    {
+        if crate::zlib::js_zlib_has_active_handles() != 0 {
+            return 1;
+        }
+    }
+    // External (perry-ext-zlib) path:
+    #[cfg(all(feature = "external-zlib-pump", not(feature = "compression")))]
+    {
+        extern "C" {
+            fn js_ext_zlib_has_active_handles() -> i32;
+        }
+        if unsafe { js_ext_zlib_has_active_handles() } != 0 {
             return 1;
         }
     }

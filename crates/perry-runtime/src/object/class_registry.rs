@@ -1610,7 +1610,15 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
 /// so raw Map/Set/Buffer pointers (no GcHeader) are never misread. Used by
 /// `typeof`, `new`, and `instanceof` to recognize a class value.
 pub fn is_class_object_ptr(ptr: *const u8) -> bool {
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    // Reject anything in the native-module handle range (< 0x100000). Those
+    // are registry ids (net.Socket, zlib stream, crypto, fastify, ioredis,
+    // timers, …) bit-OR'd with POINTER_TAG, not real heap pointers — real
+    // objects always live well above 0x100000. The previous 0x1008 floor only
+    // caught the tiny net/fastify id space; a mid-range handle (e.g. zlib's
+    // 0x60000 stream base, #1843) sailed past it and this function then
+    // segfaulted dereferencing `[handle - 8]` as a GcHeader. 0x100000 is the
+    // same handle/real-pointer threshold `js_native_call_method` already uses.
+    if ptr.is_null() || (ptr as usize) < 0x100000 {
         return false;
     }
     unsafe {

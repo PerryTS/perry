@@ -350,6 +350,22 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_zlib_gzip", I64, &[I64]);
     module.declare_function("js_zlib_gzip_sync", I64, &[I64]);
     module.declare_function("js_zlib_inflate_sync", I64, &[I64]);
+    // #1843 — Brotli one-shots (StringHeader ptr in/out; async returns a Promise ptr).
+    module.declare_function("js_zlib_brotli_compress_sync", I64, &[I64]);
+    module.declare_function("js_zlib_brotli_decompress_sync", I64, &[I64]);
+    module.declare_function("js_zlib_brotli_compress", I64, &[I64]);
+    module.declare_function("js_zlib_brotli_decompress", I64, &[I64]);
+    // #1843 — Transform-stream factories: `_opts` (DOUBLE) in, i64 handle out.
+    // (`js_zlib_create_brotli_decompress` is declared alongside the other
+    // crypto/zlib helpers in runtime_decls/strings.rs.)
+    module.declare_function("js_zlib_create_gzip", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_gunzip", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_deflate", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_inflate", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_deflate_raw", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_inflate_raw", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_unzip", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_brotli_compress", I64, &[DOUBLE]);
 
     // ========== Buffer ==========
     module.declare_function("js_buffer_alloc_unsafe", I64, &[I32]);

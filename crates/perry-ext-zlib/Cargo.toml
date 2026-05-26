@@ -11,6 +11,9 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 flate2 = "1"
+# Brotli stream + one-shot support (#1843). Matches the version the
+# `compression` feature pulls into perry-stdlib.
+brotli = "8.0.2"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

@@ -5287,6 +5287,7 @@ dependencies = [
 name = "perry-ext-zlib"
 version = "0.5.1029"
 dependencies = [
+ "brotli",
  "flate2",
  "perry-ffi",
 ]
