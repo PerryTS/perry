@@ -323,7 +323,7 @@ pub extern "C" fn js_child_process_kill_process(handle_id_val: f64) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_child_process_exec_sync(
     cmd_ptr: *const StringHeader,
-    _options_ptr: *const ObjectHeader,
+    options_ptr: *const ObjectHeader,
 ) -> *mut StringHeader {
     if cmd_ptr.is_null() {
         return js_string_from_bytes(b"".as_ptr(), 0);
@@ -339,14 +339,24 @@ pub extern "C" fn js_child_process_exec_sync(
             Err(_) => return js_string_from_bytes(b"".as_ptr(), 0),
         };
 
-        // Execute the command using shell
+        // Execute the command using the shell, honoring `cwd`/`env` options.
         #[cfg(unix)]
-        let output = Command::new("sh").arg("-c").arg(cmd_str).output();
-
+        let mut command = {
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(cmd_str);
+            c
+        };
         #[cfg(windows)]
-        let output = Command::new("cmd").arg("/C").arg(cmd_str).output();
+        let mut command = {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg(cmd_str);
+            c
+        };
+        if !options_ptr.is_null() {
+            cp_apply_options(&mut command, cp_box_ptr(options_ptr as *const u8));
+        }
 
-        match output {
+        match command.output() {
             Ok(output) => {
                 // Return stdout as a string
                 let stdout = &output.stdout;
@@ -363,7 +373,7 @@ pub extern "C" fn js_child_process_exec_sync(
 pub extern "C" fn js_child_process_spawn_sync(
     cmd_ptr: *const StringHeader,
     args_ptr: *const crate::array::ArrayHeader,
-    _options_ptr: *const ObjectHeader,
+    options_ptr: *const ObjectHeader,
 ) -> *mut ObjectHeader {
     if cmd_ptr.is_null() {
         return std::ptr::null_mut();
@@ -396,6 +406,11 @@ pub extern "C" fn js_child_process_spawn_sync(
                     command.arg(arg_str);
                 }
             }
+        }
+
+        // Honor `cwd`/`env` options.
+        if !options_ptr.is_null() {
+            cp_apply_options(&mut command, cp_box_ptr(options_ptr as *const u8));
         }
 
         // Execute the command
@@ -502,11 +517,24 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
         let cmd_bytes = std::slice::from_raw_parts(data_ptr, len);
         match std::str::from_utf8(cmd_bytes) {
             Ok(cmd_str) => {
+                // `exec` always runs through the shell. The options object sits
+                // in the `arg1` slot (`exec(cmd, options, cb)`); when `arg1` is
+                // the callback (`exec(cmd, cb)`) it's a closure, so the helper
+                // no-ops. `cwd`/`env` from the options are applied here.
                 #[cfg(unix)]
-                let output = Command::new("sh").arg("-c").arg(cmd_str).output();
+                let mut command = {
+                    let mut c = Command::new("sh");
+                    c.arg("-c").arg(cmd_str);
+                    c
+                };
                 #[cfg(windows)]
-                let output = Command::new("cmd").arg("/C").arg(cmd_str).output();
-                match output {
+                let mut command = {
+                    let mut c = Command::new("cmd");
+                    c.arg("/C").arg(cmd_str);
+                    c
+                };
+                cp_apply_options(&mut command, arg1);
+                match command.output() {
                     Ok(o) => (o.stdout, o.stderr, o.status.success()),
                     Err(e) => (Vec::new(), e.to_string().into_bytes(), false),
                 }
@@ -747,13 +775,60 @@ extern "C" fn cp_method_this0(closure: *const ClosureHeader) -> f64 {
 extern "C" fn cp_method_this1(closure: *const ClosureHeader, _a: f64) -> f64 {
     cp_this(closure)
 }
-extern "C" fn cp_method_this2(closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
-    cp_this(closure)
-}
 extern "C" fn cp_method_kill(closure: *const ClosureHeader, _signal: f64) -> f64 {
     cp_set_field(cp_this(closure), b"killed", TAG_TRUE_F64);
     TAG_TRUE_F64
 }
+/// `removeListener(event, cb)` / `off(event, cb)` — rebuild the `event`
+/// listener array without the matching closure (compared by NaN-boxed bits).
+/// #1780.
+extern "C" fn cp_method_remove_listener(closure: *const ClosureHeader, event: f64, cb: f64) -> f64 {
+    let this = cp_this(closure);
+    if let Some(name) = cp_value_to_string(event) {
+        let key = cp_listener_key(&name);
+        if let Some(arr) = cp_array_ptr(cp_get_field(this, &key)) {
+            let n = crate::array::js_array_length(arr);
+            let mut out = crate::array::js_array_alloc(n);
+            for i in 0..n {
+                let v = crate::array::js_array_get_f64(arr, i);
+                if v.to_bits() != cb.to_bits() {
+                    out = crate::array::js_array_push_f64(out, v);
+                }
+            }
+            cp_set_field(this, &key, cp_box_ptr(out as *const u8));
+        }
+    }
+    this
+}
+
+/// `removeAllListeners([event])` — clear one event's listener list, or every
+/// `__cpL_*` list when called with no event. #1780.
+extern "C" fn cp_method_remove_all_listeners(closure: *const ClosureHeader, event: f64) -> f64 {
+    let this = cp_this(closure);
+    if let Some(name) = cp_value_to_string(event) {
+        let key = cp_listener_key(&name);
+        let empty = crate::array::js_array_alloc(0);
+        cp_set_field(this, &key, cp_box_ptr(empty as *const u8));
+        return this;
+    }
+    // No event argument: clear every listener array on the object.
+    if let Some(obj) = cp_object_ptr(this) {
+        let keys = crate::object::js_object_keys(obj);
+        if !keys.is_null() {
+            let n = crate::array::js_array_length(keys);
+            for i in 0..n {
+                if let Some(k) = cp_value_to_string(crate::array::js_array_get_f64(keys, i)) {
+                    if k.as_bytes().starts_with(b"__cpL_") {
+                        let empty = crate::array::js_array_alloc(0);
+                        cp_set_field(this, k.as_bytes(), cp_box_ptr(empty as *const u8));
+                    }
+                }
+            }
+        }
+    }
+    this
+}
+
 extern "C" fn cp_method_read(_closure: *const ClosureHeader, _n: f64) -> f64 {
     TAG_NULL_F64
 }
@@ -823,7 +898,8 @@ fn cp_register_arities() {
     js_register_closure_arity(cp_method_emit as *const u8, 2);
     js_register_closure_arity(cp_method_this0 as *const u8, 0);
     js_register_closure_arity(cp_method_this1 as *const u8, 1);
-    js_register_closure_arity(cp_method_this2 as *const u8, 2);
+    js_register_closure_arity(cp_method_remove_listener as *const u8, 2);
+    js_register_closure_arity(cp_method_remove_all_listeners as *const u8, 1);
     js_register_closure_arity(cp_method_kill as *const u8, 1);
     js_register_closure_arity(cp_method_read as *const u8, 1);
     js_register_closure_arity(cp_method_pipe as *const u8, 1);
@@ -861,8 +937,8 @@ fn cp_build_readable() -> f64 {
         ("once", cp_cast2(cp_method_on)),
         ("addListener", cp_cast2(cp_method_on)),
         ("prependListener", cp_cast2(cp_method_on)),
-        ("off", cp_cast2(cp_method_this2)),
-        ("removeListener", cp_cast2(cp_method_this2)),
+        ("off", cp_cast2(cp_method_remove_listener)),
+        ("removeListener", cp_cast2(cp_method_remove_listener)),
         ("emit", cp_cast2(cp_method_emit)),
         ("pause", cp_cast0(cp_method_this0)),
         ("resume", cp_cast0(cp_method_this0)),
@@ -884,8 +960,8 @@ fn cp_build_writable() -> f64 {
         ("on", cp_cast2(cp_method_on)),
         ("once", cp_cast2(cp_method_on)),
         ("addListener", cp_cast2(cp_method_on)),
-        ("removeListener", cp_cast2(cp_method_this2)),
-        ("off", cp_cast2(cp_method_this2)),
+        ("removeListener", cp_cast2(cp_method_remove_listener)),
+        ("off", cp_cast2(cp_method_remove_listener)),
         ("emit", cp_cast2(cp_method_emit)),
         ("write", cp_cast2(cp_method_write2)),
         ("end", cp_cast1(cp_method_this1)),
@@ -949,7 +1025,7 @@ unsafe fn cp_read_arg_strings(args_ptr: i64) -> Vec<String> {
 pub extern "C" fn js_child_process_spawn_streams(
     cmd_ptr: i64,
     args_ptr: i64,
-    _opts_ptr: i64,
+    opts_ptr: i64,
 ) -> f64 {
     cp_register_arities();
 
@@ -960,10 +1036,18 @@ pub extern "C" fn js_child_process_spawn_streams(
         )
     };
 
-    // Run the command directly (no shell — matches Node's spawn) and collect its
-    // output synchronously.
-    let mut command = Command::new(&cmd_str);
-    command.args(&arg_strs);
+    // `opts_ptr` arrives as a raw (unboxed) heap pointer; re-box it so the
+    // options helpers can read `cwd`/`env`/`shell`. Small values mean
+    // no-options (codegen passes 0) — leave it undefined then.
+    let opts_val = if opts_ptr > 0x10000 {
+        cp_box_ptr(opts_ptr as *const u8)
+    } else {
+        cp_undefined()
+    };
+
+    // Build the command (honoring `shell`/`cwd`/`env`) and capture its output
+    // synchronously.
+    let mut command = cp_build_command(&cmd_str, &arg_strs, opts_val);
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -1027,9 +1111,12 @@ pub extern "C" fn js_child_process_spawn_streams(
         ("once", cp_cast2(cp_method_on)),
         ("addListener", cp_cast2(cp_method_on)),
         ("prependListener", cp_cast2(cp_method_on)),
-        ("removeListener", cp_cast2(cp_method_this2)),
-        ("off", cp_cast2(cp_method_this2)),
-        ("removeAllListeners", cp_cast1(cp_method_this1)),
+        ("removeListener", cp_cast2(cp_method_remove_listener)),
+        ("off", cp_cast2(cp_method_remove_listener)),
+        (
+            "removeAllListeners",
+            cp_cast1(cp_method_remove_all_listeners),
+        ),
         ("emit", cp_cast2(cp_method_emit)),
         ("kill", cp_cast1(cp_method_kill)),
         ("ref", cp_cast0(cp_method_this0)),
@@ -1116,6 +1203,115 @@ fn cp_args_from_value(value: f64) -> Vec<String> {
     }
 }
 
+// ============================================================================
+// Spawn / exec options: `cwd`, `env`, `shell` — #1780
+// ============================================================================
+//
+// The streaming-spawn / exec / execFile entry points previously ignored their
+// options object entirely. These helpers read the common, host-portable
+// options off a NaN-boxed options value and apply them to a `std::process::
+// Command`. Anything not listed here (`stdio`, `timeout`, `maxBuffer`, …) is
+// still ignored.
+
+/// Coerce any JS value to an owned Rust string — string fast-path, else
+/// `js_jsvalue_to_string`. Used for `env` values, which Node stringifies.
+fn cp_coerce_string(value: f64) -> String {
+    if let Some(s) = cp_value_to_string(value) {
+        return s;
+    }
+    let p = crate::value::js_jsvalue_to_string(value);
+    if p.is_null() {
+        return String::new();
+    }
+    unsafe { cp_read_string_header(p as i64) }
+}
+
+/// Apply the host-portable `{ cwd, env }` options to `command`. `opts_val` is a
+/// NaN-boxed options object (or undefined/null/non-object — then a no-op). Node
+/// semantics: `env` *replaces* the child's environment wholesale, so when an
+/// `env` object is provided we `env_clear()` first and skip keys whose value is
+/// `undefined`. #1780.
+fn cp_apply_options(command: &mut Command, opts_val: f64) {
+    if cp_object_ptr(opts_val).is_none() {
+        return;
+    }
+
+    if let Some(dir) = cp_value_to_string(cp_get_field(opts_val, b"cwd")) {
+        if !dir.is_empty() {
+            command.current_dir(dir);
+        }
+    }
+
+    let env_val = cp_get_field(opts_val, b"env");
+    if let Some(env_obj) = cp_object_ptr(env_val) {
+        command.env_clear();
+        let keys = crate::object::js_object_keys(env_obj);
+        if !keys.is_null() {
+            let n = crate::array::js_array_length(keys);
+            for i in 0..n {
+                let key = match cp_value_to_string(crate::array::js_array_get_f64(keys, i)) {
+                    Some(k) => k,
+                    None => continue,
+                };
+                let v = cp_get_field(env_val, key.as_bytes());
+                if JSValue::from_bits(v.to_bits()).is_undefined() {
+                    continue; // Node omits keys whose value is `undefined`.
+                }
+                command.env(&key, cp_coerce_string(v));
+            }
+        }
+    }
+}
+
+/// Default shell for `{ shell: true }` (`shell: "<path>"` overrides it).
+fn cp_default_shell() -> String {
+    #[cfg(windows)]
+    {
+        std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        "/bin/sh".to_string()
+    }
+}
+
+/// Build a `Command` for `spawn(cmd, args, opts)`, honoring the `shell` option
+/// (Node joins `cmd` + `args` into a single line passed to `<shell> -c`) and
+/// then applying `cwd`/`env`. With no `shell` the file is run directly. #1780.
+fn cp_build_command(cmd: &str, args: &[String], opts_val: f64) -> Command {
+    let shell = if cp_object_ptr(opts_val).is_some() {
+        cp_get_field(opts_val, b"shell")
+    } else {
+        cp_undefined()
+    };
+
+    let mut command = if crate::value::js_is_truthy(shell) != 0 {
+        // `shell: "<path>"` picks the binary; `shell: true` uses the default.
+        let shell_bin = match cp_value_to_string(shell) {
+            Some(s) if !s.is_empty() => s,
+            _ => cp_default_shell(),
+        };
+        let mut line = String::from(cmd);
+        for a in args {
+            line.push(' ');
+            line.push_str(a);
+        }
+        let mut c = Command::new(shell_bin);
+        #[cfg(windows)]
+        c.arg("/d").arg("/s").arg("/c").arg(line);
+        #[cfg(not(windows))]
+        c.arg("-c").arg(line);
+        c
+    } else {
+        let mut c = Command::new(cmd);
+        c.args(args);
+        c
+    };
+
+    cp_apply_options(&mut command, opts_val);
+    command
+}
+
 /// `child_process.execFile(file[, args][, options][, callback])` — like `exec`
 /// but runs `file` directly (no shell). The callback fires with
 /// `(err, stdout, stderr)`; with no callback the stdout string is returned.
@@ -1145,11 +1341,15 @@ pub extern "C" fn js_child_process_exec_file(
     let file_str = unsafe { cp_read_string_header(file_ptr) };
     let arg_strs = cp_args_from_value(args_val);
 
-    let (stdout_bytes, stderr_bytes, success) =
-        match Command::new(&file_str).args(&arg_strs).output() {
-            Ok(o) => (o.stdout, o.stderr, o.status.success()),
-            Err(e) => (Vec::new(), e.to_string().into_bytes(), false),
-        };
+    // `cwd`/`env` come from the options slot; when `opts_val` is the callback
+    // (`execFile(file, args, cb)`) it's a closure, so the helper no-ops.
+    let mut command = Command::new(&file_str);
+    command.args(&arg_strs);
+    cp_apply_options(&mut command, opts_val);
+    let (stdout_bytes, stderr_bytes, success) = match command.output() {
+        Ok(o) => (o.stdout, o.stderr, o.status.success()),
+        Err(e) => (Vec::new(), e.to_string().into_bytes(), false),
+    };
 
     let stdout_box = box_string(&stdout_bytes);
     if cb.is_null() {
@@ -1174,14 +1374,17 @@ pub extern "C" fn js_child_process_exec_file(
 pub extern "C" fn js_child_process_exec_file_sync(
     file_ptr: i64,
     args_val: f64,
-    _opts_val: f64,
+    opts_val: f64,
 ) -> *mut StringHeader {
     let file_str = unsafe { cp_read_string_header(file_ptr) };
     if file_str.is_empty() {
         return js_string_from_bytes(b"".as_ptr(), 0);
     }
     let arg_strs = cp_args_from_value(args_val);
-    match Command::new(&file_str).args(&arg_strs).output() {
+    let mut command = Command::new(&file_str);
+    command.args(&arg_strs);
+    cp_apply_options(&mut command, opts_val);
+    match command.output() {
         Ok(o) => js_string_from_bytes(o.stdout.as_ptr(), o.stdout.len() as u32),
         Err(_) => js_string_from_bytes(b"".as_ptr(), 0),
     }
@@ -1234,13 +1437,22 @@ fn cp_exec_result_promise(output: std::io::Result<std::process::Output>) -> f64 
     }
 }
 
-extern "C" fn cp_promisified_exec(_closure: *const ClosureHeader, cmd_val: f64, _opts: f64) -> f64 {
+extern "C" fn cp_promisified_exec(_closure: *const ClosureHeader, cmd_val: f64, opts: f64) -> f64 {
     let cmd = cp_value_to_string(cmd_val).unwrap_or_default();
     #[cfg(unix)]
-    let output = Command::new("sh").arg("-c").arg(&cmd).output();
+    let mut command = {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(&cmd);
+        c
+    };
     #[cfg(windows)]
-    let output = Command::new("cmd").arg("/C").arg(&cmd).output();
-    cp_exec_result_promise(output)
+    let mut command = {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg(&cmd);
+        c
+    };
+    cp_apply_options(&mut command, opts);
+    cp_exec_result_promise(command.output())
 }
 
 extern "C" fn cp_promisified_exec_file(
