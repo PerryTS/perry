@@ -620,12 +620,6 @@
     "category": "bug-open",
     "reason": "node:stream: setEncoding(hex) + data delivery doesn't fire. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/read-empty-returns-null": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: read() on empty buffer should return null. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/write/after-end-emits-error": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -1826,12 +1820,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: second getWriter() on locked WritableStream does not throw TypeError. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/push-returns-true-initial": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: push() under HWM does not return true. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/writable/write-returns-false-at-hwm": {
     "issue": "1539",
     "added": "2026-05-24",
@@ -2839,12 +2827,6 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream/web: RS.from(bigint) — should throw TypeError. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/readable/push-empty-string-no-end": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: push('') — treats empty string as end signal. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/writable/write-encoded-buffer": {
     "issue": "1539",
