@@ -1244,9 +1244,28 @@ fn str_from_value(v: f64) -> *const crate::string::StringHeader {
 /// thread-local side-table so a downstream `Object.getPrototypeOf(obj)`
 /// + inherited property dispatch can consult it.
 #[no_mangle]
-pub extern "C" fn js_object_set_prototype_of(obj_value: f64, _proto: f64) -> f64 {
-    // Spec: `Object.setPrototypeOf(O, proto)` returns O. We deliberately
-    // do nothing else — see the function doc above for the trade-off.
+pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 {
+    // #36 / #321: when the target is a closure (a plain function value) and the
+    // proto is an object, record the (closure → proto) link in the closure
+    // static-prototype side-table. effect's `Context.Tag(id)` returns a
+    // function `TagClass` whose `_op`/`[TagTypeId]`/`[EffectTypeId]` live on a
+    // `TagProto` object wired in via `Object.setPrototypeOf(TagClass,
+    // TagProto)`. Recording the link lets later string/symbol property reads on
+    // the closure (and on a subclass that `extends TagClass`) walk to the
+    // proto's own properties, so the Tag is recognized as a valid Effect.
+    let obj_bits = obj_value.to_bits();
+    let proto_bits = proto.to_bits();
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    if (obj_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
+        && (proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
+    {
+        let obj_ptr = crate::value::js_nanbox_get_pointer(obj_value) as usize;
+        let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as usize;
+        if obj_ptr != 0 && proto_ptr != 0 && crate::closure::is_closure_ptr(obj_ptr) {
+            crate::closure::closure_set_static_prototype(obj_ptr, proto_bits);
+        }
+    }
+    // Spec: `Object.setPrototypeOf(O, proto)` returns O.
     obj_value
 }
 

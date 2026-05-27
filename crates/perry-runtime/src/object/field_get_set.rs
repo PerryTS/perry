@@ -934,6 +934,19 @@ pub extern "C" fn js_object_get_field_by_name(
                             return v;
                         }
                     }
+                    // #36 / #321: the subclass extends a FUNCTION value
+                    // (`class Svc extends Context.Tag(id)<...>() {}`). Read the
+                    // named static off the parent closure — its OWN props
+                    // (`Svc.key` → "Svc") plus, via the closure getter, its
+                    // static prototype (`Svc._op` → "Tag" on TagProto).
+                    if let Some(closure_ptr) = super::class_registry::class_parent_closure(class_id)
+                    {
+                        let v = crate::closure::closure_get_dynamic_prop(closure_ptr, name);
+                        let vb = JSValue::from_bits(v.to_bits());
+                        if !vb.is_undefined() && !vb.is_null() {
+                            return vb;
+                        }
+                    }
                 }
             }
             return JSValue::undefined();

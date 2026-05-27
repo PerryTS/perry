@@ -11,6 +11,41 @@ fn get_closure_props() -> &'static Mutex<HashMap<usize, HashMap<String, f64>>> {
     CLOSURE_PROPS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// #36 / #321: `Object.setPrototypeOf(closure, protoObj)` side-table.
+///
+/// Maps a closure pointer to the NaN-box bits of the object that was set as
+/// its static prototype. effect's `Context.Tag(id)` returns a plain function
+/// `TagClass` whose `_op: "Tag"`, `[TagTypeId]`, and `[EffectTypeId]` live on
+/// `TagProto` (a regular object), wired by `Object.setPrototypeOf(TagClass,
+/// TagProto)`. Perry bakes class IDs at allocation time so it can't mutate a
+/// real prototype chain, but recording the (closure → proto) link here lets
+/// string- and symbol-keyed property reads on the closure walk to the proto's
+/// own properties — so `TagClass._op === "Tag"` and `isTag(TagClass)` hold.
+static CLOSURE_STATIC_PROTOTYPES: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
+
+fn get_closure_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
+    CLOSURE_STATIC_PROTOTYPES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Record `Object.setPrototypeOf(closure_ptr, proto)`. `proto_bits` is the
+/// NaN-box bits of the prototype object (POINTER-tagged). Idempotent overwrite.
+pub fn closure_set_static_prototype(closure_ptr: usize, proto_bits: u64) {
+    if closure_ptr == 0 {
+        return;
+    }
+    if let Ok(mut map) = get_closure_prototypes().lock() {
+        map.insert(closure_ptr, proto_bits);
+    }
+}
+
+/// Look up the static prototype object bits recorded for a closure, if any.
+pub fn closure_static_prototype(closure_ptr: usize) -> Option<u64> {
+    get_closure_prototypes()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&closure_ptr).copied())
+}
+
 fn barrier_closure_dynamic_props(owner: usize, props: &mut HashMap<String, f64>) {
     for value in props.values_mut() {
         crate::gc::runtime_write_barrier_external_slot(
@@ -128,6 +163,46 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
                 return val;
             }
         }
+    }
+    // #36 / #321: own prop miss — walk the closure's static prototype chain
+    // (`Object.setPrototypeOf(closure, protoObj)`). Reads a string-keyed field
+    // off the proto object. Lets effect's `TagClass._op` resolve to "Tag" on
+    // the proto. Bounded depth guards against an accidental cycle.
+    let mut cur = ptr;
+    let mut depth = 0usize;
+    while depth < 8 {
+        let Some(proto_bits) = closure_static_prototype(cur) else {
+            break;
+        };
+        let proto_f64 = f64::from_bits(proto_bits);
+        let proto_ptr = crate::value::js_nanbox_get_pointer(proto_f64) as usize;
+        if proto_ptr == 0 || proto_ptr == cur {
+            break;
+        }
+        // The proto may itself be a closure (rare) or a regular object. For a
+        // regular object, read the named field via the field getter; for a
+        // closure, recurse via its own props. Distinguish by CLOSURE_MAGIC.
+        if is_closure_ptr(proto_ptr) {
+            if let Ok(props) = get_closure_props().lock() {
+                if let Some(p) = props.get(&proto_ptr).and_then(|m| m.get(prop)) {
+                    return *p;
+                }
+            }
+            cur = proto_ptr;
+            depth += 1;
+            continue;
+        }
+        unsafe {
+            let key_hdr = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+            let v = crate::object::js_object_get_field_by_name(
+                proto_ptr as *const crate::object::ObjectHeader,
+                key_hdr as *const crate::StringHeader,
+            );
+            if !v.is_undefined() && !v.is_null() {
+                return f64::from_bits(v.bits());
+            }
+        }
+        break;
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
