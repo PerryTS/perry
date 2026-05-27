@@ -488,12 +488,6 @@
     "category": "bug-open",
     "reason": "node:stream: class extends Readable with _read() doesn't deliver data via push. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/write/with-encoding": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: write(chunk, enc, cb) doesn't propagate encoding to _write. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/write/write-buffer": {
     "issue": "1532",
     "added": "2026-05-23",

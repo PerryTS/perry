@@ -319,6 +319,16 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64) {
     }
 }
 
+fn normalize_writable_string_chunk(chunk: f64, enc: f64) -> (f64, f64) {
+    if JSValue::from_bits(chunk.to_bits()).is_any_string() {
+        let encoding = crate::buffer::js_encoding_tag_from_value(enc);
+        let buffer = crate::buffer::js_buffer_from_value(chunk.to_bits() as i64, encoding);
+        (box_pointer(buffer as *const u8), string_value(b"buffer"))
+    } else {
+        (chunk, enc)
+    }
+}
+
 #[cold]
 fn throw_writable_null_chunk() -> ! {
     let msg = b"May not write null values to stream";
@@ -332,6 +342,7 @@ fn write_writable_chunk(stream: f64, chunk: f64, enc: f64) -> f64 {
     if JSValue::from_bits(chunk.to_bits()).is_null() {
         throw_writable_null_chunk();
     }
+    let (chunk, enc) = normalize_writable_string_chunk(chunk, enc);
     if writable_corked_count(stream) > 0.0 {
         buffer_writable_write(stream, chunk, enc);
         return f64::from_bits(TAG_TRUE);
