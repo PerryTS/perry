@@ -120,6 +120,11 @@ fn this_value(closure: *const ClosureHeader) -> f64 {
 extern "C" fn ns_chain0(closure: *const ClosureHeader) -> f64 {
     this_value(closure)
 }
+extern "C" fn ns_pause0(closure: *const ClosureHeader) -> f64 {
+    let stream = this_value(closure);
+    let _ = emit_stream_event(stream, string_value(b"pause"), &[]);
+    stream
+}
 extern "C" fn ns_chain1(closure: *const ClosureHeader, _a: f64) -> f64 {
     this_value(closure)
 }
@@ -535,6 +540,13 @@ pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
     mark_stream_ended(stream);
     refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
+    stream
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_pause(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    let _ = emit_stream_event(stream, string_value(b"pause"), &[]);
     stream
 }
 
@@ -1127,6 +1139,7 @@ fn register_stub_arities() {
         crate::closure::js_register_closure_arity(func, arity);
     };
     register(ns_chain0 as *const u8, 0);
+    register(ns_pause0 as *const u8, 0);
     register(ns_chain1 as *const u8, 1);
     register(ns_destroy_error_microtask as *const u8, 0);
     register(ns_stream_abort_listener as *const u8, 0);
@@ -1878,7 +1891,7 @@ fn readable_methods() -> [(&'static str, StubFn); 37] {
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_chain1)),
-        ("pause", cast0(ns_chain0)),
+        ("pause", cast0(ns_pause0)),
         ("resume", cast0(ns_resume0)),
         ("destroy", cast1(ns_destroy1)),
         ("setEncoding", cast1(ns_chain1)),
@@ -1956,7 +1969,7 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_chain1)),
-        ("pause", cast0(ns_chain0)),
+        ("pause", cast0(ns_pause0)),
         ("resume", cast0(ns_resume0)),
         ("setEncoding", cast1(ns_chain1)),
         ("isPaused", cast0(ns_undefined0)),

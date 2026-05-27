@@ -11,6 +11,7 @@ thread_local! {
     static READABLE_END_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static WRITABLE_FINISH_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static WRITABLE_CLOSE_COUNT: RefCell<usize> = const { RefCell::new(0) };
+    static PAUSE_EVENT_MATCHES: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
 }
 
 fn string_value(s: &str) -> f64 {
@@ -81,6 +82,17 @@ extern "C" fn capture_finish_listener(_closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn capture_close_listener(_closure: *const ClosureHeader) -> f64 {
     WRITABLE_CLOSE_COUNT.with(|count| *count.borrow_mut() += 1);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn capture_pause_listener(closure: *const ClosureHeader) -> f64 {
+    let expected = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let actual = crate::object::js_implicit_this_get();
+    PAUSE_EVENT_MATCHES.with(|matches| {
+        matches
+            .borrow_mut()
+            .push(actual.to_bits() == expected.to_bits())
+    });
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -210,6 +222,37 @@ fn stream_method_closure_capture_wins_over_stale_implicit_this() {
 
     assert!(js_node_stream_is_stub_ended_after_read(stream));
     assert!(!stream_hidden_ended(other));
+}
+
+#[test]
+fn pause_emits_event_and_returns_stream() {
+    PAUSE_EVENT_MATCHES.with(|matches| matches.borrow_mut().clear());
+
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let listener = js_closure_alloc(capture_pause_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_pause_listener as *const u8, 0);
+    crate::closure::js_closure_set_capture_f64(listener, 0, stream);
+    let _ = js_node_stream_method_on(
+        handle,
+        string_value("pause"),
+        box_pointer(listener as *const u8),
+    );
+
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let pause = js_object_get_field_by_name_f64(obj, hidden_key(b"pause"));
+    let dynamic_return =
+        unsafe { crate::closure::js_native_call_value(pause, std::ptr::null(), 0) };
+    assert_eq!(dynamic_return.to_bits(), stream.to_bits());
+
+    assert_eq!(
+        js_node_stream_method_pause(handle).to_bits(),
+        stream.to_bits()
+    );
+
+    PAUSE_EVENT_MATCHES.with(|matches| {
+        assert_eq!(matches.borrow().as_slice(), &[true, true]);
+    });
 }
 
 #[test]
