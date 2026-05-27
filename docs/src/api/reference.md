@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1280 entries across 81 modules.
+Total: 1282 entries across 81 modules.
 
 ## Modules
 
@@ -1093,6 +1093,7 @@ Total: 1280 entries across 81 modules.
 - `cpus` — module
 - `endianness` — module
 - `freemem` — module
+- `getPriority` — module
 - `homedir` — module
 - `hostname` — module
 - `loadavg` — module
@@ -1100,6 +1101,7 @@ Total: 1280 entries across 81 modules.
 - `networkInterfaces` — module
 - `platform` — module
 - `release` — module
+- `setPriority` — module
 - `tmpdir` — module
 - `totalmem` — module
 - `type` — module
