@@ -266,30 +266,6 @@
     "category": "bug-open",
     "reason": "node:stream EventEmitter wiring incomplete — re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS. Real Perry gap (not ci-env); rolled under the open stream-events tracker #1532."
   },
-  "node-suite/stream/classes/writable-constructor": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Writable instance lacks .writable flag + write/end methods. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/classes/duplex-constructor": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Duplex instance lacks .readable/.writable flags. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/classes/transform-constructor": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Transform instance lacks .readable/.writable flags. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/classes/passthrough-constructor": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: PassThrough instance lacks .readable/.writable flags. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/pipeline/basic": {
     "issue": "1532",
     "added": "2026-05-23",
