@@ -1753,3 +1753,34 @@ pub extern "C" fn perry_system_take_screenshot() -> i64 {
     }
     unsafe { js_string_from_bytes(std::ptr::null(), 0) }
 }
+
+/// Load an image asset for Canvas.drawImage. watchOS currently has no real
+/// Canvas backend, so expose a proper rejected Promise rather than a bare 0.
+#[no_mangle]
+pub extern "C" fn perry_ui_load_image(_url_ptr: i64) -> i64 {
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: u32) -> *mut std::ffi::c_void;
+        fn js_nanbox_string(ptr: i64) -> f64;
+        fn js_promise_rejected(reason: f64) -> *mut std::ffi::c_void;
+    }
+    let message = b"Canvas image loading is not available on watchOS";
+    unsafe {
+        let str_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        js_promise_rejected(js_nanbox_string(str_ptr as i64)) as i64
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_draw_image(
+    _h: i64,
+    _image: i64,
+    _sx: f64,
+    _sy: f64,
+    _sw: f64,
+    _sh: f64,
+    _dx: f64,
+    _dy: f64,
+    _dw: f64,
+    _dh: f64,
+) {
+}

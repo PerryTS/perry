@@ -332,6 +332,43 @@ pub fn lower_perry_ui_table_call(
             .chain(args.iter().cloned())
             .collect();
         &synthesised_args[..]
+    } else if sig.method == "drawImage" && sig.args.len() == 9 {
+        // Canvas.drawImage mirrors HTML Canvas' three overloads, but the
+        // native FFI surface uses one fixed ABI:
+        //   (image, sx, sy, sw, sh, dx, dy, dw, dh)
+        // A negative source/dest size is the runtime sentinel for intrinsic
+        // image dimensions.
+        synthesised_args = match args.len() {
+            3 => vec![
+                args[0].clone(),
+                Expr::Integer(0),
+                Expr::Integer(0),
+                Expr::Integer(-1),
+                Expr::Integer(-1),
+                args[1].clone(),
+                args[2].clone(),
+                Expr::Integer(-1),
+                Expr::Integer(-1),
+            ],
+            5 => vec![
+                args[0].clone(),
+                Expr::Integer(0),
+                Expr::Integer(0),
+                Expr::Integer(-1),
+                Expr::Integer(-1),
+                args[1].clone(),
+                args[2].clone(),
+                args[3].clone(),
+                args[4].clone(),
+            ],
+            9 => args.to_vec(),
+            _ => Vec::new(),
+        };
+        if synthesised_args.is_empty() {
+            args
+        } else {
+            &synthesised_args[..]
+        }
     } else {
         args
     };
@@ -408,7 +445,7 @@ pub fn lower_perry_ui_table_call(
     // libperry_ui_*.a symbol. Same pending_declares mechanism the
     // cross-module call site uses for `perry_fn_*`.
     let return_type = match sig.ret {
-        UiReturnKind::Widget | UiReturnKind::I64AsF64 => I64,
+        UiReturnKind::Widget | UiReturnKind::Promise | UiReturnKind::I64AsF64 => I64,
         UiReturnKind::F64 => DOUBLE,
         UiReturnKind::Void => crate::types::VOID,
         UiReturnKind::Str => I64,
@@ -421,7 +458,7 @@ pub fn lower_perry_ui_table_call(
     let arg_slices: Vec<(crate::types::LlvmType, &str)> =
         llvm_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
     match sig.ret {
-        UiReturnKind::Widget => {
+        UiReturnKind::Widget | UiReturnKind::Promise => {
             // Scope `blk` so the mutable borrow on `ctx` is released
             // before the optional `apply_inline_style` call re-borrows.
             let handle = {
@@ -429,9 +466,12 @@ pub fn lower_perry_ui_table_call(
                 blk.call(I64, sig.runtime, &arg_slices)
             };
             // Issue #185 Phase C step 4: apply inline style if a
-            // trailing object literal was passed.
-            if let Some(style_arg) = inline_style_arg {
-                apply_inline_style(ctx, &handle, style_arg)?;
+            // trailing object literal was passed. Promise-returning helpers
+            // are not widgets and must not receive styles.
+            if sig.ret == UiReturnKind::Widget {
+                if let Some(style_arg) = inline_style_arg {
+                    apply_inline_style(ctx, &handle, style_arg)?;
+                }
             }
             let blk = ctx.block();
             Ok(nanbox_pointer_inline(blk, &handle))

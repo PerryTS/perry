@@ -8,6 +8,8 @@ use gtk4::DrawingArea;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::register_widget;
 
@@ -35,6 +37,17 @@ enum DrawCommand {
         a2: f64,
         direction: f64,
     },
+    DrawImage {
+        image: i64,
+        sx: f64,
+        sy: f64,
+        sw: f64,
+        sh: f64,
+        dx: f64,
+        dy: f64,
+        dw: f64,
+        dh: f64,
+    },
 }
 
 thread_local! {
@@ -42,6 +55,69 @@ thread_local! {
     static CANVAS_COMMANDS: RefCell<HashMap<i64, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Canvas sizes (width, height), keyed by widget handle
     static CANVAS_SIZES: RefCell<HashMap<i64, (f64, f64)>> = RefCell::new(HashMap::new());
+    static CANVAS_IMAGES: RefCell<HashMap<i64, gtk4::gdk_pixbuf::Pixbuf>> = RefCell::new(HashMap::new());
+    static IMAGE_CACHE: RefCell<HashMap<String, i64>> = RefCell::new(HashMap::new());
+}
+
+static NEXT_IMAGE_HANDLE: AtomicI64 = AtomicI64::new(1);
+
+const JS_TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+
+extern "C" {
+    fn js_object_alloc(class_id: u32, field_count: u32) -> *mut c_void;
+    fn js_object_set_field_by_name(obj: *mut c_void, key: *const c_void, value: f64);
+    fn js_object_get_field_by_name_f64(obj: *mut c_void, key: *const c_void) -> f64;
+    fn js_string_from_bytes(data: *const u8, len: u32) -> *mut c_void;
+    fn js_nanbox_pointer(ptr: i64) -> f64;
+    fn js_nanbox_string(ptr: i64) -> f64;
+    fn js_promise_resolved(value: f64) -> *mut c_void;
+    fn js_promise_rejected(reason: f64) -> *mut c_void;
+}
+
+fn js_key(name: &[u8]) -> *mut c_void {
+    unsafe { js_string_from_bytes(name.as_ptr(), name.len() as u32) }
+}
+
+fn set_image_field(obj: *mut c_void, name: &[u8], value: f64) {
+    unsafe { js_object_set_field_by_name(obj, js_key(name), value) }
+}
+
+fn resolved_image_promise(handle: i64, width: f64, height: f64) -> i64 {
+    unsafe {
+        let obj = js_object_alloc(0, 4);
+        if obj.is_null() {
+            let msg = b"Failed to allocate Canvas image object";
+            let reason =
+                js_nanbox_string(js_string_from_bytes(msg.as_ptr(), msg.len() as u32) as i64);
+            return js_promise_rejected(reason) as i64;
+        }
+        set_image_field(obj, b"__perryImageHandle", handle as f64);
+        set_image_field(obj, b"width", width);
+        set_image_field(obj, b"height", height);
+        set_image_field(obj, b"ready", f64::from_bits(JS_TAG_TRUE));
+        js_promise_resolved(js_nanbox_pointer(obj as i64)) as i64
+    }
+}
+
+fn rejected_image_promise(message: &str) -> i64 {
+    unsafe {
+        let reason =
+            js_nanbox_string(js_string_from_bytes(message.as_ptr(), message.len() as u32) as i64);
+        js_promise_rejected(reason) as i64
+    }
+}
+
+fn image_handle_from_arg(image: i64) -> i64 {
+    if image <= 0 {
+        return image;
+    }
+    let key = js_key(b"__perryImageHandle");
+    let value = unsafe { js_object_get_field_by_name_f64(image as *mut c_void, key) };
+    if value.is_finite() && value > 0.0 {
+        value as i64
+    } else {
+        image
+    }
 }
 
 /// Create a Canvas widget with given dimensions.
@@ -151,6 +227,55 @@ pub fn create(width: f64, height: f64) -> i64 {
                                 cr.restore().ok();
                             }
                         }
+                        DrawCommand::DrawImage {
+                            image,
+                            sx,
+                            sy,
+                            sw,
+                            sh,
+                            dx,
+                            dy,
+                            dw,
+                            dh,
+                        } => {
+                            CANVAS_IMAGES.with(|images| {
+                                if let Some(pixbuf) = images.borrow().get(image) {
+                                    let src_w = if *sw > 0.0 {
+                                        *sw
+                                    } else {
+                                        pixbuf.width() as f64
+                                    };
+                                    let src_h = if *sh > 0.0 {
+                                        *sh
+                                    } else {
+                                        pixbuf.height() as f64
+                                    };
+                                    let dst_w = if *dw > 0.0 { *dw } else { src_w };
+                                    let dst_h = if *dh > 0.0 { *dh } else { src_h };
+                                    if src_w <= 0.0 || src_h <= 0.0 || dst_w <= 0.0 || dst_h <= 0.0
+                                    {
+                                        return;
+                                    }
+                                    let src = pixbuf.new_subpixbuf(
+                                        (*sx).max(0.0) as i32,
+                                        (*sy).max(0.0) as i32,
+                                        src_w as i32,
+                                        src_h as i32,
+                                    );
+                                    let scaled = src
+                                        .scale_simple(
+                                            dst_w as i32,
+                                            dst_h as i32,
+                                            gtk4::gdk_pixbuf::InterpType::Bilinear,
+                                        )
+                                        .unwrap_or(src);
+                                    cr.save().ok();
+                                    gtk4::gdk::cairo::set_source_pixbuf(cr, &scaled, *dx, *dy);
+                                    cr.paint().ok();
+                                    cr.restore().ok();
+                                }
+                            });
+                        }
                     }
                 }
             }
@@ -252,6 +377,69 @@ pub fn fill_gradient(
         }
     });
     // Trigger redraw
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(area) = widget.downcast_ref::<DrawingArea>() {
+            area.queue_draw();
+        }
+    }
+}
+
+pub fn load_image(path_ptr: *const u8) -> i64 {
+    crate::app::ensure_gtk_init();
+    let raw = crate::widgets::image::str_from_header(path_ptr);
+    let path = raw.split('\0').next().unwrap_or(raw);
+    let resolved = crate::ffi::layout::resolve_asset_path(path);
+    let key = resolved.to_string_lossy().to_string();
+    if let Some(handle) = IMAGE_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        if let Some((width, height)) = CANVAS_IMAGES.with(|images| {
+            images
+                .borrow()
+                .get(&handle)
+                .map(|pixbuf| (pixbuf.width() as f64, pixbuf.height() as f64))
+        }) {
+            return resolved_image_promise(handle, width, height);
+        }
+        return rejected_image_promise("Cached Canvas image handle was missing");
+    }
+    let pixbuf = match gtk4::gdk_pixbuf::Pixbuf::from_file(&resolved) {
+        Ok(p) => p,
+        Err(_) => return rejected_image_promise(&format!("Failed to load image: {}", key)),
+    };
+    let width = pixbuf.width() as f64;
+    let height = pixbuf.height() as f64;
+    let handle = NEXT_IMAGE_HANDLE.fetch_add(1, Ordering::Relaxed);
+    CANVAS_IMAGES.with(|images| images.borrow_mut().insert(handle, pixbuf));
+    IMAGE_CACHE.with(|cache| cache.borrow_mut().insert(key, handle));
+    resolved_image_promise(handle, width, height)
+}
+
+pub fn draw_image(
+    handle: i64,
+    image: i64,
+    sx: f64,
+    sy: f64,
+    sw: f64,
+    sh: f64,
+    dx: f64,
+    dy: f64,
+    dw: f64,
+    dh: f64,
+) {
+    CANVAS_COMMANDS.with(|cmds| {
+        if let Some(commands) = cmds.borrow_mut().get_mut(&handle) {
+            commands.push(DrawCommand::DrawImage {
+                image,
+                sx,
+                sy,
+                sw,
+                sh,
+                dx,
+                dy,
+                dw,
+                dh,
+            });
+        }
+    });
     if let Some(widget) = super::get_widget(handle) {
         if let Some(area) = widget.downcast_ref::<DrawingArea>() {
             area.queue_draw();

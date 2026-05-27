@@ -581,3 +581,25 @@ pub extern "C" fn perry_ui_widget_animate_position(
 pub extern "C" fn perry_ui_state_on_change(state_handle: i64, callback: f64) {
     state::state_on_change(state_handle, callback);
 }
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_draw_image(
+    h: i64,
+    image: i64,
+    sx: f64,
+    sy: f64,
+    sw: f64,
+    sh: f64,
+    dx: f64,
+    dy: f64,
+    dw: f64,
+    dh: f64,
+) {
+    widgets::canvas::draw_image(h, image, sx, sy, sw, sh, dx, dy, dw, dh);
+}
+
+/// Load an image asset for Canvas.drawImage. Native backends expose the FFI
+/// symbol now; platform decoding/drawing support can fill this handle in.
+#[no_mangle]
+pub extern "C" fn perry_ui_load_image(url_ptr: i64) -> i64 {
+    widgets::canvas::load_image(url_ptr as *const u8)
+}

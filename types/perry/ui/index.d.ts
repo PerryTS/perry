@@ -3,6 +3,7 @@
 // and tsc can resolve `import { ... } from "perry/ui"`.
 
 declare const __widget: unique symbol;
+declare const __canvasImage: unique symbol;
 
 /**
  * Instance methods available on every Widget handle. The handle itself is
@@ -50,10 +51,38 @@ export interface CanvasMethods {
     stroke(): void;
     fillText(text: string, x: number, y: number): void;
     setFont(spec: string): void;
+    drawImage(image: Image, dx: number, dy: number): void;
+    drawImage(image: Image, dx: number, dy: number, dWidth: number, dHeight: number): void;
+    drawImage(
+        image: Image,
+        sx: number,
+        sy: number,
+        sWidth: number,
+        sHeight: number,
+        dx: number,
+        dy: number,
+        dWidth: number,
+        dHeight: number,
+    ): void;
 }
 
 /** Opaque handle to a Canvas widget. Extends Widget with 2D drawing methods. */
 export type Canvas = Widget & CanvasMethods;
+
+/** Decoded raster image asset returned by `loadImage` for Canvas blits. */
+export interface Image {
+    readonly [__canvasImage]: void;
+    readonly width: number;
+    readonly height: number;
+    readonly ready: boolean;
+}
+
+/**
+ * Load and decode an image asset for Canvas.drawImage. Repeated calls with the
+ * same URL share the same decoded handle. Relative paths are document-relative
+ * on web and bundle-relative on native.
+ */
+export function loadImage(url: string): Promise<Image>;
 
 /** Reactive state container. Generic over the value type it holds. */
 export interface State<T = number> {

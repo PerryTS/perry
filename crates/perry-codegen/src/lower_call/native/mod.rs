@@ -1698,7 +1698,7 @@ pub(crate) fn lower_native_method_call(
                 }
             }
             let return_type = match sig.ret {
-                UiReturnKind::Widget | UiReturnKind::I64AsF64 => I64,
+                UiReturnKind::Widget | UiReturnKind::Promise | UiReturnKind::I64AsF64 => I64,
                 UiReturnKind::F64 => DOUBLE,
                 UiReturnKind::Void => crate::types::VOID,
                 UiReturnKind::Str => I64,
@@ -1713,7 +1713,7 @@ pub(crate) fn lower_native_method_call(
                     blk.call_void(sig.runtime, &ref_args);
                     Ok(double_literal(0.0))
                 }
-                UiReturnKind::Widget => {
+                UiReturnKind::Widget | UiReturnKind::Promise => {
                     let raw = blk.call(I64, sig.runtime, &ref_args);
                     Ok(crate::expr::nanbox_pointer_inline(blk, &raw))
                 }
@@ -1787,7 +1787,10 @@ pub(crate) fn lower_native_method_call(
                 }
             }
             let return_type = match sig.ret {
-                UiReturnKind::Widget | UiReturnKind::I64AsF64 | UiReturnKind::Str => I64,
+                UiReturnKind::Widget
+                | UiReturnKind::Promise
+                | UiReturnKind::I64AsF64
+                | UiReturnKind::Str => I64,
                 UiReturnKind::F64 => DOUBLE,
                 UiReturnKind::Void => crate::types::VOID,
             };
@@ -1801,7 +1804,7 @@ pub(crate) fn lower_native_method_call(
                     blk.call_void(sig.runtime, &ref_args);
                     Ok(double_literal(0.0))
                 }
-                UiReturnKind::Widget => {
+                UiReturnKind::Widget | UiReturnKind::Promise => {
                     let raw = blk.call(I64, sig.runtime, &ref_args);
                     Ok(crate::expr::nanbox_pointer_inline(blk, &raw))
                 }

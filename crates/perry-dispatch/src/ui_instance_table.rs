@@ -153,4 +153,24 @@ pub const PERRY_UI_INSTANCE_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Str],
         ret: ReturnKind::Void,
     },
+    // drawImage(image, dx, dy) / drawImage(image, dx, dy, dw, dh) /
+    // drawImage(image, sx, sy, sw, sh, dx, dy, dw, dh) are normalized by
+    // native lowering into this 9-argument runtime shape. Negative widths
+    // ask the runtime to use the image's intrinsic dimensions.
+    MethodRow {
+        method: "drawImage",
+        runtime: "perry_ui_canvas_draw_image",
+        args: &[
+            ArgKind::Widget,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+        ],
+        ret: ReturnKind::Void,
+    },
 ];

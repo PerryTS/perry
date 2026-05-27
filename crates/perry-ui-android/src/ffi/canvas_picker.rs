@@ -305,3 +305,18 @@ pub extern "C" fn perry_ui_picker_set_selected(handle: i64, index: i64) {
 pub extern "C" fn perry_ui_picker_get_selected(handle: i64) -> i64 {
     widgets::picker::get_selected(handle)
 }
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_draw_image(
+    h: i64,
+    image: i64,
+    sx: f64,
+    sy: f64,
+    sw: f64,
+    sh: f64,
+    dx: f64,
+    dy: f64,
+    dw: f64,
+    dh: f64,
+) {
+    widgets::canvas::draw_image(h, image, sx, sy, sw, sh, dx, dy, dw, dh);
+}

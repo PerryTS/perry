@@ -26,7 +26,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::{alloc_control_id, register_widget, WidgetKind};
 
-fn str_from_header(ptr: *const u8) -> &'static str {
+pub(crate) fn str_from_header(ptr: *const u8) -> &'static str {
     if ptr.is_null() {
         return "";
     }

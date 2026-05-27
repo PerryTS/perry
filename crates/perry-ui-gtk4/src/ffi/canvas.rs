@@ -86,3 +86,18 @@ pub extern "C" fn perry_ui_canvas_stroke_path(_h: i64) {}
 pub extern "C" fn perry_ui_canvas_fill_text(_h: i64, _ptr: i64, _x: f64, _y: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_draw_image(
+    h: i64,
+    image: i64,
+    sx: f64,
+    sy: f64,
+    sw: f64,
+    sh: f64,
+    dx: f64,
+    dy: f64,
+    dw: f64,
+    dh: f64,
+) {
+    widgets::canvas::draw_image(h, image, sx, sy, sw, sh, dx, dy, dw, dh);
+}

@@ -408,6 +408,17 @@ pub(crate) const ROWS: &[Feature] = &[
         web_name: None,
     },
     Feature {
+        name: "perry_ui_load_image",
+        category: Image,
+        macos: S,
+        ios: S,
+        android: S,
+        gtk4: S,
+        windows: S,
+        web: S,
+        web_name: None,
+    },
+    Feature {
         name: "perry_ui_image_set_size",
         category: Image,
         macos: S,

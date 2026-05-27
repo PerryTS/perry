@@ -425,6 +425,17 @@ pub(crate) const ROWS: &[Feature] = &[
         web_name: None,
     },
     Feature {
+        name: "perry_ui_canvas_draw_image",
+        category: Canvas,
+        macos: S,
+        ios: S,
+        android: S,
+        gtk4: S,
+        windows: S,
+        web: S,
+        web_name: None,
+    },
+    Feature {
         name: "perry_ui_canvas_set_fill_color",
         category: Canvas,
         macos: U,

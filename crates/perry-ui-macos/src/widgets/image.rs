@@ -5,7 +5,7 @@ use objc2_app_kit::{NSImage, NSImageView, NSView};
 use objc2_foundation::{MainThreadMarker, NSString};
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
+pub(crate) fn str_from_header(ptr: *const u8) -> &'static str {
     if ptr.is_null() {
         return "";
     }

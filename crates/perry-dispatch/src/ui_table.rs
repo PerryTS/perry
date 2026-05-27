@@ -559,6 +559,13 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Str],
         ret: ReturnKind::Widget,
     },
+    // ---- Canvas image assets (issue #2022) ----
+    MethodRow {
+        method: "loadImage",
+        runtime: "perry_ui_load_image",
+        args: &[ArgKind::Str],
+        ret: ReturnKind::Promise,
+    },
     // ---- Issue #635: single-Image-by-URL ----
     // The TS surface accepts both `Image(url, alt?)` (positional, picked
     // up by this row) and `Image({ url, alt })` (object-literal, handled

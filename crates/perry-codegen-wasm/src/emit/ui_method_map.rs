@@ -173,6 +173,7 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "setLineWidth" | "canvas_set_line_width" => "perry_ui_canvas_set_line_width",
         "fillText" | "canvas_fill_text" => "perry_ui_canvas_fill_text",
         "setFont" | "canvas_set_font" => "perry_ui_canvas_set_font",
+        "drawImage" | "canvas_draw_image" => "perry_ui_canvas_draw_image",
         // Navigation
         "navstackPush" => "perry_ui_navstack_push",
         "navstackPop" => "perry_ui_navstack_pop",

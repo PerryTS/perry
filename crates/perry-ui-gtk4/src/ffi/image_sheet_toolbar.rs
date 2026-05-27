@@ -90,3 +90,10 @@ pub extern "C" fn perry_ui_toolbar_add_item(
 pub extern "C" fn perry_ui_toolbar_attach(toolbar_handle: i64) {
     toolbar::attach(toolbar_handle);
 }
+
+/// Load an image asset for Canvas.drawImage. Native backends expose the FFI
+/// symbol now; platform decoding/drawing support can fill this handle in.
+#[no_mangle]
+pub extern "C" fn perry_ui_load_image(url_ptr: i64) -> i64 {
+    widgets::canvas::load_image(url_ptr as *const u8)
+}

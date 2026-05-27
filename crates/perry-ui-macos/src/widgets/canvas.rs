@@ -13,6 +13,7 @@ use objc2_foundation::MainThreadMarker;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::register_widget;
 
@@ -20,6 +21,9 @@ use super::register_widget;
 type CGContextRef = *mut c_void;
 type CGColorSpaceRef = *mut c_void;
 type CGGradientRef = *mut c_void;
+type CFDataRef = *const c_void;
+type CGImageRef = *mut c_void;
+type CGImageSourceRef = *mut c_void;
 type CGFloat = f64;
 
 extern "C" {
@@ -39,6 +43,7 @@ extern "C" {
     fn CGContextFillPath(c: CGContextRef);
     fn CGContextFillRect(c: CGContextRef, rect: CGRect);
     fn CGContextStrokeRect(c: CGContextRef, rect: CGRect);
+    fn CGContextDrawImage(c: CGContextRef, rect: CGRect, image: CGImageRef);
     fn CGContextDrawLinearGradient(
         c: CGContextRef,
         gradient: CGGradientRef,
@@ -55,6 +60,17 @@ extern "C" {
         count: usize,
     ) -> CGGradientRef;
     fn CGGradientRelease(gradient: CGGradientRef);
+    fn CFDataCreate(allocator: *const c_void, bytes: *const u8, length: isize) -> CFDataRef;
+    fn CFRelease(obj: *const c_void);
+    fn CGImageSourceCreateWithData(data: CFDataRef, options: *const c_void) -> CGImageSourceRef;
+    fn CGImageSourceCreateImageAtIndex(
+        source: CGImageSourceRef,
+        index: usize,
+        options: *const c_void,
+    ) -> CGImageRef;
+    fn CGImageCreateWithImageInRect(image: CGImageRef, rect: CGRect) -> CGImageRef;
+    fn CGImageGetWidth(image: CGImageRef) -> usize;
+    fn CGImageGetHeight(image: CGImageRef) -> usize;
 }
 
 extern "C" {
@@ -113,6 +129,24 @@ enum DrawCommand {
         w: f64,
         h: f64,
     },
+    DrawImage {
+        image: i64,
+        sx: f64,
+        sy: f64,
+        sw: f64,
+        sh: f64,
+        dx: f64,
+        dy: f64,
+        dw: f64,
+        dh: f64,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct CanvasImage {
+    cg_image: CGImageRef,
+    width: f64,
+    height: f64,
 }
 
 thread_local! {
@@ -120,6 +154,69 @@ thread_local! {
     static CANVAS_COMMANDS: RefCell<HashMap<usize, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Canvas sizes (width, height), keyed by view address
     static CANVAS_SIZES: RefCell<HashMap<usize, (f64, f64)>> = RefCell::new(HashMap::new());
+    static CANVAS_IMAGES: RefCell<HashMap<i64, CanvasImage>> = RefCell::new(HashMap::new());
+    static IMAGE_CACHE: RefCell<HashMap<String, i64>> = RefCell::new(HashMap::new());
+}
+
+static NEXT_IMAGE_HANDLE: AtomicI64 = AtomicI64::new(1);
+
+const JS_TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+
+extern "C" {
+    fn js_object_alloc(class_id: u32, field_count: u32) -> *mut c_void;
+    fn js_object_set_field_by_name(obj: *mut c_void, key: *const c_void, value: f64);
+    fn js_object_get_field_by_name_f64(obj: *mut c_void, key: *const c_void) -> f64;
+    fn js_string_from_bytes(data: *const u8, len: u32) -> *mut c_void;
+    fn js_nanbox_pointer(ptr: i64) -> f64;
+    fn js_nanbox_string(ptr: i64) -> f64;
+    fn js_promise_resolved(value: f64) -> *mut c_void;
+    fn js_promise_rejected(reason: f64) -> *mut c_void;
+}
+
+fn js_key(name: &[u8]) -> *mut c_void {
+    unsafe { js_string_from_bytes(name.as_ptr(), name.len() as u32) }
+}
+
+fn set_image_field(obj: *mut c_void, name: &[u8], value: f64) {
+    unsafe { js_object_set_field_by_name(obj, js_key(name), value) }
+}
+
+fn resolved_image_promise(handle: i64, width: f64, height: f64) -> i64 {
+    unsafe {
+        let obj = js_object_alloc(0, 4);
+        if obj.is_null() {
+            let msg = b"Failed to allocate Canvas image object";
+            let reason =
+                js_nanbox_string(js_string_from_bytes(msg.as_ptr(), msg.len() as u32) as i64);
+            return js_promise_rejected(reason) as i64;
+        }
+        set_image_field(obj, b"__perryImageHandle", handle as f64);
+        set_image_field(obj, b"width", width);
+        set_image_field(obj, b"height", height);
+        set_image_field(obj, b"ready", f64::from_bits(JS_TAG_TRUE));
+        js_promise_resolved(js_nanbox_pointer(obj as i64)) as i64
+    }
+}
+
+fn rejected_image_promise(message: &str) -> i64 {
+    unsafe {
+        let reason =
+            js_nanbox_string(js_string_from_bytes(message.as_ptr(), message.len() as u32) as i64);
+        js_promise_rejected(reason) as i64
+    }
+}
+
+fn image_handle_from_arg(image: i64) -> i64 {
+    if image <= 0 {
+        return image;
+    }
+    let key = js_key(b"__perryImageHandle");
+    let value = unsafe { js_object_get_field_by_name_f64(image as *mut c_void, key) };
+    if value.is_finite() && value > 0.0 {
+        value as i64
+    } else {
+        image
+    }
 }
 
 // Custom NSView subclass for canvas drawing
@@ -317,6 +414,58 @@ define_class!(
                                     CGContextStrokeRect(ctx, CGRect::new(CGPoint::new(*x, flipped_y), CGSize::new(*w, *h)));
                                     CGContextRestoreGState(ctx);
                                 }
+                            }
+                            DrawCommand::DrawImage {
+                                image,
+                                sx,
+                                sy,
+                                sw,
+                                sh,
+                                dx,
+                                dy,
+                                dw,
+                                dh,
+                            } => {
+                                CANVAS_IMAGES.with(|images| {
+                                    if let Some(img) = images.borrow().get(image).copied() {
+                                        let src_w = if *sw > 0.0 { *sw } else { img.width };
+                                        let src_h = if *sh > 0.0 { *sh } else { img.height };
+                                        let dst_w = if *dw > 0.0 { *dw } else { src_w };
+                                        let dst_h = if *dh > 0.0 { *dh } else { src_h };
+                                        if dst_w <= 0.0 || dst_h <= 0.0 {
+                                            return;
+                                        }
+                                        let flipped_y = canvas_h - dy - dst_h;
+                                        unsafe {
+                                            CGContextSaveGState(ctx);
+                                            let draw_image = if *sw > 0.0 || *sh > 0.0 || *sx != 0.0 || *sy != 0.0 {
+                                                CGImageCreateWithImageInRect(
+                                                    img.cg_image,
+                                                    CGRect::new(
+                                                        CGPoint::new(*sx, *sy),
+                                                        CGSize::new(src_w, src_h),
+                                                    ),
+                                                )
+                                            } else {
+                                                img.cg_image
+                                            };
+                                            if !draw_image.is_null() {
+                                                CGContextDrawImage(
+                                                    ctx,
+                                                    CGRect::new(
+                                                        CGPoint::new(*dx, flipped_y),
+                                                        CGSize::new(dst_w, dst_h),
+                                                    ),
+                                                    draw_image,
+                                                );
+                                                if draw_image != img.cg_image {
+                                                    CFRelease(draw_image as *const c_void);
+                                                }
+                                            }
+                                            CGContextRestoreGState(ctx);
+                                        }
+                                    }
+                                });
                             }
                         }
                     }
@@ -552,5 +701,113 @@ pub fn fill_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
 
 pub fn stroke_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
     push_cmd(handle, DrawCommand::StrokeRect { x, y, w, h });
+    redraw(handle);
+}
+
+fn resolve_asset_path(path: &str) -> String {
+    if std::path::Path::new(path).is_absolute() {
+        return path.to_string();
+    }
+    if let Some(found) = (|| {
+        let bundle_class = objc2::runtime::AnyClass::get(c"NSBundle")?;
+        let bundle: *mut objc2::runtime::AnyObject = unsafe { msg_send![bundle_class, mainBundle] };
+        if bundle.is_null() {
+            return None;
+        }
+        let res_path: Option<Retained<objc2_foundation::NSString>> =
+            unsafe { msg_send![bundle, resourcePath] };
+        let rp = res_path?;
+        let candidate = std::path::PathBuf::from(rp.to_string()).join(path);
+        candidate
+            .exists()
+            .then(|| candidate.to_string_lossy().to_string())
+    })() {
+        return found;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let candidate = exe_dir.join(path);
+            if candidate.exists() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    path.to_string()
+}
+
+pub fn load_image(path: *const u8) -> i64 {
+    let raw = crate::widgets::image::str_from_header(path);
+    let resolved = resolve_asset_path(raw);
+    if let Some(handle) = IMAGE_CACHE.with(|c| c.borrow().get(&resolved).copied()) {
+        if let Some((width, height)) = CANVAS_IMAGES.with(|images| {
+            images
+                .borrow()
+                .get(&handle)
+                .map(|asset| (asset.width, asset.height))
+        }) {
+            return resolved_image_promise(handle, width, height);
+        }
+        return rejected_image_promise("Cached Canvas image handle was missing");
+    }
+    let bytes = match std::fs::read(&resolved) {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        _ => return rejected_image_promise(&format!("Failed to load image: {resolved}")),
+    };
+    unsafe {
+        let data = CFDataCreate(std::ptr::null(), bytes.as_ptr(), bytes.len() as isize);
+        if data.is_null() {
+            return rejected_image_promise(&format!("Failed to allocate image data: {resolved}"));
+        }
+        let source = CGImageSourceCreateWithData(data, std::ptr::null());
+        CFRelease(data);
+        if source.is_null() {
+            return rejected_image_promise(&format!("Failed to decode image: {resolved}"));
+        }
+        let image = CGImageSourceCreateImageAtIndex(source, 0, std::ptr::null());
+        CFRelease(source);
+        if image.is_null() {
+            return rejected_image_promise(&format!("Failed to decode image: {resolved}"));
+        }
+        let handle = NEXT_IMAGE_HANDLE.fetch_add(1, Ordering::Relaxed);
+        let asset = CanvasImage {
+            cg_image: image,
+            width: CGImageGetWidth(image) as f64,
+            height: CGImageGetHeight(image) as f64,
+        };
+        CANVAS_IMAGES.with(|images| images.borrow_mut().insert(handle, asset));
+        let width = asset.width;
+        let height = asset.height;
+        IMAGE_CACHE.with(|cache| cache.borrow_mut().insert(resolved, handle));
+        resolved_image_promise(handle, width, height)
+    }
+}
+
+pub fn draw_image(
+    handle: i64,
+    image: i64,
+    sx: f64,
+    sy: f64,
+    sw: f64,
+    sh: f64,
+    dx: f64,
+    dy: f64,
+    dw: f64,
+    dh: f64,
+) {
+    let image = image_handle_from_arg(image);
+    push_cmd(
+        handle,
+        DrawCommand::DrawImage {
+            image,
+            sx,
+            sy,
+            sw,
+            sh,
+            dx,
+            dy,
+            dw,
+            dh,
+        },
+    );
     redraw(handle);
 }

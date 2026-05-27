@@ -11,6 +11,7 @@
 const handles = new Map();   // handle int → DOM element
 const states = new Map();    // handle int → { _value, subscribers[] }
 let nextHandle = 1;
+const perryImageCache = new Map();
 
 function allocHandle(el) {
     const h = nextHandle++;
@@ -69,6 +70,7 @@ function wrapWidget(h) {
         setLineWidth(w) { perry_ui_canvas_set_line_width(h, w); },
         fillText(t, x, y) { perry_ui_canvas_fill_text(h, t, x, y); },
         setFont(f) { perry_ui_canvas_set_font(h, f); },
+        drawImage(image, ...args) { perry_ui_canvas_draw_image(h, image, ...args); },
     };
     return w;
 }
@@ -1345,6 +1347,58 @@ function perry_ui_widget_set_background_gradient(h, r1, g1, b1, a1, r2, g2, b2, 
     const c2 = `rgba(${Math.round(r2*255)},${Math.round(g2*255)},${Math.round(b2*255)},${a2})`;
     const dir = direction < 0.5 ? "to bottom" : "to right";
     el.style.background = `linear-gradient(${dir}, ${c1}, ${c2})`;
+}
+
+
+function perry_ui_load_image(url) {
+    const key = String(url || "");
+    if (perryImageCache.has(key)) return perryImageCache.get(key).promise;
+    const img = new Image();
+    const asset = { url: key, element: img, width: 0, height: 0, ready: false, error: null };
+    const promise = new Promise((resolve, reject) => {
+        img.onload = () => {
+            asset.width = img.naturalWidth || img.width || 0;
+            asset.height = img.naturalHeight || img.height || 0;
+            asset.ready = true;
+            resolve(asset);
+        };
+        img.onerror = () => {
+            asset.error = new Error(`Failed to load image: ${key}`);
+            reject(asset.error);
+        };
+        img.src = key;
+        if (img.decode) img.decode().then(() => {
+            if (!asset.ready) {
+                asset.width = img.naturalWidth || img.width || 0;
+                asset.height = img.naturalHeight || img.height || 0;
+                asset.ready = true;
+                resolve(asset);
+            }
+        }).catch(() => { /* onerror covers network/decode failures */ });
+    });
+    asset.promise = promise;
+    perryImageCache.set(key, asset);
+    return promise;
+}
+
+function perry_ui_canvas_draw_image(h, image, ...args) {
+    const el = (typeof getHandle === "function") ? getHandle(h) : uiGet(h);
+    const ctx = el && el._ctx;
+    const asset = image && image.element ? image : null;
+    if (!ctx || !asset || !asset.ready || !asset.element) return;
+    if (args.length === 2) {
+        ctx.drawImage(asset.element, args[0], args[1]);
+    } else if (args.length === 4) {
+        ctx.drawImage(asset.element, args[0], args[1], args[2], args[3]);
+    } else if (args.length >= 8) {
+        const [sx, sy, sw, sh, dx, dy, dw, dh] = args;
+        const srcW = sw > 0 ? sw : asset.width;
+        const srcH = sh > 0 ? sh : asset.height;
+        const dstW = dw > 0 ? dw : srcW;
+        const dstH = dh > 0 ? dh : srcH;
+        if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return;
+        ctx.drawImage(asset.element, sx, sy, srcW, srcH, dx, dy, dstW, dstH);
+    }
 }
 
 function perry_ui_canvas_fill_gradient(h, r1, g1, b1, a1, r2, g2, b2, a2, direction) {
@@ -3590,6 +3644,7 @@ window.__perry = {
     // Image
     perry_ui_image_create_symbol,
     perry_ui_image_create_url,
+    perry_ui_load_image,
     perry_ui_image_set_size,
     perry_ui_image_set_tint,
     // ProgressView
@@ -3642,6 +3697,7 @@ window.__perry = {
     perry_ui_canvas_set_line_width,
     perry_ui_canvas_fill_text,
     perry_ui_canvas_set_font,
+    perry_ui_canvas_draw_image,
     perry_ui_canvas_fill_gradient,
     // Menu
     perry_ui_menu_create,

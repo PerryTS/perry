@@ -335,3 +335,10 @@ pub extern "C" fn perry_ui_navstack_pop(handle: i64) {
 pub extern "C" fn perry_ui_zstack_create() -> i64 {
     widgets::zstack::create()
 }
+
+/// Load an image asset for Canvas.drawImage. Native backends expose the FFI
+/// symbol now; platform decoding/drawing support can fill this handle in.
+#[no_mangle]
+pub extern "C" fn perry_ui_load_image(url_ptr: i64) -> i64 {
+    crate::widgets::canvas::load_image(url_ptr as *const u8)
+}

@@ -268,6 +268,7 @@ impl JsEmitter {
             "setLineWidth" | "canvas_set_line_width" => "perry_ui_canvas_set_line_width",
             "fillText" | "canvas_fill_text" => "perry_ui_canvas_fill_text",
             "setFont" | "canvas_set_font" => "perry_ui_canvas_set_font",
+            "drawImage" | "canvas_draw_image" => "perry_ui_canvas_draw_image",
             // Hone IDE camelCase free-function imports.
             // #853: `"textSetColor"` previously had two arms — the first
             // mapped to `perry_ui_set_foreground` (which has never existed

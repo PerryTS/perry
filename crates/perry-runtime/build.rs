@@ -60,7 +60,9 @@ fn arg_kind_rust_type(k: ArgKind) -> &'static str {
 
 fn return_kind(k: ReturnKind) -> (Option<&'static str>, &'static str) {
     match k {
-        ReturnKind::Widget | ReturnKind::Str | ReturnKind::I64AsF64 => (Some("i64"), "0"),
+        ReturnKind::Widget | ReturnKind::Promise | ReturnKind::Str | ReturnKind::I64AsF64 => {
+            (Some("i64"), "0")
+        }
         ReturnKind::F64 => (Some("f64"), "0.0"),
         ReturnKind::Void => (None, ""),
     }

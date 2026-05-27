@@ -63,8 +63,10 @@ pub enum ArgKind {
 /// What the perry/ui FFI function returns and how to box it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ReturnKind {
-    /// Widget handle: NaN-box the i64 result with POINTER_TAG.
+    /// Widget/object handle: NaN-box the i64 result with POINTER_TAG.
     Widget,
+    /// Promise handle: NaN-box the i64 result with POINTER_TAG.
+    Promise,
     /// Raw f64: pass through unchanged.
     F64,
     /// Void return: emit `call void` and return the `0.0` sentinel.
