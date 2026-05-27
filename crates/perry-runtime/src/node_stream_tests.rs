@@ -9,6 +9,7 @@ thread_local! {
     static READABLE_DATA_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     static READABLE_THIS_MATCHES: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static READABLE_END_COUNT: RefCell<usize> = const { RefCell::new(0) };
+    static ERROR_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static WRITABLE_FINISH_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static WRITABLE_CLOSE_COUNT: RefCell<usize> = const { RefCell::new(0) };
 }
@@ -71,6 +72,11 @@ extern "C" fn capture_end_listener(closure: *const ClosureHeader) -> f64 {
             .push(actual.to_bits() == expected.to_bits())
     });
     READABLE_END_COUNT.with(|count| *count.borrow_mut() += 1);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn capture_error_listener(_closure: *const ClosureHeader, _err: f64) -> f64 {
+    ERROR_COUNT.with(|count| *count.borrow_mut() += 1);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -302,6 +308,39 @@ fn writable_cork_buffers_writes_until_uncorked() {
             &[b"a".to_vec(), b"b".to_vec()]
         );
     });
+}
+
+#[test]
+fn writable_write_after_end_emits_error_without_calling_write() {
+    WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    ERROR_COUNT.with(|count| *count.borrow_mut() = 0);
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    let write = js_closure_alloc(write_capture as *const u8, 0);
+    crate::closure::js_register_closure_arity(write_capture as *const u8, 3);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(write as *const u8).bits()),
+    );
+
+    let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let error = js_closure_alloc(capture_error_listener as *const u8, 0);
+    crate::closure::js_register_closure_arity(capture_error_listener as *const u8, 1);
+    let _ = js_node_stream_method_on(
+        handle,
+        string_value("error"),
+        f64::from_bits(JSValue::pointer(error as *const u8).bits()),
+    );
+
+    let _ = js_node_stream_method_end(handle, string_value("a"));
+    let result =
+        js_node_stream_method_write(handle, string_value("b"), f64::from_bits(TAG_UNDEFINED));
+
+    assert_eq!(result.to_bits(), TAG_FALSE);
+    ERROR_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    WRITE_CAPTURED.with(|captured| assert_eq!(captured.borrow().as_slice(), &[b"a".to_vec()]));
 }
 
 #[test]

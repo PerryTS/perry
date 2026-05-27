@@ -548,12 +548,6 @@
     "category": "bug-open",
     "reason": "node:stream: setEncoding(hex) + data delivery doesn't fire. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/write/after-end-emits-error": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: write() after end() should emit ERR_STREAM_WRITE_AFTER_END. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/async-iter/break-cleanup": {
     "issue": "1532",
     "added": "2026-05-23",

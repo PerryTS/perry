@@ -319,7 +319,20 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64) {
     }
 }
 
+fn writable_write_after_end_error() -> f64 {
+    let msg = b"write after end";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(s, "ERR_STREAM_WRITE_AFTER_END");
+    let err = crate::error::js_error_new_with_message(s);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
 fn write_writable_chunk(stream: f64, chunk: f64, enc: f64) -> f64 {
+    if stream_hidden_ended(stream) {
+        let err = writable_write_after_end_error();
+        let _ = emit_stream_event(stream, string_value(b"error"), &[err]);
+        return f64::from_bits(TAG_FALSE);
+    }
     if writable_corked_count(stream) > 0.0 {
         buffer_writable_write(stream, chunk, enc);
         return f64::from_bits(TAG_TRUE);
