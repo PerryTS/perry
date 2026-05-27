@@ -128,6 +128,19 @@ pub(super) fn gc_collection_count() -> u64 {
     GC_STATS.with(|s| s.borrow().collection_count)
 }
 
+pub(super) fn complete_budgeted_gc_cycle() -> JsGcStepResult {
+    let mut result = JsGcStepResult::default();
+    for _ in 0..500_000 {
+        js_gc_step_work_units(1, &mut result);
+        match result.status {
+            JS_GC_STEP_STATUS_ACTIVE => continue,
+            JS_GC_STEP_STATUS_COMPLETED => return result,
+            other => panic!("budgeted GC cycle stopped before completion: status {other}"),
+        }
+    }
+    panic!("budgeted GC cycle did not complete within step limit");
+}
+
 /// Helper for write-barrier tests: clear the remembered set
 /// to a known-empty state.
 pub(super) fn reset_remembered_set() {

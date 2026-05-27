@@ -4,6 +4,7 @@ mod budgeted_step_api;
 mod contract;
 mod copying;
 mod cycle_state;
+mod debt_pacer;
 mod evacuation;
 mod helper_stores;
 mod layout_trace;

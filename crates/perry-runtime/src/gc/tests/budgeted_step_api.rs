@@ -7,19 +7,6 @@ fn reset_old_reclaim_pressure() {
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
 }
 
-fn complete_budgeted_cycle() -> JsGcStepResult {
-    let mut result = JsGcStepResult::default();
-    for _ in 0..500_000 {
-        js_gc_step_work_units(1, &mut result);
-        match result.status {
-            JS_GC_STEP_STATUS_ACTIVE => continue,
-            JS_GC_STEP_STATUS_COMPLETED => return result,
-            other => panic!("budgeted GC cycle stopped before completion: status {other}"),
-        }
-    }
-    panic!("budgeted GC cycle did not complete within step limit");
-}
-
 #[test]
 fn no_pressure_budgeted_step_reports_idle_without_starting_cycle() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -71,7 +58,7 @@ fn arena_pressure_budgeted_step_starts_bounded_minor_cycle() {
     assert_eq!(js_gc_step_status(&mut result), JS_GC_STEP_STATUS_ACTIVE);
     assert_eq!(result.active, 1);
 
-    let completed = complete_budgeted_cycle();
+    let completed = complete_budgeted_gc_cycle();
     assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
     assert_eq!(completed.active, 0);
     assert_eq!(completed.completed, 1);
@@ -111,7 +98,7 @@ fn repeated_budgeted_steps_complete_full_cycle_and_reclaim_unreachable_objects()
     assert_eq!(result.collection_kind, GcCollectionKind::Full.ffi_code());
     assert_eq!(result.trigger_kind, GcTriggerKind::OldGenBytes.ffi_code());
 
-    let completed = complete_budgeted_cycle();
+    let completed = complete_budgeted_gc_cycle();
     assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
     assert_eq!(
         completed.phase,
@@ -157,7 +144,7 @@ fn microsecond_budget_step_remains_bounded_on_multi_slice_heap() {
     assert_eq!(result.completed, 0);
     assert_eq!(gc_collection_count(), before);
 
-    let completed = complete_budgeted_cycle();
+    let completed = complete_budgeted_gc_cycle();
     assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
     assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
 }

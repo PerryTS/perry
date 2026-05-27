@@ -542,6 +542,17 @@ pub(super) fn sweep_malloc_objects() -> u64 {
     freed_bytes
 }
 
+pub(super) fn clear_malloc_mark_bits() {
+    MALLOC_STATE.with(|s| {
+        let s = s.borrow();
+        for &header in s.objects.iter() {
+            unsafe {
+                (*header).gc_flags &= !GC_FLAG_MARKED;
+            }
+        }
+    });
+}
+
 /// Sweep variant that folds the minor-GC age-bump pass into the same arena walk.
 ///
 /// `gc_collect_minor` previously did:
@@ -557,7 +568,14 @@ pub(super) fn sweep_malloc_objects() -> u64 {
 /// in the original standalone age-bump pass (which used `pointer_in_old_gen`
 /// for the same gate).
 pub(super) fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
-    sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, false, None)
+    sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, false, None, true)
+}
+
+pub(super) fn sweep_with_age_bump_and_malloc(
+    do_age_bump: bool,
+    sweep_malloc: bool,
+) -> SweepTraceStats {
+    sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, false, None, sweep_malloc)
 }
 
 unsafe fn finalize_dead_arena_payload(
@@ -583,22 +601,34 @@ pub(super) fn sweep_with_age_bump_and_old_reclaim(
     do_age_bump: bool,
     reclaim_dead_old_blocks: bool,
 ) -> SweepTraceStats {
-    sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, reclaim_dead_old_blocks, None)
+    sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, reclaim_dead_old_blocks, None, true)
 }
 
-pub(super) fn sweep_with_age_bump_and_targeted_old_reclaim(
+pub(super) fn sweep_with_age_bump_and_targeted_old_reclaim_and_malloc(
     do_age_bump: bool,
     selected_old_blocks: &crate::fast_hash::PtrHashSet<usize>,
+    sweep_malloc: bool,
 ) -> SweepTraceStats {
-    sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, false, Some(selected_old_blocks))
+    sweep_with_age_bump_and_old_reclaim_targets(
+        do_age_bump,
+        false,
+        Some(selected_old_blocks),
+        sweep_malloc,
+    )
 }
 
 fn sweep_with_age_bump_and_old_reclaim_targets(
     do_age_bump: bool,
     reclaim_dead_old_blocks: bool,
     targeted_old_blocks: Option<&crate::fast_hash::PtrHashSet<usize>>,
+    sweep_malloc: bool,
 ) -> SweepTraceStats {
-    let mut freed_bytes = sweep_malloc_objects();
+    let mut freed_bytes = if sweep_malloc {
+        sweep_malloc_objects()
+    } else {
+        clear_malloc_mark_bits();
+        0
+    };
     let mut retained_forwarded_stub_objects: usize = 0;
     let mut retained_forwarded_stub_bytes: usize = 0;
 

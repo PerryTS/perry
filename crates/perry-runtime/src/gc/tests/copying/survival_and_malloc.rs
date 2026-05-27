@@ -292,9 +292,27 @@ fn test_gc_check_trigger_copied_minor_malloc_sweep_rebaselines_trigger() {
 
     gc_check_trigger();
 
+    let mut step_status = JsGcStepResult::default();
+    assert_eq!(
+        js_gc_step_status(&mut step_status),
+        JS_GC_STEP_STATUS_ACTIVE,
+        "gc_check_trigger should schedule malloc pressure as bounded assist work"
+    );
+    assert_eq!(
+        gc_collection_count(),
+        collections_before,
+        "gc_check_trigger must not complete malloc pressure synchronously"
+    );
+    assert_eq!(
+        step_status.trigger_kind,
+        GcTriggerKind::MallocCount.ffi_code()
+    );
+
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
     assert!(
         gc_collection_count() > collections_before,
-        "gc_check_trigger should collect when malloc pressure is due"
+        "draining the budgeted malloc-pressure cycle should collect"
     );
     assert_eq!(
         tracked_malloc_headers_matching(&churn_headers),
@@ -347,9 +365,27 @@ fn test_gc_check_trigger_copied_minor_without_malloc_sweep_preserves_malloc_trig
     let collections_before = gc_collection_count();
     gc_check_trigger();
 
+    let mut step_status = JsGcStepResult::default();
+    assert_eq!(
+        js_gc_step_status(&mut step_status),
+        JS_GC_STEP_STATUS_ACTIVE,
+        "gc_check_trigger should schedule arena pressure as bounded assist work"
+    );
+    assert_eq!(
+        gc_collection_count(),
+        collections_before,
+        "gc_check_trigger must not complete arena pressure synchronously"
+    );
+    assert_eq!(
+        step_status.trigger_kind,
+        GcTriggerKind::ArenaBytes.ffi_code()
+    );
+
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
     assert!(
         gc_collection_count() > collections_before,
-        "gc_check_trigger should collect when arena pressure is due"
+        "draining the budgeted arena-pressure cycle should collect"
     );
     assert_eq!(
         tracked_malloc_headers_matching(&churn_headers),

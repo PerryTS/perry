@@ -282,12 +282,10 @@ impl Arena {
         // `arena_reset_empty_blocks`), we may be able to reuse that
         // block instead of pushing a new one.
         //
-        // This is still the legacy synchronous trigger path: allocation
-        // pressure can run a whole collection here instead of spending a
-        // bounded work-unit budget. The GC progress contract labels it as
-        // `legacy_synchronous`; the later cycle state machine/debt pacer must
-        // replace this direct collection with bounded progress plus optional
-        // mutator assist.
+        // Threshold pressure is paid through bounded mutator-assist work.
+        // A completed assist cycle may reset blocks before we retry; an
+        // incomplete cycle leaves the debt active for later host or allocator
+        // steps.
         crate::gc::gc_check_trigger();
 
         // Retry the (possibly newly-reset) current block. arena.current

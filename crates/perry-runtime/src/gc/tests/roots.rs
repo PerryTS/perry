@@ -112,9 +112,19 @@ fn lock_safe_runtime_scanners_tui_state_defers_gc_check_trigger() {
         );
     });
 
+    if gc_collection_count() == before {
+        let mut status = JsGcStepResult::default();
+        assert_eq!(
+            js_gc_step_status(&mut status),
+            JS_GC_STEP_STATUS_ACTIVE,
+            "deferred trigger check should start bounded assist work after unlock"
+        );
+        let completed = complete_budgeted_gc_cycle();
+        assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    }
     assert!(
         gc_collection_count() > before,
-        "deferred trigger check should run after the state root lock is released"
+        "deferred trigger check should complete after the budgeted cycle is drained"
     );
     assert!(
         malloc_user_ptr_tracked(ptr),

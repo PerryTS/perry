@@ -18,10 +18,9 @@
 //!   only outside suppressed, reentrant, or unsafe regions, and must be
 //!   reported separately.
 //!
-//! Current threshold-triggered work in `gc_check_trigger()` is still a
-//! behavior-compatible synchronous collection. Trace output labels that path
-//! as `legacy_synchronous` until the cycle state machine and debt pacer turn
-//! allocation pressure into bounded progress.
+//! Threshold-triggered work in `gc_check_trigger()` is debt-paced: heap goals
+//! start or resume a budgeted cycle and allocation-side checks spend bounded
+//! mutator-assist work instead of running a whole automatic collection.
 
 use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::cell::{Cell, RefCell};
