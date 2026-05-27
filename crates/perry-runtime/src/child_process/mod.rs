@@ -378,9 +378,9 @@ pub extern "C" fn js_child_process_exec_sync(
 }
 
 /// `child_process.spawnSync(command[, args][, options])` — run the file
-/// directly and return the full Node result object: `pid`, `output`
-/// (`[null, stdout, stderr]`), `stdout`, `stderr`, `status`, `signal`, and
-/// `error` (only on spawn failure). `stdout`/`stderr` are Buffers by default
+/// directly and return the full Node result object: `status`, `signal`,
+/// `output` (`[null, stdout, stderr]`), `pid`, `stdout`, `stderr`, and
+/// `error` (first, only on spawn failure). `stdout`/`stderr` are Buffers by default
 /// (strings with an `encoding` option). #1936/#1937.
 #[no_mangle]
 pub extern "C" fn js_child_process_spawn_sync(
@@ -411,9 +411,22 @@ pub extern "C" fn js_child_process_spawn_sync(
     let command = cp_build_command(&cmd_str, &arg_strs, opts_val);
     let run = cp_run_to_completion(command);
 
-    let stdout_box = cp_box_output(&run.stdout, &mode);
-    let stderr_box = cp_box_output(&run.stderr, &mode);
-    let output = cp_output_array(stdout_box, stderr_box);
+    let spawn_failed_before_pid = run.spawn_error.is_some() && run.pid.is_none();
+    let stdout_box = if spawn_failed_before_pid {
+        cp_undefined()
+    } else {
+        cp_box_output(&run.stdout, &mode)
+    };
+    let stderr_box = if spawn_failed_before_pid {
+        cp_undefined()
+    } else {
+        cp_box_output(&run.stderr, &mode)
+    };
+    let output = if spawn_failed_before_pid {
+        TAG_NULL_F64
+    } else {
+        cp_output_array(stdout_box, stderr_box)
+    };
     let status = match run.code {
         Some(c) => c as f64,
         None => TAG_NULL_F64,
@@ -424,23 +437,20 @@ pub extern "C" fn js_child_process_spawn_sync(
     };
     let pid = match run.pid {
         Some(p) => p as f64,
+        None if spawn_failed_before_pid => 0.0,
         None => TAG_NULL_F64,
     };
 
     // Assemble the result object. `error` is present only on spawn failure
-    // (Node omits it otherwise), so build via named sets rather than a fixed
-    // index layout.
+    // (Node omits it otherwise), and is inserted before the standard result
+    // fields. Node's observable order is error,status,signal,output,pid,stdout,
+    // stderr for spawn failures and status,signal,output,pid,stdout,stderr
+    // otherwise.
     let result = crate::object::js_object_alloc(0, 7);
     let set = |key: &str, value: f64| {
         let kp = js_string_from_bytes(key.as_ptr(), key.len() as u32);
         js_object_set_field_by_name(result, kp, value);
     };
-    set("pid", pid);
-    set("output", output);
-    set("stdout", stdout_box);
-    set("stderr", stderr_box);
-    set("status", status);
-    set("signal", signal);
     if let Some((code, msg)) = &run.spawn_error {
         let syscall = format!("spawnSync {cmd_str}");
         let err = cp_make_error(
@@ -454,6 +464,12 @@ pub extern "C" fn js_child_process_spawn_sync(
         );
         set("error", err);
     }
+    set("status", status);
+    set("signal", signal);
+    set("output", output);
+    set("pid", pid);
+    set("stdout", stdout_box);
+    set("stderr", stderr_box);
     result
 }
 
