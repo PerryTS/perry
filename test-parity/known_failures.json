@@ -782,12 +782,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(single-transform) does not deliver data through. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/dispose/async-dispose": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Symbol.asyncDispose (Node 21+ explicit disposal protocol) not implemented on stream instances. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/ee/get-event-listeners": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -835,12 +829,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: finished({readable:false}) does not fire callback on writable-only close. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/dispose/sync-dispose": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Symbol.dispose presence on stream instances (Node 21+) misreports. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/duplex-pair/wired-comms": {
     "issue": "1532",

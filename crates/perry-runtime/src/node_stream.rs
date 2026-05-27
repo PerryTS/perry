@@ -209,6 +209,12 @@ extern "C" fn ns_resume0(closure: *const ClosureHeader) -> f64 {
     stream
 }
 
+extern "C" fn ns_async_dispose(closure: *const ClosureHeader) -> f64 {
+    let stream = this_value(closure);
+    destroy_stream(stream, abort_error());
+    resolved_promise(f64::from_bits(TAG_UNDEFINED))
+}
+
 extern "C" fn ns_read1(closure: *const ClosureHeader, _n: f64) -> f64 {
     let stream = this_value(closure);
     mark_stream_ended(stream);
@@ -1146,6 +1152,7 @@ fn register_stub_arities() {
     register(ns_emit2 as *const u8, 2);
     crate::closure::js_register_closure_rest(ns_emit_rest as *const u8, 1);
     register(ns_resume0 as *const u8, 0);
+    register(ns_async_dispose as *const u8, 0);
     register(ns_read1 as *const u8, 1);
     register(ns_pipe1 as *const u8, 1);
     register(writable_write_callback_noop as *const u8, 0);
@@ -1167,6 +1174,22 @@ fn register_stub_arities() {
 #[inline]
 fn box_pointer(ptr: *const u8) -> f64 {
     f64::from_bits(JSValue::pointer(ptr).bits())
+}
+
+fn install_stream_async_dispose_symbol(stream: f64) {
+    let async_dispose = crate::symbol::well_known_symbol("asyncDispose");
+    if async_dispose.is_null() {
+        return;
+    }
+    let closure = js_closure_alloc(ns_async_dispose as *const u8, 1);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            stream,
+            box_pointer(async_dispose as *const u8),
+            box_pointer(closure as *const u8),
+        );
+    }
 }
 
 #[inline]
@@ -2192,6 +2215,7 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     init_readable_state(readable, opts);
     init_abort_signal_state(readable, opts);
     async_iterator::install_readable_async_iterator_symbol(readable);
+    install_stream_async_dispose_symbol(readable);
     readable
 }
 
@@ -2211,6 +2235,7 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
     init_constructor(writable, "Writable");
     init_writable_state(writable, opts);
     init_abort_signal_state(writable, opts);
+    install_stream_async_dispose_symbol(writable);
     writable
 }
 
@@ -2228,6 +2253,7 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     init_writable_state(duplex, opts);
     init_abort_signal_state(duplex, opts);
     async_iterator::install_readable_async_iterator_symbol(duplex);
+    install_stream_async_dispose_symbol(duplex);
     duplex
 }
 

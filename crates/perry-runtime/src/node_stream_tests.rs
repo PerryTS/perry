@@ -686,6 +686,24 @@ fn stream_destroy_with_error_marks_errored_state() {
 }
 
 #[test]
+fn readable_exposes_async_dispose_symbol_method() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let async_dispose = crate::symbol::well_known_symbol("asyncDispose");
+    let method = unsafe {
+        crate::symbol::js_object_get_symbol_property(
+            stream,
+            box_pointer(async_dispose as *const u8),
+        )
+    };
+
+    assert!(is_callable_value(method));
+    let result = unsafe { crate::closure::js_native_call_value(method, std::ptr::null(), 0) };
+    assert_ne!(result.to_bits(), TAG_UNDEFINED);
+    assert_eq!(js_node_stream_method_destroyed(handle).to_bits(), TAG_TRUE);
+}
+
+#[test]
 fn readable_aborted_reflects_destroy_before_end() {
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
