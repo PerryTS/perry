@@ -710,12 +710,6 @@
     "category": "bug-open",
     "reason": "node:stream: write empty string does not reach _write with empty Buffer. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/writable/write-on-errored": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: write after destroy(err) should emit additional error. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/repipe-after-unpipe": {
     "issue": "1532",
     "added": "2026-05-23",
