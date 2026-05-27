@@ -1,17 +1,14 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WASM_RUNTIME="$ROOT/crates/perry-codegen-wasm/src/wasm_runtime.js"
-JS_RUNTIME="$ROOT/crates/perry-codegen-js/src/web_runtime.js"
-
-node - "$WASM_RUNTIME" "$JS_RUNTIME" <<'NODE'
+#!/usr/bin/env node
 const fs = require('fs');
-const [wasmRuntime, jsRuntime] = process.argv.slice(2);
+const path = require('path');
+
+const root = path.resolve(__dirname, '../..');
+const wasmRuntime = path.join(root, 'crates/perry-codegen-wasm/src/wasm_runtime.js');
+const jsRuntime = path.join(root, 'crates/perry-codegen-js/src/web_runtime.js');
 
 function functionBody(source, name) {
-  const re = new RegExp(`function ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\([^)]*\\) \\{`);
-  const match = re.exec(source);
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`function ${escaped}\\([^)]*\\) \\{`).exec(source);
   if (!match) throw new Error(`missing ${name}`);
 
   let depth = 1;
@@ -39,4 +36,3 @@ assertContains(functionBody(wasm, 'perry_ui_current_modifiers'), '__perryEnsureK
 const js = fs.readFileSync(jsRuntime, 'utf8');
 assertContains(functionBody(js, 'perry_ui_is_key_down'), '_perryEnsureKbd();', 'js isKeyDown');
 assertContains(functionBody(js, 'perry_ui_current_modifiers'), '_perryEnsureKbd();', 'js currentModifiers');
-NODE
