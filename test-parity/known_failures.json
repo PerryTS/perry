@@ -356,12 +356,6 @@
     "category": "bug-open",
     "reason": "node:stream: pause()/resume()/isPaused() not functioning on instance. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/destroyed-flag": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: destroyed flag + destroy() not wired on instance. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/readable/unshift-chunk": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -373,12 +367,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: cork()/uncork() not functioning + finish event missing. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/writable/destroyed-flag": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Writable destroyed flag + destroy() not wired. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/writable/drain-event": {
     "issue": "1532",
@@ -548,12 +536,6 @@
     "category": "bug-open",
     "reason": "node:stream: calling PassThrough() without `new` should auto-instantiate; Perry behavior differs. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/destroy/destroy-emits-close": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: destroy() doesn't async-emit close event. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/destroy/destroy-returns-this": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -710,12 +692,6 @@
     "category": "bug-open",
     "reason": "node:stream: autoDestroy default behavior doesn't fire close after end. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/abort/signal-aborts-stream": {
-    "issue": "1541",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: addAbortSignal wires the signal but aborting doesn't emit 'error' with the AbortError on a later tick. Reopened #1541 for abort->event wiring."
-  },
   "node-suite/stream/compose/multiple-transforms": {
     "issue": "1539",
     "added": "2026-05-24",
@@ -824,29 +800,11 @@
     "category": "bug-open",
     "reason": "node:stream: destroy(err) + error listener doesn't deliver the message to handler. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/destroy/destroy-non-error": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: destroy() with no error doesn't fire close event. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/object-mode/read-single-object": {
     "issue": "1532",
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: read() on objectMode stream should return one object per call. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/options/signal-readable": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: new Readable({signal}) constructor option not honored (no abort wire-up). Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/options/signal-writable": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: new Writable({signal}) constructor option not honored. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/async-iter/two-iterators-error": {
     "issue": "1532",
@@ -1754,12 +1712,6 @@
     "category": "bug-open",
     "reason": "node:stream: read(undefined) — not equivalent to read() no-arg form. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/destroy/destroy-twice-idempotent": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroy() called twice — fires duplicate 'close' or errors. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/iter-yields-buffer-no-encoding": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -2125,12 +2077,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: filter(fn).toArray() — chain produces wrong result. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/events/close-fires-on-destroy": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: 'close' event after destroy — fires 0 or 2+ times (should be exactly 1). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/from-async-iter-mixed-values": {
     "issue": "1532",

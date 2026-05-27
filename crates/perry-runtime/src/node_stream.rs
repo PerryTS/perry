@@ -91,8 +91,8 @@ const STREAM_DISTURBED_KEY: &[u8] = b"__perryStreamDisturbed";
 const READABLE_BUFFERED_KEY: &[u8] = b"__perryReadableBuffered";
 const READABLE_HWM_KEY: &[u8] = b"__perryReadableHwm";
 
+use destroy_state::{destroy_stream, ns_destroy1, ns_destroy_error_microtask};
 pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_destroyed};
-use destroy_state::{ns_destroy1, ns_destroy_error_microtask};
 
 // ─────────────────────────────────────────────────────────────────
 // Stub method bodies. Each receives the closure pointer (slot 0
@@ -545,6 +545,15 @@ extern "C" fn ns_deferred_resolve(closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
+extern "C" fn ns_stream_abort_listener(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    destroy_stream(stream, abort_error());
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 /// Build a pending Promise for a consuming helper running under a
 /// not-yet-aborted signal: an abort listener rejects it with an
 /// AbortError, while a queued microtask fulfills it with `value` if no
@@ -944,6 +953,7 @@ fn register_stub_arities() {
     register(ns_chain0 as *const u8, 0);
     register(ns_chain1 as *const u8, 1);
     register(ns_destroy_error_microtask as *const u8, 0);
+    register(ns_stream_abort_listener as *const u8, 0);
     register(ns_destroy1 as *const u8, 1);
     register(ns_chain2 as *const u8, 2);
     register(ns_chain3 as *const u8, 3);
@@ -1751,6 +1761,12 @@ fn init_writable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
 }
 
+fn init_abort_signal_state(stream: f64, opts: f64) {
+    if let Some(signal) = options_signal(opts) {
+        attach_abort_signal(signal, stream);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     register_iter_helper_arities();
@@ -1763,6 +1779,7 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     init_lifecycle_state(readable);
     init_constructor(readable, "Readable");
     init_readable_state(readable, opts);
+    init_abort_signal_state(readable, opts);
     async_iterator::install_readable_async_iterator_symbol(readable);
     readable
 }
@@ -1782,6 +1799,7 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
     init_lifecycle_state(writable);
     init_constructor(writable, "Writable");
     init_writable_state(writable, opts);
+    init_abort_signal_state(writable, opts);
     writable
 }
 
@@ -1797,6 +1815,7 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     init_constructor(duplex, "Duplex");
     init_readable_state(duplex, opts);
     init_writable_state(duplex, opts);
+    init_abort_signal_state(duplex, opts);
     async_iterator::install_readable_async_iterator_symbol(duplex);
     duplex
 }
@@ -1924,15 +1943,29 @@ pub extern "C" fn js_node_stream_set_default_hwm(object_mode: f64, value: f64) -
     f64::from_bits(TAG_UNDEFINED)
 }
 
-/// #1541: `stream.addAbortSignal(signal, stream)` — Node wires the
-/// AbortSignal so aborting it destroys the stream, and returns the
-/// stream for chaining. Perry's stream stubs don't implement the
-/// destroy / abort propagation yet, so the helper just returns the
-/// stream verbatim and ignores the signal. Caller chains
-/// (`r = addAbortSignal(s, r)`) keep working with the same stream
-/// reference they passed in.
+fn attach_abort_signal(signal: f64, stream: f64) {
+    if signal_is_aborted(signal) {
+        destroy_stream(stream, abort_error());
+        return;
+    }
+    let Some(signal_obj) = object_ptr_from_value(signal) else {
+        return;
+    };
+    let listener = js_closure_alloc(ns_stream_abort_listener as *const u8, 1);
+    js_closure_set_capture_ptr(listener, 0, stream.to_bits() as i64);
+    crate::url::js_abort_signal_add_listener(
+        signal_obj,
+        string_value(b"abort"),
+        box_pointer(listener as *const u8),
+    );
+}
+
+/// #1541: `stream.addAbortSignal(signal, stream)` — wire an AbortSignal so
+/// aborting it destroys the stream with an AbortError, then return the same
+/// stream for chaining.
 #[no_mangle]
-pub extern "C" fn js_node_stream_add_abort_signal(_signal: f64, stream: f64) -> f64 {
+pub extern "C" fn js_node_stream_add_abort_signal(signal: f64, stream: f64) -> f64 {
+    attach_abort_signal(signal, stream);
     stream
 }
 
