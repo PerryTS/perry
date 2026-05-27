@@ -194,6 +194,22 @@ impl Arena {
 
     #[inline]
     fn resync_inline_to_current(&self) {
+        // `INLINE_STATE` mirrors ONLY the general nursery-Eden arena — the
+        // one the codegen inline bump-allocator (`js_inline_arena_state`)
+        // targets. The old-gen, survivor, and longlived arenas reuse this
+        // same `Arena::alloc` body, whose block-reuse forward-scan
+        // (`self.current = i`) calls back here. Without this guard, an
+        // old-gen/survivor allocation that forward-scans to reuse a block
+        // would repoint `INLINE_STATE` at a non-Eden block; the next Eden
+        // `arena_alloc` then writes that foreign block's offset into the
+        // real current Eden block, rewinding it and allocating fresh objects
+        // over still-live ones (#1824: a large-JSON `await` allocation that
+        // landed in old-gen clobbered a suspended async-step closure, whose
+        // bytes were then read as a garbage function pointer → SIGSEGV on
+        // resume; reproduced with `full_gc=0`, so no collection involved).
+        if self.space != HeapSpace::NurseryEden {
+            return;
+        }
         INLINE_STATE.with(|s| unsafe {
             let inline = &mut *s.get();
             if !inline.data.is_null() {

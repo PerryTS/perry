@@ -904,3 +904,59 @@ fn reset_never_clears_old_gen_blocks() {
         "old-gen alloc not located in any old-gen block"
     );
 }
+
+#[test]
+fn old_arena_block_reuse_does_not_repoint_eden_inline_state() {
+    // #1824 regression. `Arena::alloc`'s block-reuse forward-scan calls
+    // `resync_inline_to_current`, which mirrors the codegen inline
+    // bump-allocator's `INLINE_STATE`. `INLINE_STATE` must track ONLY the
+    // general nursery-Eden arena. A non-Eden (old-gen / survivor) allocation
+    // that forward-scans to reuse an earlier block must NOT repoint
+    // `INLINE_STATE`: doing so pointed it at a foreign block, and the next
+    // Eden `arena_alloc` then wrote that block's offset into the live Eden
+    // block — rewinding the bump pointer so a fresh string allocation
+    // overwrote a still-live suspended async-step closure (read back later as
+    // a garbage function pointer → SIGSEGV during the await continuation).
+    run_with_fresh_arenas(|| {
+        // Initialize INLINE_STATE from the Eden arena and capture it.
+        let _ = js_inline_arena_state();
+        let _ = arena_alloc(64, 8); // make sure inline.data is live
+        let (eden_data, eden_size) = INLINE_STATE.with(|s| {
+            let st = unsafe { &*s.get() };
+            (st.data, st.size)
+        });
+        assert!(
+            !eden_data.is_null(),
+            "Eden INLINE_STATE should be initialized"
+        );
+
+        // Drive the OLD_ARENA into a forward-scan-reuse state: a reusable
+        // earlier block (offset 0) plus a full current block.
+        OLD_ARENA.with(|a| unsafe {
+            let arena = &mut *a.get();
+            arena.install_fresh_block(BLOCK_SIZE); // >=2 blocks, current = newest
+            let cur = arena.current;
+            assert!(cur > 0, "fresh block should advance current past block 0");
+            arena.blocks[cur].offset = arena.blocks[cur].size; // current is full
+            arena.blocks[0].offset = 0; // block 0 reusable
+                                        // Current full → forward-scan reuses block 0 → current = 0 →
+                                        // resync_inline_to_current(OLD_ARENA).
+            let _ = arena.alloc(64, 8);
+            assert_eq!(arena.current, 0, "forward-scan should have reused block 0");
+        });
+
+        // The OLD_ARENA block reuse must have left Eden's INLINE_STATE intact.
+        let (after_data, after_size) = INLINE_STATE.with(|s| {
+            let st = unsafe { &*s.get() };
+            (st.data, st.size)
+        });
+        assert_eq!(
+            after_data, eden_data,
+            "old-gen block reuse must not repoint Eden INLINE_STATE.data (#1824)"
+        );
+        assert_eq!(
+            after_size, eden_size,
+            "Eden INLINE_STATE.size must be intact"
+        );
+    });
+}
