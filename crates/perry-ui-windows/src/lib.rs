@@ -1,5 +1,6 @@
 pub mod app;
 pub mod audio;
+pub mod audio_playback;
 pub mod deeplinks_stub;
 #[cfg(target_os = "windows")]
 pub mod dpi_compat;

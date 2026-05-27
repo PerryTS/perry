@@ -4941,6 +4941,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-audio-miniaudio"
+version = "0.5.1031"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
 name = "perry-codegen"
 version = "0.5.1031"
 dependencies = [
@@ -5572,6 +5580,7 @@ dependencies = [
  "itoa",
  "jni 0.21.1",
  "libc",
+ "perry-audio-miniaudio",
  "perry-ext-sharp",
  "perry-runtime",
  "perry-ui",
@@ -5604,6 +5613,7 @@ dependencies = [
  "libc",
  "libshumate",
  "mpris-server",
+ "perry-audio-miniaudio",
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
@@ -5702,6 +5712,7 @@ version = "0.5.1031"
 dependencies = [
  "base64",
  "libc",
+ "perry-audio-miniaudio",
  "perry-runtime",
  "perry-ui",
  "perry-ui-testkit",

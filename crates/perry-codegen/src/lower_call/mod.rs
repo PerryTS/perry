@@ -75,10 +75,10 @@ use ui_styling::apply_inline_style;
 // names so siblings (`native.rs`, `extern_func.rs`) keep resolving the
 // table-lookup family and `lower_perry_ui_table_call` unchanged.
 pub(super) use ui_tables::{
-    lower_perry_ui_table_call, perry_background_table_lookup, perry_i18n_table_lookup,
-    perry_media_table_lookup, perry_plugin_instance_method_lookup, perry_plugin_table_lookup,
-    perry_system_table_lookup, perry_ui_instance_method_lookup, perry_ui_table_lookup,
-    perry_updater_table_lookup,
+    lower_perry_ui_table_call, perry_audio_table_lookup, perry_background_table_lookup,
+    perry_i18n_table_lookup, perry_media_table_lookup, perry_plugin_instance_method_lookup,
+    perry_plugin_table_lookup, perry_system_table_lookup, perry_ui_instance_method_lookup,
+    perry_ui_table_lookup, perry_updater_table_lookup,
 };
 // Same for `native_module_dispatch.rs` — `native.rs` consumes both
 // `native_module_lookup` and `lower_native_module_dispatch` via

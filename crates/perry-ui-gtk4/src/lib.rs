@@ -1,5 +1,6 @@
 pub mod app;
 pub mod audio;
+pub mod audio_playback;
 pub mod camera;
 pub mod clipboard;
 pub mod deeplinks_stub;

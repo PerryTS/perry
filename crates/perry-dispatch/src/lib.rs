@@ -92,6 +92,7 @@ pub struct MethodRow {
 
 // Topical sub-modules — each owns one dispatch table. Public items are
 // re-exported below so consumers keep using `perry_dispatch::PERRY_*`.
+mod audio_table;
 mod background_table;
 mod i18n_table;
 mod media_table;
@@ -100,6 +101,7 @@ mod ui_instance_table;
 mod ui_table;
 mod updater_table;
 
+pub use audio_table::PERRY_AUDIO_TABLE;
 pub use background_table::PERRY_BACKGROUND_TABLE;
 pub use i18n_table::PERRY_I18N_TABLE;
 pub use media_table::PERRY_MEDIA_TABLE;
@@ -143,6 +145,11 @@ pub fn perry_media_lookup(method: &str) -> Option<&'static MethodRow> {
 /// Look up a TS method name in the perry/background table (issue #538).
 pub fn perry_background_lookup(method: &str) -> Option<&'static MethodRow> {
     PERRY_BACKGROUND_TABLE.iter().find(|s| s.method == method)
+}
+
+/// Look up a TS method name in the perry/audio table (issue #1867).
+pub fn perry_audio_lookup(method: &str) -> Option<&'static MethodRow> {
+    PERRY_AUDIO_TABLE.iter().find(|s| s.method == method)
 }
 
 /// Resolve a TS method name to its runtime symbol across the perry/ui +

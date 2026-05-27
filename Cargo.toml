@@ -55,6 +55,7 @@ members = [
     "crates/perry-ui-ios",
     "crates/perry-ui-visionos",
     "crates/perry-ui-android",
+    "crates/perry-audio-miniaudio",
     "crates/perry-ui-gtk4",
     "crates/perry-ui-windows",
     "crates/perry-ui-watchos",
@@ -316,4 +317,5 @@ perry-codegen-glance = { path = "crates/perry-codegen-glance" }
 perry-codegen-wear-tiles = { path = "crates/perry-codegen-wear-tiles" }
 perry-codegen-wasm = { path = "crates/perry-codegen-wasm" }
 perry-ui-testkit = { path = "crates/perry-ui-testkit" }
+perry-audio-miniaudio = { path = "crates/perry-audio-miniaudio" }
 perry-updater = { path = "crates/perry-updater" }

@@ -6,6 +6,7 @@ extern crate perry_ext_sharp;
 
 pub mod app;
 pub mod audio;
+pub mod audio_playback;
 pub mod background;
 pub mod callback;
 pub mod camera;

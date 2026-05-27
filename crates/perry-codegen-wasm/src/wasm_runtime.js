@@ -3971,6 +3971,572 @@ function perry_media_destroy(handle) {
   PERRY_MEDIA_PLAYERS[handle - 1] = null;
 }
 
+// ---------- perry/audio (issue #1867) — Web Audio API: low-latency SFX + buses ----------
+//
+// Distinct from perry/media (streaming + lock-screen). This is the game-audio path:
+// preloaded PCM, voice pool, bus hierarchy, pitch/pan/fade/loop.
+//
+// Handle ranges (must match Apple impl):
+//   Sound:      0x00000001..0x0FFFFFFF
+//   PlaybackId: 0x10000001..0x1FFFFFFF
+//   Bus:        0x20000001..0x2FFFFFFF
+//   0 = master bus
+const PERRY_AUDIO_SOUND_BASE = 0x00000000;
+const PERRY_AUDIO_PLAYBACK_BASE = 0x10000000;
+const PERRY_AUDIO_BUS_BASE = 0x20000000;
+const PERRY_AUDIO_RANGE_MASK = 0xF0000000;
+
+const PERRY_AUDIO_SOUNDS = [];     // index = (handle - 1)
+const PERRY_AUDIO_PLAYBACKS = [];  // index = (handle - PERRY_AUDIO_PLAYBACK_BASE - 1)
+const PERRY_AUDIO_BUSES = [];      // index 0 = master (handle 0 maps here too)
+
+let PERRY_AUDIO_CTX = null;
+let PERRY_AUDIO_MASTER_GAIN = null;
+let PERRY_AUDIO_MASTER_BUS = null;
+let PERRY_AUDIO_WARNED_AUTOPLAY = false;
+
+function _perry_audio_ctx() {
+  if (PERRY_AUDIO_CTX) return PERRY_AUDIO_CTX;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) {
+      console.warn("perry/audio: Web Audio API not available");
+      return null;
+    }
+    PERRY_AUDIO_CTX = new AC();
+    PERRY_AUDIO_MASTER_GAIN = PERRY_AUDIO_CTX.createGain();
+    PERRY_AUDIO_MASTER_GAIN.gain.value = 1.0;
+    PERRY_AUDIO_MASTER_GAIN.connect(PERRY_AUDIO_CTX.destination);
+    // Master bus = index 0; handle 0 dereferences here.
+    PERRY_AUDIO_MASTER_BUS = {
+      name: "master",
+      parent_id: -1,
+      gainNode: PERRY_AUDIO_MASTER_GAIN,
+      stored_volume: 1.0,
+      muted: false,
+      soloed: false,
+      destroyed: false,
+    };
+    PERRY_AUDIO_BUSES[0] = PERRY_AUDIO_MASTER_BUS;
+  } catch (err) {
+    console.warn("perry/audio: failed to create AudioContext:", err);
+  }
+  return PERRY_AUDIO_CTX;
+}
+
+function _perry_audio_handle_kind(h) {
+  const n = Number(h) >>> 0;
+  if (n === 0) return "master";
+  const range = n & PERRY_AUDIO_RANGE_MASK;
+  if (range === PERRY_AUDIO_BUS_BASE) return "bus";
+  if (range === PERRY_AUDIO_PLAYBACK_BASE) return "playback";
+  return "sound";
+}
+
+function _perry_audio_get_sound(h) {
+  const n = Number(h) >>> 0;
+  if (n === 0 || (n & PERRY_AUDIO_RANGE_MASK) !== 0) return null;
+  return PERRY_AUDIO_SOUNDS[n - 1] || null;
+}
+function _perry_audio_get_playback(h) {
+  const n = Number(h) >>> 0;
+  if ((n & PERRY_AUDIO_RANGE_MASK) !== PERRY_AUDIO_PLAYBACK_BASE) return null;
+  return PERRY_AUDIO_PLAYBACKS[n - PERRY_AUDIO_PLAYBACK_BASE - 1] || null;
+}
+function _perry_audio_get_bus(h) {
+  const n = Number(h) >>> 0;
+  if (n === 0) return PERRY_AUDIO_MASTER_BUS;
+  if ((n & PERRY_AUDIO_RANGE_MASK) !== PERRY_AUDIO_BUS_BASE) return null;
+  return PERRY_AUDIO_BUSES[n - PERRY_AUDIO_BUS_BASE] || null;
+}
+
+function _perry_audio_resolve_url(path) {
+  try {
+    return new URL(String(path), document.baseURI).href;
+  } catch (_) {
+    return String(path);
+  }
+}
+
+function _perry_audio_set_gain(gainParam, target, fadeMs) {
+  if (!PERRY_AUDIO_CTX) return;
+  const t = Math.max(0, Number(target) || 0);
+  const ms = Number(fadeMs) || 0;
+  const now = PERRY_AUDIO_CTX.currentTime;
+  try {
+    gainParam.cancelScheduledValues(now);
+    if (ms > 0) {
+      const cur = gainParam.value;
+      gainParam.setValueAtTime(cur, now);
+      gainParam.linearRampToValueAtTime(t, now + ms / 1000);
+    } else {
+      gainParam.setValueAtTime(t, now);
+    }
+  } catch (err) {
+    try { gainParam.value = t; } catch (_) {}
+  }
+}
+
+function _perry_audio_start_voice(entry) {
+  // Materialize an AudioBufferSourceNode for this playback entry.
+  if (!PERRY_AUDIO_CTX || entry.stopped) return;
+  const sound = entry.sound;
+  if (!sound || !sound.audioBuffer) return;
+  const bus = entry.bus || PERRY_AUDIO_MASTER_BUS;
+  const src = PERRY_AUDIO_CTX.createBufferSource();
+  src.buffer = sound.audioBuffer;
+  src.loop = !!entry.loop;
+  try { src.playbackRate.value = entry.rate; } catch (_) {}
+
+  const voiceGain = PERRY_AUDIO_CTX.createGain();
+  let tail = voiceGain;
+  if (Math.abs(entry.pan) > 1e-6 && typeof PERRY_AUDIO_CTX.createStereoPanner === "function") {
+    const panner = PERRY_AUDIO_CTX.createStereoPanner();
+    try { panner.pan.value = Math.max(-1, Math.min(1, entry.pan)); } catch (_) {}
+    voiceGain.connect(panner);
+    tail = panner;
+    entry.pannerNode = panner;
+  }
+  tail.connect(bus.gainNode);
+  src.connect(voiceGain);
+
+  const now = PERRY_AUDIO_CTX.currentTime;
+  if (entry.fadeInMs > 0) {
+    voiceGain.gain.setValueAtTime(0, now);
+    voiceGain.gain.linearRampToValueAtTime(entry.volume, now + entry.fadeInMs / 1000);
+  } else {
+    voiceGain.gain.setValueAtTime(entry.volume, now);
+  }
+
+  entry.source = src;
+  entry.gain = voiceGain;
+  entry.startedAt = now - (entry.pauseOffset || 0);
+  entry.pauseOffset = entry.pauseOffset || 0;
+
+  src.onended = () => {
+    if (entry.suppressEnded) { entry.suppressEnded = false; return; }
+    if (entry.stopped) return;
+    entry.stopped = true;
+    entry.ended = true;
+    if (entry.onEnded) {
+      try { callWasmClosure(entry.onEnded); }
+      catch (err) { console.warn("perry/audio onEnded threw:", err); }
+    }
+  };
+
+  try { src.start(0, entry.pauseOffset || 0); }
+  catch (err) { console.warn("perry/audio start failed:", err); }
+}
+
+function _perry_audio_apply_solo_state() {
+  // When any bus is soloed, mute all non-soloed non-ancestor non-master buses.
+  if (!PERRY_AUDIO_CTX) return;
+  const soloed = PERRY_AUDIO_BUSES.filter(b => b && !b.destroyed && b.soloed);
+  for (let i = 1; i < PERRY_AUDIO_BUSES.length; i++) {
+    const b = PERRY_AUDIO_BUSES[i];
+    if (!b || b.destroyed) continue;
+    let audible;
+    if (soloed.length === 0) audible = !b.muted;
+    else audible = b.soloed && !b.muted;
+    _perry_audio_set_gain(b.gainNode.gain, audible ? b.stored_volume : 0, 0);
+  }
+}
+
+function perry_audio_load_sound(path, busHandle, stream) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return 0;
+  const url = _perry_audio_resolve_url(path);
+  const bus = _perry_audio_get_bus(busHandle) || PERRY_AUDIO_MASTER_BUS;
+  const entry = {
+    url,
+    audioBuffer: null,
+    default_volume: 1.0,
+    default_bus: bus,
+    pendingPlays: [],
+    onLoaded: null,
+    loaded: false,
+    error: false,
+    stream: !!Number(stream),
+  };
+  PERRY_AUDIO_SOUNDS.push(entry);
+  const handle = PERRY_AUDIO_SOUNDS.length; // 1-based, within sound range
+  fetch(url).then(r => {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.arrayBuffer();
+  }).then(ab => new Promise((resolve, reject) => {
+    // decodeAudioData is older-API: pass callbacks for Safari compat.
+    try {
+      const p = ctx.decodeAudioData(ab, resolve, reject);
+      if (p && typeof p.then === "function") p.then(resolve, reject);
+    } catch (err) { reject(err); }
+  })).then(buf => {
+    entry.audioBuffer = buf;
+    entry.loaded = true;
+    // Flush queued plays.
+    const queued = entry.pendingPlays;
+    entry.pendingPlays = [];
+    for (const voice of queued) {
+      if (!voice.stopped) _perry_audio_start_voice(voice);
+    }
+    if (entry.onLoaded) {
+      try { callWasmClosure(entry.onLoaded); }
+      catch (err) { console.warn("perry/audio onLoaded threw:", err); }
+    }
+  }).catch(err => {
+    entry.error = true;
+    console.warn("perry/audio load failed for", url, err);
+  });
+  return handle;
+}
+
+function perry_audio_unload(soundHandle) {
+  const s = _perry_audio_get_sound(soundHandle);
+  if (!s) return;
+  // Stop any live voices on this sound.
+  for (let i = 0; i < PERRY_AUDIO_PLAYBACKS.length; i++) {
+    const v = PERRY_AUDIO_PLAYBACKS[i];
+    if (v && v.sound === s && !v.stopped) {
+      try { v.suppressEnded = true; if (v.source) v.source.stop(); } catch (_) {}
+      v.stopped = true;
+    }
+  }
+  s.audioBuffer = null;
+  s.pendingPlays = [];
+  s.onLoaded = null;
+  PERRY_AUDIO_SOUNDS[Number(soundHandle) - 1] = null;
+}
+
+function perry_audio_play(soundHandle, volume, loop_, rate, pan, fadeInMs) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return 0;
+  const sound = _perry_audio_get_sound(soundHandle);
+  if (!sound) return 0;
+  // Autoplay-policy: if context is suspended (first play before user gesture)
+  // attempt resume; the browser will queue audio until the gesture arrives.
+  if (ctx.state === "suspended") {
+    const p = ctx.resume();
+    if (p && typeof p.catch === "function") p.catch(() => {
+      if (!PERRY_AUDIO_WARNED_AUTOPLAY) {
+        PERRY_AUDIO_WARNED_AUTOPLAY = true;
+        console.warn("perry/audio: AudioContext is suspended — first play must follow a user gesture (click/keydown).");
+      }
+    });
+  }
+  const vol = (Number(volume) >= 0) ? Number(volume) : sound.default_volume;
+  const entry = {
+    sound,
+    bus: sound.default_bus,
+    volume: vol,
+    loop: Number(loop_) >= 0.5,
+    rate: (Number(rate) > 0) ? Number(rate) : 1.0,
+    pan: Number(pan) || 0,
+    fadeInMs: Math.max(0, Number(fadeInMs) || 0),
+    source: null,
+    gain: null,
+    pannerNode: null,
+    onEnded: null,
+    stopped: false,
+    ended: false,
+    paused: false,
+    pauseOffset: 0,
+    startedAt: 0,
+    suppressEnded: false,
+  };
+  PERRY_AUDIO_PLAYBACKS.push(entry);
+  const handle = PERRY_AUDIO_PLAYBACK_BASE + PERRY_AUDIO_PLAYBACKS.length; // 1-based within playback range
+  if (sound.loaded && sound.audioBuffer) {
+    _perry_audio_start_voice(entry);
+  } else if (!sound.error) {
+    sound.pendingPlays.push(entry);
+  } else {
+    entry.stopped = true;
+  }
+  return handle;
+}
+
+function perry_audio_stop(handle, fadeOutMs) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return;
+  const ms = Math.max(0, Number(fadeOutMs) || 0);
+  const stopOne = (v) => {
+    if (!v || v.stopped) return;
+    if (ms > 0 && v.gain) {
+      const now = ctx.currentTime;
+      try {
+        v.gain.gain.cancelScheduledValues(now);
+        v.gain.gain.setValueAtTime(v.gain.gain.value, now);
+        v.gain.gain.linearRampToValueAtTime(0, now + ms / 1000);
+      } catch (_) {}
+      v.stopped = true;
+      setTimeout(() => {
+        try { if (v.source) v.source.stop(); } catch (_) {}
+      }, ms + 5);
+    } else {
+      v.stopped = true;
+      try { if (v.source) v.source.stop(); } catch (_) {}
+    }
+  };
+  const kind = _perry_audio_handle_kind(handle);
+  if (kind === "playback") {
+    stopOne(_perry_audio_get_playback(handle));
+  } else if (kind === "sound") {
+    const s = _perry_audio_get_sound(handle);
+    if (s) {
+      for (const v of PERRY_AUDIO_PLAYBACKS) if (v && v.sound === s) stopOne(v);
+    }
+  }
+}
+
+function perry_audio_pause(playbackHandle) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return;
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v || v.stopped || v.paused) return;
+  // Web Audio source nodes can't pause — capture offset, stop, replay on resume.
+  const elapsed = ctx.currentTime - v.startedAt;
+  let offset = elapsed;
+  if (v.sound && v.sound.audioBuffer && !v.loop) {
+    offset = Math.min(elapsed, v.sound.audioBuffer.duration);
+  } else if (v.sound && v.sound.audioBuffer && v.loop) {
+    offset = elapsed % v.sound.audioBuffer.duration;
+  }
+  v.pauseOffset = offset;
+  v.paused = true;
+  v.suppressEnded = true;
+  try { if (v.source) v.source.stop(); } catch (_) {}
+  v.source = null;
+}
+
+function perry_audio_resume(playbackHandle) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return;
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v || v.stopped || !v.paused) return;
+  v.paused = false;
+  // Don't re-apply fade-in on resume.
+  const saved = v.fadeInMs;
+  v.fadeInMs = 0;
+  _perry_audio_start_voice(v);
+  v.fadeInMs = saved;
+}
+
+function perry_audio_set_volume(handle, volume, fadeMs) {
+  if (!PERRY_AUDIO_CTX) return;
+  const v = Math.max(0, Number(volume) || 0);
+  const kind = _perry_audio_handle_kind(handle);
+  if (kind === "playback") {
+    const p = _perry_audio_get_playback(handle);
+    if (p && p.gain) {
+      p.volume = v;
+      _perry_audio_set_gain(p.gain.gain, v, fadeMs);
+    } else if (p) {
+      p.volume = v;
+    }
+  } else if (kind === "bus" || kind === "master") {
+    const b = _perry_audio_get_bus(handle);
+    if (b) {
+      b.stored_volume = v;
+      if (!b.muted) _perry_audio_set_gain(b.gainNode.gain, v, fadeMs);
+    }
+  } else if (kind === "sound") {
+    const s = _perry_audio_get_sound(handle);
+    if (s) s.default_volume = v;
+  }
+}
+
+function perry_audio_set_rate(playbackHandle, rate) {
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v) return;
+  const r = Number(rate);
+  if (!isFinite(r) || r <= 0) return;
+  v.rate = r;
+  if (v.source) {
+    try { v.source.playbackRate.value = r; } catch (_) {}
+  }
+}
+
+function perry_audio_set_pan(playbackHandle, pan) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return;
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v) return;
+  const p = Math.max(-1, Math.min(1, Number(pan) || 0));
+  v.pan = p;
+  if (v.pannerNode) {
+    try { v.pannerNode.pan.value = p; } catch (_) {}
+  } else if (v.source && v.gain && typeof ctx.createStereoPanner === "function") {
+    // Insert a panner mid-flight: voiceGain → panner → bus.
+    try {
+      const panner = ctx.createStereoPanner();
+      panner.pan.value = p;
+      v.gain.disconnect();
+      v.gain.connect(panner);
+      panner.connect((v.bus || PERRY_AUDIO_MASTER_BUS).gainNode);
+      v.pannerNode = panner;
+    } catch (err) { console.warn("perry/audio setPan:", err); }
+  }
+}
+
+function perry_audio_fade_in(playbackHandle, durationMs, toVol) {
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v || !v.gain) return;
+  const t = Number(toVol);
+  const target = (isFinite(t) && t >= 0) ? t : v.volume;
+  v.volume = target;
+  _perry_audio_set_gain(v.gain.gain, target, durationMs);
+}
+
+function perry_audio_fade_out(playbackHandle, durationMs) {
+  perry_audio_stop(playbackHandle, durationMs);
+}
+
+function perry_audio_crossfade(fromHandle, toHandle, durationMs) {
+  const ms = Math.max(0, Number(durationMs) || 0);
+  const from = _perry_audio_get_playback(fromHandle);
+  const to = _perry_audio_get_playback(toHandle);
+  if (from && from.gain) _perry_audio_set_gain(from.gain.gain, 0, ms);
+  if (to && to.gain) _perry_audio_set_gain(to.gain.gain, to.volume || 1.0, ms);
+  if (from) {
+    from.stopped = true;
+    const ctx = _perry_audio_ctx();
+    setTimeout(() => { try { if (from.source) from.source.stop(); } catch (_) {} }, ms + 5);
+  }
+}
+
+function perry_audio_create_bus(name, parentBus) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return 0;
+  const parent = _perry_audio_get_bus(parentBus) || PERRY_AUDIO_MASTER_BUS;
+  const gainNode = ctx.createGain();
+  gainNode.gain.value = 1.0;
+  gainNode.connect(parent.gainNode);
+  const entry = {
+    name: String(name || ""),
+    parent_id: parent === PERRY_AUDIO_MASTER_BUS ? 0 : PERRY_AUDIO_BUSES.indexOf(parent),
+    gainNode,
+    stored_volume: 1.0,
+    muted: false,
+    soloed: false,
+    destroyed: false,
+  };
+  // Index 0 reserved for master; user buses start at index 1.
+  if (PERRY_AUDIO_BUSES.length === 0) PERRY_AUDIO_BUSES[0] = PERRY_AUDIO_MASTER_BUS;
+  PERRY_AUDIO_BUSES.push(entry);
+  const idx = PERRY_AUDIO_BUSES.length - 1;
+  return PERRY_AUDIO_BUS_BASE + idx;
+}
+
+function perry_audio_destroy_bus(busHandle) {
+  const b = _perry_audio_get_bus(busHandle);
+  if (!b || b === PERRY_AUDIO_MASTER_BUS) return;
+  try { b.gainNode.disconnect(); } catch (_) {}
+  b.destroyed = true;
+}
+
+function perry_audio_mute_bus(busHandle, muted) {
+  const b = _perry_audio_get_bus(busHandle);
+  if (!b) return;
+  const m = Number(muted) >= 0.5;
+  b.muted = m;
+  _perry_audio_apply_solo_state();
+  if (!m && !PERRY_AUDIO_BUSES.some(x => x && x.soloed)) {
+    _perry_audio_set_gain(b.gainNode.gain, b.stored_volume, 0);
+  } else if (m) {
+    _perry_audio_set_gain(b.gainNode.gain, 0, 0);
+  }
+}
+
+function perry_audio_solo_bus(busHandle, soloed) {
+  const b = _perry_audio_get_bus(busHandle);
+  if (!b || b === PERRY_AUDIO_MASTER_BUS) return;
+  b.soloed = Number(soloed) >= 0.5;
+  _perry_audio_apply_solo_state();
+}
+
+function perry_audio_set_master_volume(volume, fadeMs) {
+  if (!_perry_audio_ctx()) return;
+  const v = Math.max(0, Number(volume) || 0);
+  PERRY_AUDIO_MASTER_BUS.stored_volume = v;
+  _perry_audio_set_gain(PERRY_AUDIO_MASTER_GAIN.gain, v, fadeMs);
+}
+
+function perry_audio_suspend() {
+  if (!PERRY_AUDIO_CTX) return;
+  try { PERRY_AUDIO_CTX.suspend(); } catch (_) {}
+}
+
+function perry_audio_resume_all() {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return;
+  const p = ctx.resume();
+  if (p && typeof p.catch === "function") p.catch(() => {
+    if (!PERRY_AUDIO_WARNED_AUTOPLAY) {
+      PERRY_AUDIO_WARNED_AUTOPLAY = true;
+      console.warn("perry/audio: resumeAll() rejected — must be called from a user gesture.");
+    }
+  });
+}
+
+function perry_audio_is_playing(handle) {
+  const kind = _perry_audio_handle_kind(handle);
+  if (kind === "playback") {
+    const v = _perry_audio_get_playback(handle);
+    return (v && !v.stopped && !v.paused) ? 1 : 0;
+  }
+  if (kind === "sound") {
+    const s = _perry_audio_get_sound(handle);
+    if (!s) return 0;
+    for (const v of PERRY_AUDIO_PLAYBACKS) {
+      if (v && v.sound === s && !v.stopped && !v.paused) return 1;
+    }
+    return 0;
+  }
+  return 0;
+}
+
+function perry_audio_get_duration(soundHandle) {
+  const s = _perry_audio_get_sound(soundHandle);
+  if (!s || !s.audioBuffer) return 0;
+  return s.audioBuffer.duration;
+}
+
+function perry_audio_get_position(playbackHandle) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return 0;
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v) return 0;
+  if (v.paused) return v.pauseOffset || 0;
+  if (v.stopped) return 0;
+  const elapsed = ctx.currentTime - v.startedAt;
+  if (v.sound && v.sound.audioBuffer) {
+    const d = v.sound.audioBuffer.duration;
+    if (v.loop && d > 0) return elapsed % d;
+    return Math.min(elapsed, d);
+  }
+  return elapsed;
+}
+
+function perry_audio_on_ended(playbackHandle, callback) {
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v) return;
+  v.onEnded = (callback === undefined || callback === null) ? null : callback;
+}
+
+function perry_audio_on_loaded(soundHandle, callback) {
+  const s = _perry_audio_get_sound(soundHandle);
+  if (!s) return;
+  const cb = (callback === undefined || callback === null) ? null : callback;
+  if (s.loaded && cb) {
+    // Already loaded — fire on next microtask.
+    Promise.resolve().then(() => {
+      try { callWasmClosure(cb); }
+      catch (err) { console.warn("perry/audio onLoaded threw:", err); }
+    });
+    return;
+  }
+  s.onLoaded = cb;
+}
+
 // ---------- UI Dispatch table (maps bridge function names to implementations) ----------
 const __perryUiDispatch = {
   // Widget creation
@@ -4080,6 +4646,14 @@ const __perryUiDispatch = {
   perry_media_get_current_time, perry_media_get_duration, perry_media_get_state,
   perry_media_is_playing, perry_media_on_state_change, perry_media_on_time_update,
   perry_media_set_now_playing, perry_media_destroy,
+  // Audio (issue #1867) — Web Audio API: low-latency SFX + buses
+  perry_audio_load_sound, perry_audio_unload, perry_audio_play, perry_audio_stop,
+  perry_audio_pause, perry_audio_resume, perry_audio_set_volume, perry_audio_set_rate,
+  perry_audio_set_pan, perry_audio_fade_in, perry_audio_fade_out, perry_audio_crossfade,
+  perry_audio_create_bus, perry_audio_destroy_bus, perry_audio_mute_bus, perry_audio_solo_bus,
+  perry_audio_set_master_volume, perry_audio_suspend, perry_audio_resume_all,
+  perry_audio_is_playing, perry_audio_get_duration, perry_audio_get_position,
+  perry_audio_on_ended, perry_audio_on_loaded,
 };
 
 // Also expose as __perryUi for JS async function context

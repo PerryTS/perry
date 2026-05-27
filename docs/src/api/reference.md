@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1337 entries across 81 modules.
+Total: 1361 entries across 82 modules.
 
 ## Modules
 
@@ -54,6 +54,7 @@ Total: 1337 entries across 81 modules.
 - [`path`](#path)
 - [`perf_hooks`](#perf-hooks)
 - [`perry/ads`](#perry-ads)
+- [`perry/audio`](#perry-audio)
 - [`perry/background`](#perry-background)
 - [`perry/i18n`](#perry-i18n)
 - [`perry/media`](#perry-media)
@@ -1192,6 +1193,35 @@ Total: 1337 entries across 81 modules.
 - `js_ads_interstitial_show` — module
 - `js_ads_rewarded_load` — module
 - `js_ads_rewarded_show` — module
+
+## `perry/audio`
+
+### Methods
+
+- `createBus` — module
+- `crossfade` — module
+- `destroyBus` — module
+- `fadeIn` — module
+- `fadeOut` — module
+- `getDuration` — module
+- `getPosition` — module
+- `isPlaying` — module
+- `loadSound` — module
+- `muteBus` — module
+- `onEnded` — module
+- `onLoaded` — module
+- `pause` — module
+- `play` — module
+- `resume` — module
+- `resumeAll` — module
+- `setMasterVolume` — module
+- `setPan` — module
+- `setRate` — module
+- `setVolume` — module
+- `soloBus` — module
+- `stop` — module
+- `suspend` — module
+- `unload` — module
 
 ## `perry/background`
 

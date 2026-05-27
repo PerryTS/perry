@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1337 entries across 81 modules
+// Coverage: 1361 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1085,6 +1085,57 @@ declare module "perry/ads" {
   export function js_ads_rewarded_load(...args: any[]): any;
   /** stdlib */
   export function js_ads_rewarded_show(...args: any[]): any;
+}
+
+declare module "perry/audio" {
+  /** stdlib */
+  export function createBus(...args: any[]): any;
+  /** stdlib */
+  export function crossfade(...args: any[]): any;
+  /** stdlib */
+  export function destroyBus(...args: any[]): any;
+  /** stdlib */
+  export function fadeIn(...args: any[]): any;
+  /** stdlib */
+  export function fadeOut(...args: any[]): any;
+  /** stdlib */
+  export function getDuration(...args: any[]): any;
+  /** stdlib */
+  export function getPosition(...args: any[]): any;
+  /** stdlib */
+  export function isPlaying(...args: any[]): any;
+  /** stdlib */
+  export function loadSound(...args: any[]): any;
+  /** stdlib */
+  export function muteBus(...args: any[]): any;
+  /** stdlib */
+  export function onEnded(...args: any[]): any;
+  /** stdlib */
+  export function onLoaded(...args: any[]): any;
+  /** stdlib */
+  export function pause(...args: any[]): any;
+  /** stdlib */
+  export function play(...args: any[]): any;
+  /** stdlib */
+  export function resume(...args: any[]): any;
+  /** stdlib */
+  export function resumeAll(...args: any[]): any;
+  /** stdlib */
+  export function setMasterVolume(...args: any[]): any;
+  /** stdlib */
+  export function setPan(...args: any[]): any;
+  /** stdlib */
+  export function setRate(...args: any[]): any;
+  /** stdlib */
+  export function setVolume(...args: any[]): any;
+  /** stdlib */
+  export function soloBus(...args: any[]): any;
+  /** stdlib */
+  export function stop(...args: any[]): any;
+  /** stdlib */
+  export function suspend(...args: any[]): any;
+  /** stdlib */
+  export function unload(...args: any[]): any;
 }
 
 declare module "perry/background" {

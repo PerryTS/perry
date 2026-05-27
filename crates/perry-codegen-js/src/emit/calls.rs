@@ -86,6 +86,32 @@ impl JsEmitter {
         }
     }
 
+    /// Emit a `perry/audio` (issue #1867) method call: look up the
+    /// method in `PERRY_AUDIO_TABLE` and emit `__perry.<runtime>(args...)`.
+    /// Argument coercion is purely positional — the dispatch table
+    /// guarantees uniform `f64` / `string` / `closure` shapes.
+    pub(super) fn emit_audio_method_call(&mut self, method: &str, args: &[Expr]) {
+        let rt = match perry_dispatch::perry_audio_lookup(method) {
+            Some(row) => row.runtime,
+            None => {
+                let _ = write!(
+                    self.output,
+                    "console.warn('perry/audio.{} not available')",
+                    method
+                );
+                return;
+            }
+        };
+        let _ = write!(self.output, "__perry.{}(", rt);
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            self.emit_expr(arg);
+        }
+        self.output.push(')');
+    }
+
     pub(super) fn emit_ui_method_call(
         &mut self,
         class_name: Option<&str>,

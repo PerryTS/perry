@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod audio;
+pub mod audio_playback;
 pub mod background;
 pub mod media_playback;
 pub mod state;

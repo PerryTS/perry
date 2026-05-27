@@ -689,6 +689,13 @@ pub(super) fn collect_modules(
             if import.source == "perry/background" {
                 ctx.needs_ui = true;
             }
+            // perry/audio (issue #1867) — AVAudioEngine on Apple, miniaudio
+            // on Linux/Windows/Android (PR 2). The runtime symbols live in
+            // libperry_ui_*.a same as perry/media, so importing any
+            // perry/audio function triggers UI lib linking.
+            if import.source == "perry/audio" {
+                ctx.needs_ui = true;
+            }
             if import.source == "perry/plugin" {
                 ctx.needs_plugins = true;
             }

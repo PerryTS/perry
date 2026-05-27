@@ -21,6 +21,9 @@ impl JsEmitter {
             "perry/system" => {
                 self.emit_system_method_call(method, args);
             }
+            "perry/audio" => {
+                self.emit_audio_method_call(method, args);
+            }
             "console" => {
                 self.emit_console_call(method, args);
             }

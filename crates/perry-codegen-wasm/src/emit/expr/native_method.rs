@@ -218,6 +218,23 @@ impl<'a> FuncEmitCtx<'a> {
                             }
                         }
                     }
+                    "perry/audio" => {
+                        // perry/audio (issue #1867) — same memory-based
+                        // dispatch as perry/ui, but with explicit table
+                        // lookup so the shared `play/stop/pause/setVolume`
+                        // method names don't collide with perry/media.
+                        let bridge_name = perry_dispatch::perry_audio_lookup(method)
+                            .map(|r| r.runtime)
+                            .unwrap_or("perry_audio_unknown");
+                        let mut slot = 0u32;
+                        let total_slots = args.len() as u32;
+                        self.emit_frame_begin(func, total_slots);
+                        for arg in args {
+                            self.emit_store_arg(func, slot, arg);
+                            slot += 1;
+                        }
+                        self.emit_memcall(func, bridge_name, slot);
+                    }
                     "perry/ui" | "perry/system" => {
                         // Memory-based dispatch: write args to WASM memory via i64.store.
                         let bridge_name = map_ui_method(method, class_name.as_deref());

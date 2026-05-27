@@ -1,0 +1,15 @@
+[package]
+name = "perry-audio-miniaudio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared miniaudio-backed perry/audio backend for Linux, Windows, and Android (#1867)."
+
+[lib]
+crate-type = ["rlib"]
+
+[build-dependencies]
+cc = "1"
+
+[dependencies]
+libc = "0.2"

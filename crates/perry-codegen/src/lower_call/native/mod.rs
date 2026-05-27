@@ -37,9 +37,10 @@ pub(super) use super::{
     apply_inline_style, collect_closure_introduced_ids, extract_options_fields,
     find_outer_writes_stmt, get_raw_string_ptr, lower_fetch_native_method,
     lower_native_module_dispatch, lower_notification_schedule, lower_perry_ui_table_call,
-    native_module_lookup, perry_i18n_table_lookup, perry_media_table_lookup,
-    perry_plugin_instance_method_lookup, perry_plugin_table_lookup, perry_system_table_lookup,
-    perry_ui_instance_method_lookup, perry_ui_table_lookup, perry_updater_table_lookup,
+    native_module_lookup, perry_audio_table_lookup, perry_i18n_table_lookup,
+    perry_media_table_lookup, perry_plugin_instance_method_lookup, perry_plugin_table_lookup,
+    perry_system_table_lookup, perry_ui_instance_method_lookup, perry_ui_table_lookup,
+    perry_updater_table_lookup,
 };
 
 mod box_style;
@@ -1015,6 +1016,23 @@ pub(crate) fn lower_native_method_call(
         if let Some(sig) = perry_system_table_lookup(method) {
             return lower_perry_ui_table_call(ctx, sig, args);
         }
+    }
+
+    // perry/audio dispatch (issue #1867): loadSound, play, stop, pause,
+    // setVolume, fadeIn/Out, crossfade, createBus, setBusVolume, …
+    // Low-latency game-engine-style audio backed by AVAudioEngine on
+    // Apple, Web Audio API on WASM, and (PR 2) miniaudio on Linux /
+    // Windows / Android. Distinct from perry/media (streaming + UI).
+    if module == "perry/audio" && object.is_none() {
+        if let Some(sig) = perry_audio_table_lookup(method) {
+            return lower_perry_ui_table_call(ctx, sig, args);
+        }
+        bail!(
+            "perry/audio: '{}' is not a known function (args: {}). \
+             Check types/perry/audio/index.d.ts for the supported API surface.",
+            method,
+            args.len()
+        );
     }
 
     // perry/media dispatch: createPlayer, play, pause, seek, setVolume,

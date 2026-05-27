@@ -24,6 +24,7 @@ const PERRY_THREAD_DTS: &str = include_str!("../../../../types/perry/thread/inde
 const PERRY_I18N_DTS: &str = include_str!("../../../../types/perry/i18n/index.d.ts");
 const PERRY_SYSTEM_DTS: &str = include_str!("../../../../types/perry/system/index.d.ts");
 const PERRY_MEDIA_DTS: &str = include_str!("../../../../types/perry/media/index.d.ts");
+const PERRY_AUDIO_DTS: &str = include_str!("../../../../types/perry/audio/index.d.ts");
 const PERRY_TUI_DTS: &str = include_str!("../../../../types/perry/tui/index.d.ts");
 const PERRY_WEBASSEMBLY_DTS: &str = include_str!("../../../../types/perry/webassembly/index.d.ts");
 const PERRY_BUILD_DTS: &str = include_str!("../../../../types/perry/build/index.d.ts");
@@ -47,6 +48,7 @@ pub fn write_perry_type_stubs(project_path: &Path, quiet: bool) -> Result<()> {
         ("i18n", PERRY_I18N_DTS),
         ("system", PERRY_SYSTEM_DTS),
         ("media", PERRY_MEDIA_DTS),
+        ("audio", PERRY_AUDIO_DTS),
         ("tui", PERRY_TUI_DTS),
         // Issue #76 — WebAssembly host runtime ambient declarations.
         // The file declares `WebAssembly` on the global scope, so it
@@ -76,7 +78,7 @@ pub fn write_perry_type_stubs(project_path: &Path, quiet: bool) -> Result<()> {
 
     if !quiet {
         println!(
-            "  Created .perry/types/ type stubs (ui, thread, i18n, system, media, tui, webassembly, build, stdlib)"
+            "  Created .perry/types/ type stubs (ui, thread, i18n, system, media, audio, tui, webassembly, build, stdlib)"
         );
     }
 

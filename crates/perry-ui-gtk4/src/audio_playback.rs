@@ -1,17 +1,17 @@
-//! perry/audio backend on Android (#1867).
+//! perry/audio backend on Linux / GTK4 (#1867).
 //!
 //! The implementation lives in the shared `perry-audio-miniaudio` crate
 //! so Linux / Windows / Android all share one backend instead of
 //! triplicated stubs. miniaudio (single-header C, MIT) picks the native
-//! audio API at runtime on Android: AAudio (API 26+) → OpenSL ES.
+//! audio API at runtime: PulseAudio / PipeWire / ALSA on Linux.
 //!
 //! All 24 dispatch-table symbols (see
 //! `crates/perry-dispatch/src/audio_table.rs`) are exported by
 //! `perry-audio-miniaudio` as `#[no_mangle] extern "C"`. The thin
 //! re-export wrappers below force the linker to keep them in
-//! `libperry_ui_android.a` — Rust's dead-code elimination would
-//! otherwise drop transitive `no_mangle` symbols that nothing inside
-//! the crate references.
+//! `libperry_ui_gtk4.a` — Rust's dead-code elimination would otherwise
+//! drop transitive `no_mangle` symbols that nothing inside the crate
+//! references.
 
 extern crate perry_audio_miniaudio;
 

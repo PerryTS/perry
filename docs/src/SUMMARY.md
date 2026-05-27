@@ -105,6 +105,7 @@
 - [Keychain](system/keychain.md)
 - [Notifications](system/notifications.md)
 - [Audio Capture](system/audio.md)
+- [Audio Playback](system/audio_module.md)
 - [Media Playback](system/media.md)
 - [Geolocation & Image Picker](system/geolocation.md)
 - [Background Tasks](system/background.md)

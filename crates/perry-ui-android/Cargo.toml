@@ -13,6 +13,7 @@ geisterhand = []
 
 [dependencies]
 perry-ui = { path = "../perry-ui" }
+perry-audio-miniaudio = { workspace = true }
 perry-runtime = { path = "../perry-runtime", default-features = false }
 # Issue #552: native image processing (sharp). perry-stdlib doesn't cross-compile
 # to Android; perry-ext-sharp is the OpenSSL-free standalone with the same FFI

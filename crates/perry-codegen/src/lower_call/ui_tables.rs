@@ -15,9 +15,9 @@ use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I64};
 
 use perry_dispatch::{
-    ArgKind as UiArgKind, MethodRow as UiSig, ReturnKind as UiReturnKind, PERRY_BACKGROUND_TABLE,
-    PERRY_I18N_TABLE, PERRY_MEDIA_TABLE, PERRY_SYSTEM_TABLE, PERRY_UI_INSTANCE_TABLE,
-    PERRY_UI_TABLE, PERRY_UPDATER_TABLE,
+    ArgKind as UiArgKind, MethodRow as UiSig, ReturnKind as UiReturnKind, PERRY_AUDIO_TABLE,
+    PERRY_BACKGROUND_TABLE, PERRY_I18N_TABLE, PERRY_MEDIA_TABLE, PERRY_SYSTEM_TABLE,
+    PERRY_UI_INSTANCE_TABLE, PERRY_UI_TABLE, PERRY_UPDATER_TABLE,
 };
 
 use super::apply_inline_style;
@@ -94,6 +94,19 @@ pub fn perry_updater_table_lookup(method: &str) -> Option<&'static UiSig> {
 /// `_cancel`) exported by the per-platform `perry-ui-*` crates.
 pub fn perry_background_table_lookup(method: &str) -> Option<&'static UiSig> {
     PERRY_BACKGROUND_TABLE.iter().find(|s| s.method == method)
+}
+
+// =============================================================================
+// perry/audio dispatch table (issue #1867)
+// =============================================================================
+
+/// Maps the TS exports from `types/perry/audio/index.d.ts` (loadSound, play,
+/// stop, pause, resume, setVolume, fadeIn/Out, crossfade, createBus,
+/// setBusVolume, …) to their `perry_audio_*` runtime symbols. Backed by
+/// AVAudioEngine on Apple, Web Audio API on the WASM target, and (PR 2)
+/// miniaudio on Linux / Windows / Android.
+pub fn perry_audio_table_lookup(method: &str) -> Option<&'static UiSig> {
+    PERRY_AUDIO_TABLE.iter().find(|s| s.method == method)
 }
 
 // =============================================================================

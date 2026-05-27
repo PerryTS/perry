@@ -1,5 +1,6 @@
 pub mod app;
 pub mod audio;
+pub mod audio_playback;
 pub mod background;
 pub mod clipboard;
 pub mod crash_log;
