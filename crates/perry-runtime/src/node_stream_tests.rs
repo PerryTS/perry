@@ -427,6 +427,42 @@ fn fresh_streams_expose_destroyed_false() {
 }
 
 #[test]
+fn readable_lifecycle_flags_reflect_ended_state() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+
+    assert_eq!(js_node_stream_method_readable(handle).to_bits(), TAG_TRUE);
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readable")).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_node_stream_method_readable_ended(handle).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableEnded")).to_bits(),
+        TAG_FALSE
+    );
+
+    let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
+    assert_eq!(js_node_stream_method_readable(handle).to_bits(), TAG_FALSE);
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readable")).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_node_stream_method_readable_ended(handle).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableEnded")).to_bits(),
+        TAG_TRUE
+    );
+}
+
+#[test]
 fn stream_destroy_with_error_marks_errored_state() {
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
     let destroy = js_object_get_field_by_name_f64(
