@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1304 entries across 81 modules
+// Coverage: 1317 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -2057,6 +2057,28 @@ declare module "ws" {
 
 declare module "zlib" {
   /** stdlib */
+  export class BrotliCompress { [key: string]: any; }
+  /** stdlib */
+  export class BrotliDecompress { [key: string]: any; }
+  /** stdlib */
+  export class Deflate { [key: string]: any; }
+  /** stdlib */
+  export class DeflateRaw { [key: string]: any; }
+  /** stdlib */
+  export class Gunzip { [key: string]: any; }
+  /** stdlib */
+  export class Gzip { [key: string]: any; }
+  /** stdlib */
+  export class Inflate { [key: string]: any; }
+  /** stdlib */
+  export class InflateRaw { [key: string]: any; }
+  /** stdlib */
+  export class Unzip { [key: string]: any; }
+  /** stdlib */
+  export class ZstdCompress { [key: string]: any; }
+  /** stdlib */
+  export class ZstdDecompress { [key: string]: any; }
+  /** stdlib */
   export const constants: any;
   /** stdlib */
   export function brotliCompress(p0: string): any;
@@ -2084,6 +2106,10 @@ declare module "zlib" {
   export function createInflateRaw(options?: any): any;
   /** stdlib */
   export function createUnzip(options?: any): any;
+  /** stdlib */
+  export function createZstdCompress(options?: any): any;
+  /** stdlib */
+  export function createZstdDecompress(options?: any): any;
   /** stdlib */
   export function deflateSync(p0: string): string;
   /** stdlib */

@@ -1282,6 +1282,17 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // by axios for stream wiring. Values are resolved at runtime by
     // `get_native_module_constant` in `perry-runtime/src/object.rs`.
     property("zlib", "constants"),
+    class("zlib", "Deflate"),
+    class("zlib", "DeflateRaw"),
+    class("zlib", "Gzip"),
+    class("zlib", "Gunzip"),
+    class("zlib", "Inflate"),
+    class("zlib", "InflateRaw"),
+    class("zlib", "Unzip"),
+    class("zlib", "BrotliCompress"),
+    class("zlib", "BrotliDecompress"),
+    class("zlib", "ZstdCompress"),
+    class("zlib", "ZstdDecompress"),
     // #1843 — Brotli one-shot compress/decompress (sync + async).
     method_sig(
         "zlib",
@@ -1328,6 +1339,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `zlib.createBrotliDecompress(options?)` — now a real Transform stream
     // (still passes axios's `typeof === 'function'` module-init gate).
     zlib_stream_factory("createBrotliDecompress"),
+    zlib_stream_factory("createZstdCompress"),
+    zlib_stream_factory("createZstdDecompress"),
     method_sig(
         "cron",
         "validate",

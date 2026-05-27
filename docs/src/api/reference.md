@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1304 entries across 81 modules.
+Total: 1317 entries across 81 modules.
 
 ## Modules
 
@@ -1908,6 +1908,20 @@ Total: 1304 entries across 81 modules.
 
 ## `zlib`
 
+### Classes
+
+- `BrotliCompress`
+- `BrotliDecompress`
+- `Deflate`
+- `DeflateRaw`
+- `Gunzip`
+- `Gzip`
+- `Inflate`
+- `InflateRaw`
+- `Unzip`
+- `ZstdCompress`
+- `ZstdDecompress`
+
 ### Methods
 
 - `brotliCompress` — module
@@ -1923,6 +1937,8 @@ Total: 1304 entries across 81 modules.
 - `createInflate` — module
 - `createInflateRaw` — module
 - `createUnzip` — module
+- `createZstdCompress` — module
+- `createZstdDecompress` — module
 - `deflateSync` — module
 - `gunzip` — module
 - `gunzipSync` — module
