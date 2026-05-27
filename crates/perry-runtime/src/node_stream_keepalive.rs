@@ -31,6 +31,8 @@ static KEEP_NS_WRITABLE_HWM: extern "C" fn(i64) -> f64 = super::js_node_stream_m
 static KEEP_NS_READABLE_ABORTED: extern "C" fn(i64) -> f64 =
     super::js_node_stream_method_readable_aborted;
 #[used]
+static KEEP_NS_METHOD_ERRORED: extern "C" fn(i64) -> f64 = super::js_node_stream_method_errored;
+#[used]
 static KEEP_NS_WRITABLE_CORKED: extern "C" fn(i64) -> f64 =
     super::js_node_stream_method_writable_corked;
 #[used]

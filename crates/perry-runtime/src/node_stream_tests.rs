@@ -677,12 +677,20 @@ fn stream_destroy_with_error_marks_errored_state() {
     );
     let err = string_value("boom");
 
+    assert_eq!(
+        js_node_stream_method_errored(raw_ptr_from_value(stream) as i64).to_bits(),
+        TAG_NULL
+    );
     let ret = unsafe { crate::closure::js_native_call_value(destroy, &err, 1) };
 
     assert_eq!(ret.to_bits(), stream.to_bits());
     assert_eq!(js_node_stream_is_errored(stream).to_bits(), TAG_FALSE);
     let _ = crate::promise::js_promise_run_microtasks();
     assert_eq!(js_node_stream_is_errored(stream).to_bits(), TAG_TRUE);
+    assert_eq!(
+        js_node_stream_method_errored(raw_ptr_from_value(stream) as i64).to_bits(),
+        err.to_bits()
+    );
 }
 
 #[test]

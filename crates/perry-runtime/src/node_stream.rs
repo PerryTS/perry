@@ -475,6 +475,13 @@ pub extern "C" fn js_node_stream_method_readable_aborted(stream_handle: i64) -> 
     readable_aborted_value(stream_value_from_handle(stream_handle))
 }
 
+/// `stream.errored` property getter on typed stream instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_errored(stream_handle: i64) -> f64 {
+    readable_hidden_error(stream_value_from_handle(stream_handle))
+        .unwrap_or(f64::from_bits(TAG_NULL))
+}
+
 /// `stream.writableCorked` property getter on a typed writable-side instance.
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_writable_corked(stream_handle: i64) -> f64 {

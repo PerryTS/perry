@@ -902,18 +902,6 @@
     "category": "bug-open",
     "reason": "node:stream: readable.unshift(chunk, encoding) — second-arg encoding form not honored. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/flags/readable-errored": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: readable.errored getter — stored Error after destroy(err) not exposed. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/flags/writable-errored": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: writable.errored getter — stored Error after destroy(err) not exposed. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/iter-helpers/map-returns-readable": {
     "issue": "1558",
     "added": "2026-05-24",
