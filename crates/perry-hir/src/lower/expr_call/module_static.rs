@@ -16,6 +16,7 @@ use super::super::{
     extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
     resolve_typed_parse_ty, LoweringContext,
 };
+use super::os::user_info_expr_for_call;
 
 pub(super) fn try_module_static_methods(
     ctx: &mut LoweringContext,
@@ -966,7 +967,7 @@ pub(super) fn try_module_static_methods(
                             return Ok(Ok(Expr::OsNetworkInterfaces));
                         }
                         "userInfo" => {
-                            return Ok(Ok(Expr::OsUserInfo));
+                            return Ok(Ok(user_info_expr_for_call(call)));
                         }
                         _ => {} // Fall through to generic handling
                     }

@@ -700,6 +700,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::OsCpus
         | Expr::OsNetworkInterfaces
         | Expr::OsUserInfo
+        | Expr::OsUserInfoBuffer
         | Expr::OsEOL
         | Expr::OsDevNull
         | Expr::OsAvailableParallelism

@@ -647,6 +647,8 @@ consumer = "js_array_numeric_push_f64_unboxed"
 native_rep_name = "f64"
 access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
+consumed_fact_kind = "raw_f64_layout"
+consumed_fact_state = "consumed"
 
 [[workloads.numeric_arrays.native_rep_checks.require_records]]
 name = "numeric_array_push_dynamic_fallback"
@@ -654,6 +656,17 @@ expr_kind = "NumericArrayPush"
 consumer = "js_array_push_f64"
 access_mode = "dynamic_fallback"
 materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "rejected"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_push_dynamic_fallback_invalidates_layout"
+expr_kind = "NumericArrayPush"
+consumer = "js_array_push_f64"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "invalidated"
 
 [[workloads.numeric_arrays.native_rep_checks.require_records]]
 name = "numeric_array_get_fast_f64"
@@ -662,6 +675,8 @@ consumer = "js_array_numeric_get_f64_unboxed"
 native_rep_name = "f64"
 access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
+consumed_fact_kind = "raw_f64_layout"
+consumed_fact_state = "consumed"
 
 [[workloads.numeric_arrays.native_rep_checks.require_records]]
 name = "numeric_array_get_dynamic_fallback"
@@ -669,6 +684,17 @@ expr_kind = "NumericArrayIndexGet"
 consumer = "js_typed_feedback_array_index_get_fallback_boxed"
 access_mode = "dynamic_fallback"
 materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "rejected"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_get_dynamic_fallback_invalidates_layout"
+expr_kind = "NumericArrayIndexGet"
+consumer = "js_typed_feedback_array_index_get_fallback_boxed"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "invalidated"
 
 [[workloads.numeric_arrays.native_rep_checks.require_records]]
 name = "numeric_array_set_fast_f64"
@@ -677,6 +703,8 @@ consumer = "js_array_numeric_set_f64_unboxed"
 native_rep_name = "f64"
 access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
+consumed_fact_kind = "raw_f64_layout"
+consumed_fact_state = "consumed"
 
 [[workloads.numeric_arrays.native_rep_checks.require_records]]
 name = "numeric_array_set_dynamic_fallback"
@@ -684,6 +712,17 @@ expr_kind = "NumericArrayIndexSet"
 consumer_contains = "fallback"
 access_mode = "dynamic_fallback"
 materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "rejected"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_set_dynamic_fallback_invalidates_layout"
+expr_kind = "NumericArrayIndexSet"
+consumer_contains = "fallback"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "invalidated"
 
 [workloads.raw_numeric_object_fields]
 source = "tests/raw_numeric_object_fields.ts"
@@ -737,12 +776,26 @@ consumer = "class_field_get.raw_f64_load"
 native_rep_name = "f64"
 access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
+consumed_fact_kind = "raw_f64_layout"
+consumed_fact_state = "consumed"
 
 [[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
 name = "raw_class_field_get_dynamic_fallback"
 expr_kind = "ClassFieldGet"
 consumer = "js_object_get_field_by_name_f64"
 access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "rejected"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_class_field_get_dynamic_fallback_invalidates_layout"
+expr_kind = "ClassFieldGet"
+consumer = "js_object_get_field_by_name_f64"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "invalidated"
 
 [[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
 name = "raw_class_field_set_fast_f64"
@@ -751,12 +804,26 @@ consumer = "class_field_set.raw_f64_store"
 native_rep_name = "f64"
 access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
+consumed_fact_kind = "raw_f64_layout"
+consumed_fact_state = "consumed"
 
 [[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
 name = "raw_class_field_set_dynamic_fallback"
 expr_kind = "ClassFieldSet"
 consumer = "js_object_set_field_by_name"
 access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "rejected"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_class_field_set_dynamic_fallback_invalidates_layout"
+expr_kind = "ClassFieldSet"
+consumer = "js_object_set_field_by_name"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "invalidated"
 
 [workloads.scalar_replacement_literals]
 source = "benchmarks/compiler_output/fixtures/scalar_replacement_literals.ts"

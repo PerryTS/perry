@@ -127,6 +127,13 @@ fn fire_abort_listeners(signal: *mut ObjectHeader) {
     }
 }
 
+fn abort_signal_is_aborted(signal: *mut ObjectHeader) -> bool {
+    if signal.is_null() {
+        return false;
+    }
+    crate::object::js_object_get_field_f64(signal, 0).to_bits() == TAG_TRUE_AC
+}
+
 /// Abort the controller (sets aborted = true on signal)
 #[no_mangle]
 pub extern "C" fn js_abort_controller_abort(controller: *mut ObjectHeader) {
@@ -143,6 +150,10 @@ pub extern "C" fn js_abort_controller_abort_reason(controller: *mut ObjectHeader
     let signal = unbox_pointer_ac(signal_val);
 
     if !signal.is_null() {
+        if abort_signal_is_aborted(signal) {
+            js_object_set_field_f64(controller, ABORT_ABORTED_FIELD, f64::from_bits(TAG_TRUE_AC));
+            return;
+        }
         // Set aborted = true on signal
         js_object_set_field_f64(signal, 0, f64::from_bits(TAG_TRUE_AC));
         // Store reason (defaults to undefined); if user passes a string or other value we keep it as-is.
@@ -185,6 +196,44 @@ pub extern "C" fn js_abort_signal_add_listener(
         };
     if !arr_ptr.is_null() {
         js_array_push_f64(arr_ptr, listener);
+    }
+}
+
+/// Remove one matching "abort" listener from a signal.
+#[no_mangle]
+pub extern "C" fn js_abort_signal_remove_listener(
+    signal: *mut ObjectHeader,
+    event_type: f64,
+    listener: f64,
+) {
+    if signal.is_null() {
+        return;
+    }
+    let type_str = get_string_content(event_type);
+    if type_str != "abort" {
+        return;
+    }
+    let listeners_val = crate::object::js_object_get_field_f64(signal, 2);
+    let bits = listeners_val.to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) != POINTER_TAG_AC {
+        return;
+    }
+    let arr_ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader;
+    if arr_ptr.is_null() {
+        return;
+    }
+    let len = crate::array::js_array_length(arr_ptr);
+    for i in 0..len {
+        let current = crate::array::js_array_get_f64(arr_ptr, i);
+        if current.to_bits() != listener.to_bits() {
+            continue;
+        }
+        for j in (i + 1)..len {
+            let next = crate::array::js_array_get_f64(arr_ptr, j);
+            crate::array::js_array_set_f64_unchecked(arr_ptr, j - 1, next);
+        }
+        crate::array::js_array_set_length(arr_ptr, (len - 1) as f64);
+        break;
     }
 }
 

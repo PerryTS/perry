@@ -530,7 +530,7 @@ fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     ];
 
     let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 8);
+    assert_eq!(artifact["schema_version"], 9);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -563,7 +563,7 @@ fn artifact_schema_v6_records_rejected_facts_for_buffer_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 8);
+    assert_eq!(artifact["schema_version"], 9);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -609,7 +609,7 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
-    assert_eq!(artifact["schema_version"], 8);
+    assert_eq!(artifact["schema_version"], 9);
     assert_eq!(artifact["summary"]["pod_layout_count"], 1);
     assert_eq!(artifact["summary"]["pod_record_count"], 1);
     let layouts = artifact["pod_layouts"].as_array().unwrap();
@@ -681,7 +681,7 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
-    assert_eq!(artifact["schema_version"], 8);
+    assert_eq!(artifact["schema_version"], 9);
     assert!(
         artifact["records"]
             .as_array()
@@ -728,7 +728,7 @@ fn artifact_schema_v8_rejects_inexact_pod_initializer_values() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_init_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 8);
+    assert_eq!(artifact["schema_version"], 9);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert_eq!(artifact["summary"]["pod_record_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
@@ -779,7 +779,7 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 8);
+    assert_eq!(artifact["schema_version"], 9);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
     assert!(
@@ -827,6 +827,14 @@ fn artifact_records_buffer_length_as_buffer_len_and_unsigned_materialization() {
         }),
         "expected unsigned BufferLen JS materialization record:\n{artifact:#}"
     );
+}
+
+fn record_has_raw_f64_layout_fact(record: &serde_json::Value, list: &str, state: &str) -> bool {
+    record[list].as_array().is_some_and(|facts| {
+        facts
+            .iter()
+            .any(|fact| fact["kind"] == "raw_f64_layout" && fact["state"] == state)
+    })
 }
 
 #[test]
@@ -1024,7 +1032,7 @@ fn native_library_manifest_lowercase_abi_params_emit_c_abi_signature() {
 }
 
 #[test]
-fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
+fn artifact_records_raw_numeric_array_f64_fast_paths_and_fallback_reasons() {
     let array_ty = Type::Array(Box::new(Type::Number));
     let module = module_with_classes_and_params(
         "artifact_numeric_array_f64.ts",
@@ -1052,6 +1060,7 @@ fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
                 && record["consumer"] == "js_array_numeric_set_f64_unboxed"
                 && record["native_rep_name"] == "f64"
                 && record["access_mode"] == "checked_native"
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
         }),
         "expected numeric array f64 set fast-path record:\n{artifact:#}"
     );
@@ -1061,6 +1070,7 @@ fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
                 && record["consumer"] == "js_array_numeric_get_f64_unboxed"
                 && record["native_rep_name"] == "f64"
                 && record["access_mode"] == "checked_native"
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
         }),
         "expected numeric array f64 get fast-path record:\n{artifact:#}"
     );
@@ -1069,8 +1079,31 @@ fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
             record["access_mode"] == "dynamic_fallback"
                 && record["materialization_reason"] == "runtime_api"
                 && record["fallback_reason"] == "runtime_api"
+                && record_has_raw_f64_layout_fact(record, "rejected_facts", "rejected")
+                && record_has_raw_f64_layout_fact(record, "rejected_facts", "invalidated")
         }),
         "expected boxed runtime fallback reason records:\n{artifact:#}"
+    );
+    assert!(
+        artifact["summary"]["raw_f64_layout_fact_counts"]["consumed"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 2,
+        "expected raw-f64 layout consumed summary:\n{artifact:#}"
+    );
+    assert!(
+        artifact["summary"]["raw_f64_layout_fact_counts"]["rejected"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1,
+        "expected raw-f64 layout rejection summary:\n{artifact:#}"
+    );
+    assert!(
+        artifact["summary"]["raw_f64_layout_fact_counts"]["invalidated"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1,
+        "expected raw-f64 layout invalidation summary:\n{artifact:#}"
     );
 }
 
@@ -1103,6 +1136,7 @@ fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons(
                 && record["consumer"] == "class_field_set.raw_f64_store"
                 && record["native_rep_name"] == "f64"
                 && record["access_mode"] == "checked_native"
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
         }),
         "expected raw numeric class field f64 store record:\n{artifact:#}"
     );
@@ -1112,6 +1146,7 @@ fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons(
                 && record["consumer"] == "class_field_get.raw_f64_load"
                 && record["native_rep_name"] == "f64"
                 && record["access_mode"] == "checked_native"
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
         }),
         "expected raw numeric class field f64 load record:\n{artifact:#}"
     );
@@ -1120,8 +1155,17 @@ fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons(
             record["access_mode"] == "dynamic_fallback"
                 && record["materialization_reason"] == "runtime_api"
                 && record["fallback_reason"] == "runtime_api"
+                && record_has_raw_f64_layout_fact(record, "rejected_facts", "rejected")
+                && record_has_raw_f64_layout_fact(record, "rejected_facts", "invalidated")
         }),
         "expected boxed raw-field fallback reason records:\n{artifact:#}"
+    );
+    assert!(
+        artifact["summary"]["raw_f64_layout_fact_counts"]["consumed"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 2,
+        "expected raw-f64 layout consumed summary:\n{artifact:#}"
     );
 }
 

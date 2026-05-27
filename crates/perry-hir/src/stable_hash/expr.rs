@@ -261,6 +261,7 @@ impl SH for Expr {
             Expr::OsCpus => tag(h, 211),
             Expr::OsNetworkInterfaces => tag(h, 212),
             Expr::OsUserInfo => tag(h, 213),
+            Expr::OsUserInfoBuffer => tag(h, 11221),
             Expr::OsEOL => tag(h, 214),
             Expr::OsDevNull => tag(h, 215),
             Expr::OsAvailableParallelism => tag(h, 216),

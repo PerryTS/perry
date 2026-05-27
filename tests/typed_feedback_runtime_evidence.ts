@@ -8,7 +8,7 @@ console.log(numbers[0]);
 
 function writeArrayFallback(target: number[], value: number): void {
   target[1] = value;
-  console.log((target as any)[1]);
+  console.log(target[1]);
 }
 
 writeArrayFallback(numbers, runtimeValue());
@@ -24,7 +24,7 @@ function writeCounterSuccess(target: Counter): void {
 
 function writeCounterFallback(target: Counter, value: number): void {
   target.value = value;
-  console.log((target as any).value);
+  console.log(target.value);
 }
 
 const counter = new Counter();

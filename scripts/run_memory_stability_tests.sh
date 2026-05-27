@@ -633,6 +633,10 @@ for idx, cycle in enumerate(cycles):
             "unknown_layout_slots_read",
             "pointer_free_ranges_skipped",
             "pointer_free_slots_skipped",
+            "raw_numeric_array_ranges_skipped",
+            "raw_numeric_array_slots_skipped",
+            "raw_numeric_object_field_ranges_skipped",
+            "raw_numeric_object_field_slots_skipped",
         ):
             value = layout_scans.get(field)
             if not isinstance(value, int) or value < 0:
@@ -1536,6 +1540,8 @@ run_raw_numeric_object_fields_codegen_semantics() {
         '9.5' \
         'sealed-extra-error' \
         '{"value":12.5}' \
+        'prevent-extra-error' \
+        '{"value":13.5}' \
         '44' \
         '15.5' >"$expected_output"
 
@@ -1562,6 +1568,7 @@ run_target_collector_architecture_gates() {
         "closure_heavy|243150|$workloads_dir/closure_heavy.ts"
         "async_promise_closures|18540|$workloads_dir/async_promise_closures.ts|PERRY_GEN_GC_EVACUATE=0 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
         "large_object_barriers|36052|$workloads_dir/large_object_barriers.ts"
+        "raw_numeric_layouts|71|benchmarks/compiler_output/fixtures/raw_numeric_layout_smoke.ts"
     )
 
     local report_args=()

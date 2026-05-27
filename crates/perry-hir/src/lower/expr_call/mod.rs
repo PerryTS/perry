@@ -39,6 +39,7 @@ mod module_static;
 mod native_module;
 mod nested_namespace;
 mod object_static;
+mod os;
 mod post_args_dispatch;
 mod prescans;
 mod reflect_args;

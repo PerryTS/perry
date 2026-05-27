@@ -851,11 +851,7 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
         fixture.nursery_user as *mut crate::array::ArrayHeader,
     );
     crate::object::test_seed_transition_cache_root(fixture.nursery_addr());
-    crate::object::test_seed_object_cache_roots(
-        fixture.nursery_bits,
-        fixture.nursery_bits,
-        fixture.nursery_i64(),
-    );
+    crate::object::test_seed_object_cache_roots([fixture.nursery_bits; 7], fixture.nursery_i64());
     crate::json::test_seed_parse_roots(
         fixture.nursery_value(),
         fixture.nursery_user as *const crate::string::StringHeader,
@@ -998,11 +994,7 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     );
     assert_eq!(
         crate::object::test_object_cache_roots(),
-        (
-            fixture.old_bits,
-            fixture.old_bits,
-            fixture.old_addr() as i64
-        )
+        ([fixture.old_bits; 7], fixture.old_addr() as i64)
     );
     assert_eq!(
         crate::json::test_parse_roots_snapshot(),

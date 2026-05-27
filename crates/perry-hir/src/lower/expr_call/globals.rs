@@ -13,6 +13,7 @@ use super::super::{
     extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
     resolve_typed_parse_ty, LoweringContext,
 };
+use super::os::user_info_expr_for_call;
 
 pub(super) fn try_global_builtins(
     ctx: &mut LoweringContext,
@@ -786,7 +787,7 @@ pub(super) fn try_global_builtins(
                     "version" => return Ok(Ok(Expr::OsVersion)),
                     "cpus" => return Ok(Ok(Expr::OsCpus)),
                     "networkInterfaces" => return Ok(Ok(Expr::OsNetworkInterfaces)),
-                    "userInfo" => return Ok(Ok(Expr::OsUserInfo)),
+                    "userInfo" => return Ok(Ok(user_info_expr_for_call(call))),
                     _ => {}
                 }
             }

@@ -578,6 +578,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let h = blk.call(I64, "js_os_user_info", &[]);
             Ok(nanbox_pointer_inline(blk, &h))
         }
+        Expr::OsUserInfoBuffer => {
+            let blk = ctx.block();
+            let h = blk.call(I64, "js_os_user_info_buffer", &[]);
+            Ok(nanbox_pointer_inline(blk, &h))
+        }
         Expr::OsDevNull => {
             let blk = ctx.block();
             let h = blk.call(I64, "js_os_dev_null", &[]);

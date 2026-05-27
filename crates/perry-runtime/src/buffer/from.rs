@@ -320,18 +320,18 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
     if top16 == 0x7FFD {
         let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
         if is_registered_buffer(raw) {
-            // Issue #579: ArrayBuffer source aliases the storage — every
-            // `new Uint8Array(ab)` view of the same ArrayBuffer shares the
+            // Issue #579: ArrayBuffer / SharedArrayBuffer sources alias
+            // the storage — every `new Uint8Array(ab)` view shares the
             // same `BufferHeader` pointer so writes through one view are
             // visible through every other. The decision is gated on the
-            // ArrayBuffer registry (set at `js_array_buffer_new` time) so
+            // ArrayBuffer registries (set at constructor time) so
             // it survives the `mark_as_uint8array` side-effect — a second
             // view's `is_uint8array_buffer` would otherwise return true
             // and incorrectly fall into the spec-mandated COPY branch.
             //
             // Issue #227 (the prior memcpy branch) was about avoiding
             // f64-misinterpretation; aliasing also avoids it.
-            if is_array_buffer(raw) {
+            if is_any_array_buffer(raw) {
                 mark_as_uint8array(raw);
                 return raw as *mut BufferHeader;
             }
@@ -366,17 +366,7 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
     js_uint8array_alloc(0)
 }
 
-/// `new ArrayBuffer(size)` — allocate a zero-filled buffer of `size` bytes.
-/// Issue #579: pre-fix, `ArrayBuffer` had no constructor handler so it fell
-/// through to the empty-ObjectHeader placeholder path, and `new Uint8Array(ab)`
-/// silently produced a 1-byte buffer with no aliasing. The runtime treats
-/// ArrayBuffer and the Uint8Array's storage as the same `BufferHeader`
-/// shape (see comment at `value.rs::js_object_get_field_by_name` —
-/// "Perry doesn't separate ArrayBuffer"); this constructor allocates a
-/// real buffer that subsequent `new Uint8Array(ab)` views can ALIAS by
-/// sharing the same pointer.
-#[no_mangle]
-pub extern "C" fn js_array_buffer_new(size: i32) -> *mut BufferHeader {
+fn zeroed_array_buffer_storage(size: i32) -> *mut BufferHeader {
     let size = size.max(0) as u32;
     let buf = buffer_alloc(size);
     unsafe {
@@ -390,7 +380,31 @@ pub extern "C" fn js_array_buffer_new(size: i32) -> *mut BufferHeader {
             ptr::write_bytes(data, 0, size as usize);
         }
     }
+    buf
+}
+
+/// `new ArrayBuffer(size)` — allocate a zero-filled buffer of `size` bytes.
+/// Issue #579: pre-fix, `ArrayBuffer` had no constructor handler so it fell
+/// through to the empty-ObjectHeader placeholder path, and `new Uint8Array(ab)`
+/// silently produced a 1-byte buffer with no aliasing. The runtime treats
+/// ArrayBuffer and the Uint8Array's storage as the same `BufferHeader`
+/// shape (see comment at `value.rs::js_object_get_field_by_name` —
+/// "Perry doesn't separate ArrayBuffer"); this constructor allocates a
+/// real buffer that subsequent `new Uint8Array(ab)` views can ALIAS by
+/// sharing the same pointer.
+#[no_mangle]
+pub extern "C" fn js_array_buffer_new(size: i32) -> *mut BufferHeader {
+    let buf = zeroed_array_buffer_storage(size);
     mark_as_array_buffer(buf as usize);
+    buf
+}
+
+/// `new SharedArrayBuffer(size)` — same BufferHeader backing store as
+/// ArrayBuffer, tracked in a distinct side registry for util.types predicates.
+#[no_mangle]
+pub extern "C" fn js_shared_array_buffer_new(size: i32) -> *mut BufferHeader {
+    let buf = zeroed_array_buffer_storage(size);
+    mark_as_shared_array_buffer(buf as usize);
     buf
 }
 

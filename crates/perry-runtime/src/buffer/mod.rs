@@ -28,9 +28,10 @@ pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
 // ---- Re-exports: allocation / registry helpers ----
 pub use header::{
     asymmetric_key_meta, buffer_ab_alias, buffer_alloc, buffer_data, buffer_data_mut,
-    crypto_key_meta, is_array_buffer, is_registered_buffer, is_secret_key, is_uint8array_buffer,
-    mark_as_array_buffer, mark_as_asymmetric_key, mark_as_crypto_key, mark_as_secret_key,
-    mark_as_uint8array, register_buffer, resolve_buffer_ab_alias, set_buffer_ab_alias,
+    crypto_key_meta, is_any_array_buffer, is_array_buffer, is_registered_buffer, is_secret_key,
+    is_shared_array_buffer, is_uint8array_buffer, mark_as_array_buffer, mark_as_asymmetric_key,
+    mark_as_crypto_key, mark_as_secret_key, mark_as_shared_array_buffer, mark_as_uint8array,
+    register_buffer, resolve_buffer_ab_alias, set_buffer_ab_alias,
 };
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
@@ -38,7 +39,8 @@ pub use from::{
     js_array_buffer_new, js_buffer_alloc, js_buffer_alloc_fill_value, js_buffer_alloc_unsafe,
     js_buffer_concat, js_buffer_fill, js_buffer_fill_range, js_buffer_from_array,
     js_buffer_from_arraybuffer_slice, js_buffer_from_string, js_buffer_from_value,
-    js_encoding_tag_from_value, js_uint8array_alloc, js_uint8array_from_array, js_uint8array_new,
+    js_encoding_tag_from_value, js_shared_array_buffer_new, js_uint8array_alloc,
+    js_uint8array_from_array, js_uint8array_new,
 };
 
 // ---- Re-exports: predicates / byteLength (FFI) ----

@@ -49,6 +49,11 @@ thread_local! {
     /// would make the second `js_uint8array_new` call mistake the source
     /// for a Uint8Array and fall into the spec-mandated COPY branch).
     static ARRAY_BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+    /// SharedArrayBuffer uses the same BufferHeader storage model as
+    /// ArrayBuffer, but it must remain distinguishable for util.types
+    /// predicates (`isArrayBuffer` is false, `isSharedArrayBuffer` is true).
+    static SHARED_ARRAY_BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> =
+        RefCell::new(new_ptr_hash_set());
     /// Issue #1225: ArrayBuffer-identity alias map for Buffers produced by
     /// copy paths like `Buffer.from(buf)`.  Node-compatible semantics: the
     /// new Buffer's `.buffer` returns the same ArrayBuffer object as the
@@ -89,6 +94,20 @@ pub fn mark_as_array_buffer(addr: usize) {
 
 pub fn is_array_buffer(addr: usize) -> bool {
     ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
+}
+
+pub fn mark_as_shared_array_buffer(addr: usize) {
+    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| {
+        r.borrow_mut().insert(addr);
+    });
+}
+
+pub fn is_shared_array_buffer(addr: usize) -> bool {
+    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
+}
+
+pub fn is_any_array_buffer(addr: usize) -> bool {
+    is_array_buffer(addr) || is_shared_array_buffer(addr)
 }
 
 /// Register a buffer pointer in the thread-local registry

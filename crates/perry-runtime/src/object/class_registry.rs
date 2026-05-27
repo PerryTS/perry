@@ -1766,6 +1766,32 @@ unsafe fn call_static_method(
     }
 }
 
+unsafe fn try_native_static_method_in_proto_chain(
+    class_id: u32,
+    name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let mut cid = class_id;
+    let mut depth = 0u32;
+    while cid != 0 && depth < 64 {
+        let proto_obj = class_prototype_object(cid);
+        if !proto_obj.is_null() && (*proto_obj).class_id == NATIVE_MODULE_CLASS_ID {
+            if read_native_module_name(proto_obj as *const ObjectHeader).as_deref()
+                == Some("buffer.Buffer")
+            {
+                let result = dispatch_native_module_method(proto_obj, name, args_ptr, args_len);
+                if !JSValue::from_bits(result.to_bits()).is_undefined() {
+                    return Some(result);
+                }
+            }
+        }
+        cid = get_parent_class_id(cid).unwrap_or(0);
+        depth += 1;
+    }
+    None
+}
+
 /// #1788: dispatch a static method on a class value (`Sub.greet()` where
 /// `Sub extends make(...)`, or a class-object value) by walking the class_id
 /// parent chain in `CLASS_STATIC_METHODS`. Binds `this` to the receiver (so
@@ -1862,6 +1888,11 @@ pub unsafe extern "C" fn js_class_static_method_call(
             cid = get_parent_class_id(cid).unwrap_or(0);
             depth += 1;
         }
+    }
+    if let Some(result) =
+        try_native_static_method_in_proto_chain(class_id, name, args_ptr, args_len)
+    {
+        return result;
     }
     // True miss: no static method and no callable static field resolved on the
     // class chain. We hand back the receiver (load-bearing for effect's

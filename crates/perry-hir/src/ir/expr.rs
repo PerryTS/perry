@@ -942,6 +942,7 @@ pub enum Expr {
     OsCpus,                 // os.cpus() -> array of CPU info objects
     OsNetworkInterfaces,    // os.networkInterfaces() -> object
     OsUserInfo,             // os.userInfo() -> object
+    OsUserInfoBuffer,       // os.userInfo({ encoding: "buffer" }) -> object
     OsEOL,                  // os.EOL -> string ("\n" or "\r\n")
     OsDevNull,              // os.devNull -> string
     OsAvailableParallelism, // os.availableParallelism() -> number

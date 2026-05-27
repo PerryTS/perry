@@ -18,6 +18,10 @@ pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
         )
 }
 
+fn is_process_namespace_version_property(object: &Expr, property: &str) -> bool {
+    property == "version" && matches!(object, Expr::NativeModuleRef(module) if module == "process")
+}
+
 /// Refine an `Any`-typed local's static type based on its initializer
 /// expression. Returns Some(Type) when we can statically prove the
 /// initializer produces a more specific type, so the `Stmt::Let`
@@ -278,6 +282,9 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             None
         }
         Expr::PropertyGet { object, property } => {
+            if is_process_namespace_version_property(object, property) {
+                return Some(HirType::String);
+            }
             // Error instance `e.message` / `e.stack` / `e.name` — all
             // return string handles via the runtime's GC_TYPE_ERROR
             // dispatch in js_object_get_field_by_name_f64. Refining to
@@ -989,6 +996,11 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             else_expr,
             ..
         } => is_definitely_string_expr(ctx, then_expr) && is_definitely_string_expr(ctx, else_expr),
+        Expr::PropertyGet { object, property }
+            if is_process_namespace_version_property(object, property) =>
+        {
+            true
+        }
         _ => false,
     }
 }
@@ -1138,6 +1150,15 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // `e.stack!.includes("...")` hit the string method fast path.
         Expr::PropertyGet { property, .. }
             if matches!(property.as_str(), "message" | "stack" | "name") =>
+        {
+            true
+        }
+        // Namespace `node:process` exports share the same runtime process
+        // surface as bare `process`. Keep the string method dispatch
+        // available for namespace imports:
+        // `import * as process from "node:process"; process.version.startsWith("v")`.
+        Expr::PropertyGet { object, property }
+            if is_process_namespace_version_property(object, property) =>
         {
             true
         }
@@ -1625,6 +1646,9 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         Expr::Bool(_) => Some(HirType::Boolean),
         Expr::LocalGet(id) => ctx.local_types.get(id).cloned(),
         Expr::PropertyGet { object, property } => {
+            if is_process_namespace_version_property(object, property) {
+                return Some(HirType::String);
+            }
             if matches!(property.as_str(), "publicKey" | "privateKey")
                 && matches!(
                     static_type_of(ctx, object),

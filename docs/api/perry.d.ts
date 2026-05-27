@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1279 entries across 81 modules
+// Coverage: 1280 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1949,6 +1949,8 @@ declare module "util/types" {
   export function isRegExp(...args: any[]): any;
   /** stdlib */
   export function isSet(...args: any[]): any;
+  /** stdlib */
+  export function isSharedArrayBuffer(...args: any[]): any;
   /** stdlib */
   export function isStringObject(...args: any[]): any;
   /** stdlib */

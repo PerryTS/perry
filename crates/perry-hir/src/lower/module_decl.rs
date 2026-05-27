@@ -115,12 +115,19 @@ pub(crate) fn lower_module_decl(
                             .unwrap_or_else(|| local.clone());
                         if is_native {
                             // Register as native module function with the original method name
-                            // e.g., import { v4 as uuid } from 'uuid' -> uuid maps to uuid.v4
-                            ctx.register_native_module(
-                                local.clone(),
-                                source.clone(),
-                                Some(imported.clone()),
-                            );
+                            // e.g., import { v4 as uuid } from 'uuid' -> uuid maps to uuid.v4.
+                            //
+                            // Some named exports are object-valued submodule namespaces rather
+                            // than callables. Route those locals to the canonical submodule so
+                            // `import { types } from "node:util"; types.isX()` uses the same
+                            // dispatch as `node:util/types` and `util.types.isX()`.
+                            let (native_module, native_method) =
+                                if source == "util" && imported == "types" {
+                                    ("util/types".to_string(), None)
+                                } else {
+                                    (source.clone(), Some(imported.clone()))
+                                };
+                            ctx.register_native_module(local.clone(), native_module, native_method);
                             // Auto-register parentPort from worker_threads as a native instance
                             // (it's a singleton, not created via `new`)
                             if source == "worker_threads" && imported == "parentPort" {
