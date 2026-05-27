@@ -1473,8 +1473,8 @@ fn cp_exec_callback_error(run: &CpRun, cmd: &str) -> f64 {
         &message,
         &[
             ("code", code),
-            ("signal", signal),
             ("killed", killed),
+            ("signal", signal),
             ("cmd", cp_box_string(cmd)),
         ],
     )
