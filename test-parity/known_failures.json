@@ -698,12 +698,6 @@
     "category": "bug-open",
     "reason": "node:stream: read + unshift + re-read sequence doesn't deliver chunks in the right order. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/writable/cork-multiple": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: nested cork()/uncork() flush-counting not tracked. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/async-iter/try-finally-cleanup": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -775,12 +769,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: read(0) special case not handled. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/writable/uncork-chainable": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: cork / uncork return type wrong. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/error/error-then-end-order": {
     "issue": "1532",
@@ -1280,12 +1268,6 @@
     "category": "bug-open",
     "reason": "node:stream: readableFlowing — does not track pause→flow→pause transitions correctly. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/writable/cork-returns-undefined": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: cork()/uncork() return values differ from undefined. Flips to PASS when #1539 lands."
-  },
   "node-suite/stream/flow/pause-before-data-listener": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1585,12 +1567,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: captureRejections — async listener throws not caught into 'error' event. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/writable/uncork-flushes-buffered": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: cork/uncork sequence — fails to compile in test harness (write callback signature). Flips to PASS when #1539 lands."
   },
   "node-suite/stream/web/abort-during-pipeto": {
     "issue": "1545",

@@ -229,6 +229,82 @@ fn stream_methods_dispatch_through_dynamic_method_call() {
 }
 
 #[test]
+fn writable_cork_and_uncork_update_counter_and_return_undefined() {
+    let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let cork = js_object_get_field_by_name_f64(obj, hidden_key(b"cork"));
+    let uncork = js_object_get_field_by_name_f64(obj, hidden_key(b"uncork"));
+
+    assert_eq!(writable_corked_count(stream), 0.0);
+
+    let ret = unsafe { crate::closure::js_native_call_value(cork, std::ptr::null(), 0) };
+    assert_eq!(ret.to_bits(), TAG_UNDEFINED);
+    assert_eq!(writable_corked_count(stream), 1.0);
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"writableCorked")),
+        1.0
+    );
+
+    let ret = unsafe { crate::closure::js_native_call_value(cork, std::ptr::null(), 0) };
+    assert_eq!(ret.to_bits(), TAG_UNDEFINED);
+    assert_eq!(writable_corked_count(stream), 2.0);
+
+    let ret = unsafe { crate::closure::js_native_call_value(uncork, std::ptr::null(), 0) };
+    assert_eq!(ret.to_bits(), TAG_UNDEFINED);
+    assert_eq!(writable_corked_count(stream), 1.0);
+
+    let ret = unsafe { crate::closure::js_native_call_value(uncork, std::ptr::null(), 0) };
+    assert_eq!(ret.to_bits(), TAG_UNDEFINED);
+    assert_eq!(writable_corked_count(stream), 0.0);
+
+    let ret = js_node_stream_method_cork(handle);
+    assert_eq!(ret.to_bits(), TAG_UNDEFINED);
+    assert_eq!(js_node_stream_method_writable_corked(handle), 1.0);
+    let ret = js_node_stream_method_uncork(handle);
+    assert_eq!(ret.to_bits(), TAG_UNDEFINED);
+    assert_eq!(js_node_stream_method_writable_corked(handle), 0.0);
+
+    let ret = unsafe { crate::closure::js_native_call_value(uncork, std::ptr::null(), 0) };
+    assert_eq!(ret.to_bits(), TAG_UNDEFINED);
+    assert_eq!(writable_corked_count(stream), 0.0);
+}
+
+#[test]
+fn writable_cork_buffers_writes_until_uncorked() {
+    WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    let opts = crate::object::js_object_alloc(0, 1);
+    let closure = js_closure_alloc(write_capture as *const u8, 0);
+    crate::closure::js_register_closure_arity(write_capture as *const u8, 3);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
+    );
+
+    let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+
+    let _ = js_node_stream_method_cork(handle);
+    let _ = js_node_stream_method_cork(handle);
+    let _ = js_node_stream_method_write(handle, string_value("a"), undefined);
+    let _ = js_node_stream_method_write(handle, string_value("b"), undefined);
+    WRITE_CAPTURED.with(|captured| assert!(captured.borrow().is_empty()));
+
+    let _ = js_node_stream_method_uncork(handle);
+    WRITE_CAPTURED.with(|captured| assert!(captured.borrow().is_empty()));
+
+    let _ = js_node_stream_method_uncork(handle);
+    WRITE_CAPTURED.with(|captured| {
+        assert_eq!(
+            captured.borrow().as_slice(),
+            &[b"a".to_vec(), b"b".to_vec()]
+        );
+    });
+}
+
+#[test]
 fn stream_max_listeners_default_and_override_round_trip() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
@@ -512,7 +588,7 @@ fn writable_corked_counter_tracks_cork_balance() {
 
     assert_eq!(
         unsafe { crate::closure::js_native_call_value(cork, std::ptr::null(), 0) }.to_bits(),
-        stream.to_bits()
+        TAG_UNDEFINED
     );
     assert_eq!(js_node_stream_method_writable_corked(handle), 1.0);
 
@@ -530,14 +606,11 @@ fn writable_corked_counter_tracks_cork_balance() {
         0.0
     );
 
-    assert_eq!(
-        js_node_stream_method_cork(handle).to_bits(),
-        stream.to_bits()
-    );
+    assert_eq!(js_node_stream_method_cork(handle).to_bits(), TAG_UNDEFINED);
     assert_eq!(js_node_stream_method_writable_corked(handle), 1.0);
     assert_eq!(
         js_node_stream_method_uncork(handle).to_bits(),
-        stream.to_bits()
+        TAG_UNDEFINED
     );
     assert_eq!(js_node_stream_method_writable_corked(handle), 0.0);
 }
