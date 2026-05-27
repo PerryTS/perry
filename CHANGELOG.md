@@ -2,6 +2,20 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1030 — node:zlib constructor exports (#1927)
+
+Expose the `node:zlib` stream constructor classes — `Deflate`, `DeflateRaw`,
+`Gzip`, `Gunzip`, `Inflate`, `InflateRaw`, `Unzip`, `BrotliCompress`,
+`BrotliDecompress`, plus the `ZstdCompress`/`ZstdDecompress` pair — as callable
+named/namespace exports, alongside the `createZstdCompress`/`createZstdDecompress`
+stream factories. Previously only the `create*` factory functions and
+`constants` were on the manifest, so `import { Gzip } from "node:zlib"` (and
+`zlib.Gzip`) resolved to `undefined`/`R005`. Adds the manifest `class(...)`
+entries, the matching `is_native_module_callable_export` arms in
+`perry-runtime/src/object/native_module.rs`, and a node-suite parity test
+(`zlib/imports/class-exports.ts`) that matches Node byte-for-byte. Authored by
+@andrewtdiz.
+
 ## v0.5.1029 — Effect: WeakMap dynamic dispatch + TS param-property defaults (#1763)
 
 Two small, regression-safe correctness fixes toward Effect end-to-end (#321),
