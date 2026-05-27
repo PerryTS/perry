@@ -82,6 +82,11 @@ crates/perry-runtime/src/object/native_call_method.rs
 # loop). Extracting that pass is high-risk surgery deferred to the codegen
 # split tracked under #1435.
 crates/perry-codegen/src/codegen/mod.rs
+# node:stream runtime (Readable/Writable/Duplex + EventEmitter listener
+# lifecycle). Crossed the limit during the stream-parity PR wave (#1962/
+# #1963/#1976/#1981 …); splitting mid-wave would conflict with several open
+# stream PRs that all touch this file. Split tracked under #1987.
+crates/perry-runtime/src/node_stream.rs
 EOF
 )
 
