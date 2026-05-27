@@ -296,6 +296,7 @@ fn emit_writable_chunk(stream: f64, chunk: f64) {
 
 fn finish_stream(stream: f64, callback: Option<f64>) {
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    mark_writable_ended(stream);
     if !has_truthy_hidden(stream, hidden_end_emitted_key()) {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
@@ -362,6 +363,24 @@ pub extern "C" fn js_node_stream_method_readable_hwm(stream_handle: i64) -> f64 
 pub extern "C" fn js_node_stream_method_writable_hwm(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     get_hidden_value(stream, hidden_key(b"writableHighWaterMark")).unwrap_or(16384.0)
+}
+
+/// `stream.writable` property getter on a typed writable-side instance.
+/// Mirrors `Writable.isWritable(stream)` for the current stub state.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_writable(stream_handle: i64) -> f64 {
+    js_node_stream_is_writable(stream_value_from_handle(stream_handle))
+}
+
+/// `stream.writableEnded` property getter on a typed writable-side instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_writable_ended(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if stream_hidden_ended(stream) {
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_FALSE)
+    }
 }
 
 #[no_mangle]
@@ -1731,6 +1750,25 @@ fn init_constructor(stream: f64, name: &str) {
     set_hidden_value(stream, hidden_key(b"constructor"), constructor);
 }
 
+fn set_visible_writable(stream: f64, writable: bool) {
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_some() {
+        let value = if writable { TAG_TRUE } else { TAG_FALSE };
+        set_hidden_value(stream, hidden_key(b"writable"), f64::from_bits(value));
+    }
+}
+
+fn set_visible_writable_ended(stream: f64, ended: bool) {
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_some() {
+        let value = if ended { TAG_TRUE } else { TAG_FALSE };
+        set_hidden_value(stream, hidden_key(b"writableEnded"), f64::from_bits(value));
+    }
+}
+
+fn mark_writable_ended(stream: f64) {
+    set_visible_writable(stream, false);
+    set_visible_writable_ended(stream, true);
+}
+
 /// Initialize the readable side of a stream: direction flag, buffered byte
 /// counter, effective readable highWaterMark, and the visible
 /// `readableHighWaterMark` / `destroyed` properties (#1534/#1539).
@@ -1747,6 +1785,8 @@ fn init_readable_state(stream: f64, opts: f64) {
 fn init_writable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_writable_flag_key(), f64::from_bits(TAG_TRUE));
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
+    set_visible_writable(stream, true);
+    set_visible_writable_ended(stream, false);
     let w_hwm = resolve_hwm(opts, b"writableHighWaterMark", b"writableObjectMode");
     set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
 }

@@ -452,12 +452,6 @@
     "category": "bug-open",
     "reason": "node:stream: readableEnded flag + end event don't deliver. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/flags/writable-ended": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: writableEnded flag not tracked. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/readable/read-with-size": {
     "issue": "1532",
     "added": "2026-05-23",
