@@ -1281,6 +1281,38 @@ pub unsafe extern "C" fn js_native_call_method(
                         let s = crate::array::js_array_join(arr, sep_ptr);
                         return f64::from_bits(JSValue::string_ptr(s).bits());
                     }
+                    // #321 (effect Stream/Chunk): `arr.values()` / `arr.keys()` /
+                    // `arr.entries()` reaching the runtime dispatch tower (rather
+                    // than codegen's statically-typed array inline path). This
+                    // fires for `arr[Symbol.iterator]()`, which resolves to a
+                    // bound `values` method (see `symbol.rs::js_object_get_symbol_property`)
+                    // and lands here via `dispatch_bound_method`. Without these
+                    // arms the array tower fell through to the GC_TYPE_OBJECT-only
+                    // object-field scan (which an array skips entirely) and
+                    // ultimately returned the NULL_OBJECT_BYTES sentinel — a rodata
+                    // pointer that downstream `for...of` / `.next()` reads as an
+                    // empty/garbage value. effect's `Chunk[Symbol.iterator]` does
+                    // exactly `this.backing.array[Symbol.iterator]()`, so this gap
+                    // made every `for...of` over a Chunk yield nothing (and the
+                    // stream channel executor then SIGSEGV'd / produced a Die).
+                    // Perry materializes these iterators as plain arrays (matching
+                    // `js_array_values`); `js_iterator_to_array` returns such an
+                    // array verbatim.
+                    "values" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let result = crate::array::js_array_values(arr);
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    "keys" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let result = crate::array::js_array_keys(arr);
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    "entries" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let result = crate::array::js_array_entries(arr);
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
                     _ => {} // not a handled array method — fall through to object dispatch
                 }
             }

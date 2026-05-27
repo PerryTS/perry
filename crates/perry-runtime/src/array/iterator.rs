@@ -128,6 +128,28 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     if iter_ptr == 0 {
         return arr;
     }
+
+    // #321: Perry materializes some JS iterators as plain arrays rather than
+    // standalone iterator objects. In particular `arr[Symbol.iterator]()`
+    // (and `arr.values()`) route to `js_array_values`, which returns an Array
+    // CLONE, not a `{ next }` object. effect's `Chunk[Symbol.iterator]`
+    // returns exactly this (`this.backing.array[Symbol.iterator]()`), and
+    // `js_get_iterator` hands the result straight here. Such a value has no
+    // `.next` method — pre-fix this returned an empty array (silent data loss)
+    // and downstream `.next()`/`.values()` calls on it then threw
+    // `values is not a function`. Detect an Array/lazy-array iterator value and
+    // return it directly; its elements ARE the iteration sequence.
+    {
+        use crate::gc::{GcHeader, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_LAZY_ARRAY};
+        let ot = unsafe {
+            let gc_header = (iter_ptr as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
+            (*gc_header).obj_type
+        };
+        if ot == GC_TYPE_ARRAY || ot == GC_TYPE_LAZY_ARRAY {
+            return iter_ptr as *mut ArrayHeader;
+        }
+    }
+
     let iter_obj = iter_ptr as *const ObjectHeader;
 
     // Look up the "next" method on the iterator object
