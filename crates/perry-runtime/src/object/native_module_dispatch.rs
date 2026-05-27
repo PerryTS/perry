@@ -774,6 +774,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::builtins::js_util_strip_vt_control_characters(arg(0))
         }
         ("util", "promisify") => crate::util_promisify::js_util_promisify(arg(0)),
+        ("util", "deprecate") => crate::util_promisify::js_util_deprecate(arg(0), arg(1), arg(2)),
 
         ("util", "isPromise") => {
             let v = JSValue::from_bits(arg(0).to_bits());

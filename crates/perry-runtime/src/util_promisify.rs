@@ -116,6 +116,16 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
     nanbox_pointer(closure_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8)
 }
 
+/// Minimal `util.deprecate(fn, msg, code)` shape.
+///
+/// Full warning emission is separate; callers must at least receive a callable
+/// that forwards to the original function, and Node accepts string codes that
+/// contain spaces.
+#[no_mangle]
+pub extern "C" fn js_util_deprecate(fn_value: f64, _msg: f64, _code: f64) -> f64 {
+    fn_value
+}
+
 /// Outer wrapper body: `(closure, rest_array_value) -> promise_value`.
 ///
 /// Receives the rest array of forwarded args (NaN-boxed pointer to an
