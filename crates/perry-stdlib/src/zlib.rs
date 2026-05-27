@@ -231,7 +231,11 @@ pub unsafe extern "C" fn js_zlib_crc32(data_ptr: *const StringHeader, seed: f64)
         for i in 0..256u32 {
             let mut c = i;
             for _ in 0..8 {
-                c = if c & 1 != 0 { 0xEDB88320 ^ (c >> 1) } else { c >> 1 };
+                c = if c & 1 != 0 {
+                    0xEDB88320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
             }
             TABLE[i as usize] = c;
         }
@@ -1167,9 +1171,8 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
     };
     // NaN-box-aware string pointer extraction. Mirrors what the codegen's
     // NA_STR arg coercion does for direct calls.
-    let as_str_ptr = |v: f64| -> *const StringHeader {
-        js_get_string_pointer_unified(v) as *const StringHeader
-    };
+    let as_str_ptr =
+        |v: f64| -> *const StringHeader { js_get_string_pointer_unified(v) as *const StringHeader };
     // Helper: pointer return → POINTER_TAG NaN-box (matches NR_PTR).
     let ptr_to_f64 = |p: *const u8| -> f64 {
         if p.is_null() {
