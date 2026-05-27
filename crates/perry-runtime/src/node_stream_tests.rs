@@ -159,6 +159,23 @@ fn stream_methods_dispatch_through_dynamic_method_call() {
 }
 
 #[test]
+fn stream_destroy_with_error_marks_errored_state() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let destroy = js_object_get_field_by_name_f64(
+        raw_ptr_from_value(stream) as *const ObjectHeader,
+        hidden_key(b"destroy"),
+    );
+    let err = string_value("boom");
+
+    let ret = unsafe { crate::closure::js_native_call_value(destroy, &err, 1) };
+
+    assert_eq!(ret.to_bits(), stream.to_bits());
+    assert_eq!(js_node_stream_is_errored(stream).to_bits(), TAG_FALSE);
+    let _ = crate::promise::js_promise_run_microtasks();
+    assert_eq!(js_node_stream_is_errored(stream).to_bits(), TAG_TRUE);
+}
+
+#[test]
 fn stream_native_receiver_methods_update_hidden_state() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
@@ -174,6 +191,13 @@ fn stream_native_receiver_methods_update_hidden_state() {
     let handle = raw_ptr_from_value(stream) as i64;
     let _ = js_node_stream_method_end(handle, f64::from_bits(TAG_UNDEFINED));
     assert!(js_node_stream_is_stub_ended_after_read(stream));
+
+    let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let _ = js_node_stream_method_destroy(handle, err);
+    assert!(readable_hidden_error(stream).is_none());
+    let _ = crate::promise::js_promise_run_microtasks();
+    assert!(js_node_stream_hidden_error_after_read(stream).is_some());
 }
 
 #[test]
@@ -183,12 +207,28 @@ fn stream_stub_arities_are_registered_per_thread() {
         crate::closure::lookup_closure_arity(ns_end1 as *const u8),
         Some(1)
     );
+    assert_eq!(
+        crate::closure::lookup_closure_arity(ns_destroy1 as *const u8),
+        Some(1)
+    );
+    assert_eq!(
+        crate::closure::lookup_closure_arity(ns_destroy_error_microtask as *const u8),
+        Some(0)
+    );
 
     std::thread::spawn(|| {
         let _ = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
         assert_eq!(
             crate::closure::lookup_closure_arity(ns_end1 as *const u8),
             Some(1)
+        );
+        assert_eq!(
+            crate::closure::lookup_closure_arity(ns_destroy1 as *const u8),
+            Some(1)
+        );
+        assert_eq!(
+            crate::closure::lookup_closure_arity(ns_destroy_error_microtask as *const u8),
+            Some(0)
         );
         assert_eq!(
             crate::closure::lookup_closure_arity(ns_write2 as *const u8),

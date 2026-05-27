@@ -96,6 +96,30 @@ extern "C" fn ns_chain0(closure: *const ClosureHeader) -> f64 {
 extern "C" fn ns_chain1(closure: *const ClosureHeader, _a: f64) -> f64 {
     this_value(closure)
 }
+extern "C" fn ns_destroy_error_microtask(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let err = crate::closure::js_closure_get_capture_f64(closure, 1);
+    set_hidden_value(stream, hidden_error_key(), err);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn schedule_destroy_error(stream: f64, err: f64) {
+    let bits = err.to_bits();
+    if bits != TAG_UNDEFINED && bits != TAG_NULL {
+        let closure = js_closure_alloc(ns_destroy_error_microtask as *const u8, 2);
+        js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
+        crate::closure::js_closure_set_capture_f64(closure, 1, err);
+        crate::builtins::js_queue_microtask(closure as i64);
+    }
+}
+extern "C" fn ns_destroy1(closure: *const ClosureHeader, err: f64) -> f64 {
+    let stream = this_value(closure);
+    schedule_destroy_error(stream, err);
+    stream
+}
 extern "C" fn ns_chain2(closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
     this_value(closure)
 }
@@ -291,6 +315,13 @@ pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
     mark_disturbed(stream);
+    stream
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_destroy(stream_handle: i64, err: f64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    schedule_destroy_error(stream, err);
     stream
 }
 
@@ -857,6 +888,8 @@ fn register_stub_arities() {
     };
     register(ns_chain0 as *const u8, 0);
     register(ns_chain1 as *const u8, 1);
+    register(ns_destroy_error_microtask as *const u8, 0);
+    register(ns_destroy1 as *const u8, 1);
     register(ns_chain2 as *const u8, 2);
     register(ns_chain3 as *const u8, 3);
     register(ns_on2 as *const u8, 2);
@@ -1462,7 +1495,7 @@ fn readable_methods() -> [(&'static str, StubFn); 30] {
         ("unpipe", cast1(ns_chain1)),
         ("pause", cast0(ns_chain0)),
         ("resume", cast0(ns_resume0)),
-        ("destroy", cast1(ns_chain1)),
+        ("destroy", cast1(ns_destroy1)),
         ("setEncoding", cast1(ns_chain1)),
         ("isPaused", cast0(ns_undefined0)),
         // #1558 — async iterator helpers. The consuming helpers accept a
@@ -1502,7 +1535,7 @@ fn writable_methods() -> [(&'static str, StubFn); 16] {
         ("end", cast1(ns_end1)),
         ("cork", cast0(ns_chain0)),
         ("uncork", cast0(ns_chain0)),
-        ("destroy", cast1(ns_chain1)),
+        ("destroy", cast1(ns_destroy1)),
         ("setDefaultEncoding", cast1(ns_chain1)),
         ("_write", cast3(ns_chain3)),
     ]
@@ -1533,7 +1566,7 @@ fn duplex_methods() -> [(&'static str, StubFn); 22] {
         ("end", cast1(ns_end1)),
         ("cork", cast0(ns_chain0)),
         ("uncork", cast0(ns_chain0)),
-        ("destroy", cast1(ns_chain1)),
+        ("destroy", cast1(ns_destroy1)),
         ("setDefaultEncoding", cast1(ns_chain1)),
     ]
 }
@@ -1914,71 +1947,6 @@ pub extern "C" fn js_node_stream_to_web(_node_stream: f64) -> f64 {
 pub extern "C" fn js_node_stream_from_web(_web_stream: f64) -> f64 {
     js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
 }
-
-// ─────────────────────────────────────────────────────────────────
-// #1534/#1539/#1540/#1541: symbol retention.
-//
-// These `#[no_mangle]` entry points are emitted by codegen's stream
-// dispatch (native_table/net_events.rs) but several are never referenced
-// by any Rust code in the crate graph. The default `.a` staticlib keeps
-// them via staticlib-export semantics, but the auto-optimize build round-
-// trips the runtime through whole-program LLVM bitcode and is free to
-// internalize + dead-strip an unreferenced symbol — which is exactly why
-// `Readable.isDisturbed(s)` / `r.read()` failed with
-// `Undefined symbols: _js_node_stream_is_disturbed` at final link even
-// though the feature was wired. The `#[used]` statics below pin a retained
-// reference edge so every entry point survives all link modes. See the
-// same pattern in `value/dyn_index.rs` and `process.rs` (#1344).
-#[used]
-static KEEP_NS_METHOD_EMIT: extern "C" fn(i64, f64, f64) -> f64 = js_node_stream_method_emit;
-#[used]
-static KEEP_NS_METHOD_READ: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_read;
-#[used]
-static KEEP_NS_METHOD_PUSH: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_push;
-#[used]
-static KEEP_NS_READABLE_HWM: extern "C" fn(i64) -> f64 = js_node_stream_method_readable_hwm;
-#[used]
-static KEEP_NS_WRITABLE_HWM: extern "C" fn(i64) -> f64 = js_node_stream_method_writable_hwm;
-#[used]
-static KEEP_NS_METHOD_RESUME: extern "C" fn(i64) -> f64 = js_node_stream_method_resume;
-#[used]
-static KEEP_NS_METHOD_WRITE: extern "C" fn(i64, f64, f64) -> f64 = js_node_stream_method_write;
-#[used]
-static KEEP_NS_METHOD_END: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_end;
-#[used]
-static KEEP_NS_READABLE_NEW: extern "C" fn(f64) -> f64 = js_node_stream_readable_new;
-#[used]
-static KEEP_NS_WRITABLE_NEW: extern "C" fn(f64) -> f64 = js_node_stream_writable_new;
-#[used]
-static KEEP_NS_DUPLEX_NEW: extern "C" fn(f64) -> f64 = js_node_stream_duplex_new;
-#[used]
-static KEEP_NS_TRANSFORM_NEW: extern "C" fn(f64) -> f64 = js_node_stream_transform_new;
-#[used]
-static KEEP_NS_PASSTHROUGH_NEW: extern "C" fn(f64) -> f64 = js_node_stream_passthrough_new;
-#[used]
-static KEEP_NS_READABLE_FROM: extern "C" fn(f64) -> f64 = js_node_stream_readable_from;
-#[used]
-static KEEP_NS_IS_DISTURBED: extern "C" fn(f64) -> f64 = js_node_stream_is_disturbed;
-#[used]
-static KEEP_NS_IS_ERRORED: extern "C" fn(f64) -> f64 = js_node_stream_is_errored;
-#[used]
-static KEEP_NS_IS_READABLE: extern "C" fn(f64) -> f64 = js_node_stream_is_readable;
-#[used]
-static KEEP_NS_IS_WRITABLE: extern "C" fn(f64) -> f64 = js_node_stream_is_writable;
-#[used]
-static KEEP_NS_GET_DEFAULT_HWM: extern "C" fn(f64) -> f64 = js_node_stream_get_default_hwm;
-#[used]
-static KEEP_NS_SET_DEFAULT_HWM: extern "C" fn(f64, f64) -> f64 = js_node_stream_set_default_hwm;
-#[used]
-static KEEP_NS_ADD_ABORT_SIGNAL: extern "C" fn(f64, f64) -> f64 = js_node_stream_add_abort_signal;
-#[used]
-static KEEP_NS_COMPOSE: extern "C" fn(f64) -> f64 = js_node_stream_compose;
-#[used]
-static KEEP_NS_DUPLEX_PAIR: extern "C" fn(f64) -> f64 = js_node_stream_duplex_pair;
-#[used]
-static KEEP_NS_TO_WEB: extern "C" fn(f64) -> f64 = js_node_stream_to_web;
-#[used]
-static KEEP_NS_FROM_WEB: extern "C" fn(f64) -> f64 = js_node_stream_from_web;
 
 #[cfg(test)]
 #[path = "node_stream_tests.rs"]

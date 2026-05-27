@@ -47,6 +47,7 @@ pub mod map;
 pub mod math;
 pub mod native_arena;
 pub mod node_stream;
+mod node_stream_keepalive;
 pub mod node_submodules;
 pub mod object;
 pub mod os;
