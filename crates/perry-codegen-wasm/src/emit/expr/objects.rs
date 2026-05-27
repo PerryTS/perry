@@ -226,22 +226,45 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_frame_begin(func, 3);
                 self.emit_store_arg(func, 0, object);
                 self.emit_store_arg(func, 1, index);
-                self.emit_store_arg(func, 2, value);
+                // Preserve assignment-expression semantics by returning the
+                // assigned value after the dynamic write.  Keep the current
+                // object -> index -> value evaluation order, but save the
+                // value in a temp local so the void bridge call can consume the
+                // frame without losing the expression result.
+                self.emit_expr(func, value);
+                func.instruction(&Instruction::LocalSet(self.temp_store_local));
+                self.emit_slot_addr(func, 2);
+                func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
                 self.emit_memcall_void(func, "object_set_dynamic", 3);
-                // set_dynamic is void; push undefined as expression result
-                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                func.instruction(&Instruction::LocalGet(self.temp_store_local));
             }
             Expr::IndexUpdate {
                 object,
                 index,
                 op,
-                prefix: _,
+                prefix,
             } => {
-                // Approximate: get, increment, set
+                // arr[i]++ / ++arr[i].  Pre-fix this only computed the updated
+                // value and left it on the stack; it never called the indexed
+                // setter, so module-level arrays appeared immutable on the
+                // web/wasm target (#1993).
+                //
+                // Evaluate object and index for the get, compute the new value,
+                // persist it through the same dynamic setter used by IndexSet,
+                // then return the JS-compatible prefix/postfix result.
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, object);
                 self.emit_store_arg(func, 1, index);
                 self.emit_memcall(func, "object_get_dynamic", 2);
+                if !*prefix {
+                    // Save the old value for the postfix expression result.
+                    func.instruction(&Instruction::LocalTee(self.temp_local));
+                }
                 func.instruction(&Instruction::F64ReinterpretI64);
                 func.instruction(&f64_const(1.0));
                 match op {
@@ -250,6 +273,25 @@ impl<'a> FuncEmitCtx<'a> {
                     _ => func.instruction(&Instruction::F64Add),
                 };
                 func.instruction(&Instruction::I64ReinterpretF64);
+                func.instruction(&Instruction::LocalSet(self.temp_result_local));
+
+                self.emit_frame_begin(func, 3);
+                self.emit_store_arg(func, 0, object);
+                self.emit_store_arg(func, 1, index);
+                self.emit_slot_addr(func, 2);
+                func.instruction(&Instruction::LocalGet(self.temp_result_local));
+                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                self.emit_memcall_void(func, "object_set_dynamic", 3);
+
+                if *prefix {
+                    func.instruction(&Instruction::LocalGet(self.temp_result_local));
+                } else {
+                    func.instruction(&Instruction::LocalGet(self.temp_local));
+                }
             }
 
             Expr::ObjectKeys(obj) => {

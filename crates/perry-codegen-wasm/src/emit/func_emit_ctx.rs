@@ -27,6 +27,9 @@ pub(super) struct FuncEmitCtx<'a> {
     pub(super) temp_local_i32: u32,
     /// Index of a second temp i64 local for emit_store_arg
     pub(super) temp_store_local: u32,
+    /// Index of a third temp i64 local for values that must survive calls to
+    /// emit_store_arg (which may overwrite temp_store_local).
+    pub(super) temp_result_local: u32,
     /// Current frame size for emit_store_arg address computation
     pub(super) current_frame_size: u32,
     /// Stack of saved frame sizes for nested frame support
@@ -52,6 +55,7 @@ impl<'a> FuncEmitCtx<'a> {
             temp_local,
             temp_local_i32,
             temp_store_local: temp_local + 1,
+            temp_result_local: temp_local + 2,
             current_frame_size: 0,
             frame_stack: Vec::new(),
         }

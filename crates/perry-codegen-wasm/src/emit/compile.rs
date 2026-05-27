@@ -1301,8 +1301,8 @@ impl WasmModuleEmitter {
 
             let num_locals = total_count;
             let start_temp_local = num_locals;
-            let start_temp_i32 = num_locals + 2;
-            let locals = vec![(num_locals + 2, ValType::I64), (1, ValType::I32)];
+            let start_temp_i32 = num_locals + 3;
+            let locals = vec![(num_locals + 3, ValType::I64), (1, ValType::I32)];
             let mut func = Function::new(locals);
 
             // Call __init_strings first

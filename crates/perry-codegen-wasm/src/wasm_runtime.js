@@ -244,15 +244,15 @@ function buildImports() {
       },
       object_keys: (handle) => {
         const obj = getHandle(handle);
-        return nanboxPointer(allocHandle(obj ? Object.keys(obj) : []));
+        return nanboxPointer(allocHandle(obj ? Object.keys(obj).filter(k => k !== "__class__") : []));
       },
       object_values: (handle) => {
         const obj = getHandle(handle);
-        return nanboxPointer(allocHandle(obj ? Object.values(obj) : []));
+        return nanboxPointer(allocHandle(obj ? Object.keys(obj).filter(k => k !== "__class__").map(k => obj[k]) : []));
       },
       object_entries: (handle) => {
         const obj = getHandle(handle);
-        return nanboxPointer(allocHandle(obj ? Object.entries(obj) : []));
+        return nanboxPointer(allocHandle(obj ? Object.entries(obj).filter(([k]) => k !== "__class__") : []));
       },
       object_has_property: (handle, key) => {
         const obj = getHandle(handle);
@@ -1675,9 +1675,9 @@ const __memDispatch = {
   },
   object_delete: (obj, key) => { if (obj && typeof obj === 'object') delete obj[String(key)]; },
   object_delete_dynamic: (obj, key) => { if (obj && typeof obj === 'object') delete obj[key]; },
-  object_keys: (obj) => obj && typeof obj === 'object' ? Object.keys(obj) : [],
-  object_values: (obj) => obj && typeof obj === 'object' ? Object.values(obj) : [],
-  object_entries: (obj) => obj && typeof obj === 'object' ? Object.entries(obj) : [],
+  object_keys: (obj) => obj && typeof obj === 'object' ? Object.keys(obj).filter(k => k !== "__class__") : [],
+  object_values: (obj) => obj && typeof obj === 'object' ? Object.keys(obj).filter(k => k !== "__class__").map(k => obj[k]) : [],
+  object_entries: (obj) => obj && typeof obj === 'object' ? Object.entries(obj).filter(([k]) => k !== "__class__") : [],
   object_has_property: (obj, key) => {
     if (!obj || typeof obj !== 'object') return 0;
     return (key in obj) ? 1 : 0;

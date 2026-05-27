@@ -45,8 +45,8 @@ impl WasmModuleEmitter {
         );
 
         let temp_local_idx = param_count + extra_locals;
-        let temp_i32_idx = temp_local_idx + 2;
-        let locals = vec![(extra_locals + 2, ValType::I64), (1, ValType::I32)];
+        let temp_i32_idx = temp_local_idx + 3;
+        let locals = vec![(extra_locals + 3, ValType::I64), (1, ValType::I32)];
         let mut func = Function::new(locals);
 
         // Must match func_section: `main` is always emitted as `()->i64` even when the body has no
@@ -98,8 +98,8 @@ impl WasmModuleEmitter {
         collect_locals(body, &mut local_map, &mut extra_locals, param_idx);
 
         let temp_local_idx = param_idx + extra_locals;
-        let temp_i32_idx = temp_local_idx + 2;
-        let locals = vec![(extra_locals + 2, ValType::I64), (1, ValType::I32)];
+        let temp_i32_idx = temp_local_idx + 3;
+        let locals = vec![(extra_locals + 3, ValType::I64), (1, ValType::I32)];
         let mut func = Function::new(locals);
 
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
@@ -138,8 +138,8 @@ impl WasmModuleEmitter {
         );
 
         let temp_local_idx = param_count as u32 + extra_locals;
-        let temp_i32_idx = temp_local_idx + 2;
-        let locals = vec![(extra_locals + 2, ValType::I64), (1, ValType::I32)];
+        let temp_i32_idx = temp_local_idx + 3;
+        let locals = vec![(extra_locals + 3, ValType::I64), (1, ValType::I32)];
         let mut func = Function::new(locals);
         let _rt = self.rt.as_ref().unwrap();
 
@@ -223,8 +223,8 @@ impl WasmModuleEmitter {
         );
 
         let temp_local_idx = param_count as u32 + extra_locals;
-        let temp_i32_idx = temp_local_idx + 2;
-        let locals = vec![(extra_locals + 2, ValType::I64), (1, ValType::I32)];
+        let temp_i32_idx = temp_local_idx + 3;
+        let locals = vec![(extra_locals + 3, ValType::I64), (1, ValType::I32)];
         let mut func = Function::new(locals);
         let _has_ret = method.body.iter().any(has_return);
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
