@@ -1060,6 +1060,55 @@ pub unsafe extern "C" fn js_native_call_method(
                         let result = crate::array::js_array_slice(arr, start, end);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
+                    // Issue #321 (effect Context/Layer): defensive `splice`
+                    // arm for any-typed arrays that reach the generic dispatch
+                    // tower. The sibling `slice`/`sort`/`reverse` arms exist
+                    // but `splice` was missing, so effect's FiberRuntime op
+                    // queue (`(arr as any).splice(start, deleteCount)`) threw
+                    // "splice is not a function". Mirrors JS semantics:
+                    // mutates the receiver in place and returns a new array of
+                    // the removed elements. Extra args after deleteCount are
+                    // inserted at `start`.
+                    "splice" => {
+                        let arr = raw_ptr as *mut crate::array::ArrayHeader;
+                        let arg_i32 = |i: usize| -> i32 {
+                            if i < args_len && !args_ptr.is_null() {
+                                let v = *args_ptr.add(i);
+                                if v.is_nan() || v.is_infinite() {
+                                    0
+                                } else {
+                                    v as i32
+                                }
+                            } else {
+                                0
+                            }
+                        };
+                        let start = if args_len >= 1 { arg_i32(0) } else { 0 };
+                        // Per spec: omitted deleteCount deletes through the end.
+                        // `js_array_splice` clamps to the live length.
+                        let delete_count = if args_len >= 2 { arg_i32(1) } else { i32::MAX };
+                        // Items to insert are args[2..].
+                        let items: Vec<f64> = if args_len > 2 && !args_ptr.is_null() {
+                            std::slice::from_raw_parts(args_ptr.add(2), args_len - 2).to_vec()
+                        } else {
+                            Vec::new()
+                        };
+                        let items_ptr = if items.is_empty() {
+                            std::ptr::null()
+                        } else {
+                            items.as_ptr()
+                        };
+                        let mut out_arr: *mut crate::array::ArrayHeader = std::ptr::null_mut();
+                        let deleted = crate::array::js_array_splice(
+                            arr,
+                            start,
+                            delete_count,
+                            items_ptr,
+                            items.len() as u32,
+                            &mut out_arr,
+                        );
+                        return f64::from_bits(JSValue::pointer(deleted as *mut u8).bits());
+                    }
                     // Issue #515 followup: defensive `with` arm for arrays that
                     // reach the generic dispatch tower because the HIR fold
                     // bailed (untyped receiver, chained call returning Array,
