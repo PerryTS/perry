@@ -559,16 +559,12 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
         }
     };
 
-    let box_string = |bytes: &[u8]| -> f64 {
-        let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-        crate::value::js_nanbox_string(ptr as i64)
-    };
-
     if cmd_ptr.is_null() {
         if cb.is_null() {
-            return box_string(b"");
+            return cp_box_output(b"", arg1);
         }
-        crate::closure::js_closure_call3(cb, TAG_NULL_F64, box_string(b""), box_string(b""));
+        let output = cp_box_output(b"", arg1);
+        crate::closure::js_closure_call3(cb, TAG_NULL_F64, output, output);
         return f64::from_bits(TAG_UNDEFINED_BITS);
     }
 
@@ -604,13 +600,13 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
         }
     };
 
-    let stdout_box = box_string(&stdout_bytes);
+    let stdout_box = cp_box_output(&stdout_bytes, arg1);
     if cb.is_null() {
         // Legacy no-callback shape — return the stdout string.
         return stdout_box;
     }
 
-    let stderr_box = box_string(&stderr_bytes);
+    let stderr_box = cp_box_output(&stderr_bytes, arg1);
     let err_val = if success {
         TAG_NULL_F64
     } else {
@@ -722,6 +718,28 @@ fn cp_get_field(value: f64, name: &[u8]) -> f64 {
 fn cp_set_field(value: f64, name: &[u8], field_value: f64) {
     if let Some(obj) = cp_object_ptr(value) {
         js_object_set_field_by_name(obj, cp_str_key(name), field_value);
+    }
+}
+
+fn cp_encoding_wants_buffer(opts_val: f64) -> bool {
+    if cp_object_ptr(opts_val).is_none() {
+        return false;
+    }
+    let encoding = cp_get_field(opts_val, b"encoding");
+    if encoding.to_bits() == TAG_NULL_BITS {
+        return true;
+    }
+    match cp_value_to_string(encoding) {
+        Some(s) => s.eq_ignore_ascii_case("buffer"),
+        None => false,
+    }
+}
+
+fn cp_box_output(bytes: &[u8], opts_val: f64) -> f64 {
+    if cp_encoding_wants_buffer(opts_val) {
+        cp_make_buffer(bytes)
+    } else {
+        cp_box_string_bytes(bytes)
     }
 }
 
@@ -1394,11 +1412,6 @@ pub extern "C" fn js_child_process_exec_file(
             extract_closure_ptr(opts_val)
         }
     };
-    let box_string = |bytes: &[u8]| -> f64 {
-        let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-        crate::value::js_nanbox_string(ptr as i64)
-    };
-
     let file_str = unsafe { cp_read_string_header(file_ptr) };
     let arg_strs = cp_args_from_value(args_val);
 
@@ -1412,11 +1425,11 @@ pub extern "C" fn js_child_process_exec_file(
         Err(e) => (Vec::new(), e.to_string().into_bytes(), false),
     };
 
-    let stdout_box = box_string(&stdout_bytes);
+    let stdout_box = cp_box_output(&stdout_bytes, opts_val);
     if cb.is_null() {
         return stdout_box;
     }
-    let stderr_box = box_string(&stderr_bytes);
+    let stderr_box = cp_box_output(&stderr_bytes, opts_val);
     let err_val = if success {
         TAG_NULL_F64
     } else {
