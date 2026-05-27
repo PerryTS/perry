@@ -1184,24 +1184,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.promises namespace is undefined (used for `await pipeline()` / `await finished()`). Flips to PASS when #1533 lands."
   },
-  "node-suite/stream/promises/pipeline-await": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: stream/promises pipeline await doesn't resolve correctly (depends on streams + promises ns). Flips to PASS when #1533 lands."
-  },
-  "node-suite/stream/promises/pipeline-rejects-on-error": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/promises: pipeline doesn't reject with the underlying Error. Flips to PASS when #1533 lands."
-  },
-  "node-suite/stream/promises/pipeline-with-signal": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/promises: pipeline with signal does not reject on abort. Flips to PASS when #1533 lands."
-  },
   "node-suite/stream/pipe/returns-destination": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1573,12 +1555,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: getReader({mode:'byob'}) on bytes-type stream fails or returns wrong shape. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/promises/pipeline-returns-undefined": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/promises: pipeline resolves with the wrong value. Flips to PASS when #1533 lands."
   },
   "node-suite/stream/async-iter/single-iteration-only": {
     "issue": "1531",
