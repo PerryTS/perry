@@ -1512,6 +1512,7 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "buffer.Buffer" => match property {
             "poolSize" => Some(buffer_pool_size()),
+            "name" => Some(str_val("Buffer")),
             _ => None,
         },
         "os" => match property {

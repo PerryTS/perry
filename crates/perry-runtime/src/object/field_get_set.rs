@@ -1182,6 +1182,12 @@ pub extern "C" fn js_object_get_field_by_name(
                     let b = obj as *const crate::buffer::BufferHeader;
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
+                if key_bytes == b"constructor" {
+                    let module = b"buffer.Buffer";
+                    return JSValue::from_bits(
+                        js_create_native_module_namespace(module.as_ptr(), module.len()).to_bits(),
+                    );
+                }
                 if crate::buffer::is_secret_key(obj as usize) {
                     if key_bytes == b"type" {
                         let s = crate::string::js_string_from_bytes(b"secret".as_ptr(), 6);

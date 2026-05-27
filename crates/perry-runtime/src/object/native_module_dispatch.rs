@@ -34,6 +34,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(JSValue::undefined().bits())
         }
     };
+    let i32_arg = |n: usize| -> i32 {
+        let v = arg(n);
+        let bits = v.to_bits();
+        if (bits >> 48) == 0x7FFE {
+            return (bits & 0xFFFF_FFFF) as u32 as i32;
+        }
+        if v.is_nan() || v.is_infinite() {
+            0
+        } else {
+            v as i32
+        }
+    };
 
     // Helper: extract raw string pointer from a NaN-boxed f64 value
     let arg_str_ptr = |n: usize| -> *const crate::StringHeader {
@@ -133,6 +145,83 @@ pub(crate) unsafe fn dispatch_native_module_method(
     };
 
     match (module_name, method_name) {
+        // ── Buffer constructor static API ──
+        // `class MyBuffer extends Buffer {}; MyBuffer.from(...)` reaches this
+        // path through js_class_static_method_call's native-superclass
+        // fallback. Return plain Buffer instances, matching Node's internal
+        // FastBuffer behavior rather than species/subclass construction.
+        ("buffer.Buffer", "from") => {
+            let data = arg(0);
+            let second = JSValue::from_bits(arg(1).to_bits());
+            let second_is_offset = args_len >= 2
+                && !second.is_undefined()
+                && !second.is_null()
+                && !second.is_string()
+                && !second.is_short_string();
+            let buf = if args_len >= 3 || second_is_offset {
+                let len = if args_len >= 3 { i32_arg(2) } else { -1 };
+                crate::buffer::js_buffer_from_arraybuffer_slice(
+                    data.to_bits() as i64,
+                    i32_arg(1),
+                    len,
+                )
+            } else {
+                let enc = if args_len >= 2 {
+                    crate::buffer::js_encoding_tag_from_value(arg(1))
+                } else {
+                    0
+                };
+                crate::buffer::js_buffer_from_value(data.to_bits() as i64, enc)
+            };
+            ptr_to_f64(buf as *const u8)
+        }
+        ("buffer.Buffer", "alloc") => {
+            let buf = if args_len >= 2 {
+                let enc = if args_len >= 3 {
+                    crate::buffer::js_encoding_tag_from_value(arg(2))
+                } else {
+                    0
+                };
+                crate::buffer::js_buffer_alloc_fill_value(i32_arg(0), arg(1), enc)
+            } else {
+                crate::buffer::js_buffer_alloc(i32_arg(0), 0)
+            };
+            ptr_to_f64(buf as *const u8)
+        }
+        ("buffer.Buffer", "allocUnsafe") | ("buffer.Buffer", "allocUnsafeSlow") => {
+            let buf = crate::buffer::js_buffer_alloc_unsafe(i32_arg(0));
+            ptr_to_f64(buf as *const u8)
+        }
+        ("buffer.Buffer", "concat") => {
+            let arr = ptr_addr(arg(0)) as *const crate::array::ArrayHeader;
+            ptr_to_f64(crate::buffer::js_buffer_concat(arr) as *const u8)
+        }
+        ("buffer.Buffer", "of") => {
+            let arr = pack_args();
+            ptr_to_f64(crate::buffer::js_buffer_from_array(arr) as *const u8)
+        }
+        ("buffer.Buffer", "isBuffer") => {
+            bool_to_f64(crate::buffer::js_buffer_is_buffer(arg(0).to_bits() as i64))
+        }
+        ("buffer.Buffer", "isEncoding") => {
+            bool_to_f64(crate::buffer::js_buffer_is_encoding(arg(0)))
+        }
+        ("buffer.Buffer", "byteLength") => {
+            crate::buffer::js_buffer_byte_length_value(arg(0), arg(1)) as f64
+        }
+        ("buffer.Buffer", "compare") => {
+            let a = ptr_addr(arg(0));
+            let b = ptr_addr(arg(1));
+            if crate::buffer::is_registered_buffer(a) && crate::buffer::is_registered_buffer(b) {
+                crate::buffer::js_buffer_compare(
+                    a as *const crate::buffer::BufferHeader,
+                    b as *const crate::buffer::BufferHeader,
+                ) as f64
+            } else {
+                0.0
+            }
+        }
+
         // ── process EventEmitter API ──
         ("process", "on") => crate::os::js_process_on(arg_event_ptr(0), arg_closure_ptr(1)),
         ("process", "addListener") => {
