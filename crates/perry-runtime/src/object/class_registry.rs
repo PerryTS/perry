@@ -98,6 +98,30 @@ pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock
 /// Stored as `usize` (raw address) for Send + Sync; converted back at use.
 pub static CLASS_PARENT_CLOSURES: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
 
+pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {
+    if class_id == 0 || proto_ptr.is_null() {
+        return;
+    }
+    let mut guard = CLASS_PROTOTYPE_OBJECTS.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard.as_mut().unwrap().insert(class_id, proto_ptr as usize);
+    crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
+}
+
+pub(crate) fn class_parent_closure_root_store(class_id: u32, closure_addr: usize) {
+    if class_id == 0 || closure_addr == 0 {
+        return;
+    }
+    let mut guard = CLASS_PARENT_CLOSURES.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard.as_mut().unwrap().insert(class_id, closure_addr);
+    crate::gc::runtime_write_barrier_root_raw_ptr(closure_addr as *const u8);
+}
+
 /// Look up the parent-closure address recorded for a child class_id, if any.
 pub(crate) fn class_parent_closure(class_id: u32) -> Option<usize> {
     CLASS_PARENT_CLOSURES
@@ -171,14 +195,7 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
             if let Some(&existing) = map.get(&func_bits) {
                 // Update the prototype object (allow re-pointing)
                 // without changing the class_id.
-                let mut proto_write = CLASS_PROTOTYPE_OBJECTS.write().unwrap();
-                if proto_write.is_none() {
-                    *proto_write = Some(HashMap::new());
-                }
-                proto_write
-                    .as_mut()
-                    .unwrap()
-                    .insert(existing, proto_ptr as usize);
+                class_prototype_object_root_store(existing, proto_ptr);
                 crate::typed_feedback::invalidate_method_change(existing);
                 return existing;
             }
@@ -192,13 +209,7 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
         }
         write.as_mut().unwrap().insert(func_bits, new_cid);
     }
-    {
-        let mut write = CLASS_PROTOTYPE_OBJECTS.write().unwrap();
-        if write.is_none() {
-            *write = Some(HashMap::new());
-        }
-        write.as_mut().unwrap().insert(new_cid, proto_ptr as usize);
-    }
+    class_prototype_object_root_store(new_cid, proto_ptr);
     // Register the synthetic id so REGISTERED_CLASS_IDS-gated paths
     // (e.g., the #687 ClassRef-as-receiver short-circuit) recognize it.
     unsafe { js_register_class_id(new_cid) };
@@ -1006,6 +1017,8 @@ enum ClassSideTableRootSlot {
     DynamicProp { class_id: u32, name: String },
     PrototypeMethod { class_id: u32, name: String },
     PrototypeMethodValue { class_id: u32, name: String },
+    PrototypeObject { class_id: u32 },
+    ParentClosure { class_id: u32 },
     FunctionClassIdKey { bits: u64 },
 }
 
@@ -1069,6 +1082,22 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         }
     });
 
+    if let Ok(mut guard) = CLASS_PROTOTYPE_OBJECTS.write() {
+        if let Some(map) = guard.as_mut() {
+            for proto_addr in map.values_mut() {
+                visitor.visit_usize_slot(proto_addr);
+            }
+        }
+    }
+
+    if let Ok(mut guard) = CLASS_PARENT_CLOSURES.write() {
+        if let Some(map) = guard.as_mut() {
+            for closure_addr in map.values_mut() {
+                visitor.visit_usize_slot(closure_addr);
+            }
+        }
+    }
+
     scan_function_class_id_keys_mut(visitor);
 }
 
@@ -1109,6 +1138,22 @@ fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
             });
         }
     });
+
+    if let Ok(guard) = CLASS_PROTOTYPE_OBJECTS.read() {
+        if let Some(map) = guard.as_ref() {
+            for &class_id in map.keys() {
+                slots.push(ClassSideTableRootSlot::PrototypeObject { class_id });
+            }
+        }
+    }
+
+    if let Ok(guard) = CLASS_PARENT_CLOSURES.read() {
+        if let Some(map) = guard.as_ref() {
+            for &class_id in map.keys() {
+                slots.push(ClassSideTableRootSlot::ParentClosure { class_id });
+            }
+        }
+    }
 
     if let Ok(guard) = FUNCTION_CLASS_IDS.read() {
         if let Some(map) = guard.as_ref() {
@@ -1154,6 +1199,20 @@ fn scan_class_side_table_root_slot(
                     visitor.visit_nanbox_u64_slot(value_bits);
                 }
             });
+        }
+        ClassSideTableRootSlot::PrototypeObject { class_id } => {
+            if let Ok(mut guard) = CLASS_PROTOTYPE_OBJECTS.write() {
+                if let Some(proto_addr) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
+                    visitor.visit_usize_slot(proto_addr);
+                }
+            }
+        }
+        ClassSideTableRootSlot::ParentClosure { class_id } => {
+            if let Ok(mut guard) = CLASS_PARENT_CLOSURES.write() {
+                if let Some(closure_addr) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
+                    visitor.visit_usize_slot(closure_addr);
+                }
+            }
         }
         ClassSideTableRootSlot::FunctionClassIdKey { bits } => {
             rewrite_function_class_id_key_if_forwarded(visitor, *bits);
@@ -1297,6 +1356,34 @@ pub(crate) fn test_class_prototype_method_value_root_bits(class_id: u32, name: &
             .copied()
             .unwrap_or(0)
     })
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_class_prototype_object_root(class_id: u32, addr: usize) {
+    class_prototype_object_root_store(class_id, addr as *mut ObjectHeader);
+}
+
+#[cfg(test)]
+pub(crate) fn test_class_prototype_object_root_addr(class_id: u32) -> usize {
+    CLASS_PROTOTYPE_OBJECTS
+        .read()
+        .ok()
+        .and_then(|guard| guard.as_ref().and_then(|map| map.get(&class_id).copied()))
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_class_parent_closure_root(class_id: u32, addr: usize) {
+    class_parent_closure_root_store(class_id, addr);
+}
+
+#[cfg(test)]
+pub(crate) fn test_class_parent_closure_root_addr(class_id: u32) -> usize {
+    CLASS_PARENT_CLOSURES
+        .read()
+        .ok()
+        .and_then(|guard| guard.as_ref().and_then(|map| map.get(&class_id).copied()))
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1856,11 +1943,7 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
     if tag == POINTER_TAG {
         let ptr = crate::value::js_nanbox_get_pointer(parent_value) as *mut ObjectHeader;
         if !ptr.is_null() && js_object_get_class_id(ptr as *const ObjectHeader) != 0 {
-            let mut write = CLASS_PROTOTYPE_OBJECTS.write().unwrap();
-            if write.is_none() {
-                *write = Some(HashMap::new());
-            }
-            write.as_mut().unwrap().insert(class_id, ptr as usize);
+            class_prototype_object_root_store(class_id, ptr);
         } else if !ptr.is_null() && crate::closure::is_closure_ptr(ptr as usize) {
             // #36 / #321: the parent is a plain FUNCTION value (closure), e.g.
             // effect's `class Svc extends Context.Tag("Svc")<...>() {}`. Record
@@ -1869,11 +1952,7 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
             // function's own props + ITS static prototype. The parent class_id
             // edge isn't wired (a closure carries no class_id), so this is the
             // only inheritance link for a function-valued superclass.
-            let mut write = CLASS_PARENT_CLOSURES.write().unwrap();
-            if write.is_none() {
-                *write = Some(HashMap::new());
-            }
-            write.as_mut().unwrap().insert(class_id, ptr as usize);
+            class_parent_closure_root_store(class_id, ptr as usize);
         }
     }
 }

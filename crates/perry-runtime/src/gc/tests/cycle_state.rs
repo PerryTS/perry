@@ -87,6 +87,26 @@ fn alloc_tracked_test_closure() -> *mut u8 {
     child
 }
 
+fn alloc_tracked_test_object() -> *mut crate::object::ObjectHeader {
+    let header_size = std::mem::size_of::<crate::object::ObjectHeader>();
+    let fields_size = 8 * std::mem::size_of::<crate::JSValue>();
+    let child =
+        gc_malloc(header_size + fields_size, GC_TYPE_OBJECT) as *mut crate::object::ObjectHeader;
+    unsafe {
+        (*child).object_type = crate::error::OBJECT_TYPE_REGULAR;
+        (*child).class_id = 0;
+        (*child).parent_class_id = 0;
+        (*child).field_count = 0;
+        (*child).keys_array = std::ptr::null_mut();
+        let fields_ptr = (child as *mut u8).add(header_size) as *mut crate::JSValue;
+        for i in 0..8 {
+            std::ptr::write(fields_ptr.add(i), crate::JSValue::undefined());
+        }
+        crate::gc::layout_init_pointer_free(child as *mut u8);
+    }
+    child
+}
+
 const VALID_POINTER_TEST_OBJECT_FIELDS: u32 = 1000;
 
 fn alloc_large_nursery_objects(count: usize) -> Vec<usize> {
@@ -473,6 +493,10 @@ fn root_scan_slices_many_registered_class_side_table_roots_with_tiny_budget() {
             string_bits(child),
         );
     }
+    let prototype_object = crate::object::js_object_alloc(0, 0) as usize;
+    let parent_closure = alloc_tracked_test_closure() as usize;
+    crate::object::test_seed_class_prototype_object_root(0x53f0, prototype_object);
+    crate::object::test_seed_class_parent_closure_root(0x53f1, parent_closure);
 
     let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
     run_cycle_until_phase(&mut state, GcCyclePhase::RootScan);
@@ -497,6 +521,14 @@ fn root_scan_slices_many_registered_class_side_table_roots_with_tiny_budget() {
             );
         }
     }
+    assert_marked_user_ptr(
+        prototype_object,
+        "prototype-object side-table value in sliced scanner",
+    );
+    assert_marked_user_ptr(
+        parent_closure,
+        "parent-closure side-table value in sliced scanner",
+    );
     crate::object::test_clear_class_side_table_roots();
 }
 
@@ -1085,6 +1117,53 @@ fn full_cycle_prototype_method_store_after_root_scan_preserves_new_value() {
     assert!(
         malloc_user_ptr_tracked(child),
         "prototype method stored after root scan should survive via the side-table root barrier"
+    );
+}
+
+#[test]
+fn full_cycle_prototype_object_store_after_root_scan_preserves_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let child = alloc_tracked_test_object();
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    let _created = crate::object::js_object_create(f64::from_bits(ptr_bits(child as usize)));
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(child as *mut u8),
+        "prototype object stored after root scan should survive via the side-table root barrier"
+    );
+}
+
+#[test]
+fn full_cycle_parent_closure_store_after_root_scan_preserves_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let child = alloc_tracked_test_closure();
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    crate::object::js_register_class_parent_dynamic(
+        0x5105,
+        f64::from_bits(ptr_bits(child as usize)),
+    );
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(child),
+        "parent closure stored after root scan should survive via the side-table root barrier"
     );
 }
 
