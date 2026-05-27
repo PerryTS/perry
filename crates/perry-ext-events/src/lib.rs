@@ -28,6 +28,7 @@ use perry_ffi::{
 use std::collections::HashMap;
 
 const MIN_HEAP_POINTER: u64 = 0x1000;
+const EVENT_TARGET_MIN_HEAP_POINTER: u64 = 0x10000;
 const MAX_HEAP_POINTER: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 // Direct hook into perry-runtime's sync Promise resolve.
@@ -58,6 +59,13 @@ extern "C" {
     // #1557: AbortSignal listener attachment for events.addAbortListener.
     fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
     fn js_abort_signal_add_listener(signal: *mut u8, event: f64, listener: f64);
+    fn js_event_target_is_event_target(target: *const u8) -> i32;
+    fn js_event_target_get_event_listeners(
+        target: *mut u8,
+        event: *const StringHeader,
+    ) -> *mut ArrayHeader;
+    fn js_event_target_get_max_listeners(target: *mut u8) -> f64;
+    fn js_event_target_set_max_listeners(target: *mut u8, n: f64) -> i32;
 }
 
 const TAG_UNDEFINED_F64_BITS: u64 = 0x7FFC_0000_0000_0001;
@@ -175,6 +183,27 @@ fn is_heap_pointer_candidate(callback: i64) -> bool {
     }
     let addr = callback as u64;
     (MIN_HEAP_POINTER..=MAX_HEAP_POINTER).contains(&addr) && addr & 0x7 == 0
+}
+
+unsafe fn event_target_ptr(handle: Handle) -> Option<*mut u8> {
+    let addr = handle as u64;
+    if !(EVENT_TARGET_MIN_HEAP_POINTER..=MAX_HEAP_POINTER).contains(&addr) || addr & 0x7 != 0 {
+        return None;
+    }
+    let ptr = handle as *mut u8;
+    if js_event_target_is_event_target(ptr as *const u8) != 0 {
+        Some(ptr)
+    } else {
+        None
+    }
+}
+
+fn handle_from_js_value_bits(bits: u64) -> Handle {
+    if (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {
+        (bits & POINTER_MASK) as Handle
+    } else {
+        bits as Handle
+    }
 }
 
 unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
@@ -730,7 +759,13 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
     handle: Handle,
     event_name_ptr: *const StringHeader,
 ) -> *mut ArrayHeader {
-    js_event_emitter_listeners(handle, event_name_ptr)
+    if get_handle_mut::<EventEmitterHandle>(handle).is_some() {
+        return js_event_emitter_listeners(handle, event_name_ptr);
+    }
+    if let Some(target) = event_target_ptr(handle) {
+        return js_event_target_get_event_listeners(target, event_name_ptr);
+    }
+    js_array_alloc(0)
 }
 
 /// `events.listenerCount(emitter, eventName)` — alias.
@@ -749,16 +784,32 @@ pub unsafe extern "C" fn js_events_listener_count(
 /// `events.getMaxListeners(emitter)` — alias.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_get_max_listeners(handle: Handle) -> f64 {
-    js_event_emitter_get_max_listeners(handle)
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        return emitter.max_listeners as f64;
+    }
+    if let Some(target) = event_target_ptr(handle) {
+        return js_event_target_get_max_listeners(target);
+    }
+    10.0
 }
 
 /// `events.setMaxListeners(n, ...emitters)` — Perry FFI takes a single
-/// emitter handle. Multi-target callers should emit N FFI calls; for
-/// the single-emitter case below this is exactly the right shape.
+/// array of target handles from the codegen varargs lowering.
 #[no_mangle]
-pub unsafe extern "C" fn js_events_set_max_listeners(n: f64, handle: Handle) -> f64 {
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        emitter.max_listeners = n as i32;
+pub unsafe extern "C" fn js_events_set_max_listeners(
+    n: f64,
+    handles_ptr: *const ArrayHeader,
+) -> f64 {
+    if !handles_ptr.is_null() {
+        let len = (*handles_ptr).length;
+        for i in 0..len {
+            let handle = handle_from_js_value_bits(js_array_get(handles_ptr, i).bits());
+            if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+                emitter.max_listeners = n as i32;
+            } else if let Some(target) = event_target_ptr(handle) {
+                let _ = js_event_target_set_max_listeners(target, n);
+            }
+        }
     }
     f64::from_bits(0x7FFC_0000_0000_0001)
 }

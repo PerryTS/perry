@@ -302,6 +302,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "URLSearchParams"
             | "AbortController"
             | "AbortSignal"
+            | "EventTarget"
             | "FormData"
             | "Blob"
             | "Headers"

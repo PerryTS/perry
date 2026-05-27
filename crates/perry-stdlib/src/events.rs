@@ -30,12 +30,27 @@ use std::collections::HashMap;
 const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
 const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
 const ERROR_MONITOR_EVENT_NAME: &str = "Symbol(events.errorMonitor)";
+const MIN_HEAP_POINTER: u64 = 0x10000;
+const MAX_HEAP_POINTER: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 fn bool_to_js(value: bool) -> f64 {
     if value {
         TAG_TRUE_F64
     } else {
         TAG_FALSE_F64
+    }
+}
+
+unsafe fn event_target_ptr(handle: Handle) -> Option<*mut ObjectHeader> {
+    let addr = handle as u64;
+    if !(MIN_HEAP_POINTER..=MAX_HEAP_POINTER).contains(&addr) || addr & 0x7 != 0 {
+        return None;
+    }
+    let ptr = handle as *mut ObjectHeader;
+    if perry_runtime::event_target::js_event_target_is_event_target(ptr) != 0 {
+        Some(ptr)
+    } else {
+        None
     }
 }
 
@@ -926,6 +941,12 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
     handle: Handle,
     event_name_ptr: *const StringHeader,
 ) -> *mut ArrayHeader {
+    if let Some(target) = event_target_ptr(handle) {
+        return perry_runtime::event_target::js_event_target_get_event_listeners(
+            target,
+            event_name_ptr,
+        );
+    }
     js_event_emitter_listeners(handle, event_name_ptr)
 }
 
@@ -942,13 +963,15 @@ pub unsafe extern "C" fn js_events_listener_count(
 /// `events.getMaxListeners(emitter)` — alias.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_get_max_listeners(handle: Handle) -> f64 {
+    if let Some(target) = event_target_ptr(handle) {
+        return perry_runtime::event_target::js_event_target_get_max_listeners(target);
+    }
     js_event_emitter_get_max_listeners(handle)
 }
 
-/// `events.setMaxListeners(n, ...emitters)` — Perry FFI takes a single
-/// emitter handle. The codegen wraps multi-target calls by emitting
-/// one FFI call per target; for the common single-emitter case below
-/// this is exactly the right shape.
+/// `events.setMaxListeners(n, ...targets)` — codegen passes the varargs
+/// target list as a Perry array of EventEmitter handles and EventTarget
+/// object pointers.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_set_max_listeners(
     n: f64,
@@ -968,6 +991,8 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
             };
             if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
                 emitter.max_listeners = n;
+            } else if let Some(target) = event_target_ptr(handle) {
+                let _ = perry_runtime::event_target::js_event_target_set_max_listeners(target, n);
             }
         }
     }
