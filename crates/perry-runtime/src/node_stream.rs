@@ -413,6 +413,25 @@ pub extern "C" fn js_node_stream_method_writable_hwm(stream_handle: i64) -> f64 
     get_hidden_value(stream, hidden_key(b"writableHighWaterMark")).unwrap_or(16384.0)
 }
 
+/// `stream.readableAborted` property getter on typed readable streams.
+/// Node exposes it as a boolean: false on a fresh stream, true once the
+/// readable side was destroyed before a natural end.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_aborted(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if !has_truthy_hidden(stream, hidden_readable_flag_key()) {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let aborted_before_end = !stream_hidden_ended(stream)
+        && (has_truthy_hidden(stream, hidden_key(b"destroyed"))
+            || readable_hidden_error(stream).is_some());
+    f64::from_bits(if aborted_before_end {
+        TAG_TRUE
+    } else {
+        TAG_FALSE
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
