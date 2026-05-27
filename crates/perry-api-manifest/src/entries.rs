@@ -2400,6 +2400,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Readable/Writable/Duplex/Transform/PassThrough constructor surface.
     method("stream", "read", true, None),
     method("stream", "resume", true, None),
+    method("stream", "destroy", true, None),
     method("stream", "write", true, None),
     method("stream", "end", true, None),
     // #1539: push() backpressure return + readable/writableHighWaterMark
@@ -2407,6 +2408,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "push", true, None),
     method("stream", "readableHighWaterMark", true, None),
     method("stream", "writableHighWaterMark", true, None),
+    method("stream", "destroyed", true, None),
     // --- child_process (synchronous + async exec surface;
     //     spawn/fork are documented but not yet codegen'd) ---
     method("child_process", "exec", false, None),

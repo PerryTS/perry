@@ -87,6 +87,9 @@ const STREAM_DISTURBED_KEY: &[u8] = b"__perryStreamDisturbed";
 const READABLE_BUFFERED_KEY: &[u8] = b"__perryReadableBuffered";
 const READABLE_HWM_KEY: &[u8] = b"__perryReadableHwm";
 
+pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_destroyed};
+use destroy_state::{ns_destroy1, ns_destroy_error_microtask};
+
 // ─────────────────────────────────────────────────────────────────
 // Stub method bodies. Each receives the closure pointer (slot 0
 // holds the host object's NaN-boxed bits cast to i64) plus its
@@ -870,6 +873,8 @@ fn register_stub_arities() {
     };
     register(ns_chain0 as *const u8, 0);
     register(ns_chain1 as *const u8, 1);
+    register(ns_destroy_error_microtask as *const u8, 0);
+    register(ns_destroy1 as *const u8, 1);
     register(ns_chain2 as *const u8, 2);
     register(ns_chain3 as *const u8, 3);
     register(ns_on2 as *const u8, 2);
@@ -1489,7 +1494,7 @@ fn readable_methods() -> [(&'static str, StubFn); 37] {
         ("unpipe", cast1(ns_chain1)),
         ("pause", cast0(ns_chain0)),
         ("resume", cast0(ns_resume0)),
-        ("destroy", cast1(ns_chain1)),
+        ("destroy", cast1(ns_destroy1)),
         ("setEncoding", cast1(ns_chain1)),
         ("isPaused", cast0(ns_undefined0)),
         // #1558 — async iterator helpers. The consuming helpers accept a
@@ -1536,7 +1541,7 @@ fn writable_methods() -> [(&'static str, StubFn); 22] {
         ("end", cast1(ns_end1)),
         ("cork", cast0(ns_chain0)),
         ("uncork", cast0(ns_chain0)),
-        ("destroy", cast1(ns_chain1)),
+        ("destroy", cast1(ns_destroy1)),
         ("setDefaultEncoding", cast1(ns_chain1)),
         ("_write", cast3(ns_chain3)),
     ]
@@ -1573,7 +1578,7 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("end", cast1(ns_end1)),
         ("cork", cast0(ns_chain0)),
         ("uncork", cast0(ns_chain0)),
-        ("destroy", cast1(ns_chain1)),
+        ("destroy", cast1(ns_destroy1)),
         ("setDefaultEncoding", cast1(ns_chain1)),
     ]
 }
@@ -1679,6 +1684,11 @@ fn resolve_hwm(opts: f64, specific: &[u8], specific_object_mode: &[u8]) -> f64 {
     default_hwm(object_mode)
 }
 
+/// Initialize visible lifecycle flags shared by all stream sides.
+fn init_lifecycle_state(stream: f64) {
+    set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
+}
+
 /// Initialize the readable side of a stream: direction flag, buffered byte
 /// counter, effective readable highWaterMark, and the visible
 /// `readableHighWaterMark` / `destroyed` properties (#1534/#1539).
@@ -1708,6 +1718,7 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     if let Some(read) = read_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, readable));
     }
+    init_lifecycle_state(readable);
     init_readable_state(readable, opts);
     async_iterator::install_readable_async_iterator_symbol(readable);
     readable
@@ -1725,6 +1736,7 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
             rebind_callback_this(write, writable),
         );
     }
+    init_lifecycle_state(writable);
     init_writable_state(writable, opts);
     writable
 }
@@ -1737,6 +1749,7 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     if let Some(write) = write_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, duplex));
     }
+    init_lifecycle_state(duplex);
     init_readable_state(duplex, opts);
     init_writable_state(duplex, opts);
     async_iterator::install_readable_async_iterator_symbol(duplex);
@@ -1960,6 +1973,9 @@ pub extern "C" fn js_node_stream_from_web(_web_stream: f64) -> f64 {
 
 #[path = "node_stream_keepalive.rs"]
 mod keepalive;
+
+#[path = "node_stream_destroy_state.rs"]
+mod destroy_state;
 
 #[cfg(test)]
 #[path = "node_stream_tests.rs"]

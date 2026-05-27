@@ -2678,12 +2678,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: pipeTo with pre-aborted signal — does not reject immediately. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/flags/destroyed-initial-false": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroyed flag — wrong initial value on R/W/D/T. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/pipe-adds-listener-on-dst": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -3385,12 +3379,6 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream/consumers: buffer() from raw-byte Buffer chunks — byte sequence or Array.from output differs from Node. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/static/is-errored-after-destroy": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: isErrored(stream) stays false after destroy(err) (should be true). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/static/is-writable-after-end-false": {
     "issue": "1532",

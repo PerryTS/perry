@@ -859,6 +859,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // #1540: Readable/Writable .toWeb / .fromWeb — return fresh Duplex stubs.
     module.declare_function("js_node_stream_to_web", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_from_web", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_method_destroyed", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_destroy", DOUBLE, &[I64, DOUBLE]);
 
     // ========== Event emitter ==========
     module.declare_function("js_event_emitter_emit", DOUBLE, &[I64, I64, I64]);
