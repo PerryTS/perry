@@ -194,12 +194,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:net` socket-layer surface not implemented (Server/Socket classes, BlockList, SocketAddress). Classification helpers landed via #811. Tracker for surface coverage; flips to PASS as each API lands."
   },
-  "test_parity_os": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:os` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_process": {
     "issue": "793",
     "added": "2026-05-15",
