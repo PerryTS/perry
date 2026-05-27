@@ -313,6 +313,11 @@ thread_local! {
 
 #[inline]
 pub(super) fn gc_trace_enabled() -> bool {
+    #[cfg(test)]
+    if GC_TRACE_TEST_FORCE.with(Cell::get) {
+        return true;
+    }
+
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
         matches!(
@@ -320,6 +325,37 @@ pub(super) fn gc_trace_enabled() -> bool {
             Ok("1") | Ok("on") | Ok("true")
         )
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    static GC_TRACE_TEST_FORCE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(super) struct TestGcTraceCaptureGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl TestGcTraceCaptureGuard {
+    pub(super) fn force_enabled() -> Self {
+        let previous = GC_TRACE_TEST_FORCE.with(|force| {
+            let previous = force.get();
+            force.set(true);
+            previous
+        });
+        clear_test_last_gc_trace_json();
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestGcTraceCaptureGuard {
+    fn drop(&mut self) {
+        GC_TRACE_TEST_FORCE.with(|force| force.set(self.previous));
+        clear_test_last_gc_trace_json();
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -352,6 +388,7 @@ pub(super) enum GcTriggerKind {
     MallocCount,
     OldGenBytes,
     SurvivorPromotionBytes,
+    Emergency,
     Manual,
     Direct,
 }
@@ -364,6 +401,7 @@ impl GcTriggerKind {
             GcTriggerKind::MallocCount => "malloc_count",
             GcTriggerKind::OldGenBytes => "old_gen_bytes",
             GcTriggerKind::SurvivorPromotionBytes => "survivor_promotion_bytes",
+            GcTriggerKind::Emergency => "emergency",
             GcTriggerKind::Manual => "manual",
             GcTriggerKind::Direct => "direct",
         }
@@ -378,12 +416,14 @@ impl GcTriggerKind {
             GcTriggerKind::SurvivorPromotionBytes => 4,
             GcTriggerKind::Manual => 5,
             GcTriggerKind::Direct => 6,
+            GcTriggerKind::Emergency => 7,
         }
     }
 
     #[inline]
     pub(super) const fn progress_kind(self, collection_kind: GcCollectionKind) -> GcProgressKind {
         match (self, collection_kind) {
+            (GcTriggerKind::Emergency, GcCollectionKind::Full) => GcProgressKind::EmergencyFull,
             (GcTriggerKind::Manual, GcCollectionKind::Full) => GcProgressKind::ExplicitFull,
             (GcTriggerKind::Manual, GcCollectionKind::Minor) => GcProgressKind::ExplicitSynchronous,
             (
@@ -391,6 +431,7 @@ impl GcTriggerKind {
                 | GcTriggerKind::MallocCount
                 | GcTriggerKind::OldGenBytes
                 | GcTriggerKind::SurvivorPromotionBytes
+                | GcTriggerKind::Emergency
                 | GcTriggerKind::Direct,
                 _,
             ) => GcProgressKind::LegacySynchronous,
@@ -1016,13 +1057,6 @@ enum BudgetedGcTrigger {
     MallocCount,
 }
 
-#[derive(Clone, Copy)]
-struct GcStepDebt {
-    arena_debt_bytes: u64,
-    malloc_debt_objects: u64,
-    old_reclaim_debt_bytes: u64,
-}
-
 thread_local! {
     static GC_BUDGETED_CYCLE: RefCell<Option<BudgetedGcCycle>> = const { RefCell::new(None) };
     static GC_BUDGETED_CYCLE_ACTIVE: Cell<bool> = const { Cell::new(false) };
@@ -1045,28 +1079,13 @@ fn gc_budgeted_resume_blocked() -> bool {
         || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
 }
 
-fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u64 {
+pub(super) fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u64 {
     let trigger = if baseline < GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES {
         GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES
     } else {
         baseline.saturating_add(GC_OLD_GEN_RECLAIM_GROWTH_BYTES)
     };
     old_in_use.saturating_sub(trigger) as u64
-}
-
-fn gc_step_debt() -> GcStepDebt {
-    let total = crate::arena::arena_total_bytes();
-    let next_arena_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
-    let malloc_count = malloc_object_count();
-    let next_malloc_trigger = GC_NEXT_MALLOC_TRIGGER.with(|c| c.get());
-    let old_in_use = crate::arena::old_gen_in_use_bytes();
-    let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
-
-    GcStepDebt {
-        arena_debt_bytes: total.saturating_sub(next_arena_trigger) as u64,
-        malloc_debt_objects: malloc_count.saturating_sub(next_malloc_trigger) as u64,
-        old_reclaim_debt_bytes: gc_old_reclaim_debt_bytes(old_in_use, old_baseline),
-    }
 }
 
 fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
@@ -1228,7 +1247,7 @@ fn gc_step_result(
     active: bool,
     completed: bool,
 ) -> JsGcStepResult {
-    let debt = gc_step_debt();
+    let debt = GcDebtSnapshot::current();
     JsGcStepResult {
         status,
         phase,

@@ -14,6 +14,20 @@ pub(super) enum GcCyclePhase {
 
 impl GcCyclePhase {
     #[inline]
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::BuildValidPointerSet => "build_valid_pointer_set",
+            Self::RootScan => "root_scan",
+            Self::MarkPropagation => "mark_propagation",
+            Self::BlockPersistence => "block_persistence",
+            Self::AtomicFinalize => "atomic_finalize",
+            Self::Sweep => "sweep",
+            Self::Reclaim => "reclaim",
+            Self::Complete => "complete",
+        }
+    }
+
+    #[inline]
     pub(super) const fn ffi_code(self) -> u32 {
         match self {
             Self::BuildValidPointerSet => 1,
@@ -386,6 +400,7 @@ impl GcCycleState {
             };
         }
 
+        let debt_before = self.trace.as_ref().map(|_| GcDebtSnapshot::current());
         let step_start = Instant::now();
         self.active_step_start = Some(step_start);
         match self.phase {
@@ -399,7 +414,34 @@ impl GcCycleState {
             GcCyclePhase::Complete => {}
         }
         self.active_step_start = None;
-        self.active_elapsed = self.active_elapsed.saturating_add(step_start.elapsed());
+        let step_elapsed = step_start.elapsed();
+        self.active_elapsed = self.active_elapsed.saturating_add(step_elapsed);
+        if let Some(debt_before) = debt_before {
+            let debt_after = GcDebtSnapshot::current();
+            if let Some(trace) = self.trace.as_mut() {
+                trace.record_pause_step(
+                    phase_before,
+                    self.phase,
+                    budget.work_units,
+                    step_elapsed,
+                    debt_before,
+                    debt_after,
+                );
+            } else if let Some(trace) = self
+                .outcome
+                .as_mut()
+                .and_then(|outcome| outcome.trace.as_mut())
+            {
+                trace.record_pause_step(
+                    phase_before,
+                    self.phase,
+                    budget.work_units,
+                    step_elapsed,
+                    debt_before,
+                    debt_after,
+                );
+            }
+        }
         GcCycleStepResult {
             phase: phase_before,
             completed: self.phase == GcCyclePhase::Complete,

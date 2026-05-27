@@ -1,5 +1,38 @@
 use super::super::*;
 
+fn assert_additive_pause_telemetry_fields(
+    event: &serde_json::Value,
+    expected_kind: &str,
+    expected_class: &str,
+    ordinary: bool,
+) {
+    let pause_budget = &event["pause_budget"];
+    assert_eq!(pause_budget["kind"].as_str(), Some(expected_kind));
+    assert_eq!(pause_budget["class"].as_str(), Some(expected_class));
+    assert_eq!(pause_budget["budget_unit"].as_str(), Some("work_units"));
+    assert_eq!(pause_budget["ordinary_budgeted"].as_bool(), Some(ordinary));
+    assert_eq!(
+        pause_budget["ordinary_pause_stats_include"].as_bool(),
+        Some(ordinary)
+    );
+    assert!(pause_budget["max_observed_step_pause_us"]
+        .as_u64()
+        .is_some());
+    assert!(event["pause_steps"].as_array().is_some());
+    assert!(event["phase_progression"]
+        .as_array()
+        .expect("phase_progression should be an array")
+        .iter()
+        .any(|phase| phase.as_str() == Some("build_valid_pointer_set")));
+    for key in ["start", "end", "max_observed"] {
+        assert!(event["debt"][key]["arena_debt_bytes"].as_u64().is_some());
+        assert!(event["debt"][key]["malloc_debt_objects"].as_u64().is_some());
+        assert!(event["debt"][key]["old_reclaim_debt_bytes"]
+            .as_u64()
+            .is_some());
+    }
+}
+
 #[test]
 fn test_gc_progress_contract_defaults() {
     let contract = gc_progress_contract();
@@ -64,6 +97,7 @@ fn test_gc_progress_contract_trace_json_labels_automatic_as_legacy() {
     assert!(progress["soft_pause_target_us"].is_null());
     assert_eq!(progress["ordinary_budgeted"].as_bool(), Some(false));
     assert_eq!(progress["class"].as_str(), Some("legacy"));
+    assert_additive_pause_telemetry_fields(&event, "legacy_synchronous", "legacy", false);
 }
 
 #[test]
@@ -88,4 +122,5 @@ fn test_gc_progress_contract_trace_json_labels_manual_minor_as_explicit_sync() {
     assert!(progress["soft_pause_target_us"].is_null());
     assert_eq!(progress["ordinary_budgeted"].as_bool(), Some(false));
     assert_eq!(progress["class"].as_str(), Some("explicit"));
+    assert_additive_pause_telemetry_fields(&event, "explicit_synchronous", "explicit", false);
 }

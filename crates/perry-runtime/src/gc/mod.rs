@@ -224,6 +224,23 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     GcCycleState::new_full(trigger).run_to_completion()
 }
 
+#[allow(dead_code)]
+fn gc_collect_emergency_full() -> GcCollectOutcome {
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Emergency))
+}
+
+#[cfg(test)]
+pub(super) fn test_gc_collect_emergency_full_trace_json() -> serde_json::Value {
+    let outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
+        kind: GcTriggerKind::Emergency,
+        steps_before: Some(GcStepSnapshot::current()),
+    });
+    outcome
+        .trace
+        .expect("test requested emergency full GC trace capture")
+        .into_json(GcStepSnapshot::current())
+}
+
 pub fn gc_init() {
     gc_register_mutable_root_scanner_with_source(
         scan_runtime_handle_roots_mut,

@@ -445,6 +445,77 @@ pub(super) enum BarrierTraceCounter {
     ConservativeParentSpanMarks,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct GcDebtSnapshot {
+    pub(super) arena_debt_bytes: u64,
+    pub(super) malloc_debt_objects: u64,
+    pub(super) old_reclaim_debt_bytes: u64,
+}
+
+impl GcDebtSnapshot {
+    #[inline]
+    pub(super) fn current() -> Self {
+        let total = crate::arena::arena_total_bytes();
+        let next_arena_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
+        let malloc_count = malloc_object_count();
+        let next_malloc_trigger = GC_NEXT_MALLOC_TRIGGER.with(|c| c.get());
+        let old_in_use = crate::arena::old_gen_in_use_bytes();
+        let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
+
+        Self {
+            arena_debt_bytes: total.saturating_sub(next_arena_trigger) as u64,
+            malloc_debt_objects: malloc_count.saturating_sub(next_malloc_trigger) as u64,
+            old_reclaim_debt_bytes: gc_old_reclaim_debt_bytes(old_in_use, old_baseline),
+        }
+    }
+
+    #[inline]
+    fn max_components(self, other: Self) -> Self {
+        Self {
+            arena_debt_bytes: self.arena_debt_bytes.max(other.arena_debt_bytes),
+            malloc_debt_objects: self.malloc_debt_objects.max(other.malloc_debt_objects),
+            old_reclaim_debt_bytes: self
+                .old_reclaim_debt_bytes
+                .max(other.old_reclaim_debt_bytes),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct GcDebtTrace {
+    pub(super) start: GcDebtSnapshot,
+    pub(super) end: GcDebtSnapshot,
+    pub(super) max_observed: GcDebtSnapshot,
+}
+
+impl GcDebtTrace {
+    #[inline]
+    fn new(start: GcDebtSnapshot) -> Self {
+        Self {
+            start,
+            end: start,
+            max_observed: start,
+        }
+    }
+
+    #[inline]
+    fn record(&mut self, snapshot: GcDebtSnapshot) {
+        self.end = snapshot;
+        self.max_observed = self.max_observed.max_components(snapshot);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct GcPauseStepTrace {
+    pub(super) phase_before: GcCyclePhase,
+    pub(super) phase_after: GcCyclePhase,
+    pub(super) work_units: Option<usize>,
+    pub(super) elapsed_us: u64,
+    pub(super) debt_before: GcDebtSnapshot,
+    pub(super) debt_after: GcDebtSnapshot,
+    pub(super) progress_kind: GcProgressKind,
+}
+
 pub(super) struct GcCycleTrace {
     pub(super) collection_kind: GcCollectionKind,
     pub(super) trigger_kind: GcTriggerKind,
@@ -471,6 +542,10 @@ pub(super) struct GcCycleTrace {
     pub(super) block_persist: BlockPersistTraceStats,
     pub(super) sweep: SweepTraceStats,
     pub(super) write_barrier: BarrierTraceCounters,
+    pub(super) pause_steps: Vec<GcPauseStepTrace>,
+    pub(super) phase_progression: Vec<GcCyclePhase>,
+    pub(super) debt: GcDebtTrace,
+    pub(super) max_step_pause_us: u64,
 }
 
 impl GcCycleTrace {
@@ -480,6 +555,7 @@ impl GcCycleTrace {
     ) -> Option<Self> {
         let steps_before = trigger.steps_before?;
         begin_layout_scan_trace();
+        let debt_start = GcDebtSnapshot::current();
         let mut phase_us = BTreeMap::new();
         for name in [
             "build_valid_pointer_set",
@@ -528,12 +604,48 @@ impl GcCycleTrace {
             block_persist: BlockPersistTraceStats::default(),
             sweep: SweepTraceStats::default(),
             write_barrier: take_write_barrier_trace_counters(),
+            pause_steps: Vec::new(),
+            phase_progression: vec![GcCyclePhase::BuildValidPointerSet],
+            debt: GcDebtTrace::new(debt_start),
+            max_step_pause_us: 0,
         })
     }
 
     #[inline]
     pub(super) fn record_phase(&mut self, name: &'static str, elapsed: Duration) {
         *self.phase_us.entry(name).or_insert(0) += elapsed.as_micros() as u64;
+    }
+
+    pub(super) fn record_pause_step(
+        &mut self,
+        phase_before: GcCyclePhase,
+        phase_after: GcCyclePhase,
+        work_units: usize,
+        elapsed: Duration,
+        debt_before: GcDebtSnapshot,
+        debt_after: GcDebtSnapshot,
+    ) {
+        let elapsed_us = elapsed.as_micros() as u64;
+        self.max_step_pause_us = self.max_step_pause_us.max(elapsed_us);
+        self.debt.record(debt_before);
+        self.debt.record(debt_after);
+        if self.phase_progression.last().copied() != Some(phase_before) {
+            self.phase_progression.push(phase_before);
+        }
+        if phase_after != phase_before
+            && self.phase_progression.last().copied() != Some(phase_after)
+        {
+            self.phase_progression.push(phase_after);
+        }
+        self.pause_steps.push(GcPauseStepTrace {
+            phase_before,
+            phase_after,
+            work_units: (work_units != usize::MAX).then_some(work_units),
+            elapsed_us,
+            debt_before,
+            debt_after,
+            progress_kind: self.progress_kind,
+        });
     }
 
     pub(super) fn capture_layout_scans(&mut self) {
@@ -544,6 +656,7 @@ impl GcCycleTrace {
 
     pub(super) fn into_json(mut self, steps_after: GcStepSnapshot) -> serde_json::Value {
         self.capture_layout_scans();
+        self.debt.record(GcDebtSnapshot::current());
         let arena_after = crate::arena::arena_telemetry_snapshot();
         let malloc_after = malloc_object_count();
         let remembered_set_after = remembered_set_size();
@@ -731,6 +844,23 @@ impl GcCycleTrace {
             "ordinary_budgeted": self.progress_kind.is_budgeted(),
             "class": self.progress_kind.report_class(),
         });
+        let pause_budget_json =
+            pause_budget_json(self.progress_kind, progress_budget, self.max_step_pause_us);
+        let pause_steps_json = self
+            .pause_steps
+            .iter()
+            .map(|step| pause_step_json(*step))
+            .collect::<Vec<_>>();
+        let phase_progression_json = self
+            .phase_progression
+            .iter()
+            .map(|phase| serde_json::Value::String(phase.as_str().to_string()))
+            .collect::<Vec<_>>();
+        let debt_json = serde_json::json!({
+            "start": debt_snapshot_json(self.debt.start),
+            "end": debt_snapshot_json(self.debt.end),
+            "max_observed": debt_snapshot_json(self.debt.max_observed),
+        });
         let steps_value = steps_json(self.steps_before, steps_after);
         serde_json::json!({
             "event": "gc_cycle",
@@ -758,16 +888,98 @@ impl GcCycleTrace {
             "write_barrier": write_barrier_json,
             "trigger": trigger_json,
             "progress_contract": progress_contract_json,
+            "pause_budget": pause_budget_json,
+            "pause_steps": pause_steps_json,
+            "phase_progression": phase_progression_json,
+            "debt": debt_json,
             "steps": steps_value,
         })
     }
 
     pub(super) fn emit(self, steps_after: GcStepSnapshot) {
         let event = self.into_json(steps_after);
+        #[cfg(test)]
+        set_test_last_gc_trace_json(event.clone());
         if let Ok(line) = serde_json::to_string(&event) {
             eprintln!("{line}");
         }
     }
+}
+
+pub(super) fn debt_snapshot_json(snapshot: GcDebtSnapshot) -> serde_json::Value {
+    serde_json::json!({
+        "arena_debt_bytes": snapshot.arena_debt_bytes,
+        "malloc_debt_objects": snapshot.malloc_debt_objects,
+        "old_reclaim_debt_bytes": snapshot.old_reclaim_debt_bytes,
+    })
+}
+
+pub(super) fn pause_budget_json(
+    progress_kind: GcProgressKind,
+    progress_budget: GcPauseBudget,
+    max_step_pause_us: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": progress_kind.as_str(),
+        "class": progress_kind.report_class(),
+        "budget_unit": "work_units",
+        "configured_work_budget": progress_budget.work_units,
+        "soft_pause_target_us": progress_budget.pause_us,
+        "ordinary_budgeted": progress_kind.is_budgeted(),
+        "ordinary_pause_stats_include": progress_kind.is_budgeted(),
+        "max_observed_step_pause_us": max_step_pause_us,
+    })
+}
+
+pub(super) fn pause_step_json(step: GcPauseStepTrace) -> serde_json::Value {
+    let progress_budget = gc_progress_contract().budget_for(step.progress_kind);
+    let within_soft_pause_target = progress_budget
+        .pause_us
+        .map(|target| step.elapsed_us <= target);
+    serde_json::json!({
+        "phase_before": step.phase_before.as_str(),
+        "phase_after": step.phase_after.as_str(),
+        "applied_work_units": step.work_units,
+        "elapsed_pause_us": step.elapsed_us,
+        "debt": {
+            "before": debt_snapshot_json(step.debt_before),
+            "after": debt_snapshot_json(step.debt_after),
+        },
+        "budget": {
+            "kind": step.progress_kind.as_str(),
+            "class": step.progress_kind.report_class(),
+            "budget_unit": "work_units",
+            "configured_work_budget": progress_budget.work_units,
+            "soft_pause_target_us": progress_budget.pause_us,
+            "ordinary_budgeted": step.progress_kind.is_budgeted(),
+            "ordinary_pause_stats_include": step.progress_kind.is_budgeted(),
+            "within_soft_pause_target": within_soft_pause_target,
+        },
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_LAST_GC_TRACE_JSON: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn clear_test_last_gc_trace_json() {
+    TEST_LAST_GC_TRACE_JSON.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+}
+
+#[cfg(test)]
+fn set_test_last_gc_trace_json(event: serde_json::Value) {
+    TEST_LAST_GC_TRACE_JSON.with(|slot| {
+        *slot.borrow_mut() = Some(event);
+    });
+}
+
+#[cfg(test)]
+pub(super) fn take_test_last_gc_trace_json() -> Option<serde_json::Value> {
+    TEST_LAST_GC_TRACE_JSON.with(|slot| slot.borrow_mut().take())
 }
 
 pub(super) struct GcCollectOutcome {
