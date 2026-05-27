@@ -40,7 +40,7 @@ const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 // 0x7FFF_FE40` + method_count). The base ids are spaced 0x40 (64
 // slots) apart so each constructor's `base + method_count` lands in
 // its own band and stays a unique shape-cache key — Readable's method
-// set grew to 28 with the #1558 iterator helpers, so the historical
+// set now includes iterator and EventEmitter helpers, so the historical
 // 16-slot spacing no longer left enough headroom.
 const READABLE_SHAPE_ID: u32 = 0x7FFF_FE60;
 const WRITABLE_SHAPE_ID: u32 = 0x7FFF_FEA0;
@@ -319,12 +319,44 @@ pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
     stream
 }
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_prepend_listener(
+    stream_handle: i64,
+    _event: f64,
+    _cb: f64,
+) -> f64 {
+    stream_value_from_handle(stream_handle)
+}
+
+extern "C" fn ns_event_names(_closure: *const ClosureHeader) -> f64 {
+    empty_array_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_event_names(_stream_handle: i64) -> i64 {
+    crate::array::js_array_alloc(0) as i64
+}
+
+extern "C" fn ns_raw_listeners(_closure: *const ClosureHeader, _e: f64) -> f64 {
+    empty_array_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_raw_listeners(_stream_handle: i64, _event: f64) -> i64 {
+    crate::array::js_array_alloc(0) as i64
+}
+
+fn empty_array_value() -> f64 {
+    let arr = crate::array::js_array_alloc(0);
+    f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+}
+
 extern "C" fn ns_listener_count(_closure: *const ClosureHeader, _e: f64) -> f64 {
     0.0
 }
 extern "C" fn ns_listeners(_closure: *const ClosureHeader, _e: f64) -> f64 {
-    let arr = crate::array::js_array_alloc(0);
-    f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+    empty_array_value()
 }
 extern "C" fn ns_undefined0(_closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
@@ -868,6 +900,8 @@ fn register_stub_arities() {
     register(writable_write_callback_noop as *const u8, 0);
     register(ns_write2 as *const u8, 2);
     register(ns_end1 as *const u8, 1);
+    register(ns_event_names as *const u8, 0);
+    register(ns_raw_listeners as *const u8, 1);
     register(ns_listener_count as *const u8, 1);
     register(ns_listeners as *const u8, 1);
     register(ns_undefined0 as *const u8, 0);
@@ -1446,17 +1480,21 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
 // WRITABLE_SHAPE_ID.
 // ─────────────────────────────────────────────────────────────────
 
-fn readable_methods() -> [(&'static str, StubFn); 30] {
+fn readable_methods() -> [(&'static str, StubFn); 34] {
     [
         ("on", cast2(ns_on2)),
         ("once", cast2(ns_on2)),
+        ("prependListener", cast2(ns_chain2)),
+        ("prependOnceListener", cast2(ns_chain2)),
         ("off", cast2(ns_chain2)),
         ("addListener", cast2(ns_on2)),
         ("removeListener", cast2(ns_chain2)),
         ("removeAllListeners", cast1(ns_chain1)),
         ("emit", cast2(ns_emit2)),
+        ("eventNames", cast0(ns_event_names)),
         ("listenerCount", cast1(ns_listener_count)),
         ("listeners", cast1(ns_listeners)),
+        ("rawListeners", cast1(ns_raw_listeners)),
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_chain1)),
@@ -1487,17 +1525,21 @@ fn readable_methods() -> [(&'static str, StubFn); 30] {
     ]
 }
 
-fn writable_methods() -> [(&'static str, StubFn); 16] {
+fn writable_methods() -> [(&'static str, StubFn); 20] {
     [
         ("on", cast2(ns_on2)),
         ("once", cast2(ns_on2)),
+        ("prependListener", cast2(ns_chain2)),
+        ("prependOnceListener", cast2(ns_chain2)),
         ("off", cast2(ns_chain2)),
         ("addListener", cast2(ns_on2)),
         ("removeListener", cast2(ns_chain2)),
         ("removeAllListeners", cast1(ns_chain1)),
         ("emit", cast2(ns_emit2)),
+        ("eventNames", cast0(ns_event_names)),
         ("listenerCount", cast1(ns_listener_count)),
         ("listeners", cast1(ns_listeners)),
+        ("rawListeners", cast1(ns_raw_listeners)),
         ("write", cast2(ns_write2)),
         ("end", cast1(ns_end1)),
         ("cork", cast0(ns_chain0)),
@@ -1508,20 +1550,24 @@ fn writable_methods() -> [(&'static str, StubFn); 16] {
     ]
 }
 
-fn duplex_methods() -> [(&'static str, StubFn); 22] {
+fn duplex_methods() -> [(&'static str, StubFn); 26] {
     // Union of readable + writable, deduped (`on/once/off/addListener/
     // removeListener/removeAllListeners/emit/listenerCount/listeners/
     // destroy` appear once each).
     [
         ("on", cast2(ns_on2)),
         ("once", cast2(ns_on2)),
+        ("prependListener", cast2(ns_chain2)),
+        ("prependOnceListener", cast2(ns_chain2)),
         ("off", cast2(ns_chain2)),
         ("addListener", cast2(ns_on2)),
         ("removeListener", cast2(ns_chain2)),
         ("removeAllListeners", cast1(ns_chain1)),
         ("emit", cast2(ns_emit2)),
+        ("eventNames", cast0(ns_event_names)),
         ("listenerCount", cast1(ns_listener_count)),
         ("listeners", cast1(ns_listeners)),
+        ("rawListeners", cast1(ns_raw_listeners)),
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_chain1)),
@@ -1915,70 +1961,8 @@ pub extern "C" fn js_node_stream_from_web(_web_stream: f64) -> f64 {
     js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
 }
 
-// ─────────────────────────────────────────────────────────────────
-// #1534/#1539/#1540/#1541: symbol retention.
-//
-// These `#[no_mangle]` entry points are emitted by codegen's stream
-// dispatch (native_table/net_events.rs) but several are never referenced
-// by any Rust code in the crate graph. The default `.a` staticlib keeps
-// them via staticlib-export semantics, but the auto-optimize build round-
-// trips the runtime through whole-program LLVM bitcode and is free to
-// internalize + dead-strip an unreferenced symbol — which is exactly why
-// `Readable.isDisturbed(s)` / `r.read()` failed with
-// `Undefined symbols: _js_node_stream_is_disturbed` at final link even
-// though the feature was wired. The `#[used]` statics below pin a retained
-// reference edge so every entry point survives all link modes. See the
-// same pattern in `value/dyn_index.rs` and `process.rs` (#1344).
-#[used]
-static KEEP_NS_METHOD_EMIT: extern "C" fn(i64, f64, f64) -> f64 = js_node_stream_method_emit;
-#[used]
-static KEEP_NS_METHOD_READ: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_read;
-#[used]
-static KEEP_NS_METHOD_PUSH: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_push;
-#[used]
-static KEEP_NS_READABLE_HWM: extern "C" fn(i64) -> f64 = js_node_stream_method_readable_hwm;
-#[used]
-static KEEP_NS_WRITABLE_HWM: extern "C" fn(i64) -> f64 = js_node_stream_method_writable_hwm;
-#[used]
-static KEEP_NS_METHOD_RESUME: extern "C" fn(i64) -> f64 = js_node_stream_method_resume;
-#[used]
-static KEEP_NS_METHOD_WRITE: extern "C" fn(i64, f64, f64) -> f64 = js_node_stream_method_write;
-#[used]
-static KEEP_NS_METHOD_END: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_end;
-#[used]
-static KEEP_NS_READABLE_NEW: extern "C" fn(f64) -> f64 = js_node_stream_readable_new;
-#[used]
-static KEEP_NS_WRITABLE_NEW: extern "C" fn(f64) -> f64 = js_node_stream_writable_new;
-#[used]
-static KEEP_NS_DUPLEX_NEW: extern "C" fn(f64) -> f64 = js_node_stream_duplex_new;
-#[used]
-static KEEP_NS_TRANSFORM_NEW: extern "C" fn(f64) -> f64 = js_node_stream_transform_new;
-#[used]
-static KEEP_NS_PASSTHROUGH_NEW: extern "C" fn(f64) -> f64 = js_node_stream_passthrough_new;
-#[used]
-static KEEP_NS_READABLE_FROM: extern "C" fn(f64) -> f64 = js_node_stream_readable_from;
-#[used]
-static KEEP_NS_IS_DISTURBED: extern "C" fn(f64) -> f64 = js_node_stream_is_disturbed;
-#[used]
-static KEEP_NS_IS_ERRORED: extern "C" fn(f64) -> f64 = js_node_stream_is_errored;
-#[used]
-static KEEP_NS_IS_READABLE: extern "C" fn(f64) -> f64 = js_node_stream_is_readable;
-#[used]
-static KEEP_NS_IS_WRITABLE: extern "C" fn(f64) -> f64 = js_node_stream_is_writable;
-#[used]
-static KEEP_NS_GET_DEFAULT_HWM: extern "C" fn(f64) -> f64 = js_node_stream_get_default_hwm;
-#[used]
-static KEEP_NS_SET_DEFAULT_HWM: extern "C" fn(f64, f64) -> f64 = js_node_stream_set_default_hwm;
-#[used]
-static KEEP_NS_ADD_ABORT_SIGNAL: extern "C" fn(f64, f64) -> f64 = js_node_stream_add_abort_signal;
-#[used]
-static KEEP_NS_COMPOSE: extern "C" fn(f64) -> f64 = js_node_stream_compose;
-#[used]
-static KEEP_NS_DUPLEX_PAIR: extern "C" fn(f64) -> f64 = js_node_stream_duplex_pair;
-#[used]
-static KEEP_NS_TO_WEB: extern "C" fn(f64) -> f64 = js_node_stream_to_web;
-#[used]
-static KEEP_NS_FROM_WEB: extern "C" fn(f64) -> f64 = js_node_stream_from_web;
+#[path = "node_stream_keepalive.rs"]
+mod keepalive;
 
 #[cfg(test)]
 #[path = "node_stream_tests.rs"]

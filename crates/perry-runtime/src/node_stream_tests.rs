@@ -159,6 +159,48 @@ fn stream_methods_dispatch_through_dynamic_method_call() {
 }
 
 #[test]
+fn stream_empty_event_introspection_and_prepend_chainability() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let raw_listeners = js_object_get_field_by_name_f64(obj, hidden_key(b"rawListeners"));
+    let event_names = js_object_get_field_by_name_f64(obj, hidden_key(b"eventNames"));
+    let prepend = js_object_get_field_by_name_f64(obj, hidden_key(b"prependListener"));
+
+    let raw = unsafe {
+        crate::closure::js_native_call_value(raw_listeners, [string_value("never")].as_ptr(), 1)
+    };
+    assert_eq!(
+        crate::array::js_array_length(raw_ptr_from_value(raw) as *const crate::array::ArrayHeader),
+        0
+    );
+
+    let names = unsafe { crate::closure::js_native_call_value(event_names, std::ptr::null(), 0) };
+    assert_eq!(
+        crate::array::js_array_length(raw_ptr_from_value(names) as *const crate::array::ArrayHeader),
+        0
+    );
+
+    let cb = box_pointer(js_closure_alloc(read_records_this as *const u8, 0) as *const u8);
+    let returned = unsafe {
+        crate::closure::js_native_call_value(prepend, [string_value("x"), cb].as_ptr(), 2)
+    };
+    assert_eq!(returned.to_bits(), stream.to_bits());
+
+    let native = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(native) as i64;
+    let native_raw = js_node_stream_method_raw_listeners(handle, string_value("never"))
+        as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(native_raw), 0);
+    let native_names =
+        js_node_stream_method_event_names(handle) as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(native_names), 0);
+    assert_eq!(
+        js_node_stream_method_prepend_listener(handle, string_value("x"), cb).to_bits(),
+        native.to_bits()
+    );
+}
+
+#[test]
 fn stream_native_receiver_methods_update_hidden_state() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
