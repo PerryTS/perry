@@ -171,7 +171,7 @@ pub(super) fn rebuild_evacuated_old_to_young_remembered_set(
     sticky
 }
 
-pub(super) unsafe fn remember_retained_old_to_young_slots(
+unsafe fn remember_retained_old_to_young_slots(
     sticky: &mut StickyRememberedSet,
     header: *mut GcHeader,
     require_marked: bool,
@@ -192,9 +192,7 @@ pub(super) unsafe fn remember_retained_old_to_young_slots(
     });
 }
 
-pub(super) fn rebuild_live_old_to_young_remembered_set(
-    require_marked: bool,
-) -> StickyRememberedSet {
+fn rebuild_retained_old_to_young_remembered_set(require_marked: bool) -> StickyRememberedSet {
     let mut sticky = StickyRememberedSet::default();
     crate::arena::old_arena_walk_objects(|hp| unsafe {
         remember_retained_old_to_young_slots(&mut sticky, hp as *mut GcHeader, require_marked);
@@ -208,6 +206,14 @@ pub(super) fn rebuild_live_old_to_young_remembered_set(
         }
     });
     sticky
+}
+
+pub(super) fn rebuild_live_old_to_young_remembered_set() -> StickyRememberedSet {
+    rebuild_retained_old_to_young_remembered_set(true)
+}
+
+pub(super) fn rebuild_minor_old_to_young_remembered_set() -> StickyRememberedSet {
+    rebuild_retained_old_to_young_remembered_set(false)
 }
 
 #[inline]

@@ -217,6 +217,35 @@ impl Drop for ScopedRootScannerRegistryGuard {
     }
 }
 
+pub(super) struct GcTestIsolationGuard {
+    _scanner_guard: ScopedRootScannerRegistryGuard,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl GcTestIsolationGuard {
+    pub(super) fn new() -> Self {
+        let lock = copying_nursery_isolation_lock();
+        let scanner_guard = ScopedRootScannerRegistryGuard::new();
+        reset_copying_nursery_runtime_test_state();
+        reset_shadow_stack();
+        reset_global_roots();
+        reset_remembered_set();
+        Self {
+            _scanner_guard: scanner_guard,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for GcTestIsolationGuard {
+    fn drop(&mut self) {
+        reset_copying_nursery_runtime_test_state();
+        reset_shadow_stack();
+        reset_global_roots();
+        reset_remembered_set();
+    }
+}
+
 pub(super) struct CopyingNurseryTestGuard {
     frame: u64,
     _scanner_guard: ScopedRootScannerRegistryGuard,

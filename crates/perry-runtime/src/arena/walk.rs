@@ -14,6 +14,13 @@ struct ArenaWalkBlock {
     block_idx: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ArenaBlockSnapshot {
+    pub(crate) data: usize,
+    pub(crate) offset: usize,
+    pub(crate) size: usize,
+}
+
 /// Resumable arena object walker used by the GC cycle state machine.
 ///
 /// The cursor snapshots block base pointers and offsets at creation time and
@@ -100,6 +107,27 @@ impl ArenaObjectCursor {
 
         None
     }
+}
+
+pub(crate) fn arena_block_snapshots() -> Vec<ArenaBlockSnapshot> {
+    sync_inline_arena_state();
+
+    let mut snapshots = Vec::with_capacity(arena_block_count());
+    let mut collect = |arena: &Arena| {
+        snapshots.extend(arena.blocks.iter().map(|block| ArenaBlockSnapshot {
+            data: block.data as usize,
+            offset: block.offset,
+            size: block.size,
+        }));
+    };
+
+    ARENA.with(|arena| unsafe { collect(&*arena.get()) });
+    SURVIVOR_ARENA_0.with(|arena| unsafe { collect(&*arena.get()) });
+    SURVIVOR_ARENA_1.with(|arena| unsafe { collect(&*arena.get()) });
+    LONGLIVED_ARENA.with(|arena| unsafe { collect(&*arena.get()) });
+    OLD_ARENA.with(|arena| unsafe { collect(&*arena.get()) });
+
+    snapshots
 }
 
 /// Get total bytes reserved across all arena blocks (general + longlived

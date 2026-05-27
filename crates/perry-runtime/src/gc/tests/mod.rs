@@ -8,6 +8,7 @@ mod debt_pacer;
 mod evacuation;
 mod helper_stores;
 mod host_safepoints;
+mod incremental_sweep_reclaim;
 mod layout_trace;
 mod oldgen;
 mod roots;

@@ -465,6 +465,9 @@ pub(super) unsafe fn plausible_arena_user_ptr_header(
     if header.is_null() {
         return None;
     }
+    if (header as usize) % std::mem::align_of::<GcHeader>() != 0 {
+        return None;
+    }
     let obj_type = (*header).obj_type;
     let size = (*header).size as usize;
     if gc_type_info(obj_type).is_none()

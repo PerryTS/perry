@@ -303,6 +303,27 @@ struct MinorCycleContext {
     evacuation_sticky: StickyRememberedSet,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReclaimSubphase {
+    RememberedSet,
+    ConservativePins,
+    MallocTrim,
+    Publish,
+    Done,
+}
+
+struct ReclaimCycleState {
+    subphase: ReclaimSubphase,
+}
+
+impl ReclaimCycleState {
+    fn new() -> Self {
+        Self {
+            subphase: ReclaimSubphase::RememberedSet,
+        }
+    }
+}
+
 pub(super) struct GcCycleState {
     collection_kind: GcCollectionKind,
     phase: GcCyclePhase,
@@ -315,6 +336,8 @@ pub(super) struct GcCycleState {
     block_persist: Option<BlockPersistCycleState>,
     minor: Option<MinorCycleContext>,
     live_old_to_young_sticky: Option<StickyRememberedSet>,
+    sweep_state: Option<IncrementalSweepState>,
+    reclaim_state: Option<ReclaimCycleState>,
     sweep: Option<SweepTraceStats>,
     freed_bytes: u64,
     outcome: Option<GcCollectOutcome>,
@@ -338,6 +361,8 @@ impl GcCycleState {
             block_persist: None,
             minor: None,
             live_old_to_young_sticky: None,
+            sweep_state: None,
+            reclaim_state: None,
             sweep: None,
             freed_bytes: 0,
             outcome: None,
@@ -381,6 +406,8 @@ impl GcCycleState {
                 evacuation_sticky: StickyRememberedSet::default(),
             }),
             live_old_to_young_sticky: None,
+            sweep_state: None,
+            reclaim_state: None,
             sweep: None,
             freed_bytes: 0,
             outcome: None,
@@ -419,8 +446,8 @@ impl GcCycleState {
             GcCyclePhase::MarkPropagation => self.step_mark_propagation(budget),
             GcCyclePhase::BlockPersistence => self.step_block_persistence(budget),
             GcCyclePhase::AtomicFinalize => self.step_atomic_finalize(),
-            GcCyclePhase::Sweep => self.step_sweep(),
-            GcCyclePhase::Reclaim => self.step_reclaim(),
+            GcCyclePhase::Sweep => self.step_sweep(budget),
+            GcCyclePhase::Reclaim => self.step_reclaim(budget),
             GcCyclePhase::Complete => {}
         }
         self.active_step_start = None;
@@ -729,25 +756,38 @@ impl GcCycleState {
 
         minor.evacuation = evacuation;
         minor.evacuation_sticky = evacuation_sticky;
-        self.live_old_to_young_sticky = Some(rebuild_live_old_to_young_remembered_set(false));
+        self.live_old_to_young_sticky = Some(rebuild_minor_old_to_young_remembered_set());
     }
 
-    fn step_sweep(&mut self) {
+    fn step_sweep(&mut self, budget: GcWorkBudget) {
         let phase_start = trace_phase_start(&self.trace);
-        let sweep = if let Some(minor) = self.minor.as_ref() {
-            if minor.evacuation.old_page_moved_bytes > 0 {
-                sweep_with_age_bump_and_targeted_old_reclaim_and_malloc(
-                    true,
-                    &minor.old_page_source_blocks.block_indices,
-                    minor.malloc_sweep_due,
-                )
-            } else {
-                sweep_with_age_bump_and_malloc(true, minor.malloc_sweep_due)
-            }
-        } else {
-            sweep_with_age_bump_and_old_reclaim(false, true)
-        };
+        if self.sweep_state.is_none() {
+            let (do_age_bump, reclaim_dead_old_blocks, targeted_old_blocks, sweep_malloc) =
+                if let Some(minor) = self.minor.as_ref() {
+                    let targeted_old_blocks = (minor.evacuation.old_page_moved_bytes > 0)
+                        .then(|| minor.old_page_source_blocks.block_indices.clone());
+                    (true, false, targeted_old_blocks, minor.malloc_sweep_due)
+                } else {
+                    (false, true, None, true)
+                };
+            self.sweep_state = Some(IncrementalSweepState::new(
+                do_age_bump,
+                reclaim_dead_old_blocks,
+                targeted_old_blocks,
+                sweep_malloc,
+            ));
+        }
+        let done = self
+            .sweep_state
+            .as_mut()
+            .expect("sweep state exists")
+            .step(budget.work_units);
         trace_phase_record(&mut self.trace, "sweep", phase_start);
+        if !done {
+            return;
+        }
+
+        let sweep = self.sweep_state.take().expect("sweep state exists").stats();
         self.freed_bytes = sweep.freed_bytes;
 
         if let Some(minor) = self.minor.as_mut() {
@@ -767,36 +807,86 @@ impl GcCycleState {
         self.phase = GcCyclePhase::Reclaim;
     }
 
-    fn step_reclaim(&mut self) {
-        let reclaim_start = trace_phase_start(&self.trace);
-
-        let phase_start = trace_phase_start(&self.trace);
-        remembered_set_clear();
-        if let Some(minor) = self.minor.as_ref() {
-            minor.evacuation_sticky.restore();
-        }
-        if let Some(sticky) = self.live_old_to_young_sticky.as_ref() {
-            sticky.restore();
-        }
-        trace_phase_record(&mut self.trace, "remembered_set_clear", phase_start);
-
-        if self.minor.is_some() {
-            let phase_start = trace_phase_start(&self.trace);
-            CONS_PINNED.with(|s| s.borrow_mut().clear());
-            trace_phase_record(&mut self.trace, "conservative_pin_clear", phase_start);
-        }
-
-        #[cfg(target_env = "gnu")]
-        {
-            let phase_start = trace_phase_start(&self.trace);
-            unsafe {
-                libc::malloc_trim(0);
+    fn step_reclaim(&mut self, budget: GcWorkBudget) {
+        self.reclaim_state
+            .get_or_insert_with(ReclaimCycleState::new);
+        let mut remaining = budget.work_units;
+        while remaining > 0 {
+            let subphase = self
+                .reclaim_state
+                .as_ref()
+                .expect("reclaim state exists")
+                .subphase;
+            match subphase {
+                ReclaimSubphase::RememberedSet => {
+                    let reclaim_start = trace_phase_start(&self.trace);
+                    let phase_start = trace_phase_start(&self.trace);
+                    remembered_set_clear();
+                    if let Some(minor) = self.minor.as_ref() {
+                        minor.evacuation_sticky.restore();
+                    }
+                    if let Some(sticky) = self.live_old_to_young_sticky.as_ref() {
+                        sticky.restore();
+                    }
+                    trace_phase_record(&mut self.trace, "remembered_set_clear", phase_start);
+                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    self.reclaim_state
+                        .as_mut()
+                        .expect("reclaim state exists")
+                        .subphase = ReclaimSubphase::ConservativePins;
+                    remaining -= 1;
+                }
+                ReclaimSubphase::ConservativePins => {
+                    let reclaim_start = trace_phase_start(&self.trace);
+                    let phase_start = trace_phase_start(&self.trace);
+                    if self.minor.is_some() {
+                        CONS_PINNED.with(|s| s.borrow_mut().clear());
+                    }
+                    trace_phase_record(&mut self.trace, "conservative_pin_clear", phase_start);
+                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    self.reclaim_state
+                        .as_mut()
+                        .expect("reclaim state exists")
+                        .subphase = ReclaimSubphase::MallocTrim;
+                    remaining -= 1;
+                }
+                ReclaimSubphase::MallocTrim => {
+                    let reclaim_start = trace_phase_start(&self.trace);
+                    #[cfg(target_env = "gnu")]
+                    {
+                        let phase_start = trace_phase_start(&self.trace);
+                        unsafe {
+                            libc::malloc_trim(0);
+                        }
+                        trace_phase_record(&mut self.trace, "malloc_trim", phase_start);
+                    }
+                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    self.reclaim_state
+                        .as_mut()
+                        .expect("reclaim state exists")
+                        .subphase = ReclaimSubphase::Publish;
+                    remaining -= 1;
+                }
+                ReclaimSubphase::Publish => {
+                    let reclaim_start = trace_phase_start(&self.trace);
+                    self.publish_reclaim_outcome();
+                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    self.reclaim_state
+                        .as_mut()
+                        .expect("reclaim state exists")
+                        .subphase = ReclaimSubphase::Done;
+                    self.phase = GcCyclePhase::Complete;
+                    break;
+                }
+                ReclaimSubphase::Done => {
+                    self.phase = GcCyclePhase::Complete;
+                    break;
+                }
             }
-            trace_phase_record(&mut self.trace, "malloc_trim", phase_start);
         }
+    }
 
-        trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
-
+    fn publish_reclaim_outcome(&mut self) {
         let elapsed_us = self.active_elapsed_us();
         GC_STATS.with(|stats| {
             let mut stats = stats.borrow_mut();
@@ -827,7 +917,6 @@ impl GcCycleState {
             malloc_swept,
             trace: self.trace.take(),
         });
-        self.phase = GcCyclePhase::Complete;
     }
 }
 
