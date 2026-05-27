@@ -21,8 +21,8 @@
 
 use perry_runtime::{
     js_array_alloc, js_array_length, js_array_push_f64, js_closure_call0, js_closure_call1,
-    js_nanbox_pointer, js_nanbox_string, js_object_alloc, js_promise_new, js_promise_resolve,
-    js_string_from_bytes, ArrayHeader, ClosureHeader, Promise, StringHeader,
+    js_nanbox_pointer, js_nanbox_string, js_object_alloc, js_promise_new, js_promise_reject,
+    js_promise_resolve, js_string_from_bytes, ArrayHeader, ClosureHeader, Promise, StringHeader,
 };
 use std::collections::HashMap;
 
@@ -309,6 +309,31 @@ unsafe fn drain_pending_once_promises(
     }
 }
 
+unsafe fn reject_pending_once_promises_for_error(
+    emitter: &mut EventEmitterHandle,
+    error_value: f64,
+) -> bool {
+    let event_names: Vec<String> = emitter
+        .pending_once_promises
+        .keys()
+        .filter(|name| name.as_str() != "error")
+        .cloned()
+        .collect();
+    let mut rejected_any = false;
+    for event_name in event_names {
+        let Some(pending) = emitter.pending_once_promises.remove(&event_name) else {
+            continue;
+        };
+        for promise_ptr in pending {
+            if !promise_ptr.is_null() {
+                js_promise_reject(promise_ptr, error_value);
+                rejected_any = true;
+            }
+        }
+    }
+    rejected_any
+}
+
 unsafe fn first_arg_or_undefined(args_ptr: *const ArrayHeader) -> f64 {
     if args_ptr.is_null() || js_array_length(args_ptr) == 0 {
         f64::from_bits(TAG_UNDEFINED_F64_BITS)
@@ -353,8 +378,17 @@ pub unsafe extern "C" fn js_event_emitter_emit(
             }
         }
 
-        if event_name == "error" && snapshot.is_empty() {
-            perry_runtime::exception::js_throw(first_arg_or_undefined(args_ptr));
+        if event_name == "error" {
+            let has_error_once = emitter
+                .pending_once_promises
+                .get("error")
+                .is_some_and(|pending| !pending.is_empty());
+            let rejected_once =
+                reject_pending_once_promises_for_error(emitter, first_arg_or_undefined(args_ptr));
+            had_listeners = had_listeners || has_error_once || rejected_once;
+            if snapshot.is_empty() && !has_error_once && !rejected_once {
+                perry_runtime::exception::js_throw(first_arg_or_undefined(args_ptr));
+            }
         }
 
         // Resolve any pending `events.once` Promises before dispatch.
@@ -400,8 +434,19 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
         }
 
         let empty_args = js_array_alloc(0);
-        if event_name == "error" && snapshot.is_empty() {
-            perry_runtime::exception::js_throw(f64::from_bits(TAG_UNDEFINED_F64_BITS));
+        if event_name == "error" {
+            let has_error_once = emitter
+                .pending_once_promises
+                .get("error")
+                .is_some_and(|pending| !pending.is_empty());
+            let rejected_once = reject_pending_once_promises_for_error(
+                emitter,
+                f64::from_bits(TAG_UNDEFINED_F64_BITS),
+            );
+            had_listeners = had_listeners || has_error_once || rejected_once;
+            if snapshot.is_empty() && !has_error_once && !rejected_once {
+                perry_runtime::exception::js_throw(f64::from_bits(TAG_UNDEFINED_F64_BITS));
+            }
         }
         drain_pending_once_promises(emitter, &event_name, empty_args);
 
