@@ -1878,9 +1878,11 @@ Total: 1317 entries across 81 modules.
 
 ### Methods
 
+- `getEnvironmentData` — module
 - `getWorkerData` — module
 - `parentPort` — module
 - `postMessage` — instance
+- `setEnvironmentData` — module
 - `workerData` — module
 
 ## `ws`

@@ -1760,6 +1760,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("readline", "close", true, None),
     method_sig(
         "worker_threads",
+        "getEnvironmentData",
+        false,
+        None,
+        &[p_any("p0")],
+        TypeSpec::Any,
+    ),
+    method_sig(
+        "worker_threads",
+        "setEnvironmentData",
+        false,
+        None,
+        &[p_any("p0"), p_any("p1")],
+        TypeSpec::Void,
+    ),
+    method_sig(
+        "worker_threads",
         "getWorkerData",
         false,
         None,
