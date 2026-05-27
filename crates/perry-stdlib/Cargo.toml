@@ -378,7 +378,7 @@ cron = { version = "0.12", optional = true }
 tokio-cron-scheduler = { version = "0.10", optional = true }
 
 # Rate limiting
-governor = { version = "0.6", optional = true }
+governor = { version = "0.10", optional = true }
 
 # Validation
 validator = { version = "0.20", features = ["derive"], optional = true }
