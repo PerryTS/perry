@@ -1782,8 +1782,8 @@ function perry_ui_focus_widget(handle) { _perryFocusedWidget = Number(handle); }
 function perry_ui_blur_widget(handle) {
     if (_perryFocusedWidget === Number(handle)) _perryFocusedWidget = 0;
 }
-function perry_ui_is_key_down(keyCode) { return _perryHeldKeys.has(Number(keyCode)) ? 1 : 0; }
-function perry_ui_current_modifiers() { return _perryCurrentMods; }
+function perry_ui_is_key_down(keyCode) { _perryEnsureKbd(); return _perryHeldKeys.has(Number(keyCode)) ? 1 : 0; }
+function perry_ui_current_modifiers() { _perryEnsureKbd(); return _perryCurrentMods; }
 
 // --- Keyboard Shortcuts ---
 function perry_ui_add_keyboard_shortcut(key, modifiers, callback) {

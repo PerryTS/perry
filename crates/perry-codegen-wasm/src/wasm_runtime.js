@@ -3597,9 +3597,11 @@ function perry_ui_blur_widget(handle) {
   if (__perryFocusedWidget === Number(handle)) __perryFocusedWidget = 0;
 }
 function perry_ui_is_key_down(keyCode) {
+  __perryEnsureKbdInstalled();
   return __perryHeldKeys.has(Number(keyCode)) ? 1 : 0;
 }
 function perry_ui_current_modifiers() {
+  __perryEnsureKbdInstalled();
   return __perryCurrentMods;
 }
 
