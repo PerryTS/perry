@@ -302,12 +302,6 @@
     "category": "bug-open",
     "reason": "node:stream: `for await (chunk of readable)` iterates to empty — async iterator does not yield chunks. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/static/readable-from-array": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(array) produces a Readable that never emits data/end. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/transform/uppercase": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -1514,12 +1508,6 @@
     "category": "bug-open",
     "reason": "node:stream: write() does not return false when buffered bytes cross HWM. Flips to PASS when #1539 lands."
   },
-  "node-suite/stream/readable/from-empty-iterable": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(empty) — 'end' event not fired or fires with wrong count. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/iter-helpers/find-returns-promise": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -1717,12 +1705,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: bytes-typed RS — enqueue(string) does not throw TypeError. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/readable/from-empty-iter-immediately-done": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(immediately-done iter) — wrong data count or end not firing. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/pipe/end-false-then-write": {
     "issue": "1532",
@@ -1970,12 +1952,6 @@
     "category": "bug-open",
     "reason": "node:stream: pause() doesn't flip readableFlowing to false synchronously. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/from-array-with-undefined": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from([1,undefined,3]) — undefined value handling differs. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/cleanup-state-after-end": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -2149,12 +2125,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pipeline(asyncIterable, dst, cb) — async-iterable source not handled. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/from-empty-string": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from('') — empty-string source iteration count wrong. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/tee-mid-consume-throws": {
     "issue": "1545",
