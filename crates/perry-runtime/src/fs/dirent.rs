@@ -291,6 +291,7 @@ pub(crate) fn collect_readdir_recursive_dirents(
 /// Returns an empty array on error.
 #[no_mangle]
 pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64 {
+    crate::fs::validate::validate_path("path", path_value);
     use crate::array::{js_array_alloc, js_array_push_f64};
 
     unsafe {

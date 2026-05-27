@@ -30,6 +30,7 @@ mod stats;
 pub use stats::*;
 mod dirent;
 pub use dirent::*;
+pub(crate) mod validate;
 
 thread_local! {
     static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(StdHashMap::new());
@@ -39,6 +40,16 @@ thread_local! {
     static NEXT_FD: RefCell<i32> = const { RefCell::new(100) };
     static DIR_REGISTRY: RefCell<StdHashMap<usize, DirState>> = RefCell::new(StdHashMap::new());
     static NEXT_DIR_ID: RefCell<usize> = const { RefCell::new(1) };
+}
+
+/// True if `fd` is a Perry-tracked open file descriptor (one returned by
+/// `openSync`/`open` and not yet closed). Perry uses a synthetic fd registry
+/// — `NEXT_FD` starts at 100 — so a raw OS-level check (e.g. `fcntl`) is
+/// meaningless here; membership in `FD_REGISTRY` is the source of truth.
+/// Used by `validate::validate_path_or_fd` to surface `EBADF` for an unknown
+/// numeric fd (#2013).
+pub(crate) fn fd_is_registered(fd: i32) -> bool {
+    FD_REGISTRY.with(|r| r.borrow().contains_key(&fd))
 }
 
 struct DirState {
@@ -105,6 +116,7 @@ pub extern "C" fn js_fs_read_file_sync_options(
     path_value: f64,
     options_value: f64,
 ) -> *mut StringHeader {
+    validate::validate_path_or_fd("path", path_value, "read");
     unsafe {
         let path_str_for_log = decode_path_value(path_value).unwrap_or_default();
 
@@ -297,6 +309,7 @@ pub extern "C" fn js_fs_write_file_sync_options(
     content_value: f64,
     options_value: f64,
 ) -> i32 {
+    validate::validate_path_or_fd("path", path_value, "write");
     unsafe {
         if let Some(fd) = numeric_fd_value(path_value) {
             let content_bytes = bytes_from_value(content_value);
@@ -465,6 +478,7 @@ pub extern "C" fn js_fs_mkdir_sync(path_value: f64) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn js_fs_mkdir_sync_options(path_value: f64, options_value: f64) -> i32 {
+    validate::validate_path("path", path_value);
     unsafe {
         let path_str = match decode_path_value(path_value) {
             Some(s) => s,
@@ -511,6 +525,7 @@ pub extern "C" fn js_fs_is_directory(path_value: f64) -> i32 {
 /// Accepts NaN-boxed string path
 #[no_mangle]
 pub extern "C" fn js_fs_unlink_sync(path_value: f64) -> i32 {
+    validate::validate_path("path", path_value);
     unsafe {
         let path_str = match decode_path_value(path_value) {
             Some(s) => s,
@@ -564,6 +579,7 @@ pub extern "C" fn js_fs_read_file_binary_options(
     path_value: f64,
     options_value: f64,
 ) -> *mut crate::buffer::BufferHeader {
+    validate::validate_path_or_fd("path", path_value, "read");
     unsafe {
         match read_file_bytes_with_options(path_value, options_value) {
             Some(bytes) => {
@@ -1115,6 +1131,7 @@ pub extern "C" fn js_fs_rmdir_sync(path_value: f64) -> i32 {
 /// supplied. Returns i32 status.
 #[no_mangle]
 pub extern "C" fn js_fs_rmdir_sync_options(path_value: f64, options_value: f64) -> i32 {
+    validate::validate_path("path", path_value);
     unsafe {
         let path_str = match decode_path_value(path_value) {
             Some(s) => s,
@@ -1503,6 +1520,7 @@ pub extern "C" fn js_fs_readlink_sync(path_value: f64) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn js_fs_readlink_sync_options(path_value: f64, options_value: f64) -> i64 {
+    validate::validate_path("path", path_value);
     let bytes = readlink_bytes(path_value);
     let enc = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
     encoded_string_ptr(&bytes, &enc) as i64
@@ -1510,6 +1528,7 @@ pub extern "C" fn js_fs_readlink_sync_options(path_value: f64, options_value: f6
 
 #[no_mangle]
 pub extern "C" fn js_fs_readlink_dispatch(path_value: f64, options_value: f64) -> f64 {
+    validate::validate_path("path", path_value);
     readlink_value(path_value, options_value)
 }
 
@@ -1573,6 +1592,7 @@ pub extern "C" fn js_fs_access_sync_throw(path_value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_fs_access_sync_throw_mode(path_value: f64, mode_value: f64) -> f64 {
+    validate::validate_path("path", path_value);
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     if js_fs_access_sync_mode(path_value, mode_value) == 1 {
         return f64::from_bits(TAG_UNDEFINED);
