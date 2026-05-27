@@ -278,6 +278,13 @@ pub extern "C" fn js_node_stream_method_writable_hwm(stream_handle: i64) -> f64 
     get_hidden_value(stream, hidden_key(b"writableHighWaterMark")).unwrap_or(16384.0)
 }
 
+/// `stream.destroyed` property getter on typed stream instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_destroyed(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    get_hidden_value(stream, hidden_key(b"destroyed")).unwrap_or(f64::from_bits(TAG_FALSE))
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
@@ -1639,6 +1646,11 @@ fn resolve_hwm(opts: f64, specific: &[u8], specific_object_mode: &[u8]) -> f64 {
     default_hwm(object_mode)
 }
 
+/// Initialize visible lifecycle flags shared by all stream sides.
+fn init_lifecycle_state(stream: f64) {
+    set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
+}
+
 /// Initialize the readable side of a stream: direction flag, buffered byte
 /// counter, effective readable highWaterMark, and the visible
 /// `readableHighWaterMark` property (#1534/#1539).
@@ -1667,6 +1679,7 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     if let Some(read) = read_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, readable));
     }
+    init_lifecycle_state(readable);
     init_readable_state(readable, opts);
     readable
 }
@@ -1683,6 +1696,7 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
             rebind_callback_this(write, writable),
         );
     }
+    init_lifecycle_state(writable);
     init_writable_state(writable, opts);
     writable
 }
@@ -1695,6 +1709,7 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     if let Some(write) = write_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, duplex));
     }
+    init_lifecycle_state(duplex);
     init_readable_state(duplex, opts);
     init_writable_state(duplex, opts);
     duplex

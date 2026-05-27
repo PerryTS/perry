@@ -159,6 +159,28 @@ fn stream_methods_dispatch_through_dynamic_method_call() {
 }
 
 #[test]
+fn fresh_streams_expose_destroyed_false() {
+    let streams = [
+        js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED)),
+        js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED)),
+        js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED)),
+        js_node_stream_transform_new(f64::from_bits(TAG_UNDEFINED)),
+    ];
+
+    for stream in streams {
+        let destroyed = js_object_get_field_by_name_f64(
+            raw_ptr_from_value(stream) as *const ObjectHeader,
+            hidden_key(b"destroyed"),
+        );
+        assert_eq!(destroyed.to_bits(), TAG_FALSE);
+        assert_eq!(
+            js_node_stream_method_destroyed(raw_ptr_from_value(stream) as i64).to_bits(),
+            TAG_FALSE
+        );
+    }
+}
+
+#[test]
 fn stream_native_receiver_methods_update_hidden_state() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
