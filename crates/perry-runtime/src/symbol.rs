@@ -913,7 +913,18 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
         let sym_f64 = f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
         let iter_fn = unsafe { js_object_get_symbol_property(val_f64, sym_f64) };
         if iter_fn.to_bits() != TAG_UNDEFINED {
-            let fn_ptr = crate::value::js_nanbox_get_pointer(iter_fn)
+            // #321: the `[Symbol.iterator]` method may be INHERITED from a
+            // prototype object literal (effect's `EffectPrototype`), in which
+            // case codegen baked `this` to the prototype object at definition
+            // time (CAPTURES_THIS_FLAG). Per spec `iterable[Symbol.iterator]()`
+            // must run with `this === iterable`, so the method reads the real
+            // receiver — effect's body is `new SingleShotGen(new YieldWrap(this))`
+            // and wraps the wrong value if `this` stays the prototype. Rebind
+            // `this` to the original value; a no-op for closures that don't
+            // capture `this`.
+            let rebound = crate::closure::clone_closure_rebind_this(iter_fn.to_bits(), val_f64);
+            let call_target = f64::from_bits(rebound);
+            let fn_ptr = crate::value::js_nanbox_get_pointer(call_target)
                 as *const crate::closure::ClosureHeader;
             if !fn_ptr.is_null() {
                 return crate::closure::js_closure_call0(fn_ptr);
