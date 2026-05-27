@@ -266,12 +266,6 @@
     "category": "bug-open",
     "reason": "node:stream EventEmitter wiring incomplete — re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS. Real Perry gap (not ci-env); rolled under the open stream-events tracker #1532."
   },
-  "node-suite/stream/classes/readable-constructor": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable instance lacks .readable flag + push/read/pipe methods as functions. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/classes/writable-constructor": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1369,12 +1363,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Writable defaultEncoding option — encoding arg seen by _write differs from 'hex'. Flips to PASS when #1539 lands."
-  },
-  "node-suite/stream/classes/readable-no-read-fn": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: new Readable({}) without read fn — push-based usage produces wrong output. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/readable/from-map-entries": {
     "issue": "1532",
