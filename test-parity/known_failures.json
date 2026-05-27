@@ -812,12 +812,6 @@
     "category": "bug-open",
     "reason": "node:stream: read() with no arg should return the entire buffered chunk. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/events/get-max-listeners": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: getMaxListeners/setMaxListeners not wired on instance. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/events/pause-resume-events": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -1741,12 +1735,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: eventNames() — returns wrong shape or missing event names. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/events/get-max-listeners-default": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: getMaxListeners() default — not 10, or EventEmitter.defaultMaxListeners differs. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/classes/readable-no-read-fn": {
     "issue": "1531",
@@ -3002,18 +2990,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from('') — empty-string source iteration count wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/events/raw-listeners-empty": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: rawListeners(no-event) — should return empty array, doesn't. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/events/prepend-listener-returns-this": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: prependListener() does not return emitter (chainable). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/tee-mid-consume-throws": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -3049,12 +3025,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: end(cb) — cb fires before write callbacks or before finish. Flips to PASS when #1539 lands."
-  },
-  "node-suite/stream/events/event-names-empty-array": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: fresh stream eventNames not empty array. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/pipe/writable-end-on-source-end": {
     "issue": "1532",

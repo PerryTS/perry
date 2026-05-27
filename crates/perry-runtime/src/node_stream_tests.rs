@@ -163,6 +163,104 @@ fn stream_methods_dispatch_through_dynamic_method_call() {
 }
 
 #[test]
+fn stream_max_listeners_default_and_override_round_trip() {
+    let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let get_max = js_object_get_field_by_name_f64(obj, hidden_key(b"getMaxListeners"));
+    let set_max = js_object_get_field_by_name_f64(obj, hidden_key(b"setMaxListeners"));
+
+    let initial = unsafe { crate::closure::js_native_call_value(get_max, std::ptr::null(), 0) };
+    assert_eq!(initial, 10.0);
+
+    let returned = unsafe { crate::closure::js_native_call_value(set_max, [25.0].as_ptr(), 1) };
+    assert_eq!(returned.to_bits(), stream.to_bits());
+
+    let updated = unsafe { crate::closure::js_native_call_value(get_max, std::ptr::null(), 0) };
+    assert_eq!(updated, 25.0);
+
+    let other = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let other_get = js_object_get_field_by_name_f64(
+        raw_ptr_from_value(other) as *const ObjectHeader,
+        hidden_key(b"getMaxListeners"),
+    );
+    let other_initial =
+        unsafe { crate::closure::js_native_call_value(other_get, std::ptr::null(), 0) };
+    assert_eq!(other_initial, 10.0);
+
+    let native_handle = raw_ptr_from_value(other) as i64;
+    assert_eq!(js_node_stream_method_get_max_listeners(native_handle), 10.0);
+    assert_eq!(
+        js_node_stream_method_set_max_listeners(native_handle, 42.0).to_bits(),
+        other.to_bits()
+    );
+    assert_eq!(js_node_stream_method_get_max_listeners(native_handle), 42.0);
+}
+
+#[test]
+fn stream_event_names_raw_listeners_and_prepend_chainability() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let raw_listeners = js_object_get_field_by_name_f64(obj, hidden_key(b"rawListeners"));
+    let event_names = js_object_get_field_by_name_f64(obj, hidden_key(b"eventNames"));
+    let prepend = js_object_get_field_by_name_f64(obj, hidden_key(b"prependListener"));
+
+    let raw = unsafe {
+        crate::closure::js_native_call_value(raw_listeners, [string_value("never")].as_ptr(), 1)
+    };
+    assert_eq!(
+        crate::array::js_array_length(raw_ptr_from_value(raw) as *const crate::array::ArrayHeader),
+        0
+    );
+
+    let names = unsafe { crate::closure::js_native_call_value(event_names, std::ptr::null(), 0) };
+    assert_eq!(
+        crate::array::js_array_length(raw_ptr_from_value(names) as *const crate::array::ArrayHeader),
+        0
+    );
+
+    let cb = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let returned = unsafe {
+        crate::closure::js_native_call_value(prepend, [string_value("data"), cb].as_ptr(), 2)
+    };
+    assert_eq!(returned.to_bits(), stream.to_bits());
+
+    let raw = unsafe {
+        crate::closure::js_native_call_value(raw_listeners, [string_value("data")].as_ptr(), 1)
+    };
+    let raw_arr = raw_ptr_from_value(raw) as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(raw_arr), 1);
+    assert_eq!(
+        crate::array::js_array_get_f64(raw_arr, 0).to_bits(),
+        cb.to_bits()
+    );
+
+    let names = unsafe { crate::closure::js_native_call_value(event_names, std::ptr::null(), 0) };
+    let names_arr = raw_ptr_from_value(names) as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(names_arr), 1);
+    assert!(string_value_eq(
+        crate::array::js_array_get_f64(names_arr, 0),
+        b"data"
+    ));
+
+    let native = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(native) as i64;
+    let native_raw = js_node_stream_method_raw_listeners(handle, string_value("never"))
+        as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(native_raw), 0);
+    let native_names =
+        js_node_stream_method_event_names(handle) as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(native_names), 0);
+    assert_eq!(
+        js_node_stream_method_prepend_listener(handle, string_value("data"), cb).to_bits(),
+        native.to_bits()
+    );
+    assert_eq!(
+        js_node_stream_method_listener_count(handle, string_value("data")),
+        1.0
+    );
+}
+
+#[test]
 fn stream_listener_count_and_listeners_reflect_data_end_storage() {
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
     let obj = raw_ptr_from_value(stream) as *const ObjectHeader;

@@ -27,13 +27,28 @@ static KEEP_NS_METHOD_WRITE: extern "C" fn(i64, f64, f64) -> f64 =
 #[used]
 static KEEP_NS_METHOD_END: extern "C" fn(i64, f64) -> f64 = super::js_node_stream_method_end;
 #[used]
+static KEEP_NS_METHOD_SET_MAX_LISTENERS: extern "C" fn(i64, f64) -> f64 =
+    super::js_node_stream_method_set_max_listeners;
+#[used]
+static KEEP_NS_METHOD_GET_MAX_LISTENERS: extern "C" fn(i64) -> f64 =
+    super::js_node_stream_method_get_max_listeners;
+#[used]
 static KEEP_NS_METHOD_ON: extern "C" fn(i64, f64, f64) -> f64 = super::js_node_stream_method_on;
+#[used]
+static KEEP_NS_METHOD_PREPEND_LISTENER: extern "C" fn(i64, f64, f64) -> f64 =
+    super::js_node_stream_method_prepend_listener;
+#[used]
+static KEEP_NS_METHOD_EVENT_NAMES: extern "C" fn(i64) -> i64 =
+    super::js_node_stream_method_event_names;
 #[used]
 static KEEP_NS_METHOD_LISTENER_COUNT: extern "C" fn(i64, f64) -> f64 =
     super::js_node_stream_method_listener_count;
 #[used]
 static KEEP_NS_METHOD_LISTENERS: extern "C" fn(i64, f64) -> i64 =
     super::js_node_stream_method_listeners;
+#[used]
+static KEEP_NS_METHOD_RAW_LISTENERS: extern "C" fn(i64, f64) -> i64 =
+    super::js_node_stream_method_raw_listeners;
 #[used]
 static KEEP_NS_READABLE_NEW: extern "C" fn(f64) -> f64 = super::js_node_stream_readable_new;
 #[used]

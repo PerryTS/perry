@@ -33,6 +33,19 @@ use crate::value::JSValue;
 
 mod async_iterator;
 
+#[path = "node_stream_event_emitter.rs"]
+mod event_emitter;
+pub use event_emitter::{
+    js_node_stream_method_event_names, js_node_stream_method_get_max_listeners,
+    js_node_stream_method_listener_count, js_node_stream_method_listeners,
+    js_node_stream_method_on, js_node_stream_method_prepend_listener,
+    js_node_stream_method_raw_listeners, js_node_stream_method_set_max_listeners,
+};
+use event_emitter::{
+    ns_event_names, ns_get_max_listeners, ns_listener_count, ns_listeners, ns_raw_listeners,
+    ns_set_max_listeners,
+};
+
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -42,7 +55,7 @@ const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 // 0x7FFF_FE40` + method_count). The base ids are spaced 0x40 (64
 // slots) apart so each constructor's `base + method_count` lands in
 // its own band and stays a unique shape-cache key — Readable's method
-// set grew to 28 with the #1558 iterator helpers, so the historical
+// set now includes iterator and EventEmitter helpers, so the historical
 // 16-slot spacing no longer left enough headroom.
 const READABLE_SHAPE_ID: u32 = 0x7FFF_FE60;
 const WRITABLE_SHAPE_ID: u32 = 0x7FFF_FEA0;
@@ -61,6 +74,7 @@ const STREAM_END_LISTENERS_KEY: &[u8] = b"__perryStreamEndListeners";
 const STREAM_DRAIN_SCHEDULED_KEY: &[u8] = b"__perryStreamDrainScheduled";
 const STREAM_END_EMITTED_KEY: &[u8] = b"__perryStreamEndEmitted";
 const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
+const STREAM_MAX_LISTENERS_KEY: &[u8] = b"__perryStreamMaxListeners";
 const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
 // #1534: direction + disturbed bits so the static introspection helpers
 // (`Readable.isReadable` / `isDisturbed` / `isErrored`) answer per-stream
@@ -324,59 +338,6 @@ pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f
     }
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
     stream
-}
-
-#[no_mangle]
-pub extern "C" fn js_node_stream_method_on(stream_handle: i64, event: f64, cb: f64) -> f64 {
-    let stream = stream_value_from_handle(stream_handle);
-    add_stream_listener_for_event(stream, event, cb);
-    stream
-}
-
-fn listener_key_for_event(event: f64) -> Option<*mut crate::string::StringHeader> {
-    if string_value_eq(event, b"data") {
-        Some(hidden_data_listeners_key())
-    } else if string_value_eq(event, b"end") {
-        Some(hidden_end_listeners_key())
-    } else {
-        None
-    }
-}
-
-extern "C" fn ns_listener_count(closure: *const ClosureHeader, event: f64) -> f64 {
-    let stream = this_value(closure);
-    listener_count_for_event(stream, event)
-}
-
-#[no_mangle]
-pub extern "C" fn js_node_stream_method_listener_count(stream_handle: i64, event: f64) -> f64 {
-    listener_count_for_event(stream_value_from_handle(stream_handle), event)
-}
-
-fn listener_count_for_event(stream: f64, event: f64) -> f64 {
-    listener_key_for_event(event)
-        .map(|key| listener_snapshot(stream, key).len() as f64)
-        .unwrap_or(0.0)
-}
-
-extern "C" fn ns_listeners(closure: *const ClosureHeader, event: f64) -> f64 {
-    let stream = this_value(closure);
-    f64::from_bits(JSValue::pointer(listeners_array_for_event(stream, event) as *const u8).bits())
-}
-
-#[no_mangle]
-pub extern "C" fn js_node_stream_method_listeners(stream_handle: i64, event: f64) -> i64 {
-    listeners_array_for_event(stream_value_from_handle(stream_handle), event) as i64
-}
-
-fn listeners_array_for_event(stream: f64, event: f64) -> *mut crate::array::ArrayHeader {
-    let mut arr = crate::array::js_array_alloc(0);
-    if let Some(key) = listener_key_for_event(event) {
-        for listener in listener_snapshot(stream, key) {
-            arr = crate::array::js_array_push_f64(arr, listener);
-        }
-    }
-    arr
 }
 extern "C" fn ns_undefined0(_closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
@@ -920,8 +881,12 @@ fn register_stub_arities() {
     register(writable_write_callback_noop as *const u8, 0);
     register(ns_write2 as *const u8, 2);
     register(ns_end1 as *const u8, 1);
+    register(ns_set_max_listeners as *const u8, 1);
+    register(ns_get_max_listeners as *const u8, 0);
+    register(ns_event_names as *const u8, 0);
     register(ns_listener_count as *const u8, 1);
     register(ns_listeners as *const u8, 1);
+    register(ns_raw_listeners as *const u8, 1);
     register(ns_undefined0 as *const u8, 0);
     register(ns_push1 as *const u8, 1);
     register(ns_compose1 as *const u8, 1);
@@ -1008,6 +973,11 @@ fn hidden_end_emitted_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_ended_key() -> *mut crate::string::StringHeader {
     hidden_key(STREAM_ENDED_KEY)
+}
+
+#[inline]
+fn hidden_max_listeners_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_MAX_LISTENERS_KEY)
 }
 
 #[inline]
@@ -1493,22 +1463,27 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
 // ─────────────────────────────────────────────────────────────────
 // Method tables. Order is locked in — it determines the shape's
 // packed-keys order. Each method set's length is a unique
-// shape-cache key when added to its base shape id, so e.g. Readable's
-// 28 methods at READABLE_SHAPE_ID don't collide with Writable's at
-// WRITABLE_SHAPE_ID.
+// shape-cache key when added to its base shape id, so the Readable,
+// Writable, and Duplex method tables stay in distinct shape bands.
 // ─────────────────────────────────────────────────────────────────
 
-fn readable_methods() -> [(&'static str, StubFn); 31] {
+fn readable_methods() -> [(&'static str, StubFn); 37] {
     [
         ("on", cast2(ns_on2)),
         ("once", cast2(ns_on2)),
+        ("prependListener", cast2(ns_on2)),
+        ("prependOnceListener", cast2(ns_on2)),
         ("off", cast2(ns_chain2)),
         ("addListener", cast2(ns_on2)),
         ("removeListener", cast2(ns_chain2)),
         ("removeAllListeners", cast1(ns_chain1)),
         ("emit", cast2(ns_emit2)),
+        ("setMaxListeners", cast1(ns_set_max_listeners)),
+        ("getMaxListeners", cast0(ns_get_max_listeners)),
+        ("eventNames", cast0(ns_event_names)),
         ("listenerCount", cast1(ns_listener_count)),
         ("listeners", cast1(ns_listeners)),
+        ("rawListeners", cast1(ns_raw_listeners)),
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_chain1)),
@@ -1540,17 +1515,23 @@ fn readable_methods() -> [(&'static str, StubFn); 31] {
     ]
 }
 
-fn writable_methods() -> [(&'static str, StubFn); 16] {
+fn writable_methods() -> [(&'static str, StubFn); 22] {
     [
         ("on", cast2(ns_on2)),
         ("once", cast2(ns_on2)),
+        ("prependListener", cast2(ns_on2)),
+        ("prependOnceListener", cast2(ns_on2)),
         ("off", cast2(ns_chain2)),
         ("addListener", cast2(ns_on2)),
         ("removeListener", cast2(ns_chain2)),
         ("removeAllListeners", cast1(ns_chain1)),
         ("emit", cast2(ns_emit2)),
+        ("setMaxListeners", cast1(ns_set_max_listeners)),
+        ("getMaxListeners", cast0(ns_get_max_listeners)),
+        ("eventNames", cast0(ns_event_names)),
         ("listenerCount", cast1(ns_listener_count)),
         ("listeners", cast1(ns_listeners)),
+        ("rawListeners", cast1(ns_raw_listeners)),
         ("write", cast2(ns_write2)),
         ("end", cast1(ns_end1)),
         ("cork", cast0(ns_chain0)),
@@ -1561,20 +1542,26 @@ fn writable_methods() -> [(&'static str, StubFn); 16] {
     ]
 }
 
-fn duplex_methods() -> [(&'static str, StubFn); 22] {
+fn duplex_methods() -> [(&'static str, StubFn); 28] {
     // Union of readable + writable, deduped (`on/once/off/addListener/
     // removeListener/removeAllListeners/emit/listenerCount/listeners/
     // destroy` appear once each).
     [
         ("on", cast2(ns_on2)),
         ("once", cast2(ns_on2)),
+        ("prependListener", cast2(ns_on2)),
+        ("prependOnceListener", cast2(ns_on2)),
         ("off", cast2(ns_chain2)),
         ("addListener", cast2(ns_on2)),
         ("removeListener", cast2(ns_chain2)),
         ("removeAllListeners", cast1(ns_chain1)),
         ("emit", cast2(ns_emit2)),
+        ("setMaxListeners", cast1(ns_set_max_listeners)),
+        ("getMaxListeners", cast0(ns_get_max_listeners)),
+        ("eventNames", cast0(ns_event_names)),
         ("listenerCount", cast1(ns_listener_count)),
         ("listeners", cast1(ns_listeners)),
+        ("rawListeners", cast1(ns_raw_listeners)),
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_chain1)),
