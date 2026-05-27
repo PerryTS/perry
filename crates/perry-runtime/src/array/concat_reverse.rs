@@ -71,6 +71,7 @@ pub extern "C" fn js_array_concat(
             };
             let dst_elements =
                 (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            // GC_STORE_AUDIT(BARRIERED): concat bulk copy is followed by exact layout/barrier rebuild.
             ptr::copy_nonoverlapping(
                 src_elements,
                 dst_elements.add(dest_len as usize),
@@ -142,6 +143,7 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
         let mut j = len - 1;
         while i < j {
             let tmp = *elements.add(i);
+            // GC_STORE_AUDIT(BARRIERED): reverse slot swap is followed by layout/barrier rebuild.
             *elements.add(i) = *elements.add(j);
             *elements.add(j) = tmp;
             i += 1;
@@ -167,6 +169,7 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
         }
         let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         for i in 0..len {
+            // GC_STORE_AUDIT(BARRIERED): fill slot writes are followed by layout/barrier rebuild.
             *elements.add(i) = value;
         }
         rebuild_array_layout(arr);
@@ -226,6 +229,7 @@ pub extern "C" fn js_array_fill_range(
         }
         let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         for i in s..e {
+            // GC_STORE_AUDIT(BARRIERED): fill range writes are followed by layout/barrier rebuild.
             *elements.add(i as usize) = value;
         }
         rebuild_array_layout(arr);

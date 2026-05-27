@@ -1293,18 +1293,22 @@ pub unsafe extern "C" fn js_closure_call_apply_with_spread(
     let mut heap_buf: Vec<f64>;
     let buf_ptr: *const f64 = if total <= 16 {
         if !regular_args.is_null() && reg_n > 0 {
+            // GC_STORE_AUDIT(STACK): spread-call regular args copy into a temporary stack buffer.
             std::ptr::copy_nonoverlapping(regular_args, stack_buf.as_mut_ptr(), reg_n);
         }
         if !spread_data.is_null() && spread_n > 0 {
+            // GC_STORE_AUDIT(STACK): spread args copy into a temporary stack buffer.
             std::ptr::copy_nonoverlapping(spread_data, stack_buf.as_mut_ptr().add(reg_n), spread_n);
         }
         stack_buf.as_ptr()
     } else {
         heap_buf = vec![0.0; total];
         if !regular_args.is_null() && reg_n > 0 {
+            // GC_STORE_AUDIT(STACK): regular args copy into a temporary native Vec buffer.
             std::ptr::copy_nonoverlapping(regular_args, heap_buf.as_mut_ptr(), reg_n);
         }
         if !spread_data.is_null() && spread_n > 0 {
+            // GC_STORE_AUDIT(STACK): spread args copy into a temporary native Vec buffer.
             std::ptr::copy_nonoverlapping(spread_data, heap_buf.as_mut_ptr().add(reg_n), spread_n);
         }
         heap_buf.as_ptr()

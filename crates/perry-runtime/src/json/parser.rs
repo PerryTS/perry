@@ -133,6 +133,7 @@ impl<'a> DirectParser<'a> {
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
             let value_bits = value.bits();
             let slot = elements_ptr.add(length as usize);
+            // GC_STORE_AUDIT(INIT): JSON.parse suppresses GC and notes layout for same-parse arrays below.
             std::ptr::write(slot, value_bits);
             // JSON.parse suppresses GC and writes only into arrays allocated
             // by the same parse, so a generational write barrier is redundant.
@@ -361,6 +362,7 @@ impl<'a> DirectParser<'a> {
         for i in 0..alloc_field_count {
             let fields_ptr =
                 (js_obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
+            // GC_STORE_AUDIT(INIT): shaped JSON object fields are initialized before parse publication.
             std::ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
         let obj_slot = parse_root_push(JSValue::object_ptr(js_obj as *mut u8));
@@ -572,6 +574,7 @@ impl<'a> DirectParser<'a> {
             let fields_ptr =
                 (js_obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
             for i in 0..8 {
+                // GC_STORE_AUDIT(INIT): empty JSON object fields are initialized before parse publication.
                 std::ptr::write(fields_ptr.add(i), JSValue::undefined());
             }
             parse_root_restore(saved_roots);

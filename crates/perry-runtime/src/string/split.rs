@@ -75,6 +75,7 @@ pub extern "C" fn js_string_split_n(
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             for (i, p) in parts.iter().enumerate() {
                 let nanboxed = STRING_TAG | (*p as u64 & POINTER_MASK);
+                // GC_STORE_AUDIT(BARRIERED): split char slot is immediately recorded via note_array_slot.
                 std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
                 crate::array::note_array_slot(arr, i, nanboxed);
             }
@@ -108,6 +109,7 @@ pub extern "C" fn js_string_split_n(
                 ptr::copy_nonoverlapping(part.as_ptr(), data_ptr, byte_len as usize);
             }
             let nanboxed = STRING_TAG | (sh as u64 & POINTER_MASK);
+            // GC_STORE_AUDIT(BARRIERED): split part slot is immediately recorded via note_array_slot.
             std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
             crate::array::note_array_slot(arr, i, nanboxed);
         }
