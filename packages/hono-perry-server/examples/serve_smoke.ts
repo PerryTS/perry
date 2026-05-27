@@ -1,4 +1,4 @@
-// Smoke test / example for `@hono/perry-server`. Drives the adapter with a
+// Smoke test / example for `@perryts/hono-server`. Drives the adapter with a
 // minimal hand-rolled fetch handler (no `hono` dependency) so it can be
 // compiled and run standalone in CI:
 //

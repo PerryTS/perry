@@ -188,6 +188,10 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             && obj_id.sym.as_ref() == "ReadableStream"
                                         {
                                             ty = Type::Named("ReadableStream".to_string());
+                                        } else if method == "from"
+                                            && obj_id.sym.as_ref() == "Readable"
+                                        {
+                                            ty = Type::Named("Readable".to_string());
                                         }
                                     }
                                 }
@@ -1244,6 +1248,13 @@ pub(crate) fn lower_var_decl_with_destructuring(
             };
 
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
+            if matches!(ty, Type::Any) {
+                if let Some(Expr::NativeMethodCall { module, method, .. }) = &init {
+                    if module == "stream" && method == "from" {
+                        ty = Type::Named("Readable".to_string());
+                    }
+                }
+            }
             // #321: a generator function EXPRESSION bound to a name (`const g =
             // function*(){}`) — register the name so `for (x of g())` / `[...g()]`
             // take the iterator-protocol path, matching named `function* g(){}`

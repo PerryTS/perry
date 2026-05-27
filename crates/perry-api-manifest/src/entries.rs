@@ -2386,7 +2386,6 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert", "default", false, None),
     method("assert", "strict", false, None),
     property("assert", "strict"),
-    class("assert", "CallTracker"),
     class("assert", "AssertionError"),
     method("assert/strict", "ok", false, None),
     method("assert/strict", "fail", false, None),
@@ -2505,11 +2504,20 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "destroy", true, None),
     method("stream", "write", true, None),
     method("stream", "end", true, None),
+    method("stream", "cork", true, None),
+    method("stream", "uncork", true, None),
     // #1539: push() backpressure return + readable/writableHighWaterMark
     // property getters on typed stream instances.
     method("stream", "push", true, None),
     method("stream", "readableHighWaterMark", true, None),
+    method("stream", "readable", true, None),
+    method("stream", "readableEnded", true, None),
     method("stream", "writableHighWaterMark", true, None),
+    method("stream", "readableAborted", true, None),
+    method("stream", "writableCorked", true, None),
+    method("stream", "writable", true, None),
+    method("stream", "writableEnded", true, None),
+    method("stream", "writableFinished", true, None),
     method("stream", "destroyed", true, None),
     // --- child_process (synchronous + async exec surface;
     //     spawn/fork are documented but not yet codegen'd) ---

@@ -88,6 +88,23 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
+            Expr::ObjectAssign { target, sources } => {
+                self.emit_expr(func, target);
+                for source in sources {
+                    self.emit_frame_begin(func, 2);
+                    func.instruction(&Instruction::LocalSet(self.temp_local));
+                    self.emit_slot_addr(func, 0);
+                    func.instruction(&Instruction::LocalGet(self.temp_local));
+                    func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                    self.emit_store_arg(func, 1, source);
+                    self.emit_memcall(func, "object_assign", 2);
+                }
+            }
+
             Expr::PropertyGet { object, property } => {
                 // Special case: .length uses string_len which handles both strings and arrays
                 if property == "length" {

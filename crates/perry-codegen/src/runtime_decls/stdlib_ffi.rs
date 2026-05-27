@@ -870,8 +870,17 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // #1540: Readable/Writable .toWeb / .fromWeb — return fresh Duplex stubs.
     module.declare_function("js_node_stream_to_web", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_from_web", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_method_readable_aborted", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_destroyed", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_destroy", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_node_stream_method_readable", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_readable_ended", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_cork", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_uncork", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_writable_corked", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_writable", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_writable_ended", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_writable_finished", DOUBLE, &[I64]);
 
     // ========== Event emitter ==========
     module.declare_function("js_event_emitter_emit", DOUBLE, &[I64, I64, I64]);
@@ -895,8 +904,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_raw_listeners", I64, &[I64, I64]);
     // Module-level helpers
-    module.declare_function("js_events_once", I64, &[I64, I64]);
-    module.declare_function("js_events_on", I64, &[I64, I64]);
+    module.declare_function("js_events_once", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_events_on", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_events_add_abort_listener", I64, &[I64, I64]);
     module.declare_function("js_events_get_event_listeners", I64, &[I64, I64]);
     module.declare_function("js_events_listener_count", DOUBLE, &[I64, I64]);

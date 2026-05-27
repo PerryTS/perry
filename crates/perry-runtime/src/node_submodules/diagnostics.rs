@@ -392,6 +392,86 @@ pub fn error_path_for_message(message_ptr: *const StringHeader) -> Option<String
     ERROR_MESSAGE_PATHS.with(|m| m.borrow().get(&(message_ptr as usize)).cloned())
 }
 
+/// A user-assigned own property value on an `Error` object. String values are
+/// stored as an owned `String` (GC-safe — reconstructed into a fresh
+/// `StringHeader` on read, exactly like [`ERROR_MESSAGE_PATHS`]); everything
+/// else is stored as raw NaN-box bits. Immediates (number/bool/null/undefined)
+/// carry no live heap reference so this is fully safe for the common cases
+/// (`err.code = "X"`, `err.errno = -2`). Heap-object-valued props are stored
+/// by bits as a best-effort and may not survive a GC move of the referent;
+/// errors rarely carry object-valued own properties.
+#[derive(Clone)]
+pub enum ErrUserProp {
+    Str(String),
+    Bits(u64),
+}
+
+thread_local! {
+    /// User-assigned own properties on `Error` objects, keyed by the error
+    /// object pointer.
+    ///
+    /// `ErrorHeader` is a fixed `#[repr(C)]` struct with no overflow-field
+    /// region, so a plain `err.foo = bar` had nowhere to land: the object
+    /// setter dropped it and the getter returned `undefined`. That broke
+    /// Node parity — e.g. `assert.throws(fn, { code })` could not read a
+    /// user-assigned `.code` (#2014). This side table gives errors arbitrary
+    /// string/primitive own properties. Stale entries after a GC move of the
+    /// error are harmless (same model as the message-keyed tables above): a
+    /// lookup at the new address simply misses.
+    pub(crate) static ERROR_USER_PROPS: RefCell<HashMap<usize, HashMap<String, ErrUserProp>>> =
+        RefCell::new(HashMap::new());
+}
+
+unsafe fn error_user_prop_string(value: f64) -> String {
+    let ptr = crate::value::js_jsvalue_to_string(value);
+    if ptr.is_null() {
+        return String::new();
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+}
+
+/// Record a user-assigned own property on an `Error` object. `error_ptr` is
+/// the `ErrorHeader` pointer (the NaN-box pointer payload). Called from the
+/// `GC_TYPE_ERROR` branch of `js_object_set_field_by_name`.
+pub fn set_error_user_prop(error_ptr: usize, key: &str, value: f64) {
+    if error_ptr == 0 {
+        return;
+    }
+    let stored = if JSValue::from_bits(value.to_bits()).is_any_string() {
+        ErrUserProp::Str(unsafe { error_user_prop_string(value) })
+    } else {
+        ErrUserProp::Bits(value.to_bits())
+    };
+    ERROR_USER_PROPS.with(|m| {
+        m.borrow_mut()
+            .entry(error_ptr)
+            .or_default()
+            .insert(key.to_string(), stored);
+    });
+}
+
+/// Look up a user-assigned own property on an `Error` object, materialising it
+/// back into a NaN-boxed `f64`. Returns `None` if no such property was set.
+/// Called from the `GC_TYPE_ERROR` branch of `js_object_get_field_by_name`.
+pub fn error_user_prop(error_ptr: usize, key: &str) -> Option<f64> {
+    if error_ptr == 0 {
+        return None;
+    }
+    ERROR_USER_PROPS.with(|m| {
+        m.borrow().get(&error_ptr).and_then(|props| {
+            props.get(key).map(|v| match v {
+                ErrUserProp::Str(s) => {
+                    let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                    f64::from_bits(crate::js_nanbox_string(ptr as i64).to_bits())
+                }
+                ErrUserProp::Bits(b) => f64::from_bits(*b),
+            })
+        })
+    })
+}
+
 pub(crate) fn throw_invalid_arg() -> ! {
     let msg = b"The argument is invalid";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);

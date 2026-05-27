@@ -267,6 +267,7 @@ pub extern "C" fn js_fs_stat_sync(path_value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_fs_stat_sync_options(path_value: f64, options_value: f64) -> f64 {
+    crate::fs::validate::validate_path("path", path_value);
     let bigint = unsafe { options_bool_field(options_value, b"bigint") };
     unsafe {
         let path_str = match decode_path_value(path_value) {
@@ -327,6 +328,7 @@ pub extern "C" fn js_fs_lstat_sync(path_value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_fs_lstat_sync_options(path_value: f64, options_value: f64) -> f64 {
+    crate::fs::validate::validate_path("path", path_value);
     let bigint = unsafe { options_bool_field(options_value, b"bigint") };
     unsafe {
         let path_str = match decode_path_value(path_value) {

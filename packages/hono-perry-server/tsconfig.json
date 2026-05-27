@@ -8,7 +8,7 @@
     "lib": ["ES2020", "DOM"],
     "baseUrl": ".",
     "paths": {
-      "@hono/perry-server": ["./src/index.ts"]
+      "@perryts/hono-server": ["./src/index.ts"]
     }
   },
   "include": ["src/**/*.ts", "examples/**/*.ts"],

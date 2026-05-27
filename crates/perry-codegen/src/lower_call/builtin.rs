@@ -165,6 +165,14 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_event_emitter_new_with_options", &[(DOUBLE, &opts)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        "EventTarget" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_event_target_new", &[]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
         // node:perf_hooks — `new PerformanceObserver(cb)` registers the
         // observer and returns its `perf_observer` namespace object (already
         // NaN-boxed). `cb` is passed through so the runtime can invoke it on

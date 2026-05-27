@@ -38,6 +38,7 @@ pub mod color_parse;
 pub mod date;
 pub mod error;
 pub mod event_pump;
+pub mod event_target;
 pub mod exception;
 pub mod fast_hash;
 pub mod ffi;

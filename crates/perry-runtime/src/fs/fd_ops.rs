@@ -23,6 +23,7 @@ pub(crate) fn array_ptr_from_value(value: f64) -> *const crate::array::ArrayHead
 /// `fs.openSync(path, flags)` — small fd registry for deterministic tests.
 #[no_mangle]
 pub extern "C" fn js_fs_open_sync(path_value: f64, flags_value: f64) -> f64 {
+    crate::fs::validate::validate_path("path", path_value);
     unsafe {
         let path_str = match decode_path_value(path_value) {
             Some(s) => s,

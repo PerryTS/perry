@@ -104,9 +104,10 @@ fn object_matcher_matches(actual: f64, expected: f64) -> bool {
         }
         saw_expected_key = true;
         let actual_prop = read_property(actual, key);
-        if is_null_or_undefined(actual_prop) && matches!(key, "code" | "errno") {
-            continue;
-        }
+        // Node compares every key the validator object specifies: if it
+        // names `code`/`errno`/`name`/`message`, the thrown error must carry
+        // an equal value. A missing or mismatching value on the thrown error
+        // is a mismatch (#2014) — there is no "optional code" carve-out.
         if !assert_same_value(actual_prop, expected_prop)
             && crate::value::js_jsvalue_loose_equals(actual_prop, expected_prop) == 0
         {
@@ -174,13 +175,20 @@ fn expected_error_matches(thrown: f64, expected: f64) -> bool {
             return true;
         }
     }
+    // A plain object validator (e.g. `{ code: "ERR_X" }`) is a property-bag
+    // matcher, never a constructor — its own enumerable keys must each equal
+    // the thrown error's. Do NOT fall through to the instanceof /
+    // builtin-constructor checks below: those can spuriously accept *any*
+    // error (e.g. `js_instanceof_dynamic` against a plain object, or a
+    // validator carrying `name: "Error"`) and would mask a wrong `code`
+    // (#2014).
+    if is_plain_matcher_object(expected) {
+        return object_matcher_matches(thrown, expected);
+    }
     if crate::value::js_is_truthy(crate::object::js_instanceof_dynamic(thrown, expected)) != 0 {
         return true;
     }
-    if constructor_name_matches_builtin_error(thrown, expected) {
-        return true;
-    }
-    object_matcher_matches(thrown, expected)
+    constructor_name_matches_builtin_error(thrown, expected)
 }
 
 fn call_block_capturing_throw(block: f64) -> Result<f64, f64> {

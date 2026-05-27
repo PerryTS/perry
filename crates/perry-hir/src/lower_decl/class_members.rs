@@ -470,6 +470,16 @@ pub fn lower_class_method(
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in &method.function.params {
         let param_name = get_pat_name(&param.pat)?;
+        // TypeScript's `this: T` is a TYPE-only marker (SWC emits it as a
+        // regular `Param { pat: Ident("this") }`), so skip it — it must not
+        // become a runtime parameter. `this` is already bound above via
+        // `define_local("this", ...)` for instance methods. Mirrors the
+        // `fn_decl.rs` / `expr_object.rs` sites. Without this skip, a class
+        // method `m(this: C, fin) {}` is lowered as a 2-arg function and the
+        // real `fin` arg lands in the `this` slot (#321).
+        if param_name == "this" {
+            continue;
+        }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
         let param_default = get_param_default(ctx, &param.pat)?;
         let is_rest = is_rest_param(&param.pat);
@@ -720,6 +730,11 @@ pub fn lower_setter_method(
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in &method.function.params {
         let param_name = get_pat_name(&param.pat)?;
+        // Skip the TypeScript `this: T` TYPE-only marker (see the method loop
+        // above). `this` is already bound for instance setters.
+        if param_name == "this" {
+            continue;
+        }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
         params.push(Param {

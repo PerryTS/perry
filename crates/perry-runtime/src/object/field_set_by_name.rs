@@ -260,6 +260,26 @@ pub extern "C" fn js_object_set_field_by_name(
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
+        // Error objects have a fixed `#[repr(C)]` layout with no field-storage
+        // region (`message`/`name`/`stack`/`cause`/`errors` are dedicated
+        // slots), so a user assignment like `err.code = "X"` or
+        // `err.errno = -2` has nowhere to land in the header. Route it to the
+        // per-error user-property side table so the matching getter — and
+        // `assert.throws(fn, { code })` (#2014) — can read it back. The getter
+        // checks this table first, so this also lets a user override the
+        // built-in message/name accessors, matching Node.
+        if gc_type == crate::gc::GC_TYPE_ERROR {
+            if !key.is_null() {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                if let Ok(name_str) =
+                    std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+                {
+                    crate::node_submodules::set_error_user_prop(obj as usize, name_str, value);
+                }
+            }
+            return;
+        }
         if gc_type != crate::gc::GC_TYPE_OBJECT && gc_type != crate::gc::GC_TYPE_CLOSURE {
             if !is_valid_obj_ptr(obj as *const u8) {
                 return;

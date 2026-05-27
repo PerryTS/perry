@@ -1074,6 +1074,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[PTR, I32, PTR, I32],
     );
+    // Namespace member reads for known Node submodules. Unlike direct
+    // named-import fallback, missing properties return undefined.
+    module.declare_function(
+        "js_node_submodule_namespace_member",
+        DOUBLE,
+        &[PTR, I32, PTR, I32],
+    );
     // Issue #841 companion: per-submodule namespace stub object. Returns
     // a NaN-boxed ObjectHeader pointer whose fields are the function
     // singletons emitted by `js_node_submodule_export_as_function`.
@@ -1796,6 +1803,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_abort_controller_abort_reason", VOID, &[I64, DOUBLE]);
     module.declare_function("js_abort_signal_add_listener", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_abort_signal_timeout", I64, &[DOUBLE]);
+    module.declare_function("js_event_target_new", I64, &[]);
+    module.declare_function("js_event_target_add_event_listener", VOID, &[I64, I64, I64]);
+    module.declare_function(
+        "js_event_target_remove_event_listener",
+        VOID,
+        &[I64, I64, I64],
+    );
+    module.declare_function("js_event_target_is_event_target", I32, &[I64]);
+    module.declare_function("js_event_target_get_event_listeners", I64, &[I64, I64]);
+    module.declare_function("js_event_target_get_max_listeners", DOUBLE, &[I64]);
+    module.declare_function("js_event_target_set_max_listeners", I32, &[I64, DOUBLE]);
 
     declare_phase_b_arrays(module);
 }

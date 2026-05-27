@@ -1429,6 +1429,17 @@ pub extern "C" fn js_object_get_field_by_name(
                 let key_len = (*key).byte_len as usize;
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                 let err_ptr = obj as *mut crate::error::ErrorHeader;
+                // User-assigned own properties (`err.code = "X"`,
+                // `err.errno = -2`, custom fields) take precedence over the
+                // built-in accessors below — they were recorded in the
+                // per-error side table by the setter (#2014).
+                if let Ok(key_str) = std::str::from_utf8(key_bytes) {
+                    if let Some(v) =
+                        crate::node_submodules::error_user_prop(err_ptr as usize, key_str)
+                    {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                }
                 match key_bytes {
                     b"message" => {
                         let s = crate::error::js_error_get_message(err_ptr);

@@ -80,6 +80,9 @@ const STREAM_END_EMITTED_KEY: &[u8] = b"__perryStreamEndEmitted";
 const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
 const STREAM_MAX_LISTENERS_KEY: &[u8] = b"__perryStreamMaxListeners";
 const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
+const WRITABLE_FINISH_SCHEDULED_KEY: &[u8] = b"__perryWritableFinishScheduled";
+const WRITABLE_FINISH_EMITTED_KEY: &[u8] = b"__perryWritableFinishEmitted";
+const WRITABLE_CORKED_KEY: &[u8] = b"__perryWritableCorked";
 // #1534: direction + disturbed bits so the static introspection helpers
 // (`Readable.isReadable` / `isDisturbed` / `isErrored`) answer per-stream
 // instead of with a uniform stub. Set at construction / on first read.
@@ -91,8 +94,8 @@ const STREAM_DISTURBED_KEY: &[u8] = b"__perryStreamDisturbed";
 const READABLE_BUFFERED_KEY: &[u8] = b"__perryReadableBuffered";
 const READABLE_HWM_KEY: &[u8] = b"__perryReadableHwm";
 
+use destroy_state::{destroy_stream, ns_destroy1, ns_destroy_error_microtask};
 pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_destroyed};
-use destroy_state::{ns_destroy1, ns_destroy_error_microtask};
 
 // ─────────────────────────────────────────────────────────────────
 // Stub method bodies. Each receives the closure pointer (slot 0
@@ -154,6 +157,33 @@ extern "C" fn ns_readable_end_microtask(closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
+extern "C" fn ns_writable_finish_microtask(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let callback = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
+    set_hidden_value(
+        stream,
+        hidden_finish_scheduled_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+    if !has_truthy_hidden(stream, hidden_finish_emitted_key()) {
+        set_hidden_value(
+            stream,
+            hidden_finish_emitted_key(),
+            f64::from_bits(TAG_TRUE),
+        );
+        mark_writable_finished(stream);
+        let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
+        let _ = emit_stream_event(stream, string_value(b"close"), &[]);
+    }
+    if is_callable_value(callback) {
+        call_listener_args(stream, callback, &[]);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 extern "C" fn ns_emit2(closure: *const ClosureHeader, event: f64, arg: f64) -> f64 {
     let stream = this_value(closure);
     let mut args = crate::array::js_array_alloc(0);
@@ -172,14 +202,16 @@ extern "C" fn ns_emit_rest(closure: *const ClosureHeader, event: f64, rest: f64)
 }
 extern "C" fn ns_resume0(closure: *const ClosureHeader) -> f64 {
     let stream = this_value(closure);
-    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    mark_stream_ended(stream);
+    refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
     stream
 }
 
 extern "C" fn ns_read1(closure: *const ClosureHeader, _n: f64) -> f64 {
     let stream = this_value(closure);
-    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    mark_stream_ended(stream);
+    refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
     f64::from_bits(TAG_NULL)
 }
@@ -191,7 +223,8 @@ extern "C" fn ns_read1(closure: *const ClosureHeader, _n: f64) -> f64 {
 fn push_chunk(stream: f64, chunk: f64) -> f64 {
     let jsval = JSValue::from_bits(chunk.to_bits());
     if jsval.is_null() || jsval.is_undefined() {
-        set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+        mark_stream_ended(stream);
+        refresh_readable_aborted_flag(stream);
         schedule_readable_end(stream);
         return f64::from_bits(TAG_FALSE);
     }
@@ -260,17 +293,24 @@ extern "C" fn ns_write2(closure: *const ClosureHeader, chunk: f64, enc: f64) -> 
     f64::from_bits(TAG_TRUE)
 }
 
-extern "C" fn ns_end1(closure: *const ClosureHeader, chunk: f64) -> f64 {
-    let callback = if is_callable_value(chunk) {
-        Some(chunk)
-    } else {
-        None
-    };
-    if callback.is_none() && !JSValue::from_bits(chunk.to_bits()).is_undefined() {
-        let _ = ns_write2(closure, chunk, f64::from_bits(TAG_UNDEFINED));
-    }
+extern "C" fn ns_end3(closure: *const ClosureHeader, chunk: f64, encoding: f64, cb: f64) -> f64 {
     let stream = this_value(closure);
-    finish_stream(stream, callback);
+    finish_stream_with_args(stream, chunk, encoding, cb);
+    stream
+}
+
+extern "C" fn ns_cork0(closure: *const ClosureHeader) -> f64 {
+    let stream = this_value(closure);
+    set_writable_corked_count(stream, writable_corked_count(stream) + 1.0);
+    stream
+}
+
+extern "C" fn ns_uncork0(closure: *const ClosureHeader) -> f64 {
+    let stream = this_value(closure);
+    let corked = writable_corked_count(stream);
+    if corked > 0.0 {
+        set_writable_corked_count(stream, corked - 1.0);
+    }
     stream
 }
 
@@ -295,15 +335,48 @@ fn emit_writable_chunk(stream: f64, chunk: f64) {
 }
 
 fn finish_stream(stream: f64, callback: Option<f64>) {
-    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    mark_stream_ended(stream);
+    refresh_readable_aborted_flag(stream);
+    mark_writable_ended(stream);
     if !has_truthy_hidden(stream, hidden_end_emitted_key()) {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
+        refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
     }
-    let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
-    if let Some(callback) = callback {
-        call_listener_args(stream, callback, &[]);
+    schedule_writable_finish(stream, callback);
+}
+
+fn finish_stream_with_args(stream: f64, chunk: f64, encoding: f64, cb: f64) {
+    let (chunk, encoding, callback) = normalize_end_args(chunk, encoding, cb);
+    if has_end_chunk(chunk) {
+        invoke_writable_write(stream, chunk, encoding);
+        emit_writable_chunk(stream, chunk);
     }
+    finish_stream(stream, callback);
+}
+
+fn normalize_end_args(chunk: f64, encoding: f64, cb: f64) -> (f64, f64, Option<f64>) {
+    if is_callable_value(chunk) {
+        return (
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+            Some(chunk),
+        );
+    }
+    if is_callable_value(encoding) {
+        return (chunk, f64::from_bits(TAG_UNDEFINED), Some(encoding));
+    }
+    let callback = if is_callable_value(cb) {
+        Some(cb)
+    } else {
+        None
+    };
+    (chunk, encoding, callback)
+}
+
+fn has_end_chunk(chunk: f64) -> bool {
+    let value = JSValue::from_bits(chunk.to_bits());
+    !value.is_null() && !value.is_undefined()
 }
 
 fn stream_value_from_handle(stream_handle: i64) -> f64 {
@@ -356,6 +429,24 @@ pub extern "C" fn js_node_stream_method_readable_hwm(stream_handle: i64) -> f64 
     get_hidden_value(stream, hidden_key(b"readableHighWaterMark")).unwrap_or(16384.0)
 }
 
+/// `stream.readable` property getter on a typed readable-side instance.
+/// Mirrors `Readable.isReadable(stream)` for the current stub state.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable(stream_handle: i64) -> f64 {
+    js_node_stream_is_readable(stream_value_from_handle(stream_handle))
+}
+
+/// `stream.readableEnded` property getter on a typed readable-side instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_ended(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if stream_hidden_ended(stream) {
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_FALSE)
+    }
+}
+
 /// `stream.writableHighWaterMark` property getter on a typed instance
 /// (#1539).
 #[no_mangle]
@@ -364,10 +455,62 @@ pub extern "C" fn js_node_stream_method_writable_hwm(stream_handle: i64) -> f64 
     get_hidden_value(stream, hidden_key(b"writableHighWaterMark")).unwrap_or(16384.0)
 }
 
+/// `stream.readableAborted` property getter on a typed readable-side instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_aborted(stream_handle: i64) -> f64 {
+    readable_aborted_value(stream_value_from_handle(stream_handle))
+}
+
+/// `stream.writableCorked` property getter on a typed writable-side instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_writable_corked(stream_handle: i64) -> f64 {
+    writable_corked_count(stream_value_from_handle(stream_handle))
+}
+
+/// `stream.writable` property getter on typed writable-side instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_writable(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let unavailable = stream_hidden_ended(stream) || readable_hidden_error(stream).is_some();
+    f64::from_bits(if unavailable { TAG_FALSE } else { TAG_TRUE })
+}
+
+/// `stream.writableEnded` property getter on typed writable-side instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_writable_ended(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    f64::from_bits(if stream_hidden_ended(stream) {
+        TAG_TRUE
+    } else {
+        TAG_FALSE
+    })
+}
+
+/// `stream.writableFinished` property getter on typed writable-side instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_writable_finished(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    f64::from_bits(if has_truthy_hidden(stream, hidden_finish_emitted_key()) {
+        TAG_TRUE
+    } else {
+        TAG_FALSE
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    mark_stream_ended(stream);
+    refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
     f64::from_bits(TAG_NULL)
 }
@@ -375,7 +518,8 @@ pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    mark_stream_ended(stream);
+    refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
     stream
 }
@@ -391,15 +535,41 @@ pub extern "C" fn js_node_stream_method_write(stream_handle: i64, chunk: f64, en
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    let callback = if is_callable_value(chunk) {
-        Some(chunk)
-    } else {
-        None
-    };
-    if callback.is_none() && !JSValue::from_bits(chunk.to_bits()).is_undefined() {
-        let _ = js_node_stream_method_write(stream_handle, chunk, f64::from_bits(TAG_UNDEFINED));
+    finish_stream_with_args(
+        stream,
+        chunk,
+        f64::from_bits(TAG_UNDEFINED),
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    stream
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_end3(
+    stream_handle: i64,
+    chunk: f64,
+    encoding: f64,
+    cb: f64,
+) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    finish_stream_with_args(stream, chunk, encoding, cb);
+    stream
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_cork(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    set_writable_corked_count(stream, writable_corked_count(stream) + 1.0);
+    stream
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_uncork(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    let corked = writable_corked_count(stream);
+    if corked > 0.0 {
+        set_writable_corked_count(stream, corked - 1.0);
     }
-    finish_stream(stream, callback);
     stream
 }
 extern "C" fn ns_undefined0(_closure: *const ClosureHeader) -> f64 {
@@ -542,6 +712,15 @@ extern "C" fn ns_deferred_resolve(closure: *const ClosureHeader) -> f64 {
     if !p.is_null() {
         crate::promise::js_promise_resolve(p, value);
     }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_stream_abort_listener(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    destroy_stream(stream, abort_error());
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -944,6 +1123,7 @@ fn register_stub_arities() {
     register(ns_chain0 as *const u8, 0);
     register(ns_chain1 as *const u8, 1);
     register(ns_destroy_error_microtask as *const u8, 0);
+    register(ns_stream_abort_listener as *const u8, 0);
     register(ns_destroy1 as *const u8, 1);
     register(ns_chain2 as *const u8, 2);
     register(ns_chain3 as *const u8, 3);
@@ -956,6 +1136,7 @@ fn register_stub_arities() {
     register(ns_remove_all_listeners1 as *const u8, 1);
     register(ns_readable_from_drain as *const u8, 0);
     register(ns_readable_end_microtask as *const u8, 0);
+    register(ns_writable_finish_microtask as *const u8, 0);
     register(ns_emit2 as *const u8, 2);
     crate::closure::js_register_closure_rest(ns_emit_rest as *const u8, 1);
     register(ns_resume0 as *const u8, 0);
@@ -963,7 +1144,7 @@ fn register_stub_arities() {
     register(ns_pipe1 as *const u8, 1);
     register(writable_write_callback_noop as *const u8, 0);
     register(ns_write2 as *const u8, 2);
-    register(ns_end1 as *const u8, 1);
+    register(ns_end3 as *const u8, 3);
     register(ns_set_max_listeners as *const u8, 1);
     register(ns_get_max_listeners as *const u8, 0);
     register(ns_event_names as *const u8, 0);
@@ -1061,6 +1242,21 @@ fn hidden_max_listeners_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_write_key() -> *mut crate::string::StringHeader {
     hidden_key(WRITABLE_WRITE_KEY)
+}
+
+#[inline]
+fn hidden_finish_scheduled_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_FINISH_SCHEDULED_KEY)
+}
+
+#[inline]
+fn hidden_finish_emitted_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_FINISH_EMITTED_KEY)
+}
+
+#[inline]
+fn hidden_writable_corked_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_CORKED_KEY)
 }
 
 #[inline]
@@ -1178,10 +1374,34 @@ fn schedule_readable_end(stream: f64) {
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
+fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
+    if has_truthy_hidden(stream, hidden_finish_emitted_key())
+        || has_truthy_hidden(stream, hidden_finish_scheduled_key())
+    {
+        return;
+    }
+    set_hidden_value(
+        stream,
+        hidden_finish_scheduled_key(),
+        f64::from_bits(TAG_TRUE),
+    );
+    let closure = js_closure_alloc(ns_writable_finish_microtask as *const u8, 2);
+    js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
+    js_closure_set_capture_ptr(
+        closure,
+        1,
+        callback
+            .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+            .to_bits() as i64,
+    );
+    crate::builtins::js_queue_microtask(closure as i64);
+}
+
 fn emit_readable_end_once(stream: f64) {
     if !has_truthy_hidden(stream, hidden_end_emitted_key()) {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
-        set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+        mark_stream_ended(stream);
+        refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
     }
 }
@@ -1226,8 +1446,43 @@ fn stream_hidden_ended(value: f64) -> bool {
     get_hidden_value(value, hidden_ended_key()).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
 }
 
+fn readable_aborted_value(stream: f64) -> f64 {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
+        return f64::from_bits(TAG_FALSE);
+    }
+    let destroyed = has_truthy_hidden(stream, hidden_key(b"destroyed"));
+    let errored = readable_hidden_error(stream).is_some();
+    let ended = stream_hidden_ended(stream) || has_truthy_hidden(stream, hidden_end_emitted_key());
+    if (destroyed || errored) && !ended {
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_FALSE)
+    }
+}
+
+fn refresh_readable_aborted_flag(stream: f64) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
+        set_hidden_value(
+            stream,
+            hidden_key(b"readableAborted"),
+            readable_aborted_value(stream),
+        );
+    }
+}
+
 fn writable_hidden_write(value: f64) -> Option<f64> {
     get_hidden_value(value, hidden_write_key())
+}
+
+fn writable_corked_count(value: f64) -> f64 {
+    get_hidden_value(value, hidden_writable_corked_key()).unwrap_or(0.0)
+}
+
+fn set_writable_corked_count(stream: f64, count: f64) {
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_some() {
+        set_hidden_value(stream, hidden_writable_corked_key(), count);
+        set_hidden_value(stream, hidden_key(b"writableCorked"), count);
+    }
 }
 
 fn rebind_callback_this(callback: f64, stream: f64) -> f64 {
@@ -1286,6 +1541,22 @@ fn uint8array_byte_chunks(raw: usize) -> f64 {
     }
 }
 
+fn typed_uint8array_byte_chunks(raw: usize) -> Option<f64> {
+    if crate::typedarray::lookup_typed_array_kind(raw) != Some(crate::typedarray::KIND_UINT8) {
+        return None;
+    }
+    let ta = raw as *const crate::typedarray::TypedArrayHeader;
+    let len = crate::typedarray::js_typed_array_length(ta).max(0) as u32;
+    let mut out = crate::array::js_array_alloc(len);
+    for i in 0..len {
+        out = crate::array::js_array_push_f64(
+            out,
+            crate::typedarray::js_typed_array_get(ta, i as i32),
+        );
+    }
+    Some(box_pointer(out as *const u8))
+}
+
 fn normalize_readable_from_input(iterable: f64) -> f64 {
     if let Some(chunks) = readable_hidden_chunks(iterable) {
         return chunks;
@@ -1297,6 +1568,9 @@ fn normalize_readable_from_input(iterable: f64) -> f64 {
         && !crate::buffer::is_array_buffer(raw)
     {
         return uint8array_byte_chunks(raw);
+    }
+    if let Some(chunks) = typed_uint8array_byte_chunks(raw) {
+        return chunks;
     }
     if is_array_like_value(iterable) {
         return iterable;
@@ -1575,9 +1849,9 @@ fn writable_methods() -> [(&'static str, StubFn); 22] {
         ("listeners", cast1(ns_listeners)),
         ("rawListeners", cast1(ns_raw_listeners)),
         ("write", cast2(ns_write2)),
-        ("end", cast1(ns_end1)),
-        ("cork", cast0(ns_chain0)),
-        ("uncork", cast0(ns_chain0)),
+        ("end", cast3(ns_end3)),
+        ("cork", cast0(ns_cork0)),
+        ("uncork", cast0(ns_uncork0)),
         ("destroy", cast1(ns_destroy1)),
         ("setDefaultEncoding", cast1(ns_chain1)),
         ("_write", cast3(ns_chain3)),
@@ -1612,9 +1886,9 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("setEncoding", cast1(ns_chain1)),
         ("isPaused", cast0(ns_undefined0)),
         ("write", cast2(ns_write2)),
-        ("end", cast1(ns_end1)),
-        ("cork", cast0(ns_chain0)),
-        ("uncork", cast0(ns_chain0)),
+        ("end", cast3(ns_end3)),
+        ("cork", cast0(ns_cork0)),
+        ("uncork", cast0(ns_uncork0)),
         ("destroy", cast1(ns_destroy1)),
         ("setDefaultEncoding", cast1(ns_chain1)),
     ]
@@ -1731,16 +2005,79 @@ fn init_constructor(stream: f64, name: &str) {
     set_hidden_value(stream, hidden_key(b"constructor"), constructor);
 }
 
+fn set_visible_readable(stream: f64, readable: bool) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
+        let value = if readable { TAG_TRUE } else { TAG_FALSE };
+        set_hidden_value(stream, hidden_key(b"readable"), f64::from_bits(value));
+    }
+}
+
+fn set_visible_readable_ended(stream: f64, ended: bool) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
+        let value = if ended { TAG_TRUE } else { TAG_FALSE };
+        set_hidden_value(stream, hidden_key(b"readableEnded"), f64::from_bits(value));
+    }
+}
+
+fn mark_stream_ended(stream: f64) {
+    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    set_visible_readable(stream, false);
+    set_visible_readable_ended(stream, true);
+}
+
+fn set_visible_writable(stream: f64, writable: bool) {
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_some() {
+        let value = if writable { TAG_TRUE } else { TAG_FALSE };
+        set_hidden_value(stream, hidden_key(b"writable"), f64::from_bits(value));
+    }
+}
+
+fn set_visible_writable_ended(stream: f64, ended: bool) {
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_some() {
+        let value = if ended { TAG_TRUE } else { TAG_FALSE };
+        set_hidden_value(stream, hidden_key(b"writableEnded"), f64::from_bits(value));
+    }
+}
+
+fn set_visible_writable_finished(stream: f64, finished: bool) {
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_some() {
+        let value = if finished { TAG_TRUE } else { TAG_FALSE };
+        set_hidden_value(
+            stream,
+            hidden_key(b"writableFinished"),
+            f64::from_bits(value),
+        );
+    }
+}
+
+fn mark_writable_ended(stream: f64) {
+    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    set_visible_writable(stream, false);
+    set_visible_writable_ended(stream, true);
+}
+
+fn mark_writable_finished(stream: f64) {
+    set_visible_writable(stream, false);
+    set_visible_writable_finished(stream, true);
+}
+
 /// Initialize the readable side of a stream: direction flag, buffered byte
 /// counter, effective readable highWaterMark, and the visible
 /// `readableHighWaterMark` / `destroyed` properties (#1534/#1539).
 fn init_readable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_readable_flag_key(), f64::from_bits(TAG_TRUE));
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
+    set_hidden_value(
+        stream,
+        hidden_key(b"readableAborted"),
+        f64::from_bits(TAG_FALSE),
+    );
     set_hidden_value(stream, hidden_buffered_key(), 0.0);
     let r_hwm = resolve_hwm(opts, b"readableHighWaterMark", b"readableObjectMode");
     set_hidden_value(stream, hidden_hwm_key(), r_hwm);
     set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
+    set_visible_readable(stream, true);
+    set_visible_readable_ended(stream, false);
 }
 
 /// Initialize the writable side: direction flag and visible stream flags.
@@ -1749,6 +2086,16 @@ fn init_writable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
     let w_hwm = resolve_hwm(opts, b"writableHighWaterMark", b"writableObjectMode");
     set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
+    set_writable_corked_count(stream, 0.0);
+    set_visible_writable(stream, true);
+    set_visible_writable_ended(stream, false);
+    set_visible_writable_finished(stream, false);
+}
+
+fn init_abort_signal_state(stream: f64, opts: f64) {
+    if let Some(signal) = options_signal(opts) {
+        attach_abort_signal(signal, stream);
+    }
 }
 
 #[no_mangle]
@@ -1763,6 +2110,7 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     init_lifecycle_state(readable);
     init_constructor(readable, "Readable");
     init_readable_state(readable, opts);
+    init_abort_signal_state(readable, opts);
     async_iterator::install_readable_async_iterator_symbol(readable);
     readable
 }
@@ -1782,6 +2130,7 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
     init_lifecycle_state(writable);
     init_constructor(writable, "Writable");
     init_writable_state(writable, opts);
+    init_abort_signal_state(writable, opts);
     writable
 }
 
@@ -1797,6 +2146,7 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     init_constructor(duplex, "Duplex");
     init_readable_state(duplex, opts);
     init_writable_state(duplex, opts);
+    init_abort_signal_state(duplex, opts);
     async_iterator::install_readable_async_iterator_symbol(duplex);
     duplex
 }
@@ -1924,15 +2274,29 @@ pub extern "C" fn js_node_stream_set_default_hwm(object_mode: f64, value: f64) -
     f64::from_bits(TAG_UNDEFINED)
 }
 
-/// #1541: `stream.addAbortSignal(signal, stream)` — Node wires the
-/// AbortSignal so aborting it destroys the stream, and returns the
-/// stream for chaining. Perry's stream stubs don't implement the
-/// destroy / abort propagation yet, so the helper just returns the
-/// stream verbatim and ignores the signal. Caller chains
-/// (`r = addAbortSignal(s, r)`) keep working with the same stream
-/// reference they passed in.
+fn attach_abort_signal(signal: f64, stream: f64) {
+    if signal_is_aborted(signal) {
+        destroy_stream(stream, abort_error());
+        return;
+    }
+    let Some(signal_obj) = object_ptr_from_value(signal) else {
+        return;
+    };
+    let listener = js_closure_alloc(ns_stream_abort_listener as *const u8, 1);
+    js_closure_set_capture_ptr(listener, 0, stream.to_bits() as i64);
+    crate::url::js_abort_signal_add_listener(
+        signal_obj,
+        string_value(b"abort"),
+        box_pointer(listener as *const u8),
+    );
+}
+
+/// #1541: `stream.addAbortSignal(signal, stream)` — wire an AbortSignal so
+/// aborting it destroys the stream with an AbortError, then return the same
+/// stream for chaining.
 #[no_mangle]
-pub extern "C" fn js_node_stream_add_abort_signal(_signal: f64, stream: f64) -> f64 {
+pub extern "C" fn js_node_stream_add_abort_signal(signal: f64, stream: f64) -> f64 {
+    attach_abort_signal(signal, stream);
     stream
 }
 

@@ -394,7 +394,6 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("assert", "throws")
             | ("assert", "doesNotThrow")
             | ("assert", "ifError")
-            | ("assert", "CallTracker")
             | ("assert/strict", "ok")
             | ("assert/strict", "fail")
             | ("assert/strict", "equal")

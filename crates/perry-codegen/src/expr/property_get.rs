@@ -754,6 +754,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // directly to the per-(submodule, export) function
                     // singleton; same value the named-import would
                     // produce, so `ns.setTimeout === setTimeout` holds.
+                    // Missing namespace properties must return undefined,
+                    // not the named-import fallback TAG_TRUE sentinel.
                     // Done before the class_ids check below because
                     // none of the recognized submodules export classes
                     // by name today; if/when they do (e.g.
@@ -768,7 +770,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let blk = ctx.block();
                         return Ok(blk.call(
                             DOUBLE,
-                            "js_node_submodule_export_as_function",
+                            "js_node_submodule_namespace_member",
                             &[
                                 (PTR, &submod_label),
                                 (I32, &submod_len.to_string()),

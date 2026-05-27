@@ -140,6 +140,18 @@ fn lower_method_prop(
     let mut params = Vec::new();
     for param in method.function.params.iter() {
         let param_name = get_pat_name(&param.pat)?;
+        // TypeScript's `this: T` is a TYPE-only marker (SWC emits it as a
+        // regular `Param { pat: Ident("this") }`), so skip it — it must not
+        // become a runtime parameter. Mirrors the `fn_decl.rs` /
+        // `expr_function.rs` sites. Without this skip, an object-literal
+        // method `m(this: T, fin) {}` is lowered as a 2-arg function, so
+        // when it dispatches through the `Object.create(proto)` chain (which
+        // binds `this` separately) the real `fin` arg lands in the `this`
+        // slot and the declared `fin` reads undefined (effect's
+        // `ScopeImplProto.addFinalizer(this, fin)` Layer/Scope blocker, #321).
+        if param_name == "this" {
+            continue;
+        }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
         let param_default = get_param_default(ctx, &param.pat)?;
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
