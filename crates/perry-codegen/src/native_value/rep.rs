@@ -12,6 +12,7 @@ pub(crate) enum SemanticKind {
     TypedArrayElement,
     BufferObject,
     PodRecord,
+    PodRecordView,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -39,6 +40,9 @@ pub(crate) enum NativeRep {
     /// BufferHeader.length. The runtime layout is `u32`, so LLVM carries this
     /// as `i32` with unsigned conversion semantics at JS boundaries.
     BufferLen,
+    /// Pointer-free native handle id stored inside POD bytes. LLVM carries it
+    /// as `i64`; unlike NativeHandle this is not a raw pointer contract.
+    HandleId,
     /// Raw native handle/pointer-sized integer. Region-local unless boxed by a
     /// dedicated boundary transition.
     NativeHandle,
@@ -56,6 +60,14 @@ pub(crate) enum NativeRep {
         size: u32,
         alignment: u32,
     },
+    /// Region-local view over native-arena-backed packed POD records. The
+    /// pointer value is the first record byte; the paired ABI slot carries the
+    /// record count.
+    PodRecordView {
+        layout_id: String,
+        stride: u32,
+        alignment: u32,
+    },
 }
 
 impl NativeRep {
@@ -71,10 +83,12 @@ impl NativeRep {
             Self::F32 => "f32",
             Self::U8 => "u8",
             Self::BufferLen => "buffer_len",
+            Self::HandleId => "handle_id",
             Self::NativeHandle => "native_handle",
             Self::PromiseBoundary => "promise_boundary",
             Self::BufferView(_) => "buffer_view",
             Self::PodRecord { .. } => "pod_record",
+            Self::PodRecordView { .. } => "pod_record_view",
         }
     }
 }
@@ -89,6 +103,7 @@ pub(crate) enum ExpectedNativeRep {
     F64,
     F32,
     BufferLen,
+    HandleId,
     NativeHandle,
     PromiseBoundary,
 }
@@ -152,6 +167,10 @@ impl LoweredValue {
         Self::new(SemanticKind::JsNumber, NativeRep::BufferLen, I32, value)
     }
 
+    pub(crate) fn handle_id(value: impl Into<String>) -> Self {
+        Self::new(SemanticKind::JsNumber, NativeRep::HandleId, I64, value)
+    }
+
     pub(crate) fn js_value(value: impl Into<String>) -> Self {
         Self::new(SemanticKind::JsValue, NativeRep::JsValue, DOUBLE, value)
     }
@@ -210,6 +229,7 @@ impl LoweredValue {
                 | (ExpectedNativeRep::F64, NativeRep::F64)
                 | (ExpectedNativeRep::F32, NativeRep::F32)
                 | (ExpectedNativeRep::BufferLen, NativeRep::BufferLen)
+                | (ExpectedNativeRep::HandleId, NativeRep::HandleId)
                 | (ExpectedNativeRep::NativeHandle, NativeRep::NativeHandle)
                 | (
                     ExpectedNativeRep::PromiseBoundary,

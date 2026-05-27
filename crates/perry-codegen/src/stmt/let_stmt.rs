@@ -906,6 +906,25 @@ pub(crate) fn lower_let(
                 }
             }
             ctx.block().store(DOUBLE, &v, &slot);
+            if !mutable {
+                if let perry_hir::Expr::NativePodView { count, .. } = init_expr {
+                    let layout = crate::native_value::layout_for_pod_view_type(ctx, &refined_ty)
+                        .map_err(|reason| {
+                            anyhow::anyhow!(
+                                "__perry_native_pod_view requires PerryPodView<T> where T resolves to PerryPod<...>: {}",
+                                reason
+                            )
+                        })?;
+                    ctx.pod_views.insert(
+                        id,
+                        crate::native_value::PodViewLocal {
+                            layout,
+                            view_slot: slot.clone(),
+                            count_source: pod_view_count_source(ctx, count),
+                        },
+                    );
+                }
+            }
             v
         } else {
             String::new() // unused below; cleanup blocks check used_i32_init
@@ -967,6 +986,21 @@ pub(crate) fn lower_let(
         ctx.block().store(DOUBLE, &lit, &slot);
     }
     Ok(())
+}
+
+fn pod_view_count_source(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> String {
+    match expr {
+        perry_hir::Expr::Integer(n) => format!("constant:{n}"),
+        perry_hir::Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => {
+            format!("constant:{}", *n as i64)
+        }
+        perry_hir::Expr::LocalGet(id) => ctx
+            .local_id_to_name
+            .get(id)
+            .map(|name| format!("local:{name}"))
+            .unwrap_or_else(|| format!("local_id:{id}")),
+        _ => "dynamic".to_string(),
+    }
 }
 
 fn native_i32_alias_source(expr: &perry_hir::Expr) -> Option<u32> {

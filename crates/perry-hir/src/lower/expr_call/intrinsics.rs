@@ -337,6 +337,19 @@ pub(super) fn try_native_arena_intrinsics(
         return Ok(None);
     };
     let name = ident.sym.as_ref();
+    if name == "__perry_native_pod_view" {
+        if call.args.len() != 3 || call.args.iter().any(|arg| arg.spread.is_some()) {
+            crate::lower_bail!(
+                call.span,
+                "__perry_native_pod_view(owner, byteOffset, count) expects exactly three arguments"
+            );
+        }
+        return Ok(Some(Expr::NativePodView {
+            owner: Box::new(lower_expr(ctx, &call.args[0].expr)?),
+            byte_offset: Box::new(lower_expr(ctx, &call.args[1].expr)?),
+            count: Box::new(lower_expr(ctx, &call.args[2].expr)?),
+        }));
+    }
     if !name.starts_with("__perry_native_arena_") {
         return Ok(None);
     }

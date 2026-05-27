@@ -38,10 +38,26 @@ pub struct NativeTypedViewHeader {
     pub _pad2: u32,
 }
 
+#[repr(C)]
+pub struct NativePodViewHeader {
+    pub owner: *mut NativeArenaOwnerHeader,
+    pub data: *mut u8,
+    pub byte_offset: u64,
+    pub byte_length: u64,
+    pub record_count: u64,
+    pub stride: u32,
+    pub alignment: u32,
+    pub layout_id: u64,
+    pub generation: u32,
+    pub _pad: u32,
+}
+
 thread_local! {
     static OWNER_REGISTRY: RefCell<crate::fast_hash::PtrHashSet<usize>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_set());
     static VIEW_REGISTRY: RefCell<crate::fast_hash::PtrHashSet<usize>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_set());
+    static POD_VIEW_REGISTRY: RefCell<crate::fast_hash::PtrHashSet<usize>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_set());
 }
 
@@ -105,6 +121,18 @@ fn unregister_view(view: *mut NativeTypedViewHeader) {
     typedarray::unregister_typed_array(view as *const TypedArrayHeader);
 }
 
+fn register_pod_view(view: *mut NativePodViewHeader) {
+    POD_VIEW_REGISTRY.with(|r| {
+        r.borrow_mut().insert(view as usize);
+    });
+}
+
+fn unregister_pod_view(view: *mut NativePodViewHeader) {
+    POD_VIEW_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&(view as usize));
+    });
+}
+
 #[inline]
 fn owner_is_registered(owner: *const NativeArenaOwnerHeader) -> bool {
     OWNER_REGISTRY.with(|r| r.borrow().contains(&(owner as usize)))
@@ -113,6 +141,11 @@ fn owner_is_registered(owner: *const NativeArenaOwnerHeader) -> bool {
 #[inline]
 pub(crate) fn is_native_typed_view(ta: *const TypedArrayHeader) -> bool {
     VIEW_REGISTRY.with(|r| r.borrow().contains(&(ta as usize)))
+}
+
+#[inline]
+pub(crate) fn is_native_pod_view(view: *const NativePodViewHeader) -> bool {
+    POD_VIEW_REGISTRY.with(|r| r.borrow().contains(&(view as usize)))
 }
 
 #[inline]
@@ -154,6 +187,17 @@ pub(crate) unsafe fn validate_owner_alive(owner: *mut NativeArenaOwnerHeader) {
 pub(crate) unsafe fn validate_view_alive(view: *const NativeTypedViewHeader) {
     if view.is_null() || !is_native_typed_view(view as *const TypedArrayHeader) {
         return;
+    }
+    let owner = (*view).owner;
+    validate_owner_alive(owner);
+    if (*view).generation != (*owner).generation {
+        throw_native_arena_disposed();
+    }
+}
+
+pub(crate) unsafe fn validate_pod_view_alive(view: *const NativePodViewHeader) {
+    if view.is_null() || !is_native_pod_view(view) {
+        throw_type_error(b"Invalid NativePodView");
     }
     let owner = (*view).owner;
     validate_owner_alive(owner);
@@ -278,6 +322,100 @@ pub extern "C" fn js_native_arena_view(
 }
 
 #[no_mangle]
+pub extern "C" fn js_native_pod_view(
+    owner_raw: u64,
+    byte_offset: i64,
+    record_count: i64,
+    stride: i64,
+    alignment: i64,
+    layout_id: i64,
+) -> *mut NativePodViewHeader {
+    if byte_offset < 0 || record_count < 0 || stride <= 0 || alignment <= 0 || layout_id == 0 {
+        throw_range_error(b"NativePodView is out of bounds");
+    }
+    let byte_offset = byte_offset as u64;
+    let record_count = record_count as u64;
+    let stride = stride as u64;
+    let alignment = alignment as u64;
+    if !alignment.is_power_of_two() || byte_offset % alignment != 0 || stride % alignment != 0 {
+        throw_range_error(b"NativePodView byteOffset or stride is unaligned");
+    }
+    let byte_length = record_count
+        .checked_mul(stride)
+        .unwrap_or_else(|| throw_range_error(b"NativePodView is out of bounds"));
+    let owner = unsafe { clean_owner_ptr(owner_raw) };
+    unsafe {
+        validate_owner_alive(owner);
+        let end = byte_offset
+            .checked_add(byte_length)
+            .unwrap_or_else(|| throw_range_error(b"NativePodView is out of bounds"));
+        if end > (*owner).byte_length {
+            throw_range_error(b"NativePodView is out of bounds");
+        }
+        let view = crate::gc::gc_malloc(
+            std::mem::size_of::<NativePodViewHeader>(),
+            crate::gc::GC_TYPE_NATIVE_POD_VIEW,
+        ) as *mut NativePodViewHeader;
+        (*view).owner = owner;
+        (*view).data = if byte_length == 0 {
+            (*owner).data
+        } else {
+            (*owner).data.add(byte_offset as usize)
+        };
+        (*view).byte_offset = byte_offset;
+        (*view).byte_length = byte_length;
+        (*view).record_count = record_count;
+        (*view).stride = stride as u32;
+        (*view).alignment = alignment as u32;
+        (*view).layout_id = layout_id as u64;
+        (*view).generation = (*owner).generation;
+        (*view)._pad = 0;
+        register_pod_view(view);
+        view
+    }
+}
+
+fn strict_pod_view_from_value(value: f64, expected_layout_id: u64) -> *const NativePodViewHeader {
+    let bits = value.to_bits();
+    let raw_ptr = if crate::value::JSValue::from_bits(bits).is_pointer() {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
+        bits as usize
+    } else {
+        0
+    };
+    if raw_ptr == 0 {
+        throw_type_error(b"Expected NativePodView for native pod+count parameter");
+    }
+    let view = raw_ptr as *const NativePodViewHeader;
+    unsafe {
+        validate_pod_view_alive(view);
+        if (*view).layout_id != expected_layout_id {
+            throw_type_error(b"NativePodView layout does not match manifest pod+count parameter");
+        }
+    }
+    view
+}
+
+#[no_mangle]
+pub extern "C" fn js_native_abi_check_pod_view_data_ptr(
+    value: f64,
+    expected_layout_id: i64,
+) -> *const u8 {
+    let view = strict_pod_view_from_value(value, expected_layout_id as u64);
+    unsafe { (*view).data as *const u8 }
+}
+
+#[no_mangle]
+pub extern "C" fn js_native_abi_check_pod_view_record_count(
+    value: f64,
+    expected_layout_id: i64,
+) -> usize {
+    let view = strict_pod_view_from_value(value, expected_layout_id as u64);
+    unsafe { (*view).record_count as usize }
+}
+
+#[no_mangle]
 pub extern "C" fn js_native_arena_dispose(owner_raw: u64) {
     let owner = unsafe { clean_owner_ptr(owner_raw) };
     if owner.is_null() {
@@ -295,6 +433,10 @@ pub(crate) unsafe fn finalize_native_arena_owner_for_gc(owner: *mut NativeArenaO
 
 pub(crate) unsafe fn finalize_native_typed_view_for_gc(view: *mut NativeTypedViewHeader) {
     unregister_view(view);
+}
+
+pub(crate) unsafe fn finalize_native_pod_view_for_gc(view: *mut NativePodViewHeader) {
+    unregister_pod_view(view);
 }
 
 #[cfg(test)]
@@ -364,6 +506,68 @@ mod tests {
         }
         unsafe {
             finalize_native_typed_view_for_gc(view);
+            finalize_native_arena_owner_for_gc(owner);
+        }
+    }
+
+    #[test]
+    fn native_pod_view_validates_bounds_alignment_layout_and_dispose() {
+        let owner = js_native_arena_alloc(64);
+        let view = js_native_pod_view(owner as u64, 8, 3, 8, 8, 0x1234);
+        unsafe {
+            assert_eq!((*view).owner, owner);
+            assert_eq!((*view).data, (*owner).data.add(8));
+            assert_eq!((*view).byte_offset, 8);
+            assert_eq!((*view).byte_length, 24);
+            assert_eq!((*view).record_count, 3);
+            assert_eq!((*view).stride, 8);
+            assert_eq!((*view).alignment, 8);
+            assert_eq!((*view).layout_id, 0x1234);
+        }
+        let boxed = boxed_ptr(view as *const u8);
+        assert_eq!(
+            js_native_abi_check_pod_view_data_ptr(boxed, 0x1234),
+            unsafe { (*owner).data.add(8) as *const u8 }
+        );
+        assert_eq!(js_native_abi_check_pod_view_record_count(boxed, 0x1234), 3);
+
+        assert!(catch_runtime_throw(|| {
+            let _ = js_native_abi_check_pod_view_data_ptr(boxed, 0x5678);
+        }));
+        assert!(catch_runtime_throw(|| {
+            let _ = js_native_pod_view(owner as u64, 4, 1, 8, 8, 0x1234);
+        }));
+        assert!(catch_runtime_throw(|| {
+            let _ = js_native_pod_view(owner as u64, 48, 3, 8, 8, 0x1234);
+        }));
+        assert!(catch_runtime_throw(|| {
+            let _ = js_native_pod_view(owner as u64, 0, i64::MAX, 8, 8, 0x1234);
+        }));
+
+        js_native_arena_dispose(owner as u64);
+        assert!(catch_runtime_throw(|| {
+            let _ = js_native_abi_check_pod_view_record_count(boxed, 0x1234);
+        }));
+        assert!(catch_runtime_throw(|| {
+            let _ = js_native_pod_view(owner as u64, 0, 1, 8, 8, 0x1234);
+        }));
+    }
+
+    #[test]
+    fn native_pod_view_roots_owner_without_scanning_backing_bytes() {
+        let owner = js_native_arena_alloc(32);
+        let view = js_native_pod_view(owner as u64, 0, 4, 8, 8, 0x1234);
+        unsafe {
+            assert_eq!((*view).owner, owner);
+            assert_eq!((*view).generation, (*owner).generation);
+        }
+        assert_eq!(
+            crate::gc::test_gc_rewrite_slot_count(view as usize),
+            Some(1),
+            "NativePodView must expose only its owner slot to the GC"
+        );
+        unsafe {
+            finalize_native_pod_view_for_gc(view);
             finalize_native_arena_owner_for_gc(owner);
         }
     }

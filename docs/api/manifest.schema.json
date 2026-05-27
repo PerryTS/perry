@@ -65,7 +65,7 @@
       }
     },
     "abiParamDescriptor": {
-      "description": "Native ABI descriptor for one TypeScript argument. `buffer+len` consumes one JS argument and lowers to two native slots; `pod` consumes one JS object-shaped argument and lowers through a verifier-backed C-layout record pointer.",
+      "description": "Native ABI descriptor for one TypeScript argument. `buffer+len` consumes one JS argument and lowers to two native slots; `pod` consumes one JS object-shaped argument and lowers through a verifier-backed C-layout record pointer; `pod+count` consumes one JS POD view and lowers to `(ptr, usize record_count)`.",
       "anyOf": [
         { "$ref": "#/$defs/abiParamString" },
         { "$ref": "#/$defs/abiStructuredParam" }
@@ -194,7 +194,7 @@
         "type": "object",
         "required": ["kind"],
         "properties": {
-          "kind": { "enum": ["buffer+len", "pod"] }
+          "kind": { "enum": ["buffer+len", "pod", "pod+count"] }
         }
       }
     },
@@ -204,6 +204,7 @@
         { "$ref": "#/$defs/abiPromiseDescriptor" },
         { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
         { "$ref": "#/$defs/abiPodDescriptor" },
+        { "$ref": "#/$defs/abiPodAndCountDescriptor" },
         { "$ref": "#/$defs/abiScalarDescriptor" }
       ]
     },
@@ -336,6 +337,26 @@
         }
       }
     },
+    "abiPodAndCountDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "pod+count" },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Optional record name used in diagnostics and proof artifacts."
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/abiPodFieldDescriptor" },
+          "description": "Ordered C-layout record fields. The JS argument supplies a packed record view and Perry lowers it to data pointer plus record count."
+        }
+      }
+    },
     "abiPodFieldDescriptor": {
       "type": "object",
       "additionalProperties": false,
@@ -379,28 +400,37 @@
         "f32",
         "f64",
         "number",
-        "buffer_len"
+        "buffer_len",
+        "handle_id"
       ]
     },
     "abiPodFieldStructuredScalar": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind"],
-      "properties": {
-        "kind": {
-          "enum": [
-            "i32",
-            "i64",
-            "u32",
-            "u64",
-            "usize",
-            "f32",
-            "f64",
-            "number",
-            "buffer_len"
-          ]
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "enum": [
+                "i32",
+                "i64",
+                "u32",
+                "u64",
+                "usize",
+                "f32",
+                "f64",
+                "number",
+                "buffer_len",
+                "handle_id"
+              ]
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/abiPodDescriptor"
         }
-      }
+      ]
     },
     "abiScalarDescriptor": {
       "type": "object",

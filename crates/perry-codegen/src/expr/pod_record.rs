@@ -420,7 +420,9 @@ fn coerce_js_double_to_native(
         NativeRep::I32 => ctx.block().fptosi(DOUBLE, value_js, I32),
         NativeRep::I64 => ctx.block().fptosi(DOUBLE, value_js, I64),
         NativeRep::U32 | NativeRep::BufferLen => ctx.block().toint32(value_js),
-        NativeRep::U64 | NativeRep::USize => ctx.block().fptoui(DOUBLE, value_js, I64),
+        NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => {
+            ctx.block().fptoui(DOUBLE, value_js, I64)
+        }
         NativeRep::F64 => value_js.to_string(),
         NativeRep::F32 => ctx.block().fptrunc(DOUBLE, value_js, F32),
         _ => value_js.to_string(),
@@ -459,6 +461,7 @@ fn pod_scalar_guard_rep_id(rep: &NativeRep) -> i32 {
         NativeRep::F64 => 6,
         NativeRep::F32 => 7,
         NativeRep::BufferLen => 8,
+        NativeRep::HandleId => 9,
         _ => 0,
     }
 }

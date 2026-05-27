@@ -355,7 +355,7 @@ fn parse_native_library_functions(
                 &name,
                 "returns",
                 &returns.to_string(),
-                "buffer+len and pod are parameter-only native ABI descriptors",
+                "buffer+len, pod, and pod+count are parameter-only native ABI descriptors",
             ));
         }
         parsed.push(NativeFunctionDecl {
@@ -587,6 +587,13 @@ fn parse_native_abi_descriptor(
         "pod" => {
             parse_native_pod_descriptor(package_json, function_index, function_name, slot, value)
         }
+        "pod+count" => {
+            parse_native_pod_descriptor(package_json, function_index, function_name, slot, value)
+                .map(|descriptor| match descriptor {
+                    NativeAbiType::Pod(pod) => NativeAbiType::PodAndCount(pod),
+                    other => other,
+                })
+        }
         "buffer+len" => Ok(NativeAbiType::BufferAndLen),
         _ => NativeAbiType::parse_str(kind).map_err(|err| {
             invalid_native_abi_error(
@@ -762,7 +769,7 @@ fn parse_native_pod_descriptor(
                 function_name,
                 &format!("{slot}.fields[{field_index}].type"),
                 &ty.to_string(),
-                "pod field type must be one of i32, i64, u32, u64, usize, f32, f64, number, or buffer_len",
+                "pod field type must be one of i32, i64, u32, u64, usize, f32, f64, number, buffer_len, handle_id, or nested pod",
             ));
         }
         fields.push(NativePodFieldAbi {

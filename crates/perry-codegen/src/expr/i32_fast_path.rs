@@ -348,6 +348,7 @@ pub(crate) fn lower_expr_native(
         ExpectedNativeRep::F64 => lower_expr_native_f64(ctx, e),
         ExpectedNativeRep::F32 => lower_expr_native_f32(ctx, e),
         ExpectedNativeRep::BufferLen => lower_expr_native_buffer_len(ctx, e),
+        ExpectedNativeRep::HandleId => lower_expr_native_handle_id(ctx, e),
         ExpectedNativeRep::NativeHandle => lower_expr_native_handle(ctx, e),
         ExpectedNativeRep::PromiseBoundary => lower_expr_native_promise_boundary(ctx, e),
     }
@@ -389,6 +390,10 @@ fn f32_lowered(value: String) -> LoweredValue {
 
 fn buffer_len_lowered(value: String) -> LoweredValue {
     LoweredValue::buffer_len(value)
+}
+
+fn handle_id_lowered(value: String) -> LoweredValue {
+    LoweredValue::handle_id(value)
 }
 
 fn native_expr_kind(e: &Expr) -> &'static str {
@@ -683,6 +688,24 @@ fn lower_expr_native_buffer_len(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Lowered
         native_expr_kind(e),
         None,
         "lower_expr_native_buffer_len",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
+fn lower_expr_native_handle_id(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let value = lower_expr_native_u64(ctx, e)?.value;
+    let lowered = handle_id_lowered(value);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_handle_id",
         &lowered,
         None,
         None,

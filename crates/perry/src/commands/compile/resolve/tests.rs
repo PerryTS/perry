@@ -131,6 +131,24 @@ mod manifest_parse_tests {
                                 { "name": "count", "type": "buffer_len" }
                             ]
                         },
+                        {
+                            "kind": "pod+count",
+                            "name": "PacketBatch",
+                            "fields": [
+                                { "name": "tag", "type": "u32" },
+                                { "name": "owner", "type": "handle_id" },
+                                {
+                                    "name": "meta",
+                                    "abi": {
+                                        "kind": "pod",
+                                        "name": "PacketMeta",
+                                        "fields": [
+                                            { "name": "seq", "type": "u64" }
+                                        ]
+                                    }
+                                }
+                            ]
+                        },
                         { "kind": "buffer+len" }
                     ],
                     "returns": { "kind": "promise", "result": "f64" }
@@ -170,6 +188,7 @@ mod manifest_parse_tests {
                 "handle<SharedThing>",
                 "promise<jsvalue>",
                 "pod<Packet>",
+                "pod+count<PacketBatch>",
                 "buffer+len",
             ]
         );
@@ -183,6 +202,15 @@ mod manifest_parse_tests {
                 assert_eq!(handle.debug_name, "SharedThingHandle");
             }
             other => panic!("expected handle descriptor, got {other:?}"),
+        }
+        match &function.params[20] {
+            NativeAbiType::PodAndCount(pod) => {
+                assert_eq!(pod.name.as_deref(), Some("PacketBatch"));
+                assert_eq!(pod.fields.len(), 3);
+                assert!(matches!(pod.fields[1].ty, NativeAbiType::HandleId));
+                assert!(matches!(pod.fields[2].ty, NativeAbiType::Pod(_)));
+            }
+            other => panic!("expected pod+count descriptor, got {other:?}"),
         }
         assert_eq!(function.returns.to_string(), "promise<f64>");
         assert!(matches!(parsed.functions[1].returns, NativeAbiType::Void));
@@ -265,6 +293,36 @@ mod manifest_parse_tests {
     }
 
     #[test]
+    fn native_abi_pod_and_count_return_is_rejected() {
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_pod_view_return",
+            "params": [],
+            "returns": {
+                "kind": "pod+count",
+                "name": "PacketBatch",
+                "fields": [{ "name": "tag", "type": "u32" }]
+            }
+        }));
+        assert!(err.contains("package.json"), "{err}");
+        assert!(err.contains("bad_pod_view_return"), "{err}");
+        assert!(err.contains("returns"), "{err}");
+        assert!(err.contains("pod+count"), "{err}");
+    }
+
+    #[test]
+    fn native_abi_handle_id_is_valid_only_inside_pod_fields() {
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_handle_id_param",
+            "params": ["handle_id"],
+            "returns": "void"
+        }));
+        assert!(err.contains("package.json"), "{err}");
+        assert!(err.contains("bad_handle_id_param"), "{err}");
+        assert!(err.contains("params[0]"), "{err}");
+        assert!(err.contains("handle_id"), "{err}");
+    }
+
+    #[test]
     fn native_abi_manifest_pod_empty_fields_are_rejected() {
         let err = parse_manifest_error(serde_json::json!({
             "name": "bad_pod",
@@ -274,6 +332,26 @@ mod manifest_parse_tests {
         assert!(err.contains("package.json"), "{err}");
         assert!(err.contains("bad_pod"), "{err}");
         assert!(err.contains("fields"), "{err}");
+    }
+
+    #[test]
+    fn native_abi_manifest_nested_pod_empty_fields_are_rejected() {
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_nested_pod",
+            "params": [{
+                "kind": "pod+count",
+                "name": "PacketBatch",
+                "fields": [{
+                    "name": "meta",
+                    "abi": { "kind": "pod", "name": "Meta", "fields": [] }
+                }]
+            }],
+            "returns": "void"
+        }));
+        assert!(err.contains("package.json"), "{err}");
+        assert!(err.contains("bad_nested_pod"), "{err}");
+        assert!(err.contains("params[0].fields[0].type"), "{err}");
+        assert!(err.contains("at least one field"), "{err}");
     }
 
     #[test]

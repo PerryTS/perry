@@ -1237,6 +1237,10 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             let view = user_ptr as *mut crate::native_arena::NativeTypedViewHeader;
             visit(fixed_slot(&mut (*view).owner as *mut _ as *mut u64));
         }
+        GcRewriteDescriptorKind::NativePodView => {
+            let view = user_ptr as *mut crate::native_arena::NativePodViewHeader;
+            visit(fixed_slot(&mut (*view).owner as *mut _ as *mut u64));
+        }
         GcRewriteDescriptorKind::Leaf => {}
     }
 }
@@ -1258,6 +1262,24 @@ pub(crate) fn test_layout_pointer_slot_count(user_ptr: usize, slot_count: usize)
     } else {
         None
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_gc_rewrite_slot_count(user_ptr: usize) -> Option<usize> {
+    if user_ptr < GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header = unsafe { header_from_user_ptr(user_ptr as *const u8) };
+    let mut count = 0usize;
+    unsafe {
+        visit_gc_rewrite_slot_descriptors(header, |descriptor| {
+            let mut visit_slot = |_| {
+                count += 1;
+            };
+            descriptor.visit_slots(&mut visit_slot);
+        });
+    }
+    Some(count)
 }
 
 #[inline(always)]

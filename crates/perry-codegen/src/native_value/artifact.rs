@@ -103,7 +103,40 @@ pub(crate) struct NativeHandleContractRecord {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct NativePodFieldContractRecord {
     pub name: String,
+    pub path: Vec<String>,
     pub ty: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct PodRecordViewManifest {
+    pub layout_id: String,
+    pub stride: u32,
+    pub alignment: u32,
+    pub count_source: String,
+    pub pointer_free_backing: bool,
+    pub endian: String,
+    pub packing: String,
+}
+
+fn push_pod_field_contracts(
+    out: &mut Vec<NativePodFieldContractRecord>,
+    prefix: &mut Vec<String>,
+    fields: &[perry_api_manifest::NativePodFieldAbi],
+) {
+    for field in fields {
+        prefix.push(field.name.clone());
+        match &field.ty {
+            perry_api_manifest::NativeAbiType::Pod(pod) => {
+                push_pod_field_contracts(out, prefix, &pod.fields);
+            }
+            ty => out.push(NativePodFieldContractRecord {
+                name: prefix.join("."),
+                path: prefix.clone(),
+                ty: ty.canonical_kind().to_string(),
+            }),
+        }
+        prefix.pop();
+    }
 }
 
 impl NativeAbiTypeRecord {
@@ -146,13 +179,10 @@ impl NativeAbiTypeRecord {
             pod_fields: descriptor
                 .pod_abi()
                 .map(|pod| {
-                    pod.fields
-                        .iter()
-                        .map(|field| NativePodFieldContractRecord {
-                            name: field.name.clone(),
-                            ty: field.ty.to_string(),
-                        })
-                        .collect()
+                    let mut fields = Vec::new();
+                    let mut prefix = Vec::new();
+                    push_pod_field_contracts(&mut fields, &mut prefix, &pod.fields);
+                    fields
                 })
                 .unwrap_or_default(),
         }
@@ -181,6 +211,7 @@ pub(crate) struct PodLayoutPadding {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct PodLayoutField {
     pub name: String,
+    pub path: Vec<String>,
     pub native_rep: NativeRep,
     pub native_rep_name: String,
     pub offset: u32,
@@ -232,6 +263,7 @@ pub(crate) struct NativeRepRecord {
     pub scalar_conversion: Option<ScalarConversionRecord>,
     pub native_abi_type: Option<NativeAbiTypeRecord>,
     pub pod_layout: Option<PodLayoutManifest>,
+    pub pod_record_view: Option<PodRecordViewManifest>,
     pub consumed_facts: Vec<NativeFactUse>,
     pub rejected_facts: Vec<NativeFactUse>,
     pub emitted_inbounds: bool,
@@ -265,6 +297,7 @@ struct NativeRepSummary {
     native_owned_view_count: usize,
     pod_layout_count: usize,
     pod_record_count: usize,
+    pod_record_view_count: usize,
     pod_materialization_count: usize,
 }
 
@@ -288,6 +321,7 @@ impl NativeRepSummary {
         let mut native_owned_view_count = 0;
         let mut pod_layout_count = 0;
         let mut pod_record_count = 0;
+        let mut pod_record_view_count = 0;
         let mut pod_materialization_count = 0;
         for record in records {
             *native_rep_counts
@@ -304,6 +338,11 @@ impl NativeRepSummary {
             }
             if matches!(record.native_rep, NativeRep::PodRecord { .. }) {
                 pod_record_count += 1;
+            }
+            if matches!(record.native_rep, NativeRep::PodRecordView { .. })
+                || record.pod_record_view.is_some()
+            {
+                pod_record_view_count += 1;
             }
             if matches!(
                 record.materialization_reason,
@@ -389,6 +428,7 @@ impl NativeRepSummary {
             native_owned_view_count,
             pod_layout_count,
             pod_record_count,
+            pod_record_view_count,
             pod_materialization_count,
         }
     }

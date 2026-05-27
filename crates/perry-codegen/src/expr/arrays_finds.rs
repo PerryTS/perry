@@ -22,7 +22,8 @@ use crate::lower_string_method::{
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
-    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
+    layout_runtime_id, BoundsState, BufferAccessMode, LoweredValue, MaterializationReason,
+    NativeRep, PodLayoutManifest, SemanticKind,
 };
 #[allow(unused_imports)]
 use crate::type_analysis::{
@@ -102,6 +103,38 @@ pub(crate) fn lower_uint8array_get_i32(
         Vec::new(),
     );
     Ok(slow)
+}
+
+pub(crate) fn lower_native_pod_view_with_layout(
+    ctx: &mut FnCtx<'_>,
+    owner: &Expr,
+    byte_offset: &Expr,
+    count: &Expr,
+    layout: &PodLayoutManifest,
+) -> Result<String> {
+    let owner_value = lower_expr(ctx, owner)?;
+    let byte_offset = lower_expr(ctx, byte_offset)?;
+    let count = lower_expr(ctx, count)?;
+    let blk = ctx.block();
+    let owner_handle = unbox_to_i64(blk, &owner_value);
+    let byte_offset_i64 = blk.fptosi(DOUBLE, &byte_offset, I64);
+    let count_i64 = blk.fptosi(DOUBLE, &count, I64);
+    let stride_i64 = layout.size.to_string();
+    let alignment_i64 = layout.alignment.to_string();
+    let layout_id = (layout_runtime_id(&layout.layout_id) as i64).to_string();
+    let view = blk.call(
+        I64,
+        "js_native_pod_view",
+        &[
+            (I64, &owner_handle),
+            (I64, &byte_offset_i64),
+            (I64, &count_i64),
+            (I64, &stride_i64),
+            (I64, &alignment_i64),
+            (I64, &layout_id),
+        ],
+    );
+    Ok(nanbox_pointer_inline(blk, &view))
 }
 
 pub(crate) fn lower_buffer_index_get_i32(
@@ -842,6 +875,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(nanbox_pointer_inline(blk, &view))
         }
+
+        Expr::NativePodView { .. } => Err(anyhow!(
+            "__perry_native_pod_view requires an explicit PerryPodView<T> type annotation"
+        )),
 
         Expr::NativeArenaDispose(owner) => {
             let owner_value = lower_expr(ctx, owner)?;

@@ -294,7 +294,8 @@ impl SH for Expr {
             Expr::TypedArrayNew { kind, arg } => { tag(h, 235); kind.hash(h); arg.hash(h); }
             Expr::NativeArenaAlloc(e) => { tag(h, 11237); e.as_ref().hash(h); }
             Expr::NativeArenaView { owner, kind, byte_offset, length } => { tag(h, 11238); owner.as_ref().hash(h); kind.hash(h); byte_offset.as_ref().hash(h); length.as_ref().hash(h); }
-            Expr::NativeArenaDispose(e) => { tag(h, 11239); e.as_ref().hash(h); }
+            Expr::NativePodView { owner, byte_offset, count } => { tag(h, 11241); owner.as_ref().hash(h); byte_offset.as_ref().hash(h); count.as_ref().hash(h); }
+            Expr::NativeArenaDispose(e) => { tag(h, 11242); e.as_ref().hash(h); }
             Expr::ChildProcessExecSync { command, options } => { tag(h, 236); command.as_ref().hash(h); options.hash(h); }
             Expr::ChildProcessSpawnSync { command, args, options, } => { tag(h, 237); command.as_ref().hash(h); args.hash(h); options.hash(h); }
             Expr::ChildProcessSpawn { command, args, options, } => { tag(h, 238); command.as_ref().hash(h); args.hash(h); options.hash(h); }

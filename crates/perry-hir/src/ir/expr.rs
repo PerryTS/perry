@@ -1060,6 +1060,13 @@ pub enum Expr {
         byte_offset: Box<Expr>,
         length: Box<Expr>,
     },
+    /// Hidden Perry intrinsic:
+    /// `__perry_native_pod_view(owner, byteOffset, count)`.
+    NativePodView {
+        owner: Box<Expr>,
+        byte_offset: Box<Expr>,
+        count: Box<Expr>,
+    },
     /// Hidden Perry intrinsic: `__perry_native_arena_dispose(owner)`.
     NativeArenaDispose(Box<Expr>),
 

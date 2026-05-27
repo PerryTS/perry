@@ -36,7 +36,7 @@ fn transition_lossy(rep: &NativeRep, op: &NativeAbiTransitionOp) -> bool {
     match op {
         NativeAbiTransitionOp::SignedIntToFloat => matches!(rep, NativeRep::I64),
         NativeAbiTransitionOp::UnsignedIntToFloat => {
-            matches!(rep, NativeRep::U64 | NativeRep::USize)
+            matches!(rep, NativeRep::U64 | NativeRep::USize | NativeRep::HandleId)
         }
         NativeAbiTransitionOp::None
         | NativeAbiTransitionOp::FloatExtend
@@ -183,11 +183,13 @@ pub(crate) fn materialize_js_value(
         | NativeRep::U32
         | NativeRep::U64
         | NativeRep::USize
+        | NativeRep::HandleId
         | NativeRep::BufferLen => NativeAbiTransitionOp::UnsignedIntToFloat,
         NativeRep::F32 => NativeAbiTransitionOp::FloatExtend,
         NativeRep::F64 => NativeAbiTransitionOp::None,
         NativeRep::BufferView(_)
         | NativeRep::PodRecord { .. }
+        | NativeRep::PodRecordView { .. }
         | NativeRep::JsValue
         | NativeRep::NativeHandle
         | NativeRep::PromiseBoundary => NativeAbiTransitionOp::None,
@@ -201,11 +203,14 @@ pub(crate) fn materialize_js_value(
             ctx.block().uitofp(I32, &widened, DOUBLE)
         }
         NativeRep::U32 => ctx.block().uitofp(I32, &lowered.value, DOUBLE),
-        NativeRep::U64 | NativeRep::USize => ctx.block().uitofp(I64, &lowered.value, DOUBLE),
+        NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => {
+            ctx.block().uitofp(I64, &lowered.value, DOUBLE)
+        }
         NativeRep::BufferLen => ctx.block().uitofp(I32, &lowered.value, DOUBLE),
         NativeRep::F32 => ctx.block().fpext(F32, &lowered.value, DOUBLE),
         NativeRep::BufferView(_) => lowered.value.clone(),
         NativeRep::PodRecord { .. } => lowered.value.clone(),
+        NativeRep::PodRecordView { .. } => lowered.value.clone(),
         NativeRep::JsValue
         | NativeRep::F64
         | NativeRep::NativeHandle

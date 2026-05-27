@@ -15,6 +15,13 @@ pub(crate) struct PodLocal {
     pub materialized_slot: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PodViewLocal {
+    pub layout: PodLayoutManifest,
+    pub view_slot: String,
+    pub count_source: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PodLayoutDecision {
     NotPod,
@@ -46,6 +53,36 @@ pub(crate) fn layout_decision_for_type(ctx: &FnCtx<'_>, ty: &Type) -> PodLayoutD
             }
         }
         _ => PodLayoutDecision::NotPod,
+    }
+}
+
+pub(crate) fn layout_for_pod_view_type(
+    ctx: &FnCtx<'_>,
+    ty: &Type,
+) -> Result<PodLayoutManifest, String> {
+    match ty {
+        Type::Generic { base, type_args } if base == "PerryPodView" => {
+            if type_args.len() != 1 {
+                return Err("pod_view_marker_requires_one_type_arg".to_string());
+            }
+            match layout_decision_for_type(ctx, &type_args[0]) {
+                PodLayoutDecision::Layout(layout) => Ok(layout),
+                PodLayoutDecision::Rejected(reason) => {
+                    Err(format!("pod_view_type_arg_rejected:{reason}"))
+                }
+                PodLayoutDecision::NotPod => {
+                    Err("pod_view_type_arg_must_resolve_to_perry_pod".to_string())
+                }
+            }
+        }
+        Type::Named(name) => {
+            if let Some(alias) = ctx.type_aliases.get(name) {
+                layout_for_pod_view_type(ctx, alias)
+            } else {
+                Err("pod_view_requires_explicit_perry_pod_view_annotation".to_string())
+            }
+        }
+        _ => Err("pod_view_requires_explicit_perry_pod_view_annotation".to_string()),
     }
 }
 
@@ -150,7 +187,7 @@ fn pod_init_value_roundtrips_exact(rep: &NativeRep, value: &Expr) -> bool {
             literal_i64(value).is_some_and(|n| u32::try_from(n).is_ok())
                 || literal_f64(value).is_some_and(|n| uint_roundtrips_exact(n, 4_294_967_296.0))
         }
-        NativeRep::U64 | NativeRep::USize => {
+        NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => {
             literal_i64(value).is_some_and(|n| {
                 if n < 0 {
                     return false;
@@ -210,7 +247,7 @@ pub(crate) fn llvm_type_for_native_rep(rep: &NativeRep) -> Option<&'static str> 
     Some(match rep {
         NativeRep::JsValue | NativeRep::F64 => DOUBLE,
         NativeRep::F32 => F32,
-        NativeRep::I64 | NativeRep::U64 | NativeRep::USize => I64,
+        NativeRep::I64 | NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => I64,
         NativeRep::I32 | NativeRep::U32 | NativeRep::BufferLen => I32,
         _ => return None,
     })
@@ -226,6 +263,7 @@ pub(crate) fn expected_rep_for_native_rep(rep: &NativeRep) -> Option<ExpectedNat
         NativeRep::F64 => ExpectedNativeRep::F64,
         NativeRep::F32 => ExpectedNativeRep::F32,
         NativeRep::BufferLen => ExpectedNativeRep::BufferLen,
+        NativeRep::HandleId => ExpectedNativeRep::HandleId,
         _ => return None,
     })
 }
@@ -240,11 +278,23 @@ pub(crate) fn native_rep_for_pod_abi_type(ty: &NativeAbiType) -> Option<NativeRe
         NativeAbiType::F32 => NativeRep::F32,
         NativeAbiType::F64 => NativeRep::F64,
         NativeAbiType::BufferLen => NativeRep::BufferLen,
+        NativeAbiType::HandleId => NativeRep::HandleId,
         _ => return None,
     })
 }
 
 pub(crate) fn layout_for_manifest_pod(pod: &NativePodAbi) -> Result<PodLayoutManifest, String> {
+    layout_for_manifest_pod_with_prefix(pod, Vec::new(), 0)
+}
+
+fn layout_for_manifest_pod_with_prefix(
+    pod: &NativePodAbi,
+    prefix: Vec<String>,
+    depth: u8,
+) -> Result<PodLayoutManifest, String> {
+    if depth > 8 {
+        return Err("pod_descriptor_nesting_depth_limit".to_string());
+    }
     if pod.fields.is_empty() {
         return Err("pod_descriptor_empty_fields".to_string());
     }
@@ -253,59 +303,165 @@ pub(crate) fn layout_for_manifest_pod(pod: &NativePodAbi) -> Result<PodLayoutMan
         if field.name.trim().is_empty() {
             return Err("pod_descriptor_empty_field_name".to_string());
         }
-        let rep = native_rep_for_pod_abi_type(&field.ty)
-            .ok_or_else(|| format!("unsupported_pod_field_type:{}", field.ty))?;
-        specs.push((field.name.clone(), rep));
+        let mut path = prefix.clone();
+        path.push(field.name.clone());
+        match &field.ty {
+            NativeAbiType::Pod(nested) => {
+                let layout = layout_for_manifest_pod_with_prefix(nested, Vec::new(), depth + 1)
+                    .map_err(|reason| format!("field:{}:{}", field.name, reason))?;
+                specs.push(PodFieldSpec::Nested {
+                    name: field.name.clone(),
+                    path: {
+                        let mut p = prefix.clone();
+                        p.push(field.name.clone());
+                        p
+                    },
+                    layout,
+                });
+            }
+            ty => {
+                let rep = native_rep_for_pod_abi_type(ty)
+                    .ok_or_else(|| format!("unsupported_pod_field_type:{}", ty))?;
+                specs.push(PodFieldSpec::Scalar {
+                    name: path.join("."),
+                    path,
+                    rep,
+                });
+            }
+        }
     }
-    let layout_id = compute_layout_id(&specs);
-    recompute_layout_from_fields(layout_id, &specs)
+    compute_layout_from_specs(&specs)
 }
 
 pub(crate) fn scalar_size_align(rep: &NativeRep) -> Option<(u32, u32)> {
     Some(match rep {
         NativeRep::I32 | NativeRep::U32 | NativeRep::F32 | NativeRep::BufferLen => (4, 4),
-        NativeRep::I64 | NativeRep::U64 | NativeRep::USize | NativeRep::F64 => (8, 8),
+        NativeRep::I64
+        | NativeRep::U64
+        | NativeRep::USize
+        | NativeRep::F64
+        | NativeRep::HandleId => (8, 8),
         _ => return None,
     })
+}
+
+#[derive(Debug, Clone)]
+enum PodFieldSpec {
+    Scalar {
+        name: String,
+        path: Vec<String>,
+        rep: NativeRep,
+    },
+    Nested {
+        name: String,
+        path: Vec<String>,
+        layout: PodLayoutManifest,
+    },
 }
 
 pub(crate) fn recompute_layout_from_fields(
     layout_id: String,
     field_specs: &[(String, NativeRep)],
 ) -> Result<PodLayoutManifest, String> {
+    let specs: Vec<PodFieldSpec> = field_specs
+        .iter()
+        .map(|(name, rep)| PodFieldSpec::Scalar {
+            name: name.clone(),
+            path: vec![name.clone()],
+            rep: rep.clone(),
+        })
+        .collect();
+    let mut layout = compute_layout_from_specs(&specs)?;
+    layout.layout_id = layout_id;
+    Ok(layout)
+}
+
+fn compute_layout_from_specs(field_specs: &[PodFieldSpec]) -> Result<PodLayoutManifest, String> {
     let mut fields = Vec::with_capacity(field_specs.len());
     let mut padding = Vec::new();
     let mut offset = 0u32;
     let mut max_align = 1u32;
-    let has_f32 = field_specs
-        .iter()
-        .any(|(_, rep)| matches!(rep, NativeRep::F32));
+    let mut has_f32 = false;
 
-    for (name, rep) in field_specs {
-        let (size, alignment) = scalar_size_align(rep)
-            .ok_or_else(|| format!("unsupported_field_rep:{}", rep.name()))?;
-        max_align = max_align.max(alignment);
-        let aligned = align_to(offset, alignment);
-        let padding_before = aligned - offset;
-        if padding_before != 0 {
-            padding.push(PodLayoutPadding {
-                offset,
-                size: padding_before,
-                reason: format!("align_field:{}", name),
-            });
+    for spec in field_specs {
+        match spec {
+            PodFieldSpec::Scalar { name, path, rep } => {
+                has_f32 |= matches!(rep, NativeRep::F32);
+                let (size, alignment) = scalar_size_align(rep)
+                    .ok_or_else(|| format!("unsupported_field_rep:{}", rep.name()))?;
+                max_align = max_align.max(alignment);
+                let aligned = align_to(offset, alignment);
+                let padding_before = aligned - offset;
+                if padding_before != 0 {
+                    padding.push(PodLayoutPadding {
+                        offset,
+                        size: padding_before,
+                        reason: format!("align_field:{}", name),
+                    });
+                }
+                fields.push(PodLayoutField {
+                    name: name.clone(),
+                    path: path.clone(),
+                    native_rep: rep.clone(),
+                    native_rep_name: rep.name().to_string(),
+                    offset: aligned,
+                    size,
+                    alignment,
+                    padding_before,
+                });
+                offset = aligned
+                    .checked_add(size)
+                    .ok_or_else(|| "pod_layout_size_overflow".to_string())?;
+            }
+            PodFieldSpec::Nested { name, path, layout } => {
+                has_f32 |= layout
+                    .fields
+                    .iter()
+                    .any(|field| matches!(field.native_rep, NativeRep::F32));
+                max_align = max_align.max(layout.alignment);
+                let aligned = align_to(offset, layout.alignment);
+                let padding_before = aligned - offset;
+                if padding_before != 0 {
+                    padding.push(PodLayoutPadding {
+                        offset,
+                        size: padding_before,
+                        reason: format!("align_field:{}", name),
+                    });
+                }
+                for nested_padding in &layout.padding {
+                    padding.push(PodLayoutPadding {
+                        offset: aligned
+                            .checked_add(nested_padding.offset)
+                            .ok_or_else(|| "pod_layout_size_overflow".to_string())?,
+                        size: nested_padding.size,
+                        reason: format!("nested:{}:{}", name, nested_padding.reason),
+                    });
+                }
+                for nested in &layout.fields {
+                    let mut nested_path = path.clone();
+                    if nested.path.is_empty() {
+                        nested_path.push(nested.name.clone());
+                    } else {
+                        nested_path.extend(nested.path.clone());
+                    }
+                    fields.push(PodLayoutField {
+                        name: nested_path.join("."),
+                        path: nested_path,
+                        native_rep: nested.native_rep.clone(),
+                        native_rep_name: nested.native_rep_name.clone(),
+                        offset: aligned
+                            .checked_add(nested.offset)
+                            .ok_or_else(|| "pod_layout_size_overflow".to_string())?,
+                        size: nested.size,
+                        alignment: nested.alignment,
+                        padding_before: nested.padding_before,
+                    });
+                }
+                offset = aligned
+                    .checked_add(layout.size)
+                    .ok_or_else(|| "pod_layout_size_overflow".to_string())?;
+            }
         }
-        fields.push(PodLayoutField {
-            name: name.clone(),
-            native_rep: rep.clone(),
-            native_rep_name: rep.name().to_string(),
-            offset: aligned,
-            size,
-            alignment,
-            padding_before,
-        });
-        offset = aligned
-            .checked_add(size)
-            .ok_or_else(|| "pod_layout_size_overflow".to_string())?;
     }
 
     let final_size = align_to(offset, max_align);
@@ -326,8 +482,8 @@ pub(crate) fn recompute_layout_from_fields(
         materialization_hazards.push("f32_fields_widen_to_js_f64_on_materialization".to_string());
     }
 
-    Ok(PodLayoutManifest {
-        layout_id,
+    let mut layout = PodLayoutManifest {
+        layout_id: String::new(),
         size: final_size,
         alignment: max_align,
         endian: "native".to_string(),
@@ -338,10 +494,12 @@ pub(crate) fn recompute_layout_from_fields(
         pointer_mask: Vec::new(),
         materialization_hazards,
         explicit_pointer_metadata: false,
-    })
+    };
+    layout.layout_id = compute_layout_id_from_layout(&layout);
+    Ok(layout)
 }
 
-pub(crate) fn compute_layout_id(field_specs: &[(String, NativeRep)]) -> String {
+fn compute_layout_id_from_layout(layout: &PodLayoutManifest) -> String {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     fn mix(h: &mut u64, bytes: &[u8]) {
         for b in bytes {
@@ -349,14 +507,27 @@ pub(crate) fn compute_layout_id(field_specs: &[(String, NativeRep)]) -> String {
             *h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
     }
-    mix(&mut h, b"perry_pod_v1\0");
-    for (name, rep) in field_specs {
-        mix(&mut h, name.as_bytes());
+    mix(&mut h, b"perry_pod_v2\0");
+    mix(&mut h, &layout.size.to_le_bytes());
+    mix(&mut h, &layout.alignment.to_le_bytes());
+    for field in &layout.fields {
+        mix(&mut h, field.name.as_bytes());
         mix(&mut h, b":");
-        mix(&mut h, rep.name().as_bytes());
+        mix(&mut h, field.native_rep.name().as_bytes());
+        mix(&mut h, b"@");
+        mix(&mut h, &field.offset.to_le_bytes());
+        mix(&mut h, b"/");
+        mix(&mut h, &field.size.to_le_bytes());
         mix(&mut h, b";");
     }
     format!("pod_{:016x}", h)
+}
+
+pub(crate) fn layout_runtime_id(layout_id: &str) -> u64 {
+    layout_id
+        .strip_prefix("pod_")
+        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+        .unwrap_or(0)
 }
 
 fn layout_for_inner_type(
@@ -384,12 +555,17 @@ fn layout_for_inner_type(
                     if property.optional {
                         return Err(format!("optional_field:{}", property.name));
                     }
-                    let rep = field_native_rep(ctx, &property.ty, depth + 1)
-                        .map_err(|reason| format!("field:{}:{}", property.name, reason))?;
-                    specs.push((property.name.clone(), rep));
+                    let spec = field_spec_from_type(
+                        ctx,
+                        property.name.clone(),
+                        vec![property.name.clone()],
+                        &property.ty,
+                        depth + 1,
+                    )
+                    .map_err(|reason| format!("field:{}:{}", property.name, reason))?;
+                    specs.push(spec);
                 }
-                let layout_id = compute_layout_id(&specs);
-                return recompute_layout_from_fields(layout_id, &specs);
+                return compute_layout_from_specs(&specs);
             }
             Err(format!("unknown_pod_type:{}", name))
         }
@@ -426,12 +602,55 @@ fn layout_for_object_type(
         if property.optional {
             return Err(format!("optional_field:{}", name));
         }
-        let rep = field_native_rep(ctx, &property.ty, depth + 1)
-            .map_err(|reason| format!("field:{}:{}", name, reason))?;
-        specs.push((name.clone(), rep));
+        let spec = field_spec_from_type(
+            ctx,
+            name.clone(),
+            vec![name.clone()],
+            &property.ty,
+            depth + 1,
+        )
+        .map_err(|reason| format!("field:{}:{}", name, reason))?;
+        specs.push(spec);
     }
-    let layout_id = compute_layout_id(&specs);
-    recompute_layout_from_fields(layout_id, &specs)
+    compute_layout_from_specs(&specs)
+}
+
+fn field_spec_from_type(
+    ctx: &FnCtx<'_>,
+    name: String,
+    path: Vec<String>,
+    ty: &Type,
+    depth: u8,
+) -> Result<PodFieldSpec, String> {
+    if depth > 8 {
+        return Err("type_alias_cycle_or_depth_limit".to_string());
+    }
+    match ty {
+        Type::Generic { base, type_args } if base == "PerryPod" => {
+            if type_args.len() != 1 {
+                return Err("nested_pod_requires_one_type_arg".to_string());
+            }
+            let layout = layout_for_inner_type(ctx, &type_args[0], depth + 1)?;
+            Ok(PodFieldSpec::Nested { name, path, layout })
+        }
+        Type::Named(named) => {
+            if let Some(alias) = ctx.type_aliases.get(named) {
+                if matches!(alias, Type::Generic { base, .. } if base == "PerryPod") {
+                    field_spec_from_type(ctx, name, path, alias, depth + 1)
+                } else {
+                    let rep = field_native_rep(ctx, ty, depth)?;
+                    Ok(PodFieldSpec::Scalar { name, path, rep })
+                }
+            } else {
+                let rep = field_native_rep(ctx, ty, depth)?;
+                Ok(PodFieldSpec::Scalar { name, path, rep })
+            }
+        }
+        _ => {
+            let rep = field_native_rep(ctx, ty, depth)?;
+            Ok(PodFieldSpec::Scalar { name, path, rep })
+        }
+    }
 }
 
 fn field_native_rep(ctx: &FnCtx<'_>, ty: &Type, depth: u8) -> Result<NativeRep, String> {
@@ -448,6 +667,7 @@ fn field_native_rep(ctx: &FnCtx<'_>, ty: &Type, depth: u8) -> Result<NativeRep, 
             "PerryI32" => Ok(NativeRep::I32),
             "PerryI64" => Ok(NativeRep::I64),
             "PerryBufferLen" => Ok(NativeRep::BufferLen),
+            "PerryHandleId" => Ok(NativeRep::HandleId),
             other => {
                 if let Some(alias) = ctx.type_aliases.get(other) {
                     field_native_rep(ctx, alias, depth + 1)

@@ -80,6 +80,39 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
                 )),
             }
         }
+        if let NativeRep::PodRecordView {
+            layout_id,
+            stride,
+            alignment,
+        } = &record.native_rep
+        {
+            if record.materialization_reason.is_some()
+                || record.fallback_reason.is_some()
+                || record.native_value_state != NativeValueState::RegionLocal
+            {
+                errors.push(format!(
+                    "{}:{} {} pod_record_view escaped region-local use",
+                    record.function, record.block_label, record.consumer
+                ));
+            }
+            match record.pod_record_view.as_ref() {
+                Some(view)
+                    if view.layout_id == *layout_id
+                        && view.stride == *stride
+                        && view.alignment == *alignment
+                        && view.pointer_free_backing
+                        && view.endian == "native"
+                        && view.packing == "c" => {}
+                Some(_) => errors.push(format!(
+                    "{}:{} {} pod_record_view manifest does not match native rep",
+                    record.function, record.block_label, record.consumer
+                )),
+                None => errors.push(format!(
+                    "{}:{} {} pod_record_view missing proof manifest",
+                    record.function, record.block_label, record.consumer
+                )),
+            }
+        }
         if let Some(layout) = record.pod_layout.as_ref() {
             validate_pod_layout(layout, record, &mut errors);
         }
@@ -207,6 +240,7 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
         validate_raw_f64_layout_facts(record, &mut errors);
     }
     validate_buffer_span_pairs(records, &mut errors);
+    validate_pod_view_span_pairs(records, &mut errors);
     if !errors.is_empty() {
         bail!(
             "native representation verifier failed: {}",
@@ -378,6 +412,9 @@ fn validate_native_abi_type_record(
             if abi.canonical_kind == "pod" {
                 errors.push(format!("{} pod cannot be a return type", prefix()));
             }
+            if abi.canonical_kind == "pod+count" {
+                errors.push(format!("{} pod+count cannot be a return type", prefix()));
+            }
         }
     }
     if abi.abi_slot_count == 0 && abi.canonical_kind != "void" {
@@ -410,6 +447,23 @@ fn validate_native_abi_type_record(
                     }
                 }
             }
+        }
+    }
+    if abi.canonical_kind == "pod+count" {
+        if abi.abi_slot_count != 2 {
+            errors.push(format!("{} pod+count ABI must use two slots", prefix()));
+        }
+        if abi.pod_fields.is_empty() {
+            errors.push(format!("{} pod+count ABI missing field contract", prefix()));
+        }
+        if record.pod_layout.is_none() {
+            errors.push(format!(
+                "{} pod+count ABI missing verifier layout",
+                prefix()
+            ));
+        }
+        if record.pod_record_view.is_none() {
+            errors.push(format!("{} pod+count ABI missing pod view proof", prefix()));
         }
     }
     if abi.canonical_kind == "handle" {
@@ -490,6 +544,10 @@ fn validate_native_abi_type_record(
             &record.native_rep,
             NativeRep::BufferView(_) | NativeRep::USize | NativeRep::BufferLen
         ),
+        "pod+count" => matches!(
+            &record.native_rep,
+            NativeRep::PodRecordView { .. } | NativeRep::USize
+        ),
         "handle" => matches!(&record.native_rep, NativeRep::NativeHandle),
         "promise" => matches!(&record.native_rep, NativeRep::PromiseBoundary),
         "pod" => matches!(&record.native_rep, NativeRep::PodRecord { .. }),
@@ -540,6 +598,12 @@ fn validate_native_abi_runtime_guard(
                     .notes
                     .iter()
                     .any(|note| note == "source=region_local_pod") => {}
+            None if abi.canonical_kind == "pod+count"
+                && record.pod_record_view.is_some()
+                && record
+                    .notes
+                    .iter()
+                    .any(|note| note == "source=local_pod_view") => {}
             None if abi.canonical_kind != "jsvalue" => {
                 errors.push(format!(
                     "{} native ABI param {} missing runtime guard",
@@ -577,6 +641,13 @@ fn valid_runtime_guard_helper(kind: &str, helper: &str) -> bool {
             matches!(
                 helper,
                 "js_native_abi_check_buffer_data_ptr" | "js_native_abi_check_buffer_byte_len"
+            )
+        }
+        "pod+count" => {
+            matches!(
+                helper,
+                "js_native_abi_check_pod_view_data_ptr"
+                    | "js_native_abi_check_pod_view_record_count"
             )
         }
         "handle" => helper == "js_native_handle_unwrap",
@@ -651,6 +722,70 @@ fn validate_buffer_span_pairs(records: &[NativeRepRecord], errors: &mut Vec<Stri
     }
 }
 
+fn validate_pod_view_span_pairs(records: &[NativeRepRecord], errors: &mut Vec<String>) {
+    for (idx, record) in records.iter().enumerate() {
+        let Some(abi) = record.native_abi_type.as_ref() else {
+            continue;
+        };
+        if abi.direction != NativeAbiDirection::Param || abi.canonical_kind != "pod+count" {
+            continue;
+        }
+        let Some(js_arg) = abi.js_argument_index else {
+            continue;
+        };
+        let Some(guard) = abi.runtime_guard.as_ref() else {
+            continue;
+        };
+        let prefix = || {
+            format!(
+                "{}:{} {}",
+                record.function, record.block_label, record.consumer
+            )
+        };
+        let partner_helper = match guard.helper.as_str() {
+            "js_native_abi_check_pod_view_data_ptr" => "js_native_abi_check_pod_view_record_count",
+            "js_native_abi_check_pod_view_record_count" => "js_native_abi_check_pod_view_data_ptr",
+            _ => continue,
+        };
+        let expected_partner_slot = if guard.helper == "js_native_abi_check_pod_view_data_ptr" {
+            abi.abi_slot_index + 1
+        } else if abi.abi_slot_index == 0 {
+            errors.push(format!(
+                "{} pod+count record_count slot has no preceding data slot",
+                prefix()
+            ));
+            continue;
+        } else {
+            abi.abi_slot_index - 1
+        };
+        let found_partner = records.iter().enumerate().any(|(other_idx, other)| {
+            if other_idx == idx {
+                return false;
+            }
+            let Some(other_abi) = other.native_abi_type.as_ref() else {
+                return false;
+            };
+            other.function == record.function
+                && other.block_label == record.block_label
+                && other_abi.direction == NativeAbiDirection::Param
+                && other_abi.canonical_kind == "pod+count"
+                && other_abi.js_argument_index == Some(js_arg)
+                && other_abi.abi_slot_index == expected_partner_slot
+                && other_abi.abi_slot_count == 2
+                && other_abi
+                    .runtime_guard
+                    .as_ref()
+                    .is_some_and(|other_guard| other_guard.helper == partner_helper)
+        });
+        if !found_partner {
+            errors.push(format!(
+                "{} pod+count ABI slot is not paired with its record-view partner",
+                prefix()
+            ));
+        }
+    }
+}
+
 fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
     Some(match rep {
         NativeRep::JsValue | NativeRep::F64 => DOUBLE,
@@ -658,6 +793,7 @@ fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
         NativeRep::I64
         | NativeRep::U64
         | NativeRep::USize
+        | NativeRep::HandleId
         | NativeRep::NativeHandle
         | NativeRep::PromiseBoundary => I64,
         NativeRep::I32 | NativeRep::U32 => I32,
@@ -665,6 +801,7 @@ fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
         NativeRep::U8 => I8,
         NativeRep::BufferView(_) => PTR,
         NativeRep::PodRecord { .. } => PTR,
+        NativeRep::PodRecordView { .. } => PTR,
     })
 }
 
@@ -685,59 +822,84 @@ fn validate_pod_layout(
     if layout.packing != "c" {
         errors.push(format!("{} pod layout has non-c packing", prefix()));
     }
-    let specs: Vec<(String, NativeRep)> = layout
-        .fields
-        .iter()
-        .map(|field| (field.name.clone(), field.native_rep.clone()))
-        .collect();
-    let recomputed = match recompute_layout_from_fields(layout.layout_id.clone(), &specs) {
-        Ok(layout) => layout,
-        Err(reason) => {
-            errors.push(format!(
-                "{} pod layout recompute failed: {}",
-                prefix(),
-                reason
-            ));
-            return;
+    let has_nested_paths = layout.fields.iter().any(|field| field.path.len() > 1);
+    let recomputed = if has_nested_paths {
+        None
+    } else {
+        let specs: Vec<(String, NativeRep)> = layout
+            .fields
+            .iter()
+            .map(|field| (field.name.clone(), field.native_rep.clone()))
+            .collect();
+        match recompute_layout_from_fields(layout.layout_id.clone(), &specs) {
+            Ok(layout) => Some(layout),
+            Err(reason) => {
+                errors.push(format!(
+                    "{} pod layout recompute failed: {}",
+                    prefix(),
+                    reason
+                ));
+                return;
+            }
         }
     };
-    if layout.size != recomputed.size || layout.alignment != recomputed.alignment {
-        errors.push(format!(
-            "{} pod layout size/alignment mismatch recorded=({},{}) recomputed=({},{})",
-            prefix(),
-            layout.size,
-            layout.alignment,
-            recomputed.size,
-            recomputed.alignment
-        ));
-    }
-    if layout.tail_padding != recomputed.tail_padding {
-        errors.push(format!(
-            "{} pod layout tail padding mismatch recorded={} recomputed={}",
-            prefix(),
-            layout.tail_padding,
-            recomputed.tail_padding
-        ));
-    }
-    if layout.padding != recomputed.padding {
-        errors.push(format!("{} pod layout padding mismatch", prefix()));
-    }
-    if layout.fields.len() != recomputed.fields.len() {
-        errors.push(format!("{} pod layout field count mismatch", prefix()));
-        return;
+    if let Some(recomputed) = recomputed.as_ref() {
+        if layout.size != recomputed.size || layout.alignment != recomputed.alignment {
+            errors.push(format!(
+                "{} pod layout size/alignment mismatch recorded=({},{}) recomputed=({},{})",
+                prefix(),
+                layout.size,
+                layout.alignment,
+                recomputed.size,
+                recomputed.alignment
+            ));
+        }
+        if layout.tail_padding != recomputed.tail_padding {
+            errors.push(format!(
+                "{} pod layout tail padding mismatch recorded={} recomputed={}",
+                prefix(),
+                layout.tail_padding,
+                recomputed.tail_padding
+            ));
+        }
+        if layout.padding != recomputed.padding {
+            errors.push(format!("{} pod layout padding mismatch", prefix()));
+        }
+        if layout.fields.len() != recomputed.fields.len() {
+            errors.push(format!("{} pod layout field count mismatch", prefix()));
+            return;
+        }
     }
     let mut ranges = Vec::with_capacity(layout.fields.len());
-    for (field, expected) in layout.fields.iter().zip(recomputed.fields.iter()) {
-        if field.name != expected.name
-            || field.native_rep != expected.native_rep
-            || field.native_rep_name != field.native_rep.name()
-            || field.offset != expected.offset
-            || field.size != expected.size
-            || field.alignment != expected.alignment
-            || field.padding_before != expected.padding_before
-        {
+    for (idx, field) in layout.fields.iter().enumerate() {
+        if field.path.is_empty() || field.name != field.path.join(".") {
             errors.push(format!(
-                "{} pod field layout mismatch for {}",
+                "{} pod field {} has invalid path",
+                prefix(),
+                field.name
+            ));
+        }
+        if let Some(expected) = recomputed
+            .as_ref()
+            .and_then(|layout| layout.fields.get(idx))
+        {
+            if field.name != expected.name
+                || field.native_rep != expected.native_rep
+                || field.native_rep_name != field.native_rep.name()
+                || field.offset != expected.offset
+                || field.size != expected.size
+                || field.alignment != expected.alignment
+                || field.padding_before != expected.padding_before
+            {
+                errors.push(format!(
+                    "{} pod field layout mismatch for {}",
+                    prefix(),
+                    field.name
+                ));
+            }
+        } else if field.native_rep_name != field.native_rep.name() {
+            errors.push(format!(
+                "{} pod field {} native rep name mismatch",
                 prefix(),
                 field.name
             ));
@@ -801,8 +963,10 @@ fn valid_native_abi_transition(
             matches!(from, "i32" | "i64") && lossy == (from == "i64")
         }
         NativeAbiTransitionOp::UnsignedIntToFloat => {
-            matches!(from, "u8" | "u32" | "u64" | "usize" | "buffer_len")
-                && lossy == matches!(from, "u64" | "usize")
+            matches!(
+                from,
+                "u8" | "u32" | "u64" | "usize" | "buffer_len" | "handle_id"
+            ) && lossy == matches!(from, "u64" | "usize" | "handle_id")
         }
         NativeAbiTransitionOp::FloatExtend => from == "f32" && !lossy,
         NativeAbiTransitionOp::PointerBox => from == "native_handle" && !lossy,
@@ -856,6 +1020,7 @@ mod tests {
             scalar_conversion: None,
             native_abi_type: None,
             pod_layout: None,
+            pod_record_view: None,
             consumed_facts: Vec::new(),
             rejected_facts: Vec::new(),
             emitted_inbounds: false,
@@ -899,6 +1064,30 @@ mod tests {
         r.llvm_ty = PTR;
         r.llvm_value = "%pod".to_string();
         r.pod_layout = Some(layout);
+        r
+    }
+
+    fn pod_record_view(layout: crate::native_value::PodLayoutManifest) -> NativeRepRecord {
+        let mut r = record();
+        r.semantic = SemanticKind::PodRecordView;
+        r.native_rep = NativeRep::PodRecordView {
+            layout_id: layout.layout_id.clone(),
+            stride: layout.size,
+            alignment: layout.alignment,
+        };
+        r.native_rep_name = "pod_record_view".to_string();
+        r.llvm_ty = PTR;
+        r.llvm_value = "%data".to_string();
+        r.pod_layout = Some(layout.clone());
+        r.pod_record_view = Some(crate::native_value::PodRecordViewManifest {
+            layout_id: layout.layout_id.clone(),
+            stride: layout.size,
+            alignment: layout.alignment,
+            count_source: "constant:4".to_string(),
+            pointer_free_backing: true,
+            endian: "native".to_string(),
+            packing: "c".to_string(),
+        });
         r
     }
 
@@ -950,6 +1139,38 @@ mod tests {
             ],
         });
         NativeAbiTypeRecord::new(&descriptor, direction, js_argument_index, abi_slot_index)
+    }
+
+    fn pod_count_abi_type(
+        direction: NativeAbiDirection,
+        js_argument_index: Option<usize>,
+        abi_slot_index: usize,
+        helper: &str,
+    ) -> NativeAbiTypeRecord {
+        let descriptor =
+            perry_api_manifest::NativeAbiType::PodAndCount(perry_api_manifest::NativePodAbi {
+                name: Some("PacketBatch".to_string()),
+                fields: vec![
+                    perry_api_manifest::NativePodFieldAbi {
+                        name: "tag".to_string(),
+                        ty: perry_api_manifest::NativeAbiType::U32,
+                    },
+                    perry_api_manifest::NativePodFieldAbi {
+                        name: "gain".to_string(),
+                        ty: perry_api_manifest::NativeAbiType::F32,
+                    },
+                    perry_api_manifest::NativePodFieldAbi {
+                        name: "total".to_string(),
+                        ty: perry_api_manifest::NativeAbiType::F64,
+                    },
+                    perry_api_manifest::NativePodFieldAbi {
+                        name: "count".to_string(),
+                        ty: perry_api_manifest::NativeAbiType::BufferLen,
+                    },
+                ],
+            });
+        NativeAbiTypeRecord::new(&descriptor, direction, js_argument_index, abi_slot_index)
+            .with_runtime_guard(helper, "test_requirement")
     }
 
     #[test]
@@ -1351,6 +1572,68 @@ mod tests {
         ));
 
         assert!(verify_native_rep_records(&[ptr_record, len_record]).is_ok());
+    }
+
+    #[test]
+    fn rejects_unpaired_pod_count_span_descriptor() {
+        let layout = pod_layout();
+        let mut r = pod_record_view(layout);
+        r.native_abi_type = Some(pod_count_abi_type(
+            NativeAbiDirection::Param,
+            Some(0),
+            0,
+            "js_native_abi_check_pod_view_data_ptr",
+        ));
+        assert!(verify_native_rep_records(&[r]).is_err());
+    }
+
+    #[test]
+    fn accepts_paired_pod_count_span_descriptor() {
+        let layout = pod_layout();
+        let mut data_record = pod_record_view(layout.clone());
+        data_record.native_abi_type = Some(pod_count_abi_type(
+            NativeAbiDirection::Param,
+            Some(0),
+            0,
+            "js_native_abi_check_pod_view_data_ptr",
+        ));
+
+        let mut count_record = record();
+        count_record.native_rep = NativeRep::USize;
+        count_record.native_rep_name = "usize".to_string();
+        count_record.llvm_ty = I64;
+        count_record.llvm_value = "%count".to_string();
+        count_record.pod_layout = Some(layout.clone());
+        count_record.pod_record_view = Some(crate::native_value::PodRecordViewManifest {
+            layout_id: layout.layout_id.clone(),
+            stride: layout.size,
+            alignment: layout.alignment,
+            count_source: "constant:4".to_string(),
+            pointer_free_backing: true,
+            endian: "native".to_string(),
+            packing: "c".to_string(),
+        });
+        count_record.native_abi_type = Some(pod_count_abi_type(
+            NativeAbiDirection::Param,
+            Some(0),
+            1,
+            "js_native_abi_check_pod_view_record_count",
+        ));
+
+        assert!(verify_native_rep_records(&[data_record, count_record]).is_ok());
+    }
+
+    #[test]
+    fn rejects_pod_count_return_descriptor() {
+        let layout = pod_layout();
+        let mut r = pod_record_view(layout);
+        r.native_abi_type = Some(pod_count_abi_type(
+            NativeAbiDirection::Return,
+            None,
+            0,
+            "js_native_abi_check_pod_view_data_ptr",
+        ));
+        assert!(verify_native_rep_records(&[r]).is_err());
     }
 
     #[test]

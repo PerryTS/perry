@@ -230,6 +230,7 @@ pub(super) fn compile_function(
         app_metadata: &cross_module.app_metadata,
         scalar_replaced: std::collections::HashMap::new(),
         pod_records: std::collections::HashMap::new(),
+        pod_views: std::collections::HashMap::new(),
         scalar_replaced_arrays: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news: native_facts.non_escaping_news().clone(),

@@ -27,7 +27,7 @@ use crate::native_value::{
     BufferElem, BufferIndexUnit, BufferViewRep, BufferViewSlot, ExpectedNativeRep,
     GuardedBufferIndex, LengthSource, LoweredValue, MaterializationReason, NativeAbiTypeRecord,
     NativeFactUse, NativeOwnedViewFact, NativeRep, NativeRepRecord, NativeValueState,
-    PodLayoutManifest, ScalarConversionRecord, SemanticKind,
+    PodLayoutManifest, PodRecordViewManifest, ScalarConversionRecord, SemanticKind,
 };
 use crate::strings::StringPool;
 use crate::type_analysis::{
@@ -679,6 +679,11 @@ pub(crate) struct FnCtx<'a> {
     /// materialized object, initialized to undefined until a dynamic escape.
     pub pod_records: std::collections::HashMap<u32, crate::native_value::PodLocal>,
 
+    /// Native-arena-backed packed POD record views. The ordinary JS slot holds
+    /// the small GC-visible wrapper; native-call lowering consumes this map to
+    /// emit the paired `(data_ptr, record_count)` ABI slots.
+    pub pod_views: std::collections::HashMap<u32, crate::native_value::PodViewLocal>,
+
     /// Stack for tracking which local is the target of a scalar-replaced
     /// constructor being inlined. Pushed when entering a scalar-replaced
     /// ctor body, popped on exit. PropertySet on `this` inside the ctor
@@ -1191,6 +1196,8 @@ impl<'a> FnCtx<'a> {
             materialization_reason,
             None,
             None,
+            Vec::new(),
+            Vec::new(),
             Some(native_abi_type),
             false,
             false,
@@ -1200,6 +1207,44 @@ impl<'a> FnCtx<'a> {
             if let Some(record) = self.native_rep_records.last_mut() {
                 record.pod_layout = Some(layout);
             }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_lowered_value_with_native_abi_and_pod_view(
+        &mut self,
+        expr_kind: impl Into<String>,
+        local_id: Option<u32>,
+        consumer: impl Into<String>,
+        lowered: &LoweredValue,
+        native_abi_type: NativeAbiTypeRecord,
+        pod_layout: Option<PodLayoutManifest>,
+        pod_record_view: PodRecordViewManifest,
+        access_mode: Option<BufferAccessMode>,
+        materialization_reason: Option<MaterializationReason>,
+        notes: Vec<String>,
+    ) {
+        self.record_lowered_value_full(
+            expr_kind,
+            local_id,
+            consumer,
+            lowered,
+            None,
+            None,
+            access_mode,
+            materialization_reason,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Some(native_abi_type),
+            false,
+            false,
+            notes,
+        );
+        if let Some(record) = self.native_rep_records.last_mut() {
+            record.pod_layout = pod_layout;
+            record.pod_record_view = Some(pod_record_view);
         }
     }
 
@@ -1279,6 +1324,7 @@ impl<'a> FnCtx<'a> {
             scalar_conversion,
             native_abi_type,
             pod_layout: None,
+            pod_record_view: None,
             consumed_facts,
             rejected_facts,
             emitted_inbounds,
@@ -1497,6 +1543,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::TypedArrayNew { .. }
         | Expr::NativeArenaAlloc(..)
         | Expr::NativeArenaView { .. }
+        | Expr::NativePodView { .. }
         | Expr::NativeArenaDispose(..)
         | Expr::ArrayUnshift { .. }
         | Expr::ArrayEntries(..)

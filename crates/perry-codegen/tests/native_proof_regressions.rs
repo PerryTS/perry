@@ -255,6 +255,13 @@ fn pod_type(fields: &[(&str, Type)]) -> Type {
     }
 }
 
+fn pod_view_type(record_ty: Type) -> Type {
+    Type::Generic {
+        base: "PerryPodView".to_string(),
+        type_args: vec![record_ty],
+    }
+}
+
 fn manifest_pod_abi(
     name: Option<&str>,
     fields: Vec<(&str, perry_api_manifest::NativeAbiType)>,
@@ -269,6 +276,18 @@ fn manifest_pod_abi(
             })
             .collect(),
     })
+}
+
+fn manifest_pod_view_abi(
+    name: Option<&str>,
+    fields: Vec<(&str, perry_api_manifest::NativeAbiType)>,
+) -> perry_api_manifest::NativeAbiType {
+    match manifest_pod_abi(name, fields) {
+        perry_api_manifest::NativeAbiType::Pod(pod) => {
+            perry_api_manifest::NativeAbiType::PodAndCount(pod)
+        }
+        other => unreachable!("manifest_pod_abi must return pod, got {other:?}"),
+    }
 }
 
 fn pod_let(id: u32, name: &str, ty: Type, fields: Vec<(&str, Expr)>) -> Stmt {
@@ -330,6 +349,27 @@ fn native_arena_owner_let(id: u32, name: &str, byte_length: Expr, mutable: bool)
         ty: Type::Any,
         mutable,
         init: Some(Expr::NativeArenaAlloc(Box::new(byte_length))),
+    }
+}
+
+fn native_pod_view_let(
+    id: u32,
+    name: &str,
+    ty: Type,
+    owner_id: u32,
+    byte_offset: Expr,
+    count: Expr,
+) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty,
+        mutable: false,
+        init: Some(Expr::NativePodView {
+            owner: Box::new(local(owner_id)),
+            byte_offset: Box::new(byte_offset),
+            count: Box::new(count),
+        }),
     }
 }
 
@@ -1219,122 +1259,8 @@ fn native_library_manifest_lowercase_abi_params_emit_c_abi_signature() {
     }
 }
 
-#[test]
-fn native_library_manifest_pod_param_lowers_region_local_record_to_ptr() {
-    let packet_ty = pod_type(&[
-        ("tag", Type::Named("PerryU32".to_string())),
-        ("gain", Type::Named("PerryF32".to_string())),
-        ("total", Type::Number),
-        ("count", Type::Named("PerryBufferLen".to_string())),
-    ]);
-    let packet_abi = manifest_pod_abi(
-        Some("Packet"),
-        vec![
-            ("tag", perry_api_manifest::NativeAbiType::U32),
-            ("gain", perry_api_manifest::NativeAbiType::F32),
-            ("total", perry_api_manifest::NativeAbiType::F64),
-            ("count", perry_api_manifest::NativeAbiType::BufferLen),
-        ],
-    );
-    let opts = native_library_opts_typed(vec![(
-        "native_use_packet",
-        vec![packet_abi],
-        perry_api_manifest::NativeAbiType::Void,
-    )]);
-    let module = module(
-        "native_library_pod_param.ts",
-        vec![
-            pod_let(
-                1,
-                "packet",
-                packet_ty,
-                vec![
-                    ("tag", int(7)),
-                    ("gain", number(1.5)),
-                    ("total", number(2.25)),
-                    ("count", int(4)),
-                ],
-            ),
-            Stmt::Expr(extern_call("native_use_packet", vec![local(1)], Type::Void)),
-            Stmt::Return(Some(int(0))),
-        ],
-    );
-
-    let ir = String::from_utf8(compile_module(&module, opts.clone()).unwrap()).unwrap();
-    assert!(ir.contains("declare void @native_use_packet(ptr)"), "{ir}");
-    assert!(ir.contains("call void @native_use_packet(ptr"), "{ir}");
-    assert!(
-        ir.contains("call i64 @js_native_abi_check_pod_object"),
-        "materialized POD fallback must validate object shape:\n{ir}"
-    );
-
-    let artifact = compile_artifact_json_for_module_with_opts(module, opts);
-    let records = artifact["records"].as_array().unwrap();
-    assert!(
-        records.iter().any(|record| {
-            record["expr_kind"] == "NativeLibraryParam"
-                && record["consumer"] == "native_library.param.pod"
-                && record["native_rep_name"] == "pod_record"
-                && record["native_abi_type"]["canonical_kind"] == "pod"
-                && record["native_abi_type"]["display"] == "pod<Packet>"
-                && record["native_abi_type"]["runtime_guard"].is_null()
-                && !record["pod_layout"].is_null()
-                && record["notes"].as_array().is_some_and(|notes| {
-                    notes
-                        .iter()
-                        .any(|note| note.as_str() == Some("source=region_local_pod"))
-                })
-        }),
-        "expected raw POD native-library param record:\n{artifact:#}"
-    );
-    assert!(
-        records.iter().any(|record| {
-            record["consumer"] == "native_library.param.pod_materialized_object"
-                && record["native_value_state"] == "dynamic_fallback"
-                && record["materialization_reason"] == "pod_materialization"
-        }),
-        "expected materialized-object POD fallback proof:\n{artifact:#}"
-    );
-}
-
-#[test]
-fn native_library_manifest_pod_param_rejects_layout_mismatch() {
-    let packet_ty = pod_type(&[
-        ("tag", Type::Named("PerryU32".to_string())),
-        ("gain", Type::Named("PerryF32".to_string())),
-    ]);
-    let mismatched_abi = manifest_pod_abi(
-        Some("OtherPacket"),
-        vec![
-            ("tag", perry_api_manifest::NativeAbiType::U32),
-            ("gain", perry_api_manifest::NativeAbiType::F64),
-        ],
-    );
-    let opts = native_library_opts_typed(vec![(
-        "native_use_packet",
-        vec![mismatched_abi],
-        perry_api_manifest::NativeAbiType::Void,
-    )]);
-    let module = module(
-        "native_library_pod_mismatch.ts",
-        vec![
-            pod_let(
-                1,
-                "packet",
-                packet_ty,
-                vec![("tag", int(7)), ("gain", number(1.5))],
-            ),
-            Stmt::Expr(extern_call("native_use_packet", vec![local(1)], Type::Void)),
-            Stmt::Return(Some(int(0))),
-        ],
-    );
-
-    let err = compile_module(&module, opts).expect_err("POD layout mismatch must reject");
-    let err = format!("{err:?}");
-    assert!(err.contains("native ABI pod parameter"), "{err}");
-    assert!(err.contains("expected layout"), "{err}");
-    assert!(err.contains("local 1"), "{err}");
-}
+#[path = "native_proof_regressions/pod_manifest.rs"]
+mod pod_manifest;
 
 #[test]
 fn native_library_handle_runtime_lowering_records_contracts() {

@@ -892,6 +892,7 @@ pub(crate) fn extract_ts_type_with_ctx(
                     | "PerryI32"
                     | "PerryI64"
                     | "PerryBufferLen"
+                    | "PerryHandleId"
             ) {
                 return Type::Named(name);
             }

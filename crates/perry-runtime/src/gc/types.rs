@@ -37,7 +37,8 @@ pub const GC_TYPE_SET: u8 = 12;
 pub const GC_TYPE_NATIVE_ARENA_OWNER: u8 = 13;
 pub const GC_TYPE_NATIVE_TYPED_VIEW: u8 = 14;
 pub const GC_TYPE_NATIVE_HANDLE: u8 = 15;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_NATIVE_HANDLE;
+pub const GC_TYPE_NATIVE_POD_VIEW: u8 = 16;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_NATIVE_POD_VIEW;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -71,6 +72,7 @@ pub(crate) enum GcRewriteDescriptorKind {
     LazyArray,
     Set,
     NativeTypedView,
+    NativePodView,
 }
 
 #[allow(dead_code)]
@@ -125,6 +127,7 @@ pub(crate) enum GcFinalizeHookKind {
     NativeArenaOwner,
     NativeTypedView,
     NativeHandle,
+    NativePodView,
 }
 
 #[allow(dead_code)]
@@ -404,6 +407,21 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::None,
         GcFinalizeHookKind::NativeHandle,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_NATIVE_POD_VIEW,
+        "native_pod_view",
+        GcAllocationPolicy::Malloc,
+        false,
+        GcRewriteDescriptorKind::NativePodView,
+        GcLayoutSlotKind::None,
+        false,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::MallocTracked,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::NativePodView,
+    )),
 ];
 
 #[inline]
@@ -520,6 +538,11 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
                 user_ptr as *mut crate::native_handle::NativeHandleHeader,
             );
         }
+        GcFinalizeHookKind::NativePodView => {
+            crate::native_arena::finalize_native_pod_view_for_gc(
+                user_ptr as *mut crate::native_arena::NativePodViewHeader,
+            );
+        }
     }
 }
 
@@ -571,9 +594,9 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
                 );
             }
         }
-        GcRewriteDescriptorKind::NativeTypedView => {
+        GcRewriteDescriptorKind::NativeTypedView | GcRewriteDescriptorKind::NativePodView => {
             if info.layout_slot_kind != GcLayoutSlotKind::None {
-                return Err("native typed view rewrite descriptor must use fixed slots only");
+                return Err("native view rewrite descriptor must use fixed slots only");
             }
         }
         GcRewriteDescriptorKind::Leaf => unreachable!("leaf handled above"),

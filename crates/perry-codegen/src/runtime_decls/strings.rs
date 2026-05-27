@@ -1035,6 +1035,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_uint8array_set", VOID, &[I64, I32, I32]);
     module.declare_function("js_native_arena_alloc", I64, &[I64]);
     module.declare_function("js_native_arena_view", I64, &[I64, I32, I64, I64]);
+    module.declare_function("js_native_pod_view", I64, &[I64, I64, I64, I64, I64, I64]);
+    module.declare_function("js_native_abi_check_pod_view_data_ptr", PTR, &[DOUBLE, I64]);
+    module.declare_function(
+        "js_native_abi_check_pod_view_record_count",
+        I64,
+        &[DOUBLE, I64],
+    );
     module.declare_function("js_native_arena_dispose", VOID, &[I64]);
     module.declare_function("js_typed_array_to_reversed", I64, &[I64]);
     module.declare_function("js_typed_array_to_sorted_default", I64, &[I64]);

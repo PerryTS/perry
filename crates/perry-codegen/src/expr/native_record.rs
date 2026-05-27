@@ -137,6 +137,13 @@ pub(super) fn native_fact_uses_for_record(
             "buffer_len",
             None,
         )),
+        NativeRep::HandleId => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "handle_id",
+            None,
+        )),
         NativeRep::NativeHandle => consumed.push(native_fact_use(
             "representation",
             local_id,
@@ -159,6 +166,13 @@ pub(super) fn native_fact_uses_for_record(
             None,
         )),
         NativeRep::PodRecord { layout_id, .. } => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            layout_id,
+            None,
+        )),
+        NativeRep::PodRecordView { layout_id, .. } => consumed.push(native_fact_use(
             "representation",
             local_id,
             "consumed",

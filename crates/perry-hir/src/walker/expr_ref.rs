@@ -324,6 +324,16 @@ where
             f(length);
         }
 
+        Expr::NativePodView {
+            owner,
+            byte_offset,
+            count,
+        } => {
+            f(owner);
+            f(byte_offset);
+            f(count);
+        }
+
         Expr::UrlSearchParamsForEach { params, callback } => {
             f(params);
             f(callback);
