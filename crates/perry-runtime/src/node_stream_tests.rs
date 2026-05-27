@@ -229,6 +229,19 @@ fn stream_methods_dispatch_through_dynamic_method_call() {
 }
 
 #[test]
+fn readable_wrap_method_is_present_and_chainable() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let wrap = js_object_get_field_by_name_f64(obj, hidden_key(b"wrap"));
+    assert_ne!(wrap.to_bits(), TAG_UNDEFINED);
+
+    let wrapped = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let args = [wrapped];
+    let result = unsafe { crate::closure::js_native_call_value(wrap, args.as_ptr(), args.len()) };
+    assert_eq!(result.to_bits(), stream.to_bits());
+}
+
+#[test]
 fn writable_cork_and_uncork_update_counter_and_return_undefined() {
     let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;

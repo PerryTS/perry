@@ -1858,7 +1858,7 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
 // Writable, and Duplex method tables stay in distinct shape bands.
 // ─────────────────────────────────────────────────────────────────
 
-fn readable_methods() -> [(&'static str, StubFn); 37] {
+fn readable_methods() -> [(&'static str, StubFn); 38] {
     [
         ("on", cast2(ns_on2)),
         ("once", cast2(ns_once2)),
@@ -1878,6 +1878,7 @@ fn readable_methods() -> [(&'static str, StubFn); 37] {
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_chain1)),
+        ("wrap", cast1(ns_chain1)),
         ("pause", cast0(ns_chain0)),
         ("resume", cast0(ns_resume0)),
         ("destroy", cast1(ns_destroy1)),
@@ -1933,7 +1934,7 @@ fn writable_methods() -> [(&'static str, StubFn); 22] {
     ]
 }
 
-fn duplex_methods() -> [(&'static str, StubFn); 28] {
+fn duplex_methods() -> [(&'static str, StubFn); 29] {
     // Union of readable + writable, deduped (`on/once/off/addListener/
     // removeListener/removeAllListeners/emit/listenerCount/listeners/
     // destroy` appear once each).
@@ -1956,6 +1957,7 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_chain1)),
+        ("wrap", cast1(ns_chain1)),
         ("pause", cast0(ns_chain0)),
         ("resume", cast0(ns_resume0)),
         ("setEncoding", cast1(ns_chain1)),
