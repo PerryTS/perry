@@ -682,8 +682,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
     // Narrow node:stream instance-method wiring used by the current
     // stream/promises stubs. These keep Perry's hidden stream state in sync
     // when typed `new PassThrough()` / `new Writable()` instances call the
-    // methods directly; full stream event/backpressure behavior remains
-    // deferred to #1532.
+    // methods directly so Perry's hidden stream state and EventEmitter
+    // listener registry stay in sync on typed stream instances.
     NativeModSig {
         module: "stream",
         has_receiver: true,
@@ -707,7 +707,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "once",
         class_filter: None,
-        runtime: "js_node_stream_method_on",
+        runtime: "js_node_stream_method_once",
         args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
@@ -716,8 +716,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "emit",
         class_filter: None,
-        runtime: "js_node_stream_method_emit",
-        args: &[NA_F64, NA_F64],
+        runtime: "js_node_stream_method_emit_args",
+        args: &[NA_F64, NA_VARARGS],
         ret: NR_F64,
     },
     NativeModSig {
@@ -838,8 +838,35 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "prependOnceListener",
         class_filter: None,
-        runtime: "js_node_stream_method_prepend_listener",
+        runtime: "js_node_stream_method_prepend_once_listener",
         args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "off",
+        class_filter: None,
+        runtime: "js_node_stream_method_off",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "removeListener",
+        class_filter: None,
+        runtime: "js_node_stream_method_remove_listener",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "removeAllListeners",
+        class_filter: None,
+        runtime: "js_node_stream_method_remove_all_listeners",
+        args: &[NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

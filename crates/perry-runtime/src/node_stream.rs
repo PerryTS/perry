@@ -35,15 +35,20 @@ mod async_iterator;
 
 #[path = "node_stream_event_emitter.rs"]
 mod event_emitter;
+use event_emitter::{
+    call_listener_args, emit_stream_event, emit_stream_event_from_array, is_callable_value,
+    ns_event_names, ns_get_max_listeners, ns_listener_count, ns_listeners, ns_off2, ns_on2,
+    ns_once2, ns_prepend_listener2, ns_prepend_once_listener2, ns_raw_listeners,
+    ns_remove_all_listeners1, ns_remove_listener2, ns_set_max_listeners,
+    stream_listener_count_for_event,
+};
 pub use event_emitter::{
     js_node_stream_method_event_names, js_node_stream_method_get_max_listeners,
     js_node_stream_method_listener_count, js_node_stream_method_listeners,
-    js_node_stream_method_on, js_node_stream_method_prepend_listener,
-    js_node_stream_method_raw_listeners, js_node_stream_method_set_max_listeners,
-};
-use event_emitter::{
-    ns_event_names, ns_get_max_listeners, ns_listener_count, ns_listeners, ns_raw_listeners,
-    ns_set_max_listeners,
+    js_node_stream_method_off, js_node_stream_method_on, js_node_stream_method_once,
+    js_node_stream_method_prepend_listener, js_node_stream_method_prepend_once_listener,
+    js_node_stream_method_raw_listeners, js_node_stream_method_remove_all_listeners,
+    js_node_stream_method_remove_listener, js_node_stream_method_set_max_listeners,
 };
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -69,8 +74,6 @@ const READABLE_ERROR_KEY: &[u8] = b"__perryReadableError";
 const READABLE_SIGNAL_KEY: &[u8] = b"__perryReadableSignal";
 const READABLE_READ_KEY: &[u8] = b"__perryReadableRead";
 const READABLE_READ_INVOKED_KEY: &[u8] = b"__perryReadableReadInvoked";
-const STREAM_DATA_LISTENERS_KEY: &[u8] = b"__perryStreamDataListeners";
-const STREAM_END_LISTENERS_KEY: &[u8] = b"__perryStreamEndListeners";
 const STREAM_DRAIN_SCHEDULED_KEY: &[u8] = b"__perryStreamDrainScheduled";
 const STREAM_END_EMITTED_KEY: &[u8] = b"__perryStreamEndEmitted";
 const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
@@ -122,21 +125,6 @@ extern "C" fn ns_chain3(closure: *const ClosureHeader, _a: f64, _b: f64, _c: f64
     this_value(closure)
 }
 
-extern "C" fn ns_on2(closure: *const ClosureHeader, event: f64, cb: f64) -> f64 {
-    let stream = this_value(closure);
-    add_stream_listener_for_event(stream, event, cb);
-    stream
-}
-
-fn add_stream_listener_for_event(stream: f64, event: f64, cb: f64) {
-    if string_value_eq(event, b"data") {
-        add_stream_listener(stream, hidden_data_listeners_key(), cb);
-        schedule_readable_from_drain(stream);
-    } else if string_value_eq(event, b"end") {
-        add_stream_listener(stream, hidden_end_listeners_key(), cb);
-    }
-}
-
 extern "C" fn ns_readable_from_drain(closure: *const ClosureHeader) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -152,11 +140,20 @@ extern "C" fn ns_readable_from_drain(closure: *const ClosureHeader) -> f64 {
 }
 
 extern "C" fn ns_emit2(closure: *const ClosureHeader, event: f64, arg: f64) -> f64 {
-    if string_value_eq(event, b"error") {
-        set_hidden_value(this_value(closure), hidden_error_key(), arg);
-        return f64::from_bits(TAG_TRUE);
+    let stream = this_value(closure);
+    let mut args = crate::array::js_array_alloc(0);
+    if arg.to_bits() != TAG_UNDEFINED {
+        args = crate::array::js_array_push_f64(args, arg);
     }
-    f64::from_bits(TAG_FALSE)
+    emit_stream_event_from_array(stream, event, args)
+}
+
+extern "C" fn ns_emit_rest(closure: *const ClosureHeader, event: f64, rest: f64) -> f64 {
+    emit_stream_event_from_array(
+        this_value(closure),
+        event,
+        raw_ptr_from_value(rest) as *const _,
+    )
 }
 extern "C" fn ns_resume0(closure: *const ClosureHeader) -> f64 {
     let stream = this_value(closure);
@@ -234,6 +231,26 @@ extern "C" fn writable_write_callback_noop(_closure: *const ClosureHeader) -> f6
 
 extern "C" fn ns_write2(closure: *const ClosureHeader, chunk: f64, enc: f64) -> f64 {
     let stream = this_value(closure);
+    invoke_writable_write(stream, chunk, enc);
+    emit_writable_chunk(stream, chunk);
+    f64::from_bits(TAG_TRUE)
+}
+
+extern "C" fn ns_end1(closure: *const ClosureHeader, chunk: f64) -> f64 {
+    let callback = if is_callable_value(chunk) {
+        Some(chunk)
+    } else {
+        None
+    };
+    if callback.is_none() && !JSValue::from_bits(chunk.to_bits()).is_undefined() {
+        let _ = ns_write2(closure, chunk, f64::from_bits(TAG_UNDEFINED));
+    }
+    let stream = this_value(closure);
+    finish_stream(stream, callback);
+    stream
+}
+
+fn invoke_writable_write(stream: f64, chunk: f64, enc: f64) {
     if let Some(write) = writable_hidden_write(stream) {
         let cb = js_closure_alloc(writable_write_callback_noop as *const u8, 0);
         let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
@@ -244,15 +261,25 @@ extern "C" fn ns_write2(closure: *const ClosureHeader, chunk: f64, enc: f64) -> 
         }
         crate::object::js_implicit_this_set(prev_this);
     }
-    f64::from_bits(TAG_TRUE)
 }
-extern "C" fn ns_end1(closure: *const ClosureHeader, chunk: f64) -> f64 {
-    if !JSValue::from_bits(chunk.to_bits()).is_undefined() {
-        let _ = ns_write2(closure, chunk, f64::from_bits(TAG_UNDEFINED));
+
+fn emit_writable_chunk(stream: f64, chunk: f64) {
+    if has_truthy_hidden(stream, hidden_readable_flag_key()) {
+        mark_disturbed(stream);
+        let _ = emit_stream_event(stream, string_value(b"data"), &[chunk]);
     }
-    let stream = this_value(closure);
+}
+
+fn finish_stream(stream: f64, callback: Option<f64>) {
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
-    stream
+    if !has_truthy_hidden(stream, hidden_end_emitted_key()) {
+        set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
+        let _ = emit_stream_event(stream, string_value(b"end"), &[]);
+    }
+    let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
+    if let Some(callback) = callback {
+        call_listener_args(stream, callback, &[]);
+    }
 }
 
 fn stream_value_from_handle(stream_handle: i64) -> f64 {
@@ -266,12 +293,24 @@ fn stream_value_from_handle(stream_handle: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_emit(stream_handle: i64, event: f64, arg: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if string_value_eq(event, b"error") {
-        set_hidden_value(stream, hidden_error_key(), arg);
-        f64::from_bits(TAG_TRUE)
-    } else {
-        f64::from_bits(TAG_FALSE)
+    let mut args = crate::array::js_array_alloc(0);
+    if arg.to_bits() != TAG_UNDEFINED {
+        args = crate::array::js_array_push_f64(args, arg);
     }
+    emit_stream_event_from_array(stream, event, args)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_emit_args(
+    stream_handle: i64,
+    event: f64,
+    args_ptr: i64,
+) -> f64 {
+    emit_stream_event_from_array(
+        stream_value_from_handle(stream_handle),
+        event,
+        args_ptr as *const crate::array::ArrayHeader,
+    )
 }
 
 /// `readable.push(chunk)` on a typed stream instance (#1539). Tracks the
@@ -320,26 +359,23 @@ pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_write(stream_handle: i64, chunk: f64, enc: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(write) = writable_hidden_write(stream) {
-        let cb = js_closure_alloc(writable_write_callback_noop as *const u8, 0);
-        let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
-        let args = [chunk, enc, cb_value];
-        let prev_this = crate::object::js_implicit_this_set(stream);
-        unsafe {
-            let _ = crate::closure::js_native_call_value(write, args.as_ptr(), args.len());
-        }
-        crate::object::js_implicit_this_set(prev_this);
-    }
+    invoke_writable_write(stream, chunk, enc);
+    emit_writable_chunk(stream, chunk);
     f64::from_bits(TAG_TRUE)
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if !JSValue::from_bits(chunk.to_bits()).is_undefined() {
+    let callback = if is_callable_value(chunk) {
+        Some(chunk)
+    } else {
+        None
+    };
+    if callback.is_none() && !JSValue::from_bits(chunk.to_bits()).is_undefined() {
         let _ = js_node_stream_method_write(stream_handle, chunk, f64::from_bits(TAG_UNDEFINED));
     }
-    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    finish_stream(stream, callback);
     stream
 }
 extern "C" fn ns_undefined0(_closure: *const ClosureHeader) -> f64 {
@@ -878,8 +914,15 @@ fn register_stub_arities() {
     register(ns_chain2 as *const u8, 2);
     register(ns_chain3 as *const u8, 3);
     register(ns_on2 as *const u8, 2);
+    register(ns_once2 as *const u8, 2);
+    register(ns_prepend_listener2 as *const u8, 2);
+    register(ns_prepend_once_listener2 as *const u8, 2);
+    register(ns_remove_listener2 as *const u8, 2);
+    register(ns_off2 as *const u8, 2);
+    register(ns_remove_all_listeners1 as *const u8, 1);
     register(ns_readable_from_drain as *const u8, 0);
     register(ns_emit2 as *const u8, 2);
+    crate::closure::js_register_closure_rest(ns_emit_rest as *const u8, 1);
     register(ns_resume0 as *const u8, 0);
     register(ns_read1 as *const u8, 1);
     register(ns_pipe1 as *const u8, 1);
@@ -953,16 +996,6 @@ fn hidden_read_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_read_invoked_key() -> *mut crate::string::StringHeader {
     hidden_key(READABLE_READ_INVOKED_KEY)
-}
-
-#[inline]
-fn hidden_data_listeners_key() -> *mut crate::string::StringHeader {
-    hidden_key(STREAM_DATA_LISTENERS_KEY)
-}
-
-#[inline]
-fn hidden_end_listeners_key() -> *mut crate::string::StringHeader {
-    hidden_key(STREAM_END_LISTENERS_KEY)
 }
 
 #[inline]
@@ -1073,54 +1106,6 @@ fn set_hidden_value(value: f64, key: *mut crate::string::StringHeader, field_val
     }
 }
 
-fn add_stream_listener(stream: f64, key: *mut crate::string::StringHeader, cb: f64) {
-    if raw_ptr_from_value(cb) < 0x10000 {
-        return;
-    }
-    let listeners = get_hidden_value(stream, key).unwrap_or_else(|| {
-        let arr = crate::array::js_array_alloc(0);
-        let arr_value = box_pointer(arr as *const u8);
-        set_hidden_value(stream, key, arr_value);
-        arr_value
-    });
-    if !is_array_like_value(listeners) {
-        return;
-    }
-    let arr = raw_ptr_from_value(listeners) as *mut crate::array::ArrayHeader;
-    let arr = crate::array::js_array_push_f64(arr, cb);
-    set_hidden_value(stream, key, box_pointer(arr as *const u8));
-}
-
-fn listener_snapshot(stream: f64, key: *mut crate::string::StringHeader) -> Vec<f64> {
-    let Some(listeners) = get_hidden_value(stream, key) else {
-        return Vec::new();
-    };
-    if !is_array_like_value(listeners) {
-        return Vec::new();
-    }
-    let arr = raw_ptr_from_value(listeners) as *const crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(arr);
-    let mut out = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        out.push(crate::array::js_array_get_f64(arr, i));
-    }
-    out
-}
-
-fn call_listener0(listener: f64) {
-    let raw = raw_ptr_from_value(listener);
-    if raw >= 0x10000 {
-        crate::closure::js_closure_call0(raw as *const ClosureHeader);
-    }
-}
-
-fn call_listener1(listener: f64, arg: f64) {
-    let raw = raw_ptr_from_value(listener);
-    if raw >= 0x10000 {
-        crate::closure::js_closure_call1(raw as *const ClosureHeader, arg);
-    }
-}
-
 fn has_truthy_hidden(stream: f64, key: *mut crate::string::StringHeader) -> bool {
     get_hidden_value(stream, key).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
 }
@@ -1142,25 +1127,21 @@ fn schedule_readable_from_drain(stream: f64) {
 }
 
 fn drain_readable_from_events(stream: f64) {
-    let data_listeners = listener_snapshot(stream, hidden_data_listeners_key());
-    if data_listeners.is_empty() {
+    let data_event = string_value(b"data");
+    if stream_listener_count_for_event(stream, data_event) == 0 {
         return;
     }
     if let Some(chunks) = readable_hidden_chunks(stream) {
         let mut values = Vec::new();
         push_chunk_values(chunks, &mut values, 0);
         for chunk in values {
-            for listener in &data_listeners {
-                call_listener1(*listener, chunk);
-            }
+            let _ = emit_stream_event(stream, data_event, &[chunk]);
         }
     }
     if !has_truthy_hidden(stream, hidden_end_emitted_key()) {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
         set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
-        for listener in listener_snapshot(stream, hidden_end_listeners_key()) {
-            call_listener0(listener);
-        }
+        let _ = emit_stream_event(stream, string_value(b"end"), &[]);
     }
 }
 
@@ -1475,14 +1456,14 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
 fn readable_methods() -> [(&'static str, StubFn); 37] {
     [
         ("on", cast2(ns_on2)),
-        ("once", cast2(ns_on2)),
-        ("prependListener", cast2(ns_on2)),
-        ("prependOnceListener", cast2(ns_on2)),
-        ("off", cast2(ns_chain2)),
+        ("once", cast2(ns_once2)),
+        ("prependListener", cast2(ns_prepend_listener2)),
+        ("prependOnceListener", cast2(ns_prepend_once_listener2)),
+        ("off", cast2(ns_off2)),
         ("addListener", cast2(ns_on2)),
-        ("removeListener", cast2(ns_chain2)),
-        ("removeAllListeners", cast1(ns_chain1)),
-        ("emit", cast2(ns_emit2)),
+        ("removeListener", cast2(ns_remove_listener2)),
+        ("removeAllListeners", cast1(ns_remove_all_listeners1)),
+        ("emit", cast2(ns_emit_rest)),
         ("setMaxListeners", cast1(ns_set_max_listeners)),
         ("getMaxListeners", cast0(ns_get_max_listeners)),
         ("eventNames", cast0(ns_event_names)),
@@ -1523,14 +1504,14 @@ fn readable_methods() -> [(&'static str, StubFn); 37] {
 fn writable_methods() -> [(&'static str, StubFn); 22] {
     [
         ("on", cast2(ns_on2)),
-        ("once", cast2(ns_on2)),
-        ("prependListener", cast2(ns_on2)),
-        ("prependOnceListener", cast2(ns_on2)),
-        ("off", cast2(ns_chain2)),
+        ("once", cast2(ns_once2)),
+        ("prependListener", cast2(ns_prepend_listener2)),
+        ("prependOnceListener", cast2(ns_prepend_once_listener2)),
+        ("off", cast2(ns_off2)),
         ("addListener", cast2(ns_on2)),
-        ("removeListener", cast2(ns_chain2)),
-        ("removeAllListeners", cast1(ns_chain1)),
-        ("emit", cast2(ns_emit2)),
+        ("removeListener", cast2(ns_remove_listener2)),
+        ("removeAllListeners", cast1(ns_remove_all_listeners1)),
+        ("emit", cast2(ns_emit_rest)),
         ("setMaxListeners", cast1(ns_set_max_listeners)),
         ("getMaxListeners", cast0(ns_get_max_listeners)),
         ("eventNames", cast0(ns_event_names)),
@@ -1553,14 +1534,14 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
     // destroy` appear once each).
     [
         ("on", cast2(ns_on2)),
-        ("once", cast2(ns_on2)),
-        ("prependListener", cast2(ns_on2)),
-        ("prependOnceListener", cast2(ns_on2)),
-        ("off", cast2(ns_chain2)),
+        ("once", cast2(ns_once2)),
+        ("prependListener", cast2(ns_prepend_listener2)),
+        ("prependOnceListener", cast2(ns_prepend_once_listener2)),
+        ("off", cast2(ns_off2)),
         ("addListener", cast2(ns_on2)),
-        ("removeListener", cast2(ns_chain2)),
-        ("removeAllListeners", cast1(ns_chain1)),
-        ("emit", cast2(ns_emit2)),
+        ("removeListener", cast2(ns_remove_listener2)),
+        ("removeAllListeners", cast1(ns_remove_all_listeners1)),
+        ("emit", cast2(ns_emit_rest)),
         ("setMaxListeners", cast1(ns_set_max_listeners)),
         ("getMaxListeners", cast0(ns_get_max_listeners)),
         ("eventNames", cast0(ns_event_names)),

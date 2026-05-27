@@ -12,6 +12,9 @@
 #[used]
 static KEEP_NS_METHOD_EMIT: extern "C" fn(i64, f64, f64) -> f64 = super::js_node_stream_method_emit;
 #[used]
+static KEEP_NS_METHOD_EMIT_ARGS: extern "C" fn(i64, f64, i64) -> f64 =
+    super::js_node_stream_method_emit_args;
+#[used]
 static KEEP_NS_METHOD_READ: extern "C" fn(i64, f64) -> f64 = super::js_node_stream_method_read;
 #[used]
 static KEEP_NS_METHOD_PUSH: extern "C" fn(i64, f64) -> f64 = super::js_node_stream_method_push;
@@ -40,8 +43,21 @@ static KEEP_NS_METHOD_GET_MAX_LISTENERS: extern "C" fn(i64) -> f64 =
 #[used]
 static KEEP_NS_METHOD_ON: extern "C" fn(i64, f64, f64) -> f64 = super::js_node_stream_method_on;
 #[used]
+static KEEP_NS_METHOD_ONCE: extern "C" fn(i64, f64, f64) -> f64 = super::js_node_stream_method_once;
+#[used]
 static KEEP_NS_METHOD_PREPEND_LISTENER: extern "C" fn(i64, f64, f64) -> f64 =
     super::js_node_stream_method_prepend_listener;
+#[used]
+static KEEP_NS_METHOD_PREPEND_ONCE_LISTENER: extern "C" fn(i64, f64, f64) -> f64 =
+    super::js_node_stream_method_prepend_once_listener;
+#[used]
+static KEEP_NS_METHOD_OFF: extern "C" fn(i64, f64, f64) -> f64 = super::js_node_stream_method_off;
+#[used]
+static KEEP_NS_METHOD_REMOVE_LISTENER: extern "C" fn(i64, f64, f64) -> f64 =
+    super::js_node_stream_method_remove_listener;
+#[used]
+static KEEP_NS_METHOD_REMOVE_ALL_LISTENERS: extern "C" fn(i64, f64) -> f64 =
+    super::js_node_stream_method_remove_all_listeners;
 #[used]
 static KEEP_NS_METHOD_EVENT_NAMES: extern "C" fn(i64) -> i64 =
     super::js_node_stream_method_event_names;

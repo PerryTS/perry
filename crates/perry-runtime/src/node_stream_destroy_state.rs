@@ -15,6 +15,11 @@ pub(super) extern "C" fn ns_destroy_error_microtask(closure: *const ClosureHeade
     let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let err = js_closure_get_capture_f64(closure, 1);
     set_hidden_value(stream, hidden_error_key(), err);
+    let error = super::string_value(b"error");
+    if super::event_emitter::stream_listener_count_for_event(stream, error) > 0 {
+        let _ = super::event_emitter::emit_stream_event(stream, error, &[err]);
+    }
+    let _ = super::event_emitter::emit_stream_event(stream, super::string_value(b"close"), &[]);
     f64::from_bits(TAG_UNDEFINED)
 }
 

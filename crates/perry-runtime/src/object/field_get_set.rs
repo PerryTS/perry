@@ -849,6 +849,21 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
 
 /// Get a field by its string key name
 /// Returns the field value or undefined if the key is not found
+unsafe fn closure_dynamic_prop_by_key(obj: usize, key: *const crate::StringHeader) -> Option<f64> {
+    if key.is_null() {
+        return None;
+    }
+    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let key_len = (*key).byte_len as usize;
+    let name = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).ok()?;
+    let val = crate::closure::closure_get_dynamic_prop(obj, name);
+    if val.to_bits() == crate::value::TAG_UNDEFINED {
+        None
+    } else {
+        Some(val)
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
@@ -1167,6 +1182,9 @@ pub extern "C" fn js_object_get_field_by_name(
         return JSValue::undefined();
     }
     unsafe {
+        if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
+            return JSValue::from_bits(val.to_bits());
+        }
         // Buffers: BufferHeader is allocated via raw `alloc()` (no GcHeader)
         // and tracked in BUFFER_REGISTRY. Detect first so the GC header check
         // below doesn't read garbage one word before the BufferHeader.
@@ -2098,6 +2116,11 @@ pub extern "C" fn js_object_get_field_ic_miss(
     }
     if obj.is_null() || key.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    unsafe {
+        if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
+            return val;
+        }
     }
     // Issue #340: small-handle receivers (axios, fastify, ioredis,
     // ...) are passed here from the codegen IC miss path with the

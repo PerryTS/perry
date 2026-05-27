@@ -367,6 +367,8 @@ fn stream_native_receiver_methods_update_hidden_state() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
     let err = string_value("boom");
+    let cb = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let _ = js_node_stream_method_on(handle, string_value("error"), cb);
 
     assert_eq!(
         js_node_stream_method_emit(handle, string_value("error"), err).to_bits(),
