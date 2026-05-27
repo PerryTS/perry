@@ -2,6 +2,19 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1031 — node:worker_threads getEnvironmentData/setEnvironmentData (#1951)
+
+Implement `worker_threads.getEnvironmentData(key)` / `setEnvironmentData(key,
+value)` — Node's per-thread environment-data store keyed by string/number/bool.
+Adds the manifest `method_sig` entries, the codegen native-table rows routing to
+`js_worker_threads_get_environment_data` / `js_worker_threads_set_environment_data`,
+the `is_native_module_callable_export` arms, and the runtime store in
+`perry-stdlib/src/worker_threads.rs` (a thread-local `HashMap` whose NaN-boxed
+values are kept alive by a registered GC mutable-root scanner). `setEnvironmentData(key,
+undefined)` deletes the key, matching Node. node-suite parity test
+(`worker_threads/environment-data/basic.ts`) matches Node byte-for-byte.
+Authored by @andrewtdiz.
+
 ## v0.5.1030 — node:zlib constructor exports (#1927)
 
 Expose the `node:zlib` stream constructor classes — `Deflate`, `DeflateRaw`,
