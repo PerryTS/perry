@@ -573,6 +573,39 @@ fn readable_lifecycle_flags_reflect_ended_state() {
 }
 
 #[test]
+fn duplex_allow_half_open_defaults_true_and_honors_false_option() {
+    let stream = js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"allowHalfOpen")).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_node_stream_method_allow_half_open(handle).to_bits(),
+        TAG_TRUE
+    );
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"allowHalfOpen"),
+        f64::from_bits(TAG_FALSE),
+    );
+    let stream = js_node_stream_duplex_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"allowHalfOpen")).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_node_stream_method_allow_half_open(handle).to_bits(),
+        TAG_FALSE
+    );
+}
+
+#[test]
 fn writable_corked_counter_tracks_cork_balance() {
     let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;

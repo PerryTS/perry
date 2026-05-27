@@ -521,6 +521,13 @@ pub extern "C" fn js_node_stream_method_writable_finished(stream_handle: i64) ->
 }
 
 #[no_mangle]
+pub extern "C" fn js_node_stream_method_allow_half_open(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    get_hidden_value(stream, hidden_key(b"allowHalfOpen"))
+        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+}
+
+#[no_mangle]
 pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     mark_stream_ended(stream);
@@ -2172,6 +2179,21 @@ fn init_writable_state(stream: f64, opts: f64) {
     set_visible_writable_finished(stream, false);
 }
 
+fn init_duplex_state(stream: f64, opts: f64) {
+    let allow_half_open = if get_hidden_value(opts, hidden_key(b"allowHalfOpen"))
+        .is_some_and(|v| v.to_bits() == TAG_FALSE)
+    {
+        TAG_FALSE
+    } else {
+        TAG_TRUE
+    };
+    set_hidden_value(
+        stream,
+        hidden_key(b"allowHalfOpen"),
+        f64::from_bits(allow_half_open),
+    );
+}
+
 fn init_abort_signal_state(stream: f64, opts: f64) {
     if let Some(signal) = options_signal(opts) {
         attach_abort_signal(signal, stream);
@@ -2226,6 +2248,7 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     init_constructor(duplex, "Duplex");
     init_readable_state(duplex, opts);
     init_writable_state(duplex, opts);
+    init_duplex_state(duplex, opts);
     init_abort_signal_state(duplex, opts);
     async_iterator::install_readable_async_iterator_symbol(duplex);
     duplex
