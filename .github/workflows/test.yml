@@ -172,9 +172,12 @@ jobs:
           # thread pool lets one test's `js_notify_main_thread` / timer
           # scheduling perturb another's wait budget (the event_pump timing
           # flakes) and races the GC/threading tests into intermittent SIGSEGV.
-          # Run perry-runtime single-threaded so the tests can't interfere; the
-          # rest of the workspace still runs in parallel.
+          # Run perry-runtime single-threaded so the tests can't interfere.
           RUST_TEST_THREADS=1 cargo test -p perry-runtime
+          # The remaining workspace includes large `perry` / `perry-stdlib`
+          # test binaries. On ubuntu-latest, concurrent links have crashed lld
+          # with SIGBUS, so keep Cargo build jobs serialized for this phase.
+          export CARGO_BUILD_JOBS=1
           cargo test --workspace \
             --exclude perry-runtime \
             --exclude perry-ui-macos \
