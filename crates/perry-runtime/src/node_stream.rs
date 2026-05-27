@@ -381,6 +381,11 @@ pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_node_stream_method_undefined(_stream_handle: i64) -> f64 {
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+#[no_mangle]
 pub extern "C" fn js_node_stream_method_write(stream_handle: i64, chunk: f64, enc: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     invoke_writable_write(stream, chunk, enc);
@@ -1576,8 +1581,8 @@ fn writable_methods() -> [(&'static str, StubFn); 22] {
         ("rawListeners", cast1(ns_raw_listeners)),
         ("write", cast2(ns_write2)),
         ("end", cast1(ns_end1)),
-        ("cork", cast0(ns_chain0)),
-        ("uncork", cast0(ns_chain0)),
+        ("cork", cast0(ns_undefined0)),
+        ("uncork", cast0(ns_undefined0)),
         ("destroy", cast1(ns_destroy1)),
         ("setDefaultEncoding", cast1(ns_chain1)),
         ("_write", cast3(ns_chain3)),
@@ -1613,8 +1618,8 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("isPaused", cast0(ns_undefined0)),
         ("write", cast2(ns_write2)),
         ("end", cast1(ns_end1)),
-        ("cork", cast0(ns_chain0)),
-        ("uncork", cast0(ns_chain0)),
+        ("cork", cast0(ns_undefined0)),
+        ("uncork", cast0(ns_undefined0)),
         ("destroy", cast1(ns_destroy1)),
         ("setDefaultEncoding", cast1(ns_chain1)),
     ]

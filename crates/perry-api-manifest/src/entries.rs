@@ -2505,6 +2505,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "destroy", true, None),
     method("stream", "write", true, None),
     method("stream", "end", true, None),
+    method("stream", "cork", true, None),
+    method("stream", "uncork", true, None),
     // #1539: push() backpressure return + readable/writableHighWaterMark
     // property getters on typed stream instances.
     method("stream", "push", true, None),
