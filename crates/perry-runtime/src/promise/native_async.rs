@@ -615,6 +615,41 @@ mod tests {
     }
 
     #[test]
+    fn cancel_cleanup_disposes_attached_handle_once() {
+        let _guard = test_native_async_lock();
+        test_reset_native_async_registry();
+        CLEANUP_FINALIZER_CALLS.store(0, AtomicOrdering::SeqCst);
+
+        let token = js_native_async_completion_new(0);
+        let promise = js_native_async_completion_promise(token);
+        let handle = owned_native_handle("NativeAsyncCancel", 0x3456);
+        assert_eq!(
+            js_native_async_completion_attach_handle(
+                token,
+                handle.to_bits(),
+                PERRY_NATIVE_ASYNC_CLEANUP_ON_CANCEL,
+            ),
+            PERRY_NATIVE_ASYNC_OK
+        );
+        assert_eq!(
+            js_native_async_completion_cancel(token),
+            PERRY_NATIVE_ASYNC_OK
+        );
+        assert_eq!(js_native_async_process_pending(), 1);
+
+        assert_eq!(super::super::js_promise_state(promise), 2);
+        unsafe {
+            assert_heap_string_value(
+                super::super::js_promise_reason(promise),
+                DEFAULT_CANCEL_REASON.as_bytes(),
+            );
+        }
+        assert_eq!(CLEANUP_FINALIZER_CALLS.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(crate::native_handle::js_native_handle_dispose(handle), 0);
+        assert_eq!(CLEANUP_FINALIZER_CALLS.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[test]
     fn main_thread_token_wrong_thread_rejects() {
         let _guard = test_native_async_lock();
         test_reset_native_async_registry();
