@@ -1,4 +1,9 @@
 use super::*;
+// The native-library manifest types live in the `compile` module; resolve.rs
+// no longer re-imports them (the parsing moved to `native_manifest`), so the
+// tests pull them in directly.
+use super::super::{NativeBackend, NativeLibraryManifest};
+use perry_api_manifest::NativeAbiType;
 
 #[cfg(test)]
 mod abi_validation_tests {
