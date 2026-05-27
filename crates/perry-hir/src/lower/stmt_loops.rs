@@ -67,6 +67,54 @@ fn is_web_readable_stream_expr(ctx: &LoweringContext, expr: &ast::Expr) -> bool 
     }
 }
 
+fn strip_for_of_expr_wrappers(mut expr: &ast::Expr) -> &ast::Expr {
+    loop {
+        expr = match expr {
+            ast::Expr::TsAs(x) => &x.expr,
+            ast::Expr::TsNonNull(x) => &x.expr,
+            ast::Expr::TsConstAssertion(x) => &x.expr,
+            ast::Expr::Paren(x) => &x.expr,
+            _ => return expr,
+        };
+    }
+}
+
+fn is_node_readable_class_ref(expr: &ast::Expr) -> bool {
+    match strip_for_of_expr_wrappers(expr) {
+        ast::Expr::Ident(ident) => ident.sym.as_ref() == "Readable",
+        ast::Expr::Member(member) => {
+            matches!(&member.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "Readable")
+        }
+        _ => false,
+    }
+}
+
+fn is_node_readable_static_factory(expr: &ast::Expr) -> bool {
+    let ast::Expr::Call(call) = strip_for_of_expr_wrappers(expr) else {
+        return false;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let ast::Expr::Member(member) = strip_for_of_expr_wrappers(callee.as_ref()) else {
+        return false;
+    };
+    let ast::MemberProp::Ident(prop) = &member.prop else {
+        return false;
+    };
+    matches!(prop.sym.as_ref(), "from" | "of") && is_node_readable_class_ref(&member.obj)
+}
+
+fn is_node_readable_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    if is_node_readable_static_factory(expr) {
+        return true;
+    }
+    matches!(
+        crate::lower_types::infer_type_from_expr(strip_for_of_expr_wrappers(expr), ctx),
+        Type::Named(name) if name == "Readable"
+    )
+}
+
 pub(crate) fn lower_stmt_for_of(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -159,10 +207,18 @@ pub(crate) fn lower_stmt_for_of(
             None
         };
 
-    if is_generator_call || iter_from_class.is_some() || is_timer_promises_interval_call {
+    let is_node_readable_for_await =
+        for_of_stmt.is_await && is_node_readable_for_await_target(ctx, &for_of_stmt.right);
+
+    if is_generator_call
+        || iter_from_class.is_some()
+        || is_timer_promises_interval_call
+        || is_node_readable_for_await
+    {
         // Lower to iterator protocol:
         //   let __iter = genFunc(...);                     // generator-fn path
         //   let __iter = __perry_iter_Range(new Range(...));  // class path
+        //   let __iter = readable.iterator();              // node:stream path
         //   let __result = __iter.next();
         //   while (!__result.done) { const x = __result.value; body; __result = __iter.next(); }
         let for_scope_mark = ctx.push_block_scope();
@@ -174,6 +230,15 @@ pub(crate) fn lower_stmt_for_of(
             Expr::Call {
                 callee: Box::new(Expr::FuncRef(iter_fn_id)),
                 args: vec![iter_expr],
+                type_args: vec![],
+            }
+        } else if is_node_readable_for_await {
+            Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    object: Box::new(iter_expr),
+                    property: "iterator".to_string(),
+                }),
+                args: vec![],
                 type_args: vec![],
             }
         } else {

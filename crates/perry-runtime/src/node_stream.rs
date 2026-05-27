@@ -1388,6 +1388,22 @@ fn uint8array_byte_chunks(raw: usize) -> f64 {
     }
 }
 
+fn typed_uint8array_byte_chunks(raw: usize) -> Option<f64> {
+    if crate::typedarray::lookup_typed_array_kind(raw) != Some(crate::typedarray::KIND_UINT8) {
+        return None;
+    }
+    let ta = raw as *const crate::typedarray::TypedArrayHeader;
+    let len = crate::typedarray::js_typed_array_length(ta).max(0) as u32;
+    let mut out = crate::array::js_array_alloc(len);
+    for i in 0..len {
+        out = crate::array::js_array_push_f64(
+            out,
+            crate::typedarray::js_typed_array_get(ta, i as i32),
+        );
+    }
+    Some(box_pointer(out as *const u8))
+}
+
 fn normalize_readable_from_input(iterable: f64) -> f64 {
     if let Some(chunks) = readable_hidden_chunks(iterable) {
         return chunks;
@@ -1399,6 +1415,9 @@ fn normalize_readable_from_input(iterable: f64) -> f64 {
         && !crate::buffer::is_array_buffer(raw)
     {
         return uint8array_byte_chunks(raw);
+    }
+    if let Some(chunks) = typed_uint8array_byte_chunks(raw) {
+        return chunks;
     }
     if is_array_like_value(iterable) {
         return iterable;

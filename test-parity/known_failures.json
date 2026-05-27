@@ -632,18 +632,6 @@
     "category": "bug-open",
     "reason": "node:stream: transform() callback with Error doesn't propagate as `error` event. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/from-string": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(string) doesn't deliver string chunk via async iteration. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/from-buffer": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(Buffer) doesn't deliver chunk via async iteration. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/wrap-old-stream": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -1940,12 +1928,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline async-fn throwing — cb does not receive the error. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/from-array-many-items": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(50-item array) — count, sum or first/last value wrong. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/iter-helpers/filter-then-toarray": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -2251,12 +2233,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: second [Symbol.asyncIterator]() call — does not return immediately-done iterator. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/readable/from-typed-array": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(Uint8Array) — iteration count or first-byte value wrong. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/writer-write-resolves-after-sink": {
     "issue": "1545",

@@ -101,6 +101,23 @@ fn readable_from_retains_buffer_chunks_for_consumers() {
 }
 
 #[test]
+fn readable_from_typed_uint8array_retains_numeric_byte_chunks() {
+    let mut arr = crate::array::js_array_alloc(3);
+    arr = crate::array::js_array_push_f64(arr, 1.0);
+    arr = crate::array::js_array_push_f64(arr, 2.0);
+    arr = crate::array::js_array_push_f64(arr, 3.0);
+    let typed =
+        crate::typedarray::js_typed_array_new_from_array(crate::typedarray::KIND_UINT8 as i32, arr);
+
+    let readable = js_node_stream_readable_from(box_pointer(typed as *const u8));
+    let chunks = readable_hidden_chunks(readable).expect("readable chunks");
+    let mut values = Vec::new();
+    push_chunk_values(chunks, &mut values, 0);
+
+    assert_eq!(values, vec![1.0, 2.0, 3.0]);
+}
+
+#[test]
 fn writable_options_write_callback_is_invoked_by_stub_write() {
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
     let opts = crate::object::js_object_alloc(0, 1);

@@ -576,6 +576,10 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     match (class_name.as_str(), method_name) {
                         ("TextEncoder", "encode") => return Type::Named("Uint8Array".into()),
                         ("TextDecoder", "decode") => return Type::String,
+                        (
+                            "Readable",
+                            "map" | "filter" | "flatMap" | "take" | "drop" | "compose",
+                        ) => return Type::Named("Readable".into()),
                         _ => {}
                     }
                 }
@@ -711,6 +715,16 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                             "isBuffer" => Type::Boolean,
                             "byteLength" => Type::Number,
                             "compare" => Type::Number,
+                            _ => Type::Any,
+                        };
+                    }
+                    // `Readable.from(...)` produces a classic node:stream
+                    // Readable. Typing it lets `for await (... of r)` lower
+                    // through the stream iterator instead of the generic
+                    // array-index fallback.
+                    if obj_name == "Readable" {
+                        return match method_name {
+                            "from" | "of" => Type::Named("Readable".to_string()),
                             _ => Type::Any,
                         };
                     }
