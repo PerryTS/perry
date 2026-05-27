@@ -1333,11 +1333,176 @@ pub extern "C" fn js_os_eol() -> *mut StringHeader {
 
 /// Get information about CPUs
 /// Returns an array of CPU info objects
-/// TODO: Implement properly when dynamic object properties are supported
 #[no_mangle]
 pub extern "C" fn js_os_cpus() -> *mut ArrayHeader {
-    // Return empty array for now - dynamic object properties need different API
-    crate::array::js_array_alloc(0)
+    use crate::array::{js_array_alloc, js_array_push};
+    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
+    use crate::value::{js_nanbox_string, JSValue};
+
+    const CPU_TIMES_SHAPE_ID: u32 = 0x7FFF_FF25;
+    const CPU_INFO_SHAPE_ID: u32 = 0x7FFF_FF26;
+
+    #[derive(Clone, Copy, Default)]
+    struct CpuTimes {
+        user: f64,
+        nice: f64,
+        sys: f64,
+        idle: f64,
+        irq: f64,
+    }
+
+    struct CpuInfo {
+        model: String,
+        speed: f64,
+        times: CpuTimes,
+    }
+
+    fn nanbox_string_value(s: &str) -> JSValue {
+        let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        JSValue::from_bits(js_nanbox_string(ptr as i64).to_bits())
+    }
+
+    fn cpu_count() -> usize {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .max(1)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn host_cpu_infos() -> Vec<CpuInfo> {
+        use std::io::Read;
+
+        let mut infos = Vec::new();
+        if let Ok(mut stat) = std::fs::File::open("/proc/stat") {
+            let mut contents = String::new();
+            let _ = stat.read_to_string(&mut contents);
+            for line in contents.lines() {
+                let mut parts = line.split_whitespace();
+                let Some(label) = parts.next() else {
+                    continue;
+                };
+                if !label.starts_with("cpu")
+                    || label == "cpu"
+                    || !label[3..].chars().all(|c| c.is_ascii_digit())
+                {
+                    continue;
+                }
+                let read =
+                    |slot: Option<&str>| slot.and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                let user = read(parts.next());
+                let nice = read(parts.next());
+                let sys = read(parts.next());
+                let idle = read(parts.next());
+                let _iowait = read(parts.next());
+                let irq = read(parts.next());
+                // Linux /proc/stat values are clock ticks. Deno and Node expose
+                // milliseconds; 10ms is correct on common Linux HZ=100 hosts and
+                // is enough for Perry's current shape-level parity tests.
+                infos.push(CpuInfo {
+                    model: String::new(),
+                    speed: 0.0,
+                    times: CpuTimes {
+                        user: user * 10.0,
+                        nice: nice * 10.0,
+                        sys: sys * 10.0,
+                        idle: idle * 10.0,
+                        irq: irq * 10.0,
+                    },
+                });
+            }
+        }
+
+        let mut models = Vec::new();
+        if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") {
+            for line in cpuinfo.lines() {
+                if let Some((key, value)) = line.split_once(':') {
+                    if key.trim() == "model name" {
+                        models.push(value.trim().to_string());
+                    }
+                }
+            }
+        }
+
+        for (index, info) in infos.iter_mut().enumerate() {
+            info.model = models
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            let speed_path = format!("/sys/devices/system/cpu/cpu{index}/cpufreq/scaling_cur_freq");
+            info.speed = std::fs::read_to_string(speed_path)
+                .ok()
+                .and_then(|s| s.trim().parse::<f64>().ok())
+                .map(|khz| khz / 1000.0)
+                .unwrap_or(0.0);
+        }
+
+        if infos.is_empty() {
+            fallback_cpu_infos()
+        } else {
+            infos
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn host_cpu_infos() -> Vec<CpuInfo> {
+        fallback_cpu_infos()
+    }
+
+    fn fallback_cpu_infos() -> Vec<CpuInfo> {
+        (0..cpu_count())
+            .map(|_| CpuInfo {
+                model: "unknown".to_string(),
+                speed: 0.0,
+                times: CpuTimes::default(),
+            })
+            .collect()
+    }
+
+    fn build_times_object(times: CpuTimes) -> *mut ObjectHeader {
+        let packed = b"user\0nice\0sys\0idle\0irq\0";
+        let obj =
+            js_object_alloc_with_shape(CPU_TIMES_SHAPE_ID, 5, packed.as_ptr(), packed.len() as u32);
+        js_object_set_field(obj, 0, JSValue::number(times.user));
+        js_object_set_field(obj, 1, JSValue::number(times.nice));
+        js_object_set_field(obj, 2, JSValue::number(times.sys));
+        js_object_set_field(obj, 3, JSValue::number(times.idle));
+        js_object_set_field(obj, 4, JSValue::number(times.irq));
+        obj
+    }
+
+    fn build_cpu_object(info: CpuInfo) -> *mut ObjectHeader {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let model = nanbox_string_value(&info.model);
+        let model_handle = scope.root_nanbox_u64(model.bits());
+        let times = build_times_object(info.times);
+        let times_handle = scope.root_raw_mut_ptr(times);
+
+        let packed = b"model\0speed\0times\0";
+        let obj =
+            js_object_alloc_with_shape(CPU_INFO_SHAPE_ID, 3, packed.as_ptr(), packed.len() as u32);
+        let times = times_handle.get_raw_mut_ptr::<ObjectHeader>();
+        js_object_set_field(obj, 0, JSValue::from_bits(model_handle.get_nanbox_u64()));
+        js_object_set_field(obj, 1, JSValue::number(info.speed));
+        js_object_set_field(obj, 2, JSValue::pointer(times as *const u8));
+        obj
+    }
+
+    let infos = host_cpu_infos();
+    let mut arr = js_array_alloc(infos.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    for info in infos {
+        let obj = build_cpu_object(info);
+        let obj_handle = scope.root_raw_mut_ptr(obj);
+        let current = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        arr = js_array_push(
+            current,
+            JSValue::pointer(obj_handle.get_raw_mut_ptr::<ObjectHeader>() as *const u8),
+        );
+        arr_handle.set_raw_mut_ptr(arr);
+    }
+    arr_handle.get_raw_mut_ptr::<ArrayHeader>()
 }
 
 /// Get network interfaces information
