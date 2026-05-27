@@ -84,6 +84,7 @@ const WRITABLE_FINISH_SCHEDULED_KEY: &[u8] = b"__perryWritableFinishScheduled";
 const WRITABLE_FINISH_EMITTED_KEY: &[u8] = b"__perryWritableFinishEmitted";
 const WRITABLE_CORKED_KEY: &[u8] = b"__perryWritableCorked";
 const WRITABLE_BUFFERED_KEY: &[u8] = b"__perryWritableBuffered";
+const WRITABLE_WRITEV_KEY: &[u8] = b"__perryWritableWritev";
 // #1534: direction + disturbed bits so the static introspection helpers
 // (`Readable.isReadable` / `isDisturbed` / `isErrored`) answer per-stream
 // instead of with a uniform stub. Set at construction / on first read.
@@ -314,6 +315,19 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64) {
         let prev_this = crate::object::js_implicit_this_set(stream);
         unsafe {
             let _ = crate::closure::js_native_call_value(write, args.as_ptr(), args.len());
+        }
+        crate::object::js_implicit_this_set(prev_this);
+    }
+}
+
+fn invoke_writable_writev(stream: f64, chunks: f64) {
+    if let Some(writev) = writable_hidden_writev(stream) {
+        let cb = js_closure_alloc(writable_write_callback_noop as *const u8, 0);
+        let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+        let args = [chunks, cb_value];
+        let prev_this = crate::object::js_implicit_this_set(stream);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(writev, args.as_ptr(), args.len());
         }
         crate::object::js_implicit_this_set(prev_this);
     }
@@ -1261,6 +1275,11 @@ fn hidden_writable_buffered_key() -> *mut crate::string::StringHeader {
 }
 
 #[inline]
+fn hidden_writev_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_WRITEV_KEY)
+}
+
+#[inline]
 fn hidden_readable_flag_key() -> *mut crate::string::StringHeader {
     hidden_key(READABLE_FLAG_KEY)
 }
@@ -1475,6 +1494,10 @@ fn writable_hidden_write(value: f64) -> Option<f64> {
     get_hidden_value(value, hidden_write_key())
 }
 
+fn writable_hidden_writev(value: f64) -> Option<f64> {
+    get_hidden_value(value, hidden_writev_key())
+}
+
 fn writable_corked_count(value: f64) -> f64 {
     get_hidden_value(value, hidden_writable_corked_key()).unwrap_or(0.0)
 }
@@ -1519,6 +1542,40 @@ fn buffer_writable_write(stream: f64, chunk: f64, enc: f64) {
     set_hidden_value(stream, hidden_writable_buffered_key(), buffered);
 }
 
+fn writev_record_chunk(chunk: f64, enc: f64) -> (f64, f64) {
+    if JSValue::from_bits(chunk.to_bits()).is_any_string() {
+        let buffer = crate::buffer::js_buffer_from_value(chunk.to_bits() as i64, 0);
+        (box_pointer(buffer as *const u8), string_value(b"buffer"))
+    } else {
+        let raw = raw_ptr_from_value(chunk);
+        if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
+            (chunk, string_value(b"buffer"))
+        } else {
+            (chunk, enc)
+        }
+    }
+}
+
+fn build_writev_chunks(buffered: *const crate::array::ArrayHeader, len: u32) -> f64 {
+    let mut chunks = crate::array::js_array_alloc(0);
+    let mut i = 0;
+    while i < len {
+        let chunk = crate::array::js_array_get_f64(buffered, i);
+        let enc = if i + 1 < len {
+            crate::array::js_array_get_f64(buffered, i + 1)
+        } else {
+            f64::from_bits(TAG_UNDEFINED)
+        };
+        let (chunk, encoding) = writev_record_chunk(chunk, enc);
+        let record = crate::object::js_object_alloc(0, 2);
+        js_object_set_field_by_name(record, hidden_key(b"chunk"), chunk);
+        js_object_set_field_by_name(record, hidden_key(b"encoding"), encoding);
+        chunks = crate::array::js_array_push_f64(chunks, box_pointer(record as *const u8));
+        i += 2;
+    }
+    box_pointer(chunks as *const u8)
+}
+
 fn flush_writable_buffered(stream: f64) {
     let Some(buffered) = buffered_writable_writes(stream) else {
         return;
@@ -1534,6 +1591,16 @@ fn flush_writable_buffered(stream: f64) {
         hidden_writable_buffered_key(),
         box_pointer(crate::array::js_array_alloc(0) as *const u8),
     );
+    if len > 2 && writable_hidden_writev(stream).is_some() {
+        let chunks = build_writev_chunks(arr, len);
+        invoke_writable_writev(stream, chunks);
+        let mut i = 0;
+        while i < len {
+            emit_writable_chunk(stream, crate::array::js_array_get_f64(arr, i));
+            i += 2;
+        }
+        return;
+    }
     let mut i = 0;
     while i < len {
         let chunk = crate::array::js_array_get_f64(arr, i);
@@ -1561,6 +1628,10 @@ fn read_callback_from_options(opts: f64) -> Option<f64> {
 
 fn write_callback_from_options(opts: f64) -> Option<f64> {
     get_hidden_value(opts, hidden_key(b"write"))
+}
+
+fn writev_callback_from_options(opts: f64) -> Option<f64> {
+    get_hidden_value(opts, hidden_key(b"writev"))
 }
 
 fn invoke_read_once(stream: f64) {
@@ -2195,6 +2266,13 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
             rebind_callback_this(write, writable),
         );
     }
+    if let Some(writev) = writev_callback_from_options(opts) {
+        js_object_set_field_by_name(
+            obj,
+            hidden_writev_key(),
+            rebind_callback_this(writev, writable),
+        );
+    }
     init_lifecycle_state(writable);
     init_constructor(writable, "Writable");
     init_writable_state(writable, opts);
@@ -2209,6 +2287,13 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     let duplex = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     if let Some(write) = write_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, duplex));
+    }
+    if let Some(writev) = writev_callback_from_options(opts) {
+        js_object_set_field_by_name(
+            obj,
+            hidden_writev_key(),
+            rebind_callback_this(writev, duplex),
+        );
     }
     init_lifecycle_state(duplex);
     init_constructor(duplex, "Duplex");

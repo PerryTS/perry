@@ -6,6 +6,8 @@ use std::cell::RefCell;
 
 thread_local! {
     static WRITE_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    static WRITEV_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    static WRITEV_BUFFER_SHAPE: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static READABLE_DATA_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     static READABLE_THIS_MATCHES: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static READABLE_END_COUNT: RefCell<usize> = const { RefCell::new(0) };
@@ -35,6 +37,33 @@ extern "C" fn write_capture(_closure: *const ClosureHeader, chunk: f64, _enc: f6
     let readable = js_node_stream_readable_from(chunk);
     let bytes = js_node_stream_collect_bytes(readable);
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().push(bytes));
+    unsafe {
+        let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn writev_capture(_closure: *const ClosureHeader, chunks: f64, cb: f64) -> f64 {
+    let chunks = raw_ptr_from_value(chunks) as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(chunks);
+    for i in 0..len {
+        let record = crate::array::js_array_get_f64(chunks, i);
+        let record = raw_ptr_from_value(record) as *const ObjectHeader;
+        let chunk = js_object_get_field_by_name_f64(record, hidden_key(b"chunk"));
+        let encoding = js_object_get_field_by_name_f64(record, hidden_key(b"encoding"));
+        let raw = raw_ptr_from_value(chunk);
+        WRITEV_BUFFER_SHAPE.with(|shape| {
+            shape.borrow_mut().push(
+                crate::buffer::is_registered_buffer(raw) && string_value_eq(encoding, b"buffer"),
+            )
+        });
+        let readable = js_node_stream_readable_from(chunk);
+        WRITEV_CAPTURED.with(|captured| {
+            captured
+                .borrow_mut()
+                .push(js_node_stream_collect_bytes(readable))
+        });
+    }
     unsafe {
         let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
     }
@@ -302,6 +331,47 @@ fn writable_cork_buffers_writes_until_uncorked() {
             &[b"a".to_vec(), b"b".to_vec()]
         );
     });
+}
+
+#[test]
+fn writable_cork_uses_writev_for_multi_chunk_flush() {
+    WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    WRITEV_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    WRITEV_BUFFER_SHAPE.with(|shape| shape.borrow_mut().clear());
+
+    let opts = crate::object::js_object_alloc(0, 2);
+    let write = js_closure_alloc(write_capture as *const u8, 0);
+    let writev = js_closure_alloc(writev_capture as *const u8, 0);
+    crate::closure::js_register_closure_arity(write_capture as *const u8, 3);
+    crate::closure::js_register_closure_arity(writev_capture as *const u8, 2);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(write as *const u8).bits()),
+    );
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"writev"),
+        f64::from_bits(JSValue::pointer(writev as *const u8).bits()),
+    );
+
+    let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+
+    let _ = js_node_stream_method_cork(handle);
+    let _ = js_node_stream_method_write(handle, string_value("a"), undefined);
+    let _ = js_node_stream_method_write(handle, string_value("b"), undefined);
+    let _ = js_node_stream_method_uncork(handle);
+
+    WRITE_CAPTURED.with(|captured| assert!(captured.borrow().is_empty()));
+    WRITEV_CAPTURED.with(|captured| {
+        assert_eq!(
+            captured.borrow().as_slice(),
+            &[b"a".to_vec(), b"b".to_vec()]
+        );
+    });
+    WRITEV_BUFFER_SHAPE.with(|shape| assert_eq!(shape.borrow().as_slice(), &[true, true]));
 }
 
 #[test]

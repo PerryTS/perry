@@ -470,12 +470,6 @@
     "category": "bug-open",
     "reason": "node:stream: write(null) error path (ERR_STREAM_NULL_VALUES) doesn't emit error / throw. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/write/writev-batch": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: writev() constructor option not invoked when corked + multi-write. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/method-chain/setEncoding-returns-this": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1045,12 +1039,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: WritableStream sink.start() hook not awaited before first write. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/write/writev-chunk-shape": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: user writev(chunks, cb) — chunks not delivered as array of {chunk, encoding} objects. Flips to PASS when #1539 lands."
   },
   "node-suite/stream/readable/from-infinite-take": {
     "issue": "1558",
@@ -1651,12 +1639,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pause/resume on objectMode Readable — wrong count or first item value. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/writable/_writev-vs-write": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: cork+uncork dispatches to write() instead of writev() when writev is defined. Flips to PASS when #1539 lands."
   },
   "node-suite/stream/readable/unshift-while-flowing": {
     "issue": "1532",
