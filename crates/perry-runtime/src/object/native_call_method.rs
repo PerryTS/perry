@@ -1432,9 +1432,32 @@ pub unsafe extern "C" fn js_native_call_method(
                                     method_key as *const crate::StringHeader,
                                 );
                                 if !field_val.is_undefined() && !field_val.is_null() {
+                                    // #321 (effect Context/Layer/Scope): the
+                                    // method we just read is an *inherited*
+                                    // own-property of the prototype object
+                                    // `proto_obj`, not of the receiver. When
+                                    // it is an object-literal method
+                                    // (`captures_this:true`), its reserved
+                                    // capture slot was baked to the PROTOTYPE
+                                    // at construction time, so invoking it
+                                    // with `IMPLICIT_THIS = receiver` still
+                                    // reads `this === proto`. Rebind the
+                                    // closure's `this` slot to the receiver
+                                    // first (same treatment as the symbol path
+                                    // #1969 and the `#809` arm below).
+                                    // `clone_closure_rebind_this` is a no-op
+                                    // for closures that don't capture `this`
+                                    // (e.g. effect's `EffectPrototype.pipe`,
+                                    // which reads `this` from `IMPLICIT_THIS`)
+                                    // and for non-closure values, so those
+                                    // paths are unaffected.
+                                    let bound = crate::closure::clone_closure_rebind_this(
+                                        field_val.bits(),
+                                        f64::from_bits(jsval.bits()),
+                                    );
                                     let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
                                     let result = crate::closure::js_native_call_value(
-                                        f64::from_bits(field_val.bits()),
+                                        f64::from_bits(bound),
                                         args_ptr,
                                         args_len,
                                     );
@@ -1470,9 +1493,34 @@ pub unsafe extern "C" fn js_native_call_method(
                     resolve_proto_chain_field(class_id, method_key as *const crate::StringHeader)
                 {
                     if !field_val.is_undefined() && !field_val.is_null() {
+                        // #321 (effect Context/Layer/Scope): the closure we
+                        // just resolved is an *inherited* method — by
+                        // construction `resolve_proto_chain_field` only walks
+                        // the prototype chain (the receiver's OWN fields are
+                        // handled by the earlier keys-array scan), so this is
+                        // never an own method. Object-literal methods are
+                        // lowered with `captures_this:true` and have their
+                        // reserved (last) capture slot patched to the literal
+                        // object — i.e. the PROTOTYPE — at construction time
+                        // (see `expr.rs::lower_object_literal` /
+                        // `symbol.rs::js_object_set_symbol_method`). So when
+                        // `o = Object.create(P)` resolves `o.method()`, the
+                        // closure carries `this === P`, not `this === o`, and
+                        // setting `IMPLICIT_THIS = o` can't override the
+                        // baked-in slot that the body reads. Rebind the slot
+                        // to the receiver before invoking. This mirrors the
+                        // symbol-keyed fix (#1969) for the string-keyed
+                        // static-member call path. `clone_closure_rebind_this`
+                        // is a no-op for non-`captures_this` closures and for
+                        // non-closure values, so inherited *data* properties
+                        // and arrow/`this`-free function values are untouched.
+                        let bound = crate::closure::clone_closure_rebind_this(
+                            field_val.bits(),
+                            f64::from_bits(jsval.bits()),
+                        );
                         let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
                         let result = crate::closure::js_native_call_value(
-                            f64::from_bits(field_val.bits()),
+                            f64::from_bits(bound),
                             args_ptr,
                             args_len,
                         );
