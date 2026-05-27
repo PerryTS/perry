@@ -883,10 +883,133 @@ pub fn linearize_body(
                 });
             }
 
+            // `do { B } while (C)` containing yield(s): desugar to a flagged
+            // `while` so the existing While arm splits the embedded yield into
+            // resume states (#1824 — previously this fell through to the
+            // catch-all and the yield was never lifted, so the loop-body
+            // locals were lost across the await).
+            //
+            //   __dw_first = true                 (extra local, auto-boxed)
+            //   while (__dw_first || C) {
+            //     __dw_first = false;
+            //     B
+            //   }
+            //
+            // The flag makes the first iteration run unconditionally while
+            // keeping `continue` correct (it jumps to the condition; the flag
+            // is already false so C is re-checked) and short-circuiting C on
+            // the first iteration (matching do-while, where C is not evaluated
+            // before the first body run).
+            Stmt::DoWhile { body, condition } if body_contains_yield(body) => {
+                let first_id = alloc_local(next_local_id);
+                current.push(Stmt::Expr(Expr::LocalSet(
+                    first_id,
+                    Box::new(Expr::Bool(true)),
+                )));
+                let mut while_body = Vec::with_capacity(body.len() + 1);
+                while_body.push(Stmt::Expr(Expr::LocalSet(
+                    first_id,
+                    Box::new(Expr::Bool(false)),
+                )));
+                while_body.extend(body.iter().cloned());
+                let while_stmt = Stmt::While {
+                    condition: Expr::Logical {
+                        op: LogicalOp::Or,
+                        left: Box::new(Expr::LocalGet(first_id)),
+                        right: Box::new(condition.clone()),
+                    },
+                    body: while_body,
+                };
+                linearize_body(
+                    std::slice::from_ref(&while_stmt),
+                    states,
+                    current,
+                    state_num,
+                    state_id,
+                    next_local_id,
+                    sent_id,
+                    catches,
+                );
+            }
+
+            // `label: <loop>` containing yield(s): linearize the wrapped loop
+            // so the embedded yield is split into resume states (#1824 —
+            // previously the whole labeled statement fell through to the
+            // catch-all and was emitted unsplit). `break label` / `continue
+            // label` that target this loop from its own body level are first
+            // rewritten to plain break/continue, which the loop's own
+            // linearization then maps to its state targets. (Labeled
+            // break/continue from a *nested* loop is left unconverted — the
+            // single-sentinel scheme can't yet distinguish targets; this was
+            // already unsupported before this arm existed, so no regression.)
+            Stmt::Labeled { label, body } if body_contains_yield(std::slice::from_ref(&**body)) => {
+                let mut inner = (**body).clone();
+                match &mut inner {
+                    Stmt::For { body, .. }
+                    | Stmt::While { body, .. }
+                    | Stmt::DoWhile { body, .. } => {
+                        rewrite_labeled_bc_in_stmts(body, label);
+                    }
+                    _ => {}
+                }
+                linearize_body(
+                    std::slice::from_ref(&inner),
+                    states,
+                    current,
+                    state_num,
+                    state_id,
+                    next_local_id,
+                    sent_id,
+                    catches,
+                );
+            }
+
             // Regular statement (no yield) - accumulate
             other => {
                 current.push(other.clone());
             }
+        }
+    }
+}
+
+/// Within a labeled loop's body, rewrite `break label` / `continue label`
+/// that target THIS label into plain `break` / `continue`, so the loop's own
+/// For/While linearization (which only knows about plain break/continue) maps
+/// them to the loop's state targets. Descends only through `if` / `try`
+/// (which don't capture break/continue), mirroring the scoping of
+/// `rewrite_break_continue_in_stmt`. Stops at nested loops and `switch` —
+/// a `break label` from inside one of those still targets this loop, but the
+/// current single-sentinel scheme can't express that, so those are left
+/// as-is (pre-existing limitation).
+fn rewrite_labeled_bc_in_stmts(stmts: &mut [Stmt], label: &str) {
+    for s in stmts.iter_mut() {
+        match s {
+            Stmt::LabeledBreak(l) if l == label => *s = Stmt::Break,
+            Stmt::LabeledContinue(l) if l == label => *s = Stmt::Continue,
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                rewrite_labeled_bc_in_stmts(then_branch, label);
+                if let Some(eb) = else_branch.as_mut() {
+                    rewrite_labeled_bc_in_stmts(eb, label);
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                rewrite_labeled_bc_in_stmts(body, label);
+                if let Some(c) = catch.as_mut() {
+                    rewrite_labeled_bc_in_stmts(&mut c.body, label);
+                }
+                if let Some(f) = finally.as_mut() {
+                    rewrite_labeled_bc_in_stmts(f, label);
+                }
+            }
+            _ => {}
         }
     }
 }

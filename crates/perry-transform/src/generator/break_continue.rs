@@ -251,6 +251,19 @@ pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
                     return true;
                 }
             }
+            // A yield buried in a do-while or labeled loop must still be seen
+            // by the enclosing construct's linearization (#1824), otherwise it
+            // is never split into resume states.
+            Stmt::DoWhile { body, .. } => {
+                if body_contains_yield(body) {
+                    return true;
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                if body_contains_yield(std::slice::from_ref(&**body)) {
+                    return true;
+                }
+            }
             Stmt::For { body, .. } => {
                 if body_contains_yield(body) {
                     return true;
@@ -312,6 +325,18 @@ pub fn collect_vars_recursive(stmts: &[Stmt], vars: &mut Vec<(LocalId, String, T
                 }
             }
             Stmt::While { body, .. } => collect_vars_recursive(body, vars),
+            // `do { ... } while (cond)` — a `let` declared in the body that is
+            // live across an `await` must be hoisted just like a `while` body,
+            // otherwise its box is never preallocated and the value is lost
+            // across the state-machine split (#1824).
+            Stmt::DoWhile { body, .. } => collect_vars_recursive(body, vars),
+            // A labeled statement (`outer: for (...) { ... }`) wraps its loop
+            // in `Stmt::Labeled`; descend into the wrapped statement so the
+            // loop-body `let`s are still hoisted (#1824). Without this, every
+            // local inside a labeled loop is dropped across an `await`.
+            Stmt::Labeled { body, .. } => {
+                collect_vars_recursive(std::slice::from_ref(&**body), vars)
+            }
             Stmt::For { init, body, .. } => {
                 if let Some(init) = init {
                     collect_vars_recursive(&[(**init).clone()], vars);

@@ -419,6 +419,11 @@ pub fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
             }
         }
         Stmt::While { body, .. } => scan_stmts_for_max_func(body, max_id),
+        // Mirror scan_stmt_for_max_local: a closure declared inside a
+        // do-while or labeled loop must still bump the max func id, or the
+        // generator transform can mint a colliding func id (#1824 gap class).
+        Stmt::DoWhile { body, .. } => scan_stmts_for_max_func(body, max_id),
+        Stmt::Labeled { body, .. } => scan_stmt_for_max_func(body, max_id),
         Stmt::For { body, .. } => scan_stmts_for_max_func(body, max_id),
         Stmt::Try {
             body,
