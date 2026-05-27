@@ -849,6 +849,36 @@ pub unsafe extern "C" fn js_new_function_construct(
             return crate::value::js_nanbox_pointer(inst as i64);
         }
     }
+
+    // #321 (effect Layer/Scope): `new C(args)` where `C` is a *class
+    // reference held as a first-class value* — the INT32-tagged form a bare
+    // `class` identifier lowers to (`Expr::ClassRef` → `INT32_TAG |
+    // class_id`). This reaches the dynamic-new helper via the
+    // `Expr::LocalGet` callee route in `new_dynamic.rs` whenever a class is
+    // aliased through a variable / field / cross-module argument
+    // (`const C = Svc; new C()`, or effect's `flatMap(self, …)` storing a
+    // `Context.Tag` subclass into `effect_instruction_i0`). Pre-fix this
+    // value was neither a heap class-object (the `is_class_object_value`
+    // arm above) nor a pointer-shaped closure (so
+    // `synthetic_class_id_for_function` returned 0 — it requires
+    // `is_pointer()`), leaving the instance stamped with class_id 0: every
+    // inherited prototype method then threw `<m> is not a function`.
+    // Stamp the registered class id so method dispatch walks the parent
+    // chain. Mirrors the #1789 heap-class-object arm above: the constructor
+    // body / field initializers are emitted on the static `new ClassName()`
+    // codegen path (there is no constructor-by-class_id runtime entry), so a
+    // dynamically-constructed instance starts with no own props — fields
+    // written afterward and prototype methods work.
+    {
+        let bits = func_value.to_bits();
+        if (bits >> 48) == 0x7FFE {
+            let class_cid = (bits & 0xFFFF_FFFF) as u32;
+            if class_cid != 0 && is_class_id_registered(class_cid) {
+                let inst = js_object_alloc(class_cid, 0);
+                return crate::value::js_nanbox_pointer(inst as i64);
+            }
+        }
+    }
     let cid = synthetic_class_id_for_function(func_value);
     // Allocate the instance with the synthetic class id (or 0 if the
     // value isn't callable). The object starts with no own props; the
