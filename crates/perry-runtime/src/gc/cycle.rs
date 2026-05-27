@@ -712,6 +712,68 @@ impl ReclaimCycleState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MallocTrimOutcome {
+    status: AllocatorMaintenanceStatus,
+    reason: AllocatorMaintenanceReason,
+    elapsed_us: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_MALLOC_TRIM_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn reset_test_malloc_trim_call_count() {
+    TEST_MALLOC_TRIM_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn test_malloc_trim_call_count() -> usize {
+    TEST_MALLOC_TRIM_CALLS.with(Cell::get)
+}
+
+#[cfg(all(test, target_env = "gnu"))]
+fn record_test_malloc_trim_call() {
+    TEST_MALLOC_TRIM_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
+}
+
+fn run_malloc_trim(progress_kind: GcProgressKind) -> MallocTrimOutcome {
+    if progress_kind.is_budgeted() {
+        return MallocTrimOutcome {
+            status: AllocatorMaintenanceStatus::Skipped,
+            reason: AllocatorMaintenanceReason::OrdinaryBudgeted,
+            elapsed_us: 0,
+        };
+    }
+
+    #[cfg(target_env = "gnu")]
+    {
+        #[cfg(test)]
+        record_test_malloc_trim_call();
+
+        let start = Instant::now();
+        unsafe {
+            libc::malloc_trim(0);
+        }
+        return MallocTrimOutcome {
+            status: AllocatorMaintenanceStatus::Executed,
+            reason: AllocatorMaintenanceReason::ExplicitOrEmergency,
+            elapsed_us: start.elapsed().as_micros() as u64,
+        };
+    }
+
+    #[cfg(not(target_env = "gnu"))]
+    {
+        MallocTrimOutcome {
+            status: AllocatorMaintenanceStatus::Unsupported,
+            reason: AllocatorMaintenanceReason::NotSupported,
+            elapsed_us: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AtomicFinalizeSubphase {
     MinorPrelude,
     BarrierSeedDrain,
@@ -1348,13 +1410,19 @@ impl GcCycleState {
                 }
                 ReclaimSubphase::MallocTrim => {
                     let reclaim_start = trace_phase_start(&self.trace);
-                    #[cfg(target_env = "gnu")]
-                    {
-                        let phase_start = trace_phase_start(&self.trace);
-                        unsafe {
-                            libc::malloc_trim(0);
+                    let trim = run_malloc_trim(self.progress_kind);
+                    if let Some(trace) = self.trace.as_mut() {
+                        if trim.status == AllocatorMaintenanceStatus::Executed {
+                            trace.record_phase(
+                                "malloc_trim",
+                                Duration::from_micros(trim.elapsed_us),
+                            );
                         }
-                        trace_phase_record(&mut self.trace, "malloc_trim", phase_start);
+                        trace.record_malloc_trim_maintenance(
+                            trim.status,
+                            trim.reason,
+                            trim.elapsed_us,
+                        );
                     }
                     trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
                     self.reclaim_state

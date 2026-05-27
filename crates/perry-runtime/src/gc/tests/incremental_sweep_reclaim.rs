@@ -330,3 +330,43 @@ fn budgeted_reclaim_phase_is_split_from_completion() {
     assert_eq!(tracked_malloc_headers_matching(&dead_headers), 0);
     assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
 }
+
+#[test]
+fn budgeted_reclaim_skips_process_malloc_trim() {
+    let _trace_guard = TestGcTraceCaptureGuard::force_enabled();
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let live = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(live));
+    let dead_headers = allocate_dead_malloc_churn_headers(8);
+    GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(malloc_object_count().saturating_sub(1)));
+    gc_check_trigger();
+
+    let _status = budgeted_step_until_phase(GcCyclePhase::Reclaim);
+    reset_test_malloc_trim_call_count();
+    let before = gc_collection_count();
+
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    assert_eq!(
+        test_malloc_trim_call_count(),
+        0,
+        "ordinary budgeted reclaim must not invoke process-wide malloc_trim"
+    );
+    assert!(gc_collection_count() > before);
+    assert_eq!(tracked_malloc_headers_matching(&dead_headers), 0);
+    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+
+    let event = take_test_last_gc_trace_json().expect("budgeted reclaim should emit trace JSON");
+    assert_eq!(
+        event["allocator_maintenance"]["malloc_trim"]["status"].as_str(),
+        Some("skipped")
+    );
+    assert_eq!(
+        event["allocator_maintenance"]["malloc_trim"]["reason"].as_str(),
+        Some("ordinary_budgeted")
+    );
+    assert_eq!(event["phase_us"]["malloc_trim"].as_u64(), Some(0));
+}

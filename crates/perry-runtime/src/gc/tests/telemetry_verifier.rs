@@ -79,6 +79,28 @@ fn assert_budgeted_ordinary_trace(event: &serde_json::Value, expected_kind: &str
         event["pause_budget"]["ordinary_pause_stats_include"].as_bool(),
         Some(true)
     );
+    let malloc_trim = &event["allocator_maintenance"]["malloc_trim"];
+    assert_eq!(malloc_trim["status"].as_str(), Some("skipped"));
+    assert_eq!(malloc_trim["reason"].as_str(), Some("ordinary_budgeted"));
+    assert_eq!(malloc_trim["progress_kind"].as_str(), Some(expected_kind));
+    assert_eq!(malloc_trim["class"].as_str(), Some("ordinary_budgeted"));
+    assert_eq!(
+        malloc_trim["ordinary_pause_stats_include"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(malloc_trim["elapsed_us"].as_u64(), Some(0));
+    assert_eq!(event["phase_us"]["malloc_trim"].as_u64(), Some(0));
+    for (index, step) in event["pause_steps"]
+        .as_array()
+        .expect("ordinary trace should include pause steps")
+        .iter()
+        .enumerate()
+    {
+        assert!(
+            step.get("allocator_maintenance").is_none(),
+            "pause_steps[{index}] should not include allocator maintenance"
+        );
+    }
     verify_ordinary_pause_budget(event).expect("ordinary pause steps should stay in budget");
 }
 
@@ -257,6 +279,27 @@ fn emergency_full_trace_is_excluded_from_ordinary_pause_stats() {
         step["budget"]["class"].as_str() == Some("emergency")
             && step["budget"]["ordinary_pause_stats_include"].as_bool() == Some(false)
     }));
+    let malloc_trim = &event["allocator_maintenance"]["malloc_trim"];
+    assert_eq!(
+        malloc_trim["progress_kind"].as_str(),
+        Some("emergency_full")
+    );
+    assert_eq!(malloc_trim["class"].as_str(), Some("emergency"));
+    assert_eq!(
+        malloc_trim["ordinary_pause_stats_include"].as_bool(),
+        Some(false)
+    );
+    if cfg!(target_env = "gnu") {
+        assert_eq!(malloc_trim["status"].as_str(), Some("executed"));
+        assert_eq!(
+            malloc_trim["reason"].as_str(),
+            Some("explicit_or_emergency")
+        );
+    } else {
+        assert_eq!(malloc_trim["status"].as_str(), Some("unsupported"));
+        assert_eq!(malloc_trim["reason"].as_str(), Some("not_supported"));
+    }
+    assert!(malloc_trim["elapsed_us"].as_u64().is_some());
 
     let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
     unsafe {

@@ -516,6 +516,55 @@ pub(super) struct GcPauseStepTrace {
     pub(super) progress_kind: GcProgressKind,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AllocatorMaintenanceStatus {
+    Skipped,
+    Executed,
+    Unsupported,
+}
+
+impl AllocatorMaintenanceStatus {
+    #[inline]
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Skipped => "skipped",
+            Self::Executed => "executed",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AllocatorMaintenanceReason {
+    OrdinaryBudgeted,
+    NotSupported,
+    #[cfg_attr(not(target_env = "gnu"), allow(dead_code))]
+    ExplicitOrEmergency,
+}
+
+impl AllocatorMaintenanceReason {
+    #[inline]
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::OrdinaryBudgeted => "ordinary_budgeted",
+            Self::NotSupported => "not_supported",
+            Self::ExplicitOrEmergency => "explicit_or_emergency",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct AllocatorMaintenanceEvent {
+    pub(super) status: AllocatorMaintenanceStatus,
+    pub(super) reason: AllocatorMaintenanceReason,
+    pub(super) elapsed_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct AllocatorMaintenanceTrace {
+    pub(super) malloc_trim: Option<AllocatorMaintenanceEvent>,
+}
+
 pub(super) struct GcCycleTrace {
     pub(super) collection_kind: GcCollectionKind,
     pub(super) trigger_kind: GcTriggerKind,
@@ -546,6 +595,7 @@ pub(super) struct GcCycleTrace {
     pub(super) phase_progression: Vec<GcCyclePhase>,
     pub(super) debt: GcDebtTrace,
     pub(super) max_step_pause_us: u64,
+    pub(super) allocator_maintenance: AllocatorMaintenanceTrace,
 }
 
 impl GcCycleTrace {
@@ -608,12 +658,27 @@ impl GcCycleTrace {
             phase_progression: vec![GcCyclePhase::BuildValidPointerSet],
             debt: GcDebtTrace::new(debt_start),
             max_step_pause_us: 0,
+            allocator_maintenance: AllocatorMaintenanceTrace::default(),
         })
     }
 
     #[inline]
     pub(super) fn record_phase(&mut self, name: &'static str, elapsed: Duration) {
         *self.phase_us.entry(name).or_insert(0) += elapsed.as_micros() as u64;
+    }
+
+    #[inline]
+    pub(super) fn record_malloc_trim_maintenance(
+        &mut self,
+        status: AllocatorMaintenanceStatus,
+        reason: AllocatorMaintenanceReason,
+        elapsed_us: u64,
+    ) {
+        self.allocator_maintenance.malloc_trim = Some(AllocatorMaintenanceEvent {
+            status,
+            reason,
+            elapsed_us,
+        });
     }
 
     pub(super) fn record_pause_step(
@@ -861,6 +926,8 @@ impl GcCycleTrace {
             "end": debt_snapshot_json(self.debt.end),
             "max_observed": debt_snapshot_json(self.debt.max_observed),
         });
+        let allocator_maintenance_json =
+            allocator_maintenance_json(self.allocator_maintenance, self.progress_kind);
         let steps_value = steps_json(self.steps_before, steps_after);
         serde_json::json!({
             "event": "gc_cycle",
@@ -892,6 +959,7 @@ impl GcCycleTrace {
             "pause_steps": pause_steps_json,
             "phase_progression": phase_progression_json,
             "debt": debt_json,
+            "allocator_maintenance": allocator_maintenance_json,
             "steps": steps_value,
         })
     }
@@ -956,6 +1024,41 @@ pub(super) fn pause_step_json(step: GcPauseStepTrace) -> serde_json::Value {
             "within_soft_pause_target": within_soft_pause_target,
         },
     })
+}
+
+pub(super) fn allocator_maintenance_json(
+    trace: AllocatorMaintenanceTrace,
+    progress_kind: GcProgressKind,
+) -> serde_json::Value {
+    let malloc_trim = trace
+        .malloc_trim
+        .unwrap_or_else(|| default_malloc_trim_maintenance(progress_kind));
+    serde_json::json!({
+        "malloc_trim": {
+            "status": malloc_trim.status.as_str(),
+            "reason": malloc_trim.reason.as_str(),
+            "progress_kind": progress_kind.as_str(),
+            "class": progress_kind.report_class(),
+            "ordinary_pause_stats_include": false,
+            "elapsed_us": malloc_trim.elapsed_us,
+        },
+    })
+}
+
+fn default_malloc_trim_maintenance(progress_kind: GcProgressKind) -> AllocatorMaintenanceEvent {
+    if progress_kind.is_budgeted() {
+        return AllocatorMaintenanceEvent {
+            status: AllocatorMaintenanceStatus::Skipped,
+            reason: AllocatorMaintenanceReason::OrdinaryBudgeted,
+            elapsed_us: 0,
+        };
+    }
+
+    AllocatorMaintenanceEvent {
+        status: AllocatorMaintenanceStatus::Unsupported,
+        reason: AllocatorMaintenanceReason::NotSupported,
+        elapsed_us: 0,
+    }
 }
 
 #[cfg(test)]
