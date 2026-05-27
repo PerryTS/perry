@@ -1,0 +1,69 @@
+# Test262 feature tags whose tests we run against Perry (#799).
+# Lines starting with # are comments; blank lines ignored.
+#
+# Rationale per category lives next to the tag.
+
+# --- ES2015+ core language ---
+arrow-function
+let
+const
+destructuring-assignment
+default-parameters
+rest-parameters
+spread
+template-literals
+generators
+class
+class-fields-public
+class-fields-private
+class-methods-private
+class-static-fields-public
+class-static-fields-private
+class-static-methods-private
+class-static-block
+super
+new.target
+
+# --- iterators / collections ---
+Symbol
+Symbol.iterator
+Symbol.asyncIterator
+for-of
+Map
+Set
+WeakMap
+WeakSet
+TypedArray
+DataView
+ArrayBuffer
+
+# --- async / promises ---
+async-functions
+async-iteration
+Promise
+Promise.allSettled
+Promise.any
+Promise.prototype.finally
+
+# --- ES2020+ syntax ---
+optional-chaining
+nullish-coalescing
+logical-assignment-operators
+BigInt
+globalThis
+numeric-separator-literal
+
+# --- Reflect / Proxy ---
+Reflect
+Proxy
+
+# --- explicit non-targets (commented for visibility) ---
+# eval                         — Perry is AOT
+# Function-prototype-toString  — Perry does not retain source text
+# Intl                         — out of scope (no ICU)
+# SharedArrayBuffer            — Perry threads do not share heap
+# Atomics                      — no SharedArrayBuffer
+# top-level-await              — partial; semantics depend on loader
+# regexp-lookbehind            — Rust regex crate lacks lookbehind
+# resizable-arraybuffer        — not implemented
+# Temporal                     — not implemented

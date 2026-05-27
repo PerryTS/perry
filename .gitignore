@@ -173,12 +173,18 @@ fp_fuzz_failures/
 
 test-files/.perry-cache/
 
-# #800: the `/test-*` rule above sweeps all of test-compat/, but the
-# node-core radar's source-of-truth (config, shim, README) must be tracked.
-# Re-include only node-core; keep the rest of test-compat (and node-core's
-# generated report) ignored.
+# #800/#799: the `/test-*` rule above sweeps all of test-compat/, but the
+# compat radars' source-of-truth (config, shim, README) must be tracked.
+# Re-include node-core (#800) and test262 (#799); keep the rest of
+# test-compat — and each radar's generated report.json — ignored.
 !/test-compat/
 /test-compat/*
 !/test-compat/node-core/
 !/test-compat/node-core/**
 /test-compat/node-core/report.json
+!/test-compat/test262/
+!/test-compat/test262/**
+/test-compat/test262/report.json
+
+# Vendored upstream corpora for the compat radars (large; never committed).
+/vendor/
