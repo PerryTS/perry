@@ -9,6 +9,8 @@ thread_local! {
     static READABLE_DATA_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     static READABLE_THIS_MATCHES: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static READABLE_END_COUNT: RefCell<usize> = const { RefCell::new(0) };
+    static WRITABLE_FINISH_COUNT: RefCell<usize> = const { RefCell::new(0) };
+    static WRITABLE_CLOSE_COUNT: RefCell<usize> = const { RefCell::new(0) };
 }
 
 fn string_value(s: &str) -> f64 {
@@ -69,6 +71,16 @@ extern "C" fn capture_end_listener(closure: *const ClosureHeader) -> f64 {
             .push(actual.to_bits() == expected.to_bits())
     });
     READABLE_END_COUNT.with(|count| *count.borrow_mut() += 1);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn capture_finish_listener(_closure: *const ClosureHeader) -> f64 {
+    WRITABLE_FINISH_COUNT.with(|count| *count.borrow_mut() += 1);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn capture_close_listener(_closure: *const ClosureHeader) -> f64 {
+    WRITABLE_CLOSE_COUNT.with(|count| *count.borrow_mut() += 1);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -528,6 +540,59 @@ fn writable_corked_counter_tracks_cork_balance() {
         stream.to_bits()
     );
     assert_eq!(js_node_stream_method_writable_corked(handle), 0.0);
+}
+
+#[test]
+fn writable_lifecycle_flags_reflect_end_and_finish() {
+    WRITABLE_FINISH_COUNT.with(|count| *count.borrow_mut() = 0);
+    WRITABLE_CLOSE_COUNT.with(|count| *count.borrow_mut() = 0);
+
+    let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+
+    assert_eq!(js_node_stream_method_writable(handle).to_bits(), TAG_TRUE);
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"writable")).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_node_stream_method_writable_ended(handle).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_node_stream_method_writable_finished(handle).to_bits(),
+        TAG_FALSE
+    );
+
+    let finish =
+        box_pointer(js_closure_alloc(capture_finish_listener as *const u8, 0) as *const u8);
+    let close = box_pointer(js_closure_alloc(capture_close_listener as *const u8, 0) as *const u8);
+    let _ = js_node_stream_method_on(handle, string_value("finish"), finish);
+    let _ = js_node_stream_method_on(handle, string_value("close"), close);
+
+    let _ = js_node_stream_method_end(handle, string_value("done"));
+    assert_eq!(js_node_stream_method_writable(handle).to_bits(), TAG_FALSE);
+    assert_eq!(
+        js_node_stream_method_writable_ended(handle).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_node_stream_method_writable_finished(handle).to_bits(),
+        TAG_FALSE
+    );
+
+    let _ = crate::promise::js_promise_run_microtasks();
+    assert_eq!(
+        js_node_stream_method_writable_finished(handle).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"writableFinished")).to_bits(),
+        TAG_TRUE
+    );
+    WRITABLE_FINISH_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    WRITABLE_CLOSE_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
 }
 
 #[test]

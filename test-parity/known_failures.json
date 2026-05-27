@@ -416,12 +416,6 @@
     "category": "bug-open",
     "reason": "node:stream: readableFlowing state not tracked on instance. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/flags/writable-ended": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: writableEnded flag not tracked. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/readable/read-with-size": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -710,12 +704,6 @@
     "category": "bug-open",
     "reason": "node:stream: drain event after backpressure-overflow doesn't fire. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/writable/finish-before-close": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: finish/close event ordering doesn't deliver. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/encoding/latin1": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -974,12 +962,6 @@
     "category": "bug-open",
     "reason": "node:stream: readable.readableEncoding getter — returns wrong value (does not reflect constructor option or setEncoding()). Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/flags/writable-finished": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: writable.writableFinished getter — does not flip true on 'finish' event. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/compose/instance-method": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1015,12 +997,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: writable.errored getter — stored Error after destroy(err) not exposed. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/flags/writable-lifecycle": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: writable.writable boolean lifecycle — does not flip false after finish/close. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/iter-helpers/map-returns-readable": {
     "issue": "1558",
@@ -1819,12 +1795,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(immediately-done iter) — wrong data count or end not firing. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/events/finish-then-close-writable": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Writable 'finish' / 'close' event order — wrong sequence. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/pipe/end-false-then-write": {
     "issue": "1532",
