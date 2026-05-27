@@ -90,7 +90,49 @@ impl<'a> FuncEmitCtx<'a> {
 
             // --- Update ---
             Expr::Update { id, op, prefix } => {
-                if let Some(&idx) = self.local_map.get(id) {
+                if let Some(&gidx) = self
+                    .emitter
+                    .module_let_globals
+                    .get(&(self.emitter.current_mod_idx, *id))
+                {
+                    if *prefix {
+                        // ++x on a module-level let: increment the backing WASM
+                        // global and leave the new value on the stack.
+                        func.instruction(&Instruction::GlobalGet(gidx));
+                        func.instruction(&Instruction::F64ReinterpretI64);
+                        func.instruction(&f64_const(1.0));
+                        match op {
+                            UpdateOp::Increment => {
+                                func.instruction(&Instruction::F64Add);
+                            }
+                            UpdateOp::Decrement => {
+                                func.instruction(&Instruction::F64Sub);
+                            }
+                        };
+                        func.instruction(&Instruction::I64ReinterpretF64);
+                        func.instruction(&Instruction::GlobalSet(gidx));
+                        func.instruction(&Instruction::GlobalGet(gidx));
+                    } else {
+                        // x++ on a module-level let: return the old value while
+                        // persisting the incremented value to the backing global.
+                        func.instruction(&Instruction::GlobalGet(gidx));
+                        // Compute new value
+                        func.instruction(&Instruction::GlobalGet(gidx));
+                        func.instruction(&Instruction::F64ReinterpretI64);
+                        func.instruction(&f64_const(1.0));
+                        match op {
+                            UpdateOp::Increment => {
+                                func.instruction(&Instruction::F64Add);
+                            }
+                            UpdateOp::Decrement => {
+                                func.instruction(&Instruction::F64Sub);
+                            }
+                        };
+                        func.instruction(&Instruction::I64ReinterpretF64);
+                        func.instruction(&Instruction::GlobalSet(gidx));
+                        // Old value (i64) is still on stack
+                    }
+                } else if let Some(&idx) = self.local_map.get(id) {
                     if *prefix {
                         // ++x: increment then return new value
                         // local is i64, convert to f64, add 1, convert back
