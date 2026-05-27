@@ -232,6 +232,48 @@ pub fn lower_class_decl(
             early_field_types.push((field_name, ty));
         }
     }
+    // TypeScript constructor parameter properties (`constructor(readonly
+    // stack: Node[])`) are class fields too, but they live on the
+    // constructor's param list rather than as `ClassProp` members — so the
+    // ClassProp loop above misses them. Without registering their declared
+    // types here, `const s = this.stack` inside a method infers `Any` (the
+    // `this.<field>` arm of `infer_type_from_expr` consults this registry),
+    // which knocks the subsequent `s[i]` element read off the array fast
+    // path. That mis-lowered `effect`'s `RedBlackTreeIterator` (whose
+    // `readonly stack: Array<Node<K,V>>` is a param-prop): a local alias
+    // `const stack = this.stack; stack[len-1]` returned garbage nodes, so
+    // in-order traversal lost the last node and SortedSet iteration came
+    // back short (#321). Mirror the param-prop field detection that runs
+    // later (when `fields` is built) so the early registry agrees.
+    for member in &class_decl.class.body {
+        if let ast::ClassMember::Constructor(ctor) = member {
+            for param in &ctor.params {
+                if let ast::ParamOrTsParamProp::TsParamProp(ts_prop) = param {
+                    let (param_name, param_type) = match &ts_prop.param {
+                        ast::TsParamPropParam::Ident(ident) => {
+                            let pname = ident.id.sym.to_string();
+                            let ty = ident
+                                .type_ann
+                                .as_ref()
+                                .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
+                                .unwrap_or(Type::Any);
+                            (pname, ty)
+                        }
+                        ast::TsParamPropParam::Assign(assign) => {
+                            let pname = get_pat_name(&assign.left).unwrap_or_default();
+                            let ty = extract_param_type_with_ctx(&assign.left, Some(ctx));
+                            (pname, ty)
+                        }
+                    };
+                    if !param_name.is_empty()
+                        && !early_field_types.iter().any(|(n, _)| *n == param_name)
+                    {
+                        early_field_types.push((param_name, param_type));
+                    }
+                }
+            }
+        }
+    }
     ctx.register_class_field_types(name.clone(), early_field_types);
 
     let mut fields = Vec::new();

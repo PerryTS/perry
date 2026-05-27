@@ -1005,6 +1005,49 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// Resolve the declared type of `<object>.<field>` when `object` is a
+/// known user class or interface that declares (or inherits) a field
+/// named `field`. Returns `None` when the receiver isn't a tracked
+/// class/interface, or when no such field is declared on it.
+///
+/// Used to keep name-only field heuristics (the Error `.message` /
+/// `.stack` / `.name` string assumption) from hijacking a user class
+/// whose own field happens to share that name with a non-string type
+/// (e.g. `effect`'s `RedBlackTreeIterator.stack: Array<...>` — #321).
+pub(crate) fn declared_field_type(ctx: &FnCtx<'_>, object: &Expr, field: &str) -> Option<HirType> {
+    let receiver_class = receiver_class_name(ctx, object)?;
+    if let Some(class) = ctx.classes.get(&receiver_class) {
+        if let Some(f) = class.fields.iter().find(|f| f.name == field) {
+            return Some(f.ty.clone());
+        }
+        // Walk the inheritance chain.
+        let mut parent = class.extends_name.as_deref();
+        while let Some(p) = parent {
+            let Some(pc) = ctx.classes.get(p) else { break };
+            if let Some(f) = pc.fields.iter().find(|f| f.name == field) {
+                return Some(f.ty.clone());
+            }
+            parent = pc.extends_name.as_deref();
+        }
+        return None;
+    }
+    if let Some(iface) = ctx.interfaces.get(&receiver_class) {
+        if let Some(p) = iface.properties.iter().find(|p| p.name == field) {
+            return Some(p.ty.clone());
+        }
+        for ext in &iface.extends {
+            if let HirType::Named(parent_name) = ext {
+                if let Some(parent_iface) = ctx.interfaces.get(parent_name) {
+                    if let Some(p) = parent_iface.properties.iter().find(|p| p.name == field) {
+                        return Some(p.ty.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::String(_) | Expr::WtfString(_) => true,
@@ -1148,9 +1191,28 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // all route through the runtime's GC_TYPE_ERROR dispatch and
         // return string pointers. Recognize them so chained calls like
         // `e.stack!.includes("...")` hit the string method fast path.
-        Expr::PropertyGet { property, .. }
+        //
+        // BUT this name-only heuristic must NOT hijack a user class /
+        // interface whose own field happens to be called `stack` /
+        // `name` / `message` with a non-string declared type. The
+        // RedBlackTreeIterator in `effect` has `readonly stack:
+        // Array<Node<K,V>>`; without this guard `this.stack[i]` was
+        // mis-lowered as a string `char_at` (garbage element reads →
+        // null SortedSet iteration, #321). When the receiver resolves
+        // to a concrete declared field type, defer to it; only fall
+        // back to the Error-string assumption when the receiver's type
+        // is genuinely unknown (a real caught `Error`/`unknown`/`any`).
+        Expr::PropertyGet { object, property }
             if matches!(property.as_str(), "message" | "stack" | "name") =>
         {
+            // If the receiver is a known user class / interface that
+            // *declares* a field with this name, that field's declared
+            // type wins over the name-only Error heuristic.
+            if let Some(declared) = declared_field_type(ctx, object, property) {
+                return matches!(declared, HirType::String);
+            }
+            // Otherwise it's an Error-shaped property (caught `e`,
+            // `unknown`/`any`, or an untracked receiver) → string.
             true
         }
         // Namespace `node:process` exports share the same runtime process
