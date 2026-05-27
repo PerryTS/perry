@@ -6,6 +6,9 @@ use std::cell::RefCell;
 
 thread_local! {
     static WRITE_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    static READABLE_DATA_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    static READABLE_THIS_MATCHES: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
+    static READABLE_END_COUNT: RefCell<usize> = const { RefCell::new(0) };
 }
 
 fn string_value(s: &str) -> f64 {
@@ -37,6 +40,35 @@ extern "C" fn write_capture(_closure: *const ClosureHeader, chunk: f64, _enc: f6
 }
 
 extern "C" fn noop_listener(_closure: *const ClosureHeader) -> f64 {
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn capture_data_listener(closure: *const ClosureHeader, chunk: f64) -> f64 {
+    let expected = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let actual = crate::object::js_implicit_this_get();
+    READABLE_THIS_MATCHES.with(|matches| {
+        matches
+            .borrow_mut()
+            .push(actual.to_bits() == expected.to_bits())
+    });
+    let readable = js_node_stream_readable_from(chunk);
+    READABLE_DATA_CAPTURED.with(|captured| {
+        captured
+            .borrow_mut()
+            .push(js_node_stream_collect_bytes(readable))
+    });
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn capture_end_listener(closure: *const ClosureHeader) -> f64 {
+    let expected = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let actual = crate::object::js_implicit_this_get();
+    READABLE_THIS_MATCHES.with(|matches| {
+        matches
+            .borrow_mut()
+            .push(actual.to_bits() == expected.to_bits())
+    });
+    READABLE_END_COUNT.with(|count| *count.borrow_mut() += 1);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -323,6 +355,53 @@ fn stream_listener_count_and_listeners_reflect_data_end_storage() {
     let native_arr = js_node_stream_method_listeners(native_handle, string_value("data"))
         as *const crate::array::ArrayHeader;
     assert_eq!(crate::array::js_array_length(native_arr), 2);
+}
+
+#[test]
+fn readable_push_emits_data_with_stream_this_and_deferred_end() {
+    READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    READABLE_THIS_MATCHES.with(|matches| matches.borrow_mut().clear());
+    READABLE_END_COUNT.with(|count| *count.borrow_mut() = 0);
+
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+
+    let data_closure = js_closure_alloc(capture_data_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_data_listener as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(data_closure, 0, stream);
+    let data_listener = box_pointer(data_closure as *const u8);
+
+    let end_closure = js_closure_alloc(capture_end_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_end_listener as *const u8, 0);
+    crate::closure::js_closure_set_capture_f64(end_closure, 0, stream);
+    let end_listener = box_pointer(end_closure as *const u8);
+
+    let _ = js_node_stream_method_on(handle, string_value("data"), data_listener);
+    assert_eq!(
+        js_node_stream_method_push(handle, string_value("x")).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_node_stream_method_push(handle, f64::from_bits(TAG_NULL)).to_bits(),
+        TAG_FALSE
+    );
+    let _ = js_node_stream_method_on(handle, string_value("end"), end_listener);
+
+    READABLE_DATA_CAPTURED.with(|captured| {
+        assert_eq!(captured.borrow().as_slice(), &[b"x".to_vec()]);
+    });
+    READABLE_END_COUNT.with(|count| assert_eq!(*count.borrow(), 0));
+
+    let _ = crate::promise::js_promise_run_microtasks();
+    READABLE_END_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    READABLE_THIS_MATCHES.with(|matches| {
+        assert_eq!(matches.borrow().as_slice(), &[true, true]);
+    });
+
+    let _ = js_node_stream_method_push(handle, string_value("late"));
+    READABLE_DATA_CAPTURED.with(|captured| {
+        assert_eq!(captured.borrow().as_slice(), &[b"x".to_vec()]);
+    });
 }
 
 #[test]

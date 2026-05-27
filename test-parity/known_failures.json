@@ -524,18 +524,6 @@
     "category": "bug-open",
     "reason": "node:stream: final() constructor option not invoked before finish. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/push/push-buffer": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: push(Buffer) → data delivery doesn't fire / chunk not a Buffer. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/push/push-return-value": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: push() should return false when buffered bytes > highWaterMark. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/write/write-null": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -631,12 +619,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: setEncoding(hex) + data delivery doesn't fire. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/push/typed-array": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: push(Uint8Array) doesn't deliver Buffer view via data event. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/read-empty-returns-null": {
     "issue": "1531",
@@ -775,12 +757,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: finished({error:false,...}) options-config doesn't fire callback. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/push/empty-buffer": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: push(empty Buffer) + push(null) + end-event chain doesn't fire. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/subclass/extends-duplex": {
     "issue": "1532",
@@ -1057,12 +1033,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: await using does not trigger Symbol.asyncDispose on the stream. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/push/push-undefined": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: push(undefined) crashes instead of being treated as end-of-stream. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/from-async-iterable": {
     "issue": "1539",
@@ -1717,12 +1687,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(POJO-with-Symbol.iterator) — does not iterate the custom iterable. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/events/data-multi-listeners-same-data": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: multiple 'data' listeners — receive different chunks or wrong order. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/unshift-return-value": {
     "issue": "1532",
@@ -2432,12 +2396,6 @@
     "category": "bug-open",
     "reason": "node:stream: destroy() during flowing — extra 'data' emitted or 'close' wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/flow/data-after-end-not-fired": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: push() after end-emit — extra 'data' event fired. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/from-array-with-undefined": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -2917,12 +2875,6 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: write(Buffer) — encoding arg not 'buffer'. Flips to PASS when #1539 lands."
-  },
-  "node-suite/stream/events/listener-fires-with-this-emitter": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: 'data' listener `this` not bound to emitter (non-arrow fn). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/from-gen-with-early-return": {
     "issue": "1532",
