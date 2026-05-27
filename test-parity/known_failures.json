@@ -728,12 +728,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline for already-ended source doesn't invoke callback. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/async-iterator-symbol": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable[Symbol.asyncIterator]() doesn't return a working async iterator. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/readable/double-iterate-empty": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -1087,12 +1081,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: Duplex.from(asyncIterable) — async-gen → Duplex form not yet wired. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/iterator-method": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: readable.iterator({destroyOnReturn:false}) — instance method alias for Symbol.asyncIterator not exposed. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/flags/readable-encoding": {
     "issue": "1531",
@@ -1981,12 +1969,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Transform._flush — not called exactly once after end. Flips to PASS when #1539 lands."
-  },
-  "node-suite/stream/readable/symbol-async-iter-returns-iterator": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: [Symbol.asyncIterator]() — missing next/return method or not self-iterable. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/promises/finished-rejects-on-error": {
     "issue": "1532",
