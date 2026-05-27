@@ -80,6 +80,8 @@ const STREAM_END_EMITTED_KEY: &[u8] = b"__perryStreamEndEmitted";
 const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
 const STREAM_MAX_LISTENERS_KEY: &[u8] = b"__perryStreamMaxListeners";
 const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
+const WRITABLE_FINISH_SCHEDULED_KEY: &[u8] = b"__perryWritableFinishScheduled";
+const WRITABLE_FINISH_EMITTED_KEY: &[u8] = b"__perryWritableFinishEmitted";
 // #1534: direction + disturbed bits so the static introspection helpers
 // (`Readable.isReadable` / `isDisturbed` / `isErrored`) answer per-stream
 // instead of with a uniform stub. Set at construction / on first read.
@@ -151,6 +153,31 @@ extern "C" fn ns_readable_end_microtask(closure: *const ClosureHeader) -> f64 {
         f64::from_bits(TAG_FALSE),
     );
     emit_readable_end_once(stream);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_writable_finish_microtask(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let callback = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
+    set_hidden_value(
+        stream,
+        hidden_finish_scheduled_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+    if !has_truthy_hidden(stream, hidden_finish_emitted_key()) {
+        set_hidden_value(
+            stream,
+            hidden_finish_emitted_key(),
+            f64::from_bits(TAG_TRUE),
+        );
+        let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
+    }
+    if is_callable_value(callback) {
+        call_listener_args(stream, callback, &[]);
+    }
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -300,10 +327,7 @@ fn finish_stream(stream: f64, callback: Option<f64>) {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
     }
-    let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
-    if let Some(callback) = callback {
-        call_listener_args(stream, callback, &[]);
-    }
+    schedule_writable_finish(stream, callback);
 }
 
 fn stream_value_from_handle(stream_handle: i64) -> f64 {
@@ -956,6 +980,7 @@ fn register_stub_arities() {
     register(ns_remove_all_listeners1 as *const u8, 1);
     register(ns_readable_from_drain as *const u8, 0);
     register(ns_readable_end_microtask as *const u8, 0);
+    register(ns_writable_finish_microtask as *const u8, 0);
     register(ns_emit2 as *const u8, 2);
     crate::closure::js_register_closure_rest(ns_emit_rest as *const u8, 1);
     register(ns_resume0 as *const u8, 0);
@@ -1061,6 +1086,16 @@ fn hidden_max_listeners_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_write_key() -> *mut crate::string::StringHeader {
     hidden_key(WRITABLE_WRITE_KEY)
+}
+
+#[inline]
+fn hidden_finish_scheduled_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_FINISH_SCHEDULED_KEY)
+}
+
+#[inline]
+fn hidden_finish_emitted_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_FINISH_EMITTED_KEY)
 }
 
 #[inline]
@@ -1175,6 +1210,29 @@ fn schedule_readable_end(stream: f64) {
     set_hidden_value(stream, hidden_end_scheduled_key(), f64::from_bits(TAG_TRUE));
     let closure = js_closure_alloc(ns_readable_end_microtask as *const u8, 1);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
+    crate::builtins::js_queue_microtask(closure as i64);
+}
+
+fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
+    if has_truthy_hidden(stream, hidden_finish_emitted_key())
+        || has_truthy_hidden(stream, hidden_finish_scheduled_key())
+    {
+        return;
+    }
+    set_hidden_value(
+        stream,
+        hidden_finish_scheduled_key(),
+        f64::from_bits(TAG_TRUE),
+    );
+    let closure = js_closure_alloc(ns_writable_finish_microtask as *const u8, 2);
+    js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
+    js_closure_set_capture_ptr(
+        closure,
+        1,
+        callback
+            .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+            .to_bits() as i64,
+    );
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
