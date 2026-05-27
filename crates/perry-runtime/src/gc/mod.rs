@@ -279,6 +279,12 @@ pub fn gc_init() {
         crate::object::new_class_side_table_root_scan_state,
         MutableRootScannerSource::RuntimeMutableScanner,
     );
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        crate::symbol::scan_symbol_side_table_roots_mut,
+        crate::symbol::scan_symbol_side_table_roots_mut_step,
+        crate::symbol::new_symbol_side_table_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
     // Issue #1813: the implicit-`this` cell holds the live receiver across a
     // dynamically-dispatched method body. A moving GC triggered from inside
     // that body (e.g. @perryts/mysql Pool.acquire → handshake → nativeScramble

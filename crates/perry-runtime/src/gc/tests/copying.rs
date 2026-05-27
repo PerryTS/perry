@@ -1761,6 +1761,87 @@ fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
 }
 
 #[test]
+fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    crate::symbol::test_clear_symbol_side_table_roots();
+    gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
+
+    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    let sym_key = unsafe { alloc_nursery_test_symbol() };
+    let value = young_leaf();
+    let static_sym_key = unsafe { alloc_nursery_test_symbol() };
+    let static_value = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(owner));
+
+    crate::symbol::test_seed_symbol_pointer_root(sym_key);
+    crate::symbol::test_seed_symbol_pointer_root(static_sym_key);
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            f64::from_bits(ptr_bits(owner)),
+            f64::from_bits(ptr_bits(sym_key)),
+            f64::from_bits(string_bits(value)),
+        );
+        crate::symbol::js_class_register_static_symbol(
+            0x5402,
+            f64::from_bits(ptr_bits(static_sym_key)),
+            f64::from_bits(string_bits(static_value)),
+        );
+    }
+
+    let _ = gc_collect_minor();
+
+    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let entries = crate::symbol::test_symbol_property_roots(owner_after);
+    assert_eq!(entries.len(), 1);
+    let (sym_key_after, value_bits_after) = entries[0];
+    let value_after = (value_bits_after & POINTER_MASK) as usize;
+    let static_entries = crate::symbol::test_class_static_symbol_roots_for_class(0x5402);
+    assert_eq!(static_entries.len(), 1);
+    let (static_sym_key_after, static_value_bits_after) = static_entries[0];
+    let static_value_after = (static_value_bits_after & POINTER_MASK) as usize;
+
+    assert_ne!(owner_after, owner);
+    assert_ne!(sym_key_after, sym_key);
+    assert_ne!(value_after, value);
+    assert_ne!(static_sym_key_after, static_sym_key);
+    assert_ne!(static_value_after, static_value);
+    assert!(crate::arena::pointer_in_nursery(owner_after));
+    assert!(crate::arena::pointer_in_nursery(sym_key_after));
+    assert!(crate::arena::pointer_in_nursery(value_after));
+    assert!(crate::arena::pointer_in_nursery(static_sym_key_after));
+    assert!(crate::arena::pointer_in_nursery(static_value_after));
+    assert!(
+        !crate::symbol::test_symbol_property_owner_exists(owner),
+        "symbol side table should not keep the stale owner key after moving"
+    );
+    assert!(crate::symbol::test_symbol_pointer_root_contains(
+        sym_key_after
+    ));
+    assert!(crate::symbol::test_symbol_pointer_root_contains(
+        static_sym_key_after
+    ));
+    assert!(!crate::symbol::test_symbol_pointer_root_contains(sym_key));
+    assert!(!crate::symbol::test_symbol_pointer_root_contains(
+        static_sym_key
+    ));
+
+    let moved_owner = f64::from_bits(ptr_bits(owner_after));
+    let moved_sym = f64::from_bits(ptr_bits(sym_key_after));
+    let moved_static_sym = f64::from_bits(ptr_bits(static_sym_key_after));
+    let class_ref = f64::from_bits(crate::value::INT32_TAG | 0x5402);
+    unsafe {
+        assert_eq!(
+            crate::symbol::js_object_get_symbol_property(moved_owner, moved_sym).to_bits(),
+            value_bits_after
+        );
+        assert_eq!(
+            crate::symbol::js_object_get_symbol_property(class_ref, moved_static_sym).to_bits(),
+            static_value_bits_after
+        );
+    }
+}
+
+#[test]
 fn test_copying_minor_rewrites_old_overflow_object_child_without_reentrant_borrow() {
     struct OverflowFieldsRootGuard;
 

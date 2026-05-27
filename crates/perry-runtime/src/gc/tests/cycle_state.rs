@@ -1063,6 +1063,77 @@ fn full_cycle_class_static_field_store_after_root_scan_preserves_new_value() {
 }
 
 #[test]
+fn full_cycle_symbol_property_store_after_root_scan_preserves_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::symbol::test_clear_symbol_side_table_roots();
+
+    let owner = alloc_tracked_test_object();
+    let sym = alloc_tracked_test_symbol();
+    let child = alloc_tracked_test_closure();
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            f64::from_bits(ptr_bits(owner as usize)),
+            f64::from_bits(ptr_bits(sym as usize)),
+            f64::from_bits(ptr_bits(child as usize)),
+        );
+    }
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(sym as *mut u8),
+        "symbol property key stored after root scan should survive via the side-table root barrier"
+    );
+    assert!(
+        malloc_user_ptr_tracked(child),
+        "symbol property value stored after root scan should survive via the side-table root barrier"
+    );
+    crate::symbol::test_clear_symbol_side_table_roots();
+}
+
+#[test]
+fn full_cycle_class_static_symbol_store_after_root_scan_preserves_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::symbol::test_clear_symbol_side_table_roots();
+
+    let sym = alloc_tracked_test_symbol();
+    let child = alloc_tracked_test_closure();
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    unsafe {
+        crate::symbol::js_class_register_static_symbol(
+            0x5106,
+            f64::from_bits(ptr_bits(sym as usize)),
+            f64::from_bits(ptr_bits(child as usize)),
+        );
+    }
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(sym as *mut u8),
+        "class static symbol key stored after root scan should survive via the side-table root barrier"
+    );
+    assert!(
+        malloc_user_ptr_tracked(child),
+        "class static symbol value stored after root scan should survive via the side-table root barrier"
+    );
+    crate::symbol::test_clear_symbol_side_table_roots();
+}
+
+#[test]
 fn full_cycle_class_ref_dynamic_prop_store_after_root_scan_preserves_new_value() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
