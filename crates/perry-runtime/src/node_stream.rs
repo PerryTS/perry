@@ -105,13 +105,17 @@ extern "C" fn ns_chain3(closure: *const ClosureHeader, _a: f64, _b: f64, _c: f64
 
 extern "C" fn ns_on2(closure: *const ClosureHeader, event: f64, cb: f64) -> f64 {
     let stream = this_value(closure);
+    add_stream_listener_for_event(stream, event, cb);
+    stream
+}
+
+fn add_stream_listener_for_event(stream: f64, event: f64, cb: f64) {
     if string_value_eq(event, b"data") {
         add_stream_listener(stream, hidden_data_listeners_key(), cb);
         schedule_readable_from_drain(stream);
     } else if string_value_eq(event, b"end") {
         add_stream_listener(stream, hidden_end_listeners_key(), cb);
     }
-    stream
 }
 
 extern "C" fn ns_readable_from_drain(closure: *const ClosureHeader) -> f64 {
@@ -319,12 +323,58 @@ pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
     stream
 }
-extern "C" fn ns_listener_count(_closure: *const ClosureHeader, _e: f64) -> f64 {
-    0.0
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_on(stream_handle: i64, event: f64, cb: f64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    add_stream_listener_for_event(stream, event, cb);
+    stream
 }
-extern "C" fn ns_listeners(_closure: *const ClosureHeader, _e: f64) -> f64 {
-    let arr = crate::array::js_array_alloc(0);
-    f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+
+fn listener_key_for_event(event: f64) -> Option<*mut crate::string::StringHeader> {
+    if string_value_eq(event, b"data") {
+        Some(hidden_data_listeners_key())
+    } else if string_value_eq(event, b"end") {
+        Some(hidden_end_listeners_key())
+    } else {
+        None
+    }
+}
+
+extern "C" fn ns_listener_count(closure: *const ClosureHeader, event: f64) -> f64 {
+    let stream = this_value(closure);
+    listener_count_for_event(stream, event)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_listener_count(stream_handle: i64, event: f64) -> f64 {
+    listener_count_for_event(stream_value_from_handle(stream_handle), event)
+}
+
+fn listener_count_for_event(stream: f64, event: f64) -> f64 {
+    listener_key_for_event(event)
+        .map(|key| listener_snapshot(stream, key).len() as f64)
+        .unwrap_or(0.0)
+}
+
+extern "C" fn ns_listeners(closure: *const ClosureHeader, event: f64) -> f64 {
+    let stream = this_value(closure);
+    f64::from_bits(JSValue::pointer(listeners_array_for_event(stream, event) as *const u8).bits())
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_listeners(stream_handle: i64, event: f64) -> i64 {
+    listeners_array_for_event(stream_value_from_handle(stream_handle), event) as i64
+}
+
+fn listeners_array_for_event(stream: f64, event: f64) -> *mut crate::array::ArrayHeader {
+    let mut arr = crate::array::js_array_alloc(0);
+    if let Some(key) = listener_key_for_event(event) {
+        for listener in listener_snapshot(stream, key) {
+            arr = crate::array::js_array_push_f64(arr, listener);
+        }
+    }
+    arr
 }
 extern "C" fn ns_undefined0(_closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
@@ -1945,6 +1995,13 @@ static KEEP_NS_METHOD_RESUME: extern "C" fn(i64) -> f64 = js_node_stream_method_
 static KEEP_NS_METHOD_WRITE: extern "C" fn(i64, f64, f64) -> f64 = js_node_stream_method_write;
 #[used]
 static KEEP_NS_METHOD_END: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_end;
+#[used]
+static KEEP_NS_METHOD_ON: extern "C" fn(i64, f64, f64) -> f64 = js_node_stream_method_on;
+#[used]
+static KEEP_NS_METHOD_LISTENER_COUNT: extern "C" fn(i64, f64) -> f64 =
+    js_node_stream_method_listener_count;
+#[used]
+static KEEP_NS_METHOD_LISTENERS: extern "C" fn(i64, f64) -> i64 = js_node_stream_method_listeners;
 #[used]
 static KEEP_NS_READABLE_NEW: extern "C" fn(f64) -> f64 = js_node_stream_readable_new;
 #[used]

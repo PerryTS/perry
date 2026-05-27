@@ -1766,12 +1766,6 @@
     "category": "bug-open",
     "reason": "node:stream: unshift() after end — does not emit 'error' / ERR_STREAM_PUSH_AFTER_EOF. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/events/listener-count-by-event": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: listenerCount(event) — returns wrong count per event name. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/events/raw-listeners-once-wrapped": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -2173,12 +2167,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: readableLength after multiple push() — does not equal sum of chunk lengths. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/events/listeners-returns-copy": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: EE.listeners() returns a live reference — mutating it affects internal count. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/flow/sync-pause-in-data-listener": {
     "issue": "1532",
