@@ -305,6 +305,37 @@ fn writable_cork_buffers_writes_until_uncorked() {
 }
 
 #[test]
+fn writable_write_returns_false_at_high_water_mark() {
+    WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    let opts = crate::object::js_object_alloc(0, 2);
+    let closure = js_closure_alloc(write_capture as *const u8, 0);
+    crate::closure::js_register_closure_arity(write_capture as *const u8, 3);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
+    );
+    js_object_set_field_by_name(opts, hidden_key(b"highWaterMark"), 2.0);
+
+    let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+
+    let first = js_node_stream_method_write(handle, string_value("a"), undefined);
+    let second = js_node_stream_method_write(handle, string_value("b"), undefined);
+
+    assert_eq!(first.to_bits(), TAG_TRUE);
+    assert_eq!(second.to_bits(), TAG_FALSE);
+    assert_eq!(writable_buffered_length(stream), 2.0);
+    WRITE_CAPTURED.with(|captured| {
+        assert_eq!(
+            captured.borrow().as_slice(),
+            &[b"a".to_vec(), b"b".to_vec()]
+        );
+    });
+}
+
+#[test]
 fn stream_max_listeners_default_and_override_round_trip() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let obj = raw_ptr_from_value(stream) as *const ObjectHeader;

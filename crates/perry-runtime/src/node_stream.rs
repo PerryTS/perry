@@ -84,6 +84,7 @@ const WRITABLE_FINISH_SCHEDULED_KEY: &[u8] = b"__perryWritableFinishScheduled";
 const WRITABLE_FINISH_EMITTED_KEY: &[u8] = b"__perryWritableFinishEmitted";
 const WRITABLE_CORKED_KEY: &[u8] = b"__perryWritableCorked";
 const WRITABLE_BUFFERED_KEY: &[u8] = b"__perryWritableBuffered";
+const WRITABLE_LENGTH_KEY: &[u8] = b"__perryWritableLength";
 // #1534: direction + disturbed bits so the static introspection helpers
 // (`Readable.isReadable` / `isDisturbed` / `isErrored`) answer per-stream
 // instead of with a uniform stub. Set at construction / on first read.
@@ -332,13 +333,15 @@ fn write_writable_chunk(stream: f64, chunk: f64, enc: f64) -> f64 {
     if JSValue::from_bits(chunk.to_bits()).is_null() {
         throw_writable_null_chunk();
     }
+    let length = note_writable_write_length(stream, chunk);
+    let should_continue = length < writable_high_water_mark(stream) || length == 0.0;
     if writable_corked_count(stream) > 0.0 {
         buffer_writable_write(stream, chunk, enc);
-        return f64::from_bits(TAG_TRUE);
+        return f64::from_bits(if should_continue { TAG_TRUE } else { TAG_FALSE });
     }
     invoke_writable_write(stream, chunk, enc);
     emit_writable_chunk(stream, chunk);
-    f64::from_bits(TAG_TRUE)
+    f64::from_bits(if should_continue { TAG_TRUE } else { TAG_FALSE })
 }
 
 fn emit_writable_chunk(stream: f64, chunk: f64) {
@@ -1273,6 +1276,11 @@ fn hidden_writable_buffered_key() -> *mut crate::string::StringHeader {
 }
 
 #[inline]
+fn hidden_writable_length_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_LENGTH_KEY)
+}
+
+#[inline]
 fn hidden_readable_flag_key() -> *mut crate::string::StringHeader {
     hidden_key(READABLE_FLAG_KEY)
 }
@@ -1489,6 +1497,27 @@ fn writable_hidden_write(value: f64) -> Option<f64> {
 
 fn writable_corked_count(value: f64) -> f64 {
     get_hidden_value(value, hidden_writable_corked_key()).unwrap_or(0.0)
+}
+
+fn writable_buffered_length(value: f64) -> f64 {
+    get_hidden_value(value, hidden_writable_length_key()).unwrap_or(0.0)
+}
+
+fn set_writable_buffered_length(stream: f64, length: f64) {
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_some() {
+        set_hidden_value(stream, hidden_writable_length_key(), length.max(0.0));
+    }
+}
+
+fn writable_high_water_mark(stream: f64) -> f64 {
+    get_hidden_value(stream, hidden_key(b"writableHighWaterMark"))
+        .unwrap_or_else(|| default_hwm(false))
+}
+
+fn note_writable_write_length(stream: f64, chunk: f64) -> f64 {
+    let length = writable_buffered_length(stream) + chunk_byte_len(chunk) as f64;
+    set_writable_buffered_length(stream, length);
+    length
 }
 
 fn set_writable_corked_count(stream: f64, count: f64) {
@@ -2161,6 +2190,7 @@ fn init_writable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
     let w_hwm = resolve_hwm(opts, b"writableHighWaterMark", b"writableObjectMode");
     set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
+    set_writable_buffered_length(stream, 0.0);
     set_writable_corked_count(stream, 0.0);
     set_hidden_value(
         stream,

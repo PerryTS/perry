@@ -758,12 +758,6 @@
     "category": "bug-open",
     "reason": "node:stream: construct() callback receiving Error does not propagate via error event. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/write/false-then-retry": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: write() return value sequence under backpressure not honored. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/iter-helpers/flat-map-async": {
     "issue": "1572",
     "added": "2026-05-23",
@@ -1447,12 +1441,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: second getWriter() on locked WritableStream does not throw TypeError. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/writable/write-returns-false-at-hwm": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: write() does not return false when buffered bytes cross HWM. Flips to PASS when #1539 lands."
   },
   "node-suite/stream/iter-helpers/find-returns-promise": {
     "issue": "1558",
