@@ -200,12 +200,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:os` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_path": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:path` surface. Per-method gaps closed via #741 and #810 (path.posix/win32 sub-namespace). This test now PASSes byte-for-byte; entry retained until the next sweep confirms it can be removed."
-  },
   "test_parity_process": {
     "issue": "793",
     "added": "2026-05-15",
@@ -1532,42 +1526,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: TransformStream readable.cancel() does not propagate to writable — writes still succeed after cancel. Flips to PASS when #1545 lands."
   },
-  "node-suite/perf_hooks/shapes/to-string-tag": {
-    "issue": "1479",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: Object.prototype.toString.call(performance) yields the generic object tag instead of '[object Performance]'. Flips to PASS when #1479 lands."
-  },
-  "node-suite/console/dir/depth-options": {
-    "issue": "1199",
-    "added": "2026-05-20",
-    "category": "bug-open",
-    "reason": "node:console granular parity: console.dir(value, { depth }) does not honor Node-compatible inspect depth limits. Flips to PASS when #1199 lands."
-  },
-  "node-suite/console/dir/show-hidden-option": {
-    "issue": "1200",
-    "added": "2026-05-20",
-    "category": "bug-open",
-    "reason": "node:console granular parity: console.dir(value, { showHidden: true }) does not render hidden properties with Node-compatible inspect notation. Flips to PASS when #1200 lands."
-  },
-  "node-suite/console/output/function-format": {
-    "issue": "1202",
-    "added": "2026-05-20",
-    "category": "bug-open",
-    "reason": "node:console granular parity: function values currently lose Node-compatible closure/function names in inspect output. Flips to PASS when #1202 lands."
-  },
-  "node-suite/console/output/json-circular": {
-    "issue": "1204",
-    "added": "2026-05-20",
-    "category": "bug-open",
-    "reason": "node:console granular parity: circular object formatting lacks Node-compatible <ref> / [Circular] tracking. Flips to PASS when #1204 lands."
-  },
-  "node-suite/console/output/no-tostring-on-string-format": {
-    "issue": "1203",
-    "added": "2026-05-20",
-    "category": "bug-open",
-    "reason": "node:console granular parity: inspecting a function whose own `toString` is overridden doesn't follow Node's function-formatting path (which renders `[Function: name]` without invoking user `toString`). Flips to PASS when #1203 lands."
-  },
   "test_gap_console_methods": {
     "issue": "1278",
     "added": "2026-05-21",
@@ -1591,18 +1549,6 @@
     "added": "2026-05-18",
     "category": "ci-env",
     "reason": "Brotli decompression path under node:zlib not yet implemented (cf. existing test_parity_zlib module-inventory entry). Same failure observed on #1038 pre-merge — not a regression."
-  },
-  "node-suite/perf_hooks/mark/detail-circular": {
-    "issue": "1512",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: mark detail with a circular reference should be accepted (structuredClone handles cycles). Perry throws. Flips to PASS when #1512 lands."
-  },
-  "node-suite/perf_hooks/mark/detail-function-throws": {
-    "issue": "1513",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:perf_hooks: mark detail with a Function value should throw DataCloneError (structuredClone refuses). Perry silently accepts. Flips to PASS when #1513 lands."
   },
   "node-suite/stream/imports/promises-ns": {
     "issue": "1533",
