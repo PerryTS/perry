@@ -992,12 +992,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(single-transform) does not deliver data through. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/symbol/no-sync-iterator": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable instance exposes Symbol.iterator incorrectly (should be undefined; only asyncIterator). Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/dispose/async-dispose": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1700,12 +1694,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: pipeTo() return value — not a Promise<undefined>. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/meta/readable-no-sync-iterator": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable should NOT expose Symbol.iterator (only Symbol.asyncIterator) — typeof differs from Node. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipeline/promise-form": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -2179,12 +2167,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: paused source still emits data after push. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/sync-iterator-not-exposed": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Symbol.iterator exposed on Readable (should be undefined). Flips to PASS when #1531 lands."
   },
   "node-suite/stream/readable/read-returns-buffer-default": {
     "issue": "1532",
