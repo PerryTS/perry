@@ -31,6 +31,7 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
         return;
     }
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_TRUE));
+    super::refresh_readable_aborted_flag(stream);
     let closure = js_closure_alloc(ns_destroy_error_microtask as *const u8, 2);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
     js_closure_set_capture_f64(closure, 1, err);

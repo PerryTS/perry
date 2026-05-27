@@ -200,6 +200,7 @@ extern "C" fn ns_emit_rest(closure: *const ClosureHeader, event: f64, rest: f64)
 extern "C" fn ns_resume0(closure: *const ClosureHeader) -> f64 {
     let stream = this_value(closure);
     mark_stream_ended(stream);
+    refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
     stream
 }
@@ -207,6 +208,7 @@ extern "C" fn ns_resume0(closure: *const ClosureHeader) -> f64 {
 extern "C" fn ns_read1(closure: *const ClosureHeader, _n: f64) -> f64 {
     let stream = this_value(closure);
     mark_stream_ended(stream);
+    refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
     f64::from_bits(TAG_NULL)
 }
@@ -219,6 +221,7 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
     let jsval = JSValue::from_bits(chunk.to_bits());
     if jsval.is_null() || jsval.is_undefined() {
         mark_stream_ended(stream);
+        refresh_readable_aborted_flag(stream);
         schedule_readable_end(stream);
         return f64::from_bits(TAG_FALSE);
     }
@@ -315,8 +318,10 @@ fn emit_writable_chunk(stream: f64, chunk: f64) {
 
 fn finish_stream(stream: f64, callback: Option<f64>) {
     mark_stream_ended(stream);
+    refresh_readable_aborted_flag(stream);
     if !has_truthy_hidden(stream, hidden_end_emitted_key()) {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
+        refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
     }
     schedule_writable_finish(stream, callback);
@@ -431,10 +436,17 @@ pub extern "C" fn js_node_stream_method_writable_hwm(stream_handle: i64) -> f64 
     get_hidden_value(stream, hidden_key(b"writableHighWaterMark")).unwrap_or(16384.0)
 }
 
+/// `stream.readableAborted` property getter on a typed readable-side instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_aborted(stream_handle: i64) -> f64 {
+    readable_aborted_value(stream_value_from_handle(stream_handle))
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     mark_stream_ended(stream);
+    refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
     f64::from_bits(TAG_NULL)
 }
@@ -443,6 +455,7 @@ pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64
 pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     mark_stream_ended(stream);
+    refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
     stream
 }
@@ -1302,6 +1315,7 @@ fn emit_readable_end_once(stream: f64) {
     if !has_truthy_hidden(stream, hidden_end_emitted_key()) {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
         mark_stream_ended(stream);
+        refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
     }
 }
@@ -1344,6 +1358,30 @@ fn readable_hidden_error(value: f64) -> Option<f64> {
 
 fn stream_hidden_ended(value: f64) -> bool {
     get_hidden_value(value, hidden_ended_key()).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
+}
+
+fn readable_aborted_value(stream: f64) -> f64 {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
+        return f64::from_bits(TAG_FALSE);
+    }
+    let destroyed = has_truthy_hidden(stream, hidden_key(b"destroyed"));
+    let errored = readable_hidden_error(stream).is_some();
+    let ended = stream_hidden_ended(stream) || has_truthy_hidden(stream, hidden_end_emitted_key());
+    if (destroyed || errored) && !ended {
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_FALSE)
+    }
+}
+
+fn refresh_readable_aborted_flag(stream: f64) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
+        set_hidden_value(
+            stream,
+            hidden_key(b"readableAborted"),
+            readable_aborted_value(stream),
+        );
+    }
 }
 
 fn writable_hidden_write(value: f64) -> Option<f64> {
@@ -1896,6 +1934,11 @@ fn mark_stream_ended(stream: f64) {
 fn init_readable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_readable_flag_key(), f64::from_bits(TAG_TRUE));
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
+    set_hidden_value(
+        stream,
+        hidden_key(b"readableAborted"),
+        f64::from_bits(TAG_FALSE),
+    );
     set_hidden_value(stream, hidden_buffered_key(), 0.0);
     let r_hwm = resolve_hwm(opts, b"readableHighWaterMark", b"readableObjectMode");
     set_hidden_value(stream, hidden_hwm_key(), r_hwm);

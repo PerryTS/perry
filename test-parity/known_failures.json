@@ -986,12 +986,6 @@
     "category": "bug-open",
     "reason": "node:stream: readable.readableEncoding getter — returns wrong value (does not reflect constructor option or setEncoding()). Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/flags/readable-aborted": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: readable.readableAborted getter — returns wrong value after destroy(err). Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/flags/writable-finished": {
     "issue": "1531",
     "added": "2026-05-23",

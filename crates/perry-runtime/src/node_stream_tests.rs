@@ -502,6 +502,47 @@ fn stream_destroy_with_error_marks_errored_state() {
 }
 
 #[test]
+fn readable_aborted_reflects_destroy_before_end() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let err = string_value("abort");
+
+    assert_eq!(
+        js_node_stream_method_readable_aborted(handle).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableAborted")).to_bits(),
+        TAG_FALSE
+    );
+
+    let _ = js_node_stream_method_destroy(handle, err);
+    assert_eq!(
+        js_node_stream_method_readable_aborted(handle).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableAborted")).to_bits(),
+        TAG_TRUE
+    );
+    let _ = crate::promise::js_promise_run_microtasks();
+    assert_eq!(
+        js_node_stream_method_readable_aborted(handle).to_bits(),
+        TAG_TRUE
+    );
+
+    let ended = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let ended_handle = raw_ptr_from_value(ended) as i64;
+    let _ = js_node_stream_method_push(ended_handle, f64::from_bits(TAG_NULL));
+    let _ = js_node_stream_method_destroy(ended_handle, err);
+    assert_eq!(
+        js_node_stream_method_readable_aborted(ended_handle).to_bits(),
+        TAG_FALSE
+    );
+}
+
+#[test]
 fn stream_native_receiver_methods_update_hidden_state() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;

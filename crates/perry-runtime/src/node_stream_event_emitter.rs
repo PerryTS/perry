@@ -629,6 +629,7 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
     if super::string_value_eq(event, b"error") {
         if let Some(first) = args.first() {
             super::set_hidden_value(stream, super::hidden_error_key(), *first);
+            super::refresh_readable_aborted_flag(stream);
         }
         let monitor_event = error_monitor_event();
         let monitor_snapshot = listener_snapshot(stream, monitor_event);

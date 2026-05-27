@@ -2512,6 +2512,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "readable", true, None),
     method("stream", "readableEnded", true, None),
     method("stream", "writableHighWaterMark", true, None),
+    method("stream", "readableAborted", true, None),
     method("stream", "destroyed", true, None),
     // --- child_process (synchronous + async exec surface;
     //     spawn/fork are documented but not yet codegen'd) ---
