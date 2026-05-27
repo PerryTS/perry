@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1282 entries across 81 modules
+// Coverage: 1286 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -38,6 +38,8 @@ declare module "assert" {
   /** stdlib */
   export function doesNotMatch(...args: any[]): any;
   /** stdlib */
+  export function doesNotThrow(...args: any[]): any;
+  /** stdlib */
   export function equal(...args: any[]): any;
   /** stdlib */
   export function fail(...args: any[]): any;
@@ -59,6 +61,8 @@ declare module "assert" {
   export function strict(...args: any[]): any;
   /** stdlib */
   export function strictEqual(...args: any[]): any;
+  /** stdlib */
+  export function throws(...args: any[]): any;
 }
 
 declare module "assert/strict" {
@@ -72,6 +76,8 @@ declare module "assert/strict" {
   export default function (...args: any[]): any;
   /** stdlib */
   export function doesNotMatch(...args: any[]): any;
+  /** stdlib */
+  export function doesNotThrow(...args: any[]): any;
   /** stdlib */
   export function equal(...args: any[]): any;
   /** stdlib */
@@ -92,6 +98,8 @@ declare module "assert/strict" {
   export function ok(...args: any[]): any;
   /** stdlib */
   export function strictEqual(...args: any[]): any;
+  /** stdlib */
+  export function throws(...args: any[]): any;
 }
 
 declare module "async_hooks" {

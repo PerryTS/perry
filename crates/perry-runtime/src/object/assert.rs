@@ -3,6 +3,8 @@
 //! Split out of `object/mod.rs` (issue #1103). Pure relocation — no
 //! logic changes.
 
+use std::os::raw::c_int;
+
 use super::*;
 
 fn undefined_f64() -> f64 {
@@ -59,6 +61,141 @@ fn regex_test_value(pattern: f64, input: f64) -> Option<bool> {
     let input_ptr =
         crate::string::js_string_from_bytes(input_string.as_ptr(), input_string.len() as u32);
     Some(crate::regex::js_regexp_test(ptr as *const crate::regex::RegExpHeader, input_ptr) != 0)
+}
+
+fn read_property(value: f64, key: &str) -> f64 {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return undefined_f64();
+    }
+    let ptr = jv.as_pointer::<ObjectHeader>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return undefined_f64();
+    }
+    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    crate::object::js_object_get_field_by_name_f64(ptr, key_ptr)
+}
+
+fn is_plain_matcher_object(value: f64) -> bool {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    unsafe {
+        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
+    }
+}
+
+fn object_matcher_matches(actual: f64, expected: f64) -> bool {
+    if !is_plain_matcher_object(expected) {
+        return false;
+    }
+
+    let mut saw_expected_key = false;
+    for key in ["name", "message", "code", "errno"] {
+        let expected_prop = read_property(expected, key);
+        if is_null_or_undefined(expected_prop) {
+            continue;
+        }
+        saw_expected_key = true;
+        let actual_prop = read_property(actual, key);
+        if is_null_or_undefined(actual_prop) && matches!(key, "code" | "errno") {
+            continue;
+        }
+        if !assert_same_value(actual_prop, expected_prop)
+            && crate::value::js_jsvalue_loose_equals(actual_prop, expected_prop) == 0
+        {
+            return false;
+        }
+    }
+
+    saw_expected_key
+}
+
+fn constructor_name_matches_builtin_error(thrown: f64, expected: f64) -> bool {
+    fn global_builtin(name: &'static [u8]) -> f64 {
+        crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len())
+    }
+
+    let expected_name = if expected.to_bits() == global_builtin(b"Error").to_bits() {
+        "Error"
+    } else if expected.to_bits() == global_builtin(b"TypeError").to_bits() {
+        "TypeError"
+    } else if expected.to_bits() == global_builtin(b"RangeError").to_bits() {
+        "RangeError"
+    } else if expected.to_bits() == global_builtin(b"ReferenceError").to_bits() {
+        "ReferenceError"
+    } else if expected.to_bits() == global_builtin(b"SyntaxError").to_bits() {
+        "SyntaxError"
+    } else if expected.to_bits() == global_builtin(b"AggregateError").to_bits() {
+        "AggregateError"
+    } else {
+        let expected_name = read_property(expected, "name");
+        if is_null_or_undefined(expected_name) {
+            return false;
+        }
+        let expected_name = value_to_string(expected_name);
+        if !matches!(
+            expected_name.as_str(),
+            "Error"
+                | "TypeError"
+                | "RangeError"
+                | "ReferenceError"
+                | "SyntaxError"
+                | "AggregateError"
+        ) {
+            return false;
+        }
+        let thrown_name = read_property(thrown, "name");
+        return !is_null_or_undefined(thrown_name) && value_to_string(thrown_name) == expected_name;
+    };
+    if expected_name == "Error" && is_error_value(thrown) {
+        return true;
+    }
+    let thrown_name = read_property(thrown, "name");
+    !is_null_or_undefined(thrown_name) && value_to_string(thrown_name) == expected_name
+}
+
+fn expected_error_matches(thrown: f64, expected: f64) -> bool {
+    if is_null_or_undefined(expected) {
+        return true;
+    }
+    if let Some(matches_thrown) = regex_test_value(expected, thrown) {
+        if matches_thrown {
+            return true;
+        }
+        let message = read_property(thrown, "message");
+        if !is_null_or_undefined(message) && regex_test_value(expected, message).unwrap_or(false) {
+            return true;
+        }
+    }
+    if crate::value::js_is_truthy(crate::object::js_instanceof_dynamic(thrown, expected)) != 0 {
+        return true;
+    }
+    if constructor_name_matches_builtin_error(thrown, expected) {
+        return true;
+    }
+    object_matcher_matches(thrown, expected)
+}
+
+fn call_block_capturing_throw(block: f64) -> Result<f64, f64> {
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+    let result = if jumped == 0 {
+        let value = unsafe { crate::closure::js_native_call_value(block, std::ptr::null(), 0) };
+        Ok(value)
+    } else {
+        let exc = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        Err(exc)
+    };
+    crate::exception::js_try_end();
+    result
 }
 
 fn assertion_message(custom_message: f64, fallback: &str) -> String {
@@ -338,6 +475,44 @@ pub extern "C" fn js_assert_does_not_match(actual: f64, expected: f64, message: 
         "doesNotMatch",
         is_null_or_undefined(message),
     )
+}
+
+#[no_mangle]
+pub extern "C" fn js_assert_throws(block: f64, expected: f64, message: f64) -> f64 {
+    match call_block_capturing_throw(block) {
+        Err(thrown) if expected_error_matches(thrown, expected) => undefined_f64(),
+        Err(thrown) => throw_assertion(
+            assertion_message(
+                message,
+                "The thrown error did not match the expected matcher",
+            ),
+            thrown,
+            expected,
+            "throws",
+            false,
+        ),
+        Ok(_) => throw_assertion(
+            assertion_message(message, "Missing expected exception"),
+            undefined_f64(),
+            expected,
+            "throws",
+            false,
+        ),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_assert_does_not_throw(block: f64, _expected: f64, message: f64) -> f64 {
+    match call_block_capturing_throw(block) {
+        Ok(_) => undefined_f64(),
+        Err(thrown) => throw_assertion(
+            assertion_message(message, "Got unwanted exception"),
+            thrown,
+            undefined_f64(),
+            "doesNotThrow",
+            false,
+        ),
+    }
 }
 
 /// `new assert.AssertionError({actual, expected, operator, message, ...})`
