@@ -649,6 +649,26 @@ extern "C" fn events_on_queue_listener(closure: *const ClosureHeader, arg0: f64)
     f64::from_bits(TAG_UNDEFINED_F64_BITS)
 }
 
+extern "C" fn events_abort_listener_dispose(closure: *const ClosureHeader) -> f64 {
+    use perry_runtime::closure::js_closure_get_capture_ptr;
+
+    let signal_ptr = js_closure_get_capture_ptr(closure, 0);
+    let callback_ptr = js_closure_get_capture_ptr(closure, 1);
+    if signal_ptr != 0 && callback_ptr != 0 {
+        let event_name = b"abort";
+        let event_str = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
+        let event_val = js_nanbox_string(event_str as i64);
+        let listener_val = js_nanbox_pointer(callback_ptr);
+        perry_runtime::url::js_abort_signal_remove_listener(
+            signal_ptr as *mut perry_runtime::ObjectHeader,
+            event_val,
+            listener_val,
+        );
+    }
+
+    f64::from_bits(TAG_UNDEFINED_F64_BITS)
+}
+
 /// `events.on(emitter, eventName)` — returns an async-iterable queue of
 /// argument arrays. Perry's `for await` lowering already accepts plain arrays
 /// as async-iterable inputs, so the current implementation backs the iterator
@@ -678,11 +698,12 @@ pub unsafe extern "C" fn js_events_on(
 }
 
 /// `events.addAbortListener(signal, listener)` — attach listener to AbortSignal
-/// and return a disposable-shaped object. The dispose method is currently a
-/// function-shaped placeholder; listener removal can be tightened later.
+/// and return a disposable-shaped object whose `Symbol.dispose` unregisters it.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_add_abort_listener(signal_ptr: i64, callback_ptr: i64) -> i64 {
     if signal_ptr != 0 && callback_ptr != 0 {
+        use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+
         let event_name = b"abort";
         let event_str = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
         let event_val = js_nanbox_string(event_str as i64);
@@ -693,6 +714,11 @@ pub unsafe extern "C" fn js_events_add_abort_listener(signal_ptr: i64, callback_
             listener_val,
         );
 
+        let dispose_closure = js_closure_alloc(events_abort_listener_dispose as *const u8, 2);
+        js_closure_set_capture_ptr(dispose_closure, 0, signal_ptr);
+        js_closure_set_capture_ptr(dispose_closure, 1, callback_ptr);
+        let dispose_val = js_nanbox_pointer(dispose_closure as i64);
+
         let disposable = js_object_alloc(0, 0);
         let disposable_val = js_nanbox_pointer(disposable as i64);
         let dispose_sym = perry_runtime::symbol::well_known_symbol("dispose");
@@ -700,7 +726,7 @@ pub unsafe extern "C" fn js_events_add_abort_listener(signal_ptr: i64, callback_
         perry_runtime::symbol::js_object_set_symbol_property(
             disposable_val,
             dispose_sym_val,
-            listener_val,
+            dispose_val,
         );
         disposable as i64
     } else {
