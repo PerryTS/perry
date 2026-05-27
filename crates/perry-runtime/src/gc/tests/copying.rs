@@ -548,29 +548,26 @@ fn test_copied_minor_eligibility_falls_back_for_barriers_inactive() {
 #[test]
 fn test_copied_minor_eligibility_falls_back_for_conservative_stack_scan() {
     let _isolation = copying_nursery_isolation_lock();
-    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
-    reset_shadow_stack();
-    reset_global_roots();
-    reset_remembered_set();
 
-    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    let eligibility = CopiedMinorEligibility::evaluate_with_stack_decision(
+        GcTriggerKind::Direct,
+        ConservativeStackScanDecision::Scan,
+    );
 
-    assert_copied_minor_trace(
-        &trace,
-        false,
-        CopiedMinorFallbackReason::ConservativeStack,
-        false,
+    assert!(!eligibility.eligible);
+    assert_eq!(
+        eligibility.fallback_reason,
+        CopiedMinorFallbackReason::ConservativeStack
     );
     assert_eq!(
-        trace.root_sources.native_stack_fallback.decision,
+        conservative_stack_scan_decision_for(ConservativeStackScanMode::Full, false),
         ConservativeStackScanDecision::Scan
     );
-    assert!(trace.root_sources.native_stack_fallback.scanned);
 }
 
 #[test]
-fn test_copied_minor_eligibility_active_shadow_frame_skips_conservative_stack_scan() {
+fn test_copied_minor_eligibility_auto_skips_conservative_stack_scan() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     assert!(shadow_stack_has_active_frame());
@@ -584,7 +581,7 @@ fn test_copied_minor_eligibility_active_shadow_frame_skips_conservative_stack_sc
     assert_eq!(trace.legacy_copy_only_scanner_pinned.pinned_bytes, 0);
     assert_eq!(
         trace.root_sources.native_stack_fallback.decision,
-        ConservativeStackScanDecision::SkipShadowStackActive
+        ConservativeStackScanDecision::SkipDisabled
     );
     assert!(!trace.root_sources.native_stack_fallback.scanned);
     assert_eq!(
@@ -614,7 +611,7 @@ fn root_source_active_shadow_frame_reports_precise_shadow_roots_only() {
     assert_eq!(trace.root_sources.compiled_shadow.rewritten_slots, 1);
     assert_eq!(
         trace.root_sources.native_stack_fallback.decision,
-        ConservativeStackScanDecision::SkipShadowStackActive
+        ConservativeStackScanDecision::SkipDisabled
     );
     assert!(!trace.root_sources.native_stack_fallback.scanned);
     assert_eq!(
@@ -627,14 +624,19 @@ fn root_source_active_shadow_frame_reports_precise_shadow_roots_only() {
 }
 
 #[test]
-fn test_copied_minor_eligibility_empty_copy_only_scanner_stays_eligible() {
+fn test_copied_minor_eligibility_empty_rust_copy_only_scanner_falls_back() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[]);
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
 
-    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_copied_minor_trace(
+        &trace,
+        false,
+        CopiedMinorFallbackReason::CopyOnlyRoots,
+        false,
+    );
     assert_eq!(
         trace
             .legacy_copy_only_scanner_pinned
@@ -642,6 +644,48 @@ fn test_copied_minor_eligibility_empty_copy_only_scanner_stays_eligible() {
         1
     );
     assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 0);
+}
+
+#[test]
+fn test_copied_minor_eligibility_empty_ffi_copy_only_scanner_falls_back() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::ffi_bits(&[]);
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+    assert_copied_minor_trace(
+        &trace,
+        false,
+        CopiedMinorFallbackReason::CopyOnlyRoots,
+        false,
+    );
+    assert_eq!(
+        trace
+            .legacy_copy_only_scanner_pinned
+            .registered_ffi_scanners,
+        1
+    );
+    assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 0);
+}
+
+#[test]
+fn test_copied_minor_eligibility_rejects_copy_only_without_scanning_roots() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let child = young_leaf();
+    let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[ptr_bits(child)]);
+
+    let eligibility = CopiedMinorEligibility::evaluate(GcTriggerKind::Direct);
+
+    assert!(!eligibility.eligible);
+    assert_eq!(
+        eligibility.fallback_reason,
+        CopiedMinorFallbackReason::CopyOnlyRoots
+    );
+    assert_eq!(eligibility.legacy_root_stats.registered_rust_scanners, 1);
+    assert_eq!(eligibility.legacy_root_stats.emitted_roots, 0);
+    assert_eq!(eligibility.legacy_root_stats.emitted_young_roots, 0);
 }
 
 #[test]
@@ -669,7 +713,7 @@ fn test_copied_minor_eligibility_falls_back_for_live_young_rust_copy_only_root()
     assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_young_roots, 1);
     assert_eq!(
         trace.root_sources.native_stack_fallback.decision,
-        ConservativeStackScanDecision::SkipShadowStackActive
+        ConservativeStackScanDecision::SkipDisabled
     );
     assert_eq!(
         trace
@@ -925,7 +969,7 @@ fn test_copied_minor_rewrites_old_error_cause_and_errors_slots() {
 }
 
 #[test]
-fn test_copied_minor_eligibility_old_only_copy_only_root_stays_eligible() {
+fn test_copied_minor_eligibility_old_only_copy_only_root_falls_back() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let old = crate::arena::arena_alloc_gc_old(32, 8, GC_TYPE_OBJECT) as usize;
@@ -933,21 +977,31 @@ fn test_copied_minor_eligibility_old_only_copy_only_root_stays_eligible() {
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
 
-    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_copied_minor_trace(
+        &trace,
+        false,
+        CopiedMinorFallbackReason::CopyOnlyRoots,
+        false,
+    );
     assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 1);
     assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_old_roots, 1);
     assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_young_roots, 0);
 }
 
 #[test]
-fn test_copied_minor_eligibility_malformed_copy_only_root_stays_eligible() {
+fn test_copied_minor_eligibility_malformed_copy_only_root_falls_back() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[0x7FFD_0000_0000_1000]);
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
 
-    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_copied_minor_trace(
+        &trace,
+        false,
+        CopiedMinorFallbackReason::CopyOnlyRoots,
+        false,
+    );
     assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 1);
     assert_eq!(trace.legacy_copy_only_scanner_pinned.malformed_roots, 1);
 }
@@ -1390,6 +1444,26 @@ fn test_copied_minor_verify_evacuation_env_remains_eligible() {
     );
     assert_ne!(after, child);
     assert!(crate::arena::pointer_in_nursery(after));
+}
+
+#[test]
+fn test_copied_minor_verify_evacuation_copy_only_roots_reject_before_copying() {
+    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[]);
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+    assert_copied_minor_trace(
+        &trace,
+        false,
+        CopiedMinorFallbackReason::CopyOnlyRoots,
+        false,
+    );
+    assert_eq!(trace.copying_nursery.copied_objects, 0);
+    assert_eq!(trace.copying_nursery.promoted_objects, 0);
+    assert_eq!(trace.legacy_copy_only_scanner_pinned.emitted_roots, 0);
 }
 
 #[test]

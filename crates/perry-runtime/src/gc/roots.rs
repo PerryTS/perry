@@ -128,7 +128,6 @@ pub(super) enum ConservativeStackScanMode {
 pub(super) enum ConservativeStackScanDecision {
     Scan,
     SkipDisabled,
-    SkipShadowStackActive,
 }
 
 impl ConservativeStackScanDecision {
@@ -137,7 +136,6 @@ impl ConservativeStackScanDecision {
         match self {
             Self::Scan => "scan",
             Self::SkipDisabled => "skip_disabled",
-            Self::SkipShadowStackActive => "skip_shadow_stack_active",
         }
     }
 }
@@ -172,15 +170,12 @@ pub(super) fn conservative_stack_scan_mode() -> ConservativeStackScanMode {
 #[inline]
 pub(super) fn conservative_stack_scan_decision_for(
     mode: ConservativeStackScanMode,
-    shadow_frame_active: bool,
+    _shadow_frame_active: bool,
 ) -> ConservativeStackScanDecision {
     match mode {
         ConservativeStackScanMode::Disabled => ConservativeStackScanDecision::SkipDisabled,
         ConservativeStackScanMode::Full => ConservativeStackScanDecision::Scan,
-        ConservativeStackScanMode::Auto if shadow_frame_active => {
-            ConservativeStackScanDecision::SkipShadowStackActive
-        }
-        ConservativeStackScanMode::Auto => ConservativeStackScanDecision::Scan,
+        ConservativeStackScanMode::Auto => ConservativeStackScanDecision::SkipDisabled,
     }
 }
 
@@ -193,13 +188,19 @@ pub(super) fn conservative_stack_scan_decision() -> ConservativeStackScanDecisio
 
 /// Register a root scanner function.
 /// Each scanner is called during the mark phase to discover roots.
-/// This legacy API exposes copied values only. When evacuation is
-/// enabled, every discovered target is treated as pinned because the GC
-/// has no mutable slot it can rewrite after forwarding.
+/// This legacy API exposes copied values only. It remains supported for
+/// fallback/full GC, where discovered targets can be pinned, but registering
+/// any copy-only scanner makes low-pause copied-minor collection ineligible.
 pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
     ROOT_SCANNERS.with(|scanners| {
         scanners.borrow_mut().push(scanner);
     });
+}
+
+pub(super) fn copy_only_root_scanner_counts() -> (usize, usize) {
+    let rust_scanners = ROOT_SCANNERS.with(|scanners| scanners.borrow().len());
+    let ffi_scanners = FFI_ROOT_SCANNERS.with(|scanners| scanners.borrow().len());
+    (rust_scanners, ffi_scanners)
 }
 
 /// Register a runtime-owned root scanner that exposes mutable slots.
@@ -250,8 +251,9 @@ pub(super) const PERRY_FFI_ROOT_SLOT_NANBOX_U64: u32 = 5;
 /// `perry-ffi` adapts its Rust-facing `fn(&mut dyn FnMut(f64))`
 /// convenience API to this callback shape so native wrapper archives
 /// can stay runtime-free. Like the Rust legacy scanner API, this is
-/// copy-only storage from the GC's perspective; evacuation pins those
-/// roots instead of attempting to rewrite native-owned slots.
+/// copy-only storage from the GC's perspective. Registration keeps the
+/// fallback/full-GC path compatible, but makes low-pause copied-minor
+/// collection ineligible because native-owned slots cannot be rewritten.
 #[no_mangle]
 pub extern "C" fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanner) {
     FFI_ROOT_SCANNERS.with(|scanners| {
@@ -312,10 +314,7 @@ pub(super) fn mark_stack_roots_for_decision(
 ) -> ConservativeRootTraceStats {
     match decision {
         ConservativeStackScanDecision::Scan => mark_stack_roots_unchecked(valid_ptrs),
-        ConservativeStackScanDecision::SkipDisabled
-        | ConservativeStackScanDecision::SkipShadowStackActive => {
-            ConservativeRootTraceStats::default()
-        }
+        ConservativeStackScanDecision::SkipDisabled => ConservativeRootTraceStats::default(),
     }
 }
 

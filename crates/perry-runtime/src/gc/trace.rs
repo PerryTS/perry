@@ -384,11 +384,10 @@ pub(super) fn try_mark_raw_root_addr(addr: usize, valid_ptrs: &ValidPointerSet) 
     }
 }
 
-/// Conservative stack scan policy wrapper. In default `auto` mode,
-/// compiled frames that have a precise shadow-stack frame skip this
-/// native stack/register scan. Runtime-only frames without shadow roots
-/// still get the legacy fallback; `PERRY_CONSERVATIVE_STACK_SCAN=full`
-/// forces that legacy path for debugging.
+/// Conservative stack scan policy wrapper. In default `auto` mode, native
+/// stack/register scanning is skipped so copied-minor eligibility only depends
+/// on exact mutable roots. `PERRY_CONSERVATIVE_STACK_SCAN=full` forces the
+/// legacy path for debugging and makes copied-minor ineligible.
 
 pub(super) unsafe fn mark_field_into_worklist(
     val_bits: u64,
