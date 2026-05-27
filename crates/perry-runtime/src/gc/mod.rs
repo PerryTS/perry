@@ -686,6 +686,11 @@ pub fn gc_init() {
     // under concurrent load) must rewrite the cell, or the body's next
     // `this`-derived dispatch derefs a relocated receiver → SIGSEGV.
     gc_register_mutable_root_scanner(crate::object::scan_implicit_this_roots_mut);
+    // #1934: live `child_process.spawn` ChildProcess objects are reachable only
+    // from the reactor's registry (the event loop holds no JSValue root for a
+    // fire-and-forget spawn). Scan + rewrite them so a GC between ticks doesn't
+    // reclaim the object whose `data`/`exit` handlers are still pending.
+    gc_register_mutable_root_scanner(crate::child_process::reactor::cp_reactor_scan_roots_mut);
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     gc_register_mutable_root_scanner(intern_table_mutable_root_scanner);
     gc_register_mutable_root_scanner(small_int_cache_mutable_root_scanner);

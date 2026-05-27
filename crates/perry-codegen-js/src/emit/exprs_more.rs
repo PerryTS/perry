@@ -8,6 +8,7 @@ impl JsEmitter {
             Expr::ChildProcessExecSync { .. }
             | Expr::ChildProcessSpawnSync { .. }
             | Expr::ChildProcessSpawn { .. }
+            | Expr::ChildProcessFork { .. }
             | Expr::ChildProcessExec { .. }
             | Expr::ChildProcessSpawnBackground { .. }
             | Expr::ChildProcessGetProcessStatus(_)

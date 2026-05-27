@@ -58,22 +58,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 "0".to_string()
             };
-            // js_child_process_exec_sync(cmd: i64, opts: i64) -> i64 (string handle)
-            // Runtime returns null on error; guard against it by
-            // replacing null with an empty string so `.length` reads 0
-            // instead of crashing.
-            let raw = ctx.block().call(
-                I64,
+            // js_child_process_exec_sync(cmd: i64, opts: i64) -> f64.
+            // #1937/#1938: the runtime returns an already-NaN-boxed value
+            // (Buffer by default, string with `encoding`) and throws on a
+            // non-zero exit, so we pass the result straight through.
+            let result = ctx.block().call(
+                DOUBLE,
                 "js_child_process_exec_sync",
                 &[(I64, &cmd_str), (I64, &opts_str)],
             );
-            let is_null = ctx.block().icmp_eq(I64, &raw, "0");
-            let empty = ctx
-                .block()
-                .call(I64, "js_string_from_bytes", &[(PTR, "null"), (I32, "0")]);
-            let blk = ctx.block();
-            let result = blk.select(crate::types::I1, &is_null, I64, &empty, &raw);
-            Ok(nanbox_string_inline(ctx.block(), &result))
+            Ok(result)
         }
 
         Expr::ChildProcessSpawnSync {
@@ -173,6 +167,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(result)
         }
 
+        Expr::ChildProcessFork {
+            module,
+            args,
+            options,
+        } => {
+            // `fork(modulePath[, args][, options])` — like spawn, but the
+            // runtime wires up an IPC channel + send/disconnect/'message'. The
+            // runtime returns an already-NaN-boxed ChildProcess pointer. #1933.
+            let mod_box = lower_expr(ctx, module)?;
+            let blk = ctx.block();
+            let mod_str = unbox_to_i64(blk, &mod_box);
+            let args_str = if let Some(a) = args {
+                let v = lower_expr(ctx, a)?;
+                unbox_to_i64(ctx.block(), &v)
+            } else {
+                "0".to_string()
+            };
+            let opts_str = if let Some(o) = options {
+                let v = lower_expr(ctx, o)?;
+                unbox_to_i64(ctx.block(), &v)
+            } else {
+                "0".to_string()
+            };
+            let result = ctx.block().call(
+                DOUBLE,
+                "js_child_process_fork",
+                &[(I64, &mod_str), (I64, &args_str), (I64, &opts_str)],
+            );
+            Ok(result)
+        }
+
         Expr::ChildProcessExec {
             command,
             options,
@@ -252,9 +277,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             args,
             options,
         } => {
-            // `execFileSync(file[, args][, options])` → stdout string. Runtime
-            // returns null on error; replace with an empty string so `.length`
-            // reads 0 instead of crashing (same guard as execSync).
+            // `execFileSync(file[, args][, options])` → f64. #1937/#1938: the
+            // runtime returns an already-NaN-boxed value (Buffer by default,
+            // string with `encoding`) and throws on a non-zero exit, so we pass
+            // the result straight through.
             let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let file_box = lower_expr(ctx, file)?;
             let file_str = unbox_to_i64(ctx.block(), &file_box);
@@ -268,18 +294,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 undef.clone()
             };
-            let raw = ctx.block().call(
-                I64,
+            let result = ctx.block().call(
+                DOUBLE,
                 "js_child_process_exec_file_sync",
                 &[(I64, &file_str), (DOUBLE, &args_v), (DOUBLE, &opts_v)],
             );
-            let is_null = ctx.block().icmp_eq(I64, &raw, "0");
-            let empty = ctx
-                .block()
-                .call(I64, "js_string_from_bytes", &[(PTR, "null"), (I32, "0")]);
-            let blk = ctx.block();
-            let result = blk.select(crate::types::I1, &is_null, I64, &empty, &raw);
-            Ok(nanbox_string_inline(ctx.block(), &result))
+            Ok(result)
         }
 
         Expr::ChildProcessGetProcessStatus(handle) => {
