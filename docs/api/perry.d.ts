@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1371 entries across 82 modules
+// Coverage: 1372 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1574,6 +1574,8 @@ declare module "perry/ui" {
   export function lazyvstackSetRefreshControl(...args: any[]): any;
   /** stdlib */
   export function lazyvstackSetScrollEndCallback(...args: any[]): any;
+  /** stdlib */
+  export function loadImage(...args: any[]): any;
   /** stdlib */
   export function menuAddItem(...args: any[]): any;
   /** stdlib */
