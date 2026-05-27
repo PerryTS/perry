@@ -151,7 +151,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
 /// reads degrade gracefully — but typeof reports "object".
 pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &["console", "Math", "JSON", "Reflect"];
 
-/// No-op thunk used as the function body for the singleton globalThis
+/// No-op thunk used as the function body for most singleton globalThis
 /// built-in constructor values. Lets `globalThis.Array` carry a real
 /// ClosureHeader (so `typeof globalThis.Array === "function"`) without
 /// implementing actual constructor dispatch through this path — bare
@@ -159,14 +159,21 @@ pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &["console", "Math", 
 /// the runtime `js_array_alloc` machinery, so callers that follow the
 /// usual `new <Ident>(...)` pattern are unaffected. Calling these
 /// sentinels directly (e.g. `globalThis.Array(3)`) returns undefined —
-/// best-effort no-op rather than throwing — and is a known gap for
-/// libraries that rely on call-form constructors after re-binding the
-/// global to a local.
+/// best-effort no-op rather than throwing — and remains a known gap for
+/// non-String call-form constructors after re-binding the global to a local.
 pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _arg: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn global_this_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let string_ptr = crate::builtins::js_string_coerce(value);
+    crate::value::js_nanbox_string(string_ptr as i64)
 }
 
 /// Thunk for `Object.prototype.toString` exposed as a callable closure
@@ -317,10 +324,17 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
     // Constructors: ClosureHeader-backed so typeof is "function".
     for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
-        let closure_ptr =
-            crate::closure::js_closure_alloc(global_this_builtin_noop_thunk as *const u8, 0);
+        let func_ptr = if name == "String" {
+            global_this_string_thunk as *const u8
+        } else {
+            global_this_builtin_noop_thunk as *const u8
+        };
+        let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
         if closure_ptr.is_null() {
             continue;
+        }
+        if name == "String" {
+            crate::closure::js_register_closure_arity(func_ptr, 1);
         }
         // Stash `prototype` on the closure's dynamic-prop side table.
         // `js_object_set_field_by_name` detects the CLOSURE_MAGIC tag
