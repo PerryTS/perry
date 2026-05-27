@@ -2386,7 +2386,6 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert", "default", false, None),
     method("assert", "strict", false, None),
     property("assert", "strict"),
-    class("assert", "CallTracker"),
     class("assert", "AssertionError"),
     method("assert/strict", "ok", false, None),
     method("assert/strict", "fail", false, None),

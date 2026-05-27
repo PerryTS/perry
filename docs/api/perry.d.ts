@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1372 entries across 82 modules
+// Coverage: 1371 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -25,8 +25,6 @@ declare module "argon2" {
 declare module "assert" {
   /** stdlib */
   export class AssertionError { [key: string]: any; }
-  /** stdlib */
-  export class CallTracker { [key: string]: any; }
   /** stdlib */
   export const strict: any;
   /** stdlib */
