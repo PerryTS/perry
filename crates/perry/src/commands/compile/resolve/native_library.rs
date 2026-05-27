@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 
-use super::{parse_native_library_functions, parse_target_native_config};
+use super::native_manifest::{parse_native_library_functions, parse_target_native_config};
 
 pub(crate) fn validate_native_library_manifest_value(
     package_dir: &Path,
@@ -39,24 +39,6 @@ pub(crate) fn validate_native_library_manifest_value(
         )?;
     }
     Ok(())
-}
-
-pub(super) fn native_manifest_target_key(target: Option<&str>) -> &'static str {
-    match target {
-        Some("ios-simulator") | Some("ios") => "ios",
-        Some("visionos-simulator") | Some("visionos") => "visionos",
-        Some("android") => "android",
-        Some("tvos-simulator") | Some("tvos") => "tvos",
-        Some("watchos-simulator") | Some("watchos") => "watchos",
-        Some("harmonyos-simulator") | Some("harmonyos") => "harmonyos",
-        Some("linux") => "linux",
-        Some("windows") => "windows",
-        Some("web") => "web",
-        Some("macos") => "macos",
-        None if cfg!(target_os = "linux") => "linux",
-        None if cfg!(target_os = "windows") => "windows",
-        _ => "macos",
-    }
 }
 
 fn base_target_key(target_key: &str) -> Option<&str> {
