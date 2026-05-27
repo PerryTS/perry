@@ -1664,12 +1664,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: getReader({mode:'byob'}) on bytes-type stream fails or returns wrong shape. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/destroyed-true-immediately": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroyed flag not synchronously true after destroy(). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/promises/pipeline-returns-undefined": {
     "issue": "1533",
     "added": "2026-05-23",
@@ -2006,12 +2000,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipe() with no args — does not throw TypeError. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/double-destroy-still-destroyed": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroy() twice — destroyed flag still true after both calls. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/iter-helpers/find-async-fn": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -2161,12 +2149,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: cork()+uncork() with no writes — 'finish' doesn't fire. Flips to PASS when #1539 lands."
-  },
-  "node-suite/stream/readable/destroyed-after-error": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroyed flag false after 'error' event handler fires. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/pipe/pipe-after-pause": {
     "issue": "1532",
@@ -2318,12 +2300,6 @@
     "category": "bug-open",
     "reason": "node:stream: src.on('error') during pipe — handler receives wrong error / not called. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/destroy-emits-error-event": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroy(err) — 'error' fires after 'close', or order wrong. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/iter-helpers/some-finds-match": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -2383,12 +2359,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pipe() to plain Writable — collected wrong / empty. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/destroy-without-error": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroy() no arg — destroyed flag wrong or error event fires. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/byob-reader-method-shape": {
     "issue": "1545",
