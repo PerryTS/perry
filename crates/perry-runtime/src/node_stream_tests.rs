@@ -11,6 +11,7 @@ thread_local! {
     static READABLE_END_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static WRITABLE_FINISH_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static WRITABLE_CLOSE_COUNT: RefCell<usize> = const { RefCell::new(0) };
+    static PIPE_EVENT_MATCHES: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
 }
 
 fn string_value(s: &str) -> f64 {
@@ -81,6 +82,19 @@ extern "C" fn capture_finish_listener(_closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn capture_close_listener(_closure: *const ClosureHeader) -> f64 {
     WRITABLE_CLOSE_COUNT.with(|count| *count.borrow_mut() += 1);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn capture_pipe_source_listener(closure: *const ClosureHeader, source: f64) -> f64 {
+    let expected_source = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let expected_this = crate::closure::js_closure_get_capture_f64(closure, 1);
+    let actual_this = crate::object::js_implicit_this_get();
+    PIPE_EVENT_MATCHES.with(|matches| {
+        matches.borrow_mut().push(
+            source.to_bits() == expected_source.to_bits()
+                && actual_this.to_bits() == expected_this.to_bits(),
+        )
+    });
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -210,6 +224,50 @@ fn stream_method_closure_capture_wins_over_stale_implicit_this() {
 
     assert!(js_node_stream_is_stub_ended_after_read(stream));
     assert!(!stream_hidden_ended(other));
+}
+
+#[test]
+fn pipe_and_unpipe_emit_destination_events_with_source() {
+    PIPE_EVENT_MATCHES.with(|matches| matches.borrow_mut().clear());
+
+    let source = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let dest = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let source_handle = raw_ptr_from_value(source) as i64;
+    let dest_handle = raw_ptr_from_value(dest) as i64;
+
+    crate::closure::js_register_closure_arity(capture_pipe_source_listener as *const u8, 1);
+    let make_listener = || {
+        let closure = js_closure_alloc(capture_pipe_source_listener as *const u8, 2);
+        crate::closure::js_closure_set_capture_f64(closure, 0, source);
+        crate::closure::js_closure_set_capture_f64(closure, 1, dest);
+        box_pointer(closure as *const u8)
+    };
+
+    let _ = js_node_stream_method_on(dest_handle, string_value("pipe"), make_listener());
+    let _ = js_node_stream_method_on(dest_handle, string_value("unpipe"), make_listener());
+
+    let source_obj = raw_ptr_from_value(source) as *const ObjectHeader;
+    let pipe = js_object_get_field_by_name_f64(source_obj, hidden_key(b"pipe"));
+    let unpipe = js_object_get_field_by_name_f64(source_obj, hidden_key(b"unpipe"));
+
+    let pipe_return = unsafe { crate::closure::js_native_call_value(pipe, [dest].as_ptr(), 1) };
+    assert_eq!(pipe_return.to_bits(), dest.to_bits());
+
+    let unpipe_return = unsafe { crate::closure::js_native_call_value(unpipe, [dest].as_ptr(), 1) };
+    assert_eq!(unpipe_return.to_bits(), source.to_bits());
+
+    assert_eq!(
+        js_node_stream_method_pipe(source_handle, dest).to_bits(),
+        dest.to_bits()
+    );
+    assert_eq!(
+        js_node_stream_method_unpipe(source_handle, dest).to_bits(),
+        source.to_bits()
+    );
+
+    PIPE_EVENT_MATCHES.with(|matches| {
+        assert_eq!(matches.borrow().as_slice(), &[true, true, true, true]);
+    });
 }
 
 #[test]

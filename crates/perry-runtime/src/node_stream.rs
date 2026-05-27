@@ -279,9 +279,16 @@ fn chunk_byte_len(chunk: f64) -> usize {
     }
     1
 }
-extern "C" fn ns_pipe1(_closure: *const ClosureHeader, dest: f64) -> f64 {
+extern "C" fn ns_pipe1(closure: *const ClosureHeader, dest: f64) -> f64 {
     // Node's `Readable.pipe(dest)` returns `dest` to allow `r.pipe(a).pipe(b)`.
+    let source = this_value(closure);
+    let _ = emit_stream_event(dest, string_value(b"pipe"), &[source]);
     dest
+}
+extern "C" fn ns_unpipe1(closure: *const ClosureHeader, dest: f64) -> f64 {
+    let source = this_value(closure);
+    let _ = emit_stream_event(dest, string_value(b"unpipe"), &[source]);
+    source
 }
 extern "C" fn writable_write_callback_noop(_closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
@@ -536,6 +543,20 @@ pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
     refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
     stream
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_pipe(stream_handle: i64, dest: f64) -> f64 {
+    let source = stream_value_from_handle(stream_handle);
+    let _ = emit_stream_event(dest, string_value(b"pipe"), &[source]);
+    dest
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_unpipe(stream_handle: i64, dest: f64) -> f64 {
+    let source = stream_value_from_handle(stream_handle);
+    let _ = emit_stream_event(dest, string_value(b"unpipe"), &[source]);
+    source
 }
 
 #[no_mangle]
@@ -1148,6 +1169,7 @@ fn register_stub_arities() {
     register(ns_resume0 as *const u8, 0);
     register(ns_read1 as *const u8, 1);
     register(ns_pipe1 as *const u8, 1);
+    register(ns_unpipe1 as *const u8, 1);
     register(writable_write_callback_noop as *const u8, 0);
     register(ns_write2 as *const u8, 2);
     register(ns_end3 as *const u8, 3);
@@ -1877,7 +1899,7 @@ fn readable_methods() -> [(&'static str, StubFn); 37] {
         ("rawListeners", cast1(ns_raw_listeners)),
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
-        ("unpipe", cast1(ns_chain1)),
+        ("unpipe", cast1(ns_unpipe1)),
         ("pause", cast0(ns_chain0)),
         ("resume", cast0(ns_resume0)),
         ("destroy", cast1(ns_destroy1)),
@@ -1955,7 +1977,7 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("rawListeners", cast1(ns_raw_listeners)),
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
-        ("unpipe", cast1(ns_chain1)),
+        ("unpipe", cast1(ns_unpipe1)),
         ("pause", cast0(ns_chain0)),
         ("resume", cast0(ns_resume0)),
         ("setEncoding", cast1(ns_chain1)),
