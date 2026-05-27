@@ -12,6 +12,22 @@ pub(super) enum GcCyclePhase {
     Complete,
 }
 
+impl GcCyclePhase {
+    #[inline]
+    pub(super) const fn ffi_code(self) -> u32 {
+        match self {
+            Self::BuildValidPointerSet => 1,
+            Self::RootScan => 2,
+            Self::MarkPropagation => 3,
+            Self::BlockPersistence => 4,
+            Self::AtomicFinalize => 5,
+            Self::Sweep => 6,
+            Self::Reclaim => 7,
+            Self::Complete => 8,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct GcWorkBudget {
     work_units: usize,
@@ -258,7 +274,8 @@ pub(super) struct GcCycleState {
     collection_kind: GcCollectionKind,
     phase: GcCyclePhase,
     trace: Option<GcCycleTrace>,
-    start: Instant,
+    active_elapsed: Duration,
+    active_step_start: Option<Instant>,
     valid_builder: Option<ValidPointerSetBuilder>,
     valid_ptrs: Option<ValidPointerSet>,
     trace_worklist: Option<TraceWorklistCycleState>,
@@ -280,7 +297,8 @@ impl GcCycleState {
             collection_kind: GcCollectionKind::Full,
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
-            start,
+            active_elapsed: start.elapsed(),
+            active_step_start: None,
             valid_builder: None,
             valid_ptrs: None,
             trace_worklist: None,
@@ -310,7 +328,8 @@ impl GcCycleState {
             collection_kind: GcCollectionKind::Minor,
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
-            start,
+            active_elapsed: start.elapsed(),
+            active_step_start: None,
             valid_builder: None,
             valid_ptrs: None,
             trace_worklist: None,
@@ -334,13 +353,31 @@ impl GcCycleState {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn phase(&self) -> GcCyclePhase {
         self.phase
     }
 
+    pub(super) fn collection_kind(&self) -> GcCollectionKind {
+        self.collection_kind
+    }
+
+    pub(super) fn set_progress_kind(&mut self, progress_kind: GcProgressKind) {
+        if let Some(trace) = self.trace.as_mut() {
+            trace.progress_kind = progress_kind;
+        }
+    }
+
     pub(super) fn step(&mut self, budget: GcWorkBudget) -> GcCycleStepResult {
         let phase_before = self.phase;
+        if self.phase == GcCyclePhase::Complete {
+            return GcCycleStepResult {
+                phase: phase_before,
+                completed: true,
+            };
+        }
+
+        let step_start = Instant::now();
+        self.active_step_start = Some(step_start);
         match self.phase {
             GcCyclePhase::BuildValidPointerSet => self.step_build_valid_pointer_set(budget),
             GcCyclePhase::RootScan => self.step_root_scan(),
@@ -351,6 +388,8 @@ impl GcCycleState {
             GcCyclePhase::Reclaim => self.step_reclaim(),
             GcCyclePhase::Complete => {}
         }
+        self.active_step_start = None;
+        self.active_elapsed = self.active_elapsed.saturating_add(step_start.elapsed());
         GcCycleStepResult {
             phase: phase_before,
             completed: self.phase == GcCyclePhase::Complete,
@@ -366,9 +405,19 @@ impl GcCycleState {
             .expect("completed GC cycle must produce an outcome")
     }
 
-    #[cfg(test)]
     pub(super) fn take_outcome(&mut self) -> Option<GcCollectOutcome> {
         self.outcome.take()
+    }
+
+    fn active_elapsed(&self) -> Duration {
+        match self.active_step_start {
+            Some(start) => self.active_elapsed.saturating_add(start.elapsed()),
+            None => self.active_elapsed,
+        }
+    }
+
+    fn active_elapsed_us(&self) -> u64 {
+        self.active_elapsed().as_micros() as u64
     }
 
     fn step_build_valid_pointer_set(&mut self, budget: GcWorkBudget) {
@@ -387,13 +436,14 @@ impl GcCycleState {
         self.valid_ptrs = Some(builder.finish());
         trace_phase_record(&mut self.trace, "build_valid_pointer_set", phase_start);
 
+        let active_elapsed_us = self.active_elapsed_us();
         if let Some(minor) = self.minor.as_mut() {
             let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
             minor.evacuation_policy = evacuation_policy_initial_decision(
                 valid_ptrs.tenured_nursery_bytes(),
                 minor.current_rss_bytes,
                 minor.previous_pause_us,
-                self.start.elapsed().as_micros() as u64,
+                active_elapsed_us,
                 minor.evacuation_policy_allowed,
                 minor.force_evacuation,
                 old_to_young_tracking_complete(),
@@ -532,19 +582,19 @@ impl GcCycleState {
             }
         }
 
+        let active_elapsed_us = self.active_elapsed_us();
         let minor = self.minor.as_mut().expect("minor context exists");
         if minor.evacuation_policy.considered {
             let snapshot = evacuation_policy_snapshot_after_mark(
                 minor.evacuation_policy.snapshot,
                 minor.evacuation_policy.force,
-                self.start.elapsed().as_micros() as u64,
+                active_elapsed_us,
                 &minor.old_page_selection,
             );
             minor.evacuation_policy =
                 evacuation_policy_final_decision(minor.evacuation_policy, snapshot);
         } else {
-            minor.evacuation_policy.snapshot.pre_evac_pause_us =
-                self.start.elapsed().as_micros() as u64;
+            minor.evacuation_policy.snapshot.pre_evac_pause_us = active_elapsed_us;
         }
         if let Some(trace) = self.trace.as_mut() {
             trace.evacuation_policy = minor.evacuation_policy;
@@ -677,7 +727,7 @@ impl GcCycleState {
 
         trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
 
-        let elapsed_us = self.start.elapsed().as_micros() as u64;
+        let elapsed_us = self.active_elapsed_us();
         GC_STATS.with(|stats| {
             let mut stats = stats.borrow_mut();
             stats.collection_count += 1;

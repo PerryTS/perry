@@ -340,6 +340,14 @@ impl GcCollectionKind {
             GcCollectionKind::Full => "full",
         }
     }
+
+    #[inline]
+    pub(super) const fn ffi_code(self) -> u32 {
+        match self {
+            GcCollectionKind::Minor => 1,
+            GcCollectionKind::Full => 2,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -362,6 +370,18 @@ impl GcTriggerKind {
             GcTriggerKind::SurvivorPromotionBytes => "survivor_promotion_bytes",
             GcTriggerKind::Manual => "manual",
             GcTriggerKind::Direct => "direct",
+        }
+    }
+
+    #[inline]
+    pub(super) const fn ffi_code(self) -> u32 {
+        match self {
+            GcTriggerKind::ArenaBytes => 1,
+            GcTriggerKind::MallocCount => 2,
+            GcTriggerKind::OldGenBytes => 3,
+            GcTriggerKind::SurvivorPromotionBytes => 4,
+            GcTriggerKind::Manual => 5,
+            GcTriggerKind::Direct => 6,
         }
     }
 
@@ -806,10 +826,185 @@ pub(super) fn gc_bump_malloc_trigger_with_snapshot(current: usize, bytes_now: us
     is_tiny_parse
 }
 
+fn gc_rebaseline_malloc_trigger_to_survivors(mstep: usize) {
+    let survivors = MALLOC_STATE.with(|s| s.borrow().objects.len());
+    GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
+}
+
+fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutcome) -> u64 {
+    let sweep_freed_bytes = outcome.freed_bytes;
+    let malloc_swept = outcome.malloc_swept;
+    let post_in_use = crate::arena::arena_in_use_bytes();
+
+    // Adaptive step:
+    //   >90% freed → double (almost all dead — `object_create`-style
+    //                        hot loops fit their entire working set
+    //                        under the threshold; defer.)
+    //   10-90% freed → halve (productive collection — real reclaim
+    //                         is possible, so collect again sooner
+    //                         to keep the working set bounded;
+    //                         16MB floor prevents thrash).
+    //   <10% freed → double (live set genuinely large, don't thrash).
+    //
+    // Issue #179: the halve band was formerly 10-25% only. Before
+    // the age-restricted block-persist, collections in the 25-90%
+    // band were illusory — block-persist re-marked dead neighbors
+    // as live, so "freed" over-counted what was actually reclaimable
+    // on subsequent cycles. Keeping step flat there was the correct
+    // defensive choice. With v0.5.193's block-persist limited to
+    // the last 5 general-arena blocks, "freed" now reflects real
+    // sweep effectiveness, and widening the halve band lets the
+    // trigger fire often enough for middle blocks to actually
+    // reset and RSS to stay bounded. `bench_json_roundtrip` moves
+    // into this band: first GC frees ~73% → halve → next trigger
+    // ~56MB later → second GC frees more → step halves again →
+    // RSS stabilizes instead of growing linearly with iters.
+    //
+    // The >90% and <10% branches retain the existing "don't thrash"
+    // protection (Issue #64 follow-up): both extremes mean the
+    // live/garbage ratio is such that collecting sooner is wasted
+    // work.
+    // Adaptive step, driven by the *larger* of sweep-freed-bytes
+    // and the block-reset delta (`pre - post`). `freed_bytes` from
+    // the sweep surfaces reclaim potential immediately (before the
+    // 2-cycle grace completes); `pre - post` reflects actual block
+    // resets landing on subsequent cycles. Using the max keeps the
+    // step adaptive to both surfaces of productive collection.
+    //
+    //   >90% freed → double (near-total sweep; `object_create`-style
+    //                        hot loops pay one GC then run free).
+    //   25-90% freed → halve (productive — reclaim is meaningful,
+    //                         collect again sooner to bound RSS).
+    //   10-25% freed → keep (marginal — don't thrash vs. churn).
+    //   <10% freed → double (live set genuinely large, defer).
+    //
+    // Issue #179 driver: formerly the halve band was 10-25% only,
+    // which never fired on `bench_json_roundtrip` because typical
+    // freed-pct there is 50-80%. With the max-of-two metric AND
+    // the age-restricted block-persist (v0.5.193), widening the
+    // halve band to 25-90% lets the trigger fire often enough for
+    // middle blocks to actually reset, without dropping into the
+    // 16MB-floor thrash territory that hurts throughput on
+    // moderate workloads. `bench_json_roundtrip` lands here on
+    // most cycles (60-80% freed) → step halves → GC fires 3-4×
+    // across the 50-iter loop → RSS stabilizes around the live-
+    // set size plus the 5-block recent-window headroom.
+    //
+    // The 16MB floor keeps `object_create`-scale hot loops from
+    // thrashing: those workloads land in the >90% band on the
+    // first GC and immediately double the step, escaping the
+    // halve trajectory after a single cycle.
+    let block_reclaim = pre_in_use.saturating_sub(post_in_use);
+    let freed = std::cmp::max(block_reclaim, sweep_freed_bytes as usize);
+    let mut step = GC_STEP_BYTES.with(|c| c.get());
+    let old_step = step;
+    if pre_in_use > 0 {
+        let pct_freed = (freed * 100) / pre_in_use;
+        // 2026-05-02: widen the "double" band from `>90% || <10%` to
+        // `>=85% || <10%`. ECS perf-comprehensive's two
+        // alloc-heavy benches (10k two-comp, 5k × 3 cmds) sweep
+        // at 86-89 % freed, which previously landed in the halve
+        // band. Step would shrink 64→32→16 MB across the first
+        // two benches, then GC fired every ~16 MB of fresh
+        // allocations — a 60 ms `mark_block_persisting_arena_objects`
+        // outlier landed mid-measured-round on each refire.
+        // Promoting 85-90 % to double lets the step grow to the
+        // 128 MB ceiling on the first sweep, the trigger jumps
+        // out past the bench's full per-iteration allocation
+        // budget, and subsequent GCs fire BETWEEN measured rounds
+        // (i.e. invisible to the bench's wall-time counter).
+        // `bench_json_roundtrip` lands at 50-80 % freed and is
+        // unchanged — it still halves and stabilizes at the floor.
+        //
+        // With INITIAL == ABSOLUTE_CEILING (128 MB), the post-GC
+        // `next_trigger` cap below supersedes doubling above the
+        // ceiling; the doubling branch is kept for the bisection
+        // escape hatch.
+        if !(10..=84).contains(&pct_freed) {
+            step = (step * 2).min(GC_THRESHOLD_MAX_BYTES);
+        } else if pct_freed >= 25 {
+            step = (step / 2).max(16 * 1024 * 1024);
+        }
+        // 10-25% freed → keep step unchanged (marginal churn).
+        GC_STEP_BYTES.with(|c| c.set(step));
+        if std::env::var_os("PERRY_GC_DIAG").is_some() {
+            eprintln!(
+                "[gc-step] pre_in_use={} post_in_use={} sweep_freed={} block_reclaim={} pct={}% step={}→{}",
+                pre_in_use, post_in_use, sweep_freed_bytes, block_reclaim, pct_freed, old_step, step
+            );
+        }
+    }
+    let new_total = crate::arena::arena_total_bytes();
+    // C4b-δ-tune: hard cap on next_trigger so the >90%-freed
+    // step-doubling can't drive peak nursery past the initial
+    // threshold. Floor: at least 16 MB of headroom past
+    // `new_total` so a workload whose post-GC live set already
+    // approaches the ceiling doesn't thrash on every fresh
+    // allocation.
+    let stepped = new_total.saturating_add(step);
+    let capped = stepped.min(GC_TRIGGER_ABSOLUTE_CEILING);
+    let floor = new_total.saturating_add(16 * 1024 * 1024);
+    let next_trigger = std::cmp::max(capped, floor);
+    GC_NEXT_TRIGGER_BYTES.with(|c| c.set(next_trigger));
+    // Rebaseline the malloc-count trigger only if this collection
+    // actually swept malloc objects. Copied-minor arena collections
+    // may skip the malloc sweep while count pressure is still below
+    // its trigger; moving the trigger in that case would postpone
+    // reclamation of already-tracked dead malloc churn.
+    if malloc_swept {
+        let mstep = GC_MALLOC_COUNT_STEP.with(|c| c.get());
+        gc_rebaseline_malloc_trigger_to_survivors(mstep);
+    }
+    outcome.emit_after_current()
+}
+
+fn gc_finish_malloc_trigger_collection(pre_count: usize, outcome: GcCollectOutcome) -> u64 {
+    debug_assert!(
+        outcome.malloc_swept,
+        "malloc-count trigger must sweep malloc objects"
+    );
+    let survivors = MALLOC_STATE.with(|s| s.borrow().objects.len());
+    // Adapt the malloc-count step based on collection effectiveness.
+    //
+    // Issue #58 insight: in tight allocation loops the conservative
+    // stack scanner keeps almost everything alive — GC finds <10%
+    // garbage and wastes time walking 100k+ objects. In this regime
+    // we should BACK OFF (increase the step) so the loop can finish
+    // without GC interference. Once control returns to a higher scope
+    // the dead objects will fall off the stack and become collectable.
+    //
+    // Conversely, when GC reclaims >75% it's working well and can
+    // afford to stay at the current cadence or even speed up.
+    let mut mstep = GC_MALLOC_COUNT_STEP.with(|c| c.get());
+    if pre_count > 0 {
+        let freed = pre_count.saturating_sub(survivors);
+        let pct_freed = (freed * 100) / pre_count;
+        if pct_freed < 15 {
+            // GC is nearly useless — quadruple the step to back off fast
+            mstep = (mstep * 4).min(GC_MALLOC_COUNT_STEP_MAX);
+        } else if pct_freed < 50 {
+            // GC is partially effective — double the step
+            mstep = (mstep * 2).min(GC_MALLOC_COUNT_STEP_MAX);
+        } else if pct_freed > 90 {
+            // GC is highly effective — halve the step to collect sooner
+            mstep = (mstep / 2).max(GC_MALLOC_COUNT_STEP_MIN);
+        }
+        // 50-90% freed: keep current step (balanced)
+        GC_MALLOC_COUNT_STEP.with(|c| c.set(mstep));
+    }
+    if outcome.malloc_swept {
+        GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
+    }
+    outcome.emit_after_current()
+}
+
 /// Check if GC should run. Called only when a new arena block is allocated.
 /// Skips collection if we're inside gc_malloc/gc_realloc to prevent
 /// RefCell double-borrow panics (reentrancy from allocation → arena grow → GC → sweep).
 pub fn gc_check_trigger() {
+    if gc_budgeted_cycle_active() {
+        return;
+    }
     // Issue #62: single TLS access covers both `in_alloc` and `suppressed`.
     if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0 {
         return;
@@ -830,143 +1025,10 @@ pub fn gc_check_trigger() {
     let total = arena_total_bytes();
     let next_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
     if total >= next_trigger {
-        // Snapshot pre-GC in-use bytes to measure collection effectiveness.
-        // We also capture `freed_bytes` from the sweep itself (sum of dead
-        // object sizes). Issue #179: `pre_in_use - post_in_use` measures
-        // only block-reset activity, which is gated by the 2-cycle grace
-        // period (Issue #73) — the first productive GC in a series will
-        // show (pre - post) = 0 even though the sweep found 60%+ dead
-        // objects. Using `freed_bytes` reflects true reclaim potential
-        // and lets the adaptive step halve on the cycle that first
-        // surfaces the dead working set, rather than deferring until
-        // after the grace completes.
         let pre_in_use = crate::arena::arena_in_use_bytes();
         let outcome =
             gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::ArenaBytes));
-        let sweep_freed_bytes = outcome.freed_bytes;
-        let post_in_use = crate::arena::arena_in_use_bytes();
-
-        // Adaptive step:
-        //   >90% freed → double (almost all dead — `object_create`-style
-        //                        hot loops fit their entire working set
-        //                        under the threshold; defer.)
-        //   10-90% freed → halve (productive collection — real reclaim
-        //                         is possible, so collect again sooner
-        //                         to keep the working set bounded;
-        //                         16MB floor prevents thrash).
-        //   <10% freed → double (live set genuinely large, don't thrash).
-        //
-        // Issue #179: the halve band was formerly 10-25% only. Before
-        // the age-restricted block-persist, collections in the 25-90%
-        // band were illusory — block-persist re-marked dead neighbors
-        // as live, so "freed" over-counted what was actually reclaimable
-        // on subsequent cycles. Keeping step flat there was the correct
-        // defensive choice. With v0.5.193's block-persist limited to
-        // the last 5 general-arena blocks, "freed" now reflects real
-        // sweep effectiveness, and widening the halve band lets the
-        // trigger fire often enough for middle blocks to actually
-        // reset and RSS to stay bounded. `bench_json_roundtrip` moves
-        // into this band: first GC frees ~73% → halve → next trigger
-        // ~56MB later → second GC frees more → step halves again →
-        // RSS stabilizes instead of growing linearly with iters.
-        //
-        // The >90% and <10% branches retain the existing "don't thrash"
-        // protection (Issue #64 follow-up): both extremes mean the
-        // live/garbage ratio is such that collecting sooner is wasted
-        // work.
-        // Adaptive step, driven by the *larger* of sweep-freed-bytes
-        // and the block-reset delta (`pre - post`). `freed_bytes` from
-        // the sweep surfaces reclaim potential immediately (before the
-        // 2-cycle grace completes); `pre - post` reflects actual block
-        // resets landing on subsequent cycles. Using the max keeps the
-        // step adaptive to both surfaces of productive collection.
-        //
-        //   >90% freed → double (near-total sweep; `object_create`-style
-        //                        hot loops pay one GC then run free).
-        //   25-90% freed → halve (productive — reclaim is meaningful,
-        //                         collect again sooner to bound RSS).
-        //   10-25% freed → keep (marginal — don't thrash vs. churn).
-        //   <10% freed → double (live set genuinely large, defer).
-        //
-        // Issue #179 driver: formerly the halve band was 10-25% only,
-        // which never fired on `bench_json_roundtrip` because typical
-        // freed-pct there is 50-80%. With the max-of-two metric AND
-        // the age-restricted block-persist (v0.5.193), widening the
-        // halve band to 25-90% lets the trigger fire often enough for
-        // middle blocks to actually reset, without dropping into the
-        // 16MB-floor thrash territory that hurts throughput on
-        // moderate workloads. `bench_json_roundtrip` lands here on
-        // most cycles (60-80% freed) → step halves → GC fires 3-4×
-        // across the 50-iter loop → RSS stabilizes around the live-
-        // set size plus the 5-block recent-window headroom.
-        //
-        // The 16MB floor keeps `object_create`-scale hot loops from
-        // thrashing: those workloads land in the >90% band on the
-        // first GC and immediately double the step, escaping the
-        // halve trajectory after a single cycle.
-        let block_reclaim = pre_in_use.saturating_sub(post_in_use);
-        let freed = std::cmp::max(block_reclaim, sweep_freed_bytes as usize);
-        let mut step = GC_STEP_BYTES.with(|c| c.get());
-        let old_step = step;
-        if pre_in_use > 0 {
-            let pct_freed = (freed * 100) / pre_in_use;
-            // 2026-05-02: widen the "double" band from `>90% || <10%` to
-            // `>=85% || <10%`. ECS perf-comprehensive's two
-            // alloc-heavy benches (10k two-comp, 5k × 3 cmds) sweep
-            // at 86-89 % freed, which previously landed in the halve
-            // band. Step would shrink 64→32→16 MB across the first
-            // two benches, then GC fired every ~16 MB of fresh
-            // allocations — a 60 ms `mark_block_persisting_arena_objects`
-            // outlier landed mid-measured-round on each refire.
-            // Promoting 85-90 % to double lets the step grow to the
-            // 128 MB ceiling on the first sweep, the trigger jumps
-            // out past the bench's full per-iteration allocation
-            // budget, and subsequent GCs fire BETWEEN measured rounds
-            // (i.e. invisible to the bench's wall-time counter).
-            // `bench_json_roundtrip` lands at 50-80 % freed and is
-            // unchanged — it still halves and stabilizes at the floor.
-            //
-            // With INITIAL == ABSOLUTE_CEILING (128 MB), the post-GC
-            // `next_trigger` cap below supersedes doubling above the
-            // ceiling; the doubling branch is kept for the bisection
-            // escape hatch.
-            if !(10..=84).contains(&pct_freed) {
-                step = (step * 2).min(GC_THRESHOLD_MAX_BYTES);
-            } else if pct_freed >= 25 {
-                step = (step / 2).max(16 * 1024 * 1024);
-            }
-            // 10-25% freed → keep step unchanged (marginal churn).
-            GC_STEP_BYTES.with(|c| c.set(step));
-            if std::env::var_os("PERRY_GC_DIAG").is_some() {
-                eprintln!(
-                    "[gc-step] pre_in_use={} post_in_use={} sweep_freed={} block_reclaim={} pct={}% step={}→{}",
-                    pre_in_use, post_in_use, sweep_freed_bytes, block_reclaim, pct_freed, old_step, step
-                );
-            }
-        }
-        let new_total = arena_total_bytes();
-        // C4b-δ-tune: hard cap on next_trigger so the >90%-freed
-        // step-doubling can't drive peak nursery past the initial
-        // threshold. Floor: at least 16 MB of headroom past
-        // `new_total` so a workload whose post-GC live set already
-        // approaches the ceiling doesn't thrash on every fresh
-        // allocation.
-        let stepped = new_total.saturating_add(step);
-        let capped = stepped.min(GC_TRIGGER_ABSOLUTE_CEILING);
-        let floor = new_total.saturating_add(16 * 1024 * 1024);
-        let next_trigger = std::cmp::max(capped, floor);
-        GC_NEXT_TRIGGER_BYTES.with(|c| c.set(next_trigger));
-        // Rebaseline the malloc-count trigger only if this collection
-        // actually swept malloc objects. Copied-minor arena collections
-        // may skip the malloc sweep while count pressure is still below
-        // its trigger; moving the trigger in that case would postpone
-        // reclamation of already-tracked dead malloc churn.
-        if outcome.malloc_swept {
-            let survivors = MALLOC_STATE.with(|s| s.borrow().objects.len());
-            let mstep = GC_MALLOC_COUNT_STEP.with(|c| c.get());
-            GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
-        }
-        outcome.emit_after_current();
+        gc_finish_arena_trigger_collection(pre_in_use, outcome);
         return;
     }
     // Also trigger on malloc object count to bound memory growth for
@@ -988,44 +1050,408 @@ pub fn gc_check_trigger() {
         let pre_count = malloc_count;
         let outcome =
             gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::MallocCount));
-        debug_assert!(
-            outcome.malloc_swept,
-            "malloc-count trigger must sweep malloc objects"
-        );
-        let survivors = MALLOC_STATE.with(|s| s.borrow().objects.len());
-        // Adapt the malloc-count step based on collection effectiveness.
-        //
-        // Issue #58 insight: in tight allocation loops the conservative
-        // stack scanner keeps almost everything alive — GC finds <10%
-        // garbage and wastes time walking 100k+ objects. In this regime
-        // we should BACK OFF (increase the step) so the loop can finish
-        // without GC interference. Once control returns to a higher scope
-        // the dead objects will fall off the stack and become collectable.
-        //
-        // Conversely, when GC reclaims >75% it's working well and can
-        // afford to stay at the current cadence or even speed up.
-        let mut mstep = GC_MALLOC_COUNT_STEP.with(|c| c.get());
-        if pre_count > 0 {
-            let freed = pre_count.saturating_sub(survivors);
-            let pct_freed = (freed * 100) / pre_count;
-            if pct_freed < 15 {
-                // GC is nearly useless — quadruple the step to back off fast
-                mstep = (mstep * 4).min(GC_MALLOC_COUNT_STEP_MAX);
-            } else if pct_freed < 50 {
-                // GC is partially effective — double the step
-                mstep = (mstep * 2).min(GC_MALLOC_COUNT_STEP_MAX);
-            } else if pct_freed > 90 {
-                // GC is highly effective — halve the step to collect sooner
-                mstep = (mstep / 2).max(GC_MALLOC_COUNT_STEP_MIN);
-            }
-            // 50-90% freed: keep current step (balanced)
-            GC_MALLOC_COUNT_STEP.with(|c| c.set(mstep));
-        }
-        if outcome.malloc_swept {
-            GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
-        }
-        outcome.emit_after_current();
+        gc_finish_malloc_trigger_collection(pre_count, outcome);
     }
+}
+
+pub const JS_GC_STEP_STATUS_IDLE: u32 = 0;
+pub const JS_GC_STEP_STATUS_ACTIVE: u32 = 1;
+pub const JS_GC_STEP_STATUS_COMPLETED: u32 = 2;
+pub const JS_GC_STEP_STATUS_SKIPPED: u32 = 3;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct JsGcStepResult {
+    pub status: u32,
+    pub phase: u32,
+    pub collection_kind: u32,
+    pub trigger_kind: u32,
+    pub active: u32,
+    pub completed: u32,
+    pub arena_debt_bytes: u64,
+    pub malloc_debt_objects: u64,
+    pub old_reclaim_debt_bytes: u64,
+}
+
+#[derive(Clone, Copy)]
+enum BudgetedGcRebaseline {
+    ArenaBytes { pre_in_use: usize },
+    MallocCount { pre_count: usize },
+    OldReclaim,
+}
+
+struct BudgetedGcCycle {
+    state: GcCycleState,
+    trigger_kind: GcTriggerKind,
+    collection_kind: GcCollectionKind,
+    rebaseline: BudgetedGcRebaseline,
+}
+
+#[derive(Clone, Copy)]
+enum BudgetedGcTrigger {
+    OldReclaim,
+    ArenaBytes,
+    MallocCount,
+}
+
+#[derive(Clone, Copy)]
+struct GcStepDebt {
+    arena_debt_bytes: u64,
+    malloc_debt_objects: u64,
+    old_reclaim_debt_bytes: u64,
+}
+
+thread_local! {
+    static GC_BUDGETED_CYCLE: RefCell<Option<BudgetedGcCycle>> = const { RefCell::new(None) };
+    static GC_BUDGETED_CYCLE_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(super) fn gc_budgeted_cycle_active() -> bool {
+    GC_BUDGETED_CYCLE_ACTIVE.with(Cell::get)
+}
+
+fn gc_budgeted_start_blocked() -> bool {
+    GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0
+        || gc_blocked_by_unsafe_zone()
+        || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
+}
+
+fn gc_budgeted_resume_blocked() -> bool {
+    GC_FLAGS.with(|f| f.get()) & GC_FLAG_SUPPRESSED != 0
+        || gc_blocked_by_unsafe_zone()
+        || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
+}
+
+fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u64 {
+    let trigger = if baseline < GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES {
+        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES
+    } else {
+        baseline.saturating_add(GC_OLD_GEN_RECLAIM_GROWTH_BYTES)
+    };
+    old_in_use.saturating_sub(trigger) as u64
+}
+
+fn gc_step_debt() -> GcStepDebt {
+    let total = crate::arena::arena_total_bytes();
+    let next_arena_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
+    let malloc_count = malloc_object_count();
+    let next_malloc_trigger = GC_NEXT_MALLOC_TRIGGER.with(|c| c.get());
+    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
+
+    GcStepDebt {
+        arena_debt_bytes: total.saturating_sub(next_arena_trigger) as u64,
+        malloc_debt_objects: malloc_count.saturating_sub(next_malloc_trigger) as u64,
+        old_reclaim_debt_bytes: gc_old_reclaim_debt_bytes(old_in_use, old_baseline),
+    }
+}
+
+fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
+    let old_pending = GC_OLD_RECLAIM_PENDING.with(Cell::get);
+    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
+    if old_pending || old_reclaim_pressure_due(old_in_use, old_baseline) {
+        return Some(BudgetedGcTrigger::OldReclaim);
+    }
+
+    let total = crate::arena::arena_total_bytes();
+    let next_arena_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
+    if total >= next_arena_trigger {
+        return Some(BudgetedGcTrigger::ArenaBytes);
+    }
+
+    let malloc_count = malloc_object_count();
+    let next_malloc_trigger = GC_NEXT_MALLOC_TRIGGER.with(|c| c.get());
+    if malloc_count >= next_malloc_trigger {
+        return Some(BudgetedGcTrigger::MallocCount);
+    }
+
+    None
+}
+
+fn gc_start_budgeted_full_cycle(
+    trigger_kind: GcTriggerKind,
+    rebaseline: BudgetedGcRebaseline,
+) -> BudgetedGcCycle {
+    let mut state = GcCycleState::new_full(GcTriggerSnapshot::capture(trigger_kind));
+    state.set_progress_kind(GcProgressKind::NormalIncremental);
+    BudgetedGcCycle {
+        collection_kind: state.collection_kind(),
+        state,
+        trigger_kind,
+        rebaseline,
+    }
+}
+
+fn gc_start_budgeted_minor_fallback_cycle(
+    trigger_kind: GcTriggerKind,
+    rebaseline: BudgetedGcRebaseline,
+) -> BudgetedGcCycle {
+    let trigger = GcTriggerSnapshot::capture(trigger_kind);
+    let prev_in_alloc = GC_FLAGS.with(|f| {
+        let prev = f.get();
+        f.set(prev | GC_FLAG_IN_ALLOC);
+        prev & GC_FLAG_IN_ALLOC
+    });
+    let mut trace = GcCycleTrace::new(GcCollectionKind::Minor, trigger);
+    if let Some(trace) = trace.as_mut() {
+        trace.progress_kind = GcProgressKind::NormalIncremental;
+    }
+    let start = Instant::now();
+    crate::arena::old_pages_begin_gc_cycle();
+    clear_mark_seeds();
+    let previous_pause_us = gc_last_pause_us();
+    let current_rss_bytes = crate::process::get_rss_bytes();
+    let evacuation_policy_allowed = gen_gc_evacuate_enabled();
+    let force_evacuation = gc_force_evacuate_enabled();
+    let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
+        select_old_page_defrag_pages(force_evacuation)
+    } else {
+        OldPageDefragSelection::default()
+    };
+    let old_page_source_blocks =
+        crate::arena::old_arena_source_blocks_for_pages(&old_page_selection.pages);
+    let state = GcCycleState::new_minor_fallback(
+        trigger,
+        trace,
+        start,
+        prev_in_alloc,
+        previous_pause_us,
+        current_rss_bytes,
+        evacuation_policy_allowed,
+        force_evacuation,
+        old_page_selection,
+        old_page_source_blocks,
+    );
+    BudgetedGcCycle {
+        collection_kind: state.collection_kind(),
+        state,
+        trigger_kind,
+        rebaseline,
+    }
+}
+
+fn gc_start_budgeted_cycle_for_pressure() -> Option<BudgetedGcCycle> {
+    let trigger = gc_budgeted_due_trigger()?;
+    GC_TRIGGER_BUMPED.with(|c| c.set(false));
+    Some(match trigger {
+        BudgetedGcTrigger::OldReclaim => {
+            GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+            gc_start_budgeted_full_cycle(
+                GcTriggerKind::OldGenBytes,
+                BudgetedGcRebaseline::OldReclaim,
+            )
+        }
+        BudgetedGcTrigger::ArenaBytes => {
+            let rebaseline = BudgetedGcRebaseline::ArenaBytes {
+                pre_in_use: crate::arena::arena_in_use_bytes(),
+            };
+            if gen_gc_enabled() {
+                gc_start_budgeted_minor_fallback_cycle(GcTriggerKind::ArenaBytes, rebaseline)
+            } else {
+                gc_start_budgeted_full_cycle(GcTriggerKind::ArenaBytes, rebaseline)
+            }
+        }
+        BudgetedGcTrigger::MallocCount => {
+            let rebaseline = BudgetedGcRebaseline::MallocCount {
+                pre_count: malloc_object_count(),
+            };
+            if gen_gc_enabled() {
+                gc_start_budgeted_minor_fallback_cycle(GcTriggerKind::MallocCount, rebaseline)
+            } else {
+                gc_start_budgeted_full_cycle(GcTriggerKind::MallocCount, rebaseline)
+            }
+        }
+    })
+}
+
+fn gc_step_result(
+    status: u32,
+    phase: u32,
+    collection_kind: u32,
+    trigger_kind: u32,
+    active: bool,
+    completed: bool,
+) -> JsGcStepResult {
+    let debt = gc_step_debt();
+    JsGcStepResult {
+        status,
+        phase,
+        collection_kind,
+        trigger_kind,
+        active: u32::from(active),
+        completed: u32::from(completed),
+        arena_debt_bytes: debt.arena_debt_bytes,
+        malloc_debt_objects: debt.malloc_debt_objects,
+        old_reclaim_debt_bytes: debt.old_reclaim_debt_bytes,
+    }
+}
+
+fn gc_idle_step_result() -> JsGcStepResult {
+    gc_step_result(JS_GC_STEP_STATUS_IDLE, 0, 0, 0, false, false)
+}
+
+fn gc_cycle_step_result(status: u32, cycle: &BudgetedGcCycle, completed: bool) -> JsGcStepResult {
+    gc_step_result(
+        status,
+        cycle.state.phase().ffi_code(),
+        cycle.collection_kind.ffi_code(),
+        cycle.trigger_kind.ffi_code(),
+        !completed,
+        completed,
+    )
+}
+
+fn gc_budgeted_status_result() -> JsGcStepResult {
+    if !gc_budgeted_cycle_active() {
+        return gc_idle_step_result();
+    }
+
+    let result = GC_BUDGETED_CYCLE.with(|slot| {
+        let slot = slot.borrow();
+        slot.as_ref()
+            .map(|cycle| gc_cycle_step_result(JS_GC_STEP_STATUS_ACTIVE, cycle, false))
+    });
+    match result {
+        Some(result) => result,
+        None => {
+            GC_BUDGETED_CYCLE_ACTIVE.with(|active| active.set(false));
+            gc_idle_step_result()
+        }
+    }
+}
+
+fn gc_budgeted_skipped_result() -> JsGcStepResult {
+    if !gc_budgeted_cycle_active() {
+        return gc_step_result(JS_GC_STEP_STATUS_SKIPPED, 0, 0, 0, false, false);
+    }
+
+    GC_BUDGETED_CYCLE.with(|slot| {
+        let slot = slot.borrow();
+        slot.as_ref()
+            .map(|cycle| gc_cycle_step_result(JS_GC_STEP_STATUS_SKIPPED, cycle, false))
+            .unwrap_or_else(|| gc_step_result(JS_GC_STEP_STATUS_SKIPPED, 0, 0, 0, false, false))
+    })
+}
+
+fn gc_finish_budgeted_cycle(mut cycle: BudgetedGcCycle) -> JsGcStepResult {
+    let outcome = cycle
+        .state
+        .take_outcome()
+        .expect("completed budgeted GC cycle must produce an outcome");
+    match cycle.rebaseline {
+        BudgetedGcRebaseline::ArenaBytes { pre_in_use } => {
+            gc_finish_arena_trigger_collection(pre_in_use, outcome);
+        }
+        BudgetedGcRebaseline::MallocCount { pre_count } => {
+            gc_finish_malloc_trigger_collection(pre_count, outcome);
+        }
+        BudgetedGcRebaseline::OldReclaim => {
+            outcome.emit_after_current();
+        }
+    }
+    GC_BUDGETED_CYCLE_ACTIVE.with(|active| active.set(false));
+    gc_step_result(
+        JS_GC_STEP_STATUS_COMPLETED,
+        GcCyclePhase::Complete.ffi_code(),
+        cycle.collection_kind.ffi_code(),
+        cycle.trigger_kind.ffi_code(),
+        false,
+        true,
+    )
+}
+
+enum BudgetedStepOutcome {
+    Result(JsGcStepResult),
+    Completed(BudgetedGcCycle),
+}
+
+fn gc_budgeted_step_work_units_inner(work_units: usize) -> JsGcStepResult {
+    if work_units == 0 {
+        return gc_budgeted_status_result();
+    }
+
+    if !gc_budgeted_cycle_active() {
+        if gc_budgeted_due_trigger().is_none() {
+            return gc_idle_step_result();
+        }
+        if gc_budgeted_start_blocked() {
+            return gc_budgeted_skipped_result();
+        }
+        let cycle = gc_start_budgeted_cycle_for_pressure()
+            .expect("budgeted GC pressure was observed before starting cycle");
+        GC_BUDGETED_CYCLE.with(|slot| {
+            *slot.borrow_mut() = Some(cycle);
+        });
+        GC_BUDGETED_CYCLE_ACTIVE.with(|active| active.set(true));
+    }
+
+    if gc_budgeted_resume_blocked() {
+        return gc_budgeted_skipped_result();
+    }
+
+    let outcome = GC_BUDGETED_CYCLE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(cycle) = slot.as_mut() else {
+            GC_BUDGETED_CYCLE_ACTIVE.with(|active| active.set(false));
+            return BudgetedStepOutcome::Result(gc_idle_step_result());
+        };
+
+        let step = cycle.state.step(GcWorkBudget::bounded(work_units));
+        if step.completed {
+            BudgetedStepOutcome::Completed(slot.take().expect("active budgeted GC cycle exists"))
+        } else {
+            BudgetedStepOutcome::Result(gc_cycle_step_result(
+                JS_GC_STEP_STATUS_ACTIVE,
+                cycle,
+                false,
+            ))
+        }
+    });
+
+    match outcome {
+        BudgetedStepOutcome::Result(result) => result,
+        BudgetedStepOutcome::Completed(cycle) => gc_finish_budgeted_cycle(cycle),
+    }
+}
+
+fn write_gc_step_result(out: *mut JsGcStepResult, result: JsGcStepResult) -> u32 {
+    if !out.is_null() {
+        unsafe {
+            *out = result;
+        }
+    }
+    result.status
+}
+
+#[no_mangle]
+pub extern "C" fn js_gc_step_work_units(work_units: u64, out: *mut JsGcStepResult) -> u32 {
+    let work_units = usize::try_from(work_units).unwrap_or(usize::MAX);
+    let result = gc_budgeted_step_work_units_inner(work_units);
+    write_gc_step_result(out, result)
+}
+
+#[no_mangle]
+pub extern "C" fn js_gc_step_us(budget_us: u64, out: *mut JsGcStepResult) -> u32 {
+    if budget_us == 0 {
+        let result = gc_budgeted_status_result();
+        return write_gc_step_result(out, result);
+    }
+
+    let start = Instant::now();
+    let mut result = gc_budgeted_step_work_units_inner(1);
+    while result.status == JS_GC_STEP_STATUS_ACTIVE
+        && start.elapsed().as_micros() < u128::from(budget_us)
+    {
+        result = gc_budgeted_step_work_units_inner(1);
+    }
+    write_gc_step_result(out, result)
+}
+
+#[no_mangle]
+pub extern "C" fn js_gc_step_status(out: *mut JsGcStepResult) -> u32 {
+    let result = gc_budgeted_status_result();
+    write_gc_step_result(out, result)
 }
 
 /// Counter tracking "native work holds JSValue roots we can't scan" state.
