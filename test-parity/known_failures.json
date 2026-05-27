@@ -788,12 +788,6 @@
     "category": "bug-open",
     "reason": "node:stream: Symbol.asyncDispose (Node 21+ explicit disposal protocol) not implemented on stream instances. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/ee/get-event-listeners": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:events.getEventListeners(stream, name) does not return the listener array. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/iterator/return-method": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1279,12 +1273,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: sequential read(N) drain — buffer order or chunk boundaries wrong. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/events/get-event-listeners-static": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: events.getEventListeners(emitter, event) — wrong listener array. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/async-iter-handler-rejection": {
     "issue": "1531",
@@ -2251,12 +2239,6 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(Set with duplicates) — count or order wrong (Set should dedup). Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/events/get-event-listeners-count": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: getEventListeners(emitter, event) — wrong count/array shape. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/from-bigint-throws": {
     "issue": "1545",

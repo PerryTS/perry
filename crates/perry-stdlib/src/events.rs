@@ -55,6 +55,24 @@ unsafe fn event_target_ptr(handle: Handle) -> Option<*mut ObjectHeader> {
     }
 }
 
+unsafe fn stream_listeners_for_heap_object(
+    handle: Handle,
+    event_name_ptr: *const StringHeader,
+) -> Option<*mut ArrayHeader> {
+    let addr = handle as u64;
+    if event_name_ptr.is_null()
+        || !(MIN_HEAP_POINTER..=MAX_HEAP_POINTER).contains(&addr)
+        || addr & 0x7 != 0
+    {
+        return None;
+    }
+    let event = js_nanbox_string(event_name_ptr as i64);
+    Some(
+        perry_runtime::node_stream::js_node_stream_method_listeners(handle, event)
+            as *mut ArrayHeader,
+    )
+}
+
 fn throw_max_listeners_out_of_range() -> ! {
     static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
     REGISTER_RANGE_ERROR.call_once(|| {
@@ -1185,6 +1203,9 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
             target,
             event_name_ptr,
         );
+    }
+    if let Some(listeners) = stream_listeners_for_heap_object(handle, event_name_ptr) {
+        return listeners;
     }
     js_event_emitter_listeners(handle, event_name_ptr)
 }

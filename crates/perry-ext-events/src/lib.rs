@@ -68,6 +68,7 @@ extern "C" {
     ) -> *mut ArrayHeader;
     fn js_event_target_get_max_listeners(target: *mut u8) -> f64;
     fn js_event_target_set_max_listeners(target: *mut u8, n: f64) -> i32;
+    fn js_node_stream_method_listeners(stream_handle: i64, event: f64) -> i64;
     fn js_abort_signal_remove_listener(signal: *mut u8, event: f64, listener: f64);
     fn js_abort_signal_is_aborted(signal: *mut u8) -> i32;
     fn js_abort_error_value() -> f64;
@@ -213,6 +214,21 @@ unsafe fn event_target_ptr(handle: Handle) -> Option<*mut u8> {
     } else {
         None
     }
+}
+
+unsafe fn stream_listeners_for_heap_object(
+    handle: Handle,
+    event_name_ptr: *const StringHeader,
+) -> Option<*mut ArrayHeader> {
+    let addr = handle as u64;
+    if event_name_ptr.is_null()
+        || !(EVENT_TARGET_MIN_HEAP_POINTER..=MAX_HEAP_POINTER).contains(&addr)
+        || addr & 0x7 != 0
+    {
+        return None;
+    }
+    let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
+    Some(js_node_stream_method_listeners(handle, event) as *mut ArrayHeader)
 }
 
 fn handle_from_js_value_bits(bits: u64) -> Handle {
@@ -1047,6 +1063,9 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
     }
     if let Some(target) = event_target_ptr(handle) {
         return js_event_target_get_event_listeners(target, event_name_ptr);
+    }
+    if let Some(listeners) = stream_listeners_for_heap_object(handle, event_name_ptr) {
+        return listeners;
     }
     js_array_alloc(0)
 }
