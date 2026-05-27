@@ -676,6 +676,20 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         if let Some(v) = crate::object::resolve_proto_chain_symbol(class_id, sym_f64) {
             return v;
         }
+        // #36 / #321: the subclass extends a FUNCTION value
+        // (`class Svc extends Context.Tag(id)<...>() {}`). Read the symbol off
+        // the parent closure — own symbol props plus, via the closure symbol
+        // getter, its static prototype (`Svc[TagTypeId]`/`Svc[EffectTypeId]`
+        // live on TagProto). Recurse into the closure-aware getter so its proto
+        // walk fires.
+        if let Some(closure_ptr) = crate::object::class_parent_closure(class_id) {
+            let closure_f64 =
+                f64::from_bits(crate::value::js_nanbox_pointer(closure_ptr as i64).to_bits());
+            let v = js_object_get_symbol_property(closure_f64, sym_f64);
+            if v.to_bits() != TAG_UNDEFINED {
+                return v;
+            }
+        }
         return f64::from_bits(TAG_UNDEFINED);
     }
     // #1213: Timeout/Immediate handles expose `Symbol.dispose` so
@@ -702,6 +716,49 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     }
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;
+    }
+    // #36 / #321: the receiver is a closure whose OWN symbol props miss — walk
+    // its static prototype chain (`Object.setPrototypeOf(closure, protoObj)`).
+    // effect's `TagClass[TagTypeId]` / `isTag(TagClass)` read symbols off
+    // `TagProto`. Bounded depth guards against an accidental cycle.
+    if (bits >> 48) == 0x7FFD {
+        let ptr = crate::value::js_nanbox_get_pointer(obj_f64) as usize;
+        if ptr != 0 && crate::closure::is_closure_ptr(ptr) {
+            let mut cur = ptr;
+            let mut depth = 0usize;
+            while depth < 8 {
+                let Some(proto_bits) = crate::closure::closure_static_prototype(cur) else {
+                    break;
+                };
+                let proto_f64 = f64::from_bits(proto_bits);
+                let proto_ptr = crate::value::js_nanbox_get_pointer(proto_f64) as usize;
+                if proto_ptr == 0 || proto_ptr == cur {
+                    break;
+                }
+                if let Some(v) = own_symbol_property(proto_f64, sym_f64) {
+                    return v;
+                }
+                // A class-object proto may carry the symbol through ITS own
+                // class_id prototype chain (effect's TagProto spreads
+                // EffectPrototype). Walk that before following the closure link.
+                let proto_obj = crate::value::JSValue::from_bits(proto_bits)
+                    .as_pointer::<crate::object::ObjectHeader>();
+                if !proto_obj.is_null() {
+                    let cid = crate::object::js_object_get_class_id(proto_obj);
+                    if cid != 0 {
+                        if let Some(v) = crate::object::resolve_proto_chain_symbol(cid, sym_f64) {
+                            return v;
+                        }
+                    }
+                }
+                if crate::closure::is_closure_ptr(proto_ptr) {
+                    cur = proto_ptr;
+                    depth += 1;
+                    continue;
+                }
+                break;
+            }
+        }
     }
     // #321: arrays expose `Symbol.iterator`. perry has no standalone array
     // iterator object (for-of is special-cased), but `arr[Symbol.iterator]`

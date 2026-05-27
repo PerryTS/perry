@@ -131,8 +131,37 @@ pub(crate) fn lower_module_decl(
                                 );
                             }
                         } else {
-                            // Register as imported function (we assume all imports are functions for now)
-                            ctx.register_imported_func(local.clone(), imported.clone());
+                            // Register as imported function. Issue #35 (#321):
+                            // use the LOCAL name as the original-name marker
+                            // (identity registration) — mirroring the Default
+                            // specifier's #901 fix below — so the resulting
+                            // `ExternFuncRef` carries a per-import-site UNIQUE
+                            // name. Before this, an aliased named import
+                            // registered `(local, imported)`, so the
+                            // `ExternFuncRef` carried the EXPORTED name. Two
+                            // modules exporting the SAME name (`export function
+                            // equals` in both `eqA.ts` and `eqB.ts`, imported
+                            // as `{ equals as eqA }` / `{ equals as eqB }`)
+                            // both lowered to `ExternFuncRef { name: "equals" }`
+                            // and the codegen's flat `import_function_prefixes`
+                            // lookup keyed on "equals" collided — whichever
+                            // module's prefix landed last in the HashMap won, so
+                            // BOTH `eqA(...)` and `eqB(...)` dispatched into the
+                            // same source module's `equals` body. effect's
+                            // Context/Layer DI hit this (same-named cross-module
+                            // helpers). The local name is unique per import
+                            // site, so `ExternFuncRef { name: <local> }` resolves
+                            // correctly against `import_function_prefixes` (which
+                            // already inserts both `exported_name` AND
+                            // `local_name`). The CLI's companion insert at
+                            // `crates/perry/src/commands/compile.rs` places
+                            // `local_name → exported_name` into
+                            // `import_function_origin_names` so the symbol the
+                            // codegen forms is still `perry_fn_<src>__<exported>`
+                            // — matching what the origin module emits. When
+                            // `local == imported` (the common no-alias case)
+                            // this is identical to the previous behavior.
+                            ctx.register_imported_func(local.clone(), local.clone());
                         }
                         specifiers.push(ImportSpecifier::Named { imported, local });
                     }

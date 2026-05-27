@@ -3,9 +3,10 @@ use anyhow::{bail, Result};
 #[cfg(test)]
 use super::artifact::NativeAbiTransitionRecord;
 use super::artifact::{
-    NativeAbiTransitionOp, NativeRepRecord, NativeValueState, PodLayoutManifest,
+    NativeAbiTransitionOp, NativeFactUse, NativeRepRecord, NativeValueState, PodLayoutManifest,
 };
 use super::buffer::{AliasState, BoundsState, BufferAccessMode};
+use super::materialize::MaterializationReason;
 use super::pod::recompute_layout_from_fields;
 use super::rep::NativeRep;
 use crate::types::{DOUBLE, F32, I32, I64, I8, PTR};
@@ -199,6 +200,7 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
                 record.function, record.block_label, record.consumer
             ));
         }
+        validate_raw_f64_layout_facts(record, &mut errors);
     }
     if !errors.is_empty() {
         bail!(
@@ -207,6 +209,90 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
         );
     }
     Ok(())
+}
+
+fn raw_f64_checked_native_consumer(record: &NativeRepRecord) -> bool {
+    matches!(
+        record.consumer.as_str(),
+        "js_array_numeric_get_f64_unboxed"
+            | "js_array_numeric_set_f64_unboxed"
+            | "js_array_numeric_push_f64_unboxed"
+            | "class_field_get.raw_f64_load"
+            | "class_field_set.raw_f64_store"
+    )
+}
+
+fn raw_f64_dynamic_fallback_record(record: &NativeRepRecord) -> bool {
+    matches!(
+        (record.expr_kind.as_str(), record.consumer.as_str()),
+        ("NumericArrayPush", "js_array_push_f64")
+            | (
+                "NumericArrayIndexGet",
+                "js_typed_feedback_array_index_get_fallback_boxed"
+            )
+            | (
+                "NumericArrayIndexSet",
+                "js_typed_feedback_array_index_set_fallback_boxed"
+            )
+            | ("ClassFieldGet", "js_object_get_field_by_name_f64")
+            | ("ClassFieldSet", "js_object_set_field_by_name")
+    )
+}
+
+fn has_raw_f64_layout_fact(
+    facts: &[NativeFactUse],
+    state: &str,
+    reason: Option<MaterializationReason>,
+) -> bool {
+    facts.iter().any(|fact| {
+        fact.kind == "raw_f64_layout"
+            && fact.state == state
+            && match reason.as_ref() {
+                Some(expected) => fact.reason.as_ref() == Some(expected),
+                None => true,
+            }
+    })
+}
+
+fn validate_raw_f64_layout_facts(record: &NativeRepRecord, errors: &mut Vec<String>) {
+    if raw_f64_checked_native_consumer(record)
+        && !has_raw_f64_layout_fact(&record.consumed_facts, "consumed", None)
+    {
+        errors.push(format!(
+            "{}:{} {} raw-f64 fast path missing consumed raw_f64_layout fact",
+            record.function, record.block_label, record.consumer
+        ));
+    }
+    if raw_f64_dynamic_fallback_record(record) {
+        if record.materialization_reason.as_ref() != Some(&MaterializationReason::RuntimeApi)
+            || record.fallback_reason.as_ref() != Some(&MaterializationReason::RuntimeApi)
+        {
+            errors.push(format!(
+                "{}:{} {} raw-f64 fallback missing runtime_api materialization/fallback reason",
+                record.function, record.block_label, record.consumer
+            ));
+        }
+        if !has_raw_f64_layout_fact(
+            &record.rejected_facts,
+            "rejected",
+            Some(MaterializationReason::RuntimeApi),
+        ) {
+            errors.push(format!(
+                "{}:{} {} raw-f64 fallback missing rejected raw_f64_layout fact",
+                record.function, record.block_label, record.consumer
+            ));
+        }
+        if !has_raw_f64_layout_fact(
+            &record.rejected_facts,
+            "invalidated",
+            Some(MaterializationReason::RuntimeApi),
+        ) {
+            errors.push(format!(
+                "{}:{} {} raw-f64 fallback missing invalidated raw_f64_layout fact",
+                record.function, record.block_label, record.consumer
+            ));
+        }
+    }
 }
 
 fn validate_native_owned_unchecked_access(record: &NativeRepRecord, errors: &mut Vec<String>) {
@@ -415,7 +501,8 @@ mod tests {
     use super::{NativeAbiTransitionOp, NativeAbiTransitionRecord};
     use crate::native_value::{
         verify_native_rep_records, AliasState, BoundsProof, BoundsState, BufferAccessMode,
-        BufferViewRep, LoweredValue, NativeRep, NativeRepRecord, NativeValueState, SemanticKind,
+        BufferViewRep, LoweredValue, MaterializationReason, NativeFactUse, NativeRep,
+        NativeRepRecord, NativeValueState, SemanticKind,
     };
     use crate::types::{DOUBLE, F32, I32, I64, PTR};
 
@@ -457,6 +544,16 @@ mod tests {
             emitted_inbounds: false,
             emitted_noalias: false,
             notes: Vec::new(),
+        }
+    }
+
+    fn raw_f64_layout_fact(state: &str, reason: Option<MaterializationReason>) -> NativeFactUse {
+        NativeFactUse {
+            fact_id: format!("test.raw_f64_layout.{state}"),
+            kind: "raw_f64_layout".to_string(),
+            local_id: None,
+            state: state.to_string(),
+            reason,
         }
     }
 
@@ -565,6 +662,92 @@ mod tests {
         r.access_mode = Some(BufferAccessMode::CheckedNative);
         r.bounds_state = Some(BoundsState::Unknown);
         assert!(verify_native_rep_records(&[r]).is_err());
+    }
+
+    #[test]
+    fn rejects_raw_f64_checked_native_without_consumed_layout_fact() {
+        for (expr_kind, consumer) in [
+            ("NumericArrayIndexGet", "js_array_numeric_get_f64_unboxed"),
+            ("NumericArrayIndexSet", "js_array_numeric_set_f64_unboxed"),
+            ("NumericArrayPush", "js_array_numeric_push_f64_unboxed"),
+            ("ClassFieldGet", "class_field_get.raw_f64_load"),
+            ("ClassFieldSet", "class_field_set.raw_f64_store"),
+        ] {
+            let mut r = record();
+            r.expr_kind = expr_kind.to_string();
+            r.consumer = consumer.to_string();
+            r.semantic = SemanticKind::JsNumber;
+            r.native_rep = NativeRep::F64;
+            r.native_rep_name = "f64".to_string();
+            r.llvm_ty = DOUBLE;
+            r.access_mode = Some(BufferAccessMode::CheckedNative);
+            r.bounds_state = Some(BoundsState::Guarded {
+                guard_id: "raw_f64_guard".to_string(),
+            });
+
+            assert!(
+                verify_native_rep_records(&[r.clone()]).is_err(),
+                "{consumer} should require a consumed raw_f64_layout fact"
+            );
+
+            r.consumed_facts.push(raw_f64_layout_fact("consumed", None));
+            assert!(
+                verify_native_rep_records(&[r]).is_ok(),
+                "{consumer} should verify once the consumed layout fact is present"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_raw_f64_dynamic_fallback_without_rejected_and_invalidated_layout_facts() {
+        for (expr_kind, consumer) in [
+            ("NumericArrayPush", "js_array_push_f64"),
+            (
+                "NumericArrayIndexGet",
+                "js_typed_feedback_array_index_get_fallback_boxed",
+            ),
+            (
+                "NumericArrayIndexSet",
+                "js_typed_feedback_array_index_set_fallback_boxed",
+            ),
+            ("ClassFieldGet", "js_object_get_field_by_name_f64"),
+            ("ClassFieldSet", "js_object_set_field_by_name"),
+        ] {
+            let mut r = record();
+            r.expr_kind = expr_kind.to_string();
+            r.consumer = consumer.to_string();
+            r.semantic = SemanticKind::JsValue;
+            r.native_rep = NativeRep::JsValue;
+            r.native_rep_name = "js_value".to_string();
+            r.llvm_ty = DOUBLE;
+            r.access_mode = Some(BufferAccessMode::DynamicFallback);
+            r.materialization_reason = Some(MaterializationReason::RuntimeApi);
+            r.fallback_reason = Some(MaterializationReason::RuntimeApi);
+            r.native_value_state = NativeValueState::DynamicFallback;
+
+            assert!(
+                verify_native_rep_records(&[r.clone()]).is_err(),
+                "{consumer} should require rejected and invalidated raw_f64_layout facts"
+            );
+
+            r.rejected_facts.push(raw_f64_layout_fact(
+                "rejected",
+                Some(MaterializationReason::RuntimeApi),
+            ));
+            assert!(
+                verify_native_rep_records(&[r.clone()]).is_err(),
+                "{consumer} should still require invalidated raw_f64_layout fact"
+            );
+
+            r.rejected_facts.push(raw_f64_layout_fact(
+                "invalidated",
+                Some(MaterializationReason::RuntimeApi),
+            ));
+            assert!(
+                verify_native_rep_records(&[r]).is_ok(),
+                "{consumer} should verify once rejection and invalidation are recorded"
+            );
+        }
     }
 
     #[test]

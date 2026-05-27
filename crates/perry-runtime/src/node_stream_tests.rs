@@ -36,6 +36,10 @@ extern "C" fn write_capture(_closure: *const ClosureHeader, chunk: f64, _enc: f6
     f64::from_bits(TAG_UNDEFINED)
 }
 
+extern "C" fn noop_listener(_closure: *const ClosureHeader) -> f64 {
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 extern "C" fn read_records_this(closure: *const ClosureHeader) -> f64 {
     let stream = crate::closure::js_closure_get_capture_f64(closure, 0);
     set_hidden_value(stream, hidden_error_key(), string_value("from-read"));
@@ -156,6 +160,69 @@ fn stream_methods_dispatch_through_dynamic_method_call() {
     }
 
     assert!(js_node_stream_is_stub_ended_after_read(stream));
+}
+
+#[test]
+fn stream_listener_count_and_listeners_reflect_data_end_storage() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let on = js_object_get_field_by_name_f64(obj, hidden_key(b"on"));
+    let listener_count = js_object_get_field_by_name_f64(obj, hidden_key(b"listenerCount"));
+    let listeners = js_object_get_field_by_name_f64(obj, hidden_key(b"listeners"));
+
+    let cb1 = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let cb2 = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let cb3 = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+
+    unsafe {
+        let _ = crate::closure::js_native_call_value(on, [string_value("data"), cb1].as_ptr(), 2);
+        let _ = crate::closure::js_native_call_value(on, [string_value("data"), cb2].as_ptr(), 2);
+        let _ = crate::closure::js_native_call_value(on, [string_value("end"), cb3].as_ptr(), 2);
+    }
+
+    let count_for = |event: &str| unsafe {
+        crate::closure::js_native_call_value(listener_count, [string_value(event)].as_ptr(), 1)
+    };
+    assert_eq!(count_for("data"), 2.0);
+    assert_eq!(count_for("end"), 1.0);
+    assert_eq!(count_for("error"), 0.0);
+
+    let data_listeners = unsafe {
+        crate::closure::js_native_call_value(listeners, [string_value("data")].as_ptr(), 1)
+    };
+    let data_arr = raw_ptr_from_value(data_listeners) as *mut crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(data_arr), 2);
+    assert_eq!(
+        crate::array::js_array_get_f64(data_arr, 0).to_bits(),
+        cb1.to_bits()
+    );
+    assert_eq!(
+        crate::array::js_array_get_f64(data_arr, 1).to_bits(),
+        cb2.to_bits()
+    );
+
+    crate::array::js_array_set_length(data_arr, 0.0);
+    assert_eq!(count_for("data"), 2.0);
+
+    let missing_listeners = unsafe {
+        crate::closure::js_native_call_value(listeners, [string_value("error")].as_ptr(), 1)
+    };
+    let missing_arr = raw_ptr_from_value(missing_listeners) as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(missing_arr), 0);
+
+    let native_stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let native_handle = raw_ptr_from_value(native_stream) as i64;
+    let cb4 = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let cb5 = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let _ = js_node_stream_method_on(native_handle, string_value("data"), cb4);
+    let _ = js_node_stream_method_on(native_handle, string_value("data"), cb5);
+    assert_eq!(
+        js_node_stream_method_listener_count(native_handle, string_value("data")),
+        2.0
+    );
+    let native_arr = js_node_stream_method_listeners(native_handle, string_value("data"))
+        as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(native_arr), 2);
 }
 
 #[test]

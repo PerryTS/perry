@@ -88,6 +88,31 @@ pub(super) fn try_array_only_methods(
                 let recv_is_class = match member.obj.as_ref() {
                     ast::Expr::Ident(ident) => {
                         let n = ident.sym.to_string();
+                        // #39 (#321): a module namespace import
+                        // (`import * as NS from "..."`) is NOT an array. Its
+                        // exports are member functions, so `NS.sort(cmp)` /
+                        // `NS.reverse()` / `NS.entries()` etc. must dispatch the
+                        // namespace export, never `js_array_<method>` on the
+                        // namespace object. effect's `Array.sort = dual(2, ...)`
+                        // is data-last: `Arr.sort(numberOrder)` should return the
+                        // curried `(self) => ...` closure. The non-overlapping
+                        // mutators (`sort`/`reverse`/`entries`/`keys`/`values`/
+                        // `splice`/`fill`/…) bypass the `is_overlapping` gate
+                        // below and the `"sort" if !args.is_empty()` arm folds
+                        // `NS.sort(cmp)` to `Expr::ArraySort { array: NS, ... }`,
+                        // making the compiled binary call `js_array_sort(NS, cmp)`
+                        // — which returned the namespace object itself (typeof
+                        // "object"). The downstream `pipe(bounds, sortFn, ...)`
+                        // then threw "value is not a function" inside effect's
+                        // metric histogram path at fiber exit. `try_imported_
+                        // array_methods` already guards namespaces, but it runs
+                        // *before* this pass and returns `Err(args)`, so the call
+                        // re-enters here; guard at the top of the Ident arm and
+                        // bail (treat as not-an-array) for ALL method names when
+                        // the receiver is a namespace import.
+                        if ctx.namespace_import_locals.contains(&n) {
+                            return Ok(Err(args));
+                        }
                         let ty = ctx.lookup_local_type(&n);
                         let class_typed = ty
                             .as_ref()

@@ -45,9 +45,10 @@ use super::{
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_typed_array_load, lower_url_string_getter, materialize_js_value, nanbox_bigint_inline,
     nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
-    try_flat_const_2d_int, try_lower_flat_const_index_get, try_match_channel_reduction,
-    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
-    FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
+    raw_f64_layout_fact, try_flat_const_2d_int, try_lower_flat_const_index_get,
+    try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
+    variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract,
+    TypedFeedbackKind,
 };
 
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
@@ -133,7 +134,7 @@ fn lower_guarded_array_index_get(
             llvm_ty: DOUBLE,
             value: fallback_val.clone(),
         };
-        ctx.record_lowered_value_with_access_mode(
+        ctx.record_lowered_value_with_access_mode_and_facts(
             "NumericArrayIndexGet",
             None,
             "js_typed_feedback_array_index_get_fallback_boxed",
@@ -142,6 +143,23 @@ fn lower_guarded_array_index_get(
             None,
             Some(BufferAccessMode::DynamicFallback),
             Some(MaterializationReason::RuntimeApi),
+            None,
+            None,
+            Vec::new(),
+            vec![
+                raw_f64_layout_fact(
+                    None,
+                    "rejected",
+                    "numeric_array_index_get_guard",
+                    Some(MaterializationReason::RuntimeApi),
+                ),
+                raw_f64_layout_fact(
+                    None,
+                    "invalidated",
+                    "runtime_api",
+                    Some(MaterializationReason::RuntimeApi),
+                ),
+            ],
             false,
             false,
             Vec::new(),
@@ -181,7 +199,7 @@ fn lower_guarded_array_index_get(
             llvm_ty: DOUBLE,
             value: fast_val.clone(),
         };
-        ctx.record_lowered_value_with_access_mode(
+        ctx.record_lowered_value_with_access_mode_and_facts(
             "NumericArrayIndexGet",
             None,
             "js_array_numeric_get_f64_unboxed",
@@ -192,6 +210,15 @@ fn lower_guarded_array_index_get(
             None,
             Some(BufferAccessMode::CheckedNative),
             None,
+            None,
+            None,
+            vec![raw_f64_layout_fact(
+                None,
+                "consumed",
+                "numeric_array_index_get_guard",
+                None,
+            )],
+            Vec::new(),
             false,
             false,
             Vec::new(),
@@ -564,6 +591,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let idx_double = lower_expr(ctx, index)?;
                             ctx.block().fptosi(DOUBLE, &idx_double, I32)
                         };
+                        if require_numeric_layout {
+                            let idx_double = ctx.block().sitofp(I32, &idx_i32, DOUBLE);
+                            return lower_guarded_array_index_get(
+                                ctx,
+                                &arr_box,
+                                &idx_double,
+                                &idx_i32,
+                                "bidx.num",
+                                true,
+                            );
+                        }
                         return lower_bounded_array_index_get(ctx, &arr_box, &idx_i32);
                     }
                 }
@@ -571,7 +609,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let arr_box = lower_expr(ctx, object)?;
                 let idx_double = lower_expr(ctx, index)?;
                 let idx_i32 = ctx.block().fptosi(DOUBLE, &idx_double, I32);
-                if !matches!(index.as_ref(), Expr::Integer(_) | Expr::Number(_)) {
+                if !require_numeric_layout
+                    && !matches!(index.as_ref(), Expr::Integer(_) | Expr::Number(_))
+                {
                     return lower_legacy_array_index_get(ctx, &arr_box, &idx_i32);
                 }
                 return lower_guarded_array_index_get(

@@ -22,7 +22,9 @@
 //! through `read`/`write`/`pipe` is left for a dedicated streams
 //! runtime rewrite.
 
-use crate::closure::{js_closure_alloc, js_closure_get_capture_ptr, ClosureHeader};
+use crate::closure::{
+    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
+};
 use crate::object::{
     js_object_alloc_with_shape, js_object_get_field_by_name_f64, js_object_set_field,
     js_object_set_field_by_name, ObjectHeader,
@@ -52,6 +54,10 @@ const READABLE_ERROR_KEY: &[u8] = b"__perryReadableError";
 const READABLE_SIGNAL_KEY: &[u8] = b"__perryReadableSignal";
 const READABLE_READ_KEY: &[u8] = b"__perryReadableRead";
 const READABLE_READ_INVOKED_KEY: &[u8] = b"__perryReadableReadInvoked";
+const STREAM_DATA_LISTENERS_KEY: &[u8] = b"__perryStreamDataListeners";
+const STREAM_END_LISTENERS_KEY: &[u8] = b"__perryStreamEndListeners";
+const STREAM_DRAIN_SCHEDULED_KEY: &[u8] = b"__perryStreamDrainScheduled";
+const STREAM_END_EMITTED_KEY: &[u8] = b"__perryStreamEndEmitted";
 const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
 const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
 // #1534: direction + disturbed bits so the static introspection helpers
@@ -95,6 +101,35 @@ extern "C" fn ns_chain2(closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 
 }
 extern "C" fn ns_chain3(closure: *const ClosureHeader, _a: f64, _b: f64, _c: f64) -> f64 {
     this_value(closure)
+}
+
+extern "C" fn ns_on2(closure: *const ClosureHeader, event: f64, cb: f64) -> f64 {
+    let stream = this_value(closure);
+    add_stream_listener_for_event(stream, event, cb);
+    stream
+}
+
+fn add_stream_listener_for_event(stream: f64, event: f64, cb: f64) {
+    if string_value_eq(event, b"data") {
+        add_stream_listener(stream, hidden_data_listeners_key(), cb);
+        schedule_readable_from_drain(stream);
+    } else if string_value_eq(event, b"end") {
+        add_stream_listener(stream, hidden_end_listeners_key(), cb);
+    }
+}
+
+extern "C" fn ns_readable_from_drain(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    set_hidden_value(
+        stream,
+        hidden_drain_scheduled_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+    drain_readable_from_events(stream);
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 extern "C" fn ns_emit2(closure: *const ClosureHeader, event: f64, arg: f64) -> f64 {
@@ -288,12 +323,58 @@ pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
     stream
 }
-extern "C" fn ns_listener_count(_closure: *const ClosureHeader, _e: f64) -> f64 {
-    0.0
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_on(stream_handle: i64, event: f64, cb: f64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    add_stream_listener_for_event(stream, event, cb);
+    stream
 }
-extern "C" fn ns_listeners(_closure: *const ClosureHeader, _e: f64) -> f64 {
-    let arr = crate::array::js_array_alloc(0);
-    f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+
+fn listener_key_for_event(event: f64) -> Option<*mut crate::string::StringHeader> {
+    if string_value_eq(event, b"data") {
+        Some(hidden_data_listeners_key())
+    } else if string_value_eq(event, b"end") {
+        Some(hidden_end_listeners_key())
+    } else {
+        None
+    }
+}
+
+extern "C" fn ns_listener_count(closure: *const ClosureHeader, event: f64) -> f64 {
+    let stream = this_value(closure);
+    listener_count_for_event(stream, event)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_listener_count(stream_handle: i64, event: f64) -> f64 {
+    listener_count_for_event(stream_value_from_handle(stream_handle), event)
+}
+
+fn listener_count_for_event(stream: f64, event: f64) -> f64 {
+    listener_key_for_event(event)
+        .map(|key| listener_snapshot(stream, key).len() as f64)
+        .unwrap_or(0.0)
+}
+
+extern "C" fn ns_listeners(closure: *const ClosureHeader, event: f64) -> f64 {
+    let stream = this_value(closure);
+    f64::from_bits(JSValue::pointer(listeners_array_for_event(stream, event) as *const u8).bits())
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_listeners(stream_handle: i64, event: f64) -> i64 {
+    listeners_array_for_event(stream_value_from_handle(stream_handle), event) as i64
+}
+
+fn listeners_array_for_event(stream: f64, event: f64) -> *mut crate::array::ArrayHeader {
+    let mut arr = crate::array::js_array_alloc(0);
+    if let Some(key) = listener_key_for_event(event) {
+        for listener in listener_snapshot(stream, key) {
+            arr = crate::array::js_array_push_f64(arr, listener);
+        }
+    }
+    arr
 }
 extern "C" fn ns_undefined0(_closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
@@ -828,6 +909,8 @@ fn register_stub_arities() {
     register(ns_chain1 as *const u8, 1);
     register(ns_chain2 as *const u8, 2);
     register(ns_chain3 as *const u8, 3);
+    register(ns_on2 as *const u8, 2);
+    register(ns_readable_from_drain as *const u8, 0);
     register(ns_emit2 as *const u8, 2);
     register(ns_resume0 as *const u8, 0);
     register(ns_read1 as *const u8, 1);
@@ -898,6 +981,26 @@ fn hidden_read_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_read_invoked_key() -> *mut crate::string::StringHeader {
     hidden_key(READABLE_READ_INVOKED_KEY)
+}
+
+#[inline]
+fn hidden_data_listeners_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_DATA_LISTENERS_KEY)
+}
+
+#[inline]
+fn hidden_end_listeners_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_END_LISTENERS_KEY)
+}
+
+#[inline]
+fn hidden_drain_scheduled_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_DRAIN_SCHEDULED_KEY)
+}
+
+#[inline]
+fn hidden_end_emitted_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_END_EMITTED_KEY)
 }
 
 #[inline]
@@ -990,6 +1093,97 @@ fn get_hidden_value(value: f64, key: *mut crate::string::StringHeader) -> Option
 fn set_hidden_value(value: f64, key: *mut crate::string::StringHeader, field_value: f64) {
     if let Some(obj) = object_ptr_from_value(value) {
         js_object_set_field_by_name(obj, key, field_value);
+    }
+}
+
+fn add_stream_listener(stream: f64, key: *mut crate::string::StringHeader, cb: f64) {
+    if raw_ptr_from_value(cb) < 0x10000 {
+        return;
+    }
+    let listeners = get_hidden_value(stream, key).unwrap_or_else(|| {
+        let arr = crate::array::js_array_alloc(0);
+        let arr_value = box_pointer(arr as *const u8);
+        set_hidden_value(stream, key, arr_value);
+        arr_value
+    });
+    if !is_array_like_value(listeners) {
+        return;
+    }
+    let arr = raw_ptr_from_value(listeners) as *mut crate::array::ArrayHeader;
+    let arr = crate::array::js_array_push_f64(arr, cb);
+    set_hidden_value(stream, key, box_pointer(arr as *const u8));
+}
+
+fn listener_snapshot(stream: f64, key: *mut crate::string::StringHeader) -> Vec<f64> {
+    let Some(listeners) = get_hidden_value(stream, key) else {
+        return Vec::new();
+    };
+    if !is_array_like_value(listeners) {
+        return Vec::new();
+    }
+    let arr = raw_ptr_from_value(listeners) as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(arr);
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        out.push(crate::array::js_array_get_f64(arr, i));
+    }
+    out
+}
+
+fn call_listener0(listener: f64) {
+    let raw = raw_ptr_from_value(listener);
+    if raw >= 0x10000 {
+        crate::closure::js_closure_call0(raw as *const ClosureHeader);
+    }
+}
+
+fn call_listener1(listener: f64, arg: f64) {
+    let raw = raw_ptr_from_value(listener);
+    if raw >= 0x10000 {
+        crate::closure::js_closure_call1(raw as *const ClosureHeader, arg);
+    }
+}
+
+fn has_truthy_hidden(stream: f64, key: *mut crate::string::StringHeader) -> bool {
+    get_hidden_value(stream, key).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
+}
+
+fn schedule_readable_from_drain(stream: f64) {
+    if readable_hidden_chunks(stream).is_none()
+        || has_truthy_hidden(stream, hidden_drain_scheduled_key())
+    {
+        return;
+    }
+    set_hidden_value(
+        stream,
+        hidden_drain_scheduled_key(),
+        f64::from_bits(TAG_TRUE),
+    );
+    let closure = js_closure_alloc(ns_readable_from_drain as *const u8, 1);
+    js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
+    crate::builtins::js_queue_microtask(closure as i64);
+}
+
+fn drain_readable_from_events(stream: f64) {
+    let data_listeners = listener_snapshot(stream, hidden_data_listeners_key());
+    if data_listeners.is_empty() {
+        return;
+    }
+    if let Some(chunks) = readable_hidden_chunks(stream) {
+        let mut values = Vec::new();
+        push_chunk_values(chunks, &mut values, 0);
+        for chunk in values {
+            for listener in &data_listeners {
+                call_listener1(*listener, chunk);
+            }
+        }
+    }
+    if !has_truthy_hidden(stream, hidden_end_emitted_key()) {
+        set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
+        set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+        for listener in listener_snapshot(stream, hidden_end_listeners_key()) {
+            call_listener0(listener);
+        }
     }
 }
 
@@ -1304,10 +1498,10 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
 
 fn readable_methods() -> [(&'static str, StubFn); 30] {
     [
-        ("on", cast2(ns_chain2)),
-        ("once", cast2(ns_chain2)),
+        ("on", cast2(ns_on2)),
+        ("once", cast2(ns_on2)),
         ("off", cast2(ns_chain2)),
-        ("addListener", cast2(ns_chain2)),
+        ("addListener", cast2(ns_on2)),
         ("removeListener", cast2(ns_chain2)),
         ("removeAllListeners", cast1(ns_chain1)),
         ("emit", cast2(ns_emit2)),
@@ -1345,10 +1539,10 @@ fn readable_methods() -> [(&'static str, StubFn); 30] {
 
 fn writable_methods() -> [(&'static str, StubFn); 16] {
     [
-        ("on", cast2(ns_chain2)),
-        ("once", cast2(ns_chain2)),
+        ("on", cast2(ns_on2)),
+        ("once", cast2(ns_on2)),
         ("off", cast2(ns_chain2)),
-        ("addListener", cast2(ns_chain2)),
+        ("addListener", cast2(ns_on2)),
         ("removeListener", cast2(ns_chain2)),
         ("removeAllListeners", cast1(ns_chain1)),
         ("emit", cast2(ns_emit2)),
@@ -1369,10 +1563,10 @@ fn duplex_methods() -> [(&'static str, StubFn); 22] {
     // removeListener/removeAllListeners/emit/listenerCount/listeners/
     // destroy` appear once each).
     [
-        ("on", cast2(ns_chain2)),
-        ("once", cast2(ns_chain2)),
+        ("on", cast2(ns_on2)),
+        ("once", cast2(ns_on2)),
         ("off", cast2(ns_chain2)),
-        ("addListener", cast2(ns_chain2)),
+        ("addListener", cast2(ns_on2)),
         ("removeListener", cast2(ns_chain2)),
         ("removeAllListeners", cast1(ns_chain1)),
         ("emit", cast2(ns_emit2)),
@@ -1771,70 +1965,8 @@ pub extern "C" fn js_node_stream_from_web(_web_stream: f64) -> f64 {
     js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
 }
 
-// ─────────────────────────────────────────────────────────────────
-// #1534/#1539/#1540/#1541: symbol retention.
-//
-// These `#[no_mangle]` entry points are emitted by codegen's stream
-// dispatch (native_table/net_events.rs) but several are never referenced
-// by any Rust code in the crate graph. The default `.a` staticlib keeps
-// them via staticlib-export semantics, but the auto-optimize build round-
-// trips the runtime through whole-program LLVM bitcode and is free to
-// internalize + dead-strip an unreferenced symbol — which is exactly why
-// `Readable.isDisturbed(s)` / `r.read()` failed with
-// `Undefined symbols: _js_node_stream_is_disturbed` at final link even
-// though the feature was wired. The `#[used]` statics below pin a retained
-// reference edge so every entry point survives all link modes. See the
-// same pattern in `value/dyn_index.rs` and `process.rs` (#1344).
-#[used]
-static KEEP_NS_METHOD_EMIT: extern "C" fn(i64, f64, f64) -> f64 = js_node_stream_method_emit;
-#[used]
-static KEEP_NS_METHOD_READ: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_read;
-#[used]
-static KEEP_NS_METHOD_PUSH: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_push;
-#[used]
-static KEEP_NS_READABLE_HWM: extern "C" fn(i64) -> f64 = js_node_stream_method_readable_hwm;
-#[used]
-static KEEP_NS_WRITABLE_HWM: extern "C" fn(i64) -> f64 = js_node_stream_method_writable_hwm;
-#[used]
-static KEEP_NS_METHOD_RESUME: extern "C" fn(i64) -> f64 = js_node_stream_method_resume;
-#[used]
-static KEEP_NS_METHOD_WRITE: extern "C" fn(i64, f64, f64) -> f64 = js_node_stream_method_write;
-#[used]
-static KEEP_NS_METHOD_END: extern "C" fn(i64, f64) -> f64 = js_node_stream_method_end;
-#[used]
-static KEEP_NS_READABLE_NEW: extern "C" fn(f64) -> f64 = js_node_stream_readable_new;
-#[used]
-static KEEP_NS_WRITABLE_NEW: extern "C" fn(f64) -> f64 = js_node_stream_writable_new;
-#[used]
-static KEEP_NS_DUPLEX_NEW: extern "C" fn(f64) -> f64 = js_node_stream_duplex_new;
-#[used]
-static KEEP_NS_TRANSFORM_NEW: extern "C" fn(f64) -> f64 = js_node_stream_transform_new;
-#[used]
-static KEEP_NS_PASSTHROUGH_NEW: extern "C" fn(f64) -> f64 = js_node_stream_passthrough_new;
-#[used]
-static KEEP_NS_READABLE_FROM: extern "C" fn(f64) -> f64 = js_node_stream_readable_from;
-#[used]
-static KEEP_NS_IS_DISTURBED: extern "C" fn(f64) -> f64 = js_node_stream_is_disturbed;
-#[used]
-static KEEP_NS_IS_ERRORED: extern "C" fn(f64) -> f64 = js_node_stream_is_errored;
-#[used]
-static KEEP_NS_IS_READABLE: extern "C" fn(f64) -> f64 = js_node_stream_is_readable;
-#[used]
-static KEEP_NS_IS_WRITABLE: extern "C" fn(f64) -> f64 = js_node_stream_is_writable;
-#[used]
-static KEEP_NS_GET_DEFAULT_HWM: extern "C" fn(f64) -> f64 = js_node_stream_get_default_hwm;
-#[used]
-static KEEP_NS_SET_DEFAULT_HWM: extern "C" fn(f64, f64) -> f64 = js_node_stream_set_default_hwm;
-#[used]
-static KEEP_NS_ADD_ABORT_SIGNAL: extern "C" fn(f64, f64) -> f64 = js_node_stream_add_abort_signal;
-#[used]
-static KEEP_NS_COMPOSE: extern "C" fn(f64) -> f64 = js_node_stream_compose;
-#[used]
-static KEEP_NS_DUPLEX_PAIR: extern "C" fn(f64) -> f64 = js_node_stream_duplex_pair;
-#[used]
-static KEEP_NS_TO_WEB: extern "C" fn(f64) -> f64 = js_node_stream_to_web;
-#[used]
-static KEEP_NS_FROM_WEB: extern "C" fn(f64) -> f64 = js_node_stream_from_web;
+#[path = "node_stream_keepalive.rs"]
+mod keepalive;
 
 #[cfg(test)]
 #[path = "node_stream_tests.rs"]

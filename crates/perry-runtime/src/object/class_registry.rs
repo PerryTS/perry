@@ -77,6 +77,26 @@ pub static FUNCTION_CLASS_IDS: RwLock<Option<HashMap<u64, u32>>> = RwLock::new(N
 // usage is guaranteed.
 pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
 
+/// #36 / #321: maps a child class_id to the raw address of a parent CLOSURE
+/// (function value) when `class Child extends <function value> {}`. effect's
+/// `class Svc extends Context.Tag("Svc")<...>() {}` extends the function
+/// `TagClass` returned by `Tag(id)()`. In JS this sets `Svc.__proto__ =
+/// TagClass` so static-property reads on `Svc` (`Svc.key`, `Svc._op`,
+/// `Svc[TagTypeId]`) walk to the parent function's own props + ITS static
+/// prototype. Perry's existing dynamic-parent path only models OBJECT parents
+/// (class-expression values), so this records the closure-parent axis so the
+/// class-ref static getters can reach the closure's props and proto chain.
+/// Stored as `usize` (raw address) for Send + Sync; converted back at use.
+pub static CLASS_PARENT_CLOSURES: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+
+/// Look up the parent-closure address recorded for a child class_id, if any.
+pub(crate) fn class_parent_closure(class_id: u32) -> Option<usize> {
+    CLASS_PARENT_CLOSURES
+        .read()
+        .ok()
+        .and_then(|g| g.as_ref().and_then(|m| m.get(&class_id).copied()))
+}
+
 /// Synthetic class id allocator for prototype-object classes. High bit
 /// set (0x8000_0000+) to keep them separate from codegen-assigned ids
 /// (which start from 1 and grow by module). u32 wraparound is not a
@@ -1583,6 +1603,19 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
         let ptr = crate::value::js_nanbox_get_pointer(parent_value) as *mut ObjectHeader;
         if !ptr.is_null() && js_object_get_class_id(ptr as *const ObjectHeader) != 0 {
             let mut write = CLASS_PROTOTYPE_OBJECTS.write().unwrap();
+            if write.is_none() {
+                *write = Some(HashMap::new());
+            }
+            write.as_mut().unwrap().insert(class_id, ptr as usize);
+        } else if !ptr.is_null() && crate::closure::is_closure_ptr(ptr as usize) {
+            // #36 / #321: the parent is a plain FUNCTION value (closure), e.g.
+            // effect's `class Svc extends Context.Tag("Svc")<...>() {}`. Record
+            // the closure-parent edge so static-field reads on the subclass
+            // (`Svc.key`, `Svc._op`, `Svc[TagTypeId]`) walk to the parent
+            // function's own props + ITS static prototype. The parent class_id
+            // edge isn't wired (a closure carries no class_id), so this is the
+            // only inheritance link for a function-valued superclass.
+            let mut write = CLASS_PARENT_CLOSURES.write().unwrap();
             if write.is_none() {
                 *write = Some(HashMap::new());
             }

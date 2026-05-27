@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -143,6 +143,7 @@ struct NativeRepSummary {
     unsafe_unchecked_unknown_bounds_accesses: usize,
     consumed_fact_count: usize,
     rejected_fact_count: usize,
+    raw_f64_layout_fact_counts: BTreeMap<String, usize>,
     native_owned_view_count: usize,
     pod_layout_count: usize,
     pod_record_count: usize,
@@ -161,6 +162,11 @@ impl NativeRepSummary {
         let mut unsafe_unchecked_unknown_bounds_accesses = 0;
         let mut consumed_fact_count = 0;
         let mut rejected_fact_count = 0;
+        let mut raw_f64_layout_fact_counts = BTreeMap::from([
+            ("consumed".to_string(), 0),
+            ("rejected".to_string(), 0),
+            ("invalidated".to_string(), 0),
+        ]);
         let mut native_owned_view_count = 0;
         let mut pod_layout_count = 0;
         let mut pod_record_count = 0;
@@ -236,6 +242,17 @@ impl NativeRepSummary {
             }
             consumed_fact_count += record.consumed_facts.len();
             rejected_fact_count += record.rejected_facts.len();
+            for fact in record
+                .consumed_facts
+                .iter()
+                .chain(record.rejected_facts.iter())
+            {
+                if fact.kind == "raw_f64_layout" {
+                    *raw_f64_layout_fact_counts
+                        .entry(fact.state.clone())
+                        .or_insert(0) += 1;
+                }
+            }
         }
         Self {
             record_count: records.len(),
@@ -249,6 +266,7 @@ impl NativeRepSummary {
             unsafe_unchecked_unknown_bounds_accesses,
             consumed_fact_count,
             rejected_fact_count,
+            raw_f64_layout_fact_counts,
             native_owned_view_count,
             pod_layout_count,
             pod_record_count,
@@ -301,7 +319,7 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 8,
+        schema_version: 9,
         module,
         records,
         pod_layouts: collect_pod_layouts(records),

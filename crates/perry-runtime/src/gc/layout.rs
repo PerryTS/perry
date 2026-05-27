@@ -126,6 +126,24 @@ impl LayoutSlotMask {
         }
     }
 
+    pub(super) fn count_slots(&self, slot_count: usize) -> usize {
+        let mut count = 0usize;
+        self.visit_slots(slot_count, |_| {
+            count += 1;
+        });
+        count
+    }
+
+    pub(super) fn intersects(&self, other: &Self, slot_count: usize) -> bool {
+        let mut found = false;
+        self.visit_slots(slot_count, |slot| {
+            if other.contains_slot(slot) {
+                found = true;
+            }
+        });
+        found
+    }
+
     #[inline]
     pub(super) fn contains_slot(&self, slot_index: usize) -> bool {
         match self {
@@ -372,22 +390,25 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN {
             return;
         }
-        let pointer = layout_pointer_bearing_bits(value_bits);
         if let Some(typed) = TYPED_LAYOUTS.with(|m| m.borrow().get(&parent_user).cloned()) {
             if slot_index >= typed.slot_count {
                 layout_set_typed_unknown(header, parent_user);
                 return;
             }
-            if typed.raw_f64_mask.contains_slot(slot_index) && !layout_raw_f64_bits(value_bits) {
-                layout_set_typed_unknown(header, parent_user);
+            if typed.raw_f64_mask.contains_slot(slot_index) {
+                if !layout_raw_f64_bits(value_bits) {
+                    layout_set_typed_unknown(header, parent_user);
+                }
                 return;
             }
+            let pointer = layout_pointer_bearing_bits(value_bits);
             if pointer && !typed.pointer_mask.contains_slot(slot_index) {
                 layout_set_typed_unknown(header, parent_user);
                 return;
             }
             return;
         }
+        let pointer = layout_pointer_bearing_bits(value_bits);
         if !pointer && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
             return;
         }
@@ -442,6 +463,10 @@ unsafe fn init_typed_shape_layout(
 
     let raw_f64_mask = LayoutSlotMask::from_words(raw_f64_words);
     let pointer_mask = LayoutSlotMask::from_words(pointer_words);
+    if raw_f64_mask.intersects(&pointer_mask, slot_count) {
+        layout_set_typed_unknown(header, user_ptr);
+        return;
+    }
 
     if slot_count != 0 {
         let fields = (obj_header as *const u8)
@@ -449,9 +474,12 @@ unsafe fn init_typed_shape_layout(
             as *const u64;
         for i in 0..slot_count {
             let bits = *fields.add(i);
-            if raw_f64_mask.contains_slot(i) && !layout_raw_f64_bits(bits) {
-                layout_set_typed_unknown(header, user_ptr);
-                return;
+            if raw_f64_mask.contains_slot(i) {
+                if !layout_raw_f64_bits(bits) {
+                    layout_set_typed_unknown(header, user_ptr);
+                    return;
+                }
+                continue;
             }
             if layout_pointer_bearing_bits(bits) && !pointer_mask.contains_slot(i) {
                 layout_set_typed_unknown(header, user_ptr);
@@ -539,6 +567,10 @@ pub extern "C" fn js_gc_init_unboxed_object_layout(
 
         let raw_f64_mask = LayoutSlotMask::Inline(raw_f64_mask);
         let pointer_mask = LayoutSlotMask::Inline(pointer_mask);
+        if raw_f64_mask.intersects(&pointer_mask, slot_count) {
+            layout_set_typed_unknown(header, user_ptr);
+            return;
+        }
 
         if slot_count != 0 {
             let fields = (obj_header as *const u8)
@@ -546,9 +578,12 @@ pub extern "C" fn js_gc_init_unboxed_object_layout(
                 as *const u64;
             for i in 0..slot_count {
                 let bits = *fields.add(i);
-                if raw_f64_mask.contains_slot(i) && !layout_raw_f64_bits(bits) {
-                    layout_set_typed_unknown(header, user_ptr);
-                    return;
+                if raw_f64_mask.contains_slot(i) {
+                    if !layout_raw_f64_bits(bits) {
+                        layout_set_typed_unknown(header, user_ptr);
+                        return;
+                    }
+                    continue;
                 }
                 if layout_pointer_bearing_bits(bits) && !pointer_mask.contains_slot(i) {
                     layout_set_typed_unknown(header, user_ptr);
@@ -716,6 +751,18 @@ pub(crate) fn layout_typed_raw_f64_slot_for_user(user_ptr: usize, slot_index: us
     })
 }
 
+fn layout_typed_raw_f64_slot_count_for_user(user_ptr: usize, slot_count: usize) -> usize {
+    TYPED_LAYOUTS.with(|m| {
+        m.borrow()
+            .get(&user_ptr)
+            .map(|layout| {
+                let bounded_count = slot_count.min(layout.slot_count);
+                layout.raw_f64_mask.count_slots(bounded_count)
+            })
+            .unwrap_or(0)
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct HeapSlotRange {
     pub(super) slots: *mut u64,
@@ -758,7 +805,10 @@ pub(crate) enum HeapChildSlot {
 
 pub(super) enum HeapPayloadSlotScan {
     Empty,
-    PointerFree,
+    PointerFree {
+        raw_numeric_array: bool,
+        raw_numeric_object_slots: usize,
+    },
     Masked,
     All(HeapSlotRange),
 }
@@ -766,9 +816,20 @@ pub(super) enum HeapPayloadSlotScan {
 #[derive(Clone)]
 pub(super) enum HeapPayloadSlotSelection {
     Empty,
-    PointerFree { emitted: bool },
-    Masked { mask: LayoutSlotMask, cursor: usize },
-    All { cursor: usize },
+    PointerFree {
+        emitted: bool,
+        raw_numeric_array: bool,
+        raw_numeric_object_slots: usize,
+    },
+    Masked {
+        mask: LayoutSlotMask,
+        cursor: usize,
+        raw_numeric_object_slots: usize,
+        raw_numeric_recorded: bool,
+    },
+    All {
+        cursor: usize,
+    },
 }
 
 pub(crate) struct HeapChildSlotIterator {
@@ -806,7 +867,14 @@ impl HeapChildSlotIterator {
     pub(super) fn payload_scan(&self) -> HeapPayloadSlotScan {
         match self.selection {
             HeapPayloadSlotSelection::Empty => HeapPayloadSlotScan::Empty,
-            HeapPayloadSlotSelection::PointerFree { .. } => HeapPayloadSlotScan::PointerFree,
+            HeapPayloadSlotSelection::PointerFree {
+                raw_numeric_array,
+                raw_numeric_object_slots,
+                ..
+            } => HeapPayloadSlotScan::PointerFree {
+                raw_numeric_array,
+                raw_numeric_object_slots,
+            },
             HeapPayloadSlotSelection::Masked { .. } => HeapPayloadSlotScan::Masked,
             HeapPayloadSlotSelection::All { .. } => HeapPayloadSlotScan::All(self.payload),
         }
@@ -822,16 +890,41 @@ impl Iterator for HeapChildSlotIterator {
         }
         match &mut self.selection {
             HeapPayloadSlotSelection::Empty => None,
-            HeapPayloadSlotSelection::PointerFree { emitted } => {
+            HeapPayloadSlotSelection::PointerFree {
+                emitted,
+                raw_numeric_array,
+                raw_numeric_object_slots,
+            } => {
                 if *emitted || self.payload.is_empty() {
                     None
                 } else {
                     *emitted = true;
                     record_layout_pointer_free_range_skipped(self.payload.slot_count());
+                    if *raw_numeric_array {
+                        record_layout_raw_numeric_array_range_skipped(self.payload.slot_count());
+                    }
+                    if *raw_numeric_object_slots != 0 {
+                        record_layout_raw_numeric_object_field_range_skipped(
+                            *raw_numeric_object_slots,
+                        );
+                    }
                     Some(HeapChildSlot::PointerFreeRange(self.payload))
                 }
             }
-            HeapPayloadSlotSelection::Masked { mask, cursor } => {
+            HeapPayloadSlotSelection::Masked {
+                mask,
+                cursor,
+                raw_numeric_object_slots,
+                raw_numeric_recorded,
+            } => {
+                if !*raw_numeric_recorded {
+                    *raw_numeric_recorded = true;
+                    if *raw_numeric_object_slots != 0 {
+                        record_layout_raw_numeric_object_field_range_skipped(
+                            *raw_numeric_object_slots,
+                        );
+                    }
+                }
                 let index = mask.next_slot_at_or_after(*cursor, self.payload.slot_count())?;
                 *cursor = index + 1;
                 Some(HeapChildSlot::Child(
@@ -862,12 +955,27 @@ pub(super) unsafe fn heap_payload_slot_selection(
         return HeapPayloadSlotSelection::Empty;
     }
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+    let raw_numeric_object_slots = if (*header).obj_type == GC_TYPE_OBJECT {
+        layout_typed_raw_f64_slot_count_for_user(user_ptr, payload.slot_count())
+    } else {
+        0
+    };
     match (*header)._reserved & GC_LAYOUT_STATE_MASK {
-        GC_LAYOUT_POINTER_FREE => HeapPayloadSlotSelection::PointerFree { emitted: false },
+        GC_LAYOUT_POINTER_FREE => HeapPayloadSlotSelection::PointerFree {
+            emitted: false,
+            raw_numeric_array: (*header).obj_type == GC_TYPE_ARRAY
+                && (*header)._reserved & GC_ARRAY_RAW_F64_LAYOUT != 0,
+            raw_numeric_object_slots,
+        },
         GC_LAYOUT_SIDE_MASK => {
             let mask = LAYOUT_SLOT_MASKS.with(|m| m.borrow().get(&user_ptr).cloned());
             match mask {
-                Some(mask) => HeapPayloadSlotSelection::Masked { mask, cursor: 0 },
+                Some(mask) => HeapPayloadSlotSelection::Masked {
+                    mask,
+                    cursor: 0,
+                    raw_numeric_object_slots,
+                    raw_numeric_recorded: false,
+                },
                 None => {
                     set_layout_state(header, GC_LAYOUT_UNKNOWN);
                     HeapPayloadSlotSelection::All { cursor: 0 }
@@ -977,9 +1085,18 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
 
     match child_slots.payload_scan() {
         HeapPayloadSlotScan::Empty => {}
-        HeapPayloadSlotScan::PointerFree => {
+        HeapPayloadSlotScan::PointerFree {
+            raw_numeric_array,
+            raw_numeric_object_slots,
+        } => {
             let range = child_slots.payload;
             record_layout_pointer_free_range_skipped(range.slot_count());
+            if raw_numeric_array {
+                record_layout_raw_numeric_array_range_skipped(range.slot_count());
+            }
+            if raw_numeric_object_slots != 0 {
+                record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots);
+            }
             visit(GcMutableSlotDescriptor::PointerFreeRange);
         }
         HeapPayloadSlotScan::Masked => {

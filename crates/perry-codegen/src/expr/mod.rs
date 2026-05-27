@@ -996,6 +996,15 @@ fn native_fact_use(
     }
 }
 
+pub(crate) fn raw_f64_layout_fact(
+    local_id: Option<u32>,
+    state: &'static str,
+    detail: &str,
+    reason: Option<MaterializationReason>,
+) -> NativeFactUse {
+    native_fact_use("raw_f64_layout", local_id, state, detail, reason)
+}
+
 fn native_fact_uses_for_record(
     local_id: Option<u32>,
     lowered: &LoweredValue,
@@ -1295,8 +1304,45 @@ impl<'a> FnCtx<'a> {
         emitted_noalias: bool,
         notes: Vec<String>,
     ) {
+        self.record_lowered_value_with_access_mode_and_facts(
+            expr_kind,
+            local_id,
+            consumer,
+            lowered,
+            bounds_state,
+            alias_state,
+            access_mode,
+            materialization_reason,
+            scalar_conversion,
+            buffer_access,
+            Vec::new(),
+            Vec::new(),
+            emitted_inbounds,
+            emitted_noalias,
+            notes,
+        );
+    }
+
+    pub fn record_lowered_value_with_access_mode_and_facts(
+        &mut self,
+        expr_kind: impl Into<String>,
+        local_id: Option<u32>,
+        consumer: impl Into<String>,
+        lowered: &LoweredValue,
+        bounds_state: Option<BoundsState>,
+        alias_state: Option<AliasState>,
+        access_mode: Option<BufferAccessMode>,
+        materialization_reason: Option<MaterializationReason>,
+        scalar_conversion: Option<ScalarConversionRecord>,
+        buffer_access: Option<BufferAccessFacts>,
+        extra_consumed_facts: Vec<NativeFactUse>,
+        extra_rejected_facts: Vec<NativeFactUse>,
+        emitted_inbounds: bool,
+        emitted_noalias: bool,
+        notes: Vec<String>,
+    ) {
         let block_label = self.current_block_label();
-        let (consumed_facts, rejected_facts) = native_fact_uses_for_record(
+        let (mut consumed_facts, mut rejected_facts) = native_fact_uses_for_record(
             local_id,
             lowered,
             bounds_state.as_ref(),
@@ -1304,6 +1350,8 @@ impl<'a> FnCtx<'a> {
             access_mode.as_ref(),
             materialization_reason.as_ref(),
         );
+        consumed_facts.extend(extra_consumed_facts);
+        rejected_facts.extend(extra_rejected_facts);
         let fallback_reason = if matches!(
             access_mode.as_ref(),
             Some(BufferAccessMode::DynamicFallback)

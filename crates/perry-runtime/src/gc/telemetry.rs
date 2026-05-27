@@ -247,6 +247,12 @@ pub(super) struct LayoutScanTraceStats {
     pub(super) pointer_free_ranges_skipped: usize,
     pub(super) pointer_free_slots_skipped: usize,
     pub(super) pointer_free_payload_bytes_skipped: usize,
+    pub(super) raw_numeric_array_ranges_skipped: usize,
+    pub(super) raw_numeric_array_slots_skipped: usize,
+    pub(super) raw_numeric_array_payload_bytes_skipped: usize,
+    pub(super) raw_numeric_object_field_ranges_skipped: usize,
+    pub(super) raw_numeric_object_field_slots_skipped: usize,
+    pub(super) raw_numeric_object_field_payload_bytes_skipped: usize,
 }
 
 impl LayoutScanTraceStats {
@@ -259,6 +265,12 @@ impl LayoutScanTraceStats {
             pointer_free_ranges_skipped: 0,
             pointer_free_slots_skipped: 0,
             pointer_free_payload_bytes_skipped: 0,
+            raw_numeric_array_ranges_skipped: 0,
+            raw_numeric_array_slots_skipped: 0,
+            raw_numeric_array_payload_bytes_skipped: 0,
+            raw_numeric_object_field_ranges_skipped: 0,
+            raw_numeric_object_field_slots_skipped: 0,
+            raw_numeric_object_field_payload_bytes_skipped: 0,
         }
     }
 }
@@ -341,6 +353,45 @@ pub(super) fn record_layout_pointer_free_range_skipped(slot_count: usize) {
             .saturating_add(slot_count);
         current.pointer_free_payload_bytes_skipped = current
             .pointer_free_payload_bytes_skipped
+            .saturating_add(slot_count.saturating_mul(std::mem::size_of::<u64>()));
+        stats.set(current);
+    });
+}
+
+#[inline]
+pub(super) fn record_layout_raw_numeric_array_range_skipped(slot_count: usize) {
+    if slot_count == 0 || !layout_scan_trace_active() {
+        return;
+    }
+    LAYOUT_SCAN_TRACE_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.raw_numeric_array_ranges_skipped =
+            current.raw_numeric_array_ranges_skipped.saturating_add(1);
+        current.raw_numeric_array_slots_skipped = current
+            .raw_numeric_array_slots_skipped
+            .saturating_add(slot_count);
+        current.raw_numeric_array_payload_bytes_skipped = current
+            .raw_numeric_array_payload_bytes_skipped
+            .saturating_add(slot_count.saturating_mul(std::mem::size_of::<u64>()));
+        stats.set(current);
+    });
+}
+
+#[inline]
+pub(super) fn record_layout_raw_numeric_object_field_range_skipped(slot_count: usize) {
+    if slot_count == 0 || !layout_scan_trace_active() {
+        return;
+    }
+    LAYOUT_SCAN_TRACE_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.raw_numeric_object_field_ranges_skipped = current
+            .raw_numeric_object_field_ranges_skipped
+            .saturating_add(1);
+        current.raw_numeric_object_field_slots_skipped = current
+            .raw_numeric_object_field_slots_skipped
+            .saturating_add(slot_count);
+        current.raw_numeric_object_field_payload_bytes_skipped = current
+            .raw_numeric_object_field_payload_bytes_skipped
             .saturating_add(slot_count.saturating_mul(std::mem::size_of::<u64>()));
         stats.set(current);
     });
@@ -575,6 +626,12 @@ impl GcCycleTrace {
             "pointer_free_ranges_skipped": self.layout_scans.pointer_free_ranges_skipped,
             "pointer_free_slots_skipped": self.layout_scans.pointer_free_slots_skipped,
             "pointer_free_payload_bytes_skipped": self.layout_scans.pointer_free_payload_bytes_skipped,
+            "raw_numeric_array_ranges_skipped": self.layout_scans.raw_numeric_array_ranges_skipped,
+            "raw_numeric_array_slots_skipped": self.layout_scans.raw_numeric_array_slots_skipped,
+            "raw_numeric_array_payload_bytes_skipped": self.layout_scans.raw_numeric_array_payload_bytes_skipped,
+            "raw_numeric_object_field_ranges_skipped": self.layout_scans.raw_numeric_object_field_ranges_skipped,
+            "raw_numeric_object_field_slots_skipped": self.layout_scans.raw_numeric_object_field_slots_skipped,
+            "raw_numeric_object_field_payload_bytes_skipped": self.layout_scans.raw_numeric_object_field_payload_bytes_skipped,
         });
         let evacuation_json = serde_json::json!({
             "objects": self.evacuation.objects,
