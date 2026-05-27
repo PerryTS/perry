@@ -206,6 +206,13 @@ extern "C" fn ns_resume0(closure: *const ClosureHeader) -> f64 {
     mark_stream_ended(stream);
     refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
+    set_visible_readable_flowing(stream, f64::from_bits(TAG_TRUE));
+    stream
+}
+
+extern "C" fn ns_pause0(closure: *const ClosureHeader) -> f64 {
+    let stream = this_value(closure);
+    set_visible_readable_flowing(stream, f64::from_bits(TAG_FALSE));
     stream
 }
 
@@ -475,6 +482,16 @@ pub extern "C" fn js_node_stream_method_readable_aborted(stream_handle: i64) -> 
     readable_aborted_value(stream_value_from_handle(stream_handle))
 }
 
+/// `stream.readableFlowing` property getter on typed readable-side instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_flowing(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    get_hidden_value(stream, hidden_key(b"readableFlowing")).unwrap_or(f64::from_bits(TAG_NULL))
+}
+
 /// `stream.writableCorked` property getter on a typed writable-side instance.
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_writable_corked(stream_handle: i64) -> f64 {
@@ -535,6 +552,14 @@ pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
     mark_stream_ended(stream);
     refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
+    set_visible_readable_flowing(stream, f64::from_bits(TAG_TRUE));
+    stream
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_pause(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    set_visible_readable_flowing(stream, f64::from_bits(TAG_FALSE));
     stream
 }
 
@@ -1878,7 +1903,7 @@ fn readable_methods() -> [(&'static str, StubFn); 37] {
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_chain1)),
-        ("pause", cast0(ns_chain0)),
+        ("pause", cast0(ns_pause0)),
         ("resume", cast0(ns_resume0)),
         ("destroy", cast1(ns_destroy1)),
         ("setEncoding", cast1(ns_chain1)),
@@ -1956,7 +1981,7 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_chain1)),
-        ("pause", cast0(ns_chain0)),
+        ("pause", cast0(ns_pause0)),
         ("resume", cast0(ns_resume0)),
         ("setEncoding", cast1(ns_chain1)),
         ("isPaused", cast0(ns_undefined0)),
@@ -2094,6 +2119,12 @@ fn set_visible_readable_ended(stream: f64, ended: bool) {
     }
 }
 
+pub(super) fn set_visible_readable_flowing(stream: f64, value: f64) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
+        set_hidden_value(stream, hidden_key(b"readableFlowing"), value);
+    }
+}
+
 fn mark_stream_ended(stream: f64) {
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
     set_visible_readable(stream, false);
@@ -2153,6 +2184,7 @@ fn init_readable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
     set_visible_readable(stream, true);
     set_visible_readable_ended(stream, false);
+    set_visible_readable_flowing(stream, f64::from_bits(TAG_NULL));
 }
 
 /// Initialize the writable side: direction flag and visible stream flags.

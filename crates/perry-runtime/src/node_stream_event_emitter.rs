@@ -219,6 +219,7 @@ fn add_stream_listener_for_event_with_options(
     }
     add_stream_listener(stream, event, cb, once, prepend);
     if super::string_value_eq(event, b"data") {
+        super::set_visible_readable_flowing(stream, f64::from_bits(super::TAG_TRUE));
         super::schedule_readable_from_drain(stream);
     }
 }

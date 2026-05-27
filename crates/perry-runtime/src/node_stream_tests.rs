@@ -573,6 +573,49 @@ fn readable_lifecycle_flags_reflect_ended_state() {
 }
 
 #[test]
+fn readable_flowing_tracks_data_listener_and_pause() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let data_closure = js_closure_alloc(capture_data_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_data_listener as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(data_closure, 0, stream);
+    let data_listener = box_pointer(data_closure as *const u8);
+
+    assert_eq!(
+        js_node_stream_method_readable_flowing(handle).to_bits(),
+        TAG_NULL
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableFlowing")).to_bits(),
+        TAG_NULL
+    );
+
+    let _ = js_node_stream_method_on(handle, string_value("data"), data_listener);
+    assert_eq!(
+        js_node_stream_method_readable_flowing(handle).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableFlowing")).to_bits(),
+        TAG_TRUE
+    );
+
+    assert_eq!(
+        js_node_stream_method_pause(handle).to_bits(),
+        stream.to_bits()
+    );
+    assert_eq!(
+        js_node_stream_method_readable_flowing(handle).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableFlowing")).to_bits(),
+        TAG_FALSE
+    );
+}
+
+#[test]
 fn writable_corked_counter_tracks_cork_balance() {
     let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
