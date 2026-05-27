@@ -83,6 +83,15 @@ pub struct Promise {
     _private: [u8; 0],
 }
 
+/// Opaque runtime-owned native async completion token.
+///
+/// Wrappers pass `*mut NativeAsyncCompletion` through the perry-ffi async
+/// helpers; they must not inspect or allocate this type directly.
+#[repr(C)]
+pub struct NativeAsyncCompletion {
+    _private: [u8; 0],
+}
+
 #[cfg(all(test, feature = "runtime-link"))]
 mod layout_tests {
     use super::*;

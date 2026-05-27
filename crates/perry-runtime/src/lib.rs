@@ -233,6 +233,7 @@ mod stdlib_pump {
     /// is not linked (no-op in that case).
     #[no_mangle]
     pub extern "C" fn js_run_stdlib_pump() {
+        crate::promise::js_native_async_process_pending();
         // Drain the tty resize-pending flag (#347 Phase 3). Lives in
         // perry-runtime, not stdlib, so it runs even when stdlib isn't
         // linked — a TUI program that uses process.stdout.on('resize')
@@ -261,6 +262,9 @@ mod stdlib_pump {
     /// async ops, etc.). Returns 0 if perry-stdlib is not linked.
     #[no_mangle]
     pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
+        if crate::promise::js_native_async_has_active() != 0 {
+            return 1;
+        }
         let f = STDLIB_HAS_ACTIVE_FN.load(Ordering::Acquire);
         if !f.is_null() {
             unsafe {

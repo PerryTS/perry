@@ -21,6 +21,7 @@ use crate::async_context::{
 pub mod async_step;
 pub mod combinators;
 pub mod microtasks;
+pub mod native_async;
 pub mod scanners;
 pub mod then;
 
@@ -39,6 +40,18 @@ pub use combinators::{
     js_promise_rejected, js_promise_schedule_resolve, js_value_is_promise,
 };
 pub use microtasks::js_promise_run_microtasks;
+pub use native_async::{
+    js_native_async_completion_attach_handle, js_native_async_completion_cancel,
+    js_native_async_completion_new, js_native_async_completion_promise,
+    js_native_async_completion_reject_bits, js_native_async_completion_reject_promise_bits,
+    js_native_async_completion_resolve_bits, js_native_async_completion_resolve_promise_bits,
+    js_native_async_has_active, js_native_async_process_pending,
+    scan_native_async_completion_roots_mut, NativeAsyncCompletion,
+    PERRY_NATIVE_ASYNC_ALREADY_COMPLETED, PERRY_NATIVE_ASYNC_CLEANUP_ON_CANCEL,
+    PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT, PERRY_NATIVE_ASYNC_CLEANUP_ON_SUCCESS,
+    PERRY_NATIVE_ASYNC_INVALID, PERRY_NATIVE_ASYNC_OK, PERRY_NATIVE_ASYNC_THREAD_MAIN,
+    PERRY_NATIVE_ASYNC_WRONG_THREAD,
+};
 pub use scanners::{js_promise_with_resolvers, scan_promise_roots, scan_promise_roots_mut};
 pub(crate) use then::js_promise_attach_handlers;
 pub use then::{
@@ -463,6 +476,13 @@ pub(crate) fn set_promise_callback_context(promise: *mut Promise) {
         return;
     }
     let snapshot = capture_context();
+    set_promise_context_snapshot(promise, snapshot);
+}
+
+pub(crate) fn set_promise_context_snapshot(promise: *mut Promise, snapshot: AsyncContextSnapshot) {
+    if promise.is_null() {
+        return;
+    }
     PROMISE_CONTEXTS.with(|contexts| {
         contexts.borrow_mut().insert(promise as usize, snapshot);
     });

@@ -25,7 +25,8 @@ pub use emit::{emit_dts, emit_markdown};
 pub use entries::{API_MANIFEST, NATIVE_MODULES, NODE_SUBMODULES, RUNTIME_ONLY_MODULES};
 pub use native_abi::{
     native_handle_type_id, NativeAbiParseError, NativeAbiType, NativeHandleAbi,
-    NativeHandleOwnership, NativeHandleThreadAffinity,
+    NativeHandleOwnership, NativeHandleThreadAffinity, NativePromiseAbi, NativePromiseCompletion,
+    NativePromiseThread,
 };
 
 /// One entry in the manifest. Identifies a single named symbol on a

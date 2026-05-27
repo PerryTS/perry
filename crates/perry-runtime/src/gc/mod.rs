@@ -668,6 +668,7 @@ pub fn gc_init() {
         scan_runtime_handle_roots_mut,
         MutableRootScannerSource::RuntimeHandles,
     );
+    gc_register_mutable_root_scanner(crate::promise::scan_native_async_completion_roots_mut);
     gc_register_mutable_root_scanner(promise_mutable_root_scanner);
     gc_register_mutable_root_scanner(timer_mutable_root_scanner);
     gc_register_mutable_root_scanner(exception_mutable_root_scanner);
