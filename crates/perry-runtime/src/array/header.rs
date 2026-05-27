@@ -282,6 +282,25 @@ pub(crate) fn value_bits_are_numeric(value_bits: u64) -> bool {
 pub(crate) fn value_bits_to_number(value_bits: u64) -> Option<f64> {
     if (value_bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
         let lower = (value_bits & crate::value::INT32_MASK) as u32;
+        // #321/effect-Schema: a class reference shares the INT32_TAG (0x7FFE)
+        // NaN-box shape with genuine small integers — `arrays_finds.rs` lowers
+        // a `ClassRef` to its registered class id NaN-boxed with INT32_TAG, and
+        // downstream property / method / `instanceof` dispatch keys off the
+        // surviving 0x7FFE tag. A class ref is NOT a numeric array element, so
+        // treating it as the integer `class_id` here let the raw-f64 numeric
+        // layout canonicalize the slot to `class_id.to_bits()`, stripping the
+        // tag (`canonicalize_array_numeric_store_bits` /
+        // `note_array_numeric_index_write`). That turned a class value passed
+        // through a rest parameter — `Union(...members)` in effect's Schema,
+        // whose `members.map((m) => m.ast)` then dereferenced the bare number
+        // as an object — into a SIGSEGV. Reporting class refs as non-numeric
+        // keeps such arrays off the raw-f64 fast path and preserves the tag.
+        // A genuine integer whose value coincides with a registered class id
+        // only loses the raw-f64 *optimization* (it is still a valid number
+        // when read back), so correctness is never at stake.
+        if crate::object::is_class_id_registered(lower) {
+            return None;
+        }
         return Some((lower as i32) as f64);
     }
     let upper = value_bits >> 48;
