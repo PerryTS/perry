@@ -31,6 +31,9 @@ static KEEP_NS_WRITABLE_HWM: extern "C" fn(i64) -> f64 = super::js_node_stream_m
 static KEEP_NS_READABLE_ABORTED: extern "C" fn(i64) -> f64 =
     super::js_node_stream_method_readable_aborted;
 #[used]
+static KEEP_NS_WRITABLE_CORKED: extern "C" fn(i64) -> f64 =
+    super::js_node_stream_method_writable_corked;
+#[used]
 static KEEP_NS_METHOD_RESUME: extern "C" fn(i64) -> f64 = super::js_node_stream_method_resume;
 #[used]
 static KEEP_NS_METHOD_DESTROY: extern "C" fn(i64, f64) -> f64 =
@@ -45,6 +48,10 @@ static KEEP_NS_METHOD_END: extern "C" fn(i64, f64) -> f64 = super::js_node_strea
 #[used]
 static KEEP_NS_METHOD_END3: extern "C" fn(i64, f64, f64, f64) -> f64 =
     super::js_node_stream_method_end3;
+#[used]
+static KEEP_NS_METHOD_CORK: extern "C" fn(i64) -> f64 = super::js_node_stream_method_cork;
+#[used]
+static KEEP_NS_METHOD_UNCORK: extern "C" fn(i64) -> f64 = super::js_node_stream_method_uncork;
 #[used]
 static KEEP_NS_METHOD_SET_MAX_LISTENERS: extern "C" fn(i64, f64) -> f64 =
     super::js_node_stream_method_set_max_listeners;

@@ -2505,6 +2505,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "destroy", true, None),
     method("stream", "write", true, None),
     method("stream", "end", true, None),
+    method("stream", "cork", true, None),
+    method("stream", "uncork", true, None),
     // #1539: push() backpressure return + readable/writableHighWaterMark
     // property getters on typed stream instances.
     method("stream", "push", true, None),
@@ -2513,6 +2515,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "readableEnded", true, None),
     method("stream", "writableHighWaterMark", true, None),
     method("stream", "readableAborted", true, None),
+    method("stream", "writableCorked", true, None),
     method("stream", "destroyed", true, None),
     // --- child_process (synchronous + async exec surface;
     //     spawn/fork are documented but not yet codegen'd) ---

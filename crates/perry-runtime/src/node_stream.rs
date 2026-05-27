@@ -82,6 +82,7 @@ const STREAM_MAX_LISTENERS_KEY: &[u8] = b"__perryStreamMaxListeners";
 const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
 const WRITABLE_FINISH_SCHEDULED_KEY: &[u8] = b"__perryWritableFinishScheduled";
 const WRITABLE_FINISH_EMITTED_KEY: &[u8] = b"__perryWritableFinishEmitted";
+const WRITABLE_CORKED_KEY: &[u8] = b"__perryWritableCorked";
 // #1534: direction + disturbed bits so the static introspection helpers
 // (`Readable.isReadable` / `isDisturbed` / `isErrored`) answer per-stream
 // instead of with a uniform stub. Set at construction / on first read.
@@ -296,6 +297,21 @@ extern "C" fn ns_end3(closure: *const ClosureHeader, chunk: f64, encoding: f64, 
     stream
 }
 
+extern "C" fn ns_cork0(closure: *const ClosureHeader) -> f64 {
+    let stream = this_value(closure);
+    set_writable_corked_count(stream, writable_corked_count(stream) + 1.0);
+    stream
+}
+
+extern "C" fn ns_uncork0(closure: *const ClosureHeader) -> f64 {
+    let stream = this_value(closure);
+    let corked = writable_corked_count(stream);
+    if corked > 0.0 {
+        set_writable_corked_count(stream, corked - 1.0);
+    }
+    stream
+}
+
 fn invoke_writable_write(stream: f64, chunk: f64, enc: f64) {
     if let Some(write) = writable_hidden_write(stream) {
         let cb = js_closure_alloc(writable_write_callback_noop as *const u8, 0);
@@ -442,6 +458,12 @@ pub extern "C" fn js_node_stream_method_readable_aborted(stream_handle: i64) -> 
     readable_aborted_value(stream_value_from_handle(stream_handle))
 }
 
+/// `stream.writableCorked` property getter on a typed writable-side instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_writable_corked(stream_handle: i64) -> f64 {
+    writable_corked_count(stream_value_from_handle(stream_handle))
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
@@ -489,6 +511,23 @@ pub extern "C" fn js_node_stream_method_end3(
 ) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     finish_stream_with_args(stream, chunk, encoding, cb);
+    stream
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_cork(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    set_writable_corked_count(stream, writable_corked_count(stream) + 1.0);
+    stream
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_uncork(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    let corked = writable_corked_count(stream);
+    if corked > 0.0 {
+        set_writable_corked_count(stream, corked - 1.0);
+    }
     stream
 }
 extern "C" fn ns_undefined0(_closure: *const ClosureHeader) -> f64 {
@@ -1174,6 +1213,11 @@ fn hidden_finish_emitted_key() -> *mut crate::string::StringHeader {
 }
 
 #[inline]
+fn hidden_writable_corked_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_CORKED_KEY)
+}
+
+#[inline]
 fn hidden_readable_flag_key() -> *mut crate::string::StringHeader {
     hidden_key(READABLE_FLAG_KEY)
 }
@@ -1386,6 +1430,17 @@ fn refresh_readable_aborted_flag(stream: f64) {
 
 fn writable_hidden_write(value: f64) -> Option<f64> {
     get_hidden_value(value, hidden_write_key())
+}
+
+fn writable_corked_count(value: f64) -> f64 {
+    get_hidden_value(value, hidden_writable_corked_key()).unwrap_or(0.0)
+}
+
+fn set_writable_corked_count(stream: f64, count: f64) {
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_some() {
+        set_hidden_value(stream, hidden_writable_corked_key(), count);
+        set_hidden_value(stream, hidden_key(b"writableCorked"), count);
+    }
 }
 
 fn rebind_callback_this(callback: f64, stream: f64) -> f64 {
@@ -1753,8 +1808,8 @@ fn writable_methods() -> [(&'static str, StubFn); 22] {
         ("rawListeners", cast1(ns_raw_listeners)),
         ("write", cast2(ns_write2)),
         ("end", cast3(ns_end3)),
-        ("cork", cast0(ns_chain0)),
-        ("uncork", cast0(ns_chain0)),
+        ("cork", cast0(ns_cork0)),
+        ("uncork", cast0(ns_uncork0)),
         ("destroy", cast1(ns_destroy1)),
         ("setDefaultEncoding", cast1(ns_chain1)),
         ("_write", cast3(ns_chain3)),
@@ -1790,8 +1845,8 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("isPaused", cast0(ns_undefined0)),
         ("write", cast2(ns_write2)),
         ("end", cast3(ns_end3)),
-        ("cork", cast0(ns_chain0)),
-        ("uncork", cast0(ns_chain0)),
+        ("cork", cast0(ns_cork0)),
+        ("uncork", cast0(ns_uncork0)),
         ("destroy", cast1(ns_destroy1)),
         ("setDefaultEncoding", cast1(ns_chain1)),
     ]
@@ -1953,6 +2008,7 @@ fn init_writable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
     let w_hwm = resolve_hwm(opts, b"writableHighWaterMark", b"writableObjectMode");
     set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
+    set_writable_corked_count(stream, 0.0);
 }
 
 fn init_abort_signal_state(stream: f64, opts: f64) {

@@ -998,12 +998,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.prototype.compose(stream) instance method — not yet exposed (only free compose() works). Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/flags/writable-corked": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: writable.writableCorked counter not exposed (cork/uncork balance). Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/flags/readable-did-read": {
     "issue": "1531",
     "added": "2026-05-24",

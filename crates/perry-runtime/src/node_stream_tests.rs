@@ -485,6 +485,52 @@ fn readable_lifecycle_flags_reflect_ended_state() {
 }
 
 #[test]
+fn writable_corked_counter_tracks_cork_balance() {
+    let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let cork = js_object_get_field_by_name_f64(obj, hidden_key(b"cork"));
+    let uncork = js_object_get_field_by_name_f64(obj, hidden_key(b"uncork"));
+
+    assert_eq!(js_node_stream_method_writable_corked(handle), 0.0);
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"writableCorked")),
+        0.0
+    );
+
+    assert_eq!(
+        unsafe { crate::closure::js_native_call_value(cork, std::ptr::null(), 0) }.to_bits(),
+        stream.to_bits()
+    );
+    assert_eq!(js_node_stream_method_writable_corked(handle), 1.0);
+
+    let _ = unsafe { crate::closure::js_native_call_value(cork, std::ptr::null(), 0) };
+    assert_eq!(js_node_stream_method_writable_corked(handle), 2.0);
+
+    let _ = unsafe { crate::closure::js_native_call_value(uncork, std::ptr::null(), 0) };
+    assert_eq!(js_node_stream_method_writable_corked(handle), 1.0);
+
+    let _ = unsafe { crate::closure::js_native_call_value(uncork, std::ptr::null(), 0) };
+    let _ = unsafe { crate::closure::js_native_call_value(uncork, std::ptr::null(), 0) };
+    assert_eq!(js_node_stream_method_writable_corked(handle), 0.0);
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"writableCorked")),
+        0.0
+    );
+
+    assert_eq!(
+        js_node_stream_method_cork(handle).to_bits(),
+        stream.to_bits()
+    );
+    assert_eq!(js_node_stream_method_writable_corked(handle), 1.0);
+    assert_eq!(
+        js_node_stream_method_uncork(handle).to_bits(),
+        stream.to_bits()
+    );
+    assert_eq!(js_node_stream_method_writable_corked(handle), 0.0);
+}
+
+#[test]
 fn stream_destroy_with_error_marks_errored_state() {
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
     let destroy = js_object_get_field_by_name_f64(
