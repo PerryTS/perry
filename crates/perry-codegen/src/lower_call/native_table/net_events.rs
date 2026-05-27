@@ -773,6 +773,15 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "stream",
         has_receiver: true,
+        method: "readableEncoding",
+        class_filter: None,
+        runtime: "js_node_stream_method_readable_encoding",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
         method: "writableHighWaterMark",
         class_filter: None,
         runtime: "js_node_stream_method_writable_hwm",
@@ -840,6 +849,15 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_stream_method_resume",
         args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "setEncoding",
+        class_filter: None,
+        runtime: "js_node_stream_method_set_encoding",
+        args: &[NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

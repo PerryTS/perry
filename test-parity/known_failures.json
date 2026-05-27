@@ -872,12 +872,6 @@
     "category": "bug-open",
     "reason": "node:stream: Duplex.from(asyncIterable) — async-gen → Duplex form not yet wired. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/flags/readable-encoding": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: readable.readableEncoding getter — returns wrong value (does not reflect constructor option or setEncoding()). Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/compose/instance-method": {
     "issue": "1531",
     "added": "2026-05-23",

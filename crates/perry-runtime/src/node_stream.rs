@@ -217,6 +217,12 @@ extern "C" fn ns_read1(closure: *const ClosureHeader, _n: f64) -> f64 {
     f64::from_bits(TAG_NULL)
 }
 
+extern "C" fn ns_set_encoding1(closure: *const ClosureHeader, encoding: f64) -> f64 {
+    let stream = this_value(closure);
+    set_visible_readable_encoding(stream, normalize_readable_encoding(encoding));
+    stream
+}
+
 /// Shared `push(chunk)` accounting (#1539): track the buffered byte count and
 /// return `true` while it stays below `highWaterMark`, `false` once it
 /// reaches/exceeds it — matching Node's backpressure signal. Pushing
@@ -461,6 +467,16 @@ pub extern "C" fn js_node_stream_method_readable_ended(stream_handle: i64) -> f6
     }
 }
 
+/// `stream.readableEncoding` property getter on typed readable-side instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_encoding(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    readable_encoding_value(stream)
+}
+
 /// `stream.writableHighWaterMark` property getter on a typed instance
 /// (#1539).
 #[no_mangle]
@@ -527,6 +543,13 @@ pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64
     refresh_readable_aborted_flag(stream);
     mark_disturbed(stream);
     f64::from_bits(TAG_NULL)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_set_encoding(stream_handle: i64, encoding: f64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    set_visible_readable_encoding(stream, normalize_readable_encoding(encoding));
+    stream
 }
 
 #[no_mangle]
@@ -1881,7 +1904,7 @@ fn readable_methods() -> [(&'static str, StubFn); 37] {
         ("pause", cast0(ns_chain0)),
         ("resume", cast0(ns_resume0)),
         ("destroy", cast1(ns_destroy1)),
-        ("setEncoding", cast1(ns_chain1)),
+        ("setEncoding", cast1(ns_set_encoding1)),
         ("isPaused", cast0(ns_undefined0)),
         // #1558 — async iterator helpers. The consuming helpers accept a
         // trailing `{ signal }` options arg; the lazy transforms accept one
@@ -1958,7 +1981,7 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("unpipe", cast1(ns_chain1)),
         ("pause", cast0(ns_chain0)),
         ("resume", cast0(ns_resume0)),
-        ("setEncoding", cast1(ns_chain1)),
+        ("setEncoding", cast1(ns_set_encoding1)),
         ("isPaused", cast0(ns_undefined0)),
         ("write", cast2(ns_write2)),
         ("end", cast3(ns_end3)),
@@ -2033,6 +2056,16 @@ fn opt_number(opts: f64, key: &[u8]) -> Option<f64> {
     jsvalue_as_f64(get_hidden_value(opts, hidden_key(key))?)
 }
 
+/// Read a string constructor option and preserve the existing JS string value.
+fn opt_string_value(opts: f64, key: &[u8]) -> Option<f64> {
+    let value = get_hidden_value(opts, hidden_key(key))?;
+    if JSValue::from_bits(value.to_bits()).is_any_string() {
+        Some(value)
+    } else {
+        None
+    }
+}
+
 /// Read a boolean constructor option, returning `true` only when the option
 /// is present and truthy.
 fn opt_bool(opts: f64, key: &[u8]) -> bool {
@@ -2091,6 +2124,24 @@ fn set_visible_readable_ended(stream: f64, ended: bool) {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
         let value = if ended { TAG_TRUE } else { TAG_FALSE };
         set_hidden_value(stream, hidden_key(b"readableEnded"), f64::from_bits(value));
+    }
+}
+
+fn readable_encoding_value(stream: f64) -> f64 {
+    get_hidden_value(stream, hidden_key(b"readableEncoding")).unwrap_or(f64::from_bits(TAG_NULL))
+}
+
+fn normalize_readable_encoding(encoding: f64) -> f64 {
+    if JSValue::from_bits(encoding.to_bits()).is_any_string() {
+        encoding
+    } else {
+        f64::from_bits(TAG_NULL)
+    }
+}
+
+fn set_visible_readable_encoding(stream: f64, encoding: f64) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
+        set_hidden_value(stream, hidden_key(b"readableEncoding"), encoding);
     }
 }
 
@@ -2153,6 +2204,8 @@ fn init_readable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
     set_visible_readable(stream, true);
     set_visible_readable_ended(stream, false);
+    let encoding = opt_string_value(opts, b"encoding").unwrap_or(f64::from_bits(TAG_NULL));
+    set_visible_readable_encoding(stream, encoding);
 }
 
 /// Initialize the writable side: direction flag and visible stream flags.

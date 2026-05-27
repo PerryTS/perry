@@ -573,6 +573,43 @@ fn readable_lifecycle_flags_reflect_ended_state() {
 }
 
 #[test]
+fn readable_encoding_tracks_constructor_and_set_encoding() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+
+    assert_eq!(
+        js_node_stream_method_readable_encoding(handle).to_bits(),
+        TAG_NULL
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableEncoding")).to_bits(),
+        TAG_NULL
+    );
+
+    assert_eq!(
+        js_node_stream_method_set_encoding(handle, string_value("utf8")).to_bits(),
+        stream.to_bits()
+    );
+    assert!(string_value_eq(
+        js_node_stream_method_readable_encoding(handle),
+        b"utf8"
+    ));
+    assert!(string_value_eq(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableEncoding")),
+        b"utf8"
+    ));
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(opts, hidden_key(b"encoding"), string_value("hex"));
+    let from_opts = js_node_stream_readable_new(box_pointer(opts as *const u8));
+    assert!(string_value_eq(
+        js_node_stream_method_readable_encoding(raw_ptr_from_value(from_opts) as i64),
+        b"hex"
+    ));
+}
+
+#[test]
 fn writable_corked_counter_tracks_cork_balance() {
     let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
