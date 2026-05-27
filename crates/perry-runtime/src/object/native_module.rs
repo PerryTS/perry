@@ -278,6 +278,7 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
     NATIVE_CALLABLE_EXPORTS.with(|c| {
         c.borrow_mut().insert(key, value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     });
     value
 }
@@ -2231,7 +2232,7 @@ fn create_cached_sub_namespace(name: &str, cache: &std::sync::atomic::AtomicU64)
 
     let result = create_sub_namespace(name);
     // GC_STORE_AUDIT(ROOT): os constants caches are mutable roots visited by scan_object_cache_roots_mut.
-    cache.store(result.to_bits(), Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(cache, result.to_bits(), Ordering::Relaxed);
     result
 }
 
@@ -2297,7 +2298,11 @@ unsafe fn http_methods_array() -> f64 {
     }
     let value = crate::value::js_nanbox_pointer(arr as i64);
     // GC_STORE_AUDIT(ROOT): HTTP_METHODS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
-    HTTP_METHODS_CACHE.store(value.to_bits(), Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &HTTP_METHODS_CACHE,
+        value.to_bits(),
+        Ordering::Relaxed,
+    );
     value
 }
 
@@ -2395,6 +2400,10 @@ unsafe fn create_fs_constants_object() -> f64 {
 
     let result = crate::value::js_nanbox_pointer(obj as i64);
     // GC_STORE_AUDIT(ROOT): FS_CONSTANTS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
-    FS_CONSTANTS_CACHE.store(result.to_bits(), Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &FS_CONSTANTS_CACHE,
+        result.to_bits(),
+        Ordering::Relaxed,
+    );
     result
 }

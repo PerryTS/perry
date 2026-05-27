@@ -21,6 +21,16 @@ fn run_cycle_in_single_unit_steps(state: &mut GcCycleState) -> Vec<GcCyclePhase>
     panic!("GC cycle did not complete within step limit");
 }
 
+fn run_cycle_until_phase(state: &mut GcCycleState, target: GcCyclePhase) {
+    for _ in 0..100_000 {
+        if state.phase() == target {
+            return;
+        }
+        state.step(GcWorkBudget::bounded(1));
+    }
+    panic!("GC cycle did not reach {target:?} within step limit");
+}
+
 fn start_minor_fallback_state(trigger: GcTriggerSnapshot) -> GcCycleState {
     let prev_in_alloc = GC_FLAGS.with(|f| {
         let prev = f.get();
@@ -151,4 +161,197 @@ fn bounded_minor_fallback_preserves_age_and_trace_fields() {
         trace.copying_nursery.fallback_reason,
         CopiedMinorFallbackReason::NotAttempted
     );
+}
+
+#[test]
+fn full_cycle_drains_incremental_barrier_seed_before_sweep() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let (parent, fields) = unsafe { alloc_old_test_object(1) };
+    js_shadow_slot_set(0, ptr_bits(parent as usize));
+    let child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(child);
+    }
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert_eq!(
+        state.phase(),
+        GcCyclePhase::BlockPersistence,
+        "test must store after ordinary mark propagation has drained"
+    );
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep incremental barriers active until atomic finalize"
+    );
+
+    runtime_store_jsvalue_slot(
+        parent as usize,
+        fields as usize,
+        0,
+        ptr_bits(child as usize),
+    );
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(child),
+        "child stored after mark propagation should survive via atomic barrier-seed drain"
+    );
+    assert!(
+        !incremental_mark_barrier_active(),
+        "full cycle should disable incremental barriers before completion"
+    );
+}
+
+#[test]
+fn full_cycle_box_root_set_after_root_scan_preserves_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let box_ptr = crate::r#box::js_box_alloc(0.0);
+    assert!(!box_ptr.is_null());
+    let child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(child);
+    }
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    crate::r#box::js_box_set(box_ptr, f64::from_bits(ptr_bits(child as usize)));
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(child),
+        "child stored into a box root after root scan should survive via js_box_set's root barrier"
+    );
+}
+
+#[test]
+fn full_cycle_global_root_store_after_root_scan_preserves_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let mut root_slot = 0_u64;
+    js_gc_register_global_root(&mut root_slot as *mut u64 as i64);
+    let child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(child);
+    }
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    root_slot = ptr_bits(child as usize);
+    js_write_barrier_root_nanbox(root_slot);
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(child),
+        "child stored into a registered global root after root scan should survive via root barrier"
+    );
+}
+
+#[test]
+fn full_cycle_exception_root_store_after_root_scan_preserves_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    gc_register_mutable_root_scanner(exception_mutable_root_scanner);
+    crate::exception::js_clear_exception();
+
+    let child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(child);
+    }
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    crate::exception::test_set_exception(f64::from_bits(ptr_bits(child as usize)));
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(child),
+        "child stored into the exception root after root scan should survive via root barrier"
+    );
+    crate::exception::js_clear_exception();
+}
+
+#[test]
+fn full_cycle_console_singleton_store_after_root_scan_preserves_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    gc_register_mutable_root_scanner(crate::builtins::scan_console_log_singleton_roots_mut);
+    crate::builtins::test_set_console_log_singleton(0);
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    let console_log_value = crate::builtins::js_console_log_as_closure();
+    let console_log_bits = console_log_value.to_bits();
+    assert_eq!(console_log_bits & TAG_MASK, POINTER_TAG);
+    let console_log_ptr = (console_log_bits & POINTER_MASK) as usize;
+    assert_eq!(
+        crate::builtins::test_console_log_singleton(),
+        console_log_ptr as i64
+    );
+    let console_log_header = unsafe { header_from_user_ptr(console_log_ptr as *const u8) };
+    unsafe {
+        assert_ne!(
+            (*console_log_header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "first-use console.log singleton CAS after root scan should fire the root barrier"
+        );
+    }
+
+    let replacement = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(replacement);
+    }
+    crate::builtins::test_set_console_log_singleton(replacement as i64);
+
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(replacement),
+        "console singleton test store after root scan should survive via the root barrier"
+    );
+    assert_eq!(
+        crate::builtins::test_console_log_singleton(),
+        replacement as i64
+    );
+    crate::builtins::test_set_console_log_singleton(0);
 }

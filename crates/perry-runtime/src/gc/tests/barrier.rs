@@ -1048,6 +1048,198 @@ fn assert_heap_child_marked(ptr: *const u8, label: &str) {
     }
 }
 
+fn assert_marked_user_ptr(ptr: usize, label: &str) {
+    unsafe {
+        let header = header_from_user_ptr(ptr as *const u8);
+        assert_ne!(
+            (*header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "{label} should be marked by the active incremental barrier"
+        );
+    }
+}
+
+fn mark_user_ptr(ptr: usize) {
+    unsafe {
+        let header = header_from_user_ptr(ptr as *const u8);
+        (*header).gc_flags |= GC_FLAG_MARKED;
+    }
+}
+
+fn clear_mark_user_ptr(ptr: usize) {
+    unsafe {
+        let header = header_from_user_ptr(ptr as *const u8);
+        (*header).gc_flags &= !GC_FLAG_MARKED;
+    }
+}
+
+#[test]
+fn test_incremental_barrier_marks_object_field_store() {
+    reset_remembered_set();
+    clear_marks();
+    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (obj, fields) = unsafe { alloc_old_test_object(1) };
+    mark_user_ptr(obj as usize);
+    let valid_ptrs = build_valid_pointer_set();
+    let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
+
+    runtime_store_jsvalue_slot(obj as usize, fields as usize, 0, ptr_bits(child));
+    drain_incremental_mark_barrier_seeds(&valid_ptrs);
+
+    assert_marked_user_ptr(child, "object field child");
+    let stats = verify_marked_heap_no_unmarked_children();
+    assert_eq!(stats.missing_edges, 0);
+    clear_mark_user_ptr(obj as usize);
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_incremental_barrier_marks_array_element_store() {
+    reset_remembered_set();
+    clear_marks();
+    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (arr, elements) = unsafe { alloc_old_test_array(1) };
+    mark_user_ptr(arr as usize);
+    let valid_ptrs = build_valid_pointer_set();
+    let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
+
+    runtime_store_jsvalue_slot(arr as usize, elements as usize, 0, ptr_bits(child));
+    drain_incremental_mark_barrier_seeds(&valid_ptrs);
+
+    assert_marked_user_ptr(child, "array element child");
+    let stats = verify_marked_heap_no_unmarked_children();
+    assert_eq!(stats.missing_edges, 0);
+    clear_mark_user_ptr(arr as usize);
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_incremental_barrier_marks_closure_capture_store() {
+    reset_remembered_set();
+    clear_marks();
+    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let closure = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 1);
+    mark_user_ptr(closure as usize);
+    let valid_ptrs = build_valid_pointer_set();
+    let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
+
+    crate::closure::js_closure_set_capture_ptr(closure, 0, child as i64);
+    drain_incremental_mark_barrier_seeds(&valid_ptrs);
+
+    assert_marked_user_ptr(child, "closure capture child");
+    let stats = verify_marked_heap_no_unmarked_children();
+    assert_eq!(stats.missing_edges, 0);
+    clear_mark_user_ptr(closure as usize);
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_incremental_barrier_marks_closure_static_prototype_store() {
+    reset_remembered_set();
+    clear_marks();
+    let proto = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let closure = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
+    mark_user_ptr(closure as usize);
+    let valid_ptrs = build_valid_pointer_set();
+    let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
+
+    crate::closure::closure_set_static_prototype(closure as usize, ptr_bits(proto));
+    drain_incremental_mark_barrier_seeds(&valid_ptrs);
+
+    assert_marked_user_ptr(proto, "closure static prototype");
+    let stats = verify_marked_heap_no_unmarked_children();
+    assert_eq!(stats.checked_edges, 1);
+    assert_eq!(stats.missing_edges, 0);
+    clear_mark_user_ptr(closure as usize);
+    crate::closure::test_clear_closure_side_tables();
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_incremental_barrier_marks_external_map_and_set_slots() {
+    reset_remembered_set();
+    clear_marks();
+    let map_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let set_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (map, entries, map_layout) = unsafe { alloc_old_test_map(1) };
+    let (set, elements, set_layout) = unsafe { alloc_old_test_set(1) };
+    unsafe {
+        (*map).size = 1;
+        (*set).size = 1;
+    }
+    mark_user_ptr(map as usize);
+    mark_user_ptr(set as usize);
+    let valid_ptrs = build_valid_pointer_set();
+    let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
+
+    runtime_store_external_jsvalue_slot(map as usize, entries as usize, ptr_bits(map_child));
+    runtime_store_external_jsvalue_slot(set as usize, elements as usize, ptr_bits(set_child));
+    drain_incremental_mark_barrier_seeds(&valid_ptrs);
+
+    assert_marked_user_ptr(map_child, "map external slot child");
+    assert_marked_user_ptr(set_child, "set external slot child");
+    let stats = verify_marked_heap_no_unmarked_children();
+    assert_eq!(stats.missing_edges, 0);
+    unsafe {
+        retire_old_test_map(map, entries, map_layout);
+        retire_old_test_set(set, elements, set_layout);
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_mark_invariant_verifier_rejects_incremental_barrier_bypass() {
+    reset_remembered_set();
+    clear_marks();
+    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (obj, fields) = unsafe { alloc_old_test_object(1) };
+    mark_user_ptr(obj as usize);
+    unsafe {
+        *fields = ptr_bits(child);
+    }
+
+    let result = std::panic::catch_unwind(verify_marked_heap_no_unmarked_children);
+
+    assert!(
+        result.is_err(),
+        "raw pointer-capable stores into marked parents must fail the mark verifier"
+    );
+    clear_mark_user_ptr(obj as usize);
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn test_store_outside_incremental_mark_keeps_generational_behavior_only() {
+    reset_remembered_set();
+    clear_marks();
+    assert!(!incremental_mark_barrier_active());
+    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (obj, fields) = unsafe { alloc_old_test_object(1) };
+
+    runtime_store_jsvalue_slot(obj as usize, fields as usize, 0, ptr_bits(child));
+
+    unsafe {
+        let child_header = header_from_user_ptr(child as *const u8);
+        assert_eq!(
+            (*child_header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "inactive incremental barrier must not mark the stored child"
+        );
+    }
+    assert!(
+        remembered_set_size() > 0,
+        "inactive incremental barrier must leave old-to-young remembered-set behavior intact"
+    );
+    clear_marks();
+    remembered_set_clear();
+}
+
 #[test]
 fn test_promise_pointer_field_stores_dirty_old_page() {
     let _guard = CopyingNurseryTestGuard::new(0);
