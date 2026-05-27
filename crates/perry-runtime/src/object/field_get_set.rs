@@ -1472,7 +1472,7 @@ pub extern "C" fn js_object_get_field_by_name(
         }
         // Strings: handle `.length` so `(x as string).length` on an
         // unknown-typed local (TypeScript `as` casts are erased in
-        // HIR) produces the real codepoint length.
+        // HIR) produces the real UTF-16 code-unit length.
         if gc_type == crate::gc::GC_TYPE_STRING {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -1480,7 +1480,7 @@ pub extern "C" fn js_object_get_field_by_name(
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                 if key_bytes == b"length" {
                     let s = obj as *const crate::StringHeader;
-                    return JSValue::number((*s).byte_len as f64);
+                    return JSValue::number((*s).utf16_len as f64);
                 }
                 if let Some((kind, asym_type)) = crate::buffer::asymmetric_key_meta(obj as usize) {
                     if key_bytes == b"type" {
