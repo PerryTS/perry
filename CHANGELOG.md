@@ -2,6 +2,18 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1032 — child_process execSync/execFileSync buffer-encoding parity test (#1958)
+
+Add a node-suite parity test (`child_process/sync/sync-encoding-buffer.ts`)
+covering `execSync`/`execFileSync` return-value encoding: Buffer by default and
+on `encoding: "buffer"`/`encoding: null`, string on `encoding: "utf8"` —
+including `Buffer.isBuffer`, `constructor.name`, and `toString("utf8"|"hex")`.
+The runtime/codegen for this already shipped with #1955 (both sync helpers
+return a NaN-boxed Buffer-or-string via `cp_read_output_mode`/`cp_box_output`),
+so #1958's runtime+codegen changes were superseded and dropped at merge; only
+the net-new test is kept. Matches Node byte-for-byte. Test authored by
+@andrewtdiz.
+
 ## v0.5.1031 — node:worker_threads getEnvironmentData/setEnvironmentData (#1951)
 
 Implement `worker_threads.getEnvironmentData(key)` / `setEnvironmentData(key,
