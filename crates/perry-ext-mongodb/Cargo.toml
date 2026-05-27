@@ -10,7 +10,7 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-mongodb = { version = "3.5", default-features = false, features = ["compat-3-0-0", "rustls-tls", "dns-resolver"] }
+mongodb = { version = "3.7", default-features = false, features = ["compat-3-0-0", "rustls-tls", "dns-resolver"] }
 bson = "2.9"
 tokio = { workspace = true }
 futures-util = "0.3"
