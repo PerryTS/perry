@@ -573,6 +573,17 @@ fn readable_lifecycle_flags_reflect_ended_state() {
 }
 
 #[test]
+fn readable_set_encoding_native_dispatch_returns_stream() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+
+    assert_eq!(
+        js_node_stream_method_set_encoding(handle, string_value("utf8")).to_bits(),
+        stream.to_bits()
+    );
+}
+
+#[test]
 fn writable_corked_counter_tracks_cork_balance() {
     let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;

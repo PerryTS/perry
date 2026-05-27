@@ -44,6 +44,9 @@ static KEEP_NS_METHOD_WRITABLE_FINISHED: extern "C" fn(i64) -> f64 =
 #[used]
 static KEEP_NS_METHOD_RESUME: extern "C" fn(i64) -> f64 = super::js_node_stream_method_resume;
 #[used]
+static KEEP_NS_METHOD_SET_ENCODING: extern "C" fn(i64, f64) -> f64 =
+    super::js_node_stream_method_set_encoding;
+#[used]
 static KEEP_NS_METHOD_DESTROY: extern "C" fn(i64, f64) -> f64 =
     super::js_node_stream_method_destroy;
 #[used]

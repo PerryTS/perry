@@ -440,12 +440,6 @@
     "category": "bug-open",
     "reason": "node:stream: writev() constructor option not invoked when corked + multi-write. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/method-chain/setEncoding-returns-this": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: setEncoding() should return `this` for chaining; Perry returns something else. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/constructor/without-new": {
     "issue": "1531",
     "added": "2026-05-23",

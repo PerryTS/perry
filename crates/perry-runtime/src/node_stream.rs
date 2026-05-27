@@ -530,6 +530,11 @@ pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64
 }
 
 #[no_mangle]
+pub extern "C" fn js_node_stream_method_set_encoding(stream_handle: i64, _encoding: f64) -> f64 {
+    stream_value_from_handle(stream_handle)
+}
+
+#[no_mangle]
 pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     mark_stream_ended(stream);
