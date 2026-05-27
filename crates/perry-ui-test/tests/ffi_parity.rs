@@ -83,7 +83,7 @@ fn check_platform(
     let mut missing = Vec::new();
     let mut expected_names: HashSet<String> = HashSet::new();
 
-    for f in FEATURES {
+    for f in FEATURES.iter() {
         let support = get_support(f);
         let expected = get_expected_name(f);
         expected_names.insert(expected.to_string());
