@@ -83,7 +83,8 @@ pub unsafe extern "C" fn js_native_call_method_value(
     // Non-string key: read the property value, then invoke it with `this`
     // bound to the receiver (the codegen `Expr::This` fallback reads
     // `IMPLICIT_THIS` when there's no lexical `this`).
-    let field = if crate::symbol::js_is_symbol(key) != 0 {
+    let is_symbol_key = crate::symbol::js_is_symbol(key) != 0;
+    let field = if is_symbol_key {
         crate::symbol::js_object_get_symbol_property(object, key)
     } else {
         crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, key)
@@ -92,6 +93,31 @@ pub unsafe extern "C" fn js_native_call_method_value(
     if fv.is_undefined() || fv.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+
+    // #321 (effect Context/Layer): a symbol-keyed method INHERITED via
+    // `Object.create(proto)` is stored under the *prototype's* identity, and
+    // object-literal computed-key methods bake their receiver into a reserved
+    // `this` capture slot at construction time (see
+    // `symbol.rs::js_object_set_symbol_method` /
+    // `dynamic_props.rs::clone_closure_rebind_this`). So when `o = Object.create(P)`
+    // resolves `o[SYM]()`, the closure we get back carries `this === P`, not
+    // `this === o`, and `IMPLICIT_THIS` alone can't override the baked-in slot.
+    // When the symbol method is NOT an OWN property of the receiver (i.e. it was
+    // inherited through the prototype chain), rebind its `this` slot to the
+    // receiver before invoking. `clone_closure_rebind_this` is a no-op for
+    // non-`captures_this` closures and for non-closure values, so own methods
+    // (whose slot is already the receiver), effect's Tag-class symbol *statics*
+    // (plain data values), and any closure that doesn't read `this` are all left
+    // untouched — keeping the #1758/#36/#321 closure-proto-chain paths intact.
+    let field = if is_symbol_key && crate::symbol::own_symbol_property(object, key).is_none() {
+        f64::from_bits(crate::closure::clone_closure_rebind_this(
+            field.to_bits(),
+            object,
+        ))
+    } else {
+        field
+    };
+
     let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
     let result = crate::closure::js_native_call_value(field, args_ptr, args_len);
     IMPLICIT_THIS.with(|c| c.set(prev_this));
