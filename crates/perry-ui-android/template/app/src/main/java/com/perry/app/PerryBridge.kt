@@ -1432,6 +1432,16 @@ object PerryBridge {
     @JvmStatic
     external fun nativeInvokeDeepLinkCallback(key: Long, url: String, source: String)
 
+    // Issue #1864: continuous keyboard events. Called from
+    // PerryActivity.dispatchKeyEvent on every key transition.
+    @JvmStatic
+    external fun nativeDispatchKey(
+        keyCode: Int,
+        action: Int,
+        metaState: Int,
+        repeatCount: Int,
+    )
+
     // =====================================================================
     // MapView (issue #517) — Google Maps SDK for Android.
     // =====================================================================

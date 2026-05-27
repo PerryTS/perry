@@ -1410,6 +1410,118 @@ export function addKeyboardShortcut(
     callback: () => void,
 ): void;
 
+// ---------------------------------------------------------------------------
+// Continuous keyboard events (issue #1864)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bitfield for keyboard modifier state. Shared with `addKeyboardShortcut` /
+ * `registerGlobalHotkey`. On Linux/Windows, `Cmd` maps to the Ctrl key.
+ *
+ * Use bitwise-or to combine: `Modifier.Cmd | Modifier.Shift`.
+ */
+export const enum Modifier {
+    None = 0,
+    Cmd = 1,
+    Shift = 2,
+    Alt = 4,
+    Ctrl = 8,
+}
+
+/**
+ * Canonical numeric key identifiers. Stable across releases. Values match the
+ * native `KeyCode` table in `perry-ui::keys` — the runtime passes the raw `u16`
+ * directly, so comparisons against `Key.*` compile to integer equality with
+ * zero string allocation per event.
+ *
+ * Letters are lowercase (`Key.A`/`Key.B`/…). Use `onTextInput` (future API)
+ * for IME-aware composed text — these `Key` values are *physical* keys.
+ */
+export const enum Key {
+    Unknown = 0,
+    A = 1, B = 2, C = 3, D = 4, E = 5, F = 6, G = 7, H = 8, I = 9, J = 10,
+    K = 11, L = 12, M = 13, N = 14, O = 15, P = 16, Q = 17, R = 18, S = 19,
+    T = 20, U = 21, V = 22, W = 23, X = 24, Y = 25, Z = 26,
+
+    Digit0 = 27, Digit1 = 28, Digit2 = 29, Digit3 = 30, Digit4 = 31,
+    Digit5 = 32, Digit6 = 33, Digit7 = 34, Digit8 = 35, Digit9 = 36,
+
+    F1 = 37, F2 = 38, F3 = 39, F4 = 40, F5 = 41, F6 = 42,
+    F7 = 43, F8 = 44, F9 = 45, F10 = 46, F11 = 47, F12 = 48,
+
+    ArrowUp = 49, ArrowDown = 50, ArrowLeft = 51, ArrowRight = 52,
+    Space = 53, Enter = 54, Tab = 55, Escape = 56,
+    Backspace = 57, Delete = 58,
+
+    Home = 59, End = 60, PageUp = 61, PageDown = 62, Insert = 63,
+
+    Minus = 64, Equal = 65, BracketLeft = 66, BracketRight = 67,
+    Backslash = 68, Semicolon = 69, Quote = 70, Comma = 71,
+    Period = 72, Slash = 73, Backquote = 74,
+
+    F13 = 75, F14 = 76, F15 = 77, F16 = 78,
+    F17 = 79, F18 = 80, F19 = 81, F20 = 82,
+
+    Numpad0 = 83, Numpad1 = 84, Numpad2 = 85, Numpad3 = 86, Numpad4 = 87,
+    Numpad5 = 88, Numpad6 = 89, Numpad7 = 90, Numpad8 = 91, Numpad9 = 92,
+    NumpadDecimal = 93, NumpadEnter = 94, NumpadAdd = 95, NumpadSubtract = 96,
+    NumpadMultiply = 97, NumpadDivide = 98, NumpadEqual = 99, NumpadClear = 100,
+}
+
+/**
+ * Subscribe to key-down events on a widget. Fires only while that widget owns
+ * logical focus (set via `focus(widget)`). Use `onAppKeyDown` for events that
+ * should fire regardless of which widget is focused.
+ *
+ * `repeat` is `true` when the OS auto-repeats the key while held. Filter it
+ * out for edge-only detection.
+ */
+export function onKeyDown(
+    widget: Widget,
+    handler: (key: Key, modifiers: number, repeat: boolean) => void,
+): void;
+
+/** Subscribe to key-up events on a widget. Same focus semantics as `onKeyDown`. */
+export function onKeyUp(
+    widget: Widget,
+    handler: (key: Key, modifiers: number) => void,
+): void;
+
+/**
+ * App-level key-down handler. Fires whenever no widget currently owns focus.
+ * Use this for games, modal HUDs, or any "I don't care which widget is
+ * focused" capture.
+ */
+export function onAppKeyDown(
+    handler: (key: Key, modifiers: number, repeat: boolean) => void,
+): void;
+
+/** App-level key-up handler. Same semantics as `onAppKeyDown`. */
+export function onAppKeyUp(
+    handler: (key: Key, modifiers: number) => void,
+): void;
+
+/** Route subsequent keyboard events to this widget. Pair with `style: { focusable: true }`. */
+export function focus(widget: Widget): void;
+
+/** Clear focus if `widget` currently owns it. */
+export function blur(widget: Widget): void;
+
+/**
+ * O(1), branchless poll. Returns `1` while `key` is currently held, `0`
+ * otherwise — use a truthy check: `if (isKeyDown(Key.Space)) { … }`.
+ */
+export function isKeyDown(key: Key): number;
+
+/**
+ * Snapshot of the currently-held modifier keys as a `Modifier` bitfield.
+ * Updated continuously by the OS — accurate even outside of a key event
+ * (e.g. while dragging the mouse with Shift held).
+ *
+ * Example: `if (currentModifiers() & Modifier.Shift) snapToGrid();`
+ */
+export function currentModifiers(): number;
+
 /**
  * Register a system-wide hotkey that fires even when the app is backgrounded.
  *

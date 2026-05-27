@@ -13,6 +13,7 @@ pub mod form;
 pub mod hstack;
 pub mod image;
 pub mod image_gallery;
+pub mod keyboard;
 pub mod lazyvstack;
 pub mod map_view;
 pub mod navstack;

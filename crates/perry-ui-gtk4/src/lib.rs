@@ -5,6 +5,7 @@ pub mod deeplinks_stub;
 pub mod dialog;
 pub mod file_dialog;
 pub mod issue_552_stub;
+pub mod keyboard;
 pub mod keychain;
 pub mod location;
 pub mod media_playback;

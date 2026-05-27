@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1288 entries across 81 modules
+// Coverage: 1296 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1472,6 +1472,8 @@ declare module "perry/ui" {
   /** stdlib */
   export function attributedTextClear(...args: any[]): any;
   /** stdlib */
+  export function blur(...args: any[]): any;
+  /** stdlib */
   export function bottomNavAddItem(...args: any[]): any;
   /** stdlib */
   export function bottomNavSetBadge(...args: any[]): any;
@@ -1486,7 +1488,11 @@ declare module "perry/ui" {
   /** stdlib */
   export function clipboardWrite(...args: any[]): any;
   /** stdlib */
+  export function currentModifiers(...args: any[]): any;
+  /** stdlib */
   export function embedNSView(...args: any[]): any;
+  /** stdlib */
+  export function focus(...args: any[]): any;
   /** stdlib */
   export function frameSplitAddChild(...args: any[]): any;
   /** stdlib */
@@ -1495,6 +1501,8 @@ declare module "perry/ui" {
   export function imageGalleryAddImage(...args: any[]): any;
   /** stdlib */
   export function imageGallerySetIndex(...args: any[]): any;
+  /** stdlib */
+  export function isKeyDown(...args: any[]): any;
   /** stdlib */
   export function lazyvstackEndRefreshing(...args: any[]): any;
   /** stdlib */
@@ -1523,6 +1531,14 @@ declare module "perry/ui" {
   export function menuCreate(...args: any[]): any;
   /** stdlib */
   export function onActivate(...args: any[]): any;
+  /** stdlib */
+  export function onAppKeyDown(...args: any[]): any;
+  /** stdlib */
+  export function onAppKeyUp(...args: any[]): any;
+  /** stdlib */
+  export function onKeyDown(...args: any[]): any;
+  /** stdlib */
+  export function onKeyUp(...args: any[]): any;
   /** stdlib */
   export function onTerminate(...args: any[]): any;
   /** stdlib */

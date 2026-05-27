@@ -21,6 +21,7 @@ pub mod geolocation;
 pub mod image_picker;
 pub mod jni_bridge;
 pub mod json;
+pub mod keyboard;
 pub mod keychain;
 pub mod location;
 pub mod media_playback;

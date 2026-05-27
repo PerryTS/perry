@@ -3441,6 +3441,144 @@ function perry_ui_alert(title, message, buttons, callback) {
 }
 
 // ---------- Keyboard ----------
+
+// Continuous keyboard events (issue #1864). Mirrors the macOS contract:
+// one document-level listener routes events to whichever widget owns
+// `__perryFocusedWidget`, with a `0`-keyed fallback for app-level handlers.
+//
+// `KeyboardEvent.code` is normalised to the same canonical names declared in
+// `perry-ui::keys` (lowercase letters, "ArrowLeft", "Space", …). Names not in
+// the canonical set are ignored — same behaviour as the native LUT.
+const __perryKeyDownCBs = new Map();
+const __perryKeyUpCBs = new Map();
+let __perryFocusedWidget = 0;
+let __perryAppKeyDownCB; // f64 callback
+let __perryAppKeyUpCB;
+const __perryHeldKeys = new Set();
+let __perryCurrentMods = 0;
+let __perryKbdInstalled = false;
+
+// `KeyboardEvent.code` → numeric `Key` enum value (matches perry-ui::keys).
+// Returns 0 (`Key.Unknown`) for codes outside the canonical set.
+function __perryCodeToKey(code) {
+  if (code.length === 4 && code.startsWith("Key")) {
+    const c = code.charCodeAt(3);
+    if (c >= 65 && c <= 90) return c - 64; // KeyA -> 1
+  }
+  if (code.length === 6 && code.startsWith("Digit")) {
+    const c = code.charCodeAt(5);
+    if (c >= 48 && c <= 57) return c - 21; // Digit0 -> 27
+  }
+  if (code.length >= 2 && code.charAt(0) === "F") {
+    const n = parseInt(code.slice(1), 10);
+    if (n >= 1 && n <= 12) return 36 + n;  // F1 -> 37
+    if (n >= 13 && n <= 20) return 62 + n; // F13 -> 75
+  }
+  if (code.length >= 6 && code.startsWith("Numpad")) {
+    const tail = code.slice(6);
+    if (tail.length === 1) {
+      const c = tail.charCodeAt(0);
+      if (c >= 48 && c <= 57) return 83 + (c - 48); // Numpad0 -> 83
+    }
+    switch (tail) {
+      case "Decimal": return 93;
+      case "Enter": return 94;
+      case "Add": return 95;
+      case "Subtract": return 96;
+      case "Multiply": return 97;
+      case "Divide": return 98;
+      case "Equal": return 99;
+      case "Clear": return 100;
+    }
+  }
+  switch (code) {
+    case "ArrowUp": return 49;
+    case "ArrowDown": return 50;
+    case "ArrowLeft": return 51;
+    case "ArrowRight": return 52;
+    case "Space": return 53;
+    case "Enter": case "NumpadEnter": return 54;
+    case "Tab": return 55;
+    case "Escape": return 56;
+    case "Backspace": return 57;
+    case "Delete": return 58;
+    case "Home": return 59;
+    case "End": return 60;
+    case "PageUp": return 61;
+    case "PageDown": return 62;
+    case "Insert": return 63;
+    case "Minus": return 64;
+    case "Equal": return 65;
+    case "BracketLeft": return 66;
+    case "BracketRight": return 67;
+    case "Backslash": return 68;
+    case "Semicolon": return 69;
+    case "Quote": return 70;
+    case "Comma": return 71;
+    case "Period": return 72;
+    case "Slash": return 73;
+    case "Backquote": return 74;
+    default: return 0;
+  }
+}
+function __perryEventMods(e) {
+  return (e.metaKey ? 1 : 0) | (e.shiftKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.ctrlKey ? 8 : 0);
+}
+function __perryEnsureKbdInstalled() {
+  if (__perryKbdInstalled) return;
+  __perryKbdInstalled = true;
+  // `keydown`/`keyup` update both held set and current modifier snapshot.
+  // The DOM gives us modifier state on every event including modifier-only
+  // presses (Shift down alone fires keydown with `Shift` code), so we don't
+  // need a separate `flagsChanged`-equivalent listener.
+  document.addEventListener("keydown", (e) => {
+    __perryCurrentMods = __perryEventMods(e);
+    const key = __perryCodeToKey(e.code);
+    if (!key) return;
+    __perryHeldKeys.add(key);
+    const cb = __perryKeyDownCBs.get(__perryFocusedWidget) ?? __perryAppKeyDownCB;
+    if (cb !== undefined) {
+      callWasmClosure(cb, key, __perryCurrentMods, e.repeat ? 1 : 0);
+    }
+  });
+  document.addEventListener("keyup", (e) => {
+    __perryCurrentMods = __perryEventMods(e);
+    const key = __perryCodeToKey(e.code);
+    if (!key) return;
+    __perryHeldKeys.delete(key);
+    const cb = __perryKeyUpCBs.get(__perryFocusedWidget) ?? __perryAppKeyUpCB;
+    if (cb !== undefined) {
+      callWasmClosure(cb, key, __perryCurrentMods);
+    }
+  });
+}
+function perry_ui_widget_set_on_key_down(handle, callback) {
+  __perryEnsureKbdInstalled();
+  __perryKeyDownCBs.set(Number(handle), callback);
+}
+function perry_ui_widget_set_on_key_up(handle, callback) {
+  __perryEnsureKbdInstalled();
+  __perryKeyUpCBs.set(Number(handle), callback);
+}
+function perry_ui_app_set_on_key_down(callback) {
+  __perryEnsureKbdInstalled();
+  __perryAppKeyDownCB = callback;
+}
+function perry_ui_app_set_on_key_up(callback) {
+  __perryEnsureKbdInstalled();
+  __perryAppKeyUpCB = callback;
+}
+function perry_ui_focus_widget(handle) { __perryFocusedWidget = Number(handle); }
+function perry_ui_blur_widget(handle) {
+  if (__perryFocusedWidget === Number(handle)) __perryFocusedWidget = 0;
+}
+function perry_ui_is_key_down(keyCode) {
+  return __perryHeldKeys.has(Number(keyCode)) ? 1 : 0;
+}
+function perry_ui_current_modifiers() {
+  return __perryCurrentMods;
+}
+
 function perry_ui_register_global_hotkey(_key, _modifiers, _callback) {
   // Global hotkeys require OS-level hook APIs not available in a browser context.
 }
@@ -3893,6 +4031,10 @@ const __perryUiDispatch = {
   perry_ui_open_file_dialog, perry_ui_open_folder_dialog, perry_ui_save_file_dialog, perry_ui_alert,
   // Keyboard
   perry_ui_register_global_hotkey, perry_ui_add_keyboard_shortcut,
+  perry_ui_widget_set_on_key_down, perry_ui_widget_set_on_key_up,
+  perry_ui_app_set_on_key_down, perry_ui_app_set_on_key_up,
+  perry_ui_focus_widget, perry_ui_blur_widget, perry_ui_is_key_down,
+  perry_ui_current_modifiers,
   // Sheet
   perry_ui_sheet_create, perry_ui_sheet_present, perry_ui_sheet_dismiss,
   // Toolbar

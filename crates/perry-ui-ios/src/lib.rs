@@ -8,6 +8,7 @@ pub mod deeplinks;
 pub mod file_dialog;
 pub mod geolocation;
 pub mod image_picker;
+pub mod keyboard;
 pub mod location;
 pub mod media_playback;
 pub mod menu;

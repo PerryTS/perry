@@ -85,6 +85,56 @@ pub extern "C" fn perry_ui_register_global_hotkey(key_ptr: i64, modifiers: f64, 
     app::register_global_hotkey(key_ptr as *const u8, modifiers, callback);
 }
 
+// Continuous keyboard events (issue #1864) — WM_KEY{DOWN,UP} impl.
+// On non-Windows hosts (cross-compile checks from macOS, etc.) the keyboard
+// module is `cfg`-gated out, so fall back to perry_ui::key_dispatch directly.
+
+#[cfg(target_os = "windows")]
+use crate::keyboard as kb;
+#[cfg(not(target_os = "windows"))]
+use perry_ui::key_dispatch as kb;
+
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_key_down(handle: i64, cb: f64) {
+    kb::set_on_key_down(handle, cb);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_key_up(handle: i64, cb: f64) {
+    kb::set_on_key_up(handle, cb);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_key_down(cb: f64) {
+    kb::set_on_key_down(0, cb);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_key_up(cb: f64) {
+    kb::set_on_key_up(0, cb);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_focus_widget(handle: i64) {
+    kb::focus_widget(handle);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_blur_widget(handle: i64) {
+    kb::blur_widget(handle);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_is_key_down(code: f64) -> i32 {
+    let raw = code as i32;
+    if !(0..=u16::MAX as i32).contains(&raw) {
+        return 0;
+    }
+    if kb::is_key_down(raw as u16) {
+        1
+    } else {
+        0
+    }
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_current_modifiers() -> i32 {
+    kb::current_modifiers() as i32
+}
+
 /// Get the icon for an application at the given path. Returns a widget handle or 0.
 #[no_mangle]
 pub extern "C" fn perry_system_get_app_icon(path_ptr: i64) -> i64 {

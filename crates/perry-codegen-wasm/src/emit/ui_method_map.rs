@@ -209,6 +209,16 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "clipboardWrite" => "perry_ui_clipboard_write",
         // Keyboard
         "addKeyboardShortcut" => "perry_ui_add_keyboard_shortcut",
+        "registerGlobalHotkey" => "perry_ui_register_global_hotkey",
+        // Continuous keyboard events (issue #1864)
+        "onKeyDown" => "perry_ui_widget_set_on_key_down",
+        "onKeyUp" => "perry_ui_widget_set_on_key_up",
+        "onAppKeyDown" => "perry_ui_app_set_on_key_down",
+        "onAppKeyUp" => "perry_ui_app_set_on_key_up",
+        "focus" => "perry_ui_focus_widget",
+        "blur" => "perry_ui_blur_widget",
+        "isKeyDown" => "perry_ui_is_key_down",
+        "currentModifiers" => "perry_ui_current_modifiers",
         // Sheet
         "sheetCreate" => "perry_ui_sheet_create",
         "sheetPresent" => "perry_ui_sheet_present",

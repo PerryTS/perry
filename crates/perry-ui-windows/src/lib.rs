@@ -4,6 +4,8 @@ pub mod deeplinks_stub;
 #[cfg(target_os = "windows")]
 pub mod dpi_compat;
 pub mod issue_552_stub;
+#[cfg(target_os = "windows")]
+pub mod keyboard;
 pub mod media_playback;
 pub mod network_stub;
 

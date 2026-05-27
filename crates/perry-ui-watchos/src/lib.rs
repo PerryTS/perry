@@ -717,6 +717,27 @@ pub extern "C" fn perry_ui_clipboard_write(_text: i64) {}
 pub extern "C" fn perry_ui_add_keyboard_shortcut(_key: i64, _mods: f64, _cb: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_register_global_hotkey(_key: i64, _mods: f64, _cb: f64) {}
+// Keyboard event stubs (issue #1864) — watchOS has no hardware keyboard surface.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_key_down(_handle: i64, _cb: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_key_up(_handle: i64, _cb: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_key_down(_cb: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_key_up(_cb: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_focus_widget(_handle: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_blur_widget(_handle: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_is_key_down(_code: f64) -> i32 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_current_modifiers() -> i32 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_system_get_app_icon(_path: i64) -> i64 {
     0

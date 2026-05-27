@@ -202,4 +202,23 @@ class PerryActivity : Activity() {
         PerryBridge.forwardMapsLifecycle("destroy")
         PerryBridge.nativeShutdown()
     }
+
+    // Issue #1864: continuous keyboard events. Forward every hardware key
+    // event to the native dispatcher BEFORE letting the system handle it,
+    // so onKeyDown/onKeyUp fire even for keys the app doesn't otherwise
+    // intercept. `super.dispatchKeyEvent` still runs so EditText / focus
+    // navigation keep working.
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        try {
+            PerryBridge.nativeDispatchKey(
+                event.keyCode,
+                event.action,
+                event.metaState,
+                event.repeatCount,
+            )
+        } catch (_: UnsatisfiedLinkError) {
+            // Native lib not loaded yet (key arrived during early startup).
+        }
+        return super.dispatchKeyEvent(event)
+    }
 }

@@ -274,6 +274,10 @@ pub fn app_run(_app_handle: i64) {
                 // Install keyboard shortcuts on this window
                 install_shortcuts_on_window(&window);
 
+                // Issue #1864: continuous onKeyDown/onKeyUp via a second
+                // EventControllerKey routed through the shared dispatcher.
+                crate::keyboard::install_on_window(&window);
+
                 // Enable the menu bar on this window before presenting it
                 if has_menubar {
                     window.set_show_menubar(true);

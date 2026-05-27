@@ -369,6 +369,9 @@ pub fn app_run(_app_handle: i64) {
     // Register PerryViewController (UIViewController + menu bar support)
     register_view_controller();
 
+    // Issue #1864: continuous keyboard event hooks (UIPress/UIKey).
+    crate::keyboard::install_view_controller_overrides();
+
     // Register UI function pointers for geisterhand dispatch
     #[cfg(feature = "geisterhand")]
     {

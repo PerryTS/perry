@@ -1675,6 +1675,116 @@ function perry_ui_alert(title, message, buttons, callback) {
     if (typeof callback === "function") callback(result ? 0 : 1);
 }
 
+// --- Continuous keyboard events (issue #1864) ---
+// Mirrors the native macOS contract: one document-level listener routes events
+// to whichever widget owns focus, with a `0`-keyed fallback for app-level
+// handlers. Names are normalised to perry-ui::keys canonical strings.
+const _perryKeyDownCBs = new Map();
+const _perryKeyUpCBs = new Map();
+let _perryFocusedWidget = 0;
+let _perryAppKeyDown = null;
+let _perryAppKeyUp = null;
+const _perryHeldKeys = new Set();
+let _perryCurrentMods = 0;
+let _perryKbdInstalled = false;
+function _perryCodeToKey(code) {
+    if (code.length === 4 && code.startsWith("Key")) {
+        const c = code.charCodeAt(3);
+        if (c >= 65 && c <= 90) return c - 64;
+    }
+    if (code.length === 6 && code.startsWith("Digit")) {
+        const c = code.charCodeAt(5);
+        if (c >= 48 && c <= 57) return c - 21;
+    }
+    if (code.length >= 2 && code.charAt(0) === "F") {
+        const n = parseInt(code.slice(1), 10);
+        if (n >= 1 && n <= 12) return 36 + n;
+        if (n >= 13 && n <= 20) return 62 + n;
+    }
+    if (code.length >= 6 && code.startsWith("Numpad")) {
+        const tail = code.slice(6);
+        if (tail.length === 1) {
+            const c = tail.charCodeAt(0);
+            if (c >= 48 && c <= 57) return 83 + (c - 48);
+        }
+        switch (tail) {
+            case "Decimal": return 93;
+            case "Enter": return 94;
+            case "Add": return 95;
+            case "Subtract": return 96;
+            case "Multiply": return 97;
+            case "Divide": return 98;
+            case "Equal": return 99;
+            case "Clear": return 100;
+        }
+    }
+    switch (code) {
+        case "ArrowUp": return 49;
+        case "ArrowDown": return 50;
+        case "ArrowLeft": return 51;
+        case "ArrowRight": return 52;
+        case "Space": return 53;
+        case "Enter": case "NumpadEnter": return 54;
+        case "Tab": return 55;
+        case "Escape": return 56;
+        case "Backspace": return 57;
+        case "Delete": return 58;
+        case "Home": return 59;
+        case "End": return 60;
+        case "PageUp": return 61;
+        case "PageDown": return 62;
+        case "Insert": return 63;
+        case "Minus": return 64;
+        case "Equal": return 65;
+        case "BracketLeft": return 66;
+        case "BracketRight": return 67;
+        case "Backslash": return 68;
+        case "Semicolon": return 69;
+        case "Quote": return 70;
+        case "Comma": return 71;
+        case "Period": return 72;
+        case "Slash": return 73;
+        case "Backquote": return 74;
+        default: return 0;
+    }
+}
+function _perryEventMods(e) {
+    return (e.metaKey?1:0) | (e.shiftKey?2:0) | (e.altKey?4:0) | (e.ctrlKey?8:0);
+}
+function _perryEnsureKbd() {
+    if (_perryKbdInstalled) return; _perryKbdInstalled = true;
+    document.addEventListener("keydown", (e) => {
+        _perryCurrentMods = _perryEventMods(e);
+        const key = _perryCodeToKey(e.code); if (!key) return;
+        _perryHeldKeys.add(key);
+        const cb = _perryKeyDownCBs.get(_perryFocusedWidget) || _perryAppKeyDown;
+        if (typeof cb === "function") cb(key, _perryCurrentMods, e.repeat);
+    });
+    document.addEventListener("keyup", (e) => {
+        _perryCurrentMods = _perryEventMods(e);
+        const key = _perryCodeToKey(e.code); if (!key) return;
+        _perryHeldKeys.delete(key);
+        const cb = _perryKeyUpCBs.get(_perryFocusedWidget) || _perryAppKeyUp;
+        if (typeof cb === "function") cb(key, _perryCurrentMods);
+    });
+}
+function perry_ui_widget_set_on_key_down(handle, cb) {
+    _perryEnsureKbd();
+    _perryKeyDownCBs.set(Number(handle), cb);
+}
+function perry_ui_widget_set_on_key_up(handle, cb) {
+    _perryEnsureKbd();
+    _perryKeyUpCBs.set(Number(handle), cb);
+}
+function perry_ui_app_set_on_key_down(cb) { _perryEnsureKbd(); _perryAppKeyDown = cb; }
+function perry_ui_app_set_on_key_up(cb) { _perryEnsureKbd(); _perryAppKeyUp = cb; }
+function perry_ui_focus_widget(handle) { _perryFocusedWidget = Number(handle); }
+function perry_ui_blur_widget(handle) {
+    if (_perryFocusedWidget === Number(handle)) _perryFocusedWidget = 0;
+}
+function perry_ui_is_key_down(keyCode) { return _perryHeldKeys.has(Number(keyCode)) ? 1 : 0; }
+function perry_ui_current_modifiers() { return _perryCurrentMods; }
+
 // --- Keyboard Shortcuts ---
 function perry_ui_add_keyboard_shortcut(key, modifiers, callback) {
     if (typeof callback !== "function") return;
@@ -3553,6 +3663,14 @@ window.__perry = {
     perry_ui_alert,
     // Keyboard
     perry_ui_add_keyboard_shortcut,
+    perry_ui_widget_set_on_key_down,
+    perry_ui_widget_set_on_key_up,
+    perry_ui_app_set_on_key_down,
+    perry_ui_app_set_on_key_up,
+    perry_ui_focus_widget,
+    perry_ui_blur_widget,
+    perry_ui_is_key_down,
+    perry_ui_current_modifiers,
     // Sheets
     perry_ui_sheet_create,
     perry_ui_sheet_present,

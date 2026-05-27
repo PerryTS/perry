@@ -66,6 +66,22 @@ use Support::*;
 const S: Support = Supported;
 const U: Support = Unsupported;
 
+/// Compact constructor for features that are `Supported` on every platform.
+/// Keeps the matrix readable when adding entries with identical support rows.
+const fn full(name: &'static str, category: Category) -> Feature {
+    Feature {
+        name,
+        category,
+        macos: S,
+        ios: S,
+        android: S,
+        gtk4: S,
+        windows: S,
+        web: S,
+        web_name: None,
+    }
+}
+
 /// Complete feature matrix. Every `perry_ui_*` / `perry_system_*` function across
 /// all platforms is listed here. The macOS naming convention is canonical.
 ///
@@ -1157,6 +1173,15 @@ pub const FEATURES: &[Feature] = &[
         web: U,
         web_name: None,
     },
+    // Continuous keyboard events (issue #1864). Real impl on every platform.
+    full("perry_ui_widget_set_on_key_down", Events),
+    full("perry_ui_widget_set_on_key_up", Events),
+    full("perry_ui_app_set_on_key_down", Events),
+    full("perry_ui_app_set_on_key_up", Events),
+    full("perry_ui_focus_widget", Events),
+    full("perry_ui_blur_widget", Events),
+    full("perry_ui_is_key_down", Events),
+    full("perry_ui_current_modifiers", Events),
     // ── Animation ────────────────────────────────────────────────────────
     Feature {
         name: "perry_ui_widget_animate_opacity",

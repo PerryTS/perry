@@ -6,6 +6,7 @@ pub mod crash_log;
 pub mod deeplinks_stub;
 pub mod file_dialog;
 pub mod issue_552_stub;
+pub mod keyboard;
 pub mod location;
 pub mod media_playback;
 pub mod menu;

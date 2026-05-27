@@ -522,6 +522,12 @@ pub fn app_run(_app_handle: i64) {
     // Register PerryViewController (UIViewController + menu bar support)
     register_view_controller();
 
+    // Issue #1864: install continuous keyboard event hooks
+    // (`pressesBegan:`/`pressesEnded:`/`canBecomeFirstResponder`) on the
+    // PerryViewController class. The first onKeyDown/onKeyUp registration
+    // also calls `make_first_responder` so events actually route here.
+    crate::keyboard::install_view_controller_overrides();
+
     // Register UI function pointers for geisterhand dispatch
     #[cfg(feature = "geisterhand")]
     {

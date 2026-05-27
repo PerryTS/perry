@@ -1657,6 +1657,63 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Str, ArgKind::F64, ArgKind::Closure],
         ret: ReturnKind::Void,
     },
+    // ---- Continuous keyboard events (issue #1864) ----
+    // Widget-scoped: fires only while `widget` owns logical focus.
+    MethodRow {
+        method: "onKeyDown",
+        runtime: "perry_ui_widget_set_on_key_down",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "onKeyUp",
+        runtime: "perry_ui_widget_set_on_key_up",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    // App-level fallback: fires when no widget currently owns focus.
+    MethodRow {
+        method: "onAppKeyDown",
+        runtime: "perry_ui_app_set_on_key_down",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "onAppKeyUp",
+        runtime: "perry_ui_app_set_on_key_up",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    // Programmatic focus management (paired with `style: { focusable: true }`
+    // on widgets that are not naturally focusable, e.g. Canvas / VStack).
+    MethodRow {
+        method: "focus",
+        runtime: "perry_ui_focus_widget",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "blur",
+        runtime: "perry_ui_blur_widget",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
+    // Branchless poll for `isKeyDown(Key.ArrowLeft)`. Returns 0/1 as a JS number.
+    // Argument is the numeric `Key` enum value — no string round-trip.
+    MethodRow {
+        method: "isKeyDown",
+        runtime: "perry_ui_is_key_down",
+        args: &[ArgKind::F64],
+        ret: ReturnKind::I64AsF64,
+    },
+    // Snapshot of the current modifier bitfield. Accurate outside of any
+    // key event — answers "is Shift held *right now*" while drawing, etc.
+    MethodRow {
+        method: "currentModifiers",
+        runtime: "perry_ui_current_modifiers",
+        args: &[],
+        ret: ReturnKind::I64AsF64,
+    },
     // ---- App lifecycle hooks ----
     MethodRow {
         method: "onTerminate",

@@ -430,6 +430,21 @@ pub fn app_run(app_handle: i64) {
                         continue;
                     }
                 }
+                // Issue #1864: continuous onKeyDown/onKeyUp dispatch.
+                // Runs after the shortcut check so a menu hotkey still wins.
+                if msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN {
+                    crate::keyboard::dispatch_message(
+                        msg.wParam.0 as u16,
+                        msg.lParam.0 as isize,
+                        true,
+                    );
+                } else if msg.message == WM_KEYUP || msg.message == WM_SYSKEYUP {
+                    crate::keyboard::dispatch_message(
+                        msg.wParam.0 as u16,
+                        msg.lParam.0 as isize,
+                        false,
+                    );
+                }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
                 // Process setTimeout/setInterval callbacks outside wndproc to avoid re-entrancy

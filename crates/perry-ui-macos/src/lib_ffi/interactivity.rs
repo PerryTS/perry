@@ -154,6 +154,71 @@ pub extern "C" fn perry_ui_tray_destroy(tray_handle: i64) {
     tray::destroy(tray_handle);
 }
 
+// =============================================================================
+// Keyboard events (issue #1864) — widget-level onKeyDown / onKeyUp + focus
+// =============================================================================
+
+/// Subscribe to physical key-down events on a widget. Fires only while the
+/// widget owns logical focus (`perry_ui_focus_widget`). For app-level capture
+/// use `perry_ui_app_set_on_key_down`.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_key_down(handle: i64, callback: f64) {
+    widgets::keyboard::set_on_key_down(handle, callback);
+}
+
+/// Subscribe to physical key-up events on a widget.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_key_up(handle: i64, callback: f64) {
+    widgets::keyboard::set_on_key_up(handle, callback);
+}
+
+/// App-level key-down fallback. Fires when no widget owns focus.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_key_down(callback: f64) {
+    widgets::keyboard::set_on_key_down(0, callback);
+}
+
+/// App-level key-up fallback. Fires when no widget owns focus.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_key_up(callback: f64) {
+    widgets::keyboard::set_on_key_up(0, callback);
+}
+
+/// Route subsequent keyboard events to this widget's handlers.
+#[no_mangle]
+pub extern "C" fn perry_ui_focus_widget(handle: i64) {
+    widgets::keyboard::focus_widget(handle);
+}
+
+/// Clear focus if `handle` is the current focus owner.
+#[no_mangle]
+pub extern "C" fn perry_ui_blur_widget(handle: i64) {
+    widgets::keyboard::blur_widget(handle);
+}
+
+/// Returns `1` if the given `Key` enum value is currently held. Returns `0`
+/// otherwise — including for `Key.Unknown` (0) and out-of-range codes.
+#[no_mangle]
+pub extern "C" fn perry_ui_is_key_down(code: f64) -> i32 {
+    let raw = code as i32;
+    if !(0..=u16::MAX as i32).contains(&raw) {
+        return 0;
+    }
+    if widgets::keyboard::is_key_down(raw as u16) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Snapshot of the current modifier bitfield (1=Cmd, 2=Shift, 4=Alt, 8=Ctrl).
+/// Accurate even when no key event is firing — updated continuously by the
+/// NSEvent monitor on `flagsChanged`.
+#[no_mangle]
+pub extern "C" fn perry_ui_current_modifiers() -> i32 {
+    widgets::keyboard::current_modifiers() as i32
+}
+
 /// Open a file dialog. Calls callback with selected path or undefined if cancelled.
 #[no_mangle]
 pub extern "C" fn perry_ui_open_file_dialog(callback: f64) {
