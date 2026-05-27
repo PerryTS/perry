@@ -21,8 +21,9 @@
 
 use perry_runtime::{
     js_array_alloc, js_array_length, js_array_push_f64, js_closure_call0, js_closure_call1,
-    js_nanbox_pointer, js_nanbox_string, js_object_alloc, js_promise_new, js_promise_resolve,
-    js_string_from_bytes, ArrayHeader, ClosureHeader, Promise, StringHeader,
+    js_nanbox_get_pointer, js_nanbox_pointer, js_nanbox_string, js_object_alloc,
+    js_object_get_field_by_name, js_promise_new, js_promise_resolve, js_string_from_bytes,
+    ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader,
 };
 use std::collections::HashMap;
 
@@ -67,6 +68,9 @@ pub struct EventEmitterHandle {
     /// when the count exceeds it — `getMaxListeners()` just reads back
     /// whatever was written.
     max_listeners: i32,
+    /// Constructor-level `{ captureRejections: true }` flag. When enabled,
+    /// rejected promises returned from listeners are routed to `"error"`.
+    capture_rejections: bool,
 }
 
 // SAFETY: `*mut Promise` is not Send/Sync by default, but the runtime
@@ -129,6 +133,7 @@ impl EventEmitterHandle {
             // Node's default is 10. We mirror it so `getMaxListeners()`
             // on a fresh emitter returns 10 (matching Node).
             max_listeners: 10,
+            capture_rejections: false,
         }
     }
 
@@ -191,12 +196,39 @@ unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
     Some(String::from_utf8_lossy(bytes).to_string())
 }
 
+unsafe fn event_emitter_options_capture_rejections(options: f64) -> bool {
+    if !JSValue::from_bits(options.to_bits()).is_pointer() {
+        return false;
+    }
+    let options_obj = js_nanbox_get_pointer(options) as *const ObjectHeader;
+    if options_obj.is_null() || (options_obj as usize) < 0x100000 {
+        return false;
+    }
+    let gc_header = (options_obj as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
+        as *const perry_runtime::gc::GcHeader;
+    if (*gc_header).obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
+        return false;
+    }
+    let key = b"captureRejections";
+    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let value = js_object_get_field_by_name(options_obj, key_ptr);
+    perry_runtime::value::js_is_truthy(f64::from_bits(value.bits())) != 0
+}
+
 /// Create a new EventEmitter
 /// Returns a handle (i64) to the emitter
 #[no_mangle]
 pub extern "C" fn js_event_emitter_new() -> Handle {
     ensure_gc_scanner_registered();
     register_handle(EventEmitterHandle::new())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_new_with_options(options: f64) -> Handle {
+    ensure_gc_scanner_registered();
+    let mut emitter = EventEmitterHandle::new();
+    emitter.capture_rejections = event_emitter_options_capture_rejections(options);
+    register_handle(emitter)
 }
 
 /// EventEmitter.on(eventName, listener) — also serves as `addListener`.
@@ -319,6 +351,37 @@ unsafe fn first_arg_or_undefined(args_ptr: *const ArrayHeader) -> f64 {
 
 const TAG_UNDEFINED_F64_BITS: u64 = 0x7FFC_0000_0000_0001;
 
+extern "C" fn events_capture_rejection_handler(closure: *const ClosureHeader, reason: f64) -> f64 {
+    use perry_runtime::closure::js_closure_get_capture_ptr;
+
+    let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
+    if handle != 0 {
+        let event_name = b"error";
+        let event_str = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
+        let mut args = js_array_alloc(0);
+        args = js_array_push_f64(args, reason);
+        unsafe {
+            js_event_emitter_emit(handle, event_str, args);
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED_F64_BITS)
+}
+
+unsafe fn capture_listener_rejection(handle: Handle, result: f64) {
+    use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+
+    if perry_runtime::promise::js_value_is_promise(result) == 0 {
+        return;
+    }
+    let promise = js_nanbox_get_pointer(result) as *mut Promise;
+    if promise.is_null() {
+        return;
+    }
+    let on_rejected = js_closure_alloc(events_capture_rejection_handler as *const u8, 1);
+    js_closure_set_capture_ptr(on_rejected, 0, handle);
+    perry_runtime::promise::js_promise_then(promise, std::ptr::null(), on_rejected);
+}
+
 /// EventEmitter.emit(eventName, ...args)
 /// Emit an event with variadic arguments packed into an ArrayHeader.
 /// Returns true if there were listeners, false otherwise.
@@ -361,10 +424,14 @@ pub unsafe extern "C" fn js_event_emitter_emit(
         drain_pending_once_promises(emitter, &event_name, args_ptr);
 
         let first_arg = first_arg_or_undefined(args_ptr);
+        let capture_rejections = emitter.capture_rejections && event_name != "error";
         for l in snapshot {
             if l.callback != 0 {
                 let closure_ptr = l.callback as *const ClosureHeader;
-                js_closure_call1(closure_ptr, first_arg);
+                let result = js_closure_call1(closure_ptr, first_arg);
+                if capture_rejections {
+                    capture_listener_rejection(handle, result);
+                }
             }
         }
     }
@@ -405,10 +472,14 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
         }
         drain_pending_once_promises(emitter, &event_name, empty_args);
 
+        let capture_rejections = emitter.capture_rejections && event_name != "error";
         for l in snapshot {
             if l.callback != 0 {
                 let closure_ptr = l.callback as *const ClosureHeader;
-                js_closure_call0(closure_ptr);
+                let result = js_closure_call0(closure_ptr);
+                if capture_rejections {
+                    capture_listener_rejection(handle, result);
+                }
             }
         }
     }
