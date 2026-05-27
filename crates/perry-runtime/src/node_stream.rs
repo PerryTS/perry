@@ -319,6 +319,15 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64) {
     }
 }
 
+fn normalize_writable_write_encoding(chunk: f64, enc: f64) -> f64 {
+    let raw = raw_ptr_from_value(chunk);
+    if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
+        string_value(b"buffer")
+    } else {
+        enc
+    }
+}
+
 #[cold]
 fn throw_writable_null_chunk() -> ! {
     let msg = b"May not write null values to stream";
@@ -332,6 +341,7 @@ fn write_writable_chunk(stream: f64, chunk: f64, enc: f64) -> f64 {
     if JSValue::from_bits(chunk.to_bits()).is_null() {
         throw_writable_null_chunk();
     }
+    let enc = normalize_writable_write_encoding(chunk, enc);
     if writable_corked_count(stream) > 0.0 {
         buffer_writable_write(stream, chunk, enc);
         return f64::from_bits(TAG_TRUE);

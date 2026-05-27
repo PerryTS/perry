@@ -6,6 +6,7 @@ use std::cell::RefCell;
 
 thread_local! {
     static WRITE_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    static WRITE_ENCODING_IS_BUFFER: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static READABLE_DATA_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     static READABLE_THIS_MATCHES: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static READABLE_END_COUNT: RefCell<usize> = const { RefCell::new(0) };
@@ -35,6 +36,24 @@ extern "C" fn write_capture(_closure: *const ClosureHeader, chunk: f64, _enc: f6
     let readable = js_node_stream_readable_from(chunk);
     let bytes = js_node_stream_collect_bytes(readable);
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().push(bytes));
+    unsafe {
+        let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn write_capture_encoding(
+    _closure: *const ClosureHeader,
+    chunk: f64,
+    enc: f64,
+    cb: f64,
+) -> f64 {
+    let readable = js_node_stream_readable_from(chunk);
+    let bytes = js_node_stream_collect_bytes(readable);
+    WRITE_CAPTURED.with(|captured| captured.borrow_mut().push(bytes));
+    WRITE_ENCODING_IS_BUFFER.with(|encodings| {
+        encodings.borrow_mut().push(string_value_eq(enc, b"buffer"));
+    });
     unsafe {
         let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
     }
@@ -153,6 +172,31 @@ fn writable_options_write_callback_is_invoked_by_stub_write() {
 
     WRITE_CAPTURED.with(|captured| {
         assert_eq!(captured.borrow().as_slice(), &[b"chunk".to_vec()]);
+    });
+}
+
+#[test]
+fn writable_buffer_write_passes_buffer_encoding() {
+    WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    WRITE_ENCODING_IS_BUFFER.with(|encodings| encodings.borrow_mut().clear());
+    let opts = crate::object::js_object_alloc(0, 1);
+    let closure = js_closure_alloc(write_capture_encoding as *const u8, 0);
+    crate::closure::js_register_closure_arity(write_capture_encoding as *const u8, 3);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
+    );
+
+    let writable = js_node_stream_writable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(writable) as i64;
+    let _ = js_node_stream_method_write(handle, buffer_value(b"hi"), f64::from_bits(TAG_UNDEFINED));
+
+    WRITE_CAPTURED.with(|captured| {
+        assert_eq!(captured.borrow().as_slice(), &[b"hi".to_vec()]);
+    });
+    WRITE_ENCODING_IS_BUFFER.with(|encodings| {
+        assert_eq!(encodings.borrow().as_slice(), &[true]);
     });
 }
 
