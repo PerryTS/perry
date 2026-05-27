@@ -45,6 +45,31 @@ pub(crate) unsafe fn dispatch_native_module_method(
             std::ptr::null()
         }
     };
+    let require_path_str_ptr = |n: usize| -> *const crate::StringHeader {
+        if n < args_len {
+            let v = arg(n);
+            let ptr = crate::string::js_string_materialize_to_heap(v);
+            if !ptr.is_null() {
+                return ptr;
+            }
+        }
+        crate::path::throw_invalid_path_arg_type()
+    };
+    let optional_path_str_ptr = |n: usize| -> *const crate::StringHeader {
+        if n >= args_len {
+            return std::ptr::null();
+        }
+        let v = arg(n);
+        let jsv = JSValue::from_bits(v.to_bits());
+        if jsv.is_undefined() {
+            return std::ptr::null();
+        }
+        let ptr = crate::string::js_string_materialize_to_heap(v);
+        if !ptr.is_null() {
+            return ptr;
+        }
+        crate::path::throw_invalid_path_arg_type()
+    };
 
     // Helper: convert i32 boolean to NaN-boxed TAG_TRUE / TAG_FALSE
     let bool_to_f64 = |v: i32| -> f64 {
@@ -58,6 +83,70 @@ pub(crate) unsafe fn dispatch_native_module_method(
     // Helper: convert *mut StringHeader to NaN-boxed string f64
     let str_to_f64 =
         |ptr: *mut crate::StringHeader| -> f64 { f64::from_bits(JSValue::string_ptr(ptr).bits()) };
+    let path_join_value = |win32: bool| -> f64 {
+        if args_len == 0 {
+            let result = if win32 {
+                crate::path::js_path_win32_join_unchecked(std::ptr::null(), std::ptr::null())
+            } else {
+                crate::path::js_path_join_unchecked(std::ptr::null(), std::ptr::null())
+            };
+            return str_to_f64(result);
+        }
+        let first = require_path_str_ptr(0);
+        let mut result = if win32 {
+            crate::path::js_path_win32_join_unchecked(first, std::ptr::null())
+        } else {
+            crate::path::js_path_join_unchecked(first, std::ptr::null())
+        };
+        for i in 1..args_len {
+            let segment = require_path_str_ptr(i);
+            result = if win32 {
+                crate::path::js_path_win32_join_unchecked(result, segment)
+            } else {
+                crate::path::js_path_join_unchecked(result, segment)
+            };
+        }
+        str_to_f64(result)
+    };
+    let path_resolve_value = |win32: bool| -> f64 {
+        let mut result = if args_len == 0 {
+            if win32 {
+                crate::path::js_path_win32_join_unchecked(std::ptr::null(), std::ptr::null())
+            } else {
+                crate::path::js_path_join_unchecked(std::ptr::null(), std::ptr::null())
+            }
+        } else {
+            require_path_str_ptr(0) as *mut crate::StringHeader
+        };
+        for i in 1..args_len {
+            let segment = require_path_str_ptr(i);
+            result = if win32 {
+                crate::path::js_path_win32_resolve_join(result, segment)
+            } else {
+                crate::path::js_path_resolve_join(result, segment)
+            };
+        }
+        if win32 {
+            str_to_f64(crate::path::js_path_win32_resolve(result))
+        } else {
+            str_to_f64(crate::path::js_path_resolve(result))
+        }
+    };
+    let path_basename_value = |win32: bool| -> f64 {
+        let path = require_path_str_ptr(0);
+        let ext = optional_path_str_ptr(1);
+        if win32 {
+            if ext.is_null() {
+                str_to_f64(crate::path::js_path_win32_basename(path))
+            } else {
+                str_to_f64(crate::path::js_path_win32_basename_ext(path, ext))
+            }
+        } else if ext.is_null() {
+            str_to_f64(crate::path::js_path_basename(path))
+        } else {
+            str_to_f64(crate::path::js_path_basename_ext(path, ext))
+        }
+    };
     let pack_args = || -> *mut crate::array::ArrayHeader {
         let mut arr = crate::array::js_array_alloc(args_len as u32);
         for i in 0..args_len {
@@ -587,12 +676,14 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
 
         // ── path module (args are NaN-boxed strings → extract raw StringHeader ptr) ──
-        ("path", "dirname") => str_to_f64(crate::path::js_path_dirname(arg_str_ptr(0))),
-        ("path", "basename") => str_to_f64(crate::path::js_path_basename(arg_str_ptr(0))),
-        ("path", "extname") => str_to_f64(crate::path::js_path_extname(arg_str_ptr(0))),
-        ("path", "resolve") => str_to_f64(crate::path::js_path_resolve(arg_str_ptr(0))),
-        ("path", "join") => str_to_f64(crate::path::js_path_join(arg_str_ptr(0), arg_str_ptr(1))),
-        ("path", "isAbsolute") => bool_to_f64(crate::path::js_path_is_absolute(arg_str_ptr(0))),
+        ("path", "dirname") => str_to_f64(crate::path::js_path_dirname(require_path_str_ptr(0))),
+        ("path", "basename") => path_basename_value(false),
+        ("path", "extname") => str_to_f64(crate::path::js_path_extname(require_path_str_ptr(0))),
+        ("path", "resolve") => path_resolve_value(false),
+        ("path", "join") => path_join_value(false),
+        ("path", "isAbsolute") => {
+            bool_to_f64(crate::path::js_path_is_absolute(require_path_str_ptr(0)))
+        }
 
         // #1740: dynamic sub-namespace method dispatch — `path[k].method(...)`
         // where `k` resolves to "win32"/"posix" at runtime. `path[k].sep`
@@ -602,68 +693,65 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // posix routes to the base `js_path_*` family (POSIX `/` semantics),
         // mirroring how the static `path.win32.X()` / `path.posix.X()` forms
         // lower in codegen.
-        ("path.win32", "dirname") => str_to_f64(crate::path::js_path_win32_dirname(arg_str_ptr(0))),
-        ("path.win32", "basename") if args_len >= 2 => str_to_f64(
-            crate::path::js_path_win32_basename_ext(arg_str_ptr(0), arg_str_ptr(1)),
-        ),
-        ("path.win32", "basename") => {
-            str_to_f64(crate::path::js_path_win32_basename(arg_str_ptr(0)))
+        ("path.win32", "dirname") => {
+            str_to_f64(crate::path::js_path_win32_dirname(require_path_str_ptr(0)))
         }
-        ("path.win32", "extname") => str_to_f64(crate::path::js_path_win32_extname(arg_str_ptr(0))),
-        ("path.win32", "normalize") => {
-            str_to_f64(crate::path::js_path_win32_normalize(arg_str_ptr(0)))
+        ("path.win32", "basename") => path_basename_value(true),
+        ("path.win32", "extname") => {
+            str_to_f64(crate::path::js_path_win32_extname(require_path_str_ptr(0)))
         }
-        ("path.win32", "resolve") => str_to_f64(crate::path::js_path_win32_resolve(arg_str_ptr(0))),
-        ("path.win32", "join") => str_to_f64(crate::path::js_path_win32_join(
-            arg_str_ptr(0),
-            arg_str_ptr(1),
+        ("path.win32", "normalize") => str_to_f64(crate::path::js_path_win32_normalize(
+            require_path_str_ptr(0),
         )),
+        ("path.win32", "resolve") => path_resolve_value(true),
+        ("path.win32", "join") => path_join_value(true),
         ("path.win32", "relative") => str_to_f64(crate::path::js_path_win32_relative(
-            arg_str_ptr(0),
-            arg_str_ptr(1),
+            require_path_str_ptr(0),
+            require_path_str_ptr(1),
         )),
         ("path.win32", "toNamespacedPath") => str_to_f64(
             crate::path::js_path_win32_to_namespaced_path(arg_str_ptr(0)),
         ),
-        ("path.win32", "isAbsolute") => {
-            bool_to_f64(crate::path::js_path_win32_is_absolute(arg_str_ptr(0)))
-        }
+        ("path.win32", "isAbsolute") => bool_to_f64(crate::path::js_path_win32_is_absolute(
+            require_path_str_ptr(0),
+        )),
         ("path.win32", "matchesGlob") => bool_to_f64(crate::path::js_path_win32_matches_glob(
-            arg_str_ptr(0),
-            arg_str_ptr(1),
+            require_path_str_ptr(0),
+            require_path_str_ptr(1),
         )),
         ("path.win32", "parse") => {
-            ptr_to_f64(crate::path::js_path_win32_parse(arg_str_ptr(0)) as *const u8)
+            ptr_to_f64(crate::path::js_path_win32_parse(require_path_str_ptr(0)) as *const u8)
         }
         ("path.win32", "format") => str_to_f64(crate::path::js_path_win32_format(arg(0))),
 
-        ("path.posix", "dirname") => str_to_f64(crate::path::js_path_dirname(arg_str_ptr(0))),
-        ("path.posix", "basename") if args_len >= 2 => str_to_f64(
-            crate::path::js_path_basename_ext(arg_str_ptr(0), arg_str_ptr(1)),
-        ),
-        ("path.posix", "basename") => str_to_f64(crate::path::js_path_basename(arg_str_ptr(0))),
-        ("path.posix", "extname") => str_to_f64(crate::path::js_path_extname(arg_str_ptr(0))),
-        ("path.posix", "normalize") => str_to_f64(crate::path::js_path_normalize(arg_str_ptr(0))),
-        ("path.posix", "resolve") => str_to_f64(crate::path::js_path_resolve(arg_str_ptr(0))),
-        ("path.posix", "join") => {
-            str_to_f64(crate::path::js_path_join(arg_str_ptr(0), arg_str_ptr(1)))
+        ("path.posix", "dirname") => {
+            str_to_f64(crate::path::js_path_dirname(require_path_str_ptr(0)))
         }
+        ("path.posix", "basename") => path_basename_value(false),
+        ("path.posix", "extname") => {
+            str_to_f64(crate::path::js_path_extname(require_path_str_ptr(0)))
+        }
+        ("path.posix", "normalize") => {
+            str_to_f64(crate::path::js_path_normalize(require_path_str_ptr(0)))
+        }
+        ("path.posix", "resolve") => path_resolve_value(false),
+        ("path.posix", "join") => path_join_value(false),
         ("path.posix", "relative") => str_to_f64(crate::path::js_path_relative(
-            arg_str_ptr(0),
-            arg_str_ptr(1),
+            require_path_str_ptr(0),
+            require_path_str_ptr(1),
         )),
         ("path.posix", "toNamespacedPath") => {
             str_to_f64(crate::path::js_path_to_namespaced_path(arg_str_ptr(0)))
         }
         ("path.posix", "isAbsolute") => {
-            bool_to_f64(crate::path::js_path_is_absolute(arg_str_ptr(0)))
+            bool_to_f64(crate::path::js_path_is_absolute(require_path_str_ptr(0)))
         }
         ("path.posix", "matchesGlob") => bool_to_f64(crate::path::js_path_matches_glob(
-            arg_str_ptr(0),
-            arg_str_ptr(1),
+            require_path_str_ptr(0),
+            require_path_str_ptr(1),
         )),
         ("path.posix", "parse") => {
-            ptr_to_f64(crate::path::js_path_parse(arg_str_ptr(0)) as *const u8)
+            ptr_to_f64(crate::path::js_path_parse(require_path_str_ptr(0)) as *const u8)
         }
         ("path.posix", "format") => str_to_f64(crate::path::js_path_format(arg(0))),
 
