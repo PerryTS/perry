@@ -164,6 +164,12 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
         return buffer_alloc(0);
     }
 
+    // ArrayBuffer / SharedArrayBuffer inputs create a Buffer view over the
+    // same backing storage. TypedArray and Buffer inputs still copy below.
+    if is_any_array_buffer(ptr) {
+        return js_buffer_from_arraybuffer_slice(value, 0, -1);
+    }
+
     // Check if it's a buffer (copy it)
     if is_registered_buffer(ptr) {
         let src = ptr as *const BufferHeader;
@@ -241,10 +247,12 @@ pub extern "C" fn js_buffer_from_array(arr_ptr: *const ArrayHeader) -> *mut Buff
     }
 }
 
-/// `Buffer.from(arrayBuffer, byteOffset, length?)` — deterministic subset.
-/// Perry currently models ArrayBuffer storage as a BufferHeader; this returns
-/// a copied Buffer for the requested byte range. Shared backing-store views
-/// remain a separate larger parity task.
+/// `Buffer.from(arrayBuffer, byteOffset, length?)`.
+///
+/// Perry models ArrayBuffer and SharedArrayBuffer storage as BufferHeader
+/// allocations. Node returns a Buffer view over that storage, not a detached
+/// copy, so this mirrors the selected byte window into a fresh BufferHeader
+/// and registers it with the shared view registry used by slice/subarray.
 #[no_mangle]
 pub extern "C" fn js_buffer_from_arraybuffer_slice(
     value_bits: i64,
@@ -270,8 +278,10 @@ pub extern "C" fn js_buffer_from_arraybuffer_slice(
         } else {
             length.max(0).min(available)
         };
-        let dst = buffer_alloc(take as u32);
-        (*dst).length = take as u32;
+        let take = take as u32;
+        let start = start as u32;
+        let dst = buffer_alloc(take);
+        (*dst).length = take;
         if take > 0 {
             ptr::copy_nonoverlapping(
                 buffer_data(src).add(start as usize),
@@ -279,6 +289,8 @@ pub extern "C" fn js_buffer_from_arraybuffer_slice(
                 take as usize,
             );
         }
+        super::view::register(dst as usize, raw, start, take);
+        set_buffer_ab_alias(dst as usize, resolve_buffer_ab_alias(raw));
         dst
     }
 }
@@ -526,6 +538,12 @@ pub extern "C" fn js_buffer_fill_range(
         }
         let data = buffer_data_mut(buf);
         ptr::write_bytes(data.add(start), value as u8, end - start);
+        super::view::propagate_written_range_from_receiver(
+            buf as usize,
+            start as u32,
+            data.add(start),
+            (end - start) as u32,
+        );
     }
     buf
 }

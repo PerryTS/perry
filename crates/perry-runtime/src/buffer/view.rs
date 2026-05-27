@@ -185,3 +185,30 @@ pub(crate) unsafe fn propagate_range_to_views(
         std::ptr::copy_nonoverlapping(src.add(src_off), view_data.add(view_off), bytes);
     });
 }
+
+/// Mirror a just-written byte range from `receiver_ptr` into the ultimate
+/// backing buffer and every other registered view. `local_offset` is relative
+/// to the receiver's own visible window.
+pub(crate) unsafe fn propagate_written_range_from_receiver(
+    receiver_ptr: usize,
+    local_offset: u32,
+    src: *const u8,
+    len: u32,
+) {
+    if len == 0 || src.is_null() {
+        return;
+    }
+    if let Some(info) = lookup(receiver_ptr) {
+        let back_offset = info.offset + local_offset;
+        let backing_ptr = info.backing as *mut BufferHeader;
+        if backing_ptr.is_null() || back_offset >= (*backing_ptr).length {
+            return;
+        }
+        let bounded_len = len.min((*backing_ptr).length - back_offset);
+        let backing_data = buffer_data_mut(backing_ptr).add(back_offset as usize);
+        std::ptr::copy_nonoverlapping(src, backing_data, bounded_len as usize);
+        propagate_range_to_views(info.backing, back_offset, src, bounded_len, receiver_ptr);
+    } else {
+        propagate_range_to_views(receiver_ptr, local_offset, src, len, receiver_ptr);
+    }
+}

@@ -39,6 +39,7 @@ pub extern "C" fn js_buffer_fill_random(buf_ptr: f64) -> f64 {
         let data = buffer_data_mut(buf);
         let bytes = std::slice::from_raw_parts_mut(data, len);
         rand::thread_rng().fill_bytes(bytes);
+        super::view::propagate_written_range_from_receiver(buf as usize, 0, data, len as u32);
     }
     buf_ptr
 }
@@ -61,6 +62,7 @@ pub extern "C" fn js_buffer_swap16(buf_ptr: f64) {
             *data.add(i) = *data.add(i + 1);
             *data.add(i + 1) = a;
         }
+        super::view::propagate_written_range_from_receiver(buf as usize, 0, data, len as u32);
     }
 }
 
@@ -87,6 +89,7 @@ pub extern "C" fn js_buffer_swap32(buf_ptr: f64) {
             *data.add(i + 2) = b1;
             *data.add(i + 3) = b0;
         }
+        super::view::propagate_written_range_from_receiver(buf as usize, 0, data, len as u32);
     }
 }
 
@@ -110,5 +113,6 @@ pub extern "C" fn js_buffer_swap64(buf_ptr: f64) {
                 *data.add(i + 7 - j) = a;
             }
         }
+        super::view::propagate_written_range_from_receiver(buf as usize, 0, data, len as u32);
     }
 }

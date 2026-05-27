@@ -27,6 +27,9 @@ pub(super) fn static_receiver_class(
             return match ident.sym.as_ref() {
                 "Date" => Some("Date"),
                 "URL" => Some("URL"),
+                "Buffer" => Some("Buffer"),
+                "Uint8Array" => Some("Uint8Array"),
+                "Uint8ClampedArray" => Some("Uint8ClampedArray"),
                 _ => None,
             };
         }
@@ -71,6 +74,9 @@ pub(super) fn static_receiver_class(
                 return match n.as_str() {
                     "Date" => Some("Date"),
                     "URL" => Some("URL"),
+                    "Buffer" => Some("Buffer"),
+                    "Uint8Array" => Some("Uint8Array"),
+                    "Uint8ClampedArray" => Some("Uint8ClampedArray"),
                     _ => None,
                 };
             }

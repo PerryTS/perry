@@ -104,6 +104,12 @@ pub extern "C" fn js_buffer_set_from(
         let target_data = buffer_data_mut(target);
         let source_data = buffer_data(source);
         ptr::copy_nonoverlapping(source_data, target_data.add(off), source_len);
+        super::view::propagate_written_range_from_receiver(
+            target as usize,
+            off as u32,
+            target_data.add(off),
+            source_len as u32,
+        );
     }
 }
 
