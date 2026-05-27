@@ -788,18 +788,6 @@
     "category": "bug-open",
     "reason": "node:stream: read() on a destroyed Readable should return null. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/writable/end-idempotent": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: second end() call should be a no-op. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/writable/end-null-chunk": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: end() with no args does not fire finish event. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/writable/write-empty-string": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -1208,12 +1196,6 @@
     "category": "bug-open",
     "reason": "node:stream: read() after end — does not consistently return null. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/writable/end-twice-noop": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: end() called twice — second call fires duplicate 'finish' or errors. Flips to PASS when #1539 lands."
-  },
   "node-suite/stream/readable/iterate-after-toarray": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -1303,12 +1285,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: r[Symbol.asyncIterator]().next() — direct call doesn't yield correct {value, done} shape. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/writable/end-three-arg": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: end(chunk, encoding, callback) 3-arg form — cb does not fire after finish. Flips to PASS when #1539 lands."
   },
   "node-suite/stream/iter-helpers/reduce-no-initial": {
     "issue": "1558",
