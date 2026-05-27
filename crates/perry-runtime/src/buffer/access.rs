@@ -1,5 +1,171 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum BufferSetSource {
+    Buffer(*const BufferHeader),
+    TypedArray(*const crate::typedarray::TypedArrayHeader),
+    Array(*const ArrayHeader),
+    Object(*const crate::object::ObjectHeader),
+    Empty,
+}
+
+#[inline]
+fn js_value_to_number(value: f64) -> f64 {
+    crate::value::JSValue::from_bits(value.to_bits()).to_number()
+}
+
+#[inline]
+fn to_integer_or_zero(value: f64) -> i64 {
+    let number = js_value_to_number(value);
+    if number.is_nan() {
+        0
+    } else if number == f64::INFINITY {
+        i64::MAX
+    } else if number == f64::NEG_INFINITY {
+        i64::MIN
+    } else {
+        number.trunc() as i64
+    }
+}
+
+#[inline]
+fn to_uint8(value: f64) -> u8 {
+    let number = js_value_to_number(value);
+    if !number.is_finite() || number == 0.0 {
+        return 0;
+    }
+    (number.trunc() as i64).rem_euclid(256) as u8
+}
+
+#[inline]
+fn pointer_addr_from_value(value: f64) -> Option<usize> {
+    let bits = value.to_bits();
+    let top16 = bits >> 48;
+    if top16 == 0x7FFD {
+        return Some((bits & crate::value::POINTER_MASK) as usize);
+    }
+
+    // A few runtime paths pass heap pointers as raw f64 bit patterns. Only
+    // accept those when a dedicated registry can prove the address is binary
+    // data; object/array fallback requires the normal POINTER_TAG form.
+    if top16 == 0 {
+        let addr = bits as usize;
+        if crate::buffer::is_registered_buffer(addr)
+            || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        {
+            return Some(addr);
+        }
+    }
+
+    None
+}
+
+#[inline]
+fn gc_type_at(addr: usize) -> Option<u8> {
+    if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    if !crate::object::is_valid_obj_ptr(addr as *const u8) {
+        return None;
+    }
+    unsafe {
+        let header =
+            (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        Some((*header).obj_type)
+    }
+}
+
+fn decode_buffer_set_source(value: f64) -> BufferSetSource {
+    let js_value = crate::value::JSValue::from_bits(value.to_bits());
+    if js_value.is_null() || js_value.is_undefined() {
+        crate::node_submodules::diagnostics::throw_type_error_no_code(
+            b"Cannot convert undefined or null to object",
+        );
+    }
+
+    let Some(addr) = pointer_addr_from_value(value) else {
+        return BufferSetSource::Empty;
+    };
+
+    if crate::buffer::is_registered_buffer(addr) {
+        return BufferSetSource::Buffer(addr as *const BufferHeader);
+    }
+
+    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+        return BufferSetSource::TypedArray(addr as *const crate::typedarray::TypedArrayHeader);
+    }
+
+    match gc_type_at(addr) {
+        Some(crate::gc::GC_TYPE_ARRAY) => BufferSetSource::Array(addr as *const ArrayHeader),
+        Some(crate::gc::GC_TYPE_OBJECT) => {
+            BufferSetSource::Object(addr as *const crate::object::ObjectHeader)
+        }
+        _ => BufferSetSource::Empty,
+    }
+}
+
+unsafe fn array_like_object_length(obj: *const crate::object::ObjectHeader) -> usize {
+    let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let value = crate::object::js_object_get_field_by_name(obj, key);
+    let number = value.to_number();
+    if !number.is_finite() || number <= 0.0 {
+        0
+    } else {
+        number.floor() as usize
+    }
+}
+
+unsafe fn buffer_set_source_len(source: BufferSetSource) -> usize {
+    match source {
+        BufferSetSource::Buffer(ptr) => {
+            if ptr.is_null() {
+                0
+            } else {
+                (*ptr).length as usize
+            }
+        }
+        BufferSetSource::TypedArray(ptr) => {
+            crate::typedarray::js_typed_array_length(ptr).max(0) as usize
+        }
+        BufferSetSource::Array(ptr) => crate::array::js_array_length(ptr) as usize,
+        BufferSetSource::Object(ptr) => array_like_object_length(ptr),
+        BufferSetSource::Empty => 0,
+    }
+}
+
+unsafe fn collect_buffer_set_bytes(source: BufferSetSource, source_len: usize) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(source_len);
+    match source {
+        BufferSetSource::Buffer(ptr) => {
+            for i in 0..source_len {
+                bytes.push(js_buffer_get(ptr, i as i32) as u8);
+            }
+        }
+        BufferSetSource::TypedArray(ptr) => {
+            for i in 0..source_len {
+                bytes.push(to_uint8(crate::typedarray::js_typed_array_get(
+                    ptr, i as i32,
+                )));
+            }
+        }
+        BufferSetSource::Array(ptr) => {
+            for i in 0..source_len {
+                bytes.push(to_uint8(crate::array::js_array_get_f64(ptr, i as u32)));
+            }
+        }
+        BufferSetSource::Object(ptr) => {
+            for i in 0..source_len {
+                let key = i.to_string();
+                let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+                let value = crate::object::js_object_get_field_by_name(ptr, key_ptr);
+                bytes.push(to_uint8(f64::from_bits(value.bits())));
+            }
+        }
+        BufferSetSource::Empty => {}
+    }
+    bytes
+}
+
 /// Get a byte at the specified index
 #[no_mangle]
 pub extern "C" fn js_buffer_get(buf_ptr: *const BufferHeader, index: i32) -> i32 {
@@ -94,23 +260,66 @@ pub extern "C" fn js_buffer_set_from(
     if target.is_null() || source.is_null() {
         return;
     }
+    let source_value = f64::from_bits(crate::value::JSValue::pointer(source as *const u8).bits());
+    js_buffer_set_from_value(target, source_value, offset as f64);
+}
+
+/// Copy array-like or typed-array bytes into a Buffer/Uint8Array receiver.
+/// Implements the Uint8Array.prototype.set(source, offset) behavior used by
+/// Buffer instances and BufferHeader-backed Uint8Array values.
+#[no_mangle]
+pub extern "C" fn js_buffer_set_from_value(
+    target: *mut BufferHeader,
+    source_value: f64,
+    offset_value: f64,
+) -> f64 {
+    if target.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+
+    let target = {
+        let bits = target as u64;
+        if (bits >> 48) >= 0x7FF8 {
+            (bits & crate::value::POINTER_MASK) as *mut BufferHeader
+        } else {
+            target
+        }
+    };
+    if target.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+
+    let offset = to_integer_or_zero(offset_value);
+    let source = decode_buffer_set_source(source_value);
+
     unsafe {
         let target_len = (*target).length as usize;
-        let source_len = (*source).length as usize;
-        let off = offset as usize;
-        if off + source_len > target_len {
-            return;
-        } // Would overflow
-        let target_data = buffer_data_mut(target);
-        let source_data = buffer_data(source);
-        ptr::copy_nonoverlapping(source_data, target_data.add(off), source_len);
-        super::view::propagate_written_range_from_receiver(
-            target as usize,
-            off as u32,
-            target_data.add(off),
-            source_len as u32,
-        );
+        let source_len = buffer_set_source_len(source);
+        if offset < 0 {
+            super::numeric::throw_out_of_range();
+        }
+        let offset = offset as usize;
+        if offset
+            .checked_add(source_len)
+            .map_or(true, |end| end > target_len)
+        {
+            super::numeric::throw_out_of_range();
+        }
+
+        let bytes = collect_buffer_set_bytes(source, source_len);
+        if !bytes.is_empty() {
+            let target_data = buffer_data_mut(target).add(offset);
+            ptr::copy_nonoverlapping(bytes.as_ptr(), target_data, bytes.len());
+            super::view::propagate_written_range_from_receiver(
+                target as usize,
+                offset as u32,
+                target_data,
+                bytes.len() as u32,
+            );
+        }
     }
+
+    f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// Create a slice of a buffer.  Issue #1205: the returned buffer is

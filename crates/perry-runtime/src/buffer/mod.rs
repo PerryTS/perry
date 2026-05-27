@@ -56,7 +56,9 @@ pub use encode::{
 };
 
 // ---- Re-exports: indexed access / slice / Uint8Array.set ----
-pub use access::{js_buffer_get, js_buffer_set, js_buffer_set_from, js_buffer_slice};
+pub use access::{
+    js_buffer_get, js_buffer_set, js_buffer_set_from, js_buffer_set_from_value, js_buffer_slice,
+};
 
 // ---- Re-exports: copy / write ----
 pub use copy_write::{js_buffer_copy, js_buffer_write, js_buffer_write_len};

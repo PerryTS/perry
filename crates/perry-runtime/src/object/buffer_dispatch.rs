@@ -24,6 +24,7 @@ pub fn is_buffer_method_name(name: &str) -> bool {
         "toString"
             | "slice"
             | "subarray"
+            | "set"
             | "copy"
             | "write"
             | "toJSON"
@@ -297,6 +298,13 @@ pub unsafe fn dispatch_buffer_method(
             let end = if args.len() >= 2 { arg_i32(1) } else { len };
             let result = crate::buffer::js_buffer_slice(buf_ptr, start, end);
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
+        }
+        "set" => {
+            let source = args
+                .first()
+                .copied()
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+            crate::buffer::js_buffer_set_from_value(buf_ptr, source, arg_or_zero(1))
         }
         // Issue #1206: explicit iterator-protocol surface. Each helper
         // returns a Buffer-iterator object whose `.next()` is dispatched
