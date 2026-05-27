@@ -229,6 +229,16 @@ fn stream_methods_dispatch_through_dynamic_method_call() {
 }
 
 #[test]
+fn readable_pipe_stub_returns_destination_and_rejects_missing_destination() {
+    let dest = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
+
+    assert_eq!(ns_pipe1(std::ptr::null(), dest).to_bits(), dest.to_bits());
+    assert!(pipe_destination_is_missing(f64::from_bits(TAG_UNDEFINED)));
+    assert!(pipe_destination_is_missing(f64::from_bits(TAG_NULL)));
+    assert!(!pipe_destination_is_missing(dest));
+}
+
+#[test]
 fn writable_cork_and_uncork_update_counter_and_return_undefined() {
     let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;

@@ -280,9 +280,25 @@ fn chunk_byte_len(chunk: f64) -> usize {
     1
 }
 extern "C" fn ns_pipe1(_closure: *const ClosureHeader, dest: f64) -> f64 {
+    if pipe_destination_is_missing(dest) {
+        throw_readable_pipe_missing_destination();
+    }
     // Node's `Readable.pipe(dest)` returns `dest` to allow `r.pipe(a).pipe(b)`.
     dest
 }
+
+fn pipe_destination_is_missing(dest: f64) -> bool {
+    let value = JSValue::from_bits(dest.to_bits());
+    value.is_undefined() || value.is_null()
+}
+
+#[cold]
+fn throw_readable_pipe_missing_destination() -> ! {
+    crate::node_submodules::diagnostics::throw_type_error_no_code(
+        b"Cannot read properties of undefined (reading 'on')",
+    )
+}
+
 extern "C" fn writable_write_callback_noop(_closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
