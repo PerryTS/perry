@@ -26,6 +26,7 @@ mod alloc;
 mod assert;
 mod bigint_dispatch;
 mod buffer_dispatch;
+mod class_gc_roots;
 mod class_registry;
 mod delete_rest;
 mod field_get_set;
@@ -42,6 +43,13 @@ pub use alloc::*;
 pub use assert::*;
 pub(crate) use bigint_dispatch::*;
 pub use buffer_dispatch::*;
+pub use class_gc_roots::scan_class_inheritance_roots_mut;
+#[cfg(test)]
+pub(crate) use class_gc_roots::{
+    test_class_parent_closure_root, test_class_prototype_object_root,
+    test_clear_class_inheritance_roots, test_seed_class_inheritance_roots,
+    test_seed_class_parent_closure_root,
+};
 pub use class_registry::*;
 pub use delete_rest::*;
 pub use field_get_set::*;
