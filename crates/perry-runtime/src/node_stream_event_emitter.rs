@@ -211,13 +211,26 @@ fn add_stream_listener_for_event_with_options(
     once: bool,
     prepend: bool,
 ) {
-    if event_identity_bytes(event).is_none() || !is_callable_value(cb) {
+    if event_identity_bytes(event).is_none() {
         return;
+    }
+    if !is_callable_value(cb) {
+        throw_invalid_listener_type();
     }
     add_stream_listener(stream, event, cb, once, prepend);
     if super::string_value_eq(event, b"data") {
         super::schedule_readable_from_drain(stream);
     }
+}
+
+#[cold]
+fn throw_invalid_listener_type() -> ! {
+    let msg = b"The \"listener\" argument must be of type function";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code(s, "ERR_INVALID_ARG_TYPE");
+    let err = crate::error::js_typeerror_new(s);
+    let bits = JSValue::pointer(err as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(bits))
 }
 
 fn string_bytes(value: f64) -> Option<Vec<u8>> {

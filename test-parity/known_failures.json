@@ -2462,12 +2462,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: ReadableStream.from(customIterable) — value or done wrong. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/events/on-non-function-throws": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: on(event, non-function) — does not throw TypeError as expected. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/iterator-empty-after-consumed": {
     "issue": "1531",
     "added": "2026-05-24",
