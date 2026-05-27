@@ -2500,6 +2500,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Core stream instance stubs used by stream/promises and the
     // Readable/Writable/Duplex/Transform/PassThrough constructor surface.
     method("stream", "read", true, None),
+    method("stream", "pause", true, None),
     method("stream", "resume", true, None),
     method("stream", "destroy", true, None),
     method("stream", "write", true, None),

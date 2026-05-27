@@ -539,6 +539,11 @@ pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_node_stream_method_pause(stream_handle: i64) -> f64 {
+    stream_value_from_handle(stream_handle)
+}
+
+#[no_mangle]
 pub extern "C" fn js_node_stream_method_write(stream_handle: i64, chunk: f64, enc: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     write_writable_chunk(stream, chunk, enc)

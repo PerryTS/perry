@@ -686,6 +686,17 @@ fn stream_destroy_with_error_marks_errored_state() {
 }
 
 #[test]
+fn readable_pause_native_dispatch_returns_stream() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+
+    assert_eq!(
+        js_node_stream_method_pause(handle).to_bits(),
+        stream.to_bits()
+    );
+}
+
+#[test]
 fn readable_aborted_reflects_destroy_before_end() {
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
