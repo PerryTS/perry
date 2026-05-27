@@ -37,6 +37,36 @@ fn bool_to_js(value: bool) -> f64 {
     }
 }
 
+fn throw_max_listeners_out_of_range() -> ! {
+    static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
+    REGISTER_RANGE_ERROR.call_once(|| {
+        perry_runtime::object::js_register_class_extends_error(
+            perry_runtime::error::CLASS_ID_RANGE_ERROR,
+        );
+    });
+
+    let obj = js_object_alloc(perry_runtime::error::CLASS_ID_RANGE_ERROR, 4);
+    let string_value = |bytes: &[u8]| -> f64 {
+        let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        js_nanbox_string(ptr as i64)
+    };
+    let set = |key: &[u8], value: f64| {
+        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        perry_runtime::js_object_set_field_by_name(obj, key_ptr, value);
+    };
+    set(b"name", string_value(b"RangeError"));
+    set(b"code", string_value(b"ERR_OUT_OF_RANGE"));
+    set(b"message", string_value(b"The value is out of range"));
+    perry_runtime::exception::js_throw(js_nanbox_pointer(obj as i64))
+}
+
+#[inline]
+fn validate_max_listeners(n: f64) {
+    if n.is_nan() || n < 0.0 {
+        throw_max_listeners_out_of_range();
+    }
+}
+
 use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
 
 /// One registered listener: a raw closure pointer (i64 to satisfy
@@ -66,7 +96,7 @@ pub struct EventEmitterHandle {
     /// `setMaxListeners` ceiling. Node's default is 10 but we don't warn
     /// when the count exceeds it — `getMaxListeners()` just reads back
     /// whatever was written.
-    max_listeners: i32,
+    max_listeners: f64,
 }
 
 // SAFETY: `*mut Promise` is not Send/Sync by default, but the runtime
@@ -128,7 +158,7 @@ impl EventEmitterHandle {
             pending_once_promises: HashMap::new(),
             // Node's default is 10. We mirror it so `getMaxListeners()`
             // on a fresh emitter returns 10 (matching Node).
-            max_listeners: 10,
+            max_listeners: 10.0,
         }
     }
 
@@ -517,8 +547,9 @@ pub unsafe extern "C" fn js_event_emitter_listener_count(
 /// EventEmitter.setMaxListeners(n).
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_set_max_listeners(handle: Handle, n: f64) -> Handle {
+    validate_max_listeners(n);
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        emitter.max_listeners = n as i32;
+        emitter.max_listeners = n;
     }
     handle
 }
@@ -527,7 +558,7 @@ pub unsafe extern "C" fn js_event_emitter_set_max_listeners(handle: Handle, n: f
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_get_max_listeners(handle: Handle) -> f64 {
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        return emitter.max_listeners as f64;
+        return emitter.max_listeners;
     }
     // Node's default for a stranger emitter is 10.
     10.0
@@ -743,6 +774,7 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
     n: f64,
     handles_ptr: *const ArrayHeader,
 ) -> f64 {
+    validate_max_listeners(n);
     if !handles_ptr.is_null() {
         let len = js_array_length(handles_ptr);
         for i in 0..len {
@@ -755,7 +787,7 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
                 handle
             };
             if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-                emitter.max_listeners = n as i32;
+                emitter.max_listeners = n;
             }
         }
     }
