@@ -1394,12 +1394,6 @@
     "category": "bug-open",
     "reason": "node:stream/promises: pipeline with signal does not reject on abort. Flips to PASS when #1533 lands."
   },
-  "node-suite/stream/web/strategies-imported": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: CountQueuingStrategy / ByteLengthQueuingStrategy not exported from node:stream/web. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/pipe/returns-destination": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1532,12 +1526,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(Set) — values not iterated in insertion order. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/writable-stream-no-args": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: new WritableStream() (no sink) — constructor or write() misbehaves. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/pipe/pipe-multiple-destinations": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1579,12 +1567,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: r.compose(t1).compose(t2) — chained compose() returns Duplex but pipeline breaks. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/web/writable-stream-strategy-only": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: WritableStream(undefined, strategy) — second-arg-only constructor form fails. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/readable/read-in-readable-listener": {
     "issue": "1532",
@@ -1789,12 +1771,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: unshift(Buffer) — explicit Buffer not properly added to front of buffer queue. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/web/writable-empty-object-sink": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: new WritableStream({}) — empty-sink writes don't silently succeed. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/web/desired-size-restores-after-drain": {
     "issue": "1545",
