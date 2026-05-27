@@ -556,7 +556,11 @@ unsafe fn run_connection_query(
                 }
             });
         match outcome {
-            Ok(out) => promise.resolve(outcome_to_jsvalue(&out)),
+            // #1824: build the JS result on the MAIN thread. outcome_to_jsvalue
+            // allocates arrays/objects/strings, which is UB on this blocking-pool
+            // thread (worker thread-local arena → dangling on the main thread once
+            // the pooled thread idles out). `out` is plain Send Rust data.
+            Ok(out) => promise.resolve_with(move || outcome_to_jsvalue(&out)),
             Err(e) => promise.reject_string(&e),
         }
     });
@@ -749,7 +753,11 @@ unsafe fn run_pool_query(pool_handle: Handle, sql_ptr: *const u8, params_f: f64)
                 }
             });
         match outcome {
-            Ok(out) => promise.resolve(outcome_to_jsvalue(&out)),
+            // #1824: build the JS result on the MAIN thread. outcome_to_jsvalue
+            // allocates arrays/objects/strings, which is UB on this blocking-pool
+            // thread (worker thread-local arena → dangling on the main thread once
+            // the pooled thread idles out). `out` is plain Send Rust data.
+            Ok(out) => promise.resolve_with(move || outcome_to_jsvalue(&out)),
             Err(e) => promise.reject_string(&e),
         }
     });
@@ -867,7 +875,11 @@ unsafe fn run_pool_conn_query(
                 }
             });
         match outcome {
-            Ok(out) => promise.resolve(outcome_to_jsvalue(&out)),
+            // #1824: build the JS result on the MAIN thread. outcome_to_jsvalue
+            // allocates arrays/objects/strings, which is UB on this blocking-pool
+            // thread (worker thread-local arena → dangling on the main thread once
+            // the pooled thread idles out). `out` is plain Send Rust data.
+            Ok(out) => promise.resolve_with(move || outcome_to_jsvalue(&out)),
             Err(e) => promise.reject_string(&e),
         }
     });

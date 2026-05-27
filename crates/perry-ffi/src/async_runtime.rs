@@ -37,6 +37,15 @@ extern "C" {
     fn perry_ffi_promise_new() -> *mut Promise;
     fn perry_ffi_promise_resolve_bits(promise: *mut Promise, bits: u64);
     fn perry_ffi_promise_reject_bits(promise: *mut Promise, bits: u64);
+    // Resolve by running `invoke(ctx)` on the MAIN thread (during the
+    // resolution pump) to produce the result bits. For results that require
+    // constructing JSValues (objects/arrays/strings) — which is UB on a
+    // blocking-pool thread. See `JsPromise::resolve_with`.
+    fn perry_ffi_promise_resolve_deferred(
+        promise: *mut Promise,
+        ctx: *mut c_void,
+        invoke: extern "C" fn(*mut c_void) -> u64,
+    );
     fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void));
     fn perry_ffi_spawn_blocking_with_reactor(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void));
 }
@@ -137,6 +146,40 @@ impl JsPromise {
     /// or returning objects / arrays.
     pub fn resolve(self, value: crate::JsValue) {
         unsafe { perry_ffi_promise_resolve_bits(self.0, value.bits()) };
+    }
+
+    /// Resolve by building the result JSValue on the **main thread**.
+    ///
+    /// `spawn_blocking` closures run on a tokio blocking-pool thread, where
+    /// perry-runtime's thread-local arena makes constructing JSValues
+    /// (objects / arrays / hand-built strings) undefined behaviour — the
+    /// objects land in a worker arena that is freed when the pooled thread
+    /// idles out, leaving the main thread with dangling pointers (issue
+    /// #1824). Bindings that return complex values (DB row sets, parsed
+    /// payloads, …) must therefore defer the JS construction: do the Rust
+    /// work on the worker, then hand a `Send` closure here. It runs once, on
+    /// the main thread, during the resolution pump.
+    ///
+    /// `f` must be `Send` (it crosses to the main thread) and `'static`.
+    pub fn resolve_with<F>(self, f: F)
+    where
+        F: FnOnce() -> crate::JsValue + Send + 'static,
+    {
+        // Box twice for a thin pointer across the FFI boundary, mirroring
+        // `spawn_blocking`. The trampoline runs the closure on the main
+        // thread and returns the NaN-boxed result bits.
+        let boxed: Box<dyn FnOnce() -> u64 + Send> = Box::new(move || f().bits());
+        let thin: Box<Box<dyn FnOnce() -> u64 + Send>> = Box::new(boxed);
+        let ctx = Box::into_raw(thin) as *mut c_void;
+
+        extern "C" fn invoke(ctx: *mut c_void) -> u64 {
+            let thin: Box<Box<dyn FnOnce() -> u64 + Send>> =
+                unsafe { Box::from_raw(ctx as *mut Box<dyn FnOnce() -> u64 + Send>) };
+            let f: Box<dyn FnOnce() -> u64 + Send> = *thin;
+            f()
+        }
+
+        unsafe { perry_ffi_promise_resolve_deferred(self.0, ctx, invoke) };
     }
 
     /// Reject with an arbitrary [`crate::JsValue`]. Mirror of

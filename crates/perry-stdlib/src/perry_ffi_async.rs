@@ -68,6 +68,32 @@ pub extern "C" fn perry_ffi_promise_reject_bits(promise: *mut perry_runtime::Pro
     async_bridge::queue_promise_resolution(promise as usize, false, bits);
 }
 
+/// `perry_ffi_promise_resolve_deferred(promise, ctx, invoke)` — resolve the
+/// promise by running `invoke(ctx)` on the MAIN thread during the resolution
+/// pump (`js_stdlib_process_pending`), using its return value as the result
+/// bits. This is the safe path for native bindings that need to *construct*
+/// JSValues (objects/arrays/strings) for the result: doing that on a tokio
+/// blocking-pool thread allocates from a worker thread-local arena that is
+/// freed when the pooled thread idles out, leaving dangling objects on the
+/// main thread (issue #1824). The worker keeps the JS-building closure boxed
+/// (carrying only `Send` Rust data) and this defers its execution to the main
+/// thread via the existing deferred-resolution queue. perry-ffi's
+/// `JsPromise::resolve_with` builds the `ctx`/`invoke` pair.
+#[no_mangle]
+pub extern "C" fn perry_ffi_promise_resolve_deferred(
+    promise: *mut perry_runtime::Promise,
+    ctx: *mut std::ffi::c_void,
+    invoke: extern "C" fn(*mut std::ffi::c_void) -> u64,
+) {
+    // `ctx` is a raw pointer (not Send); carry it as usize into the converter
+    // closure, which runs on the main thread where `invoke` decodes + runs the
+    // boxed JS-builder and returns the NaN-boxed result bits.
+    let ctx_addr = ctx as usize;
+    async_bridge::queue_deferred_resolution(promise as usize, true, move || {
+        invoke(ctx_addr as *mut std::ffi::c_void)
+    });
+}
+
 /// `perry_ffi_spawn_blocking(ctx, invoke)` — run `invoke(ctx)` on
 /// the global tokio runtime's blocking pool. The caller is expected
 /// to box a closure into `ctx` before calling, and write a thin
