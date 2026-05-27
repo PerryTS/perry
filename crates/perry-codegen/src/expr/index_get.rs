@@ -409,6 +409,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
             }
             if is_width_tracked_typed_array_receiver(ctx, object) {
+                // #2063: a key that isn't provably a number — a method-name
+                // string (`ta["copyWithin"]`, `ta[m]` where m iterates method
+                // names), a numeric string (`ta["2"]`), or any non-numeric /
+                // unknown-typed key — must NOT take the integer-indexed element
+                // fast path below. That path blindly `fptosi`s the key; a
+                // NaN-boxed string coerces to 0, so `ta["copyWithin"]`/`ta[m]`
+                // returned element 0 (`typeof` was "number") and `ta["2"]`
+                // returned element 0 instead of element 2. Route such keys
+                // through the runtime dispatcher, which reads an element only
+                // for a canonical numeric index and otherwise performs an
+                // ordinary [[Get]] (the same `js_object_get_field_by_name_f64`
+                // the dotted `ta.copyWithin` PropertyGet path uses — resolving
+                // the prototype method once reified, undefined until then,
+                // never a stray element value). `is_numeric_expr` stays true
+                // for literal/loop-counter indices, so every proven element
+                // fast path below is preserved.
+                if !is_numeric_expr(ctx, index) {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let key_box = lower_expr(ctx, index)?;
+                    let blk = ctx.block();
+                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                    let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_typed_array_index_get_dynamic",
+                        &[(I64, &arr_i64), (DOUBLE, &key_box)],
+                    ));
+                }
                 if let Some(value) = lower_typed_array_load(ctx, object, index)? {
                     return Ok(materialize_js_value(
                         ctx,

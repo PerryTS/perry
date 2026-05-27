@@ -1029,6 +1029,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_typed_array_new", I64, &[I32, DOUBLE]);
     module.declare_function("js_typed_array_length", I32, &[I64]);
     module.declare_function("js_typed_array_get", DOUBLE, &[I64, I32]);
+    // #2063: string / dynamic-key `ta[key]` [[Get]] dispatcher (canonical
+    // numeric index → element, else ordinary named-property [[Get]]).
+    module.declare_function("js_typed_array_index_get_dynamic", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_typed_array_at", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_typed_array_set", VOID, &[I64, I32, DOUBLE]);
     module.declare_function("js_uint8array_get", I32, &[I64, I32]);

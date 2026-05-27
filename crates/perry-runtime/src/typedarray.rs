@@ -582,6 +582,85 @@ pub extern "C" fn js_typed_array_get(ta: *const TypedArrayHeader, index: i32) ->
     }
 }
 
+/// #2063 — dynamic / string-key `[[Get]]` on a TypedArray (`ta[key]`).
+///
+/// The codegen element-read fast path only fires for statically-proven
+/// numeric indices. A string key reaches here instead of being blindly
+/// coerced to an integer index (a NaN-boxed string `fptosi`'d to 0, so
+/// `ta["copyWithin"]` / `ta[m]` returned element 0 — `typeof` was "number" —
+/// and `ta["2"]` returned element 0 instead of element 2). This implements
+/// the ECMAScript IntegerIndexedExotic `[[Get]]` dispatch:
+///   * canonical numeric index string → integer-indexed element read
+///     (bounds-checked; out-of-range → undefined),
+///   * any other string → ordinary `[[Get]]` (named / prototype property) via
+///     the same `js_object_get_field_by_name_f64` the dotted `ta.copyWithin`
+///     PropertyGet path uses (resolves the reified method once #2059 lands;
+///     undefined until then — never a stray element value),
+///   * a numeric (non-string) key → integer-indexed element read.
+#[no_mangle]
+pub extern "C" fn js_typed_array_index_get_dynamic(ta: *const TypedArrayHeader, key: f64) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(key.to_bits());
+    if jsval.is_string() || jsval.is_short_string() {
+        let key_ptr =
+            crate::value::js_get_string_pointer_unified(key) as *const crate::string::StringHeader;
+        if key_ptr.is_null() {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        if let Some(idx) = canonical_typed_array_index(key_ptr) {
+            return js_typed_array_get(ta, idx);
+        }
+        return crate::object::js_object_get_field_by_name_f64(
+            ta as *const crate::object::ObjectHeader,
+            key_ptr,
+        );
+    }
+    // Numeric key — INT32 tag or plain double (defensive: codegen only routes
+    // string-typed keys here, but type erasure can let a number flow in).
+    let num = if jsval.is_int32() {
+        jsval.as_int32() as f64
+    } else if !key.is_nan() {
+        key
+    } else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    if !num.is_finite() || num < 0.0 || num.fract() != 0.0 || num > i32::MAX as f64 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    js_typed_array_get(ta, num as i32)
+}
+
+/// Canonical numeric array-index parse for a TypedArray string key. Returns
+/// `Some(idx)` only when `key` is the canonical decimal form of a
+/// non-negative integer in `[0, i32::MAX]` (no leading zeros, sign, or
+/// fractional part) — a CanonicalNumericIndexString that is a valid integer
+/// index. Mirrors the array string-key dispatch in `js_array_set_string_key`.
+fn canonical_typed_array_index(key: *const crate::string::StringHeader) -> Option<i32> {
+    let key_str = unsafe {
+        let len = (*key).byte_len as usize;
+        if len == 0 {
+            return None;
+        }
+        let data = (key as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let bytes = std::slice::from_raw_parts(data, len);
+        std::str::from_utf8(bytes).ok()?
+    };
+    let idx = key_str.parse::<u32>().ok()?;
+    if idx.to_string() == key_str && idx <= i32::MAX as u32 {
+        Some(idx as i32)
+    } else {
+        None
+    }
+}
+
+// #2063: force-keep the dynamic-key getter under LTO / auto-optimize. Like
+// `js_dyn_index_get`, this export has zero internal Rust callers — it is only
+// invoked from generated LLVM IR (codegen emits the call in
+// `perry-codegen/src/expr/index_get.rs`), so a whole-program bitcode link is
+// free to internalize and dead-strip it. The `#[used]` anchor pins it.
+#[used]
+static KEEP_JS_TYPED_ARRAY_INDEX_GET_DYNAMIC: extern "C" fn(*const TypedArrayHeader, f64) -> f64 =
+    js_typed_array_index_get_dynamic;
+
 /// `ta.at(i)` with negative-index support.
 #[no_mangle]
 pub extern "C" fn js_typed_array_at(ta: *const TypedArrayHeader, index: f64) -> f64 {
