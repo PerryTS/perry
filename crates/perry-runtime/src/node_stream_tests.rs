@@ -153,7 +153,12 @@ fn readable_options_read_callback_this_is_rebound_to_stream() {
 fn stream_methods_use_implicit_this_without_closure_capture() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let prev_this = crate::object::js_implicit_this_set(stream);
-    let _ = ns_end1(std::ptr::null(), f64::from_bits(TAG_UNDEFINED));
+    let _ = ns_end3(
+        std::ptr::null(),
+        f64::from_bits(TAG_UNDEFINED),
+        f64::from_bits(TAG_UNDEFINED),
+        f64::from_bits(TAG_UNDEFINED),
+    );
     crate::object::js_implicit_this_set(prev_this);
 
     assert!(js_node_stream_is_stub_ended_after_read(stream));
@@ -474,8 +479,8 @@ fn stream_native_receiver_methods_update_hidden_state() {
 fn stream_stub_arities_are_registered_per_thread() {
     let _ = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     assert_eq!(
-        crate::closure::lookup_closure_arity(ns_end1 as *const u8),
-        Some(1)
+        crate::closure::lookup_closure_arity(ns_end3 as *const u8),
+        Some(3)
     );
     assert_eq!(
         crate::closure::lookup_closure_arity(ns_destroy1 as *const u8),
@@ -489,8 +494,8 @@ fn stream_stub_arities_are_registered_per_thread() {
     std::thread::spawn(|| {
         let _ = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
         assert_eq!(
-            crate::closure::lookup_closure_arity(ns_end1 as *const u8),
-            Some(1)
+            crate::closure::lookup_closure_arity(ns_end3 as *const u8),
+            Some(3)
         );
         assert_eq!(
             crate::closure::lookup_closure_arity(ns_destroy1 as *const u8),

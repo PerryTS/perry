@@ -260,17 +260,9 @@ extern "C" fn ns_write2(closure: *const ClosureHeader, chunk: f64, enc: f64) -> 
     f64::from_bits(TAG_TRUE)
 }
 
-extern "C" fn ns_end1(closure: *const ClosureHeader, chunk: f64) -> f64 {
-    let callback = if is_callable_value(chunk) {
-        Some(chunk)
-    } else {
-        None
-    };
-    if callback.is_none() && !JSValue::from_bits(chunk.to_bits()).is_undefined() {
-        let _ = ns_write2(closure, chunk, f64::from_bits(TAG_UNDEFINED));
-    }
+extern "C" fn ns_end3(closure: *const ClosureHeader, chunk: f64, encoding: f64, cb: f64) -> f64 {
     let stream = this_value(closure);
-    finish_stream(stream, callback);
+    finish_stream_with_args(stream, chunk, encoding, cb);
     stream
 }
 
@@ -304,6 +296,39 @@ fn finish_stream(stream: f64, callback: Option<f64>) {
     if let Some(callback) = callback {
         call_listener_args(stream, callback, &[]);
     }
+}
+
+fn finish_stream_with_args(stream: f64, chunk: f64, encoding: f64, cb: f64) {
+    let (chunk, encoding, callback) = normalize_end_args(chunk, encoding, cb);
+    if has_end_chunk(chunk) {
+        invoke_writable_write(stream, chunk, encoding);
+        emit_writable_chunk(stream, chunk);
+    }
+    finish_stream(stream, callback);
+}
+
+fn normalize_end_args(chunk: f64, encoding: f64, cb: f64) -> (f64, f64, Option<f64>) {
+    if is_callable_value(chunk) {
+        return (
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+            Some(chunk),
+        );
+    }
+    if is_callable_value(encoding) {
+        return (chunk, f64::from_bits(TAG_UNDEFINED), Some(encoding));
+    }
+    let callback = if is_callable_value(cb) {
+        Some(cb)
+    } else {
+        None
+    };
+    (chunk, encoding, callback)
+}
+
+fn has_end_chunk(chunk: f64) -> bool {
+    let value = JSValue::from_bits(chunk.to_bits());
+    !value.is_null() && !value.is_undefined()
 }
 
 fn stream_value_from_handle(stream_handle: i64) -> f64 {
@@ -391,15 +416,24 @@ pub extern "C" fn js_node_stream_method_write(stream_handle: i64, chunk: f64, en
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    let callback = if is_callable_value(chunk) {
-        Some(chunk)
-    } else {
-        None
-    };
-    if callback.is_none() && !JSValue::from_bits(chunk.to_bits()).is_undefined() {
-        let _ = js_node_stream_method_write(stream_handle, chunk, f64::from_bits(TAG_UNDEFINED));
-    }
-    finish_stream(stream, callback);
+    finish_stream_with_args(
+        stream,
+        chunk,
+        f64::from_bits(TAG_UNDEFINED),
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    stream
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_end3(
+    stream_handle: i64,
+    chunk: f64,
+    encoding: f64,
+    cb: f64,
+) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    finish_stream_with_args(stream, chunk, encoding, cb);
     stream
 }
 extern "C" fn ns_undefined0(_closure: *const ClosureHeader) -> f64 {
@@ -963,7 +997,7 @@ fn register_stub_arities() {
     register(ns_pipe1 as *const u8, 1);
     register(writable_write_callback_noop as *const u8, 0);
     register(ns_write2 as *const u8, 2);
-    register(ns_end1 as *const u8, 1);
+    register(ns_end3 as *const u8, 3);
     register(ns_set_max_listeners as *const u8, 1);
     register(ns_get_max_listeners as *const u8, 0);
     register(ns_event_names as *const u8, 0);
@@ -1575,7 +1609,7 @@ fn writable_methods() -> [(&'static str, StubFn); 22] {
         ("listeners", cast1(ns_listeners)),
         ("rawListeners", cast1(ns_raw_listeners)),
         ("write", cast2(ns_write2)),
-        ("end", cast1(ns_end1)),
+        ("end", cast3(ns_end3)),
         ("cork", cast0(ns_chain0)),
         ("uncork", cast0(ns_chain0)),
         ("destroy", cast1(ns_destroy1)),
@@ -1612,7 +1646,7 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("setEncoding", cast1(ns_chain1)),
         ("isPaused", cast0(ns_undefined0)),
         ("write", cast2(ns_write2)),
-        ("end", cast1(ns_end1)),
+        ("end", cast3(ns_end3)),
         ("cork", cast0(ns_chain0)),
         ("uncork", cast0(ns_chain0)),
         ("destroy", cast1(ns_destroy1)),

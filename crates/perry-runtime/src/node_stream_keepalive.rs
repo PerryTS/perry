@@ -35,6 +35,9 @@ static KEEP_NS_METHOD_WRITE: extern "C" fn(i64, f64, f64) -> f64 =
 #[used]
 static KEEP_NS_METHOD_END: extern "C" fn(i64, f64) -> f64 = super::js_node_stream_method_end;
 #[used]
+static KEEP_NS_METHOD_END3: extern "C" fn(i64, f64, f64, f64) -> f64 =
+    super::js_node_stream_method_end3;
+#[used]
 static KEEP_NS_METHOD_SET_MAX_LISTENERS: extern "C" fn(i64, f64) -> f64 =
     super::js_node_stream_method_set_max_listeners;
 #[used]

@@ -464,12 +464,6 @@
     "category": "bug-open",
     "reason": "node:stream: read(n) doesn't return buffered chunk (push/read pipeline not wired). Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/writable/end-with-chunk-and-cb": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: end(chunk, cb) doesn't invoke callback / write final chunk. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/returns-target": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1621,12 +1615,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: read(N) — consumes wrong byte count from buffered stream. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/writable/end-with-chunk-writes-before-finish": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: end(chunk) ordering — chunk write happens after 'finish' event or not at all. Flips to PASS when #1539 lands."
   },
   "node-suite/stream/flow/sequential-reads": {
     "issue": "1532",

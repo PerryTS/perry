@@ -802,8 +802,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "end",
         class_filter: None,
-        runtime: "js_node_stream_method_end",
-        args: &[NA_F64],
+        runtime: "js_node_stream_method_end3",
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
