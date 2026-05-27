@@ -48,6 +48,14 @@ pub extern "C" fn js_set_native_crypto_dispatch(func: JsNativeCryptoDispatchFn) 
     JS_NATIVE_CRYPTO_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Set the node:zlib module-method dispatcher. Same contract as
+/// `js_set_native_crypto_dispatch` above — registered by perry-stdlib at
+/// program start so a bound-then-called `zlib.gzip` reaches the stdlib FFI.
+#[no_mangle]
+pub extern "C" fn js_set_native_zlib_dispatch(func: JsNativeZlibDispatchFn) {
+    JS_NATIVE_ZLIB_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the native module JS property loader (called by perry-jsruntime)
 /// This callback loads a native module via V8 and gets a property from it.
 #[no_mangle]

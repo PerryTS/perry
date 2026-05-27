@@ -912,6 +912,36 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return crate::streams::dispatch_stream_property(handle as f64, property_name);
     }
 
+    // zlib Transform streams: `typeof createGzip().write` must read
+    // "function". The actual call dispatch is HANDLE_METHOD_DISPATCH
+    // (above), but feature-checks read through the property table — we
+    // bind a closure here so the typeof short-circuit sees "function".
+    #[cfg(feature = "compression")]
+    if crate::zlib::is_zlib_stream_handle(handle) {
+        let method: Option<&'static [u8]> = match property_name {
+            "write" => Some(b"write"),
+            "end" => Some(b"end"),
+            "on" => Some(b"on"),
+            "once" => Some(b"once"),
+            "emit" => Some(b"emit"),
+            "pipe" => Some(b"pipe"),
+            "flush" => Some(b"flush"),
+            "removeListener" => Some(b"removeListener"),
+            "removeAllListeners" => Some(b"removeAllListeners"),
+            _ => None,
+        };
+        if let Some(name_bytes) = method {
+            extern "C" {
+                fn js_class_method_bind(
+                    instance: f64,
+                    method_name_ptr: *const u8,
+                    method_name_len: usize,
+                ) -> f64;
+            }
+            return js_class_method_bind(handle as f64, name_bytes.as_ptr(), name_bytes.len());
+        }
+    }
+
     // #1113: `app.server` — return the FastifyApp handle pointer-tagged
     // so `typeof app.server === "object"` and `.on("upgrade", …)`
     // routes through HANDLE_METHOD_DISPATCH back into the FastifyApp
@@ -1497,6 +1527,10 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);
+    // Same contract for `zlib.*` methods so `util.promisify(zlib.gzip)` and
+    // `const f = zlib.gzipSync; f(buf)` reach the FFIs.
+    #[cfg(feature = "compression")]
+    perry_runtime::js_set_native_zlib_dispatch(crate::zlib::js_zlib_native_dispatch);
 
     // #1545: register the Web Streams numeric-handle probe so method calls on
     // stream handles whose static type the codegen lost route to the stream

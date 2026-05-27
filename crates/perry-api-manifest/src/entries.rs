@@ -1277,6 +1277,62 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     ),
     method_sig("zlib", "gzip", false, None, &[p_str("p0")], TypeSpec::Any),
     method_sig("zlib", "gunzip", false, None, &[p_str("p0")], TypeSpec::Any),
+    // One-shot sync codecs that round out the #1843 set: raw deflate/inflate
+    // (no zlib wrapper), auto-detect unzip, and CRC32.
+    method_sig(
+        "zlib",
+        "deflateRawSync",
+        false,
+        None,
+        &[p_str("p0")],
+        TypeSpec::Any,
+    ),
+    method_sig(
+        "zlib",
+        "inflateRawSync",
+        false,
+        None,
+        &[p_str("p0")],
+        TypeSpec::Any,
+    ),
+    method_sig(
+        "zlib",
+        "unzipSync",
+        false,
+        None,
+        &[p_str("p0")],
+        TypeSpec::Any,
+    ),
+    method_sig(
+        "zlib",
+        "crc32",
+        false,
+        None,
+        &[p_str("p0")],
+        TypeSpec::Number,
+    ),
+    // Callback-form variants that #1843 didn't surface. `gzip`/`gunzip` and
+    // `brotliCompress`/`brotliDecompress` already exist above as method_sig
+    // entries; these stub the rest so `typeof zlib.deflate === "function"`
+    // resolves true. Actual callback dispatch piggy-backs off the existing
+    // native_table sync routes when used with `util.promisify`.
+    method("zlib", "deflate", false, None),
+    method("zlib", "deflateRaw", false, None),
+    method("zlib", "inflate", false, None),
+    method("zlib", "inflateRaw", false, None),
+    method("zlib", "unzip", false, None),
+    // Stream classes — registered as classes so `typeof zlib.Gzip` reads
+    // "function". #1843 exposed the `create*` factories but not the
+    // constructor names themselves.
+    class("zlib", "Deflate"),
+    class("zlib", "DeflateRaw"),
+    class("zlib", "Gzip"),
+    class("zlib", "Gunzip"),
+    class("zlib", "Inflate"),
+    class("zlib", "InflateRaw"),
+    class("zlib", "Unzip"),
+    class("zlib", "BrotliCompress"),
+    class("zlib", "BrotliDecompress"),
     // `zlib.constants` — the ~50 Z_*/DEFLATE/INFLATE/GZIP/BROTLI_*/ZSTD_*
     // constants Node exposes on `require('node:zlib').constants`. Required
     // by axios for stream wiring. Values are resolved at runtime by

@@ -350,6 +350,10 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_zlib_gzip", I64, &[I64]);
     module.declare_function("js_zlib_gzip_sync", I64, &[I64]);
     module.declare_function("js_zlib_inflate_sync", I64, &[I64]);
+    module.declare_function("js_zlib_deflate_raw_sync", I64, &[I64]);
+    module.declare_function("js_zlib_inflate_raw_sync", I64, &[I64]);
+    module.declare_function("js_zlib_unzip_sync", I64, &[I64]);
+    module.declare_function("js_zlib_crc32", DOUBLE, &[I64, DOUBLE]);
     // #1843 — Brotli one-shots (StringHeader ptr in/out; async returns a Promise ptr).
     module.declare_function("js_zlib_brotli_compress_sync", I64, &[I64]);
     module.declare_function("js_zlib_brotli_decompress_sync", I64, &[I64]);

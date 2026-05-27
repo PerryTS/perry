@@ -114,6 +114,12 @@ pub(crate) type JsHandleTypeofFn = unsafe extern "C" fn(f64) -> i32;
 /// stdlib crypto impls, which this crate can't call directly. (#1577)
 pub(crate) type JsNativeCryptoDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
+/// node:zlib module-method dispatcher (registered by perry-stdlib). Same
+/// shape and rationale as the crypto dispatcher above — lets a captured /
+/// promisified zlib method (`const f = zlib.gzip; await f(buf)`) reach the
+/// stdlib zlib FFIs since this crate cannot call them directly.
+pub(crate) type JsNativeZlibDispatchFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 
 // ----- JS handle dispatch atomics (shared between handle.rs and consumers) -----
 
@@ -127,3 +133,4 @@ pub static JS_NATIVE_MODULE_JS_LOADER: AtomicPtr<()> = AtomicPtr::new(std::ptr::
 pub static JS_NEW_FROM_HANDLE_V8: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_HANDLE_TYPEOF: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_CRYPTO_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_ZLIB_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());

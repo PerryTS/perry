@@ -97,6 +97,30 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
         if module == "child_process" && (method == "exec" || method == "execFile") {
             return crate::child_process::make_promisified_child_process(&method);
         }
+        // node:zlib's callback-form codecs (`gzip`/`gunzip`/`deflate`/`inflate`
+        // /`deflateRaw`/`inflateRaw`/`unzip`/`brotliCompress`/`brotliDecompress`)
+        // are wired in Perry to *return a Promise* directly — there's no
+        // callback parameter that the generic outer_thunk could await. Routing
+        // them through the standard wrapper would inject a callback that never
+        // fires and the awaiter would hang. Since `util.promisify(p)` is meant
+        // to expose a Promise-returning API and `p` already is one, the
+        // identity transform is the correct semantics here.
+        if module == "zlib"
+            && matches!(
+                method.as_str(),
+                "gzip"
+                    | "gunzip"
+                    | "deflate"
+                    | "inflate"
+                    | "deflateRaw"
+                    | "inflateRaw"
+                    | "unzip"
+                    | "brotliCompress"
+                    | "brotliDecompress"
+            )
+        {
+            return fn_value;
+        }
     }
 
     register_thunks_once();
