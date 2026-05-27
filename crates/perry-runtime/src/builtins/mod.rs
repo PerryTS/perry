@@ -70,8 +70,8 @@ pub use console::{
 };
 
 pub use formatting::{
-    js_array_print, js_register_function_name, js_util_format, js_util_inspect,
-    js_util_is_deep_strict_equal, js_util_strip_vt_control_characters,
+    function_name_for_ptr, js_array_print, js_register_function_name, js_util_format,
+    js_util_inspect, js_util_is_deep_strict_equal, js_util_strip_vt_control_characters,
     register_function_name_if_absent,
 };
 

@@ -599,6 +599,90 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
 
+        // #2059: function objects (closures) are not `ObjectHeader`s — routing
+        // them through `extract_obj_ptr`/`own_key_present` below reads an
+        // out-of-bounds "keys_array" slot (offset 16, past a 0-capture
+        // closure's payload) and segfaults. Resolve their descriptors here:
+        // the built-in `name`/`length` slots (non-writable, non-enumerable,
+        // configurable per spec) plus any user-attached own data property.
+        {
+            let jsv = crate::JSValue::from_bits(obj_value.to_bits());
+            if jsv.is_pointer() {
+                let ptr = jsv.as_pointer::<u8>() as usize;
+                if crate::closure::is_closure_ptr(ptr) {
+                    let key_str = crate::builtins::js_string_coerce(key_value);
+                    if key_str.is_null() {
+                        return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    }
+                    let name_ptr =
+                        (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let name_len = (*key_str).byte_len as usize;
+                    let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+                        .unwrap_or("");
+
+                    // (value, writable, configurable). `name`/`length` are the
+                    // built-in own data slots; anything else falls back to the
+                    // user-attached dynamic-property side table.
+                    let resolved: Option<(f64, bool, bool)> = match name {
+                        "length" => {
+                            let arity = crate::closure::closure_arity(
+                                ptr as *const crate::closure::ClosureHeader,
+                            );
+                            // Numbers are NaN-boxed as their raw f64 bits.
+                            Some((arity.unwrap_or(0) as f64, false, true))
+                        }
+                        "name" => {
+                            let dynv = crate::closure::closure_get_dynamic_prop(ptr, "name");
+                            if dynv.to_bits() != crate::value::TAG_UNDEFINED {
+                                Some((dynv, true, true))
+                            } else {
+                                let func_ptr = (*(ptr as *const crate::closure::ClosureHeader))
+                                    .func_ptr
+                                    as usize;
+                                let fname = crate::builtins::function_name_for_ptr(func_ptr)
+                                    .unwrap_or_default();
+                                let s = crate::string::js_string_from_bytes(
+                                    fname.as_ptr(),
+                                    fname.len() as u32,
+                                );
+                                Some((crate::js_nanbox_string(s as i64), false, true))
+                            }
+                        }
+                        _ => {
+                            let dynv = crate::closure::closure_get_dynamic_prop(ptr, name);
+                            if dynv.to_bits() != crate::value::TAG_UNDEFINED {
+                                Some((dynv, true, true))
+                            } else {
+                                None
+                            }
+                        }
+                    };
+                    let Some((value, writable, configurable)) = resolved else {
+                        return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    };
+                    // `name`/`length` are non-enumerable; user data props are.
+                    let enumerable = !matches!(name, "name" | "length");
+                    let packed = b"value\0writable\0enumerable\0configurable";
+                    let desc = js_object_alloc_with_shape(
+                        0x0D_E5_C0,
+                        4,
+                        packed.as_ptr(),
+                        packed.len() as u32,
+                    );
+                    let header_size = std::mem::size_of::<ObjectHeader>();
+                    let fields = (desc as *mut u8).add(header_size) as *mut f64;
+                    // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
+                    *fields = value;
+                    *fields.add(1) = f64::from_bits(if writable { TAG_TRUE } else { TAG_FALSE });
+                    *fields.add(2) = f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
+                    *fields.add(3) =
+                        f64::from_bits(if configurable { TAG_TRUE } else { TAG_FALSE });
+                    super::rebuild_object_field_layout(desc, 4);
+                    return f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000);
+                }
+            }
+        }
+
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);

@@ -342,6 +342,25 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
     }
 }
 
+/// Look up the codegen-registered JS name for a function pointer.
+///
+/// Returns the name registered by `js_register_function_name` (keyed on the
+/// `__perry_wrap_<name>` wrapper address that `js_closure_alloc_singleton`
+/// stamps into the `ClosureHeader`), or `None` when no non-empty name was
+/// registered. Used by the spec `fn.name` own-property read (#2059) and by
+/// `getOwnPropertyDescriptor(fn, "name")` — the same registry the
+/// `[Function: <name>]` console formatter already consults.
+pub fn function_name_for_ptr(func_ptr: usize) -> Option<String> {
+    if func_ptr == 0 {
+        return None;
+    }
+    function_name_registry()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&func_ptr).map(|n| n.to_string()))
+        .filter(|n| !n.is_empty())
+}
+
 /// Per-thread override for the `showHidden` inspect option. Defaults to
 /// `false` (Node default): `util.inspect` / `console.log` only show
 /// enumerable properties. `console.dir(value, { showHidden: true })`

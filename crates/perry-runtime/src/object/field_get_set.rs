@@ -1000,6 +1000,20 @@ pub extern "C" fn js_object_get_field_by_name(
                             return vb;
                         }
                     }
+                    // #2059: the constructor's built-in `name` own property —
+                    // the class name. Checked last so an explicit static
+                    // `name` member (method/field, handled above) still wins.
+                    // This is what `assert.throws` reads via
+                    // `thrown.constructor.name` to label the thrown error.
+                    if name == "name" && class_id != 0 {
+                        if let Some(cname) = super::class_registry::class_name_for_id(class_id) {
+                            let s = crate::string::js_string_from_bytes(
+                                cname.as_ptr(),
+                                cname.len() as u32,
+                            );
+                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                        }
+                    }
                 }
             }
             return JSValue::undefined();
@@ -1412,7 +1426,25 @@ pub extern "C" fn js_object_get_field_by_name(
                     return JSValue::number(arity.unwrap_or(0) as f64);
                 }
                 if let Ok(name_str) = std::str::from_utf8(name_bytes) {
+                    // User-attached own property (`fn.x = 1`) takes precedence.
                     let val = crate::closure::closure_get_dynamic_prop(obj as usize, name_str);
+                    if val.to_bits() != crate::value::TAG_UNDEFINED {
+                        return JSValue::from_bits(val.to_bits());
+                    }
+                    // #2059: `fn.name` — every function carries a built-in own
+                    // `name` data property. Resolve the codegen-registered name
+                    // (keyed by the wrapper func_ptr, the same registry the
+                    // `[Function: <name>]` formatter uses); anonymous functions
+                    // read back `""`, matching Node, not `undefined`.
+                    if name_str == "name" {
+                        let func_ptr =
+                            (*(obj as *const crate::closure::ClosureHeader)).func_ptr as usize;
+                        let fname =
+                            crate::builtins::function_name_for_ptr(func_ptr).unwrap_or_default();
+                        let s =
+                            crate::string::js_string_from_bytes(fname.as_ptr(), fname.len() as u32);
+                        return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                    }
                     return JSValue::from_bits(val.to_bits());
                 }
             }
