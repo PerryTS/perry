@@ -194,18 +194,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:net` socket-layer surface not implemented (Server/Socket classes, BlockList, SocketAddress). Classification helpers landed via #811. Tracker for surface coverage; flips to PASS as each API lands."
   },
-  "test_parity_os": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:os` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
-  "test_parity_process": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:process` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_readline": {
     "issue": "793",
     "added": "2026-05-15",
@@ -253,12 +241,6 @@
     "added": "2026-05-15",
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:tls` surface not fully implemented (Socket-level TLS upgrade works via net.upgradeToTLS; the higher-level tls.connect/Server is partial). Tracker for surface coverage."
-  },
-  "test_parity_url": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:url` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_util": {
     "issue": "793",
