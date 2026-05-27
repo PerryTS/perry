@@ -50,7 +50,7 @@ pub use self::iter_methods::{
     js_array_find_last, js_array_find_last_index, js_array_flatMap, js_array_forEach,
     js_array_join, js_array_map, js_array_map_discard, js_array_reduce, js_array_some,
 };
-pub use self::iterator::js_iterator_to_array;
+pub use self::iterator::{js_for_of_to_array, js_iterator_to_array};
 pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,

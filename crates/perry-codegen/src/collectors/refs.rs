@@ -214,6 +214,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::Uint8ArrayFrom(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
+        | Expr::ForOfToArray(operand)
         | Expr::WeakRefNew(operand)
         | Expr::WeakRefDeref(operand)
         | Expr::StructuredClone(operand)

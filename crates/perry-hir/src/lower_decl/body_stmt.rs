@@ -1200,6 +1200,27 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     | "Float32Array" | "Float64Array"
                 )
             );
+            // #321: when the receiver's static type can NOT be proven to
+            // be a plain Array — an `any`-typed Map/Set (effect's
+            // `for (const [tag, s] of that.unsafeMap)`, where `that` is an
+            // untyped function parameter), an object carrying a custom
+            // `[Symbol.iterator]`, etc. — the index-based loop below would
+            // read `.length` off the wrong handle (Map/Set → 0) and
+            // iterate zero times. Route those through the runtime default
+            // iterator (`js_for_of_to_array`). Strings, typed arrays, and
+            // statically-proven Map/Set/Array keep their existing fast
+            // paths. Mirrors the module-init path in
+            // `lower::stmt_loops::lower_stmt_for_of`.
+            let proven_array = match &iterable_type {
+                Some(Type::Array(_)) => true,
+                Some(Type::Generic { base, .. }) => base == "Array",
+                _ => false,
+            };
+            let needs_runtime_iterator = !is_string_iter
+                && !is_iterable_map
+                && !is_iterable_set
+                && !is_iterable_typed_array
+                && !proven_array;
             let arr_expr = if is_iterable_map {
                 if map_kv_fastpath {
                     arr_expr
@@ -1214,6 +1235,8 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 }
             } else if is_iterable_typed_array {
                 Expr::ArrayFrom(Box::new(arr_expr))
+            } else if needs_runtime_iterator {
+                Expr::ForOfToArray(Box::new(arr_expr))
             } else {
                 arr_expr
             };

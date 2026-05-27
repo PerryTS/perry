@@ -1794,6 +1794,16 @@ pub enum Expr {
     /// `operand[Symbol.iterator]()` when iterable, else the operand itself (a
     /// generator object already *is* its iterator). Lowers to `js_get_iterator`.
     GetIterator(Box<Expr>),
+    /// #321: materialize an UNTYPED `for...of` receiver into a plain Array
+    /// by inspecting its runtime kind. The `for...of` desugar uses an
+    /// index loop (`for (i=0; i<arr.length; i++) item = arr[i]`); when the
+    /// receiver's static type can't be proven (an `any`-typed Map/Set, an
+    /// untyped JS-source value), this routes through `js_for_of_to_array`
+    /// so a Map yields `[k,v]` pairs, a Set yields values, an Array is
+    /// returned unchanged, a string yields code-point chars, and anything
+    /// else drives its `[Symbol.iterator]`. Without it the index loop read
+    /// `.length` off a raw Map/Set handle (→ 0) and iterated zero times.
+    ForOfToArray(Box<Expr>),
     /// Array.from(iterable, mapFn) -> Array
     /// Creates a new array by applying mapFn to each element of the iterable.
     ArrayFromMapped {

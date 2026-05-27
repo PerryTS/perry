@@ -1019,6 +1019,15 @@ impl JsEmitter {
                 self.emit_expr(val);
                 self.output.push(')');
             }
+            // #321: untyped `for...of` materialization. `Array.from`
+            // already drives any iterable (Map → [k,v] pairs, Set →
+            // values, Array, string, custom Symbol.iterator), matching
+            // the native runtime's `js_for_of_to_array`.
+            Expr::ForOfToArray(val) => {
+                self.output.push_str("Array.from(");
+                self.emit_expr(val);
+                self.output.push(')');
+            }
             Expr::ArrayFromMapped { iterable, map_fn } => {
                 self.output.push_str("Array.from(");
                 self.emit_expr(iterable);

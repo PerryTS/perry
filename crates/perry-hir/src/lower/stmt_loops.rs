@@ -647,6 +647,32 @@ pub(crate) fn lower_stmt_for_of(
             | "Float32Array" | "Float64Array"
         )
     );
+    // #321: the for-of desugar reads `__arr.length` / `__arr[i]` and so
+    // assumes the iterable is a plain Array. When the receiver's static
+    // type can NOT be proven to be an Array — an `any`-typed Map/Set
+    // (effect's `for (const [tag, s] of self.unsafeMap)`), an untyped
+    // JS-source value, a `Type::Object` / class instance carrying a
+    // custom `[Symbol.iterator]`, etc. — that assumption silently reads
+    // `.length` off the wrong handle (Map/Set → 0) and iterates zero
+    // times. Detect "the type proves a plain Array" so everything else
+    // routes through the runtime default-iterator (`js_for_of_to_array`).
+    //
+    // We deliberately DON'T wrap the statically-resolved kinds handled
+    // above (Map/Set/typed-array via their own materializers, strings via
+    // the string index-loop, Headers/URLSearchParams via their entries
+    // rewrite) nor proven arrays — those keep their existing fast paths.
+    let proven_array = match &iterable_type {
+        Some(Type::Array(_)) => true,
+        Some(Type::Generic { base, .. }) => base == "Array",
+        _ => false,
+    };
+    let needs_runtime_iterator = !is_string_iter
+        && !is_headers_iter
+        && !is_urlsp_iter
+        && !is_iterable_map
+        && !is_iterable_set
+        && !is_iterable_typed_array
+        && !proven_array;
     let arr_expr = if is_iterable_map {
         if let Some(args) = map_type_args.as_ref() {
             if args.len() >= 2 {
@@ -667,6 +693,8 @@ pub(crate) fn lower_stmt_for_of(
         }
     } else if is_iterable_typed_array {
         Expr::ArrayFrom(Box::new(arr_expr))
+    } else if needs_runtime_iterator {
+        Expr::ForOfToArray(Box::new(arr_expr))
     } else {
         arr_expr
     };

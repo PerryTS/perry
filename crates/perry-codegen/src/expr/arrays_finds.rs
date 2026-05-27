@@ -513,6 +513,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_get_iterator", &[(DOUBLE, &v)]))
         }
+        Expr::ForOfToArray(o) => {
+            // #321: materialize an untyped `for...of` receiver into a plain
+            // Array. Runtime inspects the value's GC kind (Map → [k,v]
+            // pairs, Set → values, Array → itself, string → chars, else
+            // drive `[Symbol.iterator]`) and returns a NaN-boxed array
+            // JSValue the index loop can read via `.length` / `arr[i]`.
+            let v = lower_expr(ctx, o)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_for_of_to_array", &[(DOUBLE, &v)]))
+        }
         Expr::WeakRefDeref(o) => {
             // `ref.deref()` — returns the wrapped target (or undefined if
             // collected; GC never clears the stub slot, so always returns

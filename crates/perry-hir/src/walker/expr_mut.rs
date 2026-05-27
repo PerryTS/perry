@@ -228,6 +228,7 @@ where
         | Expr::ArrayFrom(v)
         | Expr::IteratorToArray(v)
         | Expr::GetIterator(v)
+        | Expr::ForOfToArray(v)
         | Expr::ObjectRest { object: v, .. }
         | Expr::ProxyRevoke(v)
         | Expr::ReflectOwnKeys(v)
