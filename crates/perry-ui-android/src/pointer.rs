@@ -58,9 +58,8 @@ fn install_touch_listener(handle: i64, down_key: i64, move_key: i64, up_key: i64
     };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(8);
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
     let _ = env.call_static_method(
         bridge_cls,

@@ -53,12 +53,7 @@ fn intern_pointer_type_strings() -> &'static InternedPointerTypes {
 ///
 /// Pass the returned f64 directly to `js_closure_call1`.
 #[no_mangle]
-pub extern "C" fn js_pointer_event_new(
-    x: f64,
-    y: f64,
-    button: u32,
-    pointer_type: u32,
-) -> f64 {
+pub extern "C" fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64 {
     let packed = b"x\0y\0button\0pointerType\0";
     let field_count: u32 = 4;
     // Unique shape_id for PointerEvent — must not collide with other
@@ -129,8 +124,7 @@ mod tests {
         let touch = js_pointer_event_new(0.0, 0.0, 0, POINTER_TYPE_TOUCH);
         let pen = js_pointer_event_new(0.0, 0.0, 0, POINTER_TYPE_PEN);
         let pt = |nb: f64| {
-            let obj = (nb.to_bits() & 0x0000_FFFF_FFFF_FFFF)
-                as *mut crate::object::ObjectHeader;
+            let obj = (nb.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::object::ObjectHeader;
             unsafe { js_object_get_field(obj, 3) }.bits()
         };
         let m = pt(mouse);

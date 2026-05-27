@@ -297,7 +297,8 @@ unsafe fn handle_event(event: *mut AnyObject) {
 /// NSTrackingArea, so it doesn't matter whether the widget is a
 /// Perry-owned subclass or a stock NSButton/NSTextField.
 unsafe fn dispatch_hover_transitions(event_window: *mut AnyObject, win_loc: CGPoint) {
-    let entries: Vec<(i64, f64)> = HOVER_CB.with(|c| c.borrow().iter().map(|(k, v)| (*k, *v)).collect());
+    let entries: Vec<(i64, f64)> =
+        HOVER_CB.with(|c| c.borrow().iter().map(|(k, v)| (*k, *v)).collect());
     for (handle, closure_f64) in entries {
         let Some(view) = get_widget(handle) else {
             continue;
@@ -393,4 +394,3 @@ pub fn set_on_hover_v2(handle: i64, callback: f64) {
         prime_window_for_view(&view);
     }
 }
-

@@ -97,9 +97,7 @@ define_class!(
 
 impl PerryPointerRecognizer {
     fn new() -> Retained<Self> {
-        let this = Self::alloc().set_ivars(PerryPointerRecognizerIvars {
-            key: Cell::new(0),
-        });
+        let this = Self::alloc().set_ivars(PerryPointerRecognizerIvars { key: Cell::new(0) });
         unsafe { msg_send![super(this), init] }
     }
 }
@@ -118,9 +116,7 @@ fn dispatch_phase(recog: &PerryPointerRecognizer, touches: &AnyObject, phase: u3
     if touch.is_null() {
         return;
     }
-    let local: CGPoint = unsafe {
-        msg_send![touch, locationInView: &*view]
-    };
+    let local: CGPoint = unsafe { msg_send![touch, locationInView: &*view] };
     let cb_f64 = match phase {
         PHASE_DOWN => MOUSE_DOWN_CB.with(|c| c.borrow().get(&handle).copied()),
         PHASE_MOVE => MOUSE_MOVE_CB.with(|c| c.borrow().get(&handle).copied()),
