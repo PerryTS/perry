@@ -1,5 +1,5 @@
 {
-  "name": "@hono/perry-server",
+  "name": "@perryts/hono-server",
   "version": "0.1.0",
   "description": "Hono server adapter for Perry-native compile — serve({ fetch, port }) over Perry's bundled Fastify",
   "type": "module",
@@ -12,6 +12,10 @@
     }
   },
   "files": ["src"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/PerryTS/perry/tree/main/packages/hono-perry-server#readme",
   "peerDependencies": {
     "hono": ">=4"
   },

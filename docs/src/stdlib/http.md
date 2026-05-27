@@ -126,15 +126,15 @@ The `node:http` server FFIs and the Web Fetch `Headers` / `Request` /
 turnkey adapter, prefer [perry's Fastify binding](#fastify-server) with a
 single catch-all route delegating to `app.fetch`.
 
-### `@hono/perry-server`
+### `@perryts/hono-server`
 
-`@hono/perry-server` (in-tree at `packages/hono-perry-server`) packages that
+`@perryts/hono-server` (in-tree at `packages/hono-perry-server`) packages that
 catch-all-over-Fastify shim as Hono's standard `serve({ fetch, port })`
 contract — the Perry counterpart to `@hono/node-server` / `@hono/bun`:
 
 ```typescript,no-test
 import { Hono } from "hono"
-import { serve } from "@hono/perry-server"
+import { serve } from "@perryts/hono-server"
 
 const app = new Hono()
 app.get("/", (c) => c.json({ ok: true }))

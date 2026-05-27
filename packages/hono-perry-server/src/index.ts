@@ -1,5 +1,5 @@
 /**
- * `@hono/perry-server` — Hono's standard `serve({ fetch, port })` adapter
+ * `@perryts/hono-server` — Hono's standard `serve({ fetch, port })` adapter
  * contract on Perry-native, wrapping Perry's bundled Fastify.
  *
  * Hono is runtime-agnostic: the same `(request: Request) => Response` handler
@@ -11,7 +11,7 @@
  * Usage:
  * ```ts
  * import { Hono } from 'hono'
- * import { serve } from '@hono/perry-server'
+ * import { serve } from '@perryts/hono-server'
  *
  * const app = new Hono()
  * app.get('/', (c) => c.json({ ok: true }))

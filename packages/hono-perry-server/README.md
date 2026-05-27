@@ -1,4 +1,4 @@
-# @hono/perry-server
+# @perryts/hono-server
 
 Hono's standard `serve({ fetch, port })` adapter contract for **Perry-native**
 compile, wrapping Perry's bundled [Fastify](https://www.fastify.io/).
@@ -13,7 +13,7 @@ its own shim.
 
 ```ts
 import { Hono } from 'hono'
-import { serve } from '@hono/perry-server'
+import { serve } from '@perryts/hono-server'
 
 const app = new Hono()
 app.get('/', (c) => c.json({ ok: true }))
