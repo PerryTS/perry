@@ -21,12 +21,22 @@ struct CanvasState {
     height: i32,
     density: f32,
     cmds: Vec<DrawCmd>,
+    last_cmds: Vec<DrawCmd>,
 }
 
 // Global (not thread-local) because canvas is created on the perry-native thread
 // but drawing commands arrive from the UI thread via setInterval callbacks.
 static CANVAS_STATES: LazyLock<Mutex<HashMap<i64, CanvasState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn command_batch_renders(commands: &[DrawCmd]) -> bool {
+    commands.iter().any(|cmd| {
+        matches!(
+            cmd,
+            DrawCmd::Clear | DrawCmd::Stroke(..) | DrawCmd::FillGradient(..)
+        )
+    })
+}
 
 pub fn create(width: f64, height: f64) -> i64 {
     let mut env = jni_bridge::get_env();
@@ -123,6 +133,7 @@ pub fn create(width: f64, height: f64) -> i64 {
             height: h,
             density,
             cmds: Vec::new(),
+            last_cmds: Vec::new(),
         },
     );
 
@@ -168,10 +179,17 @@ fn create_and_set_bitmap(env: &mut jni::JNIEnv, image_view: &JObject, w: i32, h:
 
 fn repaint(handle: i64) {
     let cmds = {
-        let states = CANVAS_STATES.lock().unwrap();
-        states
-            .get(&handle)
-            .map(|st| (st.width, st.height, st.cmds.clone()))
+        let mut states = CANVAS_STATES.lock().unwrap();
+        states.get_mut(&handle).map(|st| {
+            let cmds = if st.cmds.is_empty() || !command_batch_renders(&st.cmds) {
+                st.last_cmds.clone()
+            } else {
+                let cmds = std::mem::take(&mut st.cmds);
+                st.last_cmds = cmds.clone();
+                cmds
+            };
+            (st.width, st.height, cmds)
+        })
     };
 
     if let Some((w, h, cmds)) = cmds {
@@ -428,6 +446,7 @@ pub fn clear(handle: i64) {
         let mut states = CANVAS_STATES.lock().unwrap();
         if let Some(state) = states.get_mut(&handle) {
             state.cmds.clear();
+            state.last_cmds.clear();
             state.cmds.push(DrawCmd::Clear);
         }
     }

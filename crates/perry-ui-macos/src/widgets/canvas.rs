@@ -115,9 +115,25 @@ enum DrawCommand {
     },
 }
 
+fn command_batch_renders(commands: &[DrawCommand]) -> bool {
+    commands.iter().any(|cmd| {
+        matches!(
+            cmd,
+            DrawCommand::Stroke { .. }
+                | DrawCommand::FillGradient { .. }
+                | DrawCommand::StrokePath
+                | DrawCommand::FillPath
+                | DrawCommand::FillRect { .. }
+                | DrawCommand::StrokeRect { .. }
+        )
+    })
+}
+
 thread_local! {
-    /// Canvas command buffers, keyed by view address
+    /// Pending canvas commands, keyed by view address.
     static CANVAS_COMMANDS: RefCell<HashMap<usize, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
+    /// Last rendered command batch, used for native repaints that arrive before new commands.
+    static CANVAS_LAST_FRAME: RefCell<HashMap<usize, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Canvas sizes (width, height), keyed by view address
     static CANVAS_SIZES: RefCell<HashMap<usize, (f64, f64)>> = RefCell::new(HashMap::new());
 }
@@ -154,10 +170,28 @@ define_class!(
                 s.borrow().get(&key).copied().unwrap_or((0.0, 0.0))
             });
 
-            // Replay command buffer
-            CANVAS_COMMANDS.with(|cmds| {
-                let cmds = cmds.borrow();
-                if let Some(commands) = cmds.get(&key) {
+            // Drain pending commands for this paint. Canvas calls between paints
+            // form a single frame, so frame-loop apps don't replay every historical
+            // command. Keep only the last rendered batch for native repaint events
+            // that arrive before the app submits new canvas commands.
+            let commands = CANVAS_COMMANDS
+                .with(|cmds| {
+                    let mut cmds = cmds.borrow_mut();
+                    cmds.get_mut(&key).and_then(|pending| {
+                        if pending.is_empty() || !command_batch_renders(pending) {
+                            None
+                        } else {
+                            let commands = std::mem::take(pending);
+                            CANVAS_LAST_FRAME.with(|last| {
+                                last.borrow_mut().insert(key, commands.clone());
+                            });
+                            Some(commands)
+                        }
+                    })
+                })
+                .or_else(|| CANVAS_LAST_FRAME.with(|last| last.borrow().get(&key).cloned()));
+
+            if let Some(commands) = commands {
                     // Track current path points for gradient fill.
                     // #854: an `in_path: bool` companion used to live here
                     // but was only ever written, never read. Removed.
@@ -321,8 +355,7 @@ define_class!(
                         }
                     }
                 }
-            });
-        }
+            }
 
         #[unsafe(method(isFlipped))]
         fn is_flipped(&self) -> bool {
@@ -374,6 +407,9 @@ pub fn create(width: f64, height: f64) -> i64 {
     CANVAS_COMMANDS.with(|cmds| {
         cmds.borrow_mut().insert(key, Vec::new());
     });
+    CANVAS_LAST_FRAME.with(|last| {
+        last.borrow_mut().insert(key, Vec::new());
+    });
     CANVAS_SIZES.with(|s| {
         s.borrow_mut().insert(key, (width, height));
     });
@@ -392,6 +428,11 @@ pub fn clear(handle: i64) {
     if let Some(key) = get_canvas_key(handle) {
         CANVAS_COMMANDS.with(|cmds| {
             if let Some(commands) = cmds.borrow_mut().get_mut(&key) {
+                commands.clear();
+            }
+        });
+        CANVAS_LAST_FRAME.with(|last| {
+            if let Some(commands) = last.borrow_mut().get_mut(&key) {
                 commands.clear();
             }
         });
