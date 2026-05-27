@@ -78,6 +78,63 @@ unsafe fn make_two_field_object(
     obj
 }
 
+fn cp_run_command_capture(mut command: Command) -> std::io::Result<(std::process::Output, u32)> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let child = command.spawn()?;
+    let pid = child.id();
+    let output = child.wait_with_output()?;
+    Ok((output, pid))
+}
+
+#[cfg(unix)]
+fn cp_exit_signal(status: std::process::ExitStatus) -> Option<&'static str> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal().map(cp_signal_name)
+}
+
+#[cfg(not(unix))]
+fn cp_exit_signal(_status: std::process::ExitStatus) -> Option<&'static str> {
+    None
+}
+
+fn cp_output_array(stdout: &[u8], stderr: &[u8]) -> f64 {
+    use crate::array::{js_array_alloc, js_array_push_f64};
+
+    let output = js_array_alloc(3);
+    js_array_push_f64(output, TAG_NULL_F64);
+    js_array_push_f64(output, cp_box_string_bytes(stdout));
+    js_array_push_f64(output, cp_box_string_bytes(stderr));
+    crate::value::js_nanbox_pointer(output as i64)
+}
+
+fn cp_throw_sync_nonzero_exit(output: std::process::Output, pid: u32) -> ! {
+    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_ERROR, 6);
+    let status = output
+        .status
+        .code()
+        .map_or(TAG_NULL_F64, |code| code as f64);
+    let signal = cp_exit_signal(output.status).map_or(TAG_NULL_F64, cp_box_string);
+    js_object_set_field_by_name(obj, cp_str_key(b"status"), status);
+    js_object_set_field_by_name(obj, cp_str_key(b"signal"), signal);
+    js_object_set_field_by_name(
+        obj,
+        cp_str_key(b"output"),
+        cp_output_array(&output.stdout, &output.stderr),
+    );
+    js_object_set_field_by_name(obj, cp_str_key(b"pid"), pid as f64);
+    js_object_set_field_by_name(
+        obj,
+        cp_str_key(b"stdout"),
+        cp_box_string_bytes(&output.stdout),
+    );
+    js_object_set_field_by_name(
+        obj,
+        cp_str_key(b"stderr"),
+        cp_box_string_bytes(&output.stderr),
+    );
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+}
+
 /// Spawn a process in the background (non-blocking).
 /// cmd_val: NaN-boxed string (command path)
 /// args_ptr: raw pointer to ArrayHeader of string args (0 = none)
@@ -356,8 +413,12 @@ pub extern "C" fn js_child_process_exec_sync(
             cp_apply_options(&mut command, cp_box_ptr(options_ptr as *const u8));
         }
 
-        match command.output() {
+        match cp_run_command_capture(command) {
             Ok(output) => {
+                let (output, pid) = output;
+                if !output.status.success() {
+                    cp_throw_sync_nonzero_exit(output, pid);
+                }
                 // Return stdout as a string
                 let stdout = &output.stdout;
                 js_string_from_bytes(stdout.as_ptr(), stdout.len() as u32)
@@ -1384,8 +1445,13 @@ pub extern "C" fn js_child_process_exec_file_sync(
     let mut command = Command::new(&file_str);
     command.args(&arg_strs);
     cp_apply_options(&mut command, opts_val);
-    match command.output() {
-        Ok(o) => js_string_from_bytes(o.stdout.as_ptr(), o.stdout.len() as u32),
+    match cp_run_command_capture(command) {
+        Ok((o, pid)) => {
+            if !o.status.success() {
+                cp_throw_sync_nonzero_exit(o, pid);
+            }
+            js_string_from_bytes(o.stdout.as_ptr(), o.stdout.len() as u32)
+        }
         Err(_) => js_string_from_bytes(b"".as_ptr(), 0),
     }
 }
