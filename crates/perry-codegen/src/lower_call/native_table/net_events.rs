@@ -1065,7 +1065,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "once",
         class_filter: None,
         runtime: "js_events_once",
-        args: &[NA_PTR, NA_STR],
+        args: &[NA_PTR, NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1074,7 +1074,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "on",
         class_filter: None,
         runtime: "js_events_on",
-        args: &[NA_PTR, NA_STR],
+        args: &[NA_PTR, NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {

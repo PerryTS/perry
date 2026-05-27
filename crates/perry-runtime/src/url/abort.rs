@@ -110,8 +110,11 @@ fn fire_abort_listeners(signal: *mut ObjectHeader) {
         return;
     }
     let len = crate::array::js_array_length(arr_ptr) as usize;
+    let mut callbacks = Vec::with_capacity(len);
     for i in 0..len {
-        let cb_val = crate::array::js_array_get_f64(arr_ptr, i as u32);
+        callbacks.push(crate::array::js_array_get_f64(arr_ptr, i as u32));
+    }
+    for cb_val in callbacks {
         let cb_bits = cb_val.to_bits();
         // Try to extract closure pointer (may be POINTER_TAG or raw bitcast).
         let cb_ptr = if (cb_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG_AC {
@@ -132,6 +135,22 @@ fn abort_signal_is_aborted(signal: *mut ObjectHeader) -> bool {
         return false;
     }
     crate::object::js_object_get_field_f64(signal, 0).to_bits() == TAG_TRUE_AC
+}
+
+/// Return true if the given AbortSignal has already been aborted.
+#[no_mangle]
+pub extern "C" fn js_abort_signal_is_aborted(signal: *mut ObjectHeader) -> i32 {
+    i32::from(abort_signal_is_aborted(signal))
+}
+
+/// Construct a Node-compatible AbortError value.
+#[no_mangle]
+pub extern "C" fn js_abort_error_value() -> f64 {
+    let msg = b"The operation was aborted";
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_error_new_with_name_message(b"AbortError", msg_ptr);
+    crate::node_submodules::register_error_code_pub(msg_ptr, "ABORT_ERR");
+    crate::value::js_nanbox_pointer(err as i64)
 }
 
 /// Abort the controller (sets aborted = true on signal)

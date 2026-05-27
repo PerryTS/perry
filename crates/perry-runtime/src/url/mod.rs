@@ -19,8 +19,8 @@ pub mod url_class;
 
 pub use self::abort::{
     js_abort_controller_abort, js_abort_controller_abort_reason, js_abort_controller_new,
-    js_abort_controller_signal, js_abort_signal_add_listener, js_abort_signal_remove_listener,
-    js_abort_signal_timeout,
+    js_abort_controller_signal, js_abort_error_value, js_abort_signal_add_listener,
+    js_abort_signal_is_aborted, js_abort_signal_remove_listener, js_abort_signal_timeout,
 };
 pub use self::node_compat::{
     js_url_domain_to_ascii, js_url_domain_to_unicode, js_url_file_url_to_path, js_url_format,
