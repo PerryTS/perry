@@ -123,13 +123,15 @@ vocabulary is:
 ```text
 jsvalue, string, bool, i32, i64, i64_str, u32, u64, usize,
 f32, f64, number, ptr, buffer_len, buffer+len, handle<T>,
-promise<T>, void
+promise<T>, pod, void
 ```
 
 `number` is a compatibility alias for `f64`; `js_value` and `boolean`
 are compatibility aliases for `jsvalue` and `bool`. Bare `handle` is
 the same as an untyped `handle<T>`. Bare `promise` is the same as
-`promise<jsvalue>`.
+`promise<jsvalue>`. Unlike handles and promises, `pod` has no
+string-only spelling; use object form so the field order and scalar ABI
+types are explicit.
 
 Descriptors with metadata may also use object form:
 
@@ -146,6 +148,15 @@ Descriptors with metadata may also use object form:
 }
 { "kind": "promise", "result": "jsvalue" }
 { "kind": "buffer+len" }
+{
+  "kind": "pod",
+  "name": "Packet",
+  "fields": [
+    { "name": "tag", "type": "u32" },
+    { "name": "count", "type": "usize" },
+    { "name": "weight", "abi": { "kind": "f32" } }
+  ]
+}
 ```
 
 Structured handles are GC-managed Perry native handle objects on the
@@ -163,6 +174,24 @@ Handle fields:
 | `thread` | `"any"` / `"main"` / `"creator"` | `"any"` | Runtime validation rejects use from the wrong thread. |
 | `finalizer` | symbol string | none | Valid only on owned return handles. The symbol must have `void(ptr, ptr)` ABI and must not call Perry JS APIs during GC. |
 | `debugName` | string | `type` or `"handle"` | Stored inline for diagnostics. |
+
+POD descriptors are parameter-only. A POD parameter describes one
+closed JavaScript object shape that Perry can copy into verifier-backed
+C-layout storage and pass to native code as a pointer. The `fields`
+array is ordered, and field order is part of the ABI. Each field must
+have a non-empty `name` and exactly one of `type` or `abi`.
+
+POD field types are restricted to numeric ABI scalars that have stable
+C layout:
+
+```text
+i32, i64, u32, u64, usize, f32, f64, number, buffer_len
+```
+
+`number` aliases `f64`; `buffer_len` is a `u32` byte-length scalar.
+Dynamic or pointerful descriptors such as `jsvalue`, `string`, `bool`,
+`ptr`, `buffer+len`, `handle`, `promise`, nested `pod`, and `void` are
+rejected in POD fields.
 
 ### Param types
 
@@ -183,6 +212,7 @@ Handle fields:
 | `"buffer+len"` | `(*const u8, usize)` | one Buffer/Uint8Array-shaped argument |
 | `"handle"` / `"handle<T>"` | `i64` unwrapped resource pointer | opaque native handle |
 | `"promise"` / `"promise<T>"` | `i64` promise handle | `Promise` handle metadata |
+| `{ "kind": "pod", ... }` | pointer to C-layout record storage | one object-shaped argument |
 
 ### Return types
 
@@ -212,14 +242,19 @@ Handle fields:
 > it's `-> i64` and the value happens to be a `StringHeader` address
 > (closes [#222]).
 
-`"void"` is valid only as a return descriptor. `"buffer+len"` is
-valid only as a parameter descriptor because it expands one
-JavaScript argument into two native ABI slots.
+`"void"` is valid only as a return descriptor. `"buffer+len"` and
+`{ "kind": "pod", ... }` are valid only as parameter descriptors:
+`"buffer+len"` expands one JavaScript argument into two native ABI
+slots, while `pod` lowers one object-shaped argument to a pointer to
+verifier-backed C-layout storage.
 
 Native-only numeric descriptors (`f32`, `u32`, `u64`, `usize`,
 `buffer_len`) render as TypeScript `number`. Handles remain opaque
 GC-managed values, even though native functions still receive and
-return raw `i64` resource pointers at the ABI boundary.
+return raw `i64` resource pointers at the ABI boundary. POD parameters
+remain ordinary JavaScript objects at the boundary; guarded hot paths
+may pass native record storage directly, and dynamic values fall back to
+validated object-field materialization.
 Promises remain JavaScript promises; the optional `promise<T>` result
 metadata is currently recorded in compiler proof artifacts rather
 than changing the runtime ABI.

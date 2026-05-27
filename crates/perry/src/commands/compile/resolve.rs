@@ -30,6 +30,7 @@
 use anyhow::{anyhow, Result};
 use perry_api_manifest::{
     NativeAbiType, NativeHandleAbi, NativeHandleOwnership, NativeHandleThreadAffinity,
+    NativePodAbi, NativePodFieldAbi,
 };
 use perry_hir::ModuleKind;
 use std::collections::{HashMap, HashSet};
@@ -354,7 +355,7 @@ fn parse_native_library_functions(
                 &name,
                 "returns",
                 &returns.to_string(),
-                "buffer+len is a parameter-only native ABI convenience",
+                "buffer+len and pod are parameter-only native ABI descriptors",
             ));
         }
         parsed.push(NativeFunctionDecl {
@@ -583,6 +584,9 @@ fn parse_native_abi_descriptor(
             };
             Ok(NativeAbiType::Promise(Box::new(result)))
         }
+        "pod" => {
+            parse_native_pod_descriptor(package_json, function_index, function_name, slot, value)
+        }
         "buffer+len" => Ok(NativeAbiType::BufferAndLen),
         _ => NativeAbiType::parse_str(kind).map_err(|err| {
             invalid_native_abi_error(
@@ -595,6 +599,179 @@ fn parse_native_abi_descriptor(
             )
         }),
     }
+}
+
+fn parse_native_pod_descriptor(
+    package_json: &Path,
+    function_index: usize,
+    function_name: &str,
+    slot: &str,
+    value: &serde_json::Value,
+) -> Result<NativeAbiType> {
+    let object = value.as_object().expect("pod descriptor is an object");
+    let allowed = ["kind", "name", "fields"];
+    for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(invalid_native_abi_error(
+                package_json,
+                function_index,
+                function_name,
+                slot,
+                &value.to_string(),
+                &format!("unknown pod descriptor field `{key}`"),
+            ));
+        }
+    }
+
+    let name = match object.get("name") {
+        Some(v) => Some(
+            v.as_str()
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    invalid_native_abi_error(
+                        package_json,
+                        function_index,
+                        function_name,
+                        slot,
+                        &value.to_string(),
+                        "pod descriptor `name` must be a non-empty string",
+                    )
+                })?
+                .to_string(),
+        ),
+        None => None,
+    };
+
+    let fields_value = object.get("fields").ok_or_else(|| {
+        invalid_native_abi_error(
+            package_json,
+            function_index,
+            function_name,
+            slot,
+            &value.to_string(),
+            "pod descriptor requires a `fields` array",
+        )
+    })?;
+    let fields_array = fields_value.as_array().ok_or_else(|| {
+        invalid_native_abi_error(
+            package_json,
+            function_index,
+            function_name,
+            slot,
+            &value.to_string(),
+            "pod descriptor `fields` must be an array",
+        )
+    })?;
+    if fields_array.is_empty() {
+        return Err(invalid_native_abi_error(
+            package_json,
+            function_index,
+            function_name,
+            slot,
+            &value.to_string(),
+            "pod descriptor `fields` must contain at least one field",
+        ));
+    }
+
+    let mut seen = HashSet::new();
+    let mut fields = Vec::with_capacity(fields_array.len());
+    for (field_index, field_value) in fields_array.iter().enumerate() {
+        let Some(field_object) = field_value.as_object() else {
+            return Err(invalid_native_abi_error(
+                package_json,
+                function_index,
+                function_name,
+                slot,
+                &field_value.to_string(),
+                "pod field descriptor must be an object",
+            ));
+        };
+        let allowed = ["name", "type", "abi"];
+        for key in field_object.keys() {
+            if !allowed.contains(&key.as_str()) {
+                return Err(invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    function_name,
+                    slot,
+                    &field_value.to_string(),
+                    &format!("unknown pod field descriptor field `{key}`"),
+                ));
+            }
+        }
+        let field_name = field_object
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    function_name,
+                    &format!("{slot}.fields[{field_index}]"),
+                    &field_value.to_string(),
+                    "pod field `name` must be a non-empty string",
+                )
+            })?
+            .to_string();
+        if !seen.insert(field_name.clone()) {
+            return Err(invalid_native_abi_error(
+                package_json,
+                function_index,
+                function_name,
+                &format!("{slot}.fields[{field_index}]"),
+                &field_value.to_string(),
+                &format!("duplicate pod field `{field_name}`"),
+            ));
+        }
+        if field_object.contains_key("type") && field_object.contains_key("abi") {
+            return Err(invalid_native_abi_error(
+                package_json,
+                function_index,
+                function_name,
+                &format!("{slot}.fields[{field_index}]"),
+                &field_value.to_string(),
+                "pod field must use only one of `type` or `abi`",
+            ));
+        }
+        let ty_value = field_object
+            .get("type")
+            .or_else(|| field_object.get("abi"))
+            .ok_or_else(|| {
+                invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    function_name,
+                    &format!("{slot}.fields[{field_index}]"),
+                    &field_value.to_string(),
+                    "pod field requires a `type` string",
+                )
+            })?;
+        let ty = parse_native_abi_descriptor(
+            package_json,
+            function_index,
+            function_name,
+            &format!("{slot}.fields[{field_index}].type"),
+            ty_value,
+            NativeAbiDescriptorPosition::Param,
+        )?;
+        if !ty.is_valid_pod_field() {
+            return Err(invalid_native_abi_error(
+                package_json,
+                function_index,
+                function_name,
+                &format!("{slot}.fields[{field_index}].type"),
+                &ty.to_string(),
+                "pod field type must be one of i32, i64, u32, u64, usize, f32, f64, number, or buffer_len",
+            ));
+        }
+        fields.push(NativePodFieldAbi {
+            name: field_name,
+            ty,
+        });
+    }
+
+    Ok(NativeAbiType::Pod(NativePodAbi { name, fields }))
 }
 
 fn invalid_native_abi_error(

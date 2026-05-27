@@ -121,6 +121,16 @@ mod manifest_parse_tests {
                             "debugName": "SharedThingHandle"
                         },
                         { "kind": "promise", "result": "jsvalue" },
+                        {
+                            "kind": "pod",
+                            "name": "Packet",
+                            "fields": [
+                                { "name": "tag", "type": "u32" },
+                                { "name": "gain", "type": "f32" },
+                                { "name": "total", "type": "number" },
+                                { "name": "count", "type": "buffer_len" }
+                            ]
+                        },
                         { "kind": "buffer+len" }
                     ],
                     "returns": { "kind": "promise", "result": "f64" }
@@ -159,6 +169,7 @@ mod manifest_parse_tests {
                 "handle<MyThing>",
                 "handle<SharedThing>",
                 "promise<jsvalue>",
+                "pod<Packet>",
                 "buffer+len",
             ]
         );
@@ -251,6 +262,39 @@ mod manifest_parse_tests {
         assert!(err.contains("bad_return"), "{err}");
         assert!(err.contains("returns"), "{err}");
         assert!(err.contains("buffer+len"), "{err}");
+    }
+
+    #[test]
+    fn native_abi_manifest_pod_empty_fields_are_rejected() {
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_pod",
+            "params": [{ "kind": "pod", "fields": [] }],
+            "returns": "void"
+        }));
+        assert!(err.contains("package.json"), "{err}");
+        assert!(err.contains("bad_pod"), "{err}");
+        assert!(err.contains("fields"), "{err}");
+    }
+
+    #[test]
+    fn native_abi_manifest_pod_rejects_pointer_fields() {
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_pod_field",
+            "params": [{
+                "kind": "pod",
+                "fields": [
+                    { "name": "ptr", "type": "handle" }
+                ]
+            }],
+            "returns": "void"
+        }));
+        assert!(err.contains("package.json"), "{err}");
+        assert!(err.contains("bad_pod_field"), "{err}");
+        assert!(err.contains("fields[0].type"), "{err}");
+        assert!(
+            err.contains("POD") || err.contains("pod field type"),
+            "{err}"
+        );
     }
 
     #[test]

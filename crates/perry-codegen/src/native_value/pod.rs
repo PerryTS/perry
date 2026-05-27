@@ -1,3 +1,4 @@
+use perry_api_manifest::{NativeAbiType, NativePodAbi};
 use perry_hir::Expr;
 use perry_types::{ObjectType, Type};
 
@@ -227,6 +228,37 @@ pub(crate) fn expected_rep_for_native_rep(rep: &NativeRep) -> Option<ExpectedNat
         NativeRep::BufferLen => ExpectedNativeRep::BufferLen,
         _ => return None,
     })
+}
+
+pub(crate) fn native_rep_for_pod_abi_type(ty: &NativeAbiType) -> Option<NativeRep> {
+    Some(match ty {
+        NativeAbiType::I32 => NativeRep::I32,
+        NativeAbiType::I64 => NativeRep::I64,
+        NativeAbiType::U32 => NativeRep::U32,
+        NativeAbiType::U64 => NativeRep::U64,
+        NativeAbiType::USize => NativeRep::USize,
+        NativeAbiType::F32 => NativeRep::F32,
+        NativeAbiType::F64 => NativeRep::F64,
+        NativeAbiType::BufferLen => NativeRep::BufferLen,
+        _ => return None,
+    })
+}
+
+pub(crate) fn layout_for_manifest_pod(pod: &NativePodAbi) -> Result<PodLayoutManifest, String> {
+    if pod.fields.is_empty() {
+        return Err("pod_descriptor_empty_fields".to_string());
+    }
+    let mut specs = Vec::with_capacity(pod.fields.len());
+    for field in &pod.fields {
+        if field.name.trim().is_empty() {
+            return Err("pod_descriptor_empty_field_name".to_string());
+        }
+        let rep = native_rep_for_pod_abi_type(&field.ty)
+            .ok_or_else(|| format!("unsupported_pod_field_type:{}", field.ty))?;
+        specs.push((field.name.clone(), rep));
+    }
+    let layout_id = compute_layout_id(&specs);
+    recompute_layout_from_fields(layout_id, &specs)
 }
 
 pub(crate) fn scalar_size_align(rep: &NativeRep) -> Option<(u32, u32)> {

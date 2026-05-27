@@ -45,6 +45,7 @@ pub mod fs;
 pub mod gc;
 pub mod map;
 pub mod math;
+pub mod native_abi;
 pub mod native_arena;
 pub mod native_handle;
 pub mod node_stream;

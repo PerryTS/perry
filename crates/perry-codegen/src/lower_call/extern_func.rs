@@ -4,9 +4,9 @@
 //! `lower_perry_ui_table_call` machinery, V8-fallback bridge calls,
 //! and the generic `perry_fn_<src>__<name>` consumer-prefix path.
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use perry_api_manifest::{
-    NativeAbiType, NativeHandleAbi, NativeHandleOwnership, NativeHandleThreadAffinity,
+    NativeAbiType, NativeHandleAbi, NativeHandleOwnership, NativeHandleThreadAffinity, NativePodAbi,
 };
 use perry_hir::Expr;
 use perry_types::Type as HirType;
@@ -14,10 +14,11 @@ use perry_types::Type as HirType;
 use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
-    materialize_js_value, materialize_native_handle_to_js_value,
-    materialize_promise_boundary_to_js_value, record_runtime_native_handle_box_transition,
-    AliasState, BoundsState, BufferElem, BufferIndexUnit, LoweredValue, MaterializationReason,
-    NativeAbiDirection, NativeAbiTypeRecord,
+    layout_for_manifest_pod, llvm_type_for_native_rep, materialize_js_value,
+    materialize_native_handle_to_js_value, materialize_promise_boundary_to_js_value,
+    record_runtime_native_handle_box_transition, AliasState, BoundsState, BufferAccessMode,
+    BufferElem, BufferIndexUnit, LoweredValue, MaterializationReason, NativeAbiDirection,
+    NativeAbiTypeRecord, NativeRep, PodLayoutManifest, SemanticKind,
 };
 use crate::type_analysis::{is_array_expr, is_string_expr};
 use crate::types::{DOUBLE, F32, I1, I32, I64, I8, PTR, VOID};
@@ -33,18 +34,23 @@ fn record_native_abi_param(
     js_argument_index: usize,
     abi_slot_index: usize,
     lowered: &LoweredValue,
+    runtime_guard: Option<(&'static str, &'static str)>,
     note: impl Into<String>,
 ) {
+    let mut abi_record = NativeAbiTypeRecord::new(
+        descriptor,
+        NativeAbiDirection::Param,
+        Some(js_argument_index),
+        abi_slot_index,
+    );
+    if let Some((helper, requirement)) = runtime_guard {
+        abi_record = abi_record.with_runtime_guard(helper, requirement);
+    }
     ctx.record_lowered_value_with_native_abi(
         "NativeLibraryParam",
         format!("native_library.param.{}", descriptor.canonical_kind()),
         lowered,
-        NativeAbiTypeRecord::new(
-            descriptor,
-            NativeAbiDirection::Param,
-            Some(js_argument_index),
-            abi_slot_index,
-        ),
+        abi_record,
         vec![note.into()],
     );
 }
@@ -74,8 +80,8 @@ fn lower_buffer_and_len_param(
     arg_types: &mut Vec<crate::types::LlvmType>,
 ) {
     let blk = ctx.block();
-    let data_ptr = blk.call(PTR, "js_native_buffer_data_ptr", &[(DOUBLE, val)]);
-    let byte_len = blk.call(I64, "js_native_buffer_byte_len", &[(DOUBLE, val)]);
+    let data_ptr = blk.call(PTR, "js_native_abi_check_buffer_data_ptr", &[(DOUBLE, val)]);
+    let byte_len = blk.call(I64, "js_native_abi_check_buffer_byte_len", &[(DOUBLE, val)]);
     let ptr_value = LoweredValue::buffer_view(
         data_ptr.clone(),
         byte_len.clone(),
@@ -93,6 +99,10 @@ fn lower_buffer_and_len_param(
         js_argument_index,
         abi_slot_index,
         &ptr_value,
+        Some((
+            "js_native_abi_check_buffer_data_ptr",
+            "registered_buffer_span_data",
+        )),
         "buffer+len.data_ptr",
     );
     let len_value = LoweredValue::usize(byte_len.clone());
@@ -102,6 +112,10 @@ fn lower_buffer_and_len_param(
         js_argument_index,
         abi_slot_index + 1,
         &len_value,
+        Some((
+            "js_native_abi_check_buffer_byte_len",
+            "registered_buffer_span_byte_len",
+        )),
         "buffer+len.byte_len",
     );
     lowered.push(data_ptr);
@@ -170,10 +184,354 @@ fn lower_native_handle_param(
         js_argument_index,
         abi_slot_index,
         &native,
+        Some(("js_native_handle_unwrap", "native_handle_contract")),
         "native_handle.unwrap",
     );
     lowered.push(raw);
     arg_types.push(I64);
+}
+
+fn record_native_abi_pod_param(
+    ctx: &mut FnCtx<'_>,
+    descriptor: &NativeAbiType,
+    local_id: Option<u32>,
+    js_argument_index: usize,
+    abi_slot_index: usize,
+    data_ptr: &str,
+    layout: &PodLayoutManifest,
+    runtime_guard: Option<(&'static str, &'static str)>,
+    access_mode: Option<BufferAccessMode>,
+    materialization_reason: Option<MaterializationReason>,
+    notes: Vec<String>,
+) {
+    let mut abi_record = NativeAbiTypeRecord::new(
+        descriptor,
+        NativeAbiDirection::Param,
+        Some(js_argument_index),
+        abi_slot_index,
+    );
+    if let Some((helper, requirement)) = runtime_guard {
+        abi_record = abi_record.with_runtime_guard(helper, requirement);
+    }
+    let lowered = LoweredValue {
+        semantic: SemanticKind::PodRecord,
+        rep: NativeRep::PodRecord {
+            layout_id: layout.layout_id.clone(),
+            size: layout.size,
+            alignment: layout.alignment,
+        },
+        llvm_ty: PTR,
+        value: data_ptr.to_string(),
+    };
+    ctx.record_lowered_value_with_native_abi_and_pod_layout(
+        "NativeLibraryParam",
+        local_id,
+        "native_library.param.pod",
+        &lowered,
+        abi_record,
+        Some(layout.clone()),
+        access_mode,
+        materialization_reason,
+        notes,
+    );
+}
+
+fn record_native_abi_pod_dynamic_fallback(
+    ctx: &mut FnCtx<'_>,
+    local_id: Option<u32>,
+    value: &str,
+    layout: &PodLayoutManifest,
+    notes: Vec<String>,
+) {
+    let lowered = LoweredValue::js_value(value.to_string());
+    let mut all_notes = vec![format!("layout_id={}", layout.layout_id)];
+    all_notes.extend(notes);
+    ctx.record_lowered_value_with_access_mode(
+        "NativeLibraryParamPodFallback",
+        local_id,
+        "native_library.param.pod_materialized_object",
+        &lowered,
+        None,
+        None,
+        Some(BufferAccessMode::DynamicFallback),
+        Some(MaterializationReason::PodMaterialization),
+        false,
+        false,
+        all_notes,
+    );
+}
+
+fn pod_field_ptr(ctx: &mut FnCtx<'_>, data_slot: &str, offset: u32) -> String {
+    if offset == 0 {
+        data_slot.to_string()
+    } else {
+        ctx.block()
+            .gep(I8, data_slot, &[(I32, &offset.to_string())])
+    }
+}
+
+fn interned_pod_key_handle(ctx: &mut FnCtx<'_>, property: &str) -> String {
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+    let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+    ctx.block().and(I64, &key_bits, POINTER_MASK_I64)
+}
+
+fn lower_pod_field_from_js_value(
+    ctx: &mut FnCtx<'_>,
+    local_id: Option<u32>,
+    field: &crate::native_value::PodLayoutField,
+    value: &str,
+) -> LoweredValue {
+    let (helper, lowered) = match &field.native_rep {
+        NativeRep::I32 => {
+            let raw = ctx
+                .block()
+                .call(I32, "js_native_abi_check_i32", &[(DOUBLE, value)]);
+            ("js_native_abi_check_i32", LoweredValue::i32(raw))
+        }
+        NativeRep::I64 => {
+            let raw = ctx
+                .block()
+                .call(I64, "js_native_abi_check_i64", &[(DOUBLE, value)]);
+            ("js_native_abi_check_i64", LoweredValue::i64(raw))
+        }
+        NativeRep::U32 => {
+            let raw = ctx
+                .block()
+                .call(I32, "js_native_abi_check_u32", &[(DOUBLE, value)]);
+            ("js_native_abi_check_u32", LoweredValue::u32(raw))
+        }
+        NativeRep::U64 => {
+            let raw = ctx
+                .block()
+                .call(I64, "js_native_abi_check_u64", &[(DOUBLE, value)]);
+            ("js_native_abi_check_u64", LoweredValue::u64(raw))
+        }
+        NativeRep::USize => {
+            let raw = ctx
+                .block()
+                .call(I64, "js_native_abi_check_usize", &[(DOUBLE, value)]);
+            ("js_native_abi_check_usize", LoweredValue::usize(raw))
+        }
+        NativeRep::F32 => {
+            let raw = ctx
+                .block()
+                .call(F32, "js_native_abi_check_f32", &[(DOUBLE, value)]);
+            ("js_native_abi_check_f32", LoweredValue::f32(raw))
+        }
+        NativeRep::F64 => {
+            let raw = ctx
+                .block()
+                .call(DOUBLE, "js_native_abi_check_f64", &[(DOUBLE, value)]);
+            ("js_native_abi_check_f64", LoweredValue::f64(raw))
+        }
+        NativeRep::BufferLen => {
+            let raw = ctx
+                .block()
+                .call(I32, "js_native_abi_check_u32", &[(DOUBLE, value)]);
+            ("js_native_abi_check_u32", LoweredValue::buffer_len(raw))
+        }
+        other => unreachable!("manifest POD layout contained non-scalar field {other:?}"),
+    };
+    ctx.record_lowered_value(
+        "NativeLibraryParamPodField",
+        local_id,
+        "native_library.param.pod_field",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        vec![
+            format!("field={}", field.name),
+            format!("native_rep={}", field.native_rep.name()),
+            format!("guard={helper}"),
+        ],
+    );
+    lowered
+}
+
+fn build_pod_temp_from_object_value(
+    ctx: &mut FnCtx<'_>,
+    local_id: Option<u32>,
+    object_value: &str,
+    layout: &PodLayoutManifest,
+    fallback_notes: Vec<String>,
+) -> String {
+    record_native_abi_pod_dynamic_fallback(ctx, local_id, object_value, layout, fallback_notes);
+    let data_slot = ctx
+        .func
+        .alloca_entry_bytes_aligned(layout.size, layout.alignment);
+    let object_handle = ctx.block().call(
+        I64,
+        "js_native_abi_check_pod_object",
+        &[(DOUBLE, object_value)],
+    );
+    for field in &layout.fields {
+        let key_handle = interned_pod_key_handle(ctx, &field.name);
+        let field_value = ctx.block().call(
+            DOUBLE,
+            "js_object_get_field_by_name_f64",
+            &[(I64, &object_handle), (I64, &key_handle)],
+        );
+        let lowered = lower_pod_field_from_js_value(ctx, local_id, field, &field_value);
+        let ptr = pod_field_ptr(ctx, &data_slot, field.offset);
+        let llvm_ty = llvm_type_for_native_rep(&field.native_rep)
+            .expect("manifest POD field reps have scalar LLVM types");
+        ctx.block()
+            .store_aligned(llvm_ty, &lowered.value, &ptr, field.alignment);
+    }
+    data_slot
+}
+
+fn lower_manifest_pod_param(
+    ctx: &mut FnCtx<'_>,
+    descriptor: &NativeAbiType,
+    pod: &NativePodAbi,
+    js_argument_index: usize,
+    abi_slot_index: usize,
+    arg: &Expr,
+    lowered: &mut Vec<String>,
+    arg_types: &mut Vec<crate::types::LlvmType>,
+) -> Result<()> {
+    let layout = layout_for_manifest_pod(pod).map_err(|reason| {
+        anyhow!(
+            "native ABI pod descriptor {} has invalid layout: {}",
+            descriptor,
+            reason
+        )
+    })?;
+
+    if let Expr::LocalGet(local_id) = arg {
+        if let Some(local) = ctx.pod_records.get(local_id).cloned() {
+            if local.layout.layout_id != layout.layout_id
+                || local.layout.size != layout.size
+                || local.layout.alignment != layout.alignment
+            {
+                return Err(anyhow!(
+                    "native ABI pod parameter {} expected layout {} (size {}, align {}) but local {} has layout {} (size {}, align {})",
+                    descriptor,
+                    layout.layout_id,
+                    layout.size,
+                    layout.alignment,
+                    local_id,
+                    local.layout.layout_id,
+                    local.layout.size,
+                    local.layout.alignment
+                ));
+            }
+
+            let current = ctx.block().load(DOUBLE, &local.materialized_slot);
+            let current_bits = ctx.block().bitcast_double_to_i64(&current);
+            let is_unmaterialized =
+                ctx.block()
+                    .icmp_eq(I64, &current_bits, crate::nanbox::TAG_UNDEFINED_I64);
+            let native_idx = ctx.new_block("native.pod.param.raw");
+            let fallback_idx = ctx.new_block("native.pod.param.materialized");
+            let merge_idx = ctx.new_block("native.pod.param.merge");
+            let native_label = ctx.block_label(native_idx);
+            let fallback_label = ctx.block_label(fallback_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            ctx.block()
+                .cond_br(&is_unmaterialized, &native_label, &fallback_label);
+
+            ctx.current_block = native_idx;
+            record_native_abi_pod_param(
+                ctx,
+                descriptor,
+                Some(*local_id),
+                js_argument_index,
+                abi_slot_index,
+                &local.data_slot,
+                &layout,
+                None,
+                None,
+                None,
+                vec![
+                    format!("layout_id={}", layout.layout_id),
+                    "source=region_local_pod".to_string(),
+                ],
+            );
+            let native_end = ctx.current_block_label();
+            ctx.block().br(&merge_label);
+
+            ctx.current_block = fallback_idx;
+            let fallback_slot = build_pod_temp_from_object_value(
+                ctx,
+                Some(*local_id),
+                &current,
+                &layout,
+                vec!["source=materialized_pod_object".to_string()],
+            );
+            record_native_abi_pod_param(
+                ctx,
+                descriptor,
+                Some(*local_id),
+                js_argument_index,
+                abi_slot_index,
+                &fallback_slot,
+                &layout,
+                Some((
+                    "js_native_abi_check_pod_object",
+                    "object_with_manifest_fields",
+                )),
+                None,
+                None,
+                vec![
+                    format!("layout_id={}", layout.layout_id),
+                    "source=guarded_materialized_object_copy".to_string(),
+                ],
+            );
+            let fallback_end = ctx.current_block_label();
+            ctx.block().br(&merge_label);
+
+            ctx.current_block = merge_idx;
+            let ptr = ctx.block().phi(
+                PTR,
+                &[
+                    (&local.data_slot, &native_end),
+                    (&fallback_slot, &fallback_end),
+                ],
+            );
+            lowered.push(ptr);
+            arg_types.push(PTR);
+            return Ok(());
+        }
+    }
+
+    let object_value = lower_expr(ctx, arg)?;
+    let data_slot = build_pod_temp_from_object_value(
+        ctx,
+        None,
+        &object_value,
+        &layout,
+        vec!["source=dynamic_js_value".to_string()],
+    );
+    record_native_abi_pod_param(
+        ctx,
+        descriptor,
+        None,
+        js_argument_index,
+        abi_slot_index,
+        &data_slot,
+        &layout,
+        Some((
+            "js_native_abi_check_pod_object",
+            "object_with_manifest_fields",
+        )),
+        None,
+        None,
+        vec![
+            format!("layout_id={}", layout.layout_id),
+            "source=guarded_dynamic_object_copy".to_string(),
+        ],
+    );
+    lowered.push(data_slot);
+    arg_types.push(PTR);
+    Ok(())
 }
 
 fn materialize_native_handle_return(
@@ -238,9 +596,24 @@ fn lower_manifest_param(
 ) {
     match descriptor {
         NativeAbiType::JsValue | NativeAbiType::F64 => {
-            let native = match descriptor {
-                NativeAbiType::JsValue => LoweredValue::js_value(val.to_string()),
-                _ => LoweredValue::f64(val.to_string()),
+            let (raw, native, guard, note) = match descriptor {
+                NativeAbiType::JsValue => (
+                    val.to_string(),
+                    LoweredValue::js_value(val.to_string()),
+                    None,
+                    "direct.double",
+                ),
+                _ => {
+                    let raw = ctx
+                        .block()
+                        .call(DOUBLE, "js_native_abi_check_f64", &[(DOUBLE, val)]);
+                    (
+                        raw.clone(),
+                        LoweredValue::f64(raw),
+                        Some(("js_native_abi_check_f64", "number")),
+                        "f64.checked_number",
+                    )
+                }
             };
             record_native_abi_param(
                 ctx,
@@ -248,14 +621,15 @@ fn lower_manifest_param(
                 js_argument_index,
                 abi_slot_index,
                 &native,
-                "direct.double",
+                guard,
+                note,
             );
-            lowered.push(val.to_string());
+            lowered.push(raw);
             arg_types.push(DOUBLE);
         }
         NativeAbiType::String => {
             let blk = ctx.block();
-            let raw_ptr = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, val)]);
+            let raw_ptr = blk.call(I64, "js_native_abi_check_string_ptr", &[(DOUBLE, val)]);
             let ptr_val = blk.inttoptr(I64, &raw_ptr);
             let native = LoweredValue::native_handle(raw_ptr);
             record_native_abi_param(
@@ -264,7 +638,8 @@ fn lower_manifest_param(
                 js_argument_index,
                 abi_slot_index,
                 &native,
-                "string.raw_pointer",
+                Some(("js_native_abi_check_string_ptr", "string")),
+                "string.checked_pointer",
             );
             lowered.push(ptr_val);
             arg_types.push(PTR);
@@ -278,13 +653,16 @@ fn lower_manifest_param(
                 js_argument_index,
                 abi_slot_index,
                 &native,
+                Some(("js_is_truthy", "truthiness_coercion")),
                 "bool.truthy_i32",
             );
             lowered.push(raw);
             arg_types.push(I32);
         }
         NativeAbiType::I32 => {
-            let raw = ctx.block().toint32(val);
+            let raw = ctx
+                .block()
+                .call(I32, "js_native_abi_check_i32", &[(DOUBLE, val)]);
             let native = LoweredValue::i32(raw.clone());
             record_native_abi_param(
                 ctx,
@@ -292,13 +670,16 @@ fn lower_manifest_param(
                 js_argument_index,
                 abi_slot_index,
                 &native,
-                "i32.to_int32",
+                Some(("js_native_abi_check_i32", "int32_range")),
+                "i32.checked",
             );
             lowered.push(raw);
             arg_types.push(I32);
         }
         NativeAbiType::I64 | NativeAbiType::I64String => {
-            let raw = ctx.block().fptosi(DOUBLE, val, I64);
+            let raw = ctx
+                .block()
+                .call(I64, "js_native_abi_check_i64", &[(DOUBLE, val)]);
             let native = LoweredValue::i64(raw.clone());
             record_native_abi_param(
                 ctx,
@@ -306,13 +687,16 @@ fn lower_manifest_param(
                 js_argument_index,
                 abi_slot_index,
                 &native,
-                "i64.fptosi",
+                Some(("js_native_abi_check_i64", "safe_integer_i64")),
+                "i64.checked",
             );
             lowered.push(raw);
             arg_types.push(I64);
         }
         NativeAbiType::U32 | NativeAbiType::BufferLen => {
-            let raw = ctx.block().fptoui(DOUBLE, val, I32);
+            let raw = ctx
+                .block()
+                .call(I32, "js_native_abi_check_u32", &[(DOUBLE, val)]);
             let native = if matches!(descriptor, NativeAbiType::BufferLen) {
                 LoweredValue::buffer_len(raw.clone())
             } else {
@@ -324,13 +708,19 @@ fn lower_manifest_param(
                 js_argument_index,
                 abi_slot_index,
                 &native,
-                "u32.fptoui",
+                Some(("js_native_abi_check_u32", "uint32_range")),
+                "u32.checked",
             );
             lowered.push(raw);
             arg_types.push(I32);
         }
         NativeAbiType::U64 | NativeAbiType::USize => {
-            let raw = ctx.block().fptoui(DOUBLE, val, I64);
+            let helper = if matches!(descriptor, NativeAbiType::USize) {
+                "js_native_abi_check_usize"
+            } else {
+                "js_native_abi_check_u64"
+            };
+            let raw = ctx.block().call(I64, helper, &[(DOUBLE, val)]);
             let native = if matches!(descriptor, NativeAbiType::USize) {
                 LoweredValue::usize(raw.clone())
             } else {
@@ -342,13 +732,16 @@ fn lower_manifest_param(
                 js_argument_index,
                 abi_slot_index,
                 &native,
-                "u64.fptoui",
+                Some((helper, "safe_unsigned_integer")),
+                "u64.checked",
             );
             lowered.push(raw);
             arg_types.push(I64);
         }
         NativeAbiType::F32 => {
-            let raw = ctx.block().fptrunc(DOUBLE, val, F32);
+            let raw = ctx
+                .block()
+                .call(F32, "js_native_abi_check_f32", &[(DOUBLE, val)]);
             let native = LoweredValue::f32(raw.clone());
             record_native_abi_param(
                 ctx,
@@ -356,13 +749,16 @@ fn lower_manifest_param(
                 js_argument_index,
                 abi_slot_index,
                 &native,
-                "f32.fptrunc",
+                Some(("js_native_abi_check_f32", "number_f32_range")),
+                "f32.checked",
             );
             lowered.push(raw);
             arg_types.push(F32);
         }
         NativeAbiType::Ptr => {
-            let raw = unbox_to_i64(ctx.block(), val);
+            let raw = ctx
+                .block()
+                .call(I64, "js_native_abi_check_ptr", &[(DOUBLE, val)]);
             let native = LoweredValue::native_handle(raw.clone());
             record_native_abi_param(
                 ctx,
@@ -370,7 +766,8 @@ fn lower_manifest_param(
                 js_argument_index,
                 abi_slot_index,
                 &native,
-                "raw_handle.unbox",
+                Some(("js_native_abi_check_ptr", "pointer_payload")),
+                "ptr.checked_unbox",
             );
             lowered.push(raw);
             arg_types.push(I64);
@@ -388,7 +785,9 @@ fn lower_manifest_param(
             );
         }
         NativeAbiType::Promise(_) => {
-            let raw = unbox_to_i64(ctx.block(), val);
+            let raw = ctx
+                .block()
+                .call(I64, "js_native_abi_check_promise", &[(DOUBLE, val)]);
             let native = LoweredValue::promise_boundary(raw.clone());
             record_native_abi_param(
                 ctx,
@@ -396,7 +795,8 @@ fn lower_manifest_param(
                 js_argument_index,
                 abi_slot_index,
                 &native,
-                "promise_boundary.unbox",
+                Some(("js_native_abi_check_promise", "promise_object")),
+                "promise_boundary.checked_unbox",
             );
             lowered.push(raw);
             arg_types.push(I64);
@@ -411,6 +811,9 @@ fn lower_manifest_param(
                 lowered,
                 arg_types,
             );
+        }
+        NativeAbiType::Pod(_) => {
+            unreachable!("POD ABI params are lowered before JSValue materialization")
         }
         NativeAbiType::Void => {
             lowered.push(val.to_string());
@@ -857,9 +1260,23 @@ pub fn try_lower_extern_func_call(
         let mut arg_types: Vec<crate::types::LlvmType> = Vec::with_capacity(args.len());
         let mut abi_slot_index = 0usize;
         for (idx, a) in args.iter().enumerate() {
-            let val = lower_expr(ctx, a)?;
             let manifest_kind: Option<&NativeAbiType> =
                 manifest_sig.as_ref().and_then(|(p, _)| p.get(idx));
+            if let Some(descriptor @ NativeAbiType::Pod(pod)) = manifest_kind {
+                lower_manifest_pod_param(
+                    ctx,
+                    descriptor,
+                    pod,
+                    idx,
+                    abi_slot_index,
+                    a,
+                    &mut lowered,
+                    &mut arg_types,
+                )?;
+                abi_slot_index += descriptor.abi_slot_count();
+                continue;
+            }
+            let val = lower_expr(ctx, a)?;
             if let Some(descriptor) = manifest_kind {
                 lower_manifest_param(
                     ctx,

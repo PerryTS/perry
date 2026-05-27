@@ -11,7 +11,7 @@
 //! gets garbage back (see anvil README §48 bug hunt).
 
 use crate::module::LlModule;
-use crate::types::{DOUBLE, I1, I16, I32, I64, PTR, VOID};
+use crate::types::{DOUBLE, F32, I1, I16, I32, I64, PTR, VOID};
 
 mod arrays;
 mod objects;
@@ -91,6 +91,19 @@ pub fn declare_phase1(module: &mut LlModule) {
 
     // Type checks.
     module.declare_function("js_is_truthy", I32, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_f64", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_f32", F32, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_i32", I32, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_i64", I64, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_u32", I32, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_u64", I64, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_usize", I64, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_string_ptr", I64, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_ptr", I64, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_buffer_data_ptr", PTR, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_buffer_byte_len", I64, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_promise", I64, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_pod_object", I64, &[DOUBLE]);
 
     // Phase 2.1: timing primitives.
     declare_phase2_1(module);

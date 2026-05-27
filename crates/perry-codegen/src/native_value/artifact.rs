@@ -70,9 +70,18 @@ pub(crate) struct NativeAbiTypeRecord {
     pub js_argument_index: Option<usize>,
     pub abi_slot_index: usize,
     pub abi_slot_count: usize,
+    pub runtime_guard: Option<NativeRuntimeGuardRecord>,
     pub handle_type: Option<String>,
     pub native_handle: Option<NativeHandleContractRecord>,
     pub promise_result: Option<String>,
+    pub pod_name: Option<String>,
+    pub pod_fields: Vec<NativePodFieldContractRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct NativeRuntimeGuardRecord {
+    pub helper: String,
+    pub requirement: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -89,6 +98,12 @@ pub(crate) struct NativeHandleContractRecord {
     pub js_argument_index: Option<usize>,
     pub abi_slot_index: usize,
     pub abi_slot_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct NativePodFieldContractRecord {
+    pub name: String,
+    pub ty: String,
 }
 
 impl NativeAbiTypeRecord {
@@ -121,10 +136,38 @@ impl NativeAbiTypeRecord {
             js_argument_index,
             abi_slot_index,
             abi_slot_count: descriptor.abi_slot_count(),
+            runtime_guard: None,
             handle_type: descriptor.handle_type().map(str::to_string),
             native_handle,
             promise_result: descriptor.promise_result().map(ToString::to_string),
+            pod_name: descriptor
+                .pod_abi()
+                .and_then(|pod| pod.name.as_ref().map(ToString::to_string)),
+            pod_fields: descriptor
+                .pod_abi()
+                .map(|pod| {
+                    pod.fields
+                        .iter()
+                        .map(|field| NativePodFieldContractRecord {
+                            name: field.name.clone(),
+                            ty: field.ty.to_string(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
+    }
+
+    pub(crate) fn with_runtime_guard(
+        mut self,
+        helper: impl Into<String>,
+        requirement: impl Into<String>,
+    ) -> Self {
+        self.runtime_guard = Some(NativeRuntimeGuardRecord {
+            helper: helper.into(),
+            requirement: requirement.into(),
+        });
+        self
     }
 }
 
@@ -395,7 +438,7 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 10,
+        schema_version: 11,
         module,
         records,
         pod_layouts: collect_pod_layouts(records),

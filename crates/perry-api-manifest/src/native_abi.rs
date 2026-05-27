@@ -75,6 +75,24 @@ pub struct NativeHandleAbi {
     pub debug_name: String,
 }
 
+/// One field in a manifest-declared POD record ABI descriptor.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NativePodFieldAbi {
+    /// JavaScript object property and C-layout field name.
+    pub name: String,
+    /// Native scalar slot used for this field in the C-layout record.
+    pub ty: NativeAbiType,
+}
+
+/// Runtime contract for a manifest-declared plain-old-data record.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NativePodAbi {
+    /// Optional author-visible record label for diagnostics and artifacts.
+    pub name: Option<String>,
+    /// Ordered C-layout fields. Field order is part of the ABI.
+    pub fields: Vec<NativePodFieldAbi>,
+}
+
 impl NativeHandleAbi {
     /// Construct a borrowed, non-null, thread-agnostic descriptor.
     pub fn borrowed(type_name: Option<String>) -> Self {
@@ -156,6 +174,8 @@ pub enum NativeAbiType {
     Handle(NativeHandleAbi),
     /// Opaque native promise boundary handle with optional result metadata.
     Promise(Box<NativeAbiType>),
+    /// Pointer to a verifier-backed C-layout POD record.
+    Pod(NativePodAbi),
     /// No return value. This is valid only as a return descriptor.
     Void,
 }
@@ -236,6 +256,7 @@ impl NativeAbiType {
             Self::BufferAndLen => "buffer+len",
             Self::Handle(_) => "handle",
             Self::Promise(_) => "promise",
+            Self::Pod(_) => "pod",
             Self::Void => "void",
         }
     }
@@ -273,6 +294,29 @@ impl NativeAbiType {
         }
     }
 
+    /// Return the optional POD record ABI metadata attached to `pod`.
+    pub fn pod_abi(&self) -> Option<&NativePodAbi> {
+        match self {
+            Self::Pod(abi) => Some(abi),
+            _ => None,
+        }
+    }
+
+    /// True when this descriptor can be used as a scalar POD field.
+    pub fn is_valid_pod_field(&self) -> bool {
+        matches!(
+            self,
+            Self::I32
+                | Self::I64
+                | Self::U32
+                | Self::U64
+                | Self::USize
+                | Self::F32
+                | Self::F64
+                | Self::BufferLen
+        )
+    }
+
     /// True when this descriptor is legal in a parameter list.
     pub fn is_valid_param(&self) -> bool {
         !matches!(self, Self::Void)
@@ -280,7 +324,7 @@ impl NativeAbiType {
 
     /// True when this descriptor is legal as a return type.
     pub fn is_valid_return(&self) -> bool {
-        !matches!(self, Self::BufferAndLen)
+        !matches!(self, Self::BufferAndLen | Self::Pod(_))
     }
 
     /// Render the JavaScript-facing type used in generated docs and `.d.ts`
@@ -292,6 +336,7 @@ impl NativeAbiType {
             Self::Void => "void",
             Self::Promise(_) => "Promise<any>",
             Self::Handle(_) | Self::Ptr | Self::JsValue => "any",
+            Self::Pod(_) => "object",
             Self::BufferAndLen => "Buffer",
             Self::I32
             | Self::I64
@@ -313,8 +358,25 @@ impl fmt::Display for NativeAbiType {
                 None => f.write_str("handle"),
             },
             Self::Promise(result) => write!(f, "promise<{result}>"),
+            Self::Pod(pod) => write!(f, "{pod}"),
             other => f.write_str(other.canonical_kind()),
         }
+    }
+}
+
+impl fmt::Display for NativePodAbi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(name) = self.name.as_deref() {
+            return write!(f, "pod<{name}>");
+        }
+        f.write_str("pod<{")?;
+        for (idx, field) in self.fields.iter().enumerate() {
+            if idx != 0 {
+                f.write_str(",")?;
+            }
+            write!(f, "{}:{}", field.name, field.ty)?;
+        }
+        f.write_str("}>")
     }
 }
 

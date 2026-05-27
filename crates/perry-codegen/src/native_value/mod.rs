@@ -20,7 +20,7 @@ pub(crate) use materialize::{
     MaterializationReason,
 };
 pub(crate) use pod::{
-    collect_pod_init_fields, field_expected_rep, layout_decision_for_type,
+    collect_pod_init_fields, field_expected_rep, layout_decision_for_type, layout_for_manifest_pod,
     llvm_type_for_native_rep, validate_exact_init, PodLayoutDecision, PodLocal,
 };
 pub(crate) use rep::{ExpectedNativeRep, LoweredValue, NativeRep, SemanticKind};

@@ -27,7 +27,7 @@ use crate::native_value::{
     BufferElem, BufferIndexUnit, BufferViewRep, BufferViewSlot, ExpectedNativeRep,
     GuardedBufferIndex, LengthSource, LoweredValue, MaterializationReason, NativeAbiTypeRecord,
     NativeFactUse, NativeOwnedViewFact, NativeRep, NativeRepRecord, NativeValueState,
-    ScalarConversionRecord, SemanticKind,
+    PodLayoutManifest, ScalarConversionRecord, SemanticKind,
 };
 use crate::strings::StringPool;
 use crate::type_analysis::{
@@ -1165,6 +1165,42 @@ impl<'a> FnCtx<'a> {
             false,
             notes,
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_lowered_value_with_native_abi_and_pod_layout(
+        &mut self,
+        expr_kind: impl Into<String>,
+        local_id: Option<u32>,
+        consumer: impl Into<String>,
+        lowered: &LoweredValue,
+        native_abi_type: NativeAbiTypeRecord,
+        pod_layout: Option<PodLayoutManifest>,
+        access_mode: Option<BufferAccessMode>,
+        materialization_reason: Option<MaterializationReason>,
+        notes: Vec<String>,
+    ) {
+        self.record_lowered_value_full(
+            expr_kind,
+            local_id,
+            consumer,
+            lowered,
+            None,
+            None,
+            access_mode,
+            materialization_reason,
+            None,
+            None,
+            Some(native_abi_type),
+            false,
+            false,
+            notes,
+        );
+        if let Some(layout) = pod_layout {
+            if let Some(record) = self.native_rep_records.last_mut() {
+                record.pod_layout = Some(layout);
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

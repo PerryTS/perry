@@ -52,6 +52,13 @@ cat > "$LIBDIR/native.c" << 'EOF'
 static uint64_t HANDLE_SENTINEL = 0xfeed12345678ULL;
 static uint64_t PROMISE_SENTINEL = 0xbee812345678ULL;
 
+typedef struct AbiPacket {
+    uint32_t tag;
+    float gain;
+    double total;
+    uint32_t count;
+} AbiPacket;
+
 uint32_t abi_contract_ret_u32(void) {
     return 4000000000u;
 }
@@ -86,6 +93,8 @@ uint32_t abi_contract_check_all(
     uintptr_t usize_value,
     float f32_value,
     uint32_t buffer_len,
+    const uint8_t *buffer_data,
+    uintptr_t buffer_byte_len,
     uintptr_t handle,
     uintptr_t promise
 ) {
@@ -94,10 +103,24 @@ uint32_t abi_contract_check_all(
         && usize_value == (uintptr_t)65537u
         && f32_value == 6.25f
         && buffer_len == 12u
+        && buffer_data != 0
+        && buffer_byte_len == 12u
+        && buffer_data[0] == 18u
+        && buffer_data[1] == 52u
         && handle == (uintptr_t)&HANDLE_SENTINEL
-        && promise == (uintptr_t)&PROMISE_SENTINEL
+        && promise != 0
         ? 777u
         : 13u;
+}
+
+uint32_t abi_contract_check_packet(const AbiPacket *packet) {
+    return packet != 0
+        && packet->tag == 7u
+        && packet->gain == 1.5f
+        && packet->total == 2.25
+        && packet->count == 4u
+        ? 778u
+        : 14u;
 }
 EOF
 
@@ -121,7 +144,23 @@ cat > "$LIBDIR/package.json" << 'EOF'
         { "name": "abi_contract_ret_promise", "params": [], "returns": "promise" },
         {
           "name": "abi_contract_check_all",
-          "params": ["u32", "u64", "usize", "f32", "buffer_len", "handle", "promise"],
+          "params": ["u32", "u64", "usize", "f32", "buffer_len", "buffer+len", "handle", "promise"],
+          "returns": "u32"
+        },
+        {
+          "name": "abi_contract_check_packet",
+          "params": [
+            {
+              "kind": "pod",
+              "name": "AbiPacket",
+              "fields": [
+                { "name": "tag", "type": "u32" },
+                { "name": "gain", "type": "f32" },
+                { "name": "total", "type": "number" },
+                { "name": "count", "type": "buffer_len" }
+              ]
+            }
+          ],
           "returns": "u32"
         }
       ],
@@ -142,15 +181,23 @@ declare function abi_contract_ret_f32(): number;
 declare function abi_contract_ret_buffer_len(): number;
 declare function abi_contract_ret_handle(): any;
 declare function abi_contract_ret_promise(): any;
+type AbiPacket = PerryPod<{
+  tag: PerryU32;
+  gain: PerryF32;
+  total: number;
+  count: PerryBufferLen;
+}>;
 declare function abi_contract_check_all(
   u32Value: number,
   u64Value: number,
   usizeValue: number,
   f32Value: number,
   bufferLen: number,
+  buffer: Buffer,
   handle: any,
   promise: any
 ): number;
+declare function abi_contract_check_packet(packet: AbiPacket): number;
 
 function throughDynamicBoundary(value: any): any {
   return value;
@@ -173,22 +220,28 @@ export function runNativeAbiContract(): number {
   const f32Value = abi_contract_ret_f32();
   const nativeBufferLen = abi_contract_ret_buffer_len();
   const handle = throughDynamicBoundary(abi_contract_ret_handle());
-  const promise = throughDynamicBoundary(abi_contract_ret_promise());
+  const nativePromise = throughDynamicBoundary(abi_contract_ret_promise());
+  const promise = Promise.resolve(1);
+  const packet: AbiPacket = { tag: 7, gain: 1.5, total: 2.25, count: 4 };
   const bufferLen = buf.length;
   const bufferU32 = buf.readUInt32BE(0);
   const bufferF32 = buf.readFloatLE(4);
 
-  if (abi_contract_check_all(u32Value, u64Value, usizeValue, f32Value, bufferLen, handle, promise) !== 777) {
+  if (abi_contract_check_all(u32Value, u64Value, usizeValue, f32Value, bufferLen, buf, handle, promise) !== 777) {
     return 10;
   }
-  if (abi_contract_check_all(4000000000, 4294967297, 65537, 6.25, nativeBufferLen, handle, promise) !== 777) {
+  if (abi_contract_check_all(4000000000, 4294967297, 65537, 6.25, nativeBufferLen, buf, handle, promise) !== 777) {
     return 20;
+  }
+  if (abi_contract_check_packet(packet) !== 778) {
+    return 25;
   }
   if (u32Value !== 4000000000) return 30;
   if (u64Value !== 4294967297) return 40;
   if (usizeValue !== 65537) return 50;
   if (f32Value !== 6.25) return 60;
   if (nativeBufferLen !== 12) return 70;
+  if (!nativePromise) return 75;
   if (bufferLen !== 12) return 80;
   if (bufferU32 !== 305419896) return 90;
   if (bufferF32 !== 6.25) return 100;
@@ -269,6 +322,7 @@ for token in \
   '"consumer": "native_library.raw_buffer_len"' \
   '"consumer": "native_library.raw_handle"' \
   '"consumer": "native_library.raw_promise"' \
+  '"consumer": "native_library.param.pod"' \
   '"consumer": "BufferNumericRead.native_u32"' \
   '"consumer": "BufferNumericRead.native_f32"' \
   '"consumer": "Buffer.length.native_buffer_len"' \
@@ -279,9 +333,12 @@ for token in \
   '"native_rep_name": "buffer_len"' \
   '"native_rep_name": "native_handle"' \
   '"native_rep_name": "promise_boundary"' \
+  '"native_rep_name": "pod_record"' \
+  '"canonical_kind": "pod"' \
+  '"pod_fields"' \
   '"op": "unsigned_int_to_float"' \
   '"op": "float_extend"' \
-  '"op": "pointer_box"' \
+  '"op": "native_handle_box"' \
   '"op": "promise_box"'; do
   if ! grep -qF "$token" "$ARTIFACT_TEXT"; then
     echo "FAIL: native-reps artifact missing $token"

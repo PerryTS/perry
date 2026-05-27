@@ -65,14 +65,14 @@
       }
     },
     "abiParamDescriptor": {
-      "description": "Native ABI descriptor for one TypeScript argument. `buffer+len` consumes one JS argument and lowers to two native slots.",
+      "description": "Native ABI descriptor for one TypeScript argument. `buffer+len` consumes one JS argument and lowers to two native slots; `pod` consumes one JS object-shaped argument and lowers through a verifier-backed C-layout record pointer.",
       "anyOf": [
         { "$ref": "#/$defs/abiParamString" },
         { "$ref": "#/$defs/abiStructuredParam" }
       ]
     },
     "abiReturnDescriptor": {
-      "description": "Native ABI descriptor for the return value. `buffer+len` is parameter-only.",
+      "description": "Native ABI descriptor for the return value. `buffer+len` and `pod` are parameter-only.",
       "anyOf": [
         { "$ref": "#/$defs/abiReturnString" },
         { "$ref": "#/$defs/abiStructuredReturn" }
@@ -193,7 +193,9 @@
       "not": {
         "type": "object",
         "required": ["kind"],
-        "properties": { "kind": { "const": "buffer+len" } }
+        "properties": {
+          "kind": { "enum": ["buffer+len", "pod"] }
+        }
       }
     },
     "abiStructuredParamDescriptor": {
@@ -201,6 +203,7 @@
         { "$ref": "#/$defs/abiParamHandleDescriptor" },
         { "$ref": "#/$defs/abiPromiseDescriptor" },
         { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
+        { "$ref": "#/$defs/abiPodDescriptor" },
         { "$ref": "#/$defs/abiScalarDescriptor" }
       ]
     },
@@ -209,6 +212,7 @@
         { "$ref": "#/$defs/abiReturnHandleDescriptor" },
         { "$ref": "#/$defs/abiPromiseDescriptor" },
         { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
+        { "$ref": "#/$defs/abiPodDescriptor" },
         { "$ref": "#/$defs/abiScalarDescriptor" }
       ]
     },
@@ -217,6 +221,7 @@
         { "$ref": "#/$defs/abiHandleDescriptor" },
         { "$ref": "#/$defs/abiPromiseDescriptor" },
         { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
+        { "$ref": "#/$defs/abiPodDescriptor" },
         { "$ref": "#/$defs/abiScalarDescriptor" }
       ]
     },
@@ -309,6 +314,92 @@
       "required": ["kind"],
       "properties": {
         "kind": { "const": "buffer+len" }
+      }
+    },
+    "abiPodDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "pod" },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Optional record name used in diagnostics and proof artifacts."
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/abiPodFieldDescriptor" },
+          "description": "Ordered C-layout fields. Field order is part of the ABI."
+        }
+      }
+    },
+    "abiPodFieldDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "oneOf": [
+        { "required": ["type"] },
+        { "required": ["abi"] }
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "JavaScript object property and C-layout field name."
+        },
+        "type": {
+          "$ref": "#/$defs/abiPodFieldType",
+          "description": "Native scalar ABI descriptor for this field."
+        },
+        "abi": {
+          "$ref": "#/$defs/abiPodFieldType",
+          "description": "Alias for `type` when the manifest author wants to avoid a JavaScript property named `type`."
+        }
+      }
+    },
+    "abiPodFieldType": {
+      "description": "Scalar ABI descriptor accepted inside a `pod` field.",
+      "anyOf": [
+        { "$ref": "#/$defs/abiPodFieldString" },
+        { "$ref": "#/$defs/abiPodFieldStructuredScalar" }
+      ]
+    },
+    "abiPodFieldString": {
+      "type": "string",
+      "enum": [
+        "i32",
+        "i64",
+        "u32",
+        "u64",
+        "usize",
+        "f32",
+        "f64",
+        "number",
+        "buffer_len"
+      ]
+    },
+    "abiPodFieldStructuredScalar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "i32",
+            "i64",
+            "u32",
+            "u64",
+            "usize",
+            "f32",
+            "f64",
+            "number",
+            "buffer_len"
+          ]
+        }
       }
     },
     "abiScalarDescriptor": {
