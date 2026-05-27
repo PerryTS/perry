@@ -2264,12 +2264,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: ReadableStream.from(arrayOfBuffers) — chunk count or type wrong. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/method-typeof-function": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: some instance method reports wrong typeof (not 'function'). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/from-iterator-throws": {
     "issue": "1532",
     "added": "2026-05-24",
