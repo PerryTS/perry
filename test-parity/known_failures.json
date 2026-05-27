@@ -446,12 +446,6 @@
     "category": "bug-open",
     "reason": "node:stream: readableFlowing state not tracked on instance. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/flags/readable-ended": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: readableEnded flag + end event don't deliver. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/flags/writable-ended": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1117,12 +1111,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: Readable.prototype.compose(stream) instance method — not yet exposed (only free compose() works). Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/flags/readable-readable": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: readable.readable boolean — initial value or post-end value mismatches Node. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/flags/writable-corked": {
     "issue": "1531",
@@ -2827,12 +2815,6 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: getEventListeners(emitter, event) — wrong count/array shape. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/readable-flag-after-end": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: readable boolean — wrong value before/after end. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/from-bigint-throws": {
     "issue": "1545",

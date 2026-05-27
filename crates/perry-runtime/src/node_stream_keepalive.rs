@@ -21,6 +21,11 @@ static KEEP_NS_METHOD_PUSH: extern "C" fn(i64, f64) -> f64 = super::js_node_stre
 #[used]
 static KEEP_NS_READABLE_HWM: extern "C" fn(i64) -> f64 = super::js_node_stream_method_readable_hwm;
 #[used]
+static KEEP_NS_METHOD_READABLE: extern "C" fn(i64) -> f64 = super::js_node_stream_method_readable;
+#[used]
+static KEEP_NS_METHOD_READABLE_ENDED: extern "C" fn(i64) -> f64 =
+    super::js_node_stream_method_readable_ended;
+#[used]
 static KEEP_NS_WRITABLE_HWM: extern "C" fn(i64) -> f64 = super::js_node_stream_method_writable_hwm;
 #[used]
 static KEEP_NS_METHOD_RESUME: extern "C" fn(i64) -> f64 = super::js_node_stream_method_resume;

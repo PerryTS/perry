@@ -2509,6 +2509,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // property getters on typed stream instances.
     method("stream", "push", true, None),
     method("stream", "readableHighWaterMark", true, None),
+    method("stream", "readable", true, None),
+    method("stream", "readableEnded", true, None),
     method("stream", "writableHighWaterMark", true, None),
     method("stream", "destroyed", true, None),
     // --- child_process (synchronous + async exec surface;
