@@ -1074,6 +1074,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[PTR, I32, PTR, I32],
     );
+    // Namespace property reads should preserve normal JS object semantics for
+    // absent exports (`undefined`) instead of leaking the unresolved-import
+    // TAG_TRUE sentinel used by direct callable fallback paths.
+    module.declare_function(
+        "js_node_submodule_export_or_undefined",
+        DOUBLE,
+        &[PTR, I32, PTR, I32],
+    );
     // Issue #841 companion: per-submodule namespace stub object. Returns
     // a NaN-boxed ObjectHeader pointer whose fields are the function
     // singletons emitted by `js_node_submodule_export_as_function`.

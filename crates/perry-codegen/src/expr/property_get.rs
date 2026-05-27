@@ -731,9 +731,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // Issue #841: namespace member access for the five
                     // recognized Node submodules — `import * as ns from
                     // "node:timers/promises"; ns.setTimeout`. Resolve
-                    // directly to the per-(submodule, export) function
-                    // singleton; same value the named-import would
-                    // produce, so `ns.setTimeout === setTimeout` holds.
+                    // directly to the per-(submodule, export) value. Missing
+                    // members intentionally read as `undefined`, matching an
+                    // ordinary module namespace object instead of the older
+                    // unresolved-import TAG_TRUE sentinel.
                     // Done before the class_ids check below because
                     // none of the recognized submodules export classes
                     // by name today; if/when they do (e.g.
@@ -748,7 +749,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let blk = ctx.block();
                         return Ok(blk.call(
                             DOUBLE,
-                            "js_node_submodule_export_as_function",
+                            "js_node_submodule_export_or_undefined",
                             &[
                                 (PTR, &submod_label),
                                 (I32, &submod_len.to_string()),
