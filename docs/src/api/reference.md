@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1372 entries across 82 modules.
+Total: 1376 entries across 82 modules.
 
 ## Modules
 
@@ -120,6 +120,7 @@ Total: 1372 entries across 82 modules.
 - `deepStrictEqual` — module
 - `default` — module
 - `doesNotMatch` — module
+- `doesNotReject` — module
 - `doesNotThrow` — module
 - `equal` — module
 - `fail` — module
@@ -130,6 +131,7 @@ Total: 1372 entries across 82 modules.
 - `notEqual` — module
 - `notStrictEqual` — module
 - `ok` — module
+- `rejects` — module
 - `strict` — module
 - `strictEqual` — module
 - `throws` — module
@@ -150,6 +152,7 @@ Total: 1372 entries across 82 modules.
 - `deepStrictEqual` — module
 - `default` — module
 - `doesNotMatch` — module
+- `doesNotReject` — module
 - `doesNotThrow` — module
 - `equal` — module
 - `fail` — module
@@ -160,6 +163,7 @@ Total: 1372 entries across 82 modules.
 - `notEqual` — module
 - `notStrictEqual` — module
 - `ok` — module
+- `rejects` — module
 - `strictEqual` — module
 - `throws` — module
 

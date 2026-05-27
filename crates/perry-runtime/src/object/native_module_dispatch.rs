@@ -604,6 +604,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("assert", "doesNotThrow") | ("assert/strict", "doesNotThrow") => {
             js_assert_does_not_throw(arg(0), arg(1), arg(2))
         }
+        ("assert", "rejects") | ("assert/strict", "rejects") => {
+            js_assert_rejects(arg(0), arg(1), arg(2))
+        }
+        ("assert", "doesNotReject") | ("assert/strict", "doesNotReject") => {
+            js_assert_does_not_reject(arg(0), arg(1), arg(2))
+        }
         ("assert", "ifError") | ("assert/strict", "ifError") => js_assert_if_error(arg(0)),
 
         // ── fs module (args are NaN-boxed f64, booleans return as i32→f64) ──

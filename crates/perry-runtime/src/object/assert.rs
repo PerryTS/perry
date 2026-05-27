@@ -259,6 +259,123 @@ fn throw_assertion(
     ))
 }
 
+fn promise_ptr_from_value(value: f64) -> Option<*mut crate::promise::Promise> {
+    if crate::promise::js_value_is_promise(value) == 0 {
+        return None;
+    }
+    let ptr = crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise;
+    (!ptr.is_null()).then_some(ptr)
+}
+
+fn promise_value_from_ptr(promise: *mut crate::promise::Promise) -> f64 {
+    f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
+}
+
+fn fulfilled_promise(value: f64) -> *mut crate::promise::Promise {
+    let promise = crate::promise::js_promise_new();
+    crate::promise::js_promise_resolve(promise, value);
+    promise
+}
+
+fn rejected_promise(reason: f64) -> *mut crate::promise::Promise {
+    let promise = crate::promise::js_promise_new();
+    crate::promise::js_promise_reject(promise, reason);
+    promise
+}
+
+fn promise_from_assert_async_input(input: f64) -> *mut crate::promise::Promise {
+    if let Some(promise) = promise_ptr_from_value(input) {
+        return promise;
+    }
+    match call_block_capturing_throw(input) {
+        Ok(value) => promise_ptr_from_value(value).unwrap_or_else(|| fulfilled_promise(value)),
+        Err(reason) => rejected_promise(reason),
+    }
+}
+
+extern "C" fn assert_rejects_fulfilled(
+    closure: *const crate::closure::ClosureHeader,
+    _value: f64,
+) -> f64 {
+    let result =
+        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let expected = crate::closure::js_closure_get_capture_f64(closure, 1);
+    let message = crate::closure::js_closure_get_capture_f64(closure, 2);
+    let err = make_assertion_error(
+        assertion_message(message, "Missing expected rejection"),
+        undefined_f64(),
+        expected,
+        "rejects",
+        is_null_or_undefined(message),
+    );
+    crate::promise::js_promise_reject(result, err);
+    undefined_f64()
+}
+
+extern "C" fn assert_rejects_rejected(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    let result =
+        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let expected = crate::closure::js_closure_get_capture_f64(closure, 1);
+    let message = crate::closure::js_closure_get_capture_f64(closure, 2);
+    if expected_error_matches(reason, expected) {
+        crate::promise::js_promise_resolve(result, undefined_f64());
+    } else {
+        let err = make_assertion_error(
+            assertion_message(message, "The rejection did not match the expected matcher"),
+            reason,
+            expected,
+            "rejects",
+            is_null_or_undefined(message),
+        );
+        crate::promise::js_promise_reject(result, err);
+    }
+    undefined_f64()
+}
+
+extern "C" fn assert_does_not_reject_fulfilled(
+    closure: *const crate::closure::ClosureHeader,
+    _value: f64,
+) -> f64 {
+    let result =
+        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    crate::promise::js_promise_resolve(result, undefined_f64());
+    undefined_f64()
+}
+
+extern "C" fn assert_does_not_reject_rejected(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    let result =
+        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let message = crate::closure::js_closure_get_capture_f64(closure, 1);
+    let err = make_assertion_error(
+        assertion_message(message, "Got unwanted rejection"),
+        reason,
+        undefined_f64(),
+        "doesNotReject",
+        is_null_or_undefined(message),
+    );
+    crate::promise::js_promise_reject(result, err);
+    undefined_f64()
+}
+
+fn closure3(
+    func: *const u8,
+    result: *mut crate::promise::Promise,
+    expected: f64,
+    message: f64,
+) -> *const crate::closure::ClosureHeader {
+    let closure = crate::closure::js_closure_alloc(func, 3);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, result as i64);
+    crate::closure::js_closure_set_capture_f64(closure, 1, expected);
+    crate::closure::js_closure_set_capture_f64(closure, 2, message);
+    closure
+}
+
 fn deep_equal_bool(actual: f64, expected: f64) -> bool {
     crate::value::js_is_truthy(crate::builtins::js_util_is_deep_strict_equal(
         actual, expected,
@@ -521,6 +638,41 @@ pub extern "C" fn js_assert_does_not_throw(block: f64, _expected: f64, message: 
             false,
         ),
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_assert_rejects(input: f64, expected: f64, message: f64) -> f64 {
+    let source = promise_from_assert_async_input(input);
+    let result = crate::promise::js_promise_new();
+    let on_fulfilled = closure3(
+        assert_rejects_fulfilled as *const u8,
+        result,
+        expected,
+        message,
+    );
+    let on_rejected = closure3(
+        assert_rejects_rejected as *const u8,
+        result,
+        expected,
+        message,
+    );
+    crate::promise::js_promise_then(source, on_fulfilled, on_rejected);
+    promise_value_from_ptr(result)
+}
+
+#[no_mangle]
+pub extern "C" fn js_assert_does_not_reject(input: f64, _expected: f64, message: f64) -> f64 {
+    let source = promise_from_assert_async_input(input);
+    let result = crate::promise::js_promise_new();
+    let on_fulfilled =
+        crate::closure::js_closure_alloc(assert_does_not_reject_fulfilled as *const u8, 1);
+    let on_rejected =
+        crate::closure::js_closure_alloc(assert_does_not_reject_rejected as *const u8, 2);
+    crate::closure::js_closure_set_capture_ptr(on_fulfilled, 0, result as i64);
+    crate::closure::js_closure_set_capture_ptr(on_rejected, 0, result as i64);
+    crate::closure::js_closure_set_capture_f64(on_rejected, 1, message);
+    crate::promise::js_promise_then(source, on_fulfilled, on_rejected);
+    promise_value_from_ptr(result)
 }
 
 /// `new assert.AssertionError({actual, expected, operator, message, ...})`

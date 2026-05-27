@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1372 entries across 82 modules
+// Coverage: 1376 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -36,6 +36,8 @@ declare module "assert" {
   /** stdlib */
   export function doesNotMatch(...args: any[]): any;
   /** stdlib */
+  export function doesNotReject(...args: any[]): any;
+  /** stdlib */
   export function doesNotThrow(...args: any[]): any;
   /** stdlib */
   export function equal(...args: any[]): any;
@@ -55,6 +57,8 @@ declare module "assert" {
   export function notStrictEqual(...args: any[]): any;
   /** stdlib */
   export function ok(...args: any[]): any;
+  /** stdlib */
+  export function rejects(...args: any[]): any;
   /** stdlib */
   export function strict(...args: any[]): any;
   /** stdlib */
@@ -75,6 +79,8 @@ declare module "assert/strict" {
   /** stdlib */
   export function doesNotMatch(...args: any[]): any;
   /** stdlib */
+  export function doesNotReject(...args: any[]): any;
+  /** stdlib */
   export function doesNotThrow(...args: any[]): any;
   /** stdlib */
   export function equal(...args: any[]): any;
@@ -94,6 +100,8 @@ declare module "assert/strict" {
   export function notStrictEqual(...args: any[]): any;
   /** stdlib */
   export function ok(...args: any[]): any;
+  /** stdlib */
+  export function rejects(...args: any[]): any;
   /** stdlib */
   export function strictEqual(...args: any[]): any;
   /** stdlib */
