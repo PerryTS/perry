@@ -1016,12 +1016,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(single-transform) does not deliver data through. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/inheritance/constructor-name": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: stream classes' constructor.name does not match the export name. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/symbol/no-sync-iterator": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1945,12 +1939,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream/promises: pipeline resolves with the wrong value. Flips to PASS when #1533 lands."
-  },
-  "node-suite/stream/meta/constructor-name": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: constructor.name on stream classes — returns 'Object' or other instead of 'Readable'/'Writable'/etc. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/async-iter/single-iteration-only": {
     "issue": "1531",
@@ -2893,12 +2881,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: strategy.size returning non-number — doesn't throw on enqueue. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/events/constructor-is-function": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: constructor.name / typeof not 'function' on stream classes. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/from-string-chunk-buffer": {
     "issue": "1532",

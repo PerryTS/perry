@@ -71,6 +71,44 @@ pub extern "C" fn js_object_get_field(obj: *const ObjectHeader, field_index: u32
     }
 }
 
+unsafe fn own_data_field_by_name(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    if key.is_null() {
+        return None;
+    }
+    let keys = (*obj).keys_array;
+    let keys_ptr = keys as usize;
+    if keys.is_null() || (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
+        return None;
+    }
+    let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*keys_gc).obj_type != crate::gc::GC_TYPE_ARRAY {
+        return None;
+    }
+
+    let key_count = crate::array::js_array_length(keys) as usize;
+    if key_count > 65536 {
+        return None;
+    }
+    let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
+    for i in 0..key_count {
+        let key_val = crate::array::js_array_get(keys, i as u32);
+        if key_val.is_string() && crate::string::js_string_equals(key, key_val.as_string_ptr()) != 0
+        {
+            if i < alloc_limit {
+                return Some(js_object_get_field(obj, i as u32));
+            }
+            return Some(match overflow_get(obj as usize, i) {
+                Some(bits) => JSValue::from_bits(bits),
+                None => JSValue::undefined(),
+            });
+        }
+    }
+    None
+}
+
 // Issue #922: Rate-limit and bound the [WARN_NULL_PTR] message stream
 // + abort the process when a runaway loop is detected.
 //
@@ -1711,6 +1749,9 @@ pub extern "C" fn js_object_get_field_by_name(
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
             if key_bytes == b"constructor" {
+                if let Some(v) = own_data_field_by_name(obj, key) {
+                    return v;
+                }
                 let class_id = (*obj).class_id;
                 // Object-literal instances (`{ x: 1 }`) carry a synthetic
                 // `__AnonShape_*` class id. Spec says their `.constructor`

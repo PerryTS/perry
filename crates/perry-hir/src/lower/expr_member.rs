@@ -804,6 +804,32 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
+    // #1531/#1532: Node stream instances expose the normal JS constructor
+    // function (`r.constructor === Readable`, `r.constructor.name ===
+    // "Readable"`). Native-instance value reads normally lower to a 0-arg
+    // NativeMethodCall/getter, but `constructor` is metadata, not a stream
+    // method. Lower it back to the named module export so typeof/name reads
+    // see the callable constructor.
+    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+        if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+            if prop_ident.sym.as_ref() == "constructor" {
+                if let Some(("stream", class_name)) =
+                    ctx.lookup_native_instance(obj_ident.sym.as_ref())
+                {
+                    if matches!(
+                        class_name,
+                        "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+                    ) {
+                        return Ok(Expr::PropertyGet {
+                            object: Box::new(Expr::NativeModuleRef("stream".to_string())),
+                            property: class_name.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     // Check for native instance property access (e.g., response.status, response.ok)
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let obj_name = obj_ident.sym.to_string();

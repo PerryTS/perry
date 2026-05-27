@@ -1670,6 +1670,11 @@ fn init_lifecycle_state(stream: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
 }
 
+fn init_constructor(stream: f64, name: &str) {
+    let constructor = crate::object::bound_native_callable_export_value("stream", name);
+    set_hidden_value(stream, hidden_key(b"constructor"), constructor);
+}
+
 /// Initialize the readable side of a stream: direction flag, buffered byte
 /// counter, effective readable highWaterMark, and the visible
 /// `readableHighWaterMark` / `destroyed` properties (#1534/#1539).
@@ -1700,6 +1705,7 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
         js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, readable));
     }
     init_lifecycle_state(readable);
+    init_constructor(readable, "Readable");
     init_readable_state(readable, opts);
     async_iterator::install_readable_async_iterator_symbol(readable);
     readable
@@ -1718,6 +1724,7 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
         );
     }
     init_lifecycle_state(writable);
+    init_constructor(writable, "Writable");
     init_writable_state(writable, opts);
     writable
 }
@@ -1731,6 +1738,7 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
         js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, duplex));
     }
     init_lifecycle_state(duplex);
+    init_constructor(duplex, "Duplex");
     init_readable_state(duplex, opts);
     init_writable_state(duplex, opts);
     async_iterator::install_readable_async_iterator_symbol(duplex);
@@ -1741,12 +1749,16 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
 /// `transform`/`flush` callbacks aren't wired through.
 #[no_mangle]
 pub extern "C" fn js_node_stream_transform_new(_opts: f64) -> f64 {
-    js_node_stream_duplex_new(_opts)
+    let transform = js_node_stream_duplex_new(_opts);
+    init_constructor(transform, "Transform");
+    transform
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_passthrough_new(_opts: f64) -> f64 {
-    js_node_stream_duplex_new(_opts)
+    let passthrough = js_node_stream_duplex_new(_opts);
+    init_constructor(passthrough, "PassThrough");
+    passthrough
 }
 
 /// `Readable.from(iterable)` — Node's static factory. Returns a
