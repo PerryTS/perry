@@ -9,8 +9,13 @@ use super::*;
 ///   2. Call setjmp(jmpbuf) — returns 0 on first call, non-0 after longjmp
 ///   3. Branch: 0 → try_body, non-0 → catch_entry
 ///   4. try_body runs, calls js_try_end(), branches to finally
-///   5. catch_entry calls js_try_end(), reads exception, runs catch, branches to finally
-///   6. finally runs (if present), then falls through to merge
+///   5. catch_entry calls js_try_end(). With a user `catch`: reads the
+///      exception, runs catch, branches to finally. WITHOUT a `catch`
+///      (a `try/finally` with no handler): captures the exception, runs
+///      a dedicated copy of the finally body, then re-raises via
+///      js_throw so the throw propagates instead of being swallowed.
+///   6. finally runs (if present), then falls through to merge (only the
+///      normal-completion path reaches this merge finally)
 pub(crate) fn lower_try(
     ctx: &mut FnCtx<'_>,
     body: &[perry_hir::Stmt],
@@ -101,12 +106,39 @@ pub(crate) fn lower_try(
             ctx.block().store(DOUBLE, &exc, &slot);
         }
         lower_stmts(ctx, &clause.body)?;
-    }
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&finally_label);
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&finally_label);
+        }
+    } else {
+        // No catch clause: this is a `try { ... } finally { ... }`
+        // (or a bare `try { ... } finally {}`). The longjmp landed
+        // here because the try body threw. ECMAScript requires the
+        // finally to run and then the ORIGINAL exception to RE-PROPAGATE
+        // — it must NOT be swallowed. Previously this block only did
+        // `js_try_end()` + fell through to the shared merge finally and
+        // the function returned `undefined`, silently eating the throw.
+        //
+        // Issue #37 / effect's `internalCall` "forced" path:
+        // `try { return body() } finally {}` swallowed body()'s throw,
+        // surfacing as `(FiberFailure) Error: {}`.
+        //
+        // Capture the pending exception BEFORE running finally (the
+        // finally body may touch exception state), run a dedicated copy
+        // of the finally body on this exception path, then re-raise via
+        // js_throw — unless the finally itself completed abruptly (a
+        // `return`/`throw` inside finally overrides the pending
+        // exception, per spec), in which case its own terminator stands.
+        let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
+        if let Some(f) = finally {
+            lower_stmts(ctx, f)?;
+        }
+        if !ctx.block().is_terminated() {
+            ctx.block().call_void("js_throw", &[(DOUBLE, &exc)]);
+            ctx.block().unreachable();
+        }
     }
 
-    // --- finally / merge ---
+    // --- finally / merge (normal-completion path) ---
     ctx.current_block = finally_idx;
     if let Some(f) = finally {
         lower_stmts(ctx, f)?;

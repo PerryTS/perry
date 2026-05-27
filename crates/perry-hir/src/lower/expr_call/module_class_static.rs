@@ -56,6 +56,16 @@ pub(super) fn try_module_class_static(
                                 // value-method dispatch instead of building a
                                 // bogus NativeMethodCall(class="supportedEntryTypes").
                                 | ("perf_hooks", "supportedEntryTypes")
+                                // `process.version` is a string value. Let
+                                // String.prototype methods dispatch through
+                                // the normal value-method path instead of
+                                // building NativeMethodCall(class="version").
+                                | ("process", "version")
+                                // `os.EOL` / `os.devNull` are string-valued
+                                // module properties, so `os.devNull.includes(x)`
+                                // is a String method on the property value.
+                                | ("os", "EOL")
+                                | ("os", "devNull")
                         );
                         // Unimplemented-API gate (#463) for the chained
                         // `mod.X.Y()` case. The lower_member gate fires

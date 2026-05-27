@@ -491,11 +491,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_promisify", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_deprecate", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_boxed_number_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_string_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_boolean_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_promise", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_array_buffer", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_shared_array_buffer", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_any_array_buffer", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_array_buffer_view", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_typed_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_uint8_array", DOUBLE, &[DOUBLE]);
@@ -1385,6 +1388,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Issue #579: `new ArrayBuffer(size)` — zero-filled BufferHeader of `size`
     // bytes that subsequent `new Uint8Array(ab)` views ALIAS via shared pointer.
     module.declare_function("js_array_buffer_new", I64, &[I32]);
+    module.declare_function("js_shared_array_buffer_new", I64, &[I32]);
     // JSON full-featured stringify/parse (replacer + indent + reviver).
     module.declare_function("js_json_stringify_full", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_json_parse_with_reviver", I64, &[I64, I64]);
@@ -1522,6 +1526,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_buffer_from_arraybuffer_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_buffer_length", I32, &[I64]);
     module.declare_function("js_buffer_get", I32, &[I64, I32]);
+    module.declare_function("js_native_buffer_data_ptr", PTR, &[DOUBLE]);
+    module.declare_function("js_native_buffer_byte_len", I64, &[DOUBLE]);
     // console.time/count runtime functions.
     module.declare_function("js_console_time", VOID, &[I64]);
     module.declare_function("js_console_time_end", VOID, &[I64]);

@@ -57,7 +57,7 @@ pub extern "C" fn js_buffer_is_encoding(value: f64) -> i32 {
     }
 }
 
-fn value_bytes(value: f64) -> Option<&'static [u8]> {
+fn native_buffer_from_value(value: f64) -> Option<*const BufferHeader> {
     let bits = value.to_bits();
     let jsval = crate::JSValue::from_bits(bits);
     let raw_ptr = if jsval.is_pointer() || jsval.is_string() {
@@ -68,7 +68,28 @@ fn value_bytes(value: f64) -> Option<&'static [u8]> {
         0
     };
     if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
-        let buf = raw_ptr as *const BufferHeader;
+        Some(raw_ptr as *const BufferHeader)
+    } else {
+        None
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_native_buffer_data_ptr(value: f64) -> *const u8 {
+    native_buffer_from_value(value)
+        .map(buffer_data)
+        .unwrap_or(std::ptr::null())
+}
+
+#[no_mangle]
+pub extern "C" fn js_native_buffer_byte_len(value: f64) -> usize {
+    native_buffer_from_value(value)
+        .map(|buf| unsafe { (*buf).length as usize })
+        .unwrap_or(0)
+}
+
+fn value_bytes(value: f64) -> Option<&'static [u8]> {
+    if let Some(buf) = native_buffer_from_value(value) {
         return unsafe {
             Some(std::slice::from_raw_parts(
                 buffer_data(buf),

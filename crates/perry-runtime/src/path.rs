@@ -6,7 +6,7 @@ use crate::string::{js_string_from_bytes, StringHeader};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
+    if !is_string_header_ptr(ptr) {
         return None;
     }
     let len = (*ptr).byte_len as usize;
@@ -15,10 +15,49 @@ unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
+fn is_string_header_ptr(ptr: *const StringHeader) -> bool {
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    if ptr == crate::string::js_get_empty_string() {
+        return true;
+    }
+    if matches!(
+        crate::arena::classify_heap_generation(ptr as usize),
+        crate::arena::HeapGeneration::Unknown
+    ) {
+        return false;
+    }
+    unsafe {
+        let gc_header =
+            (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_STRING {
+            return false;
+        }
+        let byte_len = (*ptr).byte_len;
+        let capacity = (*ptr).capacity;
+        byte_len <= capacity && capacity < 1_073_741_824
+    }
+}
+
 /// Helper to create a JS string from a Rust string
 fn string_to_js(s: &str) -> *mut StringHeader {
     let bytes = s.as_bytes();
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+pub(crate) fn throw_invalid_path_arg_type() -> ! {
+    let msg = b"The \"path\" argument must be of type string.";
+    let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(s, "ERR_INVALID_ARG_TYPE");
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(f64::from_bits(
+        crate::value::JSValue::pointer(err as *const u8).bits(),
+    ))
+}
+
+fn string_from_header_or_throw(ptr: *const StringHeader) -> String {
+    unsafe { string_from_header(ptr) }.unwrap_or_else(|| throw_invalid_path_arg_type())
 }
 
 fn resolve_posix_str(path_str: &str) -> String {
@@ -41,8 +80,7 @@ fn resolve_posix_str(path_str: &str) -> String {
 /// normalizes — it does NOT reset on an absolute segment (that's
 /// `path.resolve`'s job). We can't use Rust's `Path::join` because it
 /// resets on absolute segments.
-#[no_mangle]
-pub extern "C" fn js_path_join(
+pub(crate) fn js_path_join_unchecked(
     a_ptr: *const StringHeader,
     b_ptr: *const StringHeader,
 ) -> *mut StringHeader {
@@ -62,12 +100,21 @@ pub extern "C" fn js_path_join(
     }
 }
 
+#[no_mangle]
+pub extern "C" fn js_path_join(
+    a_ptr: *const StringHeader,
+    b_ptr: *const StringHeader,
+) -> *mut StringHeader {
+    let _ = string_from_header_or_throw(a_ptr);
+    let _ = string_from_header_or_throw(b_ptr);
+    js_path_join_unchecked(a_ptr, b_ptr)
+}
+
 /// `path.win32.join(a, b)` — Windows-style join. Always emits backslash
 /// separators regardless of host platform. Treats both `/` and `\` as
 /// segment separators in normalization (Node's win32 implementation does
 /// the same) and collapses repeated separators.
-#[no_mangle]
-pub extern "C" fn js_path_win32_join(
+pub(crate) fn js_path_win32_join_unchecked(
     a_ptr: *const StringHeader,
     b_ptr: *const StringHeader,
 ) -> *mut StringHeader {
@@ -86,6 +133,16 @@ pub extern "C" fn js_path_win32_join(
         };
         string_to_js(&normalize_win32_str(&joined))
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_path_win32_join(
+    a_ptr: *const StringHeader,
+    b_ptr: *const StringHeader,
+) -> *mut StringHeader {
+    let _ = string_from_header_or_throw(a_ptr);
+    let _ = string_from_header_or_throw(b_ptr);
+    js_path_win32_join_unchecked(a_ptr, b_ptr)
 }
 
 /// Result of splitting a win32 path into its root and remainder.
@@ -291,128 +348,100 @@ fn normalize_win32_str(input: &str) -> String {
 /// returns `None` there, which we treat as "stay at root".
 #[no_mangle]
 pub extern "C" fn js_path_dirname(path_ptr: *const StringHeader) -> *mut StringHeader {
-    unsafe {
-        let path_str = match string_from_header(path_ptr) {
-            Some(s) => s,
-            None => return string_to_js("."),
-        };
+    let path_str = string_from_header_or_throw(path_ptr);
 
-        if path_str.is_empty() {
-            return string_to_js(".");
-        }
+    if path_str.is_empty() {
+        return string_to_js(".");
+    }
 
-        // POSIX root: dirname("/") = "/", dirname("///") = "/"
-        if path_str.chars().all(|c| c == '/') {
-            return string_to_js("/");
-        }
-        // Node preserves exactly two leading slashes for the dirname of
-        // `//foo` on POSIX.
-        if path_str.starts_with("//")
-            && !path_str.starts_with("///")
-            && !path_str[2..].contains('/')
-        {
-            return string_to_js("//");
-        }
+    // POSIX root: dirname("/") = "/", dirname("///") = "/"
+    if path_str.chars().all(|c| c == '/') {
+        return string_to_js("/");
+    }
+    // Node preserves exactly two leading slashes for the dirname of
+    // `//foo` on POSIX.
+    if path_str.starts_with("//") && !path_str.starts_with("///") && !path_str[2..].contains('/') {
+        return string_to_js("//");
+    }
 
-        let path = Path::new(&path_str);
-        match path.parent() {
-            Some(parent) => {
-                let s = parent.to_string_lossy();
-                if s.is_empty() {
-                    string_to_js(".")
-                } else {
-                    string_to_js(&s)
-                }
+    let path = Path::new(&path_str);
+    match path.parent() {
+        Some(parent) => {
+            let s = parent.to_string_lossy();
+            if s.is_empty() {
+                string_to_js(".")
+            } else {
+                string_to_js(&s)
             }
-            None => string_to_js("."),
         }
+        None => string_to_js("."),
     }
 }
 
 /// Get base name (file name) from path
 #[no_mangle]
 pub extern "C" fn js_path_basename(path_ptr: *const StringHeader) -> *mut StringHeader {
-    unsafe {
-        let path_str = match string_from_header(path_ptr) {
-            Some(s) => s,
-            None => return string_to_js(""),
-        };
+    let path_str = string_from_header_or_throw(path_ptr);
 
-        let path = Path::new(&path_str);
-        match path.file_name() {
-            Some(name) => string_to_js(&name.to_string_lossy()),
-            None => string_to_js(""),
-        }
+    let path = Path::new(&path_str);
+    match path.file_name() {
+        Some(name) => string_to_js(&name.to_string_lossy()),
+        None => string_to_js(""),
     }
 }
 
 /// Get file extension from path (including the dot)
 #[no_mangle]
 pub extern "C" fn js_path_extname(path_ptr: *const StringHeader) -> *mut StringHeader {
-    unsafe {
-        let path_str = match string_from_header(path_ptr) {
-            Some(s) => s,
-            None => return string_to_js(""),
-        };
+    let path_str = string_from_header_or_throw(path_ptr);
 
-        let path = Path::new(&path_str);
-        match path.extension() {
-            Some(ext) => {
-                let mut result = String::from(".");
-                result.push_str(&ext.to_string_lossy());
-                string_to_js(&result)
-            }
-            None => string_to_js(""),
+    let path = Path::new(&path_str);
+    match path.extension() {
+        Some(ext) => {
+            let mut result = String::from(".");
+            result.push_str(&ext.to_string_lossy());
+            string_to_js(&result)
         }
+        None => string_to_js(""),
     }
 }
 
 /// Check if path is absolute
 #[no_mangle]
 pub extern "C" fn js_path_is_absolute(path_ptr: *const StringHeader) -> i32 {
-    unsafe {
-        let path_str = match string_from_header(path_ptr) {
-            Some(s) => s,
-            None => return 0,
-        };
-        if Path::new(&path_str).is_absolute() {
-            1
-        } else {
-            0
-        }
+    let path_str = string_from_header_or_throw(path_ptr);
+    if Path::new(&path_str).is_absolute() {
+        1
+    } else {
+        0
     }
 }
 
 /// Resolve path to absolute path
 #[no_mangle]
 pub extern "C" fn js_path_resolve(path_ptr: *const StringHeader) -> *mut StringHeader {
-    unsafe {
-        let path_str = match string_from_header(path_ptr) {
-            Some(s) => s,
-            None => return string_to_js(""),
+    let path_str = string_from_header_or_throw(path_ptr);
+
+    if path_str.is_empty() {
+        return match std::env::current_dir() {
+            Ok(cwd) => string_to_js(&cwd.to_string_lossy()),
+            Err(_) => string_to_js(""),
         };
+    }
 
-        if path_str.is_empty() {
-            return match std::env::current_dir() {
-                Ok(cwd) => string_to_js(&cwd.to_string_lossy()),
-                Err(_) => string_to_js(""),
-            };
-        }
-
-        match std::fs::canonicalize(&path_str) {
-            Ok(abs_path) => string_to_js(&abs_path.to_string_lossy()),
-            Err(_) => {
-                // If canonicalize fails (file doesn't exist), try to construct absolute path
-                if Path::new(&path_str).is_absolute() {
-                    string_to_js(&path_str)
-                } else {
-                    match std::env::current_dir() {
-                        Ok(cwd) => {
-                            let joined = cwd.join(&path_str);
-                            string_to_js(&joined.to_string_lossy())
-                        }
-                        Err(_) => string_to_js(&path_str),
+    match std::fs::canonicalize(&path_str) {
+        Ok(abs_path) => string_to_js(&abs_path.to_string_lossy()),
+        Err(_) => {
+            // If canonicalize fails (file doesn't exist), try to construct absolute path
+            if Path::new(&path_str).is_absolute() {
+                string_to_js(&path_str)
+            } else {
+                match std::env::current_dir() {
+                    Ok(cwd) => {
+                        let joined = cwd.join(&path_str);
+                        string_to_js(&joined.to_string_lossy())
                     }
+                    Err(_) => string_to_js(&path_str),
                 }
             }
         }
@@ -463,13 +492,8 @@ fn normalize_str(input: &str) -> String {
 
 #[no_mangle]
 pub extern "C" fn js_path_normalize(path_ptr: *const StringHeader) -> *mut StringHeader {
-    unsafe {
-        let path_str = match string_from_header(path_ptr) {
-            Some(s) => s,
-            None => return string_to_js("."),
-        };
-        string_to_js(&normalize_str(&path_str))
-    }
+    let path_str = string_from_header_or_throw(path_ptr);
+    string_to_js(&normalize_str(&path_str))
 }
 
 #[no_mangle]
@@ -656,21 +680,19 @@ pub extern "C" fn js_path_resolve_join(
     a_ptr: *const StringHeader,
     b_ptr: *const StringHeader,
 ) -> *mut StringHeader {
-    unsafe {
-        let a = string_from_header(a_ptr).unwrap_or_default();
-        let b = string_from_header(b_ptr).unwrap_or_default();
+    let a = string_from_header_or_throw(a_ptr);
+    let b = string_from_header_or_throw(b_ptr);
 
-        let joined = if b.starts_with('/') {
-            b
-        } else if a.is_empty() {
-            b
-        } else if b.is_empty() {
-            a
-        } else {
-            format!("{}/{}", a, b)
-        };
-        string_to_js(&normalize_str(&joined))
-    }
+    let joined = if b.starts_with('/') {
+        b
+    } else if a.is_empty() {
+        b
+    } else if b.is_empty() {
+        a
+    } else {
+        format!("{}/{}", a, b)
+    };
+    string_to_js(&normalize_str(&joined))
 }
 
 /// `path.toNamespacedPath(path)` — Windows-only effect on Node. On POSIX

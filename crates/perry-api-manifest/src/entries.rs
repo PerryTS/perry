@@ -1925,6 +1925,37 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("os", "networkInterfaces", false, None),
     method("os", "userInfo", false, None),
     method("os", "version", false, None),
+    method_sig(
+        "os",
+        "getPriority",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "pid",
+            ty: TypeSpec::Number,
+            optional: true,
+        }],
+        TypeSpec::Number,
+    ),
+    method_sig(
+        "os",
+        "setPriority",
+        false,
+        None,
+        &[
+            ParamSpec::Named {
+                name: "pidOrPriority",
+                ty: TypeSpec::Number,
+                optional: false,
+            },
+            ParamSpec::Named {
+                name: "priority",
+                ty: TypeSpec::Number,
+                optional: true,
+            },
+        ],
+        TypeSpec::Void,
+    ),
     property("os", "EOL"),
     property("os", "devNull"),
     // Issue #649: os/crypto.constants tables — see
@@ -2220,6 +2251,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("util", "types"),
     method("util/types", "isPromise", false, None),
     method("util/types", "isArrayBuffer", false, None),
+    method("util/types", "isSharedArrayBuffer", false, None),
     method("util/types", "isAnyArrayBuffer", false, None),
     method("util/types", "isArrayBufferView", false, None),
     method("util/types", "isTypedArray", false, None),

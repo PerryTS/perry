@@ -1160,13 +1160,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
             map
         },
-        // FFI manifest: each `native_library_functions` entry is
-        // `(function_name, param_kinds, return_kind)` from the package.json
-        // `nativeLibrary.functions` declaration. Build a name → (params, returns)
-        // map so `lower_call` can emit the correct LLVM signature for direct
-        // calls to native C/Rust functions (matters when the C ABI differs
-        // from Perry's all-double default — e.g. `*mut View` returns in `x0`,
-        // not `d0`).
+        // FFI manifest: each `native_library_functions` entry is a typed
+        // native ABI signature from package.json `nativeLibrary.functions`.
+        // Build a name → (params, returns) map so `lower_call` can emit the
+        // correct LLVM signature for direct calls to native C/Rust functions
+        // (matters when the C ABI differs from Perry's all-double default —
+        // e.g. `*mut View` returns in `x0`, not `d0`).
         ffi_signatures: opts
             .native_library_functions
             .iter()

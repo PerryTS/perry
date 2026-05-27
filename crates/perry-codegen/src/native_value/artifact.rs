@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -40,6 +40,7 @@ pub(crate) enum NativeAbiTransitionOp {
     UnsignedIntToFloat,
     FloatExtend,
     PointerBox,
+    NativeHandleBox,
     PromiseBox,
 }
 
@@ -53,6 +54,79 @@ pub(crate) struct NativeAbiTransitionRecord {
 }
 
 pub(crate) type ScalarConversionRecord = NativeAbiTransitionRecord;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NativeAbiDirection {
+    Param,
+    Return,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct NativeAbiTypeRecord {
+    pub canonical_kind: String,
+    pub display: String,
+    pub direction: NativeAbiDirection,
+    pub js_argument_index: Option<usize>,
+    pub abi_slot_index: usize,
+    pub abi_slot_count: usize,
+    pub handle_type: Option<String>,
+    pub native_handle: Option<NativeHandleContractRecord>,
+    pub promise_result: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct NativeHandleContractRecord {
+    pub type_name: Option<String>,
+    pub type_id: u64,
+    pub ownership: String,
+    pub nullable: bool,
+    pub thread_affinity: String,
+    pub debug_name: String,
+    pub finalizer_symbol: Option<String>,
+    pub has_finalizer: bool,
+    pub direction: NativeAbiDirection,
+    pub js_argument_index: Option<usize>,
+    pub abi_slot_index: usize,
+    pub abi_slot_count: usize,
+}
+
+impl NativeAbiTypeRecord {
+    pub(crate) fn new(
+        descriptor: &perry_api_manifest::NativeAbiType,
+        direction: NativeAbiDirection,
+        js_argument_index: Option<usize>,
+        abi_slot_index: usize,
+    ) -> Self {
+        let native_handle = descriptor
+            .handle_abi()
+            .map(|handle| NativeHandleContractRecord {
+                type_name: handle.type_name.clone(),
+                type_id: handle.type_id(),
+                ownership: handle.ownership.as_str().to_string(),
+                nullable: handle.nullable,
+                thread_affinity: handle.thread.as_str().to_string(),
+                debug_name: handle.debug_name.clone(),
+                finalizer_symbol: handle.finalizer.clone(),
+                has_finalizer: handle.finalizer.is_some(),
+                direction: direction.clone(),
+                js_argument_index,
+                abi_slot_index,
+                abi_slot_count: descriptor.abi_slot_count(),
+            });
+        Self {
+            canonical_kind: descriptor.canonical_kind().to_string(),
+            display: descriptor.to_string(),
+            direction,
+            js_argument_index,
+            abi_slot_index,
+            abi_slot_count: descriptor.abi_slot_count(),
+            handle_type: descriptor.handle_type().map(str::to_string),
+            native_handle,
+            promise_result: descriptor.promise_result().map(ToString::to_string),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct PodLayoutPadding {
@@ -113,6 +187,7 @@ pub(crate) struct NativeRepRecord {
     pub native_value_state: NativeValueState,
     pub native_abi_transition: Option<NativeAbiTransitionRecord>,
     pub scalar_conversion: Option<ScalarConversionRecord>,
+    pub native_abi_type: Option<NativeAbiTypeRecord>,
     pub pod_layout: Option<PodLayoutManifest>,
     pub consumed_facts: Vec<NativeFactUse>,
     pub rejected_facts: Vec<NativeFactUse>,
@@ -143,6 +218,7 @@ struct NativeRepSummary {
     unsafe_unchecked_unknown_bounds_accesses: usize,
     consumed_fact_count: usize,
     rejected_fact_count: usize,
+    raw_f64_layout_fact_counts: BTreeMap<String, usize>,
     native_owned_view_count: usize,
     pod_layout_count: usize,
     pod_record_count: usize,
@@ -161,6 +237,11 @@ impl NativeRepSummary {
         let mut unsafe_unchecked_unknown_bounds_accesses = 0;
         let mut consumed_fact_count = 0;
         let mut rejected_fact_count = 0;
+        let mut raw_f64_layout_fact_counts = BTreeMap::from([
+            ("consumed".to_string(), 0),
+            ("rejected".to_string(), 0),
+            ("invalidated".to_string(), 0),
+        ]);
         let mut native_owned_view_count = 0;
         let mut pod_layout_count = 0;
         let mut pod_record_count = 0;
@@ -195,6 +276,7 @@ impl NativeRepSummary {
                     NativeAbiTransitionOp::UnsignedIntToFloat => "unsigned_int_to_float",
                     NativeAbiTransitionOp::FloatExtend => "float_extend",
                     NativeAbiTransitionOp::PointerBox => "pointer_box",
+                    NativeAbiTransitionOp::NativeHandleBox => "native_handle_box",
                     NativeAbiTransitionOp::PromiseBox => "promise_box",
                 };
                 *native_abi_transition_op_counts
@@ -236,6 +318,17 @@ impl NativeRepSummary {
             }
             consumed_fact_count += record.consumed_facts.len();
             rejected_fact_count += record.rejected_facts.len();
+            for fact in record
+                .consumed_facts
+                .iter()
+                .chain(record.rejected_facts.iter())
+            {
+                if fact.kind == "raw_f64_layout" {
+                    *raw_f64_layout_fact_counts
+                        .entry(fact.state.clone())
+                        .or_insert(0) += 1;
+                }
+            }
         }
         Self {
             record_count: records.len(),
@@ -249,6 +342,7 @@ impl NativeRepSummary {
             unsafe_unchecked_unknown_bounds_accesses,
             consumed_fact_count,
             rejected_fact_count,
+            raw_f64_layout_fact_counts,
             native_owned_view_count,
             pod_layout_count,
             pod_record_count,
@@ -301,7 +395,7 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 8,
+        schema_version: 10,
         module,
         records,
         pod_layouts: collect_pod_layouts(records),

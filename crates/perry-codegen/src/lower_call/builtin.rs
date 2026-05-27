@@ -76,10 +76,12 @@ pub(super) fn lower_builtin_new(
         // `js_uint8array_new` in `crates/perry-runtime/src/buffer.rs`:
         // sources that ARE registered buffers but NOT marked as
         // Uint8Array — i.e. ArrayBuffers — are aliased rather than
-        // copied). Non-numeric arg shapes (`new ArrayBuffer(undefined)`
-        // etc.) coerce to 0 — matches Node/bun's `ToIndex(length)` step
-        // for the typical undefined-arg case.
-        "ArrayBuffer" => {
+        // copied). SharedArrayBuffer uses the same storage allocation with a
+        // separate runtime registry so util.types can distinguish it.
+        // Non-numeric arg shapes (`new ArrayBuffer(undefined)` etc.) coerce to
+        // 0 — matches Node/bun's `ToIndex(length)` step for the typical
+        // undefined-arg case.
+        "ArrayBuffer" | "SharedArrayBuffer" => {
             let size_box = if !args.is_empty() {
                 lower_expr(ctx, &args[0])?
             } else {
@@ -87,7 +89,12 @@ pub(super) fn lower_builtin_new(
             };
             let blk = ctx.block();
             let size_i32 = blk.fptosi(DOUBLE, &size_box, I32);
-            let handle = blk.call(I64, "js_array_buffer_new", &[(I32, &size_i32)]);
+            let runtime = if class_name == "SharedArrayBuffer" {
+                "js_shared_array_buffer_new"
+            } else {
+                "js_array_buffer_new"
+            };
+            let handle = blk.call(I64, runtime, &[(I32, &size_i32)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         // Minimal DataView support for BufferSource consumers such as
@@ -146,11 +153,16 @@ pub(super) fn lower_builtin_new(
         // every .on/.emit call dispatched against a junk pointer and
         // silently registered nothing / fired nothing.
         "EventEmitter" => {
-            for a in args {
+            let opts = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
                 let _ = lower_expr(ctx, a)?;
             }
             let blk = ctx.block();
-            let handle = blk.call(I64, "js_event_emitter_new", &[]);
+            let handle = blk.call(I64, "js_event_emitter_new_with_options", &[(DOUBLE, &opts)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         // node:perf_hooks — `new PerformanceObserver(cb)` registers the

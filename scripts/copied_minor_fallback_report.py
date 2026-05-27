@@ -46,6 +46,10 @@ LAYOUT_SCAN_TOTALS = (
     "unknown_layout_slots_read",
     "pointer_free_ranges_skipped",
     "pointer_free_slots_skipped",
+    "raw_numeric_array_ranges_skipped",
+    "raw_numeric_array_slots_skipped",
+    "raw_numeric_object_field_ranges_skipped",
+    "raw_numeric_object_field_slots_skipped",
 )
 
 ROOT_SOURCE_SLOT_NAMES = (
@@ -922,6 +926,13 @@ def run_target_collector_gates(
                     f"{name}: pointer_slots_read={read} exceeds pointer-free "
                     f"payload allowance {max_expected_reads} for skipped={skipped}"
                 )
+
+        if "raw_numeric" in name:
+            layout = workload["layout_scans"]
+            if layout["raw_numeric_array_slots_skipped"] == 0:
+                errors.append(f"{name}: no raw numeric array slots were skipped")
+            if layout["raw_numeric_object_field_slots_skipped"] == 0:
+                errors.append(f"{name}: no raw numeric object field slots were skipped")
 
         if "large" in name and target_gates_require_copied_minor(name):
             copying = workload["copying_nursery"]

@@ -576,6 +576,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_os_totalmem", DOUBLE, &[]);
     module.declare_function("js_os_uptime", DOUBLE, &[]);
     module.declare_function("js_os_user_info", I64, &[]);
+    module.declare_function("js_os_user_info_buffer", I64, &[]);
 
     // ========== Crypto ==========
     module.declare_function("js_crypto_aes256_decrypt", I64, &[I64, I64, I64]);
@@ -864,6 +865,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_emit0", DOUBLE, &[I64, I64]);
     module.declare_function("js_event_emitter_listener_count", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_event_emitter_new", I64, &[]);
+    module.declare_function("js_event_emitter_new_with_options", I64, &[DOUBLE]);
     module.declare_function("js_event_emitter_on", I64, &[I64, I64, I64]);
     module.declare_function("js_event_emitter_once", I64, &[I64, I64, I64]);
     module.declare_function("js_event_emitter_prepend_listener", I64, &[I64, I64, I64]);

@@ -828,6 +828,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::OsCpus => Expr::OsCpus,
         Expr::OsNetworkInterfaces => Expr::OsNetworkInterfaces,
         Expr::OsUserInfo => Expr::OsUserInfo,
+        Expr::OsUserInfoBuffer => Expr::OsUserInfoBuffer,
         Expr::OsUptime => Expr::OsUptime,
         Expr::OsEOL => Expr::OsEOL,
         Expr::OsDevNull => Expr::OsDevNull,

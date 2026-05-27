@@ -13,7 +13,7 @@ use perry_runtime::{
     ClosureHeader, JSValue, StringHeader,
 };
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::Mutex;
 
 use crate::common::async_bridge::{queue_promise_resolution, spawn};
@@ -74,7 +74,11 @@ pub unsafe extern "C" fn js_zlib_deflate_sync(data_ptr: *const StringHeader) -> 
         None => return std::ptr::null_mut(),
     };
 
-    let mut encoder = DeflateEncoder::new(&data[..], Compression::default());
+    // Node's `deflateSync` produces the zlib format (RFC 1950), not raw
+    // deflate — `deflateRawSync` is the raw form. Use ZlibEncoder so the
+    // output is Node-byte-compatible and round-trips through `inflateSync`
+    // (and matches `createDeflate`) (#1843).
+    let mut encoder = ZlibEncoder::new(&data[..], Compression::default());
     let mut compressed = Vec::new();
 
     match encoder.read_to_end(&mut compressed) {
@@ -92,7 +96,7 @@ pub unsafe extern "C" fn js_zlib_inflate_sync(data_ptr: *const StringHeader) -> 
         None => return std::ptr::null_mut(),
     };
 
-    let mut decoder = DeflateDecoder::new(&data[..]);
+    let mut decoder = ZlibDecoder::new(&data[..]);
     let mut decompressed = Vec::new();
 
     match decoder.read_to_end(&mut decompressed) {
@@ -312,6 +316,10 @@ enum Codec {
 
 struct ZlibStreamState {
     codec: Codec,
+    /// Streaming codec, fed incrementally by `.write()`. `None` for
+    /// `createUnzip` (uses `input` + `run_codec` on `.end()`) or once finalized.
+    codec_state: Option<CodecState>,
+    /// Only used by `createUnzip` (buffer-until-end auto-detect).
     input: Vec<u8>,
     ended: bool,
     /// Destinations registered via `.pipe(dest)` — stored as NaN-boxed bits;
@@ -323,6 +331,8 @@ enum ZlibEvent {
     Data(i64, Vec<u8>),
     End(i64),
     Error(i64, String),
+    /// `.flush(cb)` completion callback — invoked after its flushed 'data'.
+    Callback(i64),
 }
 
 lazy_static::lazy_static! {
@@ -355,6 +365,14 @@ fn scan_zlib_roots(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
             }
         }
     }
+    // `.flush(cb)` callbacks queued but not yet drained live only here.
+    if let Ok(mut pending) = ZLIB_PENDING_EVENTS.lock() {
+        for ev in pending.iter_mut() {
+            if let ZlibEvent::Callback(cb) = ev {
+                visitor.visit_i64_slot(cb);
+            }
+        }
+    }
 }
 
 fn next_zlib_id() -> i64 {
@@ -371,6 +389,7 @@ fn create_zlib_stream(codec: Codec) -> i64 {
         id,
         ZlibStreamState {
             codec,
+            codec_state: make_codec_state(codec),
             input: Vec::new(),
             ended: false,
             pipes: Vec::new(),
@@ -490,6 +509,101 @@ fn run_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
+// ── streaming codec state ────────────────────────────────────────────────────
+//
+// Stateful write-codec: fed incrementally by `.write()`, flushed by `.flush()`
+// (Z_SYNC_FLUSH / BROTLI_OPERATION_FLUSH), finalized by `.end()`. `None` for
+// `createUnzip` (gzip/zlib auto-detect stays buffer-until-end via `run_codec`).
+
+enum CodecState {
+    GzEnc(flate2::write::GzEncoder<Vec<u8>>),
+    GzDec(flate2::write::GzDecoder<Vec<u8>>),
+    ZlibEnc(flate2::write::ZlibEncoder<Vec<u8>>),
+    ZlibDec(flate2::write::ZlibDecoder<Vec<u8>>),
+    DeflateEnc(flate2::write::DeflateEncoder<Vec<u8>>),
+    DeflateDec(flate2::write::DeflateDecoder<Vec<u8>>),
+    BrotliEnc(brotli::CompressorWriter<Vec<u8>>),
+    BrotliDec(brotli::DecompressorWriter<Vec<u8>>),
+}
+
+impl CodecState {
+    fn write_chunk(&mut self, data: &[u8]) -> std::io::Result<()> {
+        match self {
+            CodecState::GzEnc(w) => w.write_all(data),
+            CodecState::GzDec(w) => w.write_all(data),
+            CodecState::ZlibEnc(w) => w.write_all(data),
+            CodecState::ZlibDec(w) => w.write_all(data),
+            CodecState::DeflateEnc(w) => w.write_all(data),
+            CodecState::DeflateDec(w) => w.write_all(data),
+            CodecState::BrotliEnc(w) => w.write_all(data),
+            CodecState::BrotliDec(w) => w.write_all(data),
+        }
+    }
+
+    fn flush_codec(&mut self) -> std::io::Result<()> {
+        match self {
+            CodecState::GzEnc(w) => w.flush(),
+            CodecState::GzDec(w) => w.flush(),
+            CodecState::ZlibEnc(w) => w.flush(),
+            CodecState::ZlibDec(w) => w.flush(),
+            CodecState::DeflateEnc(w) => w.flush(),
+            CodecState::DeflateDec(w) => w.flush(),
+            CodecState::BrotliEnc(w) => w.flush(),
+            CodecState::BrotliDec(w) => w.flush(),
+        }
+    }
+
+    fn drain(&mut self) -> Vec<u8> {
+        match self {
+            CodecState::GzEnc(w) => std::mem::take(w.get_mut()),
+            CodecState::GzDec(w) => std::mem::take(w.get_mut()),
+            CodecState::ZlibEnc(w) => std::mem::take(w.get_mut()),
+            CodecState::ZlibDec(w) => std::mem::take(w.get_mut()),
+            CodecState::DeflateEnc(w) => std::mem::take(w.get_mut()),
+            CodecState::DeflateDec(w) => std::mem::take(w.get_mut()),
+            CodecState::BrotliEnc(w) => std::mem::take(w.get_mut()),
+            CodecState::BrotliDec(w) => std::mem::take(w.get_mut()),
+        }
+    }
+
+    fn finish(self) -> std::io::Result<Vec<u8>> {
+        match self {
+            CodecState::GzEnc(w) => w.finish(),
+            CodecState::GzDec(w) => w.finish(),
+            CodecState::ZlibEnc(w) => w.finish(),
+            CodecState::ZlibDec(w) => w.finish(),
+            CodecState::DeflateEnc(w) => w.finish(),
+            CodecState::DeflateDec(w) => w.finish(),
+            CodecState::BrotliEnc(w) => Ok(w.into_inner()),
+            CodecState::BrotliDec(w) => Ok(w.into_inner().unwrap_or_else(|v| v)),
+        }
+    }
+}
+
+fn make_codec_state(codec: Codec) -> Option<CodecState> {
+    use flate2::write;
+    Some(match codec {
+        Codec::Gzip => CodecState::GzEnc(write::GzEncoder::new(Vec::new(), Compression::default())),
+        Codec::Gunzip => CodecState::GzDec(write::GzDecoder::new(Vec::new())),
+        Codec::Deflate => {
+            CodecState::ZlibEnc(write::ZlibEncoder::new(Vec::new(), Compression::default()))
+        }
+        Codec::Inflate => CodecState::ZlibDec(write::ZlibDecoder::new(Vec::new())),
+        Codec::DeflateRaw => CodecState::DeflateEnc(write::DeflateEncoder::new(
+            Vec::new(),
+            Compression::default(),
+        )),
+        Codec::InflateRaw => CodecState::DeflateDec(write::DeflateDecoder::new(Vec::new())),
+        Codec::BrotliCompress => {
+            CodecState::BrotliEnc(brotli::CompressorWriter::new(Vec::new(), 4096, 11, 22))
+        }
+        Codec::BrotliDecompress => {
+            CodecState::BrotliDec(brotli::DecompressorWriter::new(Vec::new(), 4096))
+        }
+        Codec::Unzip => return None,
+    })
+}
+
 // ── instance ops (called from dispatch_zlib_stream) ──────────────────────────
 
 /// Convert a `.write()`/`.end()` chunk (Buffer, string, number) to bytes.
@@ -521,45 +635,96 @@ unsafe fn chunk_to_bytes(value: f64) -> Option<Vec<u8>> {
     None
 }
 
-/// `stream.write(chunk)` — buffer the chunk for the deferred codec run.
+/// `stream.write(chunk)` — feed the streaming codec and queue any output that
+/// becomes available immediately (incremental 'data'). `createUnzip` buffers.
 pub unsafe fn zlib_stream_write(handle: i64, chunk: f64) {
-    if let Some(bytes) = chunk_to_bytes(chunk) {
-        if let Some(s) = ZLIB_STREAMS.lock().unwrap().get_mut(&handle) {
-            if !s.ended {
-                s.input.extend_from_slice(&bytes);
-            }
+    let bytes = match chunk_to_bytes(chunk) {
+        Some(b) => b,
+        None => return,
+    };
+    let event = {
+        let mut g = ZLIB_STREAMS.lock().unwrap();
+        match g.get_mut(&handle) {
+            Some(s) if !s.ended => match s.codec_state.as_mut() {
+                Some(cs) => match cs.write_chunk(&bytes) {
+                    Ok(()) => {
+                        let out = cs.drain();
+                        (!out.is_empty()).then(|| ZlibEvent::Data(handle, out))
+                    }
+                    Err(e) => Some(ZlibEvent::Error(handle, e.to_string())),
+                },
+                None => {
+                    s.input.extend_from_slice(&bytes);
+                    None
+                }
+            },
+            _ => return,
         }
+    };
+    if let Some(ev) = event {
+        ZLIB_PENDING_EVENTS.lock().unwrap().push(ev);
+        perry_runtime::event_pump::js_notify_main_thread();
     }
 }
 
-/// `stream.end([chunk])` — optional final chunk, then run the codec and queue
-/// the 'data'/'end' (or 'error') events.
+/// `stream.end([chunk])` — optional final chunk, then finalize + queue events.
 pub unsafe fn zlib_stream_end(handle: i64, chunk: f64) {
     zlib_stream_write(handle, chunk);
     finish_zlib_stream(handle);
 }
 
-fn finish_zlib_stream(handle: i64) {
-    let (codec, input) = {
+/// `stream.flush([kind], cb?)` — emit a Z_SYNC_FLUSH block, then queue the cb.
+pub fn zlib_stream_flush(handle: i64, cb: i64) {
+    let data = {
         let mut g = ZLIB_STREAMS.lock().unwrap();
         match g.get_mut(&handle) {
-            Some(s) if !s.ended => {
-                s.ended = true;
-                (s.codec, std::mem::take(&mut s.input))
-            }
-            _ => return,
+            Some(s) if !s.ended => match s.codec_state.as_mut() {
+                Some(cs) => {
+                    let _ = cs.flush_codec();
+                    cs.drain()
+                }
+                None => Vec::new(),
+            },
+            _ => Vec::new(),
         }
     };
     {
         let mut pending = ZLIB_PENDING_EVENTS.lock().unwrap();
-        match run_codec(codec, &input) {
+        if !data.is_empty() {
+            pending.push(ZlibEvent::Data(handle, data));
+        }
+        if cb != 0 {
+            pending.push(ZlibEvent::Callback(cb));
+        }
+    }
+    perry_runtime::event_pump::js_notify_main_thread();
+}
+
+fn finish_zlib_stream(handle: i64) {
+    let (codec_state, codec, input) = {
+        let mut g = ZLIB_STREAMS.lock().unwrap();
+        match g.get_mut(&handle) {
+            Some(s) if !s.ended => {
+                s.ended = true;
+                (s.codec_state.take(), s.codec, std::mem::take(&mut s.input))
+            }
+            _ => return,
+        }
+    };
+    let result = match codec_state {
+        Some(cs) => cs.finish().map_err(|e| e.to_string()),
+        None => run_codec(codec, &input).map_err(|e| e.to_string()), // Unzip
+    };
+    {
+        let mut pending = ZLIB_PENDING_EVENTS.lock().unwrap();
+        match result {
             Ok(out) => {
                 if !out.is_empty() {
                     pending.push(ZlibEvent::Data(handle, out));
                 }
                 pending.push(ZlibEvent::End(handle));
             }
-            Err(e) => pending.push(ZlibEvent::Error(handle, format!("{}", e))),
+            Err(msg) => pending.push(ZlibEvent::Error(handle, msg)),
         }
     }
     perry_runtime::event_pump::js_notify_main_thread();
@@ -734,6 +899,11 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                 ZLIB_LISTENERS.lock().unwrap().remove(&id);
                 ZLIB_STREAMS.lock().unwrap().remove(&id);
             }
+            ZlibEvent::Callback(cb) => {
+                if cb != 0 {
+                    js_closure_call0(cb as *const ClosureHeader);
+                }
+            }
             ZlibEvent::Error(id, msg) => {
                 let err_f64 = build_zlib_error(&msg);
                 for cb in listeners_for(id, "error") {
@@ -810,4 +980,50 @@ pub unsafe extern "C" fn js_zlib_gunzip(
     });
 
     promise
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+
+    /// Drive the streaming codec like the FFI ops do: write + drain, flush +
+    /// drain between chunks, then finish — reassembling the full stream.
+    fn stream_compress(codec: Codec, chunks: &[&[u8]]) -> Vec<u8> {
+        let mut cs = make_codec_state(codec).expect("streaming codec");
+        let mut out = Vec::new();
+        for c in chunks {
+            cs.write_chunk(c).unwrap();
+            out.extend(cs.drain());
+            cs.flush_codec().unwrap();
+            out.extend(cs.drain());
+        }
+        out.extend(cs.finish().unwrap());
+        out
+    }
+
+    #[test]
+    fn gzip_stream_roundtrips() {
+        let c = stream_compress(Codec::Gzip, &[b"hello ", b"streaming ", b"world"]);
+        assert_eq!(&c[..2], &[0x1f, 0x8b]);
+        assert_eq!(
+            run_codec(Codec::Gunzip, &c).unwrap(),
+            b"hello streaming world"
+        );
+    }
+
+    #[test]
+    fn deflate_stream_is_zlib_format_and_roundtrips() {
+        let c = stream_compress(Codec::Deflate, &[b"AAAA", b"BBBB"]);
+        assert_eq!(c[0], 0x78);
+        assert_eq!(run_codec(Codec::Inflate, &c).unwrap(), b"AAAABBBB");
+    }
+
+    #[test]
+    fn brotli_stream_roundtrips() {
+        let c = stream_compress(Codec::BrotliCompress, &[b"brotli ", b"stream ", b"test"]);
+        assert_eq!(
+            run_codec(Codec::BrotliDecompress, &c).unwrap(),
+            b"brotli stream test"
+        );
+    }
 }

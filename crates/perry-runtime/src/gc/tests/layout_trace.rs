@@ -52,6 +52,7 @@ fn test_layout_mask_pointer_free_array_scans_zero_slots() {
     for i in 0..4 {
         crate::array::js_array_set_f64(arr, i, (i + 1) as f64);
     }
+    assert_eq!(crate::array::js_array_mark_numeric_f64_layout(arr), 1);
 
     let valid_ptrs = build_valid_pointer_set();
     let mut worklist = Vec::new();
@@ -96,6 +97,7 @@ fn test_layout_scan_trace_json_counts_pointer_free_slots() {
     for i in 0..4 {
         crate::array::js_array_set_f64(arr, i, (i + 1) as f64);
     }
+    assert_eq!(crate::array::js_array_mark_numeric_f64_layout(arr), 1);
 
     let valid_ptrs = build_valid_pointer_set();
     assert!(try_mark_value(
@@ -115,6 +117,18 @@ fn test_layout_scan_trace_json_counts_pointer_free_slots() {
     assert_eq!(layout_scans["pointer_free_slots_skipped"].as_u64(), Some(4));
     assert_eq!(
         layout_scans["pointer_free_payload_bytes_skipped"].as_u64(),
+        Some(32)
+    );
+    assert_eq!(
+        layout_scans["raw_numeric_array_ranges_skipped"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        layout_scans["raw_numeric_array_slots_skipped"].as_u64(),
+        Some(4)
+    );
+    assert_eq!(
+        layout_scans["raw_numeric_array_payload_bytes_skipped"].as_u64(),
         Some(32)
     );
 
@@ -178,6 +192,37 @@ fn test_pointer_free_target_gate_emits_trace() {
 
     assert_ne!(after, arr as usize);
     assert!(crate::arena::pointer_in_nursery(after));
+}
+
+#[test]
+fn test_raw_numeric_array_layout_transfers_on_copying_minor_and_skips_payload() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let arr = crate::array::js_array_alloc_with_length(4);
+    for i in 0..4 {
+        crate::array::js_array_set_f64(arr, i, (i + 1) as f64 + 0.25);
+    }
+    assert_eq!(crate::array::js_array_mark_numeric_f64_layout(arr), 1);
+    js_shadow_slot_set(0, ptr_bits(arr as usize));
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let header = unsafe { header_from_user_ptr(after as *const u8) };
+
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_ne!(after, arr as usize);
+    assert!(crate::arena::pointer_in_nursery(after));
+    unsafe {
+        assert_ne!((*header)._reserved & GC_ARRAY_RAW_F64_LAYOUT, 0);
+    }
+    assert_eq!(test_layout_pointer_slot_count(after, 4), Some(0));
+    assert_eq!(test_heap_child_slot_count(after as *mut u8), 0);
+    assert!(
+        trace.layout_scans.raw_numeric_array_slots_skipped >= 4,
+        "copied raw numeric array payload should be skipped by layout scan: {:?}",
+        trace.layout_scans
+    );
 }
 
 #[test]
@@ -420,6 +465,43 @@ fn test_typed_shape_descriptor_tracks_raw_numeric_slots() {
 }
 
 #[test]
+fn test_typed_shape_raw_numeric_slots_accept_pointer_like_f64_bits() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let obj = crate::object::js_object_alloc(0, 2);
+    let pointer_like_number = f64::from_bits(0x1000);
+    crate::object::js_object_set_unboxed_f64_field(obj, 0, pointer_like_number);
+    let child = crate::string::js_string_from_bytes(b"mixed-child".as_ptr(), 11);
+    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::string_ptr(child));
+
+    let raw_mask = [0b01u64];
+    let pointer_mask = [0b10u64];
+    js_gc_init_typed_shape_layout(
+        obj as u64,
+        2,
+        raw_mask.as_ptr(),
+        raw_mask.len() as u32,
+        pointer_mask.as_ptr(),
+        pointer_mask.len() as u32,
+    );
+
+    assert!(layout_typed_raw_f64_slot_for_user(obj as usize, 0));
+    assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), Some(1));
+
+    let next_pointer_like_number = f64::from_bits(0x2000);
+    crate::object::js_object_set_unboxed_f64_field(obj, 0, next_pointer_like_number);
+    assert!(
+        layout_typed_raw_f64_slot_for_user(obj as usize, 0),
+        "raw f64 slots must not be downgraded by numeric payload bits that resemble raw pointers"
+    );
+    assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), Some(1));
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
+#[test]
 fn test_typed_shape_descriptor_rejects_nanbox_non_number_tags() {
     clear_marks();
     clear_mark_seeds();
@@ -556,6 +638,115 @@ fn test_unboxed_object_layout_scans_zero_raw_numeric_fields() {
 }
 
 #[test]
+fn test_layout_scan_trace_counts_raw_numeric_object_fields() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let trace = GcCycleTrace::new(
+        GcCollectionKind::Minor,
+        GcTriggerSnapshot {
+            kind: GcTriggerKind::Direct,
+            steps_before: Some(GcStepSnapshot::current()),
+        },
+    )
+    .expect("test requested GC trace capture");
+
+    let obj = crate::object::js_object_alloc(0, 2);
+    crate::object::js_object_set_unboxed_f64_field(obj, 0, 1.25);
+    crate::object::js_object_set_unboxed_f64_field(obj, 1, -2.5);
+    let raw_mask = [0b11u64];
+    js_gc_init_typed_shape_layout(
+        obj as u64,
+        2,
+        raw_mask.as_ptr(),
+        raw_mask.len() as u32,
+        std::ptr::null(),
+        0,
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    assert!(try_mark_value(
+        POINTER_TAG | (obj as u64 & POINTER_MASK),
+        &valid_ptrs
+    ));
+    trace_marked_objects(&valid_ptrs);
+
+    let event = trace.into_json(GcStepSnapshot::current());
+    let layout_scans = &event["layout_scans"];
+    assert_eq!(
+        layout_scans["raw_numeric_object_field_ranges_skipped"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        layout_scans["raw_numeric_object_field_slots_skipped"].as_u64(),
+        Some(2)
+    );
+    assert_eq!(
+        layout_scans["raw_numeric_object_field_payload_bytes_skipped"].as_u64(),
+        Some(16)
+    );
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
+#[test]
+fn test_layout_scan_trace_counts_mixed_raw_numeric_object_fields() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let trace = GcCycleTrace::new(
+        GcCollectionKind::Minor,
+        GcTriggerSnapshot {
+            kind: GcTriggerKind::Direct,
+            steps_before: Some(GcStepSnapshot::current()),
+        },
+    )
+    .expect("test requested GC trace capture");
+
+    let obj = crate::object::js_object_alloc(0, 2);
+    crate::object::js_object_set_unboxed_f64_field(obj, 0, f64::from_bits(0x1000));
+    let child = crate::string::js_string_from_bytes(b"mixed-child".as_ptr(), 11);
+    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::string_ptr(child));
+    let raw_mask = [0b01u64];
+    let pointer_mask = [0b10u64];
+    js_gc_init_typed_shape_layout(
+        obj as u64,
+        2,
+        raw_mask.as_ptr(),
+        raw_mask.len() as u32,
+        pointer_mask.as_ptr(),
+        pointer_mask.len() as u32,
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    assert!(try_mark_value(
+        POINTER_TAG | (obj as u64 & POINTER_MASK),
+        &valid_ptrs
+    ));
+    trace_marked_objects(&valid_ptrs);
+
+    let event = trace.into_json(GcStepSnapshot::current());
+    let layout_scans = &event["layout_scans"];
+    assert_eq!(layout_scans["masked_pointer_slots_read"].as_u64(), Some(1));
+    assert_eq!(
+        layout_scans["raw_numeric_object_field_ranges_skipped"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        layout_scans["raw_numeric_object_field_slots_skipped"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        layout_scans["raw_numeric_object_field_payload_bytes_skipped"].as_u64(),
+        Some(8)
+    );
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
+#[test]
 fn test_unboxed_object_pointer_write_to_raw_slot_falls_back_and_traces() {
     clear_marks();
     clear_mark_seeds();
@@ -617,6 +808,63 @@ fn test_unboxed_object_descriptor_transfers_on_object_move() {
 
     clear_marks();
     clear_mark_seeds();
+}
+
+#[test]
+fn test_raw_numeric_object_descriptor_transfers_on_copying_minor_and_skips_raw_slots() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let child = young_leaf();
+    let obj = crate::object::js_object_alloc(0, 3);
+    crate::object::js_object_set_unboxed_f64_field(obj, 0, 10.5);
+    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::from_bits(ptr_bits(child)));
+    crate::object::js_object_set_unboxed_f64_field(obj, 2, -3.25);
+    let raw_mask = [0b101u64];
+    let pointer_mask = [0b010u64];
+    js_gc_init_typed_shape_layout(
+        obj as u64,
+        3,
+        raw_mask.as_ptr(),
+        raw_mask.len() as u32,
+        pointer_mask.as_ptr(),
+        pointer_mask.len() as u32,
+    );
+    assert!(layout_typed_raw_f64_slot_for_user(obj as usize, 0));
+    assert!(layout_typed_raw_f64_slot_for_user(obj as usize, 2));
+    assert_eq!(test_layout_pointer_slot_count(obj as usize, 3), Some(1));
+    js_shadow_slot_set(0, ptr_bits(obj as usize));
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let fields = unsafe {
+        (after as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const u64
+    };
+    let first = f64::from_bits(unsafe { *fields.add(0) });
+    let child_after = unsafe { (*fields.add(1) & POINTER_MASK) as usize };
+    let third = f64::from_bits(unsafe { *fields.add(2) });
+
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_ne!(after, obj as usize);
+    assert_ne!(child_after, child);
+    assert!(crate::arena::pointer_in_nursery(after));
+    assert!(crate::arena::pointer_in_nursery(child_after));
+    assert_eq!(first, 10.5);
+    assert_eq!(third, -3.25);
+    assert!(layout_typed_raw_f64_slot_for_user(after, 0));
+    assert!(layout_typed_raw_f64_slot_for_user(after, 2));
+    assert_eq!(test_layout_pointer_slot_count(after, 3), Some(1));
+    assert_eq!(test_heap_child_slot_count(after as *mut u8), 1);
+    assert!(
+        trace.layout_scans.masked_pointer_slots_read >= 1,
+        "pointer slot should still be scanned: {:?}",
+        trace.layout_scans
+    );
+    assert!(
+        trace.layout_scans.raw_numeric_object_field_slots_skipped >= 2,
+        "raw numeric object slots should be skipped: {:?}",
+        trace.layout_scans
+    );
 }
 
 fn unboxed_point_for_shape_change_test(shape_id: u32) -> *mut crate::object::ObjectHeader {

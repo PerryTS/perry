@@ -781,10 +781,18 @@ unsafe fn dispatch_zlib_stream(handle: i64, method: &str, args: &[f64]) -> f64 {
             crate::zlib::zlib_stream_end(handle, f64::from_bits(UNDEFINED));
             f64::from_bits(UNDEFINED)
         }
-        // `.flush([cb])` — with the buffer-until-end model there's nothing to
-        // flush mid-stream (all output emits on `.end()`); accept it as a no-op
-        // so callers don't hit "flush is not a function".
-        "flush" => f64::from_bits(UNDEFINED),
+        // `.flush([kind], cb?)` — emit a Z_SYNC_FLUSH block, then run the
+        // callback. `kind` is numeric; the callback is the POINTER_TAG arg.
+        "flush" => {
+            let cb = args
+                .iter()
+                .rev()
+                .find(|a| (a.to_bits() >> 48) == 0x7FFD)
+                .map(|a| unbox_to_i64(*a))
+                .unwrap_or(0);
+            crate::zlib::zlib_stream_flush(handle, cb);
+            f64::from_bits(UNDEFINED)
+        }
         _ => f64::from_bits(UNDEFINED),
     }
 }

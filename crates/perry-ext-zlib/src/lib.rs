@@ -7,7 +7,7 @@
 //! aren't valid UTF-8, so the wrapper can't go through the
 //! standard `read_string` / `alloc_string` path.
 
-use flate2::read::{DeflateDecoder, DeflateEncoder, GzDecoder, GzEncoder};
+use flate2::read::{GzDecoder, GzEncoder, ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use perry_ffi::{alloc_bytes, spawn_blocking, JsPromise, JsValue, Promise, StringHeader};
 use std::io::Read;
@@ -41,15 +41,21 @@ fn gunzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(decompressed)
 }
 
+// Node's `zlib.deflateSync`/`inflateSync` use the zlib format (RFC 1950 —
+// 0x78 header + adler32), NOT raw deflate. Raw deflate is `deflateRawSync`/
+// `inflateRawSync`. Using ZlibEncoder/ZlibDecoder here makes the one-shots
+// Node-byte-compatible and consistent with `createDeflate`/`createInflate`
+// (which also use the zlib format), so a stream's output round-trips through
+// `inflateSync` (#1843).
 fn deflate_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
-    let mut encoder = DeflateEncoder::new(data, Compression::default());
+    let mut encoder = ZlibEncoder::new(data, Compression::default());
     let mut compressed = Vec::new();
     encoder.read_to_end(&mut compressed)?;
     Ok(compressed)
 }
 
 fn inflate_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
-    let mut decoder = DeflateDecoder::new(data);
+    let mut decoder = ZlibDecoder::new(data);
     let mut decompressed = Vec::new();
     decoder.read_to_end(&mut decompressed)?;
     Ok(decompressed)

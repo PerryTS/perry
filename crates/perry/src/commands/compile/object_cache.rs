@@ -240,12 +240,17 @@ pub fn compute_object_cache_key(
     }
     {
         let mut buf = String::new();
-        for (lib, funcs, header) in &opts.native_library_functions {
-            buf.push_str(lib);
+        for (name, params, ret) in &opts.native_library_functions {
+            buf.push_str(name);
             buf.push(':');
-            buf.push_str(&funcs.join(","));
-            buf.push('@');
-            buf.push_str(header);
+            for (idx, param) in params.iter().enumerate() {
+                if idx > 0 {
+                    buf.push(',');
+                }
+                buf.push_str(&param.to_string());
+            }
+            buf.push_str("->");
+            buf.push_str(&ret.to_string());
             buf.push('|');
         }
         h.field("native_libs", &buf);

@@ -69,6 +69,21 @@ pub fn declare_phase1(module: &mut LlModule) {
     module.declare_function("js_nanbox_string", DOUBLE, &[I64]);
     module.declare_function("js_nanbox_pointer", DOUBLE, &[I64]);
     module.declare_function("js_nanbox_get_pointer", I64, &[DOUBLE]);
+    module.declare_function(
+        "js_native_handle_new_owned",
+        DOUBLE,
+        &[I64, I64, I32, I32, PTR, PTR, I64],
+    );
+    module.declare_function(
+        "js_native_handle_new_borrowed",
+        DOUBLE,
+        &[I64, I64, I32, I32, PTR, I64],
+    );
+    module.declare_function(
+        "js_native_handle_unwrap",
+        I64,
+        &[DOUBLE, I64, I32, I32, I32],
+    );
 
     // Strings (enough to produce string literals for later phases).
     module.declare_function("js_string_from_bytes", I64, &[PTR, I32]);

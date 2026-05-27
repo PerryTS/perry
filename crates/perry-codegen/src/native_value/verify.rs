@@ -3,9 +3,11 @@ use anyhow::{bail, Result};
 #[cfg(test)]
 use super::artifact::NativeAbiTransitionRecord;
 use super::artifact::{
-    NativeAbiTransitionOp, NativeRepRecord, NativeValueState, PodLayoutManifest,
+    NativeAbiDirection, NativeAbiTransitionOp, NativeFactUse, NativeRepRecord, NativeValueState,
+    PodLayoutManifest,
 };
 use super::buffer::{AliasState, BoundsState, BufferAccessMode};
+use super::materialize::MaterializationReason;
 use super::pod::recompute_layout_from_fields;
 use super::rep::NativeRep;
 use crate::types::{DOUBLE, F32, I32, I64, I8, PTR};
@@ -136,6 +138,9 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
                 ));
             }
         }
+        if let Some(native_abi_type) = record.native_abi_type.as_ref() {
+            validate_native_abi_type_record(record, native_abi_type, &mut errors);
+        }
         if record.emitted_inbounds
             && !matches!(
                 record.bounds_state,
@@ -199,6 +204,7 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
                 record.function, record.block_label, record.consumer
             ));
         }
+        validate_raw_f64_layout_facts(record, &mut errors);
     }
     if !errors.is_empty() {
         bail!(
@@ -207,6 +213,90 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
         );
     }
     Ok(())
+}
+
+fn raw_f64_checked_native_consumer(record: &NativeRepRecord) -> bool {
+    matches!(
+        record.consumer.as_str(),
+        "js_array_numeric_get_f64_unboxed"
+            | "js_array_numeric_set_f64_unboxed"
+            | "js_array_numeric_push_f64_unboxed"
+            | "class_field_get.raw_f64_load"
+            | "class_field_set.raw_f64_store"
+    )
+}
+
+fn raw_f64_dynamic_fallback_record(record: &NativeRepRecord) -> bool {
+    matches!(
+        (record.expr_kind.as_str(), record.consumer.as_str()),
+        ("NumericArrayPush", "js_array_push_f64")
+            | (
+                "NumericArrayIndexGet",
+                "js_typed_feedback_array_index_get_fallback_boxed"
+            )
+            | (
+                "NumericArrayIndexSet",
+                "js_typed_feedback_array_index_set_fallback_boxed"
+            )
+            | ("ClassFieldGet", "js_object_get_field_by_name_f64")
+            | ("ClassFieldSet", "js_object_set_field_by_name")
+    )
+}
+
+fn has_raw_f64_layout_fact(
+    facts: &[NativeFactUse],
+    state: &str,
+    reason: Option<MaterializationReason>,
+) -> bool {
+    facts.iter().any(|fact| {
+        fact.kind == "raw_f64_layout"
+            && fact.state == state
+            && match reason.as_ref() {
+                Some(expected) => fact.reason.as_ref() == Some(expected),
+                None => true,
+            }
+    })
+}
+
+fn validate_raw_f64_layout_facts(record: &NativeRepRecord, errors: &mut Vec<String>) {
+    if raw_f64_checked_native_consumer(record)
+        && !has_raw_f64_layout_fact(&record.consumed_facts, "consumed", None)
+    {
+        errors.push(format!(
+            "{}:{} {} raw-f64 fast path missing consumed raw_f64_layout fact",
+            record.function, record.block_label, record.consumer
+        ));
+    }
+    if raw_f64_dynamic_fallback_record(record) {
+        if record.materialization_reason.as_ref() != Some(&MaterializationReason::RuntimeApi)
+            || record.fallback_reason.as_ref() != Some(&MaterializationReason::RuntimeApi)
+        {
+            errors.push(format!(
+                "{}:{} {} raw-f64 fallback missing runtime_api materialization/fallback reason",
+                record.function, record.block_label, record.consumer
+            ));
+        }
+        if !has_raw_f64_layout_fact(
+            &record.rejected_facts,
+            "rejected",
+            Some(MaterializationReason::RuntimeApi),
+        ) {
+            errors.push(format!(
+                "{}:{} {} raw-f64 fallback missing rejected raw_f64_layout fact",
+                record.function, record.block_label, record.consumer
+            ));
+        }
+        if !has_raw_f64_layout_fact(
+            &record.rejected_facts,
+            "invalidated",
+            Some(MaterializationReason::RuntimeApi),
+        ) {
+            errors.push(format!(
+                "{}:{} {} raw-f64 fallback missing invalidated raw_f64_layout fact",
+                record.function, record.block_label, record.consumer
+            ));
+        }
+    }
 }
 
 fn validate_native_owned_unchecked_access(record: &NativeRepRecord, errors: &mut Vec<String>) {
@@ -247,6 +337,137 @@ fn validate_native_owned_unchecked_access(record: &NativeRepRecord, errors: &mut
         errors.push(format!(
             "{} unchecked native-owned view access missing alias proof",
             prefix()
+        ));
+    }
+}
+
+fn validate_native_abi_type_record(
+    record: &NativeRepRecord,
+    abi: &super::artifact::NativeAbiTypeRecord,
+    errors: &mut Vec<String>,
+) {
+    let prefix = || {
+        format!(
+            "{}:{} {}",
+            record.function, record.block_label, record.consumer
+        )
+    };
+    if abi.display.is_empty() || abi.canonical_kind.is_empty() {
+        errors.push(format!("{} native ABI descriptor is empty", prefix()));
+    }
+    match abi.direction {
+        NativeAbiDirection::Param => {
+            if abi.js_argument_index.is_none() {
+                errors.push(format!(
+                    "{} native ABI param missing JS argument index",
+                    prefix()
+                ));
+            }
+        }
+        NativeAbiDirection::Return => {
+            if abi.js_argument_index.is_some() {
+                errors.push(format!(
+                    "{} native ABI return must not carry JS argument index",
+                    prefix()
+                ));
+            }
+            if abi.canonical_kind == "buffer+len" {
+                errors.push(format!("{} buffer+len cannot be a return type", prefix()));
+            }
+        }
+    }
+    if abi.abi_slot_count == 0 && abi.canonical_kind != "void" {
+        errors.push(format!("{} native ABI slot count is zero", prefix()));
+    }
+    if abi.canonical_kind == "handle" {
+        match abi.native_handle.as_ref() {
+            Some(handle) => {
+                if handle.direction != abi.direction
+                    || handle.js_argument_index != abi.js_argument_index
+                    || handle.abi_slot_index != abi.abi_slot_index
+                    || handle.abi_slot_count != abi.abi_slot_count
+                {
+                    errors.push(format!(
+                        "{} native handle contract slot metadata does not match ABI record",
+                        prefix()
+                    ));
+                }
+                if handle.type_id == 0 {
+                    errors.push(format!("{} native handle type id is zero", prefix()));
+                }
+                if handle.debug_name.is_empty() {
+                    errors.push(format!("{} native handle debug name is empty", prefix()));
+                }
+                if !matches!(handle.ownership.as_str(), "owned" | "borrowed") {
+                    errors.push(format!("{} native handle ownership is invalid", prefix()));
+                }
+                if !matches!(handle.thread_affinity.as_str(), "any" | "main" | "creator") {
+                    errors.push(format!(
+                        "{} native handle thread affinity is invalid",
+                        prefix()
+                    ));
+                }
+                if handle.has_finalizer != handle.finalizer_symbol.is_some() {
+                    errors.push(format!(
+                        "{} native handle finalizer presence is inconsistent",
+                        prefix()
+                    ));
+                }
+                if handle.has_finalizer && handle.ownership != "owned" {
+                    errors.push(format!(
+                        "{} native handle finalizer requires owned ownership",
+                        prefix()
+                    ));
+                }
+                if handle.has_finalizer && abi.direction == NativeAbiDirection::Param {
+                    errors.push(format!(
+                        "{} native handle param must not carry a finalizer",
+                        prefix()
+                    ));
+                }
+            }
+            None => errors.push(format!(
+                "{} handle ABI missing native_handle contract",
+                prefix()
+            )),
+        }
+    } else if abi.native_handle.is_some() {
+        errors.push(format!(
+            "{} non-handle ABI must not carry native_handle contract",
+            prefix()
+        ));
+    }
+    let rep_matches = match abi.canonical_kind.as_str() {
+        "jsvalue" => matches!(&record.native_rep, NativeRep::JsValue),
+        "string" | "ptr" | "i64_str" => {
+            matches!(
+                &record.native_rep,
+                NativeRep::NativeHandle | NativeRep::JsValue
+            )
+        }
+        "bool" | "i32" => matches!(&record.native_rep, NativeRep::I32),
+        "i64" => matches!(&record.native_rep, NativeRep::I64),
+        "u32" => matches!(&record.native_rep, NativeRep::U32),
+        "u64" => matches!(&record.native_rep, NativeRep::U64),
+        "usize" => matches!(&record.native_rep, NativeRep::USize),
+        "f32" => matches!(&record.native_rep, NativeRep::F32),
+        "f64" => matches!(&record.native_rep, NativeRep::F64 | NativeRep::JsValue),
+        "buffer_len" => matches!(&record.native_rep, NativeRep::BufferLen),
+        "buffer+len" => matches!(
+            &record.native_rep,
+            NativeRep::BufferView(_) | NativeRep::USize | NativeRep::BufferLen
+        ),
+        "handle" => matches!(&record.native_rep, NativeRep::NativeHandle),
+        "promise" => matches!(&record.native_rep, NativeRep::PromiseBoundary),
+        "void" => false,
+        _ => false,
+    };
+    if !rep_matches {
+        errors.push(format!(
+            "{} native ABI descriptor {} does not match recorded native rep {}",
+            prefix(),
+            abi.display,
+            record.native_rep_name
         ));
     }
 }
@@ -406,6 +627,7 @@ fn valid_native_abi_transition(
         }
         NativeAbiTransitionOp::FloatExtend => from == "f32" && !lossy,
         NativeAbiTransitionOp::PointerBox => from == "native_handle" && !lossy,
+        NativeAbiTransitionOp::NativeHandleBox => from == "native_handle" && !lossy,
         NativeAbiTransitionOp::PromiseBox => from == "promise_boundary" && !lossy,
     }
 }
@@ -415,7 +637,9 @@ mod tests {
     use super::{NativeAbiTransitionOp, NativeAbiTransitionRecord};
     use crate::native_value::{
         verify_native_rep_records, AliasState, BoundsProof, BoundsState, BufferAccessMode,
-        BufferViewRep, LoweredValue, NativeRep, NativeRepRecord, NativeValueState, SemanticKind,
+        BufferViewRep, LoweredValue, MaterializationReason, NativeAbiDirection,
+        NativeAbiTypeRecord, NativeFactUse, NativeRep, NativeRepRecord, NativeValueState,
+        SemanticKind,
     };
     use crate::types::{DOUBLE, F32, I32, I64, PTR};
 
@@ -451,12 +675,23 @@ mod tests {
             native_value_state: NativeValueState::RegionLocal,
             native_abi_transition: None,
             scalar_conversion: None,
+            native_abi_type: None,
             pod_layout: None,
             consumed_facts: Vec::new(),
             rejected_facts: Vec::new(),
             emitted_inbounds: false,
             emitted_noalias: false,
             notes: Vec::new(),
+        }
+    }
+
+    fn raw_f64_layout_fact(state: &str, reason: Option<MaterializationReason>) -> NativeFactUse {
+        NativeFactUse {
+            fact_id: format!("test.raw_f64_layout.{state}"),
+            kind: "raw_f64_layout".to_string(),
+            local_id: None,
+            state: state.to_string(),
+            reason,
         }
     }
 
@@ -486,6 +721,16 @@ mod tests {
         r.llvm_value = "%pod".to_string();
         r.pod_layout = Some(layout);
         r
+    }
+
+    fn abi_type(
+        descriptor: &str,
+        direction: NativeAbiDirection,
+        js_argument_index: Option<usize>,
+        abi_slot_index: usize,
+    ) -> NativeAbiTypeRecord {
+        let descriptor = perry_api_manifest::NativeAbiType::parse_str(descriptor).unwrap();
+        NativeAbiTypeRecord::new(&descriptor, direction, js_argument_index, abi_slot_index)
     }
 
     #[test]
@@ -568,54 +813,164 @@ mod tests {
     }
 
     #[test]
+    fn rejects_raw_f64_checked_native_without_consumed_layout_fact() {
+        for (expr_kind, consumer) in [
+            ("NumericArrayIndexGet", "js_array_numeric_get_f64_unboxed"),
+            ("NumericArrayIndexSet", "js_array_numeric_set_f64_unboxed"),
+            ("NumericArrayPush", "js_array_numeric_push_f64_unboxed"),
+            ("ClassFieldGet", "class_field_get.raw_f64_load"),
+            ("ClassFieldSet", "class_field_set.raw_f64_store"),
+        ] {
+            let mut r = record();
+            r.expr_kind = expr_kind.to_string();
+            r.consumer = consumer.to_string();
+            r.semantic = SemanticKind::JsNumber;
+            r.native_rep = NativeRep::F64;
+            r.native_rep_name = "f64".to_string();
+            r.llvm_ty = DOUBLE;
+            r.access_mode = Some(BufferAccessMode::CheckedNative);
+            r.bounds_state = Some(BoundsState::Guarded {
+                guard_id: "raw_f64_guard".to_string(),
+            });
+
+            assert!(
+                verify_native_rep_records(&[r.clone()]).is_err(),
+                "{consumer} should require a consumed raw_f64_layout fact"
+            );
+
+            r.consumed_facts.push(raw_f64_layout_fact("consumed", None));
+            assert!(
+                verify_native_rep_records(&[r]).is_ok(),
+                "{consumer} should verify once the consumed layout fact is present"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_raw_f64_dynamic_fallback_without_rejected_and_invalidated_layout_facts() {
+        for (expr_kind, consumer) in [
+            ("NumericArrayPush", "js_array_push_f64"),
+            (
+                "NumericArrayIndexGet",
+                "js_typed_feedback_array_index_get_fallback_boxed",
+            ),
+            (
+                "NumericArrayIndexSet",
+                "js_typed_feedback_array_index_set_fallback_boxed",
+            ),
+            ("ClassFieldGet", "js_object_get_field_by_name_f64"),
+            ("ClassFieldSet", "js_object_set_field_by_name"),
+        ] {
+            let mut r = record();
+            r.expr_kind = expr_kind.to_string();
+            r.consumer = consumer.to_string();
+            r.semantic = SemanticKind::JsValue;
+            r.native_rep = NativeRep::JsValue;
+            r.native_rep_name = "js_value".to_string();
+            r.llvm_ty = DOUBLE;
+            r.access_mode = Some(BufferAccessMode::DynamicFallback);
+            r.materialization_reason = Some(MaterializationReason::RuntimeApi);
+            r.fallback_reason = Some(MaterializationReason::RuntimeApi);
+            r.native_value_state = NativeValueState::DynamicFallback;
+
+            assert!(
+                verify_native_rep_records(&[r.clone()]).is_err(),
+                "{consumer} should require rejected and invalidated raw_f64_layout facts"
+            );
+
+            r.rejected_facts.push(raw_f64_layout_fact(
+                "rejected",
+                Some(MaterializationReason::RuntimeApi),
+            ));
+            assert!(
+                verify_native_rep_records(&[r.clone()]).is_err(),
+                "{consumer} should still require invalidated raw_f64_layout fact"
+            );
+
+            r.rejected_facts.push(raw_f64_layout_fact(
+                "invalidated",
+                Some(MaterializationReason::RuntimeApi),
+            ));
+            assert!(
+                verify_native_rep_records(&[r]).is_ok(),
+                "{consumer} should verify once rejection and invalidation are recorded"
+            );
+        }
+    }
+
+    #[test]
     fn accepts_new_region_local_native_abi_records() {
         let mut f64_record = record();
         f64_record.native_rep = NativeRep::F64;
         f64_record.native_rep_name = "f64".to_string();
         f64_record.llvm_ty = DOUBLE;
         f64_record.llvm_value = "%f".to_string();
+        f64_record.native_abi_type = Some(abi_type("f64", NativeAbiDirection::Return, None, 0));
 
         let mut u32_record = record();
         u32_record.native_rep = NativeRep::U32;
         u32_record.native_rep_name = "u32".to_string();
         u32_record.llvm_ty = I32;
         u32_record.llvm_value = "%u".to_string();
+        u32_record.native_abi_type = Some(abi_type("u32", NativeAbiDirection::Param, Some(0), 0));
 
         let mut u64_record = record();
         u64_record.native_rep = NativeRep::U64;
         u64_record.native_rep_name = "u64".to_string();
         u64_record.llvm_ty = I64;
         u64_record.llvm_value = "%u64".to_string();
+        u64_record.native_abi_type = Some(abi_type("u64", NativeAbiDirection::Param, Some(1), 1));
 
         let mut usize_record = record();
         usize_record.native_rep = NativeRep::USize;
         usize_record.native_rep_name = "usize".to_string();
         usize_record.llvm_ty = I64;
         usize_record.llvm_value = "%usize".to_string();
+        usize_record.native_abi_type =
+            Some(abi_type("usize", NativeAbiDirection::Param, Some(2), 2));
 
         let mut f32_record = record();
         f32_record.native_rep = NativeRep::F32;
         f32_record.native_rep_name = "f32".to_string();
         f32_record.llvm_ty = F32;
         f32_record.llvm_value = "%f32".to_string();
+        f32_record.native_abi_type = Some(abi_type("f32", NativeAbiDirection::Param, Some(3), 3));
 
         let mut buffer_len_record = record();
         buffer_len_record.native_rep = NativeRep::BufferLen;
         buffer_len_record.native_rep_name = "buffer_len".to_string();
         buffer_len_record.llvm_ty = I32;
         buffer_len_record.llvm_value = "%len".to_string();
+        buffer_len_record.native_abi_type = Some(abi_type(
+            "buffer_len",
+            NativeAbiDirection::Param,
+            Some(4),
+            4,
+        ));
 
         let mut handle_record = record();
         handle_record.native_rep = NativeRep::NativeHandle;
         handle_record.native_rep_name = "native_handle".to_string();
         handle_record.llvm_ty = I64;
         handle_record.llvm_value = "%handle".to_string();
+        handle_record.native_abi_type = Some(abi_type(
+            "handle<MyThing>",
+            NativeAbiDirection::Param,
+            Some(5),
+            5,
+        ));
 
         let mut promise_record = record();
         promise_record.native_rep = NativeRep::PromiseBoundary;
         promise_record.native_rep_name = "promise_boundary".to_string();
         promise_record.llvm_ty = I64;
         promise_record.llvm_value = "%promise".to_string();
+        promise_record.native_abi_type = Some(abi_type(
+            "promise<f64>",
+            NativeAbiDirection::Return,
+            None,
+            0,
+        ));
 
         assert!(verify_native_rep_records(&[
             f64_record,
@@ -628,6 +983,95 @@ mod tests {
             promise_record
         ])
         .is_ok());
+    }
+
+    #[test]
+    fn rejects_native_abi_descriptor_rep_mismatch() {
+        let mut r = record();
+        r.native_abi_type = Some(abi_type("f32", NativeAbiDirection::Param, Some(0), 0));
+        assert!(verify_native_rep_records(&[r]).is_err());
+    }
+
+    #[test]
+    fn rejects_native_abi_param_without_js_argument_index() {
+        let mut r = record();
+        r.native_abi_type = Some(abi_type("i32", NativeAbiDirection::Param, None, 0));
+        assert!(verify_native_rep_records(&[r]).is_err());
+    }
+
+    #[test]
+    fn rejects_native_abi_return_with_js_argument_index() {
+        let mut r = record();
+        r.native_abi_type = Some(abi_type("i32", NativeAbiDirection::Return, Some(0), 0));
+        assert!(verify_native_rep_records(&[r]).is_err());
+    }
+
+    #[test]
+    fn rejects_buffer_and_len_return_descriptor() {
+        let mut r = record();
+        r.native_rep = NativeRep::BufferView(BufferViewRep {
+            data_ptr: "%ptr".to_string(),
+            length: "%len".to_string(),
+            elem: crate::native_value::BufferElem::U8,
+            element_width_bytes: 1,
+            index_unit: crate::native_value::BufferIndexUnit::Byte,
+            view_byte_offset: Some(0),
+            length_offset_from_data: -8,
+            bounds: BoundsState::Unknown,
+            alias: AliasState::Unknown,
+        });
+        r.native_rep_name = "buffer_view".to_string();
+        r.llvm_ty = PTR;
+        r.native_abi_type = Some(abi_type("buffer+len", NativeAbiDirection::Return, None, 0));
+        assert!(verify_native_rep_records(&[r]).is_err());
+    }
+
+    #[test]
+    fn rejects_handle_abi_missing_native_handle_contract() {
+        let mut r = record();
+        r.native_rep = NativeRep::NativeHandle;
+        r.native_rep_name = "native_handle".to_string();
+        r.llvm_ty = I64;
+        r.llvm_value = "%handle".to_string();
+        r.native_abi_type = Some(abi_type(
+            "handle<MyThing>",
+            NativeAbiDirection::Param,
+            Some(0),
+            0,
+        ));
+        r.native_abi_type.as_mut().unwrap().native_handle = None;
+
+        assert!(verify_native_rep_records(&[r]).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_native_handle_contract_fields() {
+        let mut r = record();
+        r.native_rep = NativeRep::NativeHandle;
+        r.native_rep_name = "native_handle".to_string();
+        r.llvm_ty = I64;
+        r.llvm_value = "%handle".to_string();
+        r.native_abi_type = Some(abi_type(
+            "handle<MyThing>",
+            NativeAbiDirection::Param,
+            Some(0),
+            0,
+        ));
+        let handle = r
+            .native_abi_type
+            .as_mut()
+            .unwrap()
+            .native_handle
+            .as_mut()
+            .unwrap();
+        handle.type_id = 0;
+        handle.ownership = "leased".to_string();
+        handle.thread_affinity = "worker".to_string();
+        handle.debug_name.clear();
+        handle.has_finalizer = true;
+        handle.finalizer_symbol = Some("my_thing_free".to_string());
+
+        assert!(verify_native_rep_records(&[r]).is_err());
     }
 
     #[test]

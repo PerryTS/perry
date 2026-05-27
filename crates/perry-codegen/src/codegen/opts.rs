@@ -278,9 +278,13 @@ pub struct CompileOptions {
     pub js_module_specifiers: Vec<String>,
     /// Bundled TypeScript extensions — `(absolute_path, module_prefix)`.
     pub bundled_extensions: Vec<(String, String)>,
-    /// Native library FFI from `package.json` — `(library_name,
-    /// function_names, header_path)` tuples.
-    pub native_library_functions: Vec<(String, Vec<String>, String)>,
+    /// Native library FFI from `package.json` — function name, typed
+    /// parameter descriptors, and typed return descriptor.
+    pub native_library_functions: Vec<(
+        String,
+        Vec<perry_api_manifest::NativeAbiType>,
+        perry_api_manifest::NativeAbiType,
+    )>,
     /// i18n translation table snapshot — `(translations, key_count,
     /// locale_count, locale_codes, default_locale_idx)`. The
     /// `default_locale_idx` is the row index used at compile time to
@@ -637,14 +641,19 @@ pub(crate) struct CrossModuleCtx {
     /// lowering can intercept `X[i][j]` / `krow[j]` patterns.
     pub flat_const_arrays: std::collections::HashMap<u32, crate::expr::FlatConstInfo>,
     /// FFI manifest signatures from `package.json`'s `nativeLibrary.functions`.
-    /// Maps function name → (param_kinds, return_kind) where each kind uses
-    /// the native-library manifest ABI vocabulary. Without this map,
+    /// Maps function name → (param descriptors, return descriptor). Without this map,
     /// `lower_call` falls back to a heuristic that puts all numeric args/returns
     /// into d-registers (DOUBLE) — incorrect for handle-returning C functions
     /// like `hone_editor_create() -> *mut EditorView` whose actual ABI returns
     /// the pointer in `x0`, not `d0`. The manifest tells us when to use
     /// `i64`/`I64` so the LLVM declaration matches the platform C ABI.
-    pub ffi_signatures: std::collections::HashMap<String, (Vec<String>, String)>,
+    pub ffi_signatures: std::collections::HashMap<
+        String,
+        (
+            Vec<perry_api_manifest::NativeAbiType>,
+            perry_api_manifest::NativeAbiType,
+        ),
+    >,
     /// Per-module mapping: local class/binding name → import source spec.
     /// Built once in `compile_module` from `hir.imports`. Used by
     /// `lower_builtin_new` to disambiguate ambiguously-named built-in

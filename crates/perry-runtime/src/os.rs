@@ -5,6 +5,7 @@ use crate::object::ObjectHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -21,6 +22,10 @@ static HRTIME_START: OnceLock<Instant> = OnceLock::new();
 fn get_hrtime_start() -> &'static Instant {
     HRTIME_START.get_or_init(Instant::now)
 }
+
+#[path = "os_priority.rs"]
+mod os_priority;
+pub use os_priority::{js_os_get_priority, js_os_set_priority};
 
 /// Get the operating system platform
 /// Returns: "darwin", "linux", "win32", "freebsd", etc.
@@ -1171,13 +1176,14 @@ pub fn scan_process_stream_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
 fn build_stream_object_with_write(
     write_stub: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64,
     fd: f64,
+    writable: f64,
 ) -> *mut crate::object::ObjectHeader {
     use crate::closure::js_closure_alloc;
     use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::JSValue;
 
-    let packed = b"write\0fd\0emit\0on\0once\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF22, 5, packed.as_ptr(), packed.len() as u32);
+    let packed = b"write\0fd\0emit\0on\0once\0writable\0";
+    let obj = js_object_alloc_with_shape(0x7FFF_FF22, 6, packed.as_ptr(), packed.len() as u32);
     let closure = js_closure_alloc(write_stub as *const u8, 0);
     let cval = JSValue::pointer(closure as *const u8);
     js_object_set_field(obj, 0, cval);
@@ -1188,6 +1194,7 @@ fn build_stream_object_with_write(
     js_object_set_field(obj, 3, JSValue::pointer(on as *const u8));
     let once = js_closure_alloc(process_stream_on_once_stub as *const u8, 0);
     js_object_set_field(obj, 4, JSValue::pointer(once as *const u8));
+    js_object_set_field(obj, 5, JSValue::from_bits(writable.to_bits()));
     obj
 }
 
@@ -1200,7 +1207,11 @@ pub extern "C" fn js_process_stdin() -> f64 {
     let obj = STDIN_STREAM_SINGLETON.with(|slot| {
         let mut slot = slot.borrow_mut();
         if *slot == 0 {
-            *slot = build_stream_object_with_write(process_stdin_write_noop_stub, 0.0) as usize;
+            *slot = build_stream_object_with_write(
+                process_stdin_write_noop_stub,
+                0.0,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            ) as usize;
         }
         *slot as *mut crate::object::ObjectHeader
     });
@@ -1215,7 +1226,11 @@ pub extern "C" fn js_process_stdout() -> f64 {
     let obj = STDOUT_STREAM_SINGLETON.with(|slot| {
         let mut slot = slot.borrow_mut();
         if *slot == 0 {
-            *slot = build_stream_object_with_write(process_stdout_write_stub, 1.0) as usize;
+            *slot = build_stream_object_with_write(
+                process_stdout_write_stub,
+                1.0,
+                f64::from_bits(crate::value::TAG_TRUE),
+            ) as usize;
         }
         *slot as *mut crate::object::ObjectHeader
     });
@@ -1230,7 +1245,11 @@ pub extern "C" fn js_process_stderr() -> f64 {
     let obj = STDERR_STREAM_SINGLETON.with(|slot| {
         let mut slot = slot.borrow_mut();
         if *slot == 0 {
-            *slot = build_stream_object_with_write(process_stderr_write_stub, 2.0) as usize;
+            *slot = build_stream_object_with_write(
+                process_stderr_write_stub,
+                2.0,
+                f64::from_bits(crate::value::TAG_TRUE),
+            ) as usize;
         }
         *slot as *mut crate::object::ObjectHeader
     });
@@ -1333,20 +1352,410 @@ pub extern "C" fn js_os_eol() -> *mut StringHeader {
 
 /// Get information about CPUs
 /// Returns an array of CPU info objects
-/// TODO: Implement properly when dynamic object properties are supported
 #[no_mangle]
 pub extern "C" fn js_os_cpus() -> *mut ArrayHeader {
-    // Return empty array for now - dynamic object properties need different API
-    crate::array::js_array_alloc(0)
+    use crate::array::{js_array_alloc, js_array_push};
+    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
+    use crate::value::{js_nanbox_string, JSValue};
+
+    const CPU_TIMES_SHAPE_ID: u32 = 0x7FFF_FF25;
+    const CPU_INFO_SHAPE_ID: u32 = 0x7FFF_FF26;
+
+    #[derive(Clone, Copy, Default)]
+    struct CpuTimes {
+        user: f64,
+        nice: f64,
+        sys: f64,
+        idle: f64,
+        irq: f64,
+    }
+
+    struct CpuInfo {
+        model: String,
+        speed: f64,
+        times: CpuTimes,
+    }
+
+    fn nanbox_string_value(s: &str) -> JSValue {
+        let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        JSValue::from_bits(js_nanbox_string(ptr as i64).to_bits())
+    }
+
+    fn cpu_count() -> usize {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .max(1)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn host_cpu_infos() -> Vec<CpuInfo> {
+        use std::io::Read;
+
+        let mut infos = Vec::new();
+        if let Ok(mut stat) = std::fs::File::open("/proc/stat") {
+            let mut contents = String::new();
+            let _ = stat.read_to_string(&mut contents);
+            for line in contents.lines() {
+                let mut parts = line.split_whitespace();
+                let Some(label) = parts.next() else {
+                    continue;
+                };
+                if !label.starts_with("cpu")
+                    || label == "cpu"
+                    || !label[3..].chars().all(|c| c.is_ascii_digit())
+                {
+                    continue;
+                }
+                let read =
+                    |slot: Option<&str>| slot.and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                let user = read(parts.next());
+                let nice = read(parts.next());
+                let sys = read(parts.next());
+                let idle = read(parts.next());
+                let _iowait = read(parts.next());
+                let irq = read(parts.next());
+                // Linux /proc/stat values are clock ticks. Deno and Node expose
+                // milliseconds; 10ms is correct on common Linux HZ=100 hosts and
+                // is enough for Perry's current shape-level parity tests.
+                infos.push(CpuInfo {
+                    model: String::new(),
+                    speed: 0.0,
+                    times: CpuTimes {
+                        user: user * 10.0,
+                        nice: nice * 10.0,
+                        sys: sys * 10.0,
+                        idle: idle * 10.0,
+                        irq: irq * 10.0,
+                    },
+                });
+            }
+        }
+
+        let mut models = Vec::new();
+        if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") {
+            for line in cpuinfo.lines() {
+                if let Some((key, value)) = line.split_once(':') {
+                    if key.trim() == "model name" {
+                        models.push(value.trim().to_string());
+                    }
+                }
+            }
+        }
+
+        for (index, info) in infos.iter_mut().enumerate() {
+            info.model = models
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            let speed_path = format!("/sys/devices/system/cpu/cpu{index}/cpufreq/scaling_cur_freq");
+            info.speed = std::fs::read_to_string(speed_path)
+                .ok()
+                .and_then(|s| s.trim().parse::<f64>().ok())
+                .map(|khz| khz / 1000.0)
+                .unwrap_or(0.0);
+        }
+
+        if infos.is_empty() {
+            fallback_cpu_infos()
+        } else {
+            infos
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn host_cpu_infos() -> Vec<CpuInfo> {
+        fallback_cpu_infos()
+    }
+
+    fn fallback_cpu_infos() -> Vec<CpuInfo> {
+        (0..cpu_count())
+            .map(|_| CpuInfo {
+                model: "unknown".to_string(),
+                speed: 0.0,
+                times: CpuTimes::default(),
+            })
+            .collect()
+    }
+
+    fn build_times_object(times: CpuTimes) -> *mut ObjectHeader {
+        let packed = b"user\0nice\0sys\0idle\0irq\0";
+        let obj =
+            js_object_alloc_with_shape(CPU_TIMES_SHAPE_ID, 5, packed.as_ptr(), packed.len() as u32);
+        js_object_set_field(obj, 0, JSValue::number(times.user));
+        js_object_set_field(obj, 1, JSValue::number(times.nice));
+        js_object_set_field(obj, 2, JSValue::number(times.sys));
+        js_object_set_field(obj, 3, JSValue::number(times.idle));
+        js_object_set_field(obj, 4, JSValue::number(times.irq));
+        obj
+    }
+
+    fn build_cpu_object(info: CpuInfo) -> *mut ObjectHeader {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let model = nanbox_string_value(&info.model);
+        let model_handle = scope.root_nanbox_u64(model.bits());
+        let times = build_times_object(info.times);
+        let times_handle = scope.root_raw_mut_ptr(times);
+
+        let packed = b"model\0speed\0times\0";
+        let obj =
+            js_object_alloc_with_shape(CPU_INFO_SHAPE_ID, 3, packed.as_ptr(), packed.len() as u32);
+        let times = times_handle.get_raw_mut_ptr::<ObjectHeader>();
+        js_object_set_field(obj, 0, JSValue::from_bits(model_handle.get_nanbox_u64()));
+        js_object_set_field(obj, 1, JSValue::number(info.speed));
+        js_object_set_field(obj, 2, JSValue::pointer(times as *const u8));
+        obj
+    }
+
+    let infos = host_cpu_infos();
+    let mut arr = js_array_alloc(infos.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    for info in infos {
+        let obj = build_cpu_object(info);
+        let obj_handle = scope.root_raw_mut_ptr(obj);
+        let current = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        arr = js_array_push(
+            current,
+            JSValue::pointer(obj_handle.get_raw_mut_ptr::<ObjectHeader>() as *const u8),
+        );
+        arr_handle.set_raw_mut_ptr(arr);
+    }
+    arr_handle.get_raw_mut_ptr::<ArrayHeader>()
+}
+
+const OS_NETWORK_IPV4_SHAPE_ID: u32 = 0x7FFF_FF27;
+const OS_NETWORK_IPV6_SHAPE_ID: u32 = 0x7FFF_FF28;
+
+struct OsNetworkAddress {
+    address: String,
+    netmask: String,
+    family: &'static str,
+    mac: String,
+    internal: bool,
+    cidr: String,
+    scopeid: Option<u32>,
+}
+
+fn prefix_len_ipv4(netmask: Ipv4Addr) -> u32 {
+    u32::from(netmask).count_ones()
+}
+
+fn prefix_len_ipv6(netmask: Ipv6Addr) -> u32 {
+    netmask.octets().iter().map(|byte| byte.count_ones()).sum()
+}
+
+fn fallback_mac_address() -> String {
+    "00:00:00:00:00:00".to_string()
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn interface_mac_address(name: &str) -> String {
+    let path = format!("/sys/class/net/{name}/address");
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(fallback_mac_address)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn interface_mac_address(_name: &str) -> String {
+    fallback_mac_address()
+}
+
+#[cfg(unix)]
+unsafe fn ipv4_from_sockaddr(addr: *const libc::sockaddr) -> Ipv4Addr {
+    let sin = &*(addr as *const libc::sockaddr_in);
+    Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr))
+}
+
+#[cfg(unix)]
+unsafe fn ipv6_from_sockaddr(addr: *const libc::sockaddr) -> Ipv6Addr {
+    let sin6 = &*(addr as *const libc::sockaddr_in6);
+    Ipv6Addr::from(sin6.sin6_addr.s6_addr)
+}
+
+#[cfg(unix)]
+fn collect_network_interfaces() -> HashMap<String, Vec<OsNetworkAddress>> {
+    let mut first: *mut libc::ifaddrs = std::ptr::null_mut();
+    if unsafe { libc::getifaddrs(&mut first) } != 0 {
+        return HashMap::new();
+    }
+
+    let mut interfaces: HashMap<String, Vec<OsNetworkAddress>> = HashMap::new();
+    let mut macs: HashMap<String, String> = HashMap::new();
+    let mut current = first;
+    while !current.is_null() {
+        let ifa = unsafe { &*current };
+        if !ifa.ifa_addr.is_null() && !ifa.ifa_name.is_null() {
+            let family = unsafe { (*ifa.ifa_addr).sa_family as i32 };
+            let internal = (ifa.ifa_flags & (libc::IFF_LOOPBACK as libc::c_uint)) != 0;
+            let name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) }
+                .to_string_lossy()
+                .into_owned();
+            let mac = macs
+                .entry(name.clone())
+                .or_insert_with(|| interface_mac_address(&name))
+                .clone();
+
+            match family {
+                libc::AF_INET => {
+                    let address = unsafe { ipv4_from_sockaddr(ifa.ifa_addr) };
+                    let netmask = if ifa.ifa_netmask.is_null() {
+                        Ipv4Addr::UNSPECIFIED
+                    } else {
+                        unsafe { ipv4_from_sockaddr(ifa.ifa_netmask) }
+                    };
+                    let prefix = prefix_len_ipv4(netmask);
+                    interfaces.entry(name).or_default().push(OsNetworkAddress {
+                        address: address.to_string(),
+                        netmask: netmask.to_string(),
+                        family: "IPv4",
+                        mac,
+                        internal,
+                        cidr: format!("{address}/{prefix}"),
+                        scopeid: None,
+                    });
+                }
+                libc::AF_INET6 => {
+                    let sin6 = unsafe { &*(ifa.ifa_addr as *const libc::sockaddr_in6) };
+                    let address = unsafe { ipv6_from_sockaddr(ifa.ifa_addr) };
+                    let netmask = if ifa.ifa_netmask.is_null() {
+                        Ipv6Addr::UNSPECIFIED
+                    } else {
+                        unsafe { ipv6_from_sockaddr(ifa.ifa_netmask) }
+                    };
+                    let prefix = prefix_len_ipv6(netmask);
+                    interfaces.entry(name).or_default().push(OsNetworkAddress {
+                        address: address.to_string(),
+                        netmask: netmask.to_string(),
+                        family: "IPv6",
+                        mac,
+                        internal,
+                        cidr: format!("{address}/{prefix}"),
+                        scopeid: Some(sin6.sin6_scope_id),
+                    });
+                }
+                _ => {}
+            }
+        }
+        current = ifa.ifa_next;
+    }
+
+    unsafe { libc::freeifaddrs(first) };
+    interfaces
+}
+
+#[cfg(not(unix))]
+fn collect_network_interfaces() -> HashMap<String, Vec<OsNetworkAddress>> {
+    HashMap::new()
+}
+
+fn js_string_value(value: &str) -> crate::value::JSValue {
+    let ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    crate::value::JSValue::string_ptr(ptr)
+}
+
+fn build_network_address_object(address: &OsNetworkAddress) -> *mut ObjectHeader {
+    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
+    use crate::value::JSValue;
+
+    let (shape_id, packed, field_count) = if address.family == "IPv6" {
+        (
+            OS_NETWORK_IPV6_SHAPE_ID,
+            b"address\0netmask\0family\0mac\0internal\0cidr\0scopeid\0".as_slice(),
+            7,
+        )
+    } else {
+        (
+            OS_NETWORK_IPV4_SHAPE_ID,
+            b"address\0netmask\0family\0mac\0internal\0cidr\0".as_slice(),
+            6,
+        )
+    };
+    let obj =
+        js_object_alloc_with_shape(shape_id, field_count, packed.as_ptr(), packed.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+
+    js_object_set_field(
+        obj_handle.get_raw_mut_ptr(),
+        0,
+        js_string_value(&address.address),
+    );
+    js_object_set_field(
+        obj_handle.get_raw_mut_ptr(),
+        1,
+        js_string_value(&address.netmask),
+    );
+    js_object_set_field(
+        obj_handle.get_raw_mut_ptr(),
+        2,
+        js_string_value(address.family),
+    );
+    js_object_set_field(
+        obj_handle.get_raw_mut_ptr(),
+        3,
+        js_string_value(&address.mac),
+    );
+    js_object_set_field(
+        obj_handle.get_raw_mut_ptr(),
+        4,
+        JSValue::bool(address.internal),
+    );
+    js_object_set_field(
+        obj_handle.get_raw_mut_ptr(),
+        5,
+        js_string_value(&address.cidr),
+    );
+    if let Some(scopeid) = address.scopeid {
+        js_object_set_field(
+            obj_handle.get_raw_mut_ptr(),
+            6,
+            JSValue::number(scopeid as f64),
+        );
+    }
+
+    obj_handle.get_raw_mut_ptr()
 }
 
 /// Get network interfaces information
 /// Returns an object with interface names as keys
-/// TODO: Implement properly when dynamic object properties are supported
 #[no_mangle]
 pub extern "C" fn js_os_network_interfaces() -> *mut ObjectHeader {
-    // Return empty object for now - dynamic object properties need different API
-    crate::object::js_object_alloc(0, 0)
+    use crate::object::{js_object_alloc, js_object_set_field_by_name};
+    use crate::value::JSValue;
+
+    let interfaces = collect_network_interfaces();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = js_object_alloc(0, 0);
+    let result_handle = scope.root_raw_mut_ptr(result);
+
+    for (name, addresses) in interfaces {
+        let arr = crate::array::js_array_alloc(addresses.len() as u32);
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+
+        for address in addresses {
+            let entry = build_network_address_object(&address);
+            let entry_handle = scope.root_raw_mut_ptr(entry);
+            let pushed = crate::array::js_array_push(
+                arr_handle.get_raw_mut_ptr(),
+                JSValue::pointer(entry_handle.get_raw_mut_ptr() as *const u8),
+            );
+            arr_handle.set_raw_mut_ptr(pushed);
+        }
+
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key_handle = scope.root_string_ptr(key);
+        js_object_set_field_by_name(
+            result_handle.get_raw_mut_ptr(),
+            key_handle.get_raw_const_ptr(),
+            f64::from_bits(JSValue::pointer(arr_handle.get_raw_mut_ptr() as *const u8).bits()),
+        );
+    }
+
+    result_handle.get_raw_mut_ptr()
 }
 
 /// Get information about the current user
@@ -1354,6 +1763,15 @@ pub extern "C" fn js_os_network_interfaces() -> *mut ObjectHeader {
 /// TODO: Implement properly when dynamic object properties are supported
 #[no_mangle]
 pub extern "C" fn js_os_user_info() -> *mut ObjectHeader {
+    js_os_user_info_impl(false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_os_user_info_buffer() -> *mut ObjectHeader {
+    js_os_user_info_impl(true)
+}
+
+fn js_os_user_info_impl(buffer_encoding: bool) -> *mut ObjectHeader {
     use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::JSValue;
 
@@ -1391,13 +1809,25 @@ pub extern "C" fn js_os_user_info() -> *mut ObjectHeader {
         let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
         JSValue::string_ptr(ptr)
     };
+    let buffer_value = |s: &str| -> JSValue {
+        let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        let buf = crate::buffer::js_buffer_from_string(ptr as *const StringHeader, 0);
+        JSValue::pointer(buf as *const u8)
+    };
+    let text_value = |s: &str| -> JSValue {
+        if buffer_encoding {
+            buffer_value(s)
+        } else {
+            string_value(s)
+        }
+    };
 
     js_object_set_field(obj, 0, JSValue::number(uid));
     js_object_set_field(obj, 1, JSValue::number(gid));
-    js_object_set_field(obj, 2, string_value(&username));
-    js_object_set_field(obj, 3, string_value(&homedir));
+    js_object_set_field(obj, 2, text_value(&username));
+    js_object_set_field(obj, 3, text_value(&homedir));
     #[cfg(unix)]
-    js_object_set_field(obj, 4, string_value(&shell));
+    js_object_set_field(obj, 4, text_value(&shell));
     #[cfg(not(unix))]
     js_object_set_field(obj, 4, JSValue::null());
 

@@ -295,6 +295,21 @@ pub(super) fn ensure_set_built(s: &mut MallocState) {
     MALLOC_REGISTRY_REBUILD_COUNT.with(|c| c.set(c.get().saturating_add(1)));
 }
 
+/// True when `header` is an exact malloc-tracked GC allocation header.
+///
+/// This is for validation paths that need to reject forged pointer-tagged JS
+/// values before reading a candidate header.
+pub(crate) fn gc_malloc_header_is_tracked(header: *const GcHeader) -> bool {
+    if header.is_null() {
+        return false;
+    }
+    MALLOC_STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        ensure_set_built(&mut s);
+        s.set.contains(&(header as usize))
+    })
+}
+
 /// Reallocate a malloc-tracked object, preserving GcHeader.
 /// `old_user_ptr` is the pointer previously returned by gc_malloc.
 /// Returns new user pointer (after header).

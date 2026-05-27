@@ -6,8 +6,8 @@ mod rep;
 mod verify;
 
 pub(crate) use artifact::{
-    write_native_rep_artifact_if_enabled, NativeFactUse, NativeRepRecord, NativeValueState,
-    PodLayoutField, PodLayoutManifest, ScalarConversionRecord,
+    write_native_rep_artifact_if_enabled, NativeAbiDirection, NativeAbiTypeRecord, NativeFactUse,
+    NativeRepRecord, NativeValueState, PodLayoutField, PodLayoutManifest, ScalarConversionRecord,
 };
 pub(crate) use buffer::{
     AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode,
@@ -16,7 +16,8 @@ pub(crate) use buffer::{
 };
 pub(crate) use materialize::{
     materialize_js_value, materialize_native_handle_to_js_value,
-    materialize_promise_boundary_to_js_value, MaterializationReason,
+    materialize_promise_boundary_to_js_value, record_runtime_native_handle_box_transition,
+    MaterializationReason,
 };
 pub(crate) use pod::{
     collect_pod_init_fields, field_expected_rep, layout_decision_for_type,

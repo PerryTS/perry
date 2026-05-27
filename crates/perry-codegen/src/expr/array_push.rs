@@ -46,10 +46,10 @@ use super::{
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
-    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
-    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
-    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
-    I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
+    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, raw_f64_layout_fact,
+    try_flat_const_2d_int, try_lower_flat_const_index_get, try_match_channel_reduction,
+    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
+    FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -63,15 +63,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let layout_note_needed = array_store_needs_layout_note(ctx, &array_expr, value);
             let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
             let value_is_numeric = is_numeric_expr(ctx, value);
-            let value_is_plain_number = is_plain_number_value_expr(ctx, value);
             let require_numeric_layout =
                 value_is_numeric && expr_has_numeric_pointer_free_array_layout(ctx, &array_expr);
             let v = lower_expr(ctx, value)?;
             let arr_box = lower_expr(ctx, &array_expr)?;
-            let skip_guarded_numeric_push = !ctx.loop_targets.is_empty() && value_is_plain_number;
 
             if require_numeric_layout
-                && !skip_guarded_numeric_push
                 && !ctx.boxed_vars.contains(array_id)
                 && !ctx.closure_captures.contains_key(array_id)
                 && ctx.locals.contains_key(array_id)
@@ -120,7 +117,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     llvm_ty: DOUBLE,
                     value: v.clone(),
                 };
-                ctx.record_lowered_value_with_access_mode(
+                ctx.record_lowered_value_with_access_mode_and_facts(
                     "NumericArrayPush",
                     Some(*array_id),
                     "js_array_numeric_push_f64_unboxed",
@@ -131,6 +128,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     None,
                     Some(BufferAccessMode::CheckedNative),
                     None,
+                    None,
+                    None,
+                    vec![raw_f64_layout_fact(
+                        Some(*array_id),
+                        "consumed",
+                        "numeric_array_push_guard",
+                        None,
+                    )],
+                    Vec::new(),
                     false,
                     false,
                     Vec::new(),
@@ -159,7 +165,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     llvm_ty: DOUBLE,
                     value: v.clone(),
                 };
-                ctx.record_lowered_value_with_access_mode(
+                ctx.record_lowered_value_with_access_mode_and_facts(
                     "NumericArrayPush",
                     Some(*array_id),
                     "js_array_push_f64",
@@ -168,6 +174,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     None,
                     Some(BufferAccessMode::DynamicFallback),
                     Some(MaterializationReason::RuntimeApi),
+                    None,
+                    None,
+                    Vec::new(),
+                    vec![
+                        raw_f64_layout_fact(
+                            Some(*array_id),
+                            "rejected",
+                            "numeric_array_push_guard",
+                            Some(MaterializationReason::RuntimeApi),
+                        ),
+                        raw_f64_layout_fact(
+                            Some(*array_id),
+                            "invalidated",
+                            "runtime_api",
+                            Some(MaterializationReason::RuntimeApi),
+                        ),
+                    ],
                     false,
                     false,
                     Vec::new(),
@@ -454,57 +477,5 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // (`perry_closure_<modprefix>__<func_id>`) earlier in
         // `compile_module` via the `compile_closure` pass.
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
-    }
-}
-
-fn is_plain_number_value_expr(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    match expr {
-        Expr::Integer(_) | Expr::Number(_) | Expr::DateNow => true,
-        Expr::Uint8ArrayGet { .. }
-        | Expr::BufferIndexGet { .. }
-        | Expr::Uint8ArrayLength(_)
-        | Expr::BufferLength(_) => true,
-        Expr::LocalGet(id) | Expr::Update { id, .. } => {
-            ctx.integer_locals.contains(id) || ctx.unsigned_i32_locals.contains(id)
-        }
-        Expr::MathImul(_, _) => true,
-        Expr::Binary { op, left, right } => match op {
-            BinaryOp::Add
-            | BinaryOp::Sub
-            | BinaryOp::Mul
-            | BinaryOp::BitAnd
-            | BinaryOp::BitOr
-            | BinaryOp::BitXor
-            | BinaryOp::Shl
-            | BinaryOp::Shr
-            | BinaryOp::UShr => {
-                is_plain_number_value_expr(ctx, left) && is_plain_number_value_expr(ctx, right)
-            }
-            BinaryOp::Div => {
-                is_plain_number_value_expr(ctx, left)
-                    && match right.as_ref() {
-                        Expr::Integer(n) => *n != 0,
-                        Expr::Number(n) => n.is_finite() && n.abs() >= 1.0,
-                        other => is_plain_number_value_expr(ctx, other),
-                    }
-            }
-            BinaryOp::Mod => {
-                is_plain_number_value_expr(ctx, left)
-                    && match right.as_ref() {
-                        Expr::Integer(n) => *n != 0,
-                        Expr::Number(n) => n.is_finite() && *n != 0.0,
-                        other => is_plain_number_value_expr(ctx, other),
-                    }
-            }
-            _ => false,
-        },
-        Expr::Conditional {
-            then_expr,
-            else_expr,
-            ..
-        } => {
-            is_plain_number_value_expr(ctx, then_expr) && is_plain_number_value_expr(ctx, else_expr)
-        }
-        _ => false,
     }
 }

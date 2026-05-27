@@ -5,14 +5,14 @@ use anyhow::{anyhow, Result};
 
 use super::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
-    emit_write_barrier_slot_on_block, nanbox_pointer_inline, FnCtx,
+    emit_write_barrier_slot_on_block, nanbox_pointer_inline, raw_f64_layout_fact, FnCtx,
 };
 use crate::block::LlBlock;
 use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
 };
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64};
 
 /// Inline fast-path lowering for `local_arr[i] = v`.
 ///
@@ -38,7 +38,9 @@ use crate::types::{DOUBLE, I32, I64};
 ///   check_capacity:
 ///     %capacity = load i32, ptr @ arr_handle+4
 ///     %within_cap = icmp ult %idx_i32, %capacity
-///     br i1 %within_cap, label %extend_inline, label %realloc
+///     %dense_append = icmp eq %idx_i32, %length
+///     %can_extend_inline = and %within_cap, %dense_append
+///     br i1 %can_extend_inline, label %extend_inline, label %runtime_extend
 ///
 ///   extend_inline:
 ///     store double %v, ptr %element_ptr
@@ -46,7 +48,7 @@ use crate::types::{DOUBLE, I32, I64};
 ///     store i32 %new_len, ptr @ arr_handle+0
 ///     br merge
 ///
-///   realloc:
+///   runtime_extend:
 ///     %new_handle = call i64 @js_array_set_f64_extend(...)
 ///     %new_box = nanbox_pointer_inline(new_handle)
 ///     store double %new_box, ptr %local_slot
@@ -63,8 +65,8 @@ use crate::types::{DOUBLE, I32, I64};
 ///
 /// The inline store paths are entered only after the runtime guard proves the
 /// receiver is a live, non-forwarded plain array with a sane header. The realloc
-/// path only fires when the array actually has to grow (~17 times for a
-/// 100K-element build with doubling growth).
+/// path also handles sparse extensions so holes are filled and numeric raw
+/// layout is downgraded before JavaScript can observe the gap.
 pub(crate) fn lower_index_set_fast(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -154,7 +156,7 @@ pub(crate) fn lower_index_set_fast(
                 llvm_ty: DOUBLE,
                 value: fallback_box,
             };
-            ctx.record_lowered_value_with_access_mode(
+            ctx.record_lowered_value_with_access_mode_and_facts(
                 "NumericArrayIndexSet",
                 Some(local_id),
                 "js_typed_feedback_array_index_set_fallback_boxed",
@@ -163,6 +165,23 @@ pub(crate) fn lower_index_set_fast(
                 None,
                 Some(BufferAccessMode::DynamicFallback),
                 Some(MaterializationReason::RuntimeApi),
+                None,
+                None,
+                Vec::new(),
+                vec![
+                    raw_f64_layout_fact(
+                        Some(local_id),
+                        "rejected",
+                        "numeric_array_index_set_guard",
+                        Some(MaterializationReason::RuntimeApi),
+                    ),
+                    raw_f64_layout_fact(
+                        Some(local_id),
+                        "invalidated",
+                        "runtime_api",
+                        Some(MaterializationReason::RuntimeApi),
+                    ),
+                ],
                 false,
                 false,
                 Vec::new(),
@@ -224,7 +243,7 @@ pub(crate) fn lower_index_set_fast(
             llvm_ty: DOUBLE,
             value: val_double.to_string(),
         };
-        ctx.record_lowered_value_with_access_mode(
+        ctx.record_lowered_value_with_access_mode_and_facts(
             "NumericArrayIndexSet",
             Some(local_id),
             "js_array_numeric_set_f64_unboxed",
@@ -235,13 +254,24 @@ pub(crate) fn lower_index_set_fast(
             None,
             Some(BufferAccessMode::CheckedNative),
             None,
+            None,
+            None,
+            vec![raw_f64_layout_fact(
+                Some(local_id),
+                "consumed",
+                "numeric_array_index_set_guard",
+                None,
+            )],
+            Vec::new(),
             false,
             false,
             Vec::new(),
         );
     }
 
-    // MEDIUM: idx >= length but < capacity. Store + bump length.
+    // MEDIUM: idx == length and idx < capacity. Store + bump length.
+    // Sparse writes must go through `js_array_set_f64_extend` so gaps become
+    // TAG_HOLE and raw numeric layout is downgraded before user-visible reads.
     ctx.current_block = check_cap_idx;
     let capacity = {
         let blk = ctx.block();
@@ -251,9 +281,14 @@ pub(crate) fn lower_index_set_fast(
         let cap_ptr = blk.inttoptr(I64, &cap_addr);
         blk.load(I32, &cap_ptr)
     };
-    let within_cap = ctx.block().icmp_ult(I32, &idx_i32, &capacity);
+    let can_extend_inline = {
+        let blk = ctx.block();
+        let within_cap = blk.icmp_ult(I32, &idx_i32, &capacity);
+        let dense_append = blk.icmp_eq(I32, &idx_i32, &length);
+        blk.and(I1, &within_cap, &dense_append)
+    };
     ctx.block()
-        .cond_br(&within_cap, &extend_inline_label, &realloc_label);
+        .cond_br(&can_extend_inline, &extend_inline_label, &realloc_label);
 
     ctx.current_block = extend_inline_idx;
     {

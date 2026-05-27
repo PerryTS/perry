@@ -238,7 +238,7 @@ for raw in sys.stdin:
         # appeared after the Node v25 upgrade and has nothing to do
         # with Perry's output).
         sed -E '/^\(node:[0-9]+\) \[MODULE_TYPELESS_PACKAGE_JSON\]/d' | \
-        sed -E '/^\(node:[0-9]+\) \[DEP[0-9]+\] DeprecationWarning:/d' | \
+        sed -E '/^\(node:[0-9]+\)( \[[^]]+\])? DeprecationWarning:/d' | \
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: Type Stripping is an experimental feature/d' | \
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: glob is an experimental feature/d' | \
         sed -E '/^\(node:[0-9]+\) TimeoutOverflowWarning:/d' | \

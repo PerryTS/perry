@@ -57,6 +57,11 @@ pub use util_types::*;
 
 static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);
 static FS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
+static OS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
+static OS_CONSTANTS_SIGNALS_CACHE: AtomicU64 = AtomicU64::new(0);
+static OS_CONSTANTS_ERRNO_CACHE: AtomicU64 = AtomicU64::new(0);
+static OS_CONSTANTS_PRIORITY_CACHE: AtomicU64 = AtomicU64::new(0);
+static OS_CONSTANTS_DLOPEN_CACHE: AtomicU64 = AtomicU64::new(0);
 static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
 
 // Overflow field storage for objects that exceed their pre-allocated inline slot count.
@@ -1110,6 +1115,27 @@ pub fn scan_object_cache_roots(mark: &mut dyn FnMut(f64)) {
 pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     visitor.visit_atomic_nanbox_u64_slot(&HTTP_METHODS_CACHE, Ordering::Relaxed, Ordering::Relaxed);
     visitor.visit_atomic_nanbox_u64_slot(&FS_CONSTANTS_CACHE, Ordering::Relaxed, Ordering::Relaxed);
+    visitor.visit_atomic_nanbox_u64_slot(&OS_CONSTANTS_CACHE, Ordering::Relaxed, Ordering::Relaxed);
+    visitor.visit_atomic_nanbox_u64_slot(
+        &OS_CONSTANTS_SIGNALS_CACHE,
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    );
+    visitor.visit_atomic_nanbox_u64_slot(
+        &OS_CONSTANTS_ERRNO_CACHE,
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    );
+    visitor.visit_atomic_nanbox_u64_slot(
+        &OS_CONSTANTS_PRIORITY_CACHE,
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    );
+    visitor.visit_atomic_nanbox_u64_slot(
+        &OS_CONSTANTS_DLOPEN_CACHE,
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    );
     visitor.visit_atomic_i64_slot(&GLOBAL_THIS_PTR, Ordering::Acquire, Ordering::Release);
 }
 
@@ -1225,24 +1251,37 @@ pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
 }
 
 #[cfg(test)]
-pub(crate) fn test_seed_object_cache_roots(
-    http_methods_bits: u64,
-    fs_constants_bits: u64,
-    global_this_ptr: i64,
-) {
+pub(crate) fn test_seed_object_cache_roots(object_cache_bits: [u64; 7], global_this_ptr: i64) {
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    HTTP_METHODS_CACHE.store(http_methods_bits, Ordering::Relaxed);
+    HTTP_METHODS_CACHE.store(object_cache_bits[0], Ordering::Relaxed);
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    FS_CONSTANTS_CACHE.store(fs_constants_bits, Ordering::Relaxed);
+    FS_CONSTANTS_CACHE.store(object_cache_bits[1], Ordering::Relaxed);
+    // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
+    OS_CONSTANTS_CACHE.store(object_cache_bits[2], Ordering::Relaxed);
+    // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
+    OS_CONSTANTS_SIGNALS_CACHE.store(object_cache_bits[3], Ordering::Relaxed);
+    // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
+    OS_CONSTANTS_ERRNO_CACHE.store(object_cache_bits[4], Ordering::Relaxed);
+    // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
+    OS_CONSTANTS_PRIORITY_CACHE.store(object_cache_bits[5], Ordering::Relaxed);
+    // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
+    OS_CONSTANTS_DLOPEN_CACHE.store(object_cache_bits[6], Ordering::Relaxed);
     // GC_STORE_AUDIT(ROOT): test seed mirrors GLOBAL_THIS_PTR scanned by scan_object_cache_roots_mut.
     GLOBAL_THIS_PTR.store(global_this_ptr, Ordering::Release);
 }
 
 #[cfg(test)]
-pub(crate) fn test_object_cache_roots() -> (u64, u64, i64) {
+pub(crate) fn test_object_cache_roots() -> ([u64; 7], i64) {
     (
-        HTTP_METHODS_CACHE.load(Ordering::Relaxed),
-        FS_CONSTANTS_CACHE.load(Ordering::Relaxed),
+        [
+            HTTP_METHODS_CACHE.load(Ordering::Relaxed),
+            FS_CONSTANTS_CACHE.load(Ordering::Relaxed),
+            OS_CONSTANTS_CACHE.load(Ordering::Relaxed),
+            OS_CONSTANTS_SIGNALS_CACHE.load(Ordering::Relaxed),
+            OS_CONSTANTS_ERRNO_CACHE.load(Ordering::Relaxed),
+            OS_CONSTANTS_PRIORITY_CACHE.load(Ordering::Relaxed),
+            OS_CONSTANTS_DLOPEN_CACHE.load(Ordering::Relaxed),
+        ],
         GLOBAL_THIS_PTR.load(Ordering::Acquire),
     )
 }
@@ -1253,6 +1292,16 @@ pub(crate) fn test_clear_object_cache_roots() {
     HTTP_METHODS_CACHE.store(0, Ordering::Relaxed);
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
     FS_CONSTANTS_CACHE.store(0, Ordering::Relaxed);
+    // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
+    OS_CONSTANTS_CACHE.store(0, Ordering::Relaxed);
+    // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
+    OS_CONSTANTS_SIGNALS_CACHE.store(0, Ordering::Relaxed);
+    // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
+    OS_CONSTANTS_ERRNO_CACHE.store(0, Ordering::Relaxed);
+    // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
+    OS_CONSTANTS_PRIORITY_CACHE.store(0, Ordering::Relaxed);
+    // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
+    OS_CONSTANTS_DLOPEN_CACHE.store(0, Ordering::Relaxed);
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinel into scanned GLOBAL_THIS_PTR.
     GLOBAL_THIS_PTR.store(0, Ordering::Release);
 }

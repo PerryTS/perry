@@ -28,6 +28,9 @@
 //!   supporting helpers.
 
 use anyhow::{anyhow, Result};
+use perry_api_manifest::{
+    NativeAbiType, NativeHandleAbi, NativeHandleOwnership, NativeHandleThreadAffinity,
+};
 use perry_hir::ModuleKind;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -110,12 +113,20 @@ pub(super) fn parse_native_library_manifest(
     package_dir: &Path,
     module_name: &str,
     target: Option<&str>,
-) -> Option<NativeLibraryManifest> {
+) -> Result<Option<NativeLibraryManifest>> {
     let package_json = package_dir.join("package.json");
-    let content = fs::read_to_string(&package_json).ok()?;
-    let pkg: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let content = match fs::read_to_string(&package_json) {
+        Ok(content) => content,
+        Err(_) => return Ok(None),
+    };
+    let pkg: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(pkg) => pkg,
+        Err(_) => return Ok(None),
+    };
 
-    let native_lib = pkg.get("perry")?.get("nativeLibrary")?;
+    let Some(native_lib) = pkg.get("perry").and_then(|p| p.get("nativeLibrary")) else {
+        return Ok(None);
+    };
 
     // Issue #466 Phase 2: read the `abiVersion` field that wrappers
     // declare to assert which `perry-ffi` ABI they were built
@@ -129,47 +140,7 @@ pub(super) fn parse_native_library_manifest(
         .and_then(|v| v.as_str())
         .map(String::from);
 
-    // Parse functions.
-    //
-    // Valid `returns` values (codegen dispatch in lower_call.rs):
-    //   "string" / "ptr"  → PTR return (*const u8 / *const StringHeader);
-    //                        NaN-boxed as STRING_TAG.  Use when Rust fn is
-    //                        declared `-> *const u8`.
-    //   "i64_str"         → I64 return that IS a *StringHeader address;
-    //                        NaN-boxed as STRING_TAG without sitofp.  Use
-    //                        when Rust fn is declared `-> i64` but the value
-    //                        is a string pointer (closes issue #222).
-    //   "i64"             → I64 return; sitofp → JS number.  Opaque handles,
-    //                        counts, etc.
-    //   "u32" / "u64" /
-    //   "usize" / "f32"  → native scalar ABI return; explicitly
-    //                        materialized to a JS number.
-    //   "buffer_len"      → u32 BufferHeader.length return.
-    //   "handle"          → I64 opaque handle; NaN-boxed as POINTER_TAG.
-    //   "promise"         → I64 promise-boundary handle; NaN-boxed as
-    //                        POINTER_TAG with an explicit transition record.
-    //   "void"            → no return value.
-    //   (anything else)   → treated as f64 (Perry double ABI).
-    //
-    // Param strings use the same lowercase native ABI names where applicable:
-    // "u32", "u64", "usize", "f32", "buffer_len", "handle", and "promise".
-    let functions: Vec<NativeFunctionDecl> = native_lib
-        .get("functions")?
-        .as_array()?
-        .iter()
-        .filter_map(|f| {
-            Some(NativeFunctionDecl {
-                name: f.get("name")?.as_str()?.to_string(),
-                params: f
-                    .get("params")?
-                    .as_array()?
-                    .iter()
-                    .filter_map(|p| p.as_str().map(|s| s.to_string()))
-                    .collect(),
-                returns: f.get("returns")?.as_str()?.to_string(),
-            })
-        })
-        .collect();
+    let functions = parse_native_library_functions(&package_json, native_lib)?;
 
     // Parse target config
     let target_key = match target {
@@ -291,13 +262,358 @@ pub(super) fn parse_native_library_manifest(
             .unwrap_or_default(),
     });
 
-    Some(NativeLibraryManifest {
+    Ok(Some(NativeLibraryManifest {
         module: module_name.to_string(),
         package_dir: package_dir.to_path_buf(),
         abi_version,
         functions,
         target_config,
-    })
+    }))
+}
+
+fn parse_native_library_functions(
+    package_json: &Path,
+    native_lib: &serde_json::Value,
+) -> Result<Vec<NativeFunctionDecl>> {
+    let functions = native_lib
+        .get("functions")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            anyhow!(
+                "{} perry.nativeLibrary.functions must be an array",
+                package_json.display()
+            )
+        })?;
+
+    let mut parsed = Vec::with_capacity(functions.len());
+    for (function_index, function) in functions.iter().enumerate() {
+        let name = function
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                anyhow!(
+                    "{} nativeLibrary.functions[{}] name must be a string",
+                    package_json.display(),
+                    function_index
+                )
+            })?
+            .to_string();
+        let params = function
+            .get("params")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                anyhow!(
+                    "{} nativeLibrary.functions[{}] `{}` params must be an array",
+                    package_json.display(),
+                    function_index,
+                    name
+                )
+            })?;
+        let mut parsed_params = Vec::with_capacity(params.len());
+        for (param_index, param) in params.iter().enumerate() {
+            let descriptor = parse_native_abi_descriptor(
+                package_json,
+                function_index,
+                &name,
+                &format!("params[{param_index}]"),
+                param,
+                NativeAbiDescriptorPosition::Param,
+            )?;
+            if !descriptor.is_valid_param() {
+                return Err(invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    &name,
+                    &format!("params[{param_index}]"),
+                    &descriptor.to_string(),
+                    "void is only valid as a return descriptor",
+                ));
+            }
+            parsed_params.push(descriptor);
+        }
+        let returns_value = function.get("returns").ok_or_else(|| {
+            anyhow!(
+                "{} nativeLibrary.functions[{}] `{}` returns is required",
+                package_json.display(),
+                function_index,
+                name
+            )
+        })?;
+        let returns = parse_native_abi_descriptor(
+            package_json,
+            function_index,
+            &name,
+            "returns",
+            returns_value,
+            NativeAbiDescriptorPosition::Return,
+        )?;
+        if !returns.is_valid_return() {
+            return Err(invalid_native_abi_error(
+                package_json,
+                function_index,
+                &name,
+                "returns",
+                &returns.to_string(),
+                "buffer+len is a parameter-only native ABI convenience",
+            ));
+        }
+        parsed.push(NativeFunctionDecl {
+            name,
+            params: parsed_params,
+            returns,
+        });
+    }
+    Ok(parsed)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeAbiDescriptorPosition {
+    Param,
+    Return,
+}
+
+fn parse_native_abi_descriptor(
+    package_json: &Path,
+    function_index: usize,
+    function_name: &str,
+    slot: &str,
+    value: &serde_json::Value,
+    position: NativeAbiDescriptorPosition,
+) -> Result<NativeAbiType> {
+    if let Some(spelling) = value.as_str() {
+        return NativeAbiType::parse_str(spelling).map_err(|err| {
+            invalid_native_abi_error(
+                package_json,
+                function_index,
+                function_name,
+                slot,
+                err.spelling(),
+                err.reason(),
+            )
+        });
+    }
+
+    let Some(object) = value.as_object() else {
+        return Err(invalid_native_abi_error(
+            package_json,
+            function_index,
+            function_name,
+            slot,
+            &value.to_string(),
+            "descriptor must be a string or object",
+        ));
+    };
+    let kind = object.get("kind").and_then(|v| v.as_str()).ok_or_else(|| {
+        invalid_native_abi_error(
+            package_json,
+            function_index,
+            function_name,
+            slot,
+            &value.to_string(),
+            "structured descriptor requires a string `kind` field",
+        )
+    })?;
+
+    match kind {
+        "handle" => {
+            let allowed = [
+                "kind",
+                "type",
+                "ownership",
+                "nullable",
+                "thread",
+                "finalizer",
+                "debugName",
+            ];
+            for key in object.keys() {
+                if !allowed.contains(&key.as_str()) {
+                    return Err(invalid_native_abi_error(
+                        package_json,
+                        function_index,
+                        function_name,
+                        slot,
+                        &value.to_string(),
+                        &format!("unknown handle descriptor field `{key}`"),
+                    ));
+                }
+            }
+
+            let handle_type = match object.get("type") {
+                Some(v) => Some(
+                    v.as_str()
+                        .filter(|s| !s.trim().is_empty())
+                        .ok_or_else(|| {
+                            invalid_native_abi_error(
+                                package_json,
+                                function_index,
+                                function_name,
+                                slot,
+                                &value.to_string(),
+                                "handle descriptor `type` must be a non-empty string",
+                            )
+                        })?
+                        .to_string(),
+                ),
+                None => None,
+            };
+            let ownership = match object.get("ownership") {
+                Some(v) => match v.as_str() {
+                    Some("borrowed") => NativeHandleOwnership::Borrowed,
+                    Some("owned") => NativeHandleOwnership::Owned,
+                    Some(_) | None => {
+                        return Err(invalid_native_abi_error(
+                            package_json,
+                            function_index,
+                            function_name,
+                            slot,
+                            &value.to_string(),
+                            "handle descriptor `ownership` must be `owned` or `borrowed`",
+                        ));
+                    }
+                },
+                None => NativeHandleOwnership::Borrowed,
+            };
+            let nullable = match object.get("nullable") {
+                Some(v) => v.as_bool().ok_or_else(|| {
+                    invalid_native_abi_error(
+                        package_json,
+                        function_index,
+                        function_name,
+                        slot,
+                        &value.to_string(),
+                        "handle descriptor `nullable` must be a boolean",
+                    )
+                })?,
+                None => false,
+            };
+            let thread = match object.get("thread") {
+                Some(v) => match v.as_str() {
+                    Some("any") => NativeHandleThreadAffinity::Any,
+                    Some("main") => NativeHandleThreadAffinity::Main,
+                    Some("creator") => NativeHandleThreadAffinity::Creator,
+                    Some(_) | None => {
+                        return Err(invalid_native_abi_error(
+                            package_json,
+                            function_index,
+                            function_name,
+                            slot,
+                            &value.to_string(),
+                            "handle descriptor `thread` must be `any`, `main`, or `creator`",
+                        ));
+                    }
+                },
+                None => NativeHandleThreadAffinity::Any,
+            };
+            let finalizer = match object.get("finalizer") {
+                Some(v) => Some(
+                    v.as_str()
+                        .filter(|s| !s.trim().is_empty())
+                        .ok_or_else(|| {
+                            invalid_native_abi_error(
+                                package_json,
+                                function_index,
+                                function_name,
+                                slot,
+                                &value.to_string(),
+                                "handle descriptor `finalizer` must be a non-empty string",
+                            )
+                        })?
+                        .to_string(),
+                ),
+                None => None,
+            };
+            if finalizer.is_some() && ownership != NativeHandleOwnership::Owned {
+                return Err(invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    function_name,
+                    slot,
+                    &value.to_string(),
+                    "handle descriptor `finalizer` requires `ownership: \"owned\"`",
+                ));
+            }
+            if finalizer.is_some() && position == NativeAbiDescriptorPosition::Param {
+                return Err(invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    function_name,
+                    slot,
+                    &value.to_string(),
+                    "handle descriptor `finalizer` is valid only on returns",
+                ));
+            }
+            let debug_name = match object.get("debugName") {
+                Some(v) => v
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .ok_or_else(|| {
+                        invalid_native_abi_error(
+                            package_json,
+                            function_index,
+                            function_name,
+                            slot,
+                            &value.to_string(),
+                            "handle descriptor `debugName` must be a non-empty string",
+                        )
+                    })?
+                    .to_string(),
+                None => handle_type.as_deref().unwrap_or("handle").to_string(),
+            };
+
+            Ok(NativeAbiType::Handle(NativeHandleAbi {
+                type_name: handle_type,
+                ownership,
+                nullable,
+                thread,
+                finalizer,
+                debug_name,
+            }))
+        }
+        "promise" => {
+            let result = match object.get("result") {
+                Some(result) => parse_native_abi_descriptor(
+                    package_json,
+                    function_index,
+                    function_name,
+                    slot,
+                    result,
+                    position,
+                )?,
+                None => NativeAbiType::JsValue,
+            };
+            Ok(NativeAbiType::Promise(Box::new(result)))
+        }
+        "buffer+len" => Ok(NativeAbiType::BufferAndLen),
+        _ => NativeAbiType::parse_str(kind).map_err(|err| {
+            invalid_native_abi_error(
+                package_json,
+                function_index,
+                function_name,
+                slot,
+                err.spelling(),
+                err.reason(),
+            )
+        }),
+    }
+}
+
+fn invalid_native_abi_error(
+    package_json: &Path,
+    function_index: usize,
+    function_name: &str,
+    slot: &str,
+    spelling: &str,
+    reason: &str,
+) -> anyhow::Error {
+    anyhow!(
+        "{} nativeLibrary.functions[{}] `{}` {} invalid ABI {:?}: {}",
+        package_json.display(),
+        function_index,
+        function_name,
+        slot,
+        spelling,
+        reason
+    )
 }
 
 /// Map a Perry target string to the architecture token used in
@@ -499,431 +815,7 @@ pub(super) fn validate_abi_version(manifest: &NativeLibraryManifest) -> Result<(
 }
 
 #[cfg(test)]
-mod abi_validation_tests {
-    use super::*;
-
-    fn manifest_with_abi(abi: Option<&str>) -> NativeLibraryManifest {
-        NativeLibraryManifest {
-            module: "test".to_string(),
-            package_dir: PathBuf::new(),
-            abi_version: abi.map(String::from),
-            functions: vec![],
-            target_config: None,
-        }
-    }
-
-    #[test]
-    fn missing_abi_version_warns_but_passes() {
-        let m = manifest_with_abi(None);
-        assert!(validate_abi_version(&m).is_ok());
-    }
-
-    #[test]
-    fn matching_caret_range_passes() {
-        // The bundled version is whatever this build is compiled
-        // against — by definition the same major.minor as itself.
-        let v = PERRY_FFI_ABI_VERSION;
-        let major_minor = v.splitn(3, '.').take(2).collect::<Vec<_>>().join(".");
-        let m = manifest_with_abi(Some(&major_minor));
-        assert!(
-            validate_abi_version(&m).is_ok(),
-            "wrapper declaring `{}` should validate against bundled `{}`",
-            major_minor,
-            v
-        );
-    }
-
-    #[test]
-    fn future_major_fails() {
-        // `^99.0` rejects every actual perry-ffi version that ships
-        // this decade. Use `^99` so we don't need to bump the test
-        // when the runtime hits a multi-digit minor.
-        let m = manifest_with_abi(Some("99"));
-        let err = validate_abi_version(&m).expect_err("99 must reject current ABI");
-        assert!(err.contains("perry-ffi"), "got: {}", err);
-        assert!(err.contains("test"), "got: {}", err);
-    }
-
-    #[test]
-    fn unparseable_abi_version_returns_error() {
-        let m = manifest_with_abi(Some("not a version"));
-        let err = validate_abi_version(&m).expect_err("garbage must reject");
-        assert!(err.contains("unparseable"), "got: {}", err);
-    }
-}
-
-#[cfg(test)]
-mod manifest_parse_tests {
-    use super::*;
-
-    /// Relative `libDirs` entries must resolve against the package's
-    /// own directory, not the user's cwd — otherwise a wrapper that
-    /// ships a `vendor/lib/` alongside its `package.json` would only
-    /// link when invoked from one specific directory. Absolute entries
-    /// pass through unchanged (`PathBuf::join` ignores the base when
-    /// the right-hand side is absolute).
-    #[test]
-    fn lib_dirs_relative_paths_anchored_to_package_dir() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pkg_dir = dir.path();
-        let manifest = serde_json::json!({
-            "perry": {
-                "nativeLibrary": {
-                    "functions": [],
-                    "targets": {
-                        "macos": {
-                            "crate": "rust",
-                            "lib": "demo",
-                            "libDirs": ["vendor/lib", "/abs/path"]
-                        }
-                    }
-                }
-            }
-        });
-        std::fs::write(
-            pkg_dir.join("package.json"),
-            serde_json::to_string(&manifest).unwrap(),
-        )
-        .expect("write package.json");
-
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
-        let tc = parsed.target_config.expect("target_config");
-        assert_eq!(tc.lib_dirs.len(), 2);
-        assert_eq!(tc.lib_dirs[0], pkg_dir.join("vendor/lib"));
-        assert_eq!(tc.lib_dirs[1], PathBuf::from("/abs/path"));
-    }
-
-    /// Omitted `libDirs` must default to an empty list, not error —
-    /// it's an optional field on every existing wrapper.
-    #[test]
-    fn lib_dirs_defaults_to_empty_when_absent() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pkg_dir = dir.path();
-        let manifest = serde_json::json!({
-            "perry": {
-                "nativeLibrary": {
-                    "functions": [],
-                    "targets": { "macos": { "crate": "rust", "lib": "demo" } }
-                }
-            }
-        });
-        std::fs::write(
-            pkg_dir.join("package.json"),
-            serde_json::to_string(&manifest).unwrap(),
-        )
-        .expect("write package.json");
-
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
-        let tc = parsed.target_config.expect("target_config");
-        assert!(tc.lib_dirs.is_empty());
-    }
-
-    /// Issue #860 — `targets.<os>-<arch>` keys take precedence over
-    /// the bare `targets.<os>` key. A wrapper that ships per-arch
-    /// prebuilts (esbuild/sharp/swc pattern) needs to direct macos
-    /// arm64 vs macos x64 consumers at different `.a` archives even
-    /// though both pass `--target macos`.
-    #[test]
-    fn per_arch_target_key_beats_bare_os_key() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pkg_dir = dir.path();
-        let manifest = serde_json::json!({
-            "perry": {
-                "nativeLibrary": {
-                    "functions": [],
-                    "targets": {
-                        "macos":       { "crate": "rust",       "lib": "fallback" },
-                        "macos-arm64": { "crate": "rust-arm64", "lib": "arm64_lib" },
-                        "macos-x64":   { "crate": "rust-x64",   "lib": "x64_lib"   }
-                    }
-                }
-            }
-        });
-        std::fs::write(
-            pkg_dir.join("package.json"),
-            serde_json::to_string(&manifest).unwrap(),
-        )
-        .expect("write package.json");
-
-        // The arch key for `Some("macos")` is hard-coded to `arm64`
-        // by `arch_for_target_key` — that's the production macOS
-        // distribution arch (Apple Silicon). x64 entries can still be
-        // delivered by passing a different target string in the
-        // future; we just need the per-arch lookup to fire.
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
-        let tc = parsed.target_config.expect("target_config");
-        assert_eq!(tc.lib_name, "arm64_lib");
-        assert_eq!(tc.crate_path, pkg_dir.join("rust-arm64"));
-    }
-
-    /// When no per-arch key matches, the bare OS-only key still
-    /// resolves — existing on-disk wrappers must not regress.
-    #[test]
-    fn falls_back_to_bare_os_key_when_per_arch_absent() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pkg_dir = dir.path();
-        let manifest = serde_json::json!({
-            "perry": {
-                "nativeLibrary": {
-                    "functions": [],
-                    "targets": {
-                        "macos": { "crate": "rust", "lib": "demo" }
-                    }
-                }
-            }
-        });
-        std::fs::write(
-            pkg_dir.join("package.json"),
-            serde_json::to_string(&manifest).unwrap(),
-        )
-        .expect("write package.json");
-
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
-        let tc = parsed.target_config.expect("target_config");
-        assert_eq!(tc.lib_name, "demo");
-        assert!(tc.prebuilt.is_none());
-    }
-
-    /// Issue #860 — `prebuilt:` pointing at a node-style module
-    /// reference (`@scope/pkg/subpath/file.a`) resolves through the
-    /// consumer's `node_modules`. This is the esbuild/sharp/swc
-    /// distribution shape: a thin meta-package declares optional
-    /// per-platform subpackages via `optionalDependencies`, npm
-    /// installs only the matching one, and `prebuilt:` reaches into
-    /// it without invoking cargo.
-    #[test]
-    fn prebuilt_resolves_node_modules_subpackage() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path();
-        // Lay out a realistic node_modules: consumer/node_modules/
-        // @bloomengine/{engine, engine-darwin-arm64}/.
-        let consumer_pkg = root
-            .join("node_modules")
-            .join("@bloomengine")
-            .join("engine");
-        let prebuilt_pkg = root
-            .join("node_modules")
-            .join("@bloomengine")
-            .join("engine-darwin-arm64")
-            .join("lib");
-        std::fs::create_dir_all(&consumer_pkg).expect("mkdir engine");
-        std::fs::create_dir_all(&prebuilt_pkg).expect("mkdir engine-darwin-arm64/lib");
-        let prebuilt_file = prebuilt_pkg.join("libbloom_macos.a");
-        std::fs::write(&prebuilt_file, b"fake archive").expect("write prebuilt");
-
-        let manifest = serde_json::json!({
-            "perry": {
-                "nativeLibrary": {
-                    "functions": [],
-                    "targets": {
-                        "macos-arm64": {
-                            "prebuilt": "@bloomengine/engine-darwin-arm64/lib/libbloom_macos.a",
-                            "frameworks": ["Metal", "QuartzCore"]
-                        }
-                    }
-                }
-            }
-        });
-        std::fs::write(
-            consumer_pkg.join("package.json"),
-            serde_json::to_string(&manifest).unwrap(),
-        )
-        .expect("write engine/package.json");
-
-        let parsed =
-            parse_native_library_manifest(&consumer_pkg, "@bloomengine/engine", Some("macos"))
-                .expect("parsed manifest");
-        let tc = parsed.target_config.expect("target_config");
-        let prebuilt = tc.prebuilt.expect("prebuilt path");
-        // Use canonicalize on both sides — the test's `tmpdir` on
-        // macOS lives under `/var/...` which is a symlink to
-        // `/private/var/...`; the resolver returns the symlinked
-        // form, the original `prebuilt_file` was constructed with
-        // the symlinked form too, so they match before canonicalize
-        // here. But canonicalize defensively in case CI tmpdirs differ.
-        assert_eq!(
-            prebuilt.canonicalize().expect("canonicalize prebuilt"),
-            prebuilt_file.canonicalize().expect("canonicalize expected")
-        );
-        assert_eq!(tc.frameworks, vec!["Metal", "QuartzCore"]);
-        // The cargo build path should still be empty — no `crate:`
-        // means the prebuilt branch is exclusive.
-        assert_eq!(tc.lib_name, "");
-    }
-
-    /// Relative `prebuilt:` paths anchor against the package's own
-    /// directory — useful for tarball-shipped wrappers that vendor
-    /// the static lib alongside their `package.json`.
-    #[test]
-    fn prebuilt_relative_path_anchors_to_package_dir() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pkg_dir = dir.path();
-        let vendor_dir = pkg_dir.join("vendor");
-        std::fs::create_dir_all(&vendor_dir).expect("mkdir vendor");
-        let lib_path = vendor_dir.join("libfoo.a");
-        std::fs::write(&lib_path, b"fake archive").expect("write lib");
-
-        let manifest = serde_json::json!({
-            "perry": {
-                "nativeLibrary": {
-                    "functions": [],
-                    "targets": {
-                        "macos": { "prebuilt": "./vendor/libfoo.a" }
-                    }
-                }
-            }
-        });
-        std::fs::write(
-            pkg_dir.join("package.json"),
-            serde_json::to_string(&manifest).unwrap(),
-        )
-        .expect("write package.json");
-
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
-        let tc = parsed.target_config.expect("target_config");
-        let prebuilt = tc.prebuilt.expect("prebuilt path");
-        assert_eq!(prebuilt, pkg_dir.join("./vendor/libfoo.a"));
-    }
-
-    /// Issue #1304 — vendored-SDK frameworks parse from the snake_case
-    /// manifest keys (`optional_frameworks` / `frameworks_env`), matching
-    /// the `swift_sources` / `metal_sources` convention. These are the
-    /// shape `@perryts/google-auth` uses for the real GoogleSignIn SDK.
-    #[test]
-    fn optional_frameworks_parse_snake_case() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pkg_dir = dir.path();
-        let manifest = serde_json::json!({
-            "perry": {
-                "nativeLibrary": {
-                    "functions": [],
-                    "targets": {
-                        "ios": {
-                            "crate": "crate-ios",
-                            "lib": "perry_google_auth",
-                            "optional_frameworks": ["GoogleSignIn"],
-                            "frameworks_env": "PERRY_GOOGLE_SIGN_IN_FRAMEWORK_DIR"
-                        }
-                    }
-                }
-            }
-        });
-        std::fs::write(
-            pkg_dir.join("package.json"),
-            serde_json::to_string(&manifest).unwrap(),
-        )
-        .expect("write package.json");
-
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("ios")).expect("parsed manifest");
-        let tc = parsed.target_config.expect("target_config");
-        assert_eq!(tc.optional_frameworks, vec!["GoogleSignIn"]);
-        assert_eq!(
-            tc.frameworks_env.as_deref(),
-            Some("PERRY_GOOGLE_SIGN_IN_FRAMEWORK_DIR")
-        );
-    }
-
-    /// The camelCase spelling (`optionalFrameworks` / `frameworksEnv`,
-    /// matching `libDirs` / `pkgConfig`) is accepted too — the manifest's
-    /// casing convention is mixed, so we don't want a silent no-op when an
-    /// author picks the camelCase form.
-    #[test]
-    fn optional_frameworks_parse_camel_case() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pkg_dir = dir.path();
-        let manifest = serde_json::json!({
-            "perry": {
-                "nativeLibrary": {
-                    "functions": [],
-                    "targets": {
-                        "ios": {
-                            "crate": "crate-ios",
-                            "lib": "demo",
-                            "optionalFrameworks": ["GoogleSignIn", "AppAuth"],
-                            "frameworksEnv": "VENDOR_FW_DIR"
-                        }
-                    }
-                }
-            }
-        });
-        std::fs::write(
-            pkg_dir.join("package.json"),
-            serde_json::to_string(&manifest).unwrap(),
-        )
-        .expect("write package.json");
-
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("ios")).expect("parsed manifest");
-        let tc = parsed.target_config.expect("target_config");
-        assert_eq!(tc.optional_frameworks, vec!["GoogleSignIn", "AppAuth"]);
-        assert_eq!(tc.frameworks_env.as_deref(), Some("VENDOR_FW_DIR"));
-    }
-
-    /// Omitting both fields must default to an empty list / `None`, not
-    /// error — every existing wrapper lacks them.
-    #[test]
-    fn optional_frameworks_default_when_absent() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pkg_dir = dir.path();
-        let manifest = serde_json::json!({
-            "perry": {
-                "nativeLibrary": {
-                    "functions": [],
-                    "targets": { "ios": { "crate": "rust", "lib": "demo" } }
-                }
-            }
-        });
-        std::fs::write(
-            pkg_dir.join("package.json"),
-            serde_json::to_string(&manifest).unwrap(),
-        )
-        .expect("write package.json");
-
-        let parsed =
-            parse_native_library_manifest(pkg_dir, "demo", Some("ios")).expect("parsed manifest");
-        let tc = parsed.target_config.expect("target_config");
-        assert!(tc.optional_frameworks.is_empty());
-        assert!(tc.frameworks_env.is_none());
-    }
-}
-
-#[cfg(test)]
-mod module_spec_tests {
-    use super::split_module_spec;
-
-    #[test]
-    fn splits_scoped_package_and_subpath() {
-        let (pkg, sub) = split_module_spec("@bloomengine/engine-darwin-arm64/lib/libbloom_macos.a")
-            .expect("split");
-        assert_eq!(pkg, "@bloomengine/engine-darwin-arm64");
-        assert_eq!(sub, "lib/libbloom_macos.a");
-    }
-
-    #[test]
-    fn splits_unscoped_package_and_subpath() {
-        let (pkg, sub) = split_module_spec("esbuild-darwin-arm64/bin/esbuild").expect("split");
-        assert_eq!(pkg, "esbuild-darwin-arm64");
-        assert_eq!(sub, "bin/esbuild");
-    }
-
-    #[test]
-    fn bare_scoped_package_without_subpath_rejected() {
-        // `@scope/pkg` has no file to link — `prebuilt:` must name a
-        // specific archive within the package.
-        assert!(split_module_spec("@bloomengine/engine-darwin-arm64").is_none());
-    }
-
-    #[test]
-    fn bare_unscoped_package_without_subpath_rejected() {
-        assert!(split_module_spec("esbuild-darwin-arm64").is_none());
-    }
-}
+mod tests;
 
 /// Packages that Perry provides built-in native extensions for.
 /// These must never be loaded into V8 — Perry's codegen intercepts all imports

@@ -107,31 +107,103 @@ name to an `extern "C"` symbol exported by the wrapper's staticlib.
 | Field    | Type            | Required | Notes                                         |
 |----------|-----------------|----------|-----------------------------------------------|
 | `name`   | string          | yes      | Symbol name (Perry prepends an underscore on macOS). |
-| `params` | array of string | yes      | Parameter ABI types — see "Param types" below. |
-| `returns`| string          | yes      | Return ABI type — see "Return types" below.   |
+| `params` | ABI descriptor[] | yes     | Parameter ABI descriptors — see "Param types" below. |
+| `returns`| ABI descriptor   | yes     | Return ABI descriptor — see "Return types" below. |
+
+ABI descriptors describe the native calling convention, not the
+TypeScript type system. Perry keeps three layers separate:
+
+- JS-visible values (`number`, `string`, opaque handles, promises)
+- native ABI descriptors in the manifest (`f32`, `usize`, `buffer+len`)
+- lowered LLVM/C ABI slots (`double`, `i64`, `ptr`, etc.)
+
+Existing string spellings remain valid. The canonical descriptor
+vocabulary is:
+
+```text
+jsvalue, string, bool, i32, i64, i64_str, u32, u64, usize,
+f32, f64, number, ptr, buffer_len, buffer+len, handle<T>,
+promise<T>, void
+```
+
+`number` is a compatibility alias for `f64`; `js_value` and `boolean`
+are compatibility aliases for `jsvalue` and `bool`. Bare `handle` is
+the same as an untyped `handle<T>`. Bare `promise` is the same as
+`promise<jsvalue>`.
+
+Descriptors with metadata may also use object form:
+
+```json
+{ "kind": "handle", "type": "MyThing" }
+{
+  "kind": "handle",
+  "type": "MyThing",
+  "ownership": "owned",
+  "nullable": true,
+  "thread": "creator",
+  "finalizer": "my_thing_free",
+  "debugName": "MyThing"
+}
+{ "kind": "promise", "result": "jsvalue" }
+{ "kind": "buffer+len" }
+```
+
+Structured handles are GC-managed Perry native handle objects on the
+JavaScript side. They are opaque and branded; user code cannot forge a
+valid handle by passing a number or ordinary object. Use `"ptr"` only
+when you intentionally want the raw pointer payload escape hatch.
+
+Handle fields:
+
+| Field | Values | Default | Notes |
+|---|---|---|---|
+| `type` | string | untyped | Branded handle type. Legacy `"handle<T>"` maps here. |
+| `ownership` | `"borrowed"` / `"owned"` | `"borrowed"` | Owned return handles may run a native finalizer. Params may not declare finalizers. |
+| `nullable` | boolean | `false` | Nullable handles may wrap a null resource pointer and unwrap to `0`. Non-null descriptors reject null handles. |
+| `thread` | `"any"` / `"main"` / `"creator"` | `"any"` | Runtime validation rejects use from the wrong thread. |
+| `finalizer` | symbol string | none | Valid only on owned return handles. The symbol must have `void(ptr, ptr)` ABI and must not call Perry JS APIs during GC. |
+| `debugName` | string | `type` or `"handle"` | Stored inline for diagnostics. |
 
 ### Param types
 
-| Manifest value | Maps to Rust signature       | When TS callsite passes …            |
-|----------------|------------------------------|--------------------------------------|
-| `"string"`     | `*const StringHeader`        | a JS string                           |
-| `"number"`     | `f64`                        | any JS number                         |
-| `"i32"`        | `i32`                        | a number truncated to int             |
-| `"i64"`        | `i64`                        | a BigInt or large number              |
-| `"bool"`       | `bool`                       | a boolean                             |
-| `"ptr"`        | `*const c_void`              | an opaque handle (advanced)           |
+| Manifest descriptor | Maps to Rust signature | TypeScript callsite view |
+|---|---|---|
+| `"jsvalue"` | `f64` | raw Perry NaN-boxed value |
+| `"string"` | `*const StringHeader` | `string` |
+| `"bool"` | `i32` truthy flag | `boolean` |
+| `"i32"` | `i32` | `number` truncated to signed 32-bit |
+| `"i64"` | `i64` | `number` converted to signed 64-bit |
+| `"u32"` | `u32` | `number` converted to unsigned 32-bit |
+| `"u64"` | `u64` | `number` converted to unsigned 64-bit |
+| `"usize"` | `usize` | `number` converted to pointer-sized unsigned integer |
+| `"f32"` | `f32` | `number` narrowed to 32-bit float |
+| `"f64"` / `"number"` | `f64` | `number` |
+| `"ptr"` | `i64` raw boxed pointer payload | raw pointer escape hatch |
+| `"buffer_len"` | `u32` byte length | `number` |
+| `"buffer+len"` | `(*const u8, usize)` | one Buffer/Uint8Array-shaped argument |
+| `"handle"` / `"handle<T>"` | `i64` unwrapped resource pointer | opaque native handle |
+| `"promise"` / `"promise<T>"` | `i64` promise handle | `Promise` handle metadata |
 
 ### Return types
 
-| Manifest value | Rust signature              | TypeScript view                            |
-|----------------|-----------------------------|--------------------------------------------|
-| `"string"`     | `-> *const u8` *(see note)* | a string                                   |
-| `"ptr"`        | `-> *const u8` *(see note)* | a string                                   |
-| `"i64_str"`    | `-> i64`                    | a string (the `i64` is a `*StringHeader`)  |
-| `"i64"`        | `-> i64`                    | a number                                   |
-| `"number"`     | `-> f64`                    | a number                                   |
-| `"void"`       | `-> ()`                     | `undefined`                                |
-| anything else  | `-> f64`                    | a number                                   |
+| Manifest descriptor | Rust signature | TypeScript view |
+|---|---|---|
+| `"jsvalue"` | `-> f64` | raw Perry NaN-boxed value |
+| `"string"` | `-> *const u8` *(see note)* | `string` |
+| `"ptr"` | `-> *const u8` *(see note)* | `string` legacy pointer return |
+| `"i64_str"` | `-> i64` | `string` (the `i64` is a `*StringHeader`) |
+| `"bool"` | `-> i32` | `boolean` |
+| `"i32"` | `-> i32` | `number` |
+| `"i64"` | `-> i64` | `number` |
+| `"u32"` | `-> u32` | `number` |
+| `"u64"` | `-> u64` | `number` |
+| `"usize"` | `-> usize` | `number` |
+| `"f32"` | `-> f32` | `number` via explicit `f32 -> f64` materialization |
+| `"f64"` / `"number"` | `-> f64` | `number` |
+| `"buffer_len"` | `-> u32` | `number` |
+| `"handle"` / `"handle<T>"` | `-> i64` resource pointer | opaque native handle object |
+| `"promise"` / `"promise<T>"` | `-> i64` | JavaScript `Promise` |
+| `"void"` | `-> ()` | `undefined` |
 
 > Note on `"string"` vs. `"i64_str"`: both produce a string on the
 > TypeScript side, but they differ in how Rust returns the pointer.
@@ -139,6 +211,18 @@ name to an `extern "C"` symbol exported by the wrapper's staticlib.
 > `-> *const u8` (or `*const StringHeader`); use `"i64_str"` when
 > it's `-> i64` and the value happens to be a `StringHeader` address
 > (closes [#222]).
+
+`"void"` is valid only as a return descriptor. `"buffer+len"` is
+valid only as a parameter descriptor because it expands one
+JavaScript argument into two native ABI slots.
+
+Native-only numeric descriptors (`f32`, `u32`, `u64`, `usize`,
+`buffer_len`) render as TypeScript `number`. Handles remain opaque
+GC-managed values, even though native functions still receive and
+return raw `i64` resource pointers at the ABI boundary.
+Promises remain JavaScript promises; the optional `promise<T>` result
+metadata is currently recorded in compiler proof artifacts rather
+than changing the runtime ABI.
 
 ## `targets.<target>`
 

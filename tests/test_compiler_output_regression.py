@@ -119,6 +119,30 @@ def native_record(function="main", block="for.body.2", rep="i32", **overrides):
     return row
 
 
+def raw_f64_layout_fact(state):
+    return {
+        "fact_id": f"native_region.raw_f64_layout.test.{state}",
+        "kind": "raw_f64_layout",
+        "local_id": None,
+        "state": state,
+        "reason": "runtime_api" if state != "consumed" else None,
+    }
+
+
+def attach_raw_f64_layout_facts(records):
+    for record in records:
+        if record.get("access_mode") == "checked_native":
+            record.setdefault("consumed_facts", []).append(raw_f64_layout_fact("consumed"))
+        elif record.get("access_mode") == "dynamic_fallback":
+            record.setdefault("rejected_facts", []).extend(
+                [
+                    raw_f64_layout_fact("rejected"),
+                    raw_f64_layout_fact("invalidated"),
+                ]
+            )
+    return records
+
+
 def image_native_records():
     proven = {"proven": {"proof": "loop_guard"}}
     input_records = [
@@ -232,7 +256,7 @@ def image_native_records():
 
 
 def loop_data_dependent_native_records():
-    return [
+    return attach_raw_f64_layout_facts([
         native_record(
             block="apush.numeric_fast.5",
             rep="f64",
@@ -284,7 +308,57 @@ def loop_data_dependent_native_records():
             bounds_state="unknown",
             materialization_reason="runtime_api",
         ),
-    ]
+    ])
+
+
+def numeric_array_native_records():
+    return attach_raw_f64_layout_facts([
+        native_record(
+            rep="f64",
+            expr_kind="NumericArrayPush",
+            consumer="js_array_numeric_push_f64_unboxed",
+            access_mode="checked_native",
+            bounds_state={"guarded": {"guard_id": "numeric_array_push_guard"}},
+        ),
+        native_record(
+            rep="js_value",
+            expr_kind="NumericArrayPush",
+            consumer="js_array_push_f64",
+            access_mode="dynamic_fallback",
+            bounds_state="unknown",
+            materialization_reason="runtime_api",
+        ),
+        native_record(
+            rep="f64",
+            expr_kind="NumericArrayIndexGet",
+            consumer="js_array_numeric_get_f64_unboxed",
+            access_mode="checked_native",
+            bounds_state={"guarded": {"guard_id": "numeric_array_index_get_guard"}},
+        ),
+        native_record(
+            rep="js_value",
+            expr_kind="NumericArrayIndexGet",
+            consumer="js_typed_feedback_array_index_get_fallback_boxed",
+            access_mode="dynamic_fallback",
+            bounds_state="unknown",
+            materialization_reason="runtime_api",
+        ),
+        native_record(
+            rep="f64",
+            expr_kind="NumericArrayIndexSet",
+            consumer="js_array_numeric_set_f64_unboxed",
+            access_mode="checked_native",
+            bounds_state={"guarded": {"guard_id": "numeric_array_index_set_guard"}},
+        ),
+        native_record(
+            rep="js_value",
+            expr_kind="NumericArrayIndexSet",
+            consumer="js_typed_feedback_array_index_set_fallback_boxed",
+            access_mode="dynamic_fallback",
+            bounds_state="unknown",
+            materialization_reason="runtime_api",
+        ),
+    ])
 
 
 class CompilerOutputRegressionTests(unittest.TestCase):
@@ -453,7 +527,7 @@ entry:
   ret i32 0
 }
 """
-        records = [
+        records = attach_raw_f64_layout_facts([
             native_record(
                 rep="f64",
                 expr_kind="NumericArrayPush",
@@ -499,7 +573,7 @@ entry:
                 bounds_state="unknown",
                 materialization_reason="runtime_api",
             ),
-        ]
+        ])
         for record in records:
             if record.get("access_mode") == "dynamic_fallback":
                 record["materialization_reason"] = None
@@ -819,7 +893,7 @@ entry:
   ret i32 0
 }
 """
-        records = [
+        records = attach_raw_f64_layout_facts([
             native_record(
                 rep="f64",
                 expr_kind="NumericArrayPush",
@@ -865,7 +939,7 @@ entry:
                 bounds_state="unknown",
                 materialization_reason="runtime_api",
             ),
-        ]
+        ])
         report = HARNESS.verify_artifacts(
             workload="numeric_arrays",
             ir_before=ir,
@@ -876,6 +950,57 @@ entry:
             native_reps=[{"records": records}],
         )
         self.assertEqual(report["status"], "pass", report["errors"])
+
+    def test_numeric_array_native_rep_checks_require_raw_layout_facts(self):
+        ir = """
+define i32 @main() {
+entry:
+  call i64 @js_array_numeric_push_f64_unboxed(i64 1, double 2.0)
+  call double @js_array_numeric_get_f64_unboxed(i64 1, i32 0)
+  call i32 @js_array_numeric_set_f64_unboxed(i64 1, i32 0, double 3.0)
+  ret i32 0
+}
+"""
+        checked_records = numeric_array_native_records()
+        for record in checked_records:
+            if record.get("access_mode") == "checked_native":
+                record["consumed_facts"] = []
+        checked_report = HARNESS.verify_artifacts(
+            workload="numeric_arrays",
+            ir_before=ir,
+            ir_after=ir,
+            assembly=GOOD_ASM,
+            benchmark={"runs": [{"exit_code": 0, "stdout_first": "25\n"}]},
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": checked_records}],
+        )
+        self.assertEqual(checked_report["status"], "fail")
+        self.assertTrue(
+            any("native_reps_required_numeric_array_push_fast_f64" in error for error in checked_report["errors"]),
+            checked_report["errors"],
+        )
+
+        fallback_records = numeric_array_native_records()
+        for record in fallback_records:
+            if record.get("access_mode") == "dynamic_fallback":
+                record["rejected_facts"] = []
+        fallback_report = HARNESS.verify_artifacts(
+            workload="numeric_arrays",
+            ir_before=ir,
+            ir_after=ir,
+            assembly=GOOD_ASM,
+            benchmark={"runs": [{"exit_code": 0, "stdout_first": "25\n"}]},
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": fallback_records}],
+        )
+        self.assertEqual(fallback_report["status"], "fail")
+        self.assertTrue(
+            any(
+                "native_reps_required_numeric_array_get_dynamic_fallback" in error
+                for error in fallback_report["errors"]
+            ),
+            fallback_report["errors"],
+        )
 
     def test_generic_native_rep_checks_reject_unexpected_materialization(self):
         ir = "define i32 @main() { entry: ret i32 0 }\n"

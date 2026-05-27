@@ -97,6 +97,16 @@ pub extern "C" fn js_util_types_is_array_buffer(value: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_types_is_shared_array_buffer(value: f64) -> f64 {
+    nanbox_bool(crate::buffer::is_shared_array_buffer(jsvalue_addr(value)))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_any_array_buffer(value: f64) -> f64 {
+    nanbox_bool(crate::buffer::is_any_array_buffer(jsvalue_addr(value)))
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_types_is_array_buffer_view(value: f64) -> f64 {
     let addr = jsvalue_addr(value);
     nanbox_bool(
