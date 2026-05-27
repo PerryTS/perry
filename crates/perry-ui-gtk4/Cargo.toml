@@ -32,6 +32,9 @@ webkit6 = "=0.4"
 dirs = "6"
 # perry/media — GStreamer playbin for streaming audio playback (#351).
 gstreamer = "0.25"
+# perry/ui CameraView — appsink frame pull for the v4l2 live-preview /
+# frame-callback pipeline (#191).
+gstreamer-app = "0.25"
 # perry/media — MPRIS D-Bus exposure for GNOME / KDE / playerctl /
 # Bluetooth headphones (#366). Linux-only; zbus has Linux-specific
 # system deps that don't build on macOS / Windows hosts, so the crate

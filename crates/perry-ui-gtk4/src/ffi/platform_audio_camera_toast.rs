@@ -179,35 +179,55 @@ pub extern "C" fn __wrapper_hone_get_app_files_dir(_closure_ptr: i64) -> f64 {
     nanbox_static_str(b"")
 }
 
-// --- Camera stubs (issue #191) ---
-// Real implementations live in `perry-ui-ios` and `perry-ui-android`. On
-// Linux, integrating GStreamer / V4L2 for live preview is a separate scope;
-// these no-ops let user code that targets multiple platforms link cleanly.
+// --- CameraView widget (GTK4 / GStreamer implementation, issue #191) ---
+// On Linux we drive a `v4l2src → videoconvert → appsink` GStreamer pipeline
+// for live preview and per-frame callbacks (`crate::camera`). iOS / Android
+// keep their own AVFoundation / CameraX backends.
 
 #[no_mangle]
 pub extern "C" fn perry_ui_camera_create() -> i64 {
-    0
+    crate::camera::create()
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_start(_handle: i64) {}
-
-#[no_mangle]
-pub extern "C" fn perry_ui_camera_stop(_handle: i64) {}
-
-#[no_mangle]
-pub extern "C" fn perry_ui_camera_freeze(_handle: i64) {}
-
-#[no_mangle]
-pub extern "C" fn perry_ui_camera_unfreeze(_handle: i64) {}
-
-#[no_mangle]
-pub extern "C" fn perry_ui_camera_sample_color(_x: f64, _y: f64) -> f64 {
-    -1.0
+pub extern "C" fn perry_ui_camera_start(handle: i64) {
+    crate::camera::start(handle)
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_set_on_tap(_handle: i64, _callback: f64) {}
+pub extern "C" fn perry_ui_camera_stop(handle: i64) {
+    crate::camera::stop(handle)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_camera_freeze(handle: i64) {
+    crate::camera::freeze(handle)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_camera_unfreeze(handle: i64) {
+    crate::camera::unfreeze(handle)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_camera_sample_color(x: f64, y: f64) -> f64 {
+    crate::camera::sample_color(x, y)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_camera_set_on_tap(handle: i64, callback: f64) {
+    crate::camera::set_on_tap(handle, callback)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_camera_register_frame_callback(handle: i64, callback: f64) {
+    crate::camera::register_frame_callback(handle, callback)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_camera_unregister_frame_callback(handle: i64) {
+    crate::camera::unregister_frame_callback(handle)
+}
 
 // --- Cross-platform toast + reactive setText (Phase 2 v3.3) ---
 

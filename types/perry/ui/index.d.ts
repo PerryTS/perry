@@ -1334,6 +1334,28 @@ export function cameraSampleColor(x: number, y: number): number;
  */
 export function cameraSetOnTap(camera: Widget, callback: (x: number, y: number) => void): void;
 
+/**
+ * Register a callback invoked for each captured camera frame, enabling
+ * real-time processing such as QR / barcode detection.
+ *
+ * The callback receives the frame as tightly-packed 24-bit RGB
+ * (`width * height * 3` bytes, 3 bytes per pixel), its pixel width and its
+ * pixel height. The buffer is only valid for the duration of the
+ * synchronous call — copy out anything you need to retain.
+ *
+ * Platform support:
+ *   - Linux:   GStreamer `v4l2src` pipeline
+ *   - iOS:     AVFoundation capture session
+ *   - Android: CameraX / Camera2
+ *   - Other:   no-op (the callback never fires)
+ *
+ * Requires camera permission.
+ */
+export function cameraRegisterFrameCallback(camera: Widget, callback: (frameData: Uint8Array, width: number, height: number) => void): void;
+
+/** Unregister a previously-registered camera frame callback. */
+export function cameraUnregisterFrameCallback(camera: Widget): void;
+
 // ---------------------------------------------------------------------------
 // Sheet
 // ---------------------------------------------------------------------------

@@ -1835,6 +1835,18 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget, ArgKind::Closure],
         ret: ReturnKind::Void,
     },
+    MethodRow {
+        method: "cameraRegisterFrameCallback",
+        runtime: "perry_ui_camera_register_frame_callback",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "cameraUnregisterFrameCallback",
+        runtime: "perry_ui_camera_unregister_frame_callback",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
     // ---- Canvas ----
     MethodRow {
         method: "Canvas",

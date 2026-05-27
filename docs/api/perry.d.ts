@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1288 entries across 81 modules
+// Coverage: 1296 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1481,6 +1481,22 @@ declare module "perry/ui" {
   export function bottomNavSetTintColor(...args: any[]): any;
   /** stdlib */
   export function bottomNavSetUnselectedTintColor(...args: any[]): any;
+  /** stdlib */
+  export function cameraFreeze(...args: any[]): any;
+  /** stdlib */
+  export function cameraRegisterFrameCallback(...args: any[]): any;
+  /** stdlib */
+  export function cameraSampleColor(...args: any[]): any;
+  /** stdlib */
+  export function cameraSetOnTap(...args: any[]): any;
+  /** stdlib */
+  export function cameraStart(...args: any[]): any;
+  /** stdlib */
+  export function cameraStop(...args: any[]): any;
+  /** stdlib */
+  export function cameraUnfreeze(...args: any[]): any;
+  /** stdlib */
+  export function cameraUnregisterFrameCallback(...args: any[]): any;
   /** stdlib */
   export function clipboardRead(...args: any[]): any;
   /** stdlib */
