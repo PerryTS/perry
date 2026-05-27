@@ -28,6 +28,7 @@ use std::collections::HashMap;
 
 const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
 const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
+const ERROR_MONITOR_EVENT_NAME: &str = "Symbol(events.errorMonitor)";
 
 fn bool_to_js(value: bool) -> f64 {
     if value {
@@ -185,10 +186,42 @@ unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
     if ptr.is_null() {
         return None;
     }
+
+    let sym_ptr = ptr as *const perry_runtime::symbol::SymbolHeader;
+    if (*sym_ptr).magic == perry_runtime::symbol::SYMBOL_MAGIC {
+        let sym_value = js_nanbox_pointer(ptr as i64);
+        let rendered = perry_runtime::symbol::js_symbol_to_string(sym_value);
+        return string_from_header(rendered as *const StringHeader);
+    }
+
     let len = (*ptr).byte_len as usize;
     let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
     Some(String::from_utf8_lossy(bytes).to_string())
+}
+
+unsafe fn dispatch_error_monitor(emitter: &mut EventEmitterHandle, arg: Option<f64>) {
+    let snapshot: Vec<Listener> = match emitter.events.get(ERROR_MONITOR_EVENT_NAME) {
+        Some(v) if !v.is_empty() => v.clone(),
+        _ => return,
+    };
+    if snapshot.iter().any(|l| l.once) {
+        if let Some(v) = emitter.events.get_mut(ERROR_MONITOR_EVENT_NAME) {
+            v.retain(|l| !l.once);
+        }
+        emitter.prune_event_if_empty(ERROR_MONITOR_EVENT_NAME);
+    }
+
+    for l in snapshot {
+        if l.callback != 0 {
+            let closure_ptr = l.callback as *const ClosureHeader;
+            if let Some(arg) = arg {
+                js_closure_call1(closure_ptr, arg);
+            } else {
+                js_closure_call0(closure_ptr);
+            }
+        }
+    }
 }
 
 /// Create a new EventEmitter
@@ -353,14 +386,17 @@ pub unsafe extern "C" fn js_event_emitter_emit(
             }
         }
 
-        if event_name == "error" && snapshot.is_empty() {
-            perry_runtime::exception::js_throw(first_arg_or_undefined(args_ptr));
+        let first_arg = first_arg_or_undefined(args_ptr);
+        if event_name == "error" {
+            dispatch_error_monitor(emitter, Some(first_arg));
+            if snapshot.is_empty() {
+                perry_runtime::exception::js_throw(first_arg);
+            }
         }
 
         // Resolve any pending `events.once` Promises before dispatch.
         drain_pending_once_promises(emitter, &event_name, args_ptr);
 
-        let first_arg = first_arg_or_undefined(args_ptr);
         for l in snapshot {
             if l.callback != 0 {
                 let closure_ptr = l.callback as *const ClosureHeader;
@@ -400,8 +436,11 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
         }
 
         let empty_args = js_array_alloc(0);
-        if event_name == "error" && snapshot.is_empty() {
-            perry_runtime::exception::js_throw(f64::from_bits(TAG_UNDEFINED_F64_BITS));
+        if event_name == "error" {
+            dispatch_error_monitor(emitter, None);
+            if snapshot.is_empty() {
+                perry_runtime::exception::js_throw(f64::from_bits(TAG_UNDEFINED_F64_BITS));
+            }
         }
         drain_pending_once_promises(emitter, &event_name, empty_args);
 
