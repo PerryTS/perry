@@ -559,6 +559,37 @@ unsafe fn ensure_key_in_keys_array(obj: *mut ObjectHeader, key: *const crate::St
     }
 }
 
+/// Install a built-in *getter-only* accessor on a prototype object so that
+/// `Object.getOwnPropertyDescriptor(proto, key)` reflects it as a real
+/// accessor descriptor `{ get, set: undefined, enumerable, configurable }`.
+///
+/// `getter_bits` is the NaN-boxed `f64` bits of the getter closure (0 = none).
+/// The descriptor is non-enumerable and configurable, matching the ECMA-262
+/// shape for `%TypedArray%.prototype` accessors like `length` / `byteLength` /
+/// `byteOffset` / `buffer`. Reflection-only: this does NOT flip the hot-path
+/// descriptor gate (see `set_builtin_accessor_descriptor`). #2060.
+pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str, getter_bits: u64) {
+    if proto.is_null() || (proto as usize) < 0x10000 {
+        return;
+    }
+    let key_str = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    if key_str.is_null() {
+        return;
+    }
+    // Make the key discoverable by `own_key_present` / `getOwnPropertyNames`.
+    ensure_key_in_keys_array(proto, key_str);
+    set_builtin_accessor_descriptor(
+        proto as usize,
+        key.to_string(),
+        AccessorDescriptor {
+            get: getter_bits,
+            set: 0,
+        },
+        // writable is N/A for an accessor; enumerable=false, configurable=true.
+        PropertyAttrs::new(true, false, true),
+    );
+}
+
 /// Object.getOwnPropertyDescriptor(obj, key) — returns a data descriptor
 /// `{ value, writable, enumerable, configurable }` for data properties, or an
 /// accessor descriptor `{ get, set, enumerable, configurable }` for properties

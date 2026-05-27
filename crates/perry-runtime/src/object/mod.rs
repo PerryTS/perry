@@ -496,6 +496,34 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     });
 }
 
+/// Install a built-in *reflection-only* accessor descriptor for (obj, key)
+/// WITHOUT flipping the process-wide `GLOBAL_DESCRIPTORS_IN_USE` /
+/// `ACCESSORS_IN_USE` / `PROPERTY_ATTRS_IN_USE` hot-path gates.
+///
+/// `Object.getOwnPropertyDescriptor` reads `ACCESSOR_DESCRIPTORS` and
+/// `PROPERTY_DESCRIPTORS` *unconditionally*, so the descriptor is fully
+/// reflectable — but the hot object get/set paths (which only consult the
+/// side tables once a gate has flipped) keep skipping the HashMap lookup.
+/// This matters because built-in prototype accessors such as
+/// `%TypedArray%.prototype.length` are installed lazily at globalThis
+/// init for *every* program that merely touches a builtin global; flipping
+/// the gate there would slow the property-write fast path process-wide for
+/// no behavioral gain (these accessors have no setter and are never written
+/// in real workloads — they exist purely so reflection sees them). See #2060.
+pub(crate) fn set_builtin_accessor_descriptor(
+    obj: usize,
+    key: String,
+    acc: AccessorDescriptor,
+    attrs: PropertyAttrs,
+) {
+    ACCESSOR_DESCRIPTORS.with(|m| {
+        m.borrow_mut().insert((obj, key.clone()), acc);
+    });
+    PROPERTY_DESCRIPTORS.with(|m| {
+        m.borrow_mut().insert((obj, key), attrs);
+    });
+}
+
 /// Walk the keys array of `obj` and apply the given attribute mask AND filter to every existing key.
 /// Used by `Object.freeze` (drops `writable` + `configurable`) and `Object.seal` (drops `configurable`).
 unsafe fn mark_all_keys(

@@ -1087,7 +1087,26 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 if obj_ident.sym.as_ref() == property.as_str() {
-                    object_expr = Expr::GlobalGet(0);
+                    // #2060: `<TypedArrayCtor>.prototype` must keep reading the
+                    // constructor closure's *real* prototype object — the per-kind
+                    // proto carries the reflectable `length`/`byteLength`/
+                    // `byteOffset`/`buffer` accessor descriptors installed by
+                    // `populate_builtin_prototype_methods`. Collapsing to
+                    // `PropertyGet { GlobalGet(0), "prototype" }` would instead hit
+                    // codegen's `0.0` no-value placeholder (a number), so
+                    // `Object.getPrototypeOf(Int8Array.prototype)` returned null and
+                    // the descriptor lookup found nothing. Leave the inner
+                    // `PropertyGet { GlobalGet(0), <ctor> }` in place so the outer
+                    // `.prototype` reads through the closure's dynamic-prop table.
+                    let outer_is_prototype = matches!(
+                        &member.prop,
+                        ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
+                    );
+                    let is_typed_array_ctor =
+                        crate::ir::typed_array_kind_for_name(property).is_some();
+                    if !(outer_is_prototype && is_typed_array_ctor) {
+                        object_expr = Expr::GlobalGet(0);
+                    }
                 }
             }
         }

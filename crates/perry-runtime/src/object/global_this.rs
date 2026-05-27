@@ -306,6 +306,116 @@ extern "C" fn array_prototype_slice_thunk(
     f64::from_bits(crate::value::js_nanbox_pointer(result as i64).to_bits())
 }
 
+/// Resolve the `IMPLICIT_THIS` receiver to a `(typed-array ptr, kind)` if it
+/// is a typed array, else `None`. Backs the `%TypedArray%.prototype` accessor
+/// getters installed for reflection (#2060) — these fire when user code does
+/// `desc.get.call(int8arr)` after pulling the descriptor out via
+/// `Object.getOwnPropertyDescriptor`. Mirrors the receiver-extraction the
+/// `Array.prototype.slice` thunk uses (NaN-boxed pointer or raw-i64 form).
+fn typed_array_receiver() -> Option<(*const crate::typedarray::TypedArrayHeader, u8)> {
+    use crate::value::JSValue;
+    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_jsv = JSValue::from_bits(this_bits);
+    let raw = if this_jsv.is_pointer() {
+        (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if this_bits >> 48 == 0 && this_bits > 0x10000 {
+        this_bits as usize
+    } else {
+        return None;
+    };
+    let kind = crate::typedarray::lookup_typed_array_kind(raw)?;
+    Some((raw as *const crate::typedarray::TypedArrayHeader, kind))
+}
+
+/// `%TypedArray%.prototype.length` getter — element count of the receiver.
+extern "C" fn typed_array_length_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    match typed_array_receiver() {
+        Some((ta, _)) => {
+            let len = crate::typedarray::js_typed_array_length(ta);
+            f64::from_bits(crate::value::JSValue::number(len as f64).bits())
+        }
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+/// `%TypedArray%.prototype.byteLength` getter — `length * BYTES_PER_ELEMENT`.
+extern "C" fn typed_array_byte_length_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    match typed_array_receiver() {
+        Some((ta, kind)) => {
+            let len = crate::typedarray::js_typed_array_length(ta) as usize;
+            let elem_size = crate::typedarray::elem_size_for_kind(kind);
+            f64::from_bits(crate::value::JSValue::number((len * elem_size) as f64).bits())
+        }
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+/// `%TypedArray%.prototype.byteOffset` getter — always 0 (Perry views are not
+/// backed by an offset into a shared `ArrayBuffer`).
+extern "C" fn typed_array_byte_offset_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    match typed_array_receiver() {
+        Some(_) => f64::from_bits(crate::value::JSValue::number(0.0).bits()),
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+/// `%TypedArray%.prototype.buffer` getter. Perry does not yet model a
+/// first-class `ArrayBuffer` behind a view, so this returns `undefined` for
+/// now (matching the existing `int8arr.buffer` data-path behavior). The
+/// accessor still exists so reflection sees a real getter — closing the
+/// `getOwnPropertyDescriptor(...).get` cascade in #2060.
+extern "C" fn typed_array_buffer_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Install the four `%TypedArray%.prototype` accessor descriptors
+/// (`length`, `byteLength`, `byteOffset`, `buffer`) on a typed-array
+/// constructor's prototype object so `Object.getOwnPropertyDescriptor`
+/// reflects them as `{ get, set: undefined, enumerable: false,
+/// configurable: true }`. #2060.
+fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
+    unsafe {
+        // 0-arg getters: `.call(this)` forwards 0 user args.
+        let mk = |f: *const u8| -> u64 {
+            crate::closure::js_register_closure_arity(f, 0);
+            let c = crate::closure::js_closure_alloc(f, 0);
+            if c.is_null() {
+                0
+            } else {
+                crate::value::js_nanbox_pointer(c as i64).to_bits()
+            }
+        };
+        install_builtin_getter(
+            proto_obj,
+            "length",
+            mk(typed_array_length_getter_thunk as *const u8),
+        );
+        install_builtin_getter(
+            proto_obj,
+            "byteLength",
+            mk(typed_array_byte_length_getter_thunk as *const u8),
+        );
+        install_builtin_getter(
+            proto_obj,
+            "byteOffset",
+            mk(typed_array_byte_offset_getter_thunk as *const u8),
+        );
+        install_builtin_getter(
+            proto_obj,
+            "buffer",
+            mk(typed_array_buffer_getter_thunk as *const u8),
+        );
+    }
+}
+
 /// Populate the freshly-allocated globalThis singleton with built-in
 /// constructor / namespace properties. Called exactly once from the CAS
 /// winner in `js_get_global_this`. Constructors get a ClosureHeader-
@@ -442,6 +552,18 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 let value = crate::value::js_nanbox_pointer(to_string_closure as i64);
                 js_object_set_field_by_name(proto_obj, key, value);
             }
+        }
+        // Typed-array constructors: install the `%TypedArray%.prototype`
+        // accessor descriptors (`length`/`byteLength`/`byteOffset`/`buffer`)
+        // on the per-kind prototype object. Perry's `getPrototypeOf(heapObj)`
+        // returns the object itself, so `Object.getOwnPropertyDescriptor(
+        // Object.getPrototypeOf(Int8Array.prototype), "length")` resolves to
+        // this same object and finds the accessor — closing the
+        // `Cannot read properties of undefined (reading 'get')` cascade. #2060.
+        "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
+        | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
+        | "BigUint64Array" => {
+            install_typed_array_proto_accessors(proto_obj);
         }
         _ => {}
     }
