@@ -78,6 +78,7 @@ where
         | Expr::OsCpus
         | Expr::OsNetworkInterfaces
         | Expr::OsUserInfo
+        | Expr::OsUserInfoBuffer
         | Expr::OsEOL
         | Expr::OsDevNull
         | Expr::OsAvailableParallelism

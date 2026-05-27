@@ -1710,6 +1710,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::OsCpus
         | Expr::OsNetworkInterfaces
         | Expr::OsUserInfo
+        | Expr::OsUserInfoBuffer
         | Expr::OsDevNull
         | Expr::OsAvailableParallelism
         | Expr::OsEndianness

@@ -1354,6 +1354,15 @@ pub extern "C" fn js_os_network_interfaces() -> *mut ObjectHeader {
 /// TODO: Implement properly when dynamic object properties are supported
 #[no_mangle]
 pub extern "C" fn js_os_user_info() -> *mut ObjectHeader {
+    js_os_user_info_impl(false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_os_user_info_buffer() -> *mut ObjectHeader {
+    js_os_user_info_impl(true)
+}
+
+fn js_os_user_info_impl(buffer_encoding: bool) -> *mut ObjectHeader {
     use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::JSValue;
 
@@ -1391,13 +1400,25 @@ pub extern "C" fn js_os_user_info() -> *mut ObjectHeader {
         let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
         JSValue::string_ptr(ptr)
     };
+    let buffer_value = |s: &str| -> JSValue {
+        let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        let buf = crate::buffer::js_buffer_from_string(ptr as *const StringHeader, 0);
+        JSValue::pointer(buf as *const u8)
+    };
+    let text_value = |s: &str| -> JSValue {
+        if buffer_encoding {
+            buffer_value(s)
+        } else {
+            string_value(s)
+        }
+    };
 
     js_object_set_field(obj, 0, JSValue::number(uid));
     js_object_set_field(obj, 1, JSValue::number(gid));
-    js_object_set_field(obj, 2, string_value(&username));
-    js_object_set_field(obj, 3, string_value(&homedir));
+    js_object_set_field(obj, 2, text_value(&username));
+    js_object_set_field(obj, 3, text_value(&homedir));
     #[cfg(unix)]
-    js_object_set_field(obj, 4, string_value(&shell));
+    js_object_set_field(obj, 4, text_value(&shell));
     #[cfg(not(unix))]
     js_object_set_field(obj, 4, JSValue::null());
 

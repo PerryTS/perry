@@ -446,7 +446,7 @@ pub fn check_object_literal_escapes_in_expr(
         | Expr::OsPlatform | Expr::OsArch | Expr::OsHostname | Expr::OsHomedir
         | Expr::OsTmpdir | Expr::OsTotalmem | Expr::OsFreemem | Expr::OsUptime
         | Expr::OsType | Expr::OsRelease | Expr::OsCpus | Expr::OsNetworkInterfaces
-        | Expr::OsUserInfo | Expr::OsEOL | Expr::OsDevNull | Expr::OsAvailableParallelism | Expr::OsEndianness | Expr::OsLoadavg | Expr::OsMachine | Expr::OsVersion
+        | Expr::OsUserInfo | Expr::OsUserInfoBuffer | Expr::OsEOL | Expr::OsDevNull | Expr::OsAvailableParallelism | Expr::OsEndianness | Expr::OsLoadavg | Expr::OsMachine | Expr::OsVersion
         // Collection constructors (no sub-exprs)
         | Expr::MapNew | Expr::SetNew
         // RegExp leaf accessors
