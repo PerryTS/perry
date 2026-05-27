@@ -328,6 +328,15 @@ fn throw_writable_null_chunk() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+#[cold]
+fn throw_readable_from_invalid_iterable() -> ! {
+    let msg = b"The \"iterable\" argument must be an instance of Iterable.";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(s, "ERR_INVALID_ARG_TYPE");
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 fn write_writable_chunk(stream: f64, chunk: f64, enc: f64) -> f64 {
     if JSValue::from_bits(chunk.to_bits()).is_null() {
         throw_writable_null_chunk();
@@ -2252,6 +2261,10 @@ pub extern "C" fn js_node_stream_passthrough_new(_opts: f64) -> f64 {
 /// `node:stream/consumers` can drain the current stub stream surface.
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_from(iterable: f64) -> f64 {
+    if matches!(iterable.to_bits(), TAG_NULL | TAG_UNDEFINED) {
+        throw_readable_from_invalid_iterable();
+    }
+
     let readable = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
     let raw = raw_ptr_from_value(readable);
     if raw >= 0x10000 {

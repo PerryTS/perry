@@ -824,12 +824,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: pipeTo preventClose option not honored. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/from-null-throws": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(null) / from(undefined) does not throw. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/finished/readable-false-option": {
     "issue": "1532",
     "added": "2026-05-23",
