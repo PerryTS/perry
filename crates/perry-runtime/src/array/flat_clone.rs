@@ -297,6 +297,49 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                     return ptr;
                 }
             }
+            // #321: per ECMA-262 §23.1.2.1, `Array.from` prefers the ITERATOR
+            // protocol (`obj[Symbol.iterator]`) over the array-like `.length`
+            // path. An effect `Chunk` carries BOTH a `.length` field AND a
+            // `[Symbol.iterator]` that delegates to `backing.array`'s iterator,
+            // so the pre-fix array-like fallback read `.length`=N and `obj[i]`
+            // (which a Chunk doesn't store positionally) → N undefined elements.
+            // That surfaced downstream as `Cannot read properties of undefined
+            // (reading '_tag')` in effect's `exitZipWith`. Drive the iterator
+            // protocol when the object is iterable, or when it IS an iterator
+            // (the runtime array-iterator class id / a stored `.next` closure).
+            unsafe {
+                let iter_f64 = crate::value::js_nanbox_pointer(raw_addr as i64);
+                let is_array_iterator = (*obj).class_id == ARRAY_ITERATOR_CLASS_ID;
+                let is_iterable = is_array_iterator || {
+                    let iter_sym = crate::symbol::well_known_symbol("iterator");
+                    if iter_sym.is_null() {
+                        false
+                    } else {
+                        let sym_f64 = f64::from_bits(
+                            crate::value::JSValue::pointer(iter_sym as *const u8).bits(),
+                        );
+                        let iter_fn =
+                            crate::symbol::js_object_get_symbol_property(iter_f64, sym_f64);
+                        iter_fn.to_bits() != crate::value::TAG_UNDEFINED
+                    }
+                };
+                // Also catch a bare iterator object that exposes `.next()` as a
+                // stored closure field but no `[Symbol.iterator]` (uncommon).
+                let has_next_field = {
+                    let next_key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
+                    let next_val = crate::object::js_object_get_field_by_name(
+                        obj as *const crate::ObjectHeader,
+                        next_key,
+                    );
+                    let next_ptr =
+                        crate::value::js_nanbox_get_pointer(f64::from_bits(next_val.bits()))
+                            as usize;
+                    !next_val.is_undefined() && crate::closure::is_closure_ptr(next_ptr)
+                };
+                if is_iterable || has_next_field {
+                    return js_iterator_to_array(crate::symbol::js_get_iterator(iter_f64));
+                }
+            }
             return unsafe { js_array_from_arraylike(raw_addr as *const crate::ObjectHeader) };
         }
     }

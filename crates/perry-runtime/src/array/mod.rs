@@ -7,6 +7,7 @@ mod immutable;
 mod indexing;
 mod is_array;
 mod iter_methods;
+mod iter_object;
 mod iterator;
 mod jsvalue_api;
 mod push_pop;
@@ -49,6 +50,10 @@ pub use self::iter_methods::{
     js_array_at, js_array_every, js_array_filter, js_array_find, js_array_findIndex,
     js_array_find_last, js_array_find_last_index, js_array_flatMap, js_array_forEach,
     js_array_join, js_array_map, js_array_map_discard, js_array_reduce, js_array_some,
+};
+pub use self::iter_object::{
+    array_entries_iter, array_keys_iter, array_values_iter, dispatch_array_iterator_method,
+    ARRAY_ITERATOR_CLASS_ID,
 };
 pub use self::iterator::{js_for_of_to_array, js_iterator_to_array};
 pub use self::jsvalue_api::{

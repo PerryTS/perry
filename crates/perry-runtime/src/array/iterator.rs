@@ -130,19 +130,23 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     }
     let iter_obj = iter_ptr as *const ObjectHeader;
 
-    // Look up the "next" method on the iterator object
+    // Look up the "next" method on the iterator object as a stored closure
+    // FIELD (the common case for generator objects / effect's `SingleShotGen`,
+    // which store `next` as an own callable property).
     let next_key = js_string_from_bytes(b"next".as_ptr(), 4);
     let next_val = js_object_get_field_by_name(iter_obj, next_key);
-    if next_val.is_undefined() {
-        return arr;
-    }
-
-    // next_val should be a closure pointer
     let next_f64 = unsafe { f64::from_bits(std::mem::transmute::<_, u64>(next_val)) };
-    let next_ptr = js_nanbox_get_pointer(next_f64) as *const closure::ClosureHeader;
-    if next_ptr.is_null() {
-        return arr;
-    }
+    let next_ptr = if next_val.is_undefined() {
+        std::ptr::null::<closure::ClosureHeader>()
+    } else {
+        js_nanbox_get_pointer(next_f64) as *const closure::ClosureHeader
+    };
+    // #321: some iterators (perry's runtime array iterator with
+    // `ARRAY_ITERATOR_CLASS_ID`, Buffer iterators) dispatch `.next()` through
+    // the class-id method tower in `js_native_call_method` rather than storing
+    // a `next` closure field, so the field lookup above misses. Fall back to a
+    // method-call dispatch in that case instead of bailing with an empty array.
+    let use_method_dispatch = next_ptr.is_null();
 
     // Iterate: call next() until done
     let done_key = js_string_from_bytes(b"done".as_ptr(), 4);
@@ -151,8 +155,20 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
 
     for _ in 0..100_000 {
         // safety limit
-        // Call next()
-        let result_f64 = closure::js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED));
+        // Call next() — stored-closure fast path, or class-id method dispatch.
+        let result_f64 = if use_method_dispatch {
+            unsafe {
+                crate::object::js_native_call_method(
+                    iter_f64,
+                    b"next".as_ptr() as *const i8,
+                    4,
+                    std::ptr::null(),
+                    0,
+                )
+            }
+        } else {
+            closure::js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED))
+        };
         let result_ptr = js_nanbox_get_pointer(result_f64);
         if result_ptr == 0 {
             break;

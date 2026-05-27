@@ -1281,6 +1281,25 @@ pub unsafe extern "C" fn js_native_call_method(
                         let s = crate::array::js_array_join(arr, sep_ptr);
                         return f64::from_bits(JSValue::string_ptr(s).bits());
                     }
+                    // #321: a value-level `arr[Symbol.iterator]()` resolves to
+                    // the array's bound `values` method (see symbol.rs), and
+                    // `arr.values()`/`.keys()`/`.entries()` reaching the runtime
+                    // dispatch tower (not codegen's eager `Expr::ArrayValues`
+                    // fast path) must return a real `.next()`-bearing iterator,
+                    // not an eager array clone. Effect's `Chunk[Symbol.iterator]`
+                    // delegates to `backing.array[Symbol.iterator]()` and then
+                    // `Array.from`/`Arr.reduce` drive `.next()` on the result;
+                    // without this the call returned `undefined` and surfaced as
+                    // `Cannot read properties of undefined (reading '_tag')`.
+                    "values" | "Symbol.iterator" | "@@iterator" => {
+                        return crate::array::array_values_iter(object);
+                    }
+                    "keys" => {
+                        return crate::array::array_keys_iter(object);
+                    }
+                    "entries" => {
+                        return crate::array::array_entries_iter(object);
+                    }
                     _ => {} // not a handled array method — fall through to object dispatch
                 }
             }
@@ -1304,6 +1323,16 @@ pub unsafe extern "C" fn js_native_call_method(
             // closure-field scan below.
             if (*obj).class_id == crate::buffer::BUFFER_ITERATOR_CLASS_ID {
                 return crate::buffer::dispatch_buffer_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
+            // #321: array iterators returned from a value-level
+            // `arr.values()`/`.keys()`/`.entries()`/`[Symbol.iterator]()`
+            // carry a dedicated class id so `.next()` lands in the iterator
+            // dispatcher (matching the Buffer iterator above).
+            if (*obj).class_id == crate::array::ARRAY_ITERATOR_CLASS_ID {
+                return crate::array::dispatch_array_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,
                 );
@@ -1662,6 +1691,13 @@ pub unsafe extern "C" fn js_native_call_method(
             // a bitcast) still routes through the iterator dispatcher.
             if (*obj).class_id == crate::buffer::BUFFER_ITERATOR_CLASS_ID {
                 return crate::buffer::dispatch_buffer_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
+            // #321: same array-iterator class-id check as the NaN-boxed path.
+            if (*obj).class_id == crate::array::ARRAY_ITERATOR_CLASS_ID {
+                return crate::array::dispatch_array_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,
                 );
