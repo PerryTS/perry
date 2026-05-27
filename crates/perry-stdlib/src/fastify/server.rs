@@ -452,6 +452,37 @@ async fn handle_request(
 /// other pump arms follow — `js_ws_process_pending`,
 /// `js_node_http_server_process_pending`, etc.).
 pub fn js_fastify_process_pending() -> i32 {
+    // #1824: re-entrancy guard. This pump dispatches each request handler
+    // inside a setjmp try-frame (`call_closure2_catching` → `js_try_push`).
+    // A handler that `await`s pumps the event loop
+    // (`js_async_first_call` → `js_promise_run_microtasks` →
+    // `js_stdlib_process_pending`), which re-enters THIS function while the
+    // outer handler's try-frame is still open on the native stack. If the
+    // re-entrant call starts *another* request handler, that handler's
+    // try-frame nests inside the suspended outer one. Under concurrent load
+    // the nesting grows one level per in-flight request and blows
+    // `MAX_TRY_DEPTH` (128) → "Try block nesting too deep" abort (observed
+    // as a silent SIGSEGV under PM2 on Linux x86_64). Guard against re-entry:
+    // a nested call processes no new requests and returns 0. The pending
+    // requests stay queued in each server's `request_rx` and are picked up
+    // by the next top-level pump tick, once the current handler unwinds its
+    // try-frame. The in-flight handler's own `await` still makes progress —
+    // the awaited resolution drains through `PENDING_RESOLUTIONS` in
+    // `js_stdlib_process_pending`, not through this request loop.
+    thread_local! {
+        static IN_PROGRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if IN_PROGRESS.with(|f| f.replace(true)) {
+        return 0;
+    }
+    struct ResetReentryGuard;
+    impl Drop for ResetReentryGuard {
+        fn drop(&mut self) {
+            IN_PROGRESS.with(|f| f.set(false));
+        }
+    }
+    let _reentry_guard = ResetReentryGuard;
+
     // Snapshot handle ids so we don't hold a DashMap iterator across
     // the dispatch — handler calls may register/drop other handles.
     //
@@ -461,11 +492,11 @@ pub fn js_fastify_process_pending() -> i32 {
     // per call is a high-frequency heap alloc/free that surfaces as GC
     // `madvise` page-churn under sustained async load — the #1114 wedge
     // signature. Reuse a per-thread scratch buffer so steady state is
-    // allocation-free. The buffer is moved out (not borrowed) across
-    // `process_fastify_request` because that dispatches user TS, which
-    // can re-enter this pump via an inline `await`; a re-entrant call
-    // just gets a fresh empty Vec, and the outer call restores its
-    // capacity-retaining buffer on the way out.
+    // allocation-free. The buffer is still moved out (not borrowed) across
+    // `process_fastify_request` as belt-and-suspenders: the #1824 re-entry
+    // guard above means a nested pump call returns before reaching this
+    // point, but moving the buffer out keeps the take/restore sound even if
+    // that guard is ever relaxed.
     thread_local! {
         static SCRATCH: std::cell::RefCell<Vec<Handle>> =
             const { std::cell::RefCell::new(Vec::new()) };
