@@ -34,6 +34,15 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         }
     }
     if let Some((module, method)) = unsafe { bound_native_callable_module_and_method(type_ref) } {
+        if module == "stream"
+            && matches!(
+                method.as_str(),
+                "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough" | "Stream"
+            )
+            && crate::node_stream::is_classic_stream_instance_of(value, method.as_str())
+        {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
         if module == "events"
             && method == "EventEmitter"
             && (crate::node_stream::is_classic_stream_instance_value(value)
@@ -57,6 +66,24 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 
     if class_id == 0 {
         return false_val;
+    }
+
+    // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
+    let classic_stream_name = match class_id {
+        0xFFFF0070 => Some("Stream"),
+        0xFFFF0071 => Some("Readable"),
+        0xFFFF0072 => Some("Writable"),
+        0xFFFF0073 => Some("Duplex"),
+        0xFFFF0074 => Some("Transform"),
+        0xFFFF0075 => Some("PassThrough"),
+        _ => None,
+    };
+    if let Some(name) = classic_stream_name {
+        return if crate::node_stream::is_classic_stream_instance_of(value, name) {
+            true_val
+        } else {
+            false_val
+        };
     }
 
     // User-defined `Symbol.hasInstance` takes precedence over the built-in

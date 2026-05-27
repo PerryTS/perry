@@ -707,6 +707,7 @@ pub(super) fn try_array_only_methods(
                         // (e.g. Stack<T>.push()), or an object type literal (e.g.
                         // { push: (v) => void, ... }), so its method dispatches correctly.
                         let is_user_class_receiver = match member.obj.as_ref() {
+                            ast::Expr::This(_) => true,
                             ast::Expr::Ident(ident) => {
                                 ctx.lookup_local_type(ident.sym.as_ref())
                                     .map(|ty| {

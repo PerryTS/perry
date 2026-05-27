@@ -91,6 +91,10 @@ const WRITABLE_NEED_DRAIN_KEY: &[u8] = b"__perryWritableNeedDrain";
 const WRITABLE_OBJECT_MODE_KEY: &[u8] = b"__perryWritableObjectMode";
 const WRITABLE_PENDING_FINISH_CALLBACK_KEY: &[u8] = b"__perryWritablePendingFinishCallback";
 const WRITABLE_WRITEV_KEY: &[u8] = b"__perryWritableWritev";
+const TRANSFORM_CALLBACK_KEY: &[u8] = b"__perryTransformCallback";
+const TRANSFORM_FLUSH_KEY: &[u8] = b"__perryTransformFlush";
+const TRANSFORM_PASSTHROUGH_KEY: &[u8] = b"__perryTransformPassThrough";
+const TRANSFORM_FINISHING_KEY: &[u8] = b"__perryTransformFinishing";
 // #1534: direction + disturbed bits so the static introspection helpers
 // (`Readable.isReadable` / `isDisturbed` / `isErrored`) answer per-stream
 // instead of with a uniform stub. Set at construction / on first read.
@@ -394,6 +398,53 @@ fn throw_readable_pipe_missing_destination() -> ! {
     )
 }
 
+extern "C" fn transform_write_callback(closure: *const ClosureHeader, err: f64, value: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = js_closure_get_capture_f64(closure, 0);
+    let len = js_closure_get_capture_f64(closure, 1);
+    let callback = js_closure_get_capture_f64(closure, 2);
+    if err.to_bits() != TAG_UNDEFINED && err.to_bits() != TAG_NULL {
+        complete_writable_write(stream, len, callback, err);
+        destroy_stream(stream, err);
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    push_callback_value(stream, value);
+    complete_writable_write(stream, len, callback, f64::from_bits(TAG_UNDEFINED));
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn transform_flush_callback(closure: *const ClosureHeader, err: f64, value: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = js_closure_get_capture_f64(closure, 0);
+    let callback = js_closure_get_capture_f64(closure, 1);
+    set_hidden_value(
+        stream,
+        hidden_transform_finishing_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+    if err.to_bits() != TAG_UNDEFINED && err.to_bits() != TAG_NULL {
+        destroy_stream(stream, err);
+        if is_callable_value(callback) {
+            call_listener_args(stream, callback, &[err]);
+        }
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    push_callback_value(stream, value);
+    finish_stream(
+        stream,
+        if is_callable_value(callback) {
+            Some(callback)
+        } else {
+            None
+        },
+    );
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 extern "C" fn ns_write3(closure: *const ClosureHeader, chunk: f64, enc: f64, cb: f64) -> f64 {
     let stream = this_value(closure);
     write_writable_chunk(stream, chunk, enc, cb)
@@ -456,6 +507,37 @@ fn writable_write_after_end_error() -> f64 {
     crate::value::js_nanbox_pointer(err as i64)
 }
 
+fn push_callback_value(stream: f64, value: f64) {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_null() && !jsval.is_undefined() {
+        let _ = push_chunk(stream, value);
+    }
+}
+
+fn invoke_transform_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: f64) {
+    if has_truthy_hidden(stream, hidden_transform_passthrough_key()) {
+        let _ = push_chunk(stream, chunk);
+        complete_writable_write(stream, len, callback, f64::from_bits(TAG_UNDEFINED));
+        return;
+    }
+    if let Some(transform) = transform_hidden_callback(stream) {
+        let cb = js_closure_alloc(transform_write_callback as *const u8, 3);
+        js_closure_set_capture_f64(cb, 0, stream);
+        js_closure_set_capture_f64(cb, 1, len);
+        js_closure_set_capture_f64(cb, 2, callback);
+        let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+        let args = [chunk, enc, cb_value];
+        let prev_this = crate::object::js_implicit_this_set(stream);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(transform, args.as_ptr(), args.len());
+        }
+        crate::object::js_implicit_this_set(prev_this);
+        return;
+    }
+    emit_writable_chunk(stream, chunk);
+    complete_writable_write(stream, len, callback, f64::from_bits(TAG_UNDEFINED));
+}
+
 #[cold]
 fn throw_writable_null_chunk() -> ! {
     let msg = b"May not write null values to stream";
@@ -513,6 +595,8 @@ fn write_writable_chunk(stream: f64, chunk: f64, enc: f64, cb: f64) -> f64 {
     let ret = writable_backpressure_return(stream);
     if writable_corked_count(stream) > 0.0 {
         buffer_writable_write(stream, chunk, enc, len, callback);
+    } else if is_transform_stream(stream) {
+        invoke_transform_write(stream, chunk, enc, len, callback);
     } else {
         invoke_writable_write(stream, chunk, enc, len, callback);
         emit_writable_chunk(stream, chunk);
@@ -594,6 +678,9 @@ fn finish_stream_with_args(stream: f64, chunk: f64, encoding: f64, cb: f64) {
         let _ = write_writable_chunk(stream, chunk, encoding, f64::from_bits(TAG_UNDEFINED));
     }
     flush_writable_buffered(stream);
+    if finish_transform_stream(stream, callback) {
+        return;
+    }
     finish_stream(stream, callback);
 }
 
@@ -1527,6 +1614,8 @@ fn register_stub_arities() {
     register(ns_pipe1 as *const u8, 1);
     register(ns_writable_write_done as *const u8, 1);
     register(writable_write_callback_noop as *const u8, 0);
+    register(transform_write_callback as *const u8, 2);
+    register(transform_flush_callback as *const u8, 2);
     register(ns_write3 as *const u8, 3);
     register(ns_end3 as *const u8, 3);
     register(ns_cork0 as *const u8, 0);
@@ -1699,6 +1788,26 @@ fn hidden_writable_pending_finish_callback_key() -> *mut crate::string::StringHe
 #[inline]
 fn hidden_writev_key() -> *mut crate::string::StringHeader {
     hidden_key(WRITABLE_WRITEV_KEY)
+}
+
+#[inline]
+fn hidden_transform_callback_key() -> *mut crate::string::StringHeader {
+    hidden_key(TRANSFORM_CALLBACK_KEY)
+}
+
+#[inline]
+fn hidden_transform_flush_key() -> *mut crate::string::StringHeader {
+    hidden_key(TRANSFORM_FLUSH_KEY)
+}
+
+#[inline]
+fn hidden_transform_passthrough_key() -> *mut crate::string::StringHeader {
+    hidden_key(TRANSFORM_PASSTHROUGH_KEY)
+}
+
+#[inline]
+fn hidden_transform_finishing_key() -> *mut crate::string::StringHeader {
+    hidden_key(TRANSFORM_FINISHING_KEY)
 }
 
 #[inline]
@@ -1886,6 +1995,37 @@ pub(crate) fn is_classic_stream_instance_value(value: f64) -> bool {
     unsafe {
         own_field_by_key_bytes(obj, READABLE_FLAG_KEY).is_some()
             || own_field_by_key_bytes(obj, WRITABLE_FLAG_KEY).is_some()
+    }
+}
+
+pub(crate) fn is_classic_stream_instance_of(value: f64, constructor_name: &str) -> bool {
+    if constructor_name == "Stream" {
+        return is_classic_stream_instance_value(value);
+    }
+
+    let Some(obj) = object_ptr_from_value(value) else {
+        return false;
+    };
+    let Some(constructor) = (unsafe { own_field_by_key_bytes(obj, b"constructor") }) else {
+        return false;
+    };
+    let Some((module, actual)) =
+        (unsafe { crate::object::bound_native_callable_module_and_method(constructor) })
+    else {
+        return false;
+    };
+    if module != "stream" {
+        return false;
+    }
+    let actual = actual.as_str();
+
+    match constructor_name {
+        "Readable" => matches!(actual, "Readable" | "Duplex" | "Transform" | "PassThrough"),
+        "Writable" => matches!(actual, "Writable" | "Duplex" | "Transform" | "PassThrough"),
+        "Duplex" => matches!(actual, "Duplex" | "Transform" | "PassThrough"),
+        "Transform" => matches!(actual, "Transform" | "PassThrough"),
+        "PassThrough" => actual == "PassThrough",
+        _ => false,
     }
 }
 
@@ -2404,6 +2544,48 @@ fn writable_hidden_writev(value: f64) -> Option<f64> {
     get_hidden_value(value, hidden_writev_key())
 }
 
+fn transform_hidden_callback(value: f64) -> Option<f64> {
+    get_hidden_value(value, hidden_transform_callback_key())
+}
+
+fn transform_hidden_flush(value: f64) -> Option<f64> {
+    get_hidden_value(value, hidden_transform_flush_key())
+}
+
+fn is_transform_stream(stream: f64) -> bool {
+    transform_hidden_callback(stream).is_some()
+        || transform_hidden_flush(stream).is_some()
+        || has_truthy_hidden(stream, hidden_transform_passthrough_key())
+}
+
+fn finish_transform_stream(stream: f64, callback: Option<f64>) -> bool {
+    let Some(flush) = transform_hidden_flush(stream) else {
+        return false;
+    };
+    if has_truthy_hidden(stream, hidden_transform_finishing_key()) {
+        return true;
+    }
+    set_hidden_value(
+        stream,
+        hidden_transform_finishing_key(),
+        f64::from_bits(TAG_TRUE),
+    );
+    let cb = js_closure_alloc(transform_flush_callback as *const u8, 2);
+    js_closure_set_capture_f64(cb, 0, stream);
+    js_closure_set_capture_f64(
+        cb,
+        1,
+        callback.unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED)),
+    );
+    let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+    let prev_this = crate::object::js_implicit_this_set(stream);
+    unsafe {
+        let _ = crate::closure::js_native_call_value(flush, [cb_value].as_ptr(), 1);
+    }
+    crate::object::js_implicit_this_set(prev_this);
+    true
+}
+
 fn writable_corked_count(value: f64) -> f64 {
     get_hidden_value(value, hidden_writable_corked_key()).unwrap_or(0.0)
 }
@@ -2612,6 +2794,14 @@ fn write_callback_from_options(opts: f64) -> Option<f64> {
 
 fn writev_callback_from_options(opts: f64) -> Option<f64> {
     get_hidden_value(opts, hidden_key(b"writev"))
+}
+
+fn transform_callback_from_options(opts: f64) -> Option<f64> {
+    get_hidden_value(opts, hidden_key(b"transform"))
+}
+
+fn transform_flush_from_options(opts: f64) -> Option<f64> {
+    get_hidden_value(opts, hidden_key(b"flush"))
 }
 
 fn invoke_read_once(stream: f64) {
@@ -2996,7 +3186,7 @@ fn writable_methods() -> [(&'static str, StubFn); 22] {
     ]
 }
 
-fn duplex_methods() -> [(&'static str, StubFn); 29] {
+fn duplex_methods() -> [(&'static str, StubFn); 31] {
     // Union of readable + writable, deduped (`on/once/off/addListener/
     // removeListener/removeAllListeners/emit/listenerCount/listeners/
     // destroy` appear once each).
@@ -3024,6 +3214,8 @@ fn duplex_methods() -> [(&'static str, StubFn); 29] {
         ("resume", cast0(ns_resume0)),
         ("setEncoding", cast1(ns_set_encoding1)),
         ("isPaused", cast0(ns_is_paused0)),
+        ("push", cast1(ns_push1)),
+        ("compose", cast1(ns_compose1)),
         ("write", cast3(ns_write3)),
         ("end", cast3(ns_end3)),
         ("cork", cast0(ns_cork0)),
@@ -3313,8 +3505,6 @@ fn init_writable_state(stream: f64, opts: f64) {
     );
     let w_hwm = resolve_hwm(opts, b"writableHighWaterMark", b"writableObjectMode");
     set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
-    let writable_object_mode =
-        opt_bool(opts, b"writableObjectMode") || opt_bool(opts, b"objectMode");
     set_hidden_value(
         stream,
         hidden_writable_object_mode_key(),
@@ -3430,18 +3620,35 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     duplex
 }
 
-/// Transform / PassThrough share Duplex's surface for the stub — the
-/// `transform`/`flush` callbacks aren't wired through.
 #[no_mangle]
-pub extern "C" fn js_node_stream_transform_new(_opts: f64) -> f64 {
-    let transform = js_node_stream_duplex_new(_opts);
+pub extern "C" fn js_node_stream_transform_new(opts: f64) -> f64 {
+    let transform = js_node_stream_duplex_new(opts);
+    if let Some(callback) = transform_callback_from_options(opts) {
+        set_hidden_value(
+            transform,
+            hidden_transform_callback_key(),
+            rebind_callback_this(callback, transform),
+        );
+    }
+    if let Some(flush) = transform_flush_from_options(opts) {
+        set_hidden_value(
+            transform,
+            hidden_transform_flush_key(),
+            rebind_callback_this(flush, transform),
+        );
+    }
     init_constructor(transform, "Transform");
     transform
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_stream_passthrough_new(_opts: f64) -> f64 {
-    let passthrough = js_node_stream_duplex_new(_opts);
+pub extern "C" fn js_node_stream_passthrough_new(opts: f64) -> f64 {
+    let passthrough = js_node_stream_duplex_new(opts);
+    set_hidden_value(
+        passthrough,
+        hidden_transform_passthrough_key(),
+        f64::from_bits(TAG_TRUE),
+    );
     init_constructor(passthrough, "PassThrough");
     passthrough
 }
@@ -3677,3 +3884,7 @@ mod destroy_state;
 #[cfg(test)]
 #[path = "node_stream_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "node_stream_state_tests.rs"]
+mod state_tests;

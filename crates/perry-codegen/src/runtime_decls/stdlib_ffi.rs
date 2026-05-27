@@ -881,6 +881,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_method_readable_length", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_readable_flowing", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_readable_ended", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_readable_object_mode", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_pipe", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_node_stream_method_unpipe", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_node_stream_method_pause", DOUBLE, &[I64]);
@@ -897,6 +898,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_method_writable_finished", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_allow_half_open", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_set_encoding", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_node_stream_method_writable_object_mode", DOUBLE, &[I64]);
 
     // ========== Event emitter ==========
     module.declare_function("js_event_emitter_emit", DOUBLE, &[I64, I64, I64]);
