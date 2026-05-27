@@ -5425,6 +5425,7 @@ dependencies = [
  "perry-diagnostics",
  "perry-parser",
  "perry-types",
+ "perry-ui-model",
  "serde",
  "serde_json",
  "swc_common",
@@ -5571,6 +5572,9 @@ dependencies = [
 [[package]]
 name = "perry-ui"
 version = "0.5.1032"
+dependencies = [
+ "perry-ui-model",
+]
 
 [[package]]
 name = "perry-ui-android"
@@ -5652,6 +5656,10 @@ dependencies = [
  "perry-ui",
  "perry-ui-testkit",
 ]
+
+[[package]]
+name = "perry-ui-model"
+version = "0.5.1032"
 
 [[package]]
 name = "perry-ui-test"

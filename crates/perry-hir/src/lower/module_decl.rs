@@ -128,6 +128,41 @@ pub(crate) fn lower_module_decl(
                                     (source.clone(), Some(imported.clone()))
                                 };
                             ctx.register_native_module(local.clone(), native_module, native_method);
+                            // #1991: `perry/ui` exposes these as numeric
+                            // `const enum`s in `types/perry/ui/index.d.ts`.
+                            // Native modules do not have source HIR enum
+                            // declarations, so register the imported binding as
+                            // a real HIR enum at the import site. That lets the
+                            // existing enum-member lowering/codegen path handle
+                            // `Key.Space`, including aliases like
+                            // `import { Key as K } from "perry/ui"; K.Space`,
+                            // instead of treating it as a runtime property read
+                            // from a non-existent native-module object.
+                            if source == "perry/ui" {
+                                if let Some(model_members) =
+                                    perry_ui_model::const_enum_members(&imported)
+                                {
+                                    let enum_id = ctx.fresh_enum();
+                                    let members: Vec<EnumMember> = model_members
+                                        .into_iter()
+                                        .map(|member| EnumMember {
+                                            name: member.name.to_string(),
+                                            value: EnumValue::Number(member.value),
+                                        })
+                                        .collect();
+                                    let member_values = members
+                                        .iter()
+                                        .map(|m| (m.name.clone(), m.value.clone()))
+                                        .collect();
+                                    ctx.define_enum(local.clone(), enum_id, member_values);
+                                    module.enums.push(Enum {
+                                        id: enum_id,
+                                        name: local.clone(),
+                                        members,
+                                        is_exported: false,
+                                    });
+                                }
+                            }
                             // Auto-register parentPort from worker_threads as a native instance
                             // (it's a singleton, not created via `new`)
                             if source == "worker_threads" && imported == "parentPort" {

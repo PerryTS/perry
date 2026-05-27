@@ -1,0 +1,8 @@
+[package]
+name = "perry-ui-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared Perry UI constants and public model metadata"
+
+[dependencies]

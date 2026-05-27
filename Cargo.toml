@@ -51,6 +51,7 @@ members = [
     "crates/perry-stdlib",
     "crates/perry-diagnostics",
     "crates/perry-ui",
+    "crates/perry-ui-model",
     "crates/perry-ui-macos",
     "crates/perry-ui-ios",
     "crates/perry-ui-visionos",
@@ -309,6 +310,7 @@ perry-ext-pdf = { path = "crates/perry-ext-pdf" }
 perry-ext-ads = { path = "crates/perry-ext-ads" }
 perry-stdlib = { path = "crates/perry-stdlib" }
 perry-diagnostics = { path = "crates/perry-diagnostics" }
+perry-ui-model = { path = "crates/perry-ui-model" }
 perry-wasm-host = { path = "crates/perry-wasm-host" }
 perry-codegen-js = { path = "crates/perry-codegen-js" }
 perry-codegen-swiftui = { path = "crates/perry-codegen-swiftui" }

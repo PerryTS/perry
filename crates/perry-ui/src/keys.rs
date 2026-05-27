@@ -49,95 +49,29 @@ pub mod modifiers {
     pub const CTRL: u32 = 8;
 }
 
-macro_rules! key_table {
-    ( $( $id:literal => $name:literal ),* $(,)? ) => {
-        /// All `(KeyCode, name)` pairs in id order. `id == index + 1`.
-        pub const KEY_TABLE: &[(u16, &str)] = &[ $( ($id, $name) ),* ];
+/// All `(KeyCode, name)` pairs in id order, excluding `Unknown`.
+pub const KEY_TABLE: &[(u16, &str)] = perry_ui_model::KEY_TABLE;
 
-        /// Lookup a canonical key name from its id. Returns `""` for unknown.
-        #[inline]
-        pub fn name(code: KeyCode) -> &'static str {
-            let idx = code.0 as usize;
-            if idx == 0 || idx > KEY_TABLE.len() { return ""; }
-            KEY_TABLE[idx - 1].1
-        }
-
-        /// Lookup a canonical key id from a name. Returns `KeyCode::UNKNOWN` if not found.
-        pub fn from_name(s: &str) -> KeyCode {
-            // Linear scan: ~80 entries, dominated by 1-3 char compares. Faster
-            // than HashMap on this size and no allocation at startup.
-            for &(id, n) in KEY_TABLE {
-                if n == s { return KeyCode(id); }
-            }
-            KeyCode::UNKNOWN
-        }
-    };
+/// Lookup a canonical key name from its id. Returns `""` for unknown.
+#[inline]
+pub fn name(code: KeyCode) -> &'static str {
+    perry_ui_model::KEY_MEMBERS
+        .get(code.0 as usize)
+        .filter(|member| member.value == code.0)
+        .map(|member| member.event_name)
+        .unwrap_or("")
 }
 
-key_table! {
-    // Letters (1-26) — lowercase to match Web KeyboardEvent.key when unmodified.
-    1  => "a",  2  => "b",  3  => "c",  4  => "d",  5  => "e",  6  => "f",
-    7  => "g",  8  => "h",  9  => "i",  10 => "j",  11 => "k",  12 => "l",
-    13 => "m",  14 => "n",  15 => "o",  16 => "p",  17 => "q",  18 => "r",
-    19 => "s",  20 => "t",  21 => "u",  22 => "v",  23 => "w",  24 => "x",
-    25 => "y",  26 => "z",
-
-    // Digits (27-36).
-    27 => "0", 28 => "1", 29 => "2", 30 => "3", 31 => "4",
-    32 => "5", 33 => "6", 34 => "7", 35 => "8", 36 => "9",
-
-    // Function keys (37-48).
-    37 => "F1", 38 => "F2", 39 => "F3", 40 => "F4", 41 => "F5",  42 => "F6",
-    43 => "F7", 44 => "F8", 45 => "F9", 46 => "F10", 47 => "F11", 48 => "F12",
-
-    // Arrows + whitespace + edit.
-    49 => "ArrowUp",
-    50 => "ArrowDown",
-    51 => "ArrowLeft",
-    52 => "ArrowRight",
-    53 => "Space",
-    54 => "Enter",
-    55 => "Tab",
-    56 => "Escape",
-    57 => "Backspace",
-    58 => "Delete",
-
-    // Navigation.
-    59 => "Home",
-    60 => "End",
-    61 => "PageUp",
-    62 => "PageDown",
-    63 => "Insert",
-
-    // Standard punctuation that needs a name (the rest comes through onTextInput).
-    64 => "Minus",
-    65 => "Equal",
-    66 => "BracketLeft",
-    67 => "BracketRight",
-    68 => "Backslash",
-    69 => "Semicolon",
-    70 => "Quote",
-    71 => "Comma",
-    72 => "Period",
-    73 => "Slash",
-    74 => "Backquote",
-
-    // Extended function keys (full-size keyboards / external ones).
-    75 => "F13", 76 => "F14", 77 => "F15", 78 => "F16",
-    79 => "F17", 80 => "F18", 81 => "F19", 82 => "F20",
-
-    // Numeric keypad (distinct from top-row digits so apps can tell them apart).
-    83 => "Numpad0", 84 => "Numpad1", 85 => "Numpad2", 86 => "Numpad3",
-    87 => "Numpad4", 88 => "Numpad5", 89 => "Numpad6", 90 => "Numpad7",
-    91 => "Numpad8", 92 => "Numpad9",
-    93 => "NumpadDecimal",
-    94 => "NumpadEnter",
-    95 => "NumpadAdd",
-    96 => "NumpadSubtract",
-    97 => "NumpadMultiply",
-    98 => "NumpadDivide",
-    99 => "NumpadEqual",
-    100 => "NumpadClear",
+/// Lookup a canonical key id from a name. Returns `KeyCode::UNKNOWN` if not found.
+pub fn from_name(s: &str) -> KeyCode {
+    // Linear scan: ~100 entries, dominated by 1-3 char compares. Faster
+    // than HashMap on this size and no allocation at startup.
+    for member in perry_ui_model::KEY_MEMBERS {
+        if member.event_name == s {
+            return KeyCode(member.value);
+        }
+    }
+    KeyCode::UNKNOWN
 }
 
 #[cfg(test)]
