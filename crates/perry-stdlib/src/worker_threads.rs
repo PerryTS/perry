@@ -7,7 +7,9 @@
 //! - parentPort.on('message', callback): Async stdin reader, dispatch on main thread
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
+use std::sync::Once;
 
 use perry_runtime::closure::ClosureHeader;
 use perry_runtime::string::{js_string_from_bytes, StringHeader};
@@ -35,6 +37,120 @@ thread_local! {
     static STDIN_READER_STARTED: RefCell<bool> = const { RefCell::new(false) };
     /// Whether stdin has reached EOF
     static STDIN_EOF: RefCell<bool> = const { RefCell::new(false) };
+    /// Node-compatible per-thread environment data.
+    static ENVIRONMENT_DATA: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
+}
+
+static ENVIRONMENT_DATA_GC_REGISTERED: Once = Once::new();
+
+fn ensure_environment_data_gc_scanner() {
+    ENVIRONMENT_DATA_GC_REGISTERED.call_once(|| {
+        perry_runtime::gc::gc_register_mutable_root_scanner_named(
+            "stdlib:worker_threads:environmentData",
+            scan_environment_data_roots_mut,
+        );
+    });
+}
+
+fn scan_environment_data_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    ENVIRONMENT_DATA.with(|data| {
+        for value in data.borrow_mut().values_mut() {
+            visitor.visit_nanbox_u64_slot(value);
+        }
+    });
+}
+
+fn string_header_to_string(str_ptr: *const StringHeader) -> Option<String> {
+    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
+        return None;
+    }
+    unsafe {
+        let len = (*str_ptr).byte_len as usize;
+        let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let slice = std::slice::from_raw_parts(data_ptr, len);
+        Some(String::from_utf8_lossy(slice).into_owned())
+    }
+}
+
+fn string_value_to_string(value: f64) -> Option<String> {
+    let raw_ptr = perry_runtime::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    string_header_to_string(raw_ptr)
+}
+
+fn number_key_bits(value: f64) -> u64 {
+    if value == 0.0 {
+        0.0f64.to_bits()
+    } else if value.is_nan() {
+        f64::NAN.to_bits()
+    } else {
+        value.to_bits()
+    }
+}
+
+fn environment_data_key(value: f64) -> String {
+    let bits = value.to_bits();
+    let js_value = JSValue::from_bits(bits);
+
+    if js_value.is_any_string() {
+        if let Some(s) = string_value_to_string(value) {
+            return format!("string:{s}");
+        }
+    }
+    if js_value.is_int32() {
+        return format!(
+            "number:{:016x}",
+            number_key_bits(js_value.as_int32() as f64)
+        );
+    }
+    if js_value.is_number() {
+        return format!("number:{:016x}", number_key_bits(js_value.as_number()));
+    }
+    if js_value.is_bool() {
+        return format!("bool:{}", js_value.as_bool());
+    }
+    if js_value.is_null() {
+        return "null".to_string();
+    }
+    if js_value.is_undefined() {
+        return "undefined".to_string();
+    }
+
+    format!("bits:{bits:016x}")
+}
+
+/// worker_threads.setEnvironmentData(key, value)
+/// Stores data for this thread. An undefined value deletes the key.
+#[no_mangle]
+pub extern "C" fn js_worker_threads_set_environment_data(key: f64, value: f64) -> f64 {
+    ensure_environment_data_gc_scanner();
+    let key = environment_data_key(key);
+    let value_bits = value.to_bits();
+
+    ENVIRONMENT_DATA.with(|data| {
+        let mut data = data.borrow_mut();
+        if JSValue::from_bits(value_bits).is_undefined() {
+            data.remove(&key);
+        } else {
+            data.insert(key, value_bits);
+        }
+    });
+
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+/// worker_threads.getEnvironmentData(key)
+#[no_mangle]
+pub extern "C" fn js_worker_threads_get_environment_data(key: f64) -> f64 {
+    ensure_environment_data_gc_scanner();
+    let key = environment_data_key(key);
+    ENVIRONMENT_DATA.with(|data| {
+        f64::from_bits(
+            data.borrow()
+                .get(&key)
+                .copied()
+                .unwrap_or_else(|| JSValue::undefined().bits()),
+        )
+    })
 }
 
 /// Get workerData from PERRY_WORKER_DATA environment variable
