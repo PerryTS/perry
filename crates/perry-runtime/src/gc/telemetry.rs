@@ -492,6 +492,7 @@ impl GcCycleTrace {
             "reference_rewrite",
             "old_young_edge_verify",
             "sweep",
+            "reclaim",
             "remembered_set_clear",
             "conservative_pin_clear",
             "malloc_trim",

@@ -54,6 +54,8 @@ mod copying;
 use copying::*;
 mod oldgen;
 use oldgen::*;
+mod cycle;
+use cycle::*;
 mod verify;
 pub use verify::*;
 
@@ -97,14 +99,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         let outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
             GcTriggerKind::SurvivorPromotionBytes,
         ));
-        GC_FLAGS.with(|f| {
-            let cur = f.get();
-            if prev_in_alloc != 0 {
-                f.set(cur | GC_FLAG_IN_ALLOC);
-            } else {
-                f.set(cur & !GC_FLAG_IN_ALLOC);
-            }
-        });
+        restore_minor_in_alloc(prev_in_alloc);
         return outcome;
     }
     let mut trace = GcCycleTrace::new(GcCollectionKind::Minor, trigger);
@@ -133,14 +128,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
             stats.total_freed_bytes += freed_bytes;
             stats.last_pause_us = elapsed_us;
         });
-        GC_FLAGS.with(|f| {
-            let cur = f.get();
-            if prev_in_alloc != 0 {
-                f.set(cur | GC_FLAG_IN_ALLOC);
-            } else {
-                f.set(cur & !GC_FLAG_IN_ALLOC);
-            }
-        });
+        restore_minor_in_alloc(prev_in_alloc);
         if let Some(trace) = trace.as_mut() {
             trace.pause_us = elapsed_us;
             trace.capture_layout_scans();
@@ -152,293 +140,19 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         };
     }
     clear_mark_seeds();
-    let phase_start = trace_phase_start(&trace);
-    let valid_ptrs = build_valid_pointer_set();
-    trace_phase_record(&mut trace, "build_valid_pointer_set", phase_start);
-    let mut evacuation_policy = evacuation_policy_initial_decision(
-        valid_ptrs.tenured_nursery_bytes(),
-        current_rss_bytes,
+    GcCycleState::new_minor_fallback(
+        trigger,
+        trace,
+        start,
+        prev_in_alloc,
         previous_pause_us,
-        start.elapsed().as_micros() as u64,
+        current_rss_bytes,
         evacuation_policy_allowed,
         force_evacuation,
-        old_to_young_tracking_complete(),
-        old_page_selection.selected_pages,
-    );
-    if let Some(trace) = trace.as_mut() {
-        trace.evacuation_policy = evacuation_policy;
-    }
-
-    // === MARK PHASE (minor) ===
-    // Order matters for the C4b pinning policy:
-    //
-    //   1. Optional conservative C-stack/register scan first. Those
-    //      words cannot be rewritten, so when evacuation is enabled
-    //      we pin objects discovered by this phase before any
-    //      rewriteable root source can add marks. Default `auto`
-    //      mode skips this scan while a precise shadow-stack frame is
-    //      active; `PERRY_CONSERVATIVE_STACK_SCAN=full` restores the
-    //      legacy always-scan fallback.
-    //   2. Mutable root slots (shadow stack + registered globals).
-    //      These are real slots we can rewrite after forwarding, so
-    //      they stay out of CONS_PINNED.
-    //   3. Mutable registered scanners. These expose runtime-owned
-    //      slots and are revisited by the forwarding rewrite pass, so
-    //      they also stay out of CONS_PINNED.
-    //   4. Legacy Rust/FFI scanners. Their API exposes copied f64
-    //      values only; when evacuation is enabled the scanner
-    //      callbacks pin each discovery directly.
-    //
-    // Pinning only root-direct discoveries keeps heap-field reachability
-    // movable: heap fields are handled later by the reference-rewrite
-    // pass.
-    let phase_start = trace_phase_start(&trace);
-    let conservative_scan_decision = conservative_stack_scan_decision();
-    let conservative_root_stats =
-        mark_stack_roots_for_decision(&valid_ptrs, conservative_scan_decision);
-    // CONS_PINNED is only consumed by `evacuate_tenured_nursery_objects`.
-    // Stage 1 keeps the low-pressure path from doing the pinning walk.
-    let consider_evacuation = evacuation_policy.considered;
-    let conservative_pin_stats = if consider_evacuation
-        && matches!(
-            conservative_scan_decision,
-            ConservativeStackScanDecision::Scan
-        ) {
-        pin_currently_marked_as_conservative()
-    } else {
-        ConservativePinTraceStats::default()
-    };
-    match trace.as_mut() {
-        Some(trace) => mark_mutable_root_slots(
-            &valid_ptrs,
-            Some(&mut trace.shadow_roots),
-            Some(&mut trace.root_sources),
-        ),
-        None => mark_mutable_root_slots(&valid_ptrs, None, None),
-    }
-    match trace.as_mut() {
-        Some(trace) => {
-            mark_mutable_registered_roots_with_sources(&valid_ptrs, Some(&mut trace.root_sources))
-        }
-        None => mark_mutable_registered_roots(&valid_ptrs),
-    }
-    let legacy_root_stats = mark_registered_roots(&valid_ptrs, consider_evacuation);
-    if let Some(trace) = trace.as_mut() {
-        trace.conservative_root_count = conservative_root_stats.root_count;
-        trace.conservative_pinned = conservative_pin_stats.pinned_roots;
-        trace.conservative_pinned_bytes = conservative_pin_stats.pinned_bytes;
-        trace.legacy_copy_only_scanner_pinned = legacy_root_stats;
-        trace.root_sources.native_stack_fallback.decision = conservative_scan_decision;
-        trace.root_sources.native_stack_fallback.scanned = matches!(
-            conservative_scan_decision,
-            ConservativeStackScanDecision::Scan
-        );
-        trace.root_sources.native_stack_fallback.roots_found = conservative_root_stats.root_count;
-        trace.root_sources.native_stack_fallback.pinned_roots = conservative_pin_stats.pinned_roots;
-        trace.root_sources.native_stack_fallback.pinned_bytes = conservative_pin_stats.pinned_bytes;
-    }
-    trace_phase_record(&mut trace, "root_marking", phase_start);
-    let phase_start = trace_phase_start(&trace);
-    let remembered_set = mark_remembered_set_roots(&valid_ptrs);
-    trace_phase_record(&mut trace, "remembered_set_marking", phase_start);
-    if let Some(trace) = trace.as_mut() {
-        trace.remembered_set = remembered_set;
-    }
-    let phase_start = trace_phase_start(&trace);
-    trace_marked_objects_minor(&valid_ptrs);
-    trace_phase_record(&mut trace, "trace_worklist", phase_start);
-    let phase_start = trace_phase_start(&trace);
-    let block_persist = mark_block_persisting_arena_objects(&valid_ptrs);
-    trace_phase_record(&mut trace, "block_persistence", phase_start);
-    if let Some(trace) = trace.as_mut() {
-        trace.block_persist = block_persist;
-    }
-    if gc_verify_evacuation_enabled() {
-        let phase_start = trace_phase_start(&trace);
-        let old_young_edge_verifier = verify_old_to_young_edges_covered();
-        trace_phase_record(&mut trace, "old_young_edge_verify", phase_start);
-        if let Some(trace) = trace.as_mut() {
-            trace.old_young_edge_verifier = old_young_edge_verifier;
-        }
-    }
-    // Phase C4b-γ-2 makes evacuation correctness-safe: the
-    // post-evac `rewrite_forwarded_references` walk visits every
-    // reference site we own (shadow stack + module globals + every
-    // marked heap object's fields) and rewrites pointers to
-    // forwarded objects. The transitive-pinning safety valve
-    // formerly here is no longer needed — non-pinned tenured
-    // objects are now genuine evacuation candidates and the bench
-    // RSS win lands accordingly.
-
-    // === AGE-BUMP PASS (gen-GC Phase C4) ===
-    // Folded into the sweep walk via `sweep_with_age_bump(true)` below.
-    // Each general-arena object header was walked twice per minor GC: once
-    // here for HAS_SURVIVED/TENURED bookkeeping, once in sweep for the
-    // mark/free decision. With ~1.6M objects per cycle in
-    // perf-comprehensive that doubled the per-cycle header-touch cost; the
-    // merged walk halves it. Aging applies to nursery only (gated on
-    // `block_idx < general_block_count()` inside the merged walk), matching
-    // the original `pointer_in_old_gen` skip.
-    //
-    // Two-bit aging (HAS_SURVIVED → TENURED) gives PROMOTION_AGE=2:
-    //   - First survival:  set HAS_SURVIVED.
-    //   - Second survival: set TENURED, clear HAS_SURVIVED.
-    //
-    // Tenured objects are skipped by `drain_trace_worklist_minor` on
-    // subsequent minor GCs — bounded by the time-win generational design
-    // promises. They stay PHYSICALLY in nursery (no copying) so RSS
-    // doesn't drop until Phase C4b lands real evacuation.
-
-    // === EVACUATION PASS (Phase C4b-β + C4b-γ-2, auto-policy) ===
-    // Copy productive sets of non-pinned tenured nursery objects into
-    // OLD_ARENA and install short-lived forwarding pointers in the
-    // original nursery slots. After owned references are rewritten and
-    // optionally verified, those original stubs release FORWARDED so sweep
-    // can reclaim them. Stage 2 runs after mark/trace/block-persist so
-    // the policy uses measured movable bytes, block-reclaimable candidate
-    // bytes, retained forwarded stubs, pinned bytes, RSS, and pause
-    // telemetry instead of a simple env-var opt-in.
-    if evacuation_policy.considered {
-        let snapshot = evacuation_policy_snapshot_after_mark(
-            evacuation_policy.snapshot,
-            evacuation_policy.force,
-            start.elapsed().as_micros() as u64,
-            &old_page_selection,
-        );
-        evacuation_policy = evacuation_policy_final_decision(evacuation_policy, snapshot);
-    } else {
-        evacuation_policy.snapshot.pre_evac_pause_us = start.elapsed().as_micros() as u64;
-    }
-    if let Some(trace) = trace.as_mut() {
-        trace.evacuation_policy = evacuation_policy;
-    }
-    let mut evacuation = EvacuationTraceStats::default();
-    let mut evacuation_sticky = StickyRememberedSet::default();
-    if evacuation_policy.enabled {
-        let phase_start = trace_phase_start(&trace);
-        let mut evacuated_new_headers = Vec::new();
-        let mut evacuated_original_headers = Vec::new();
-        evacuation = evacuate_tenured_nursery_objects_collecting(
-            evacuation_policy.force,
-            &mut evacuated_new_headers,
-            &mut evacuated_original_headers,
-        );
-        let old_page_evacuation = evacuate_selected_old_pages_collecting(
-            &old_page_selection.pages,
-            &mut evacuated_new_headers,
-            &mut evacuated_original_headers,
-        );
-        evacuation.objects = evacuation
-            .objects
-            .saturating_add(old_page_evacuation.objects);
-        evacuation.bytes = evacuation.bytes.saturating_add(old_page_evacuation.bytes);
-        evacuation.moved_objects = evacuation
-            .moved_objects
-            .saturating_add(old_page_evacuation.moved_objects);
-        evacuation.moved_bytes = evacuation
-            .moved_bytes
-            .saturating_add(old_page_evacuation.moved_bytes);
-        evacuation.old_page_moved_objects = old_page_evacuation.old_page_moved_objects;
-        evacuation.old_page_moved_bytes = old_page_evacuation.old_page_moved_bytes;
-        trace_phase_record(&mut trace, "evacuation", phase_start);
-        if evacuation.objects > 0 {
-            let phase_start = trace_phase_start(&trace);
-            match trace.as_mut() {
-                Some(trace) => rewrite_forwarded_references(
-                    &valid_ptrs,
-                    Some(&mut trace.shadow_roots),
-                    Some(&mut trace.root_sources),
-                ),
-                None => rewrite_forwarded_references(&valid_ptrs, None, None),
-            }
-            evacuation_sticky =
-                rebuild_evacuated_old_to_young_remembered_set(&evacuated_new_headers);
-            trace_phase_record(&mut trace, "reference_rewrite", phase_start);
-            if gc_verify_evacuation_enabled() {
-                let phase_start = trace_phase_start(&trace);
-                verify_evacuated_no_stale_forwarded_refs(&valid_ptrs);
-                trace_phase_record(&mut trace, "evacuation_verify", phase_start);
-            }
-            let released = release_evacuated_original_forwarding_stubs(&evacuated_original_headers);
-            evacuation.released_original_objects = released.released_original_objects;
-            evacuation.released_original_bytes = released.released_original_bytes;
-            evacuation.released_original_reusable_bytes = released.released_original_reusable_bytes;
-            evacuation.released_original_returned_bytes = released.released_original_returned_bytes;
-        }
-    }
-    let live_old_to_young_sticky = rebuild_live_old_to_young_remembered_set();
-
-    // === SWEEP PHASE ===
-    // `do_age_bump = true` folds the per-object HAS_SURVIVED / TENURED
-    // update into this same walk (see comment block above the removed
-    // dedicated age-bump pass).
-    let phase_start = trace_phase_start(&trace);
-    let sweep = if evacuation.old_page_moved_bytes > 0 {
-        sweep_with_age_bump_and_targeted_old_reclaim(true, &old_page_source_blocks.block_indices)
-    } else {
-        sweep_with_age_bump(true)
-    };
-    trace_phase_record(&mut trace, "sweep", phase_start);
-    let freed_bytes = sweep.freed_bytes;
-    evacuation.retained_forwarded_stub_objects = sweep.retained_forwarded_stub_objects;
-    evacuation.retained_forwarded_stub_bytes = sweep.retained_forwarded_stub_bytes;
-    maybe_print_evacuation_policy_diag(evacuation_policy, evacuation);
-    if let Some(trace) = trace.as_mut() {
-        trace.evacuation = evacuation;
-        trace.sweep = sweep;
-        trace.old_pages = crate::arena::old_page_summary();
-    }
-
-    // RS clear — see gc_collect_inner for the rationale.
-    let phase_start = trace_phase_start(&trace);
-    remembered_set_clear();
-    evacuation_sticky.restore();
-    live_old_to_young_sticky.restore();
-    trace_phase_record(&mut trace, "remembered_set_clear", phase_start);
-    // Conservative-pinning is per-cycle; clear so next cycle
-    // re-discovers fresh.
-    let phase_start = trace_phase_start(&trace);
-    CONS_PINNED.with(|s| s.borrow_mut().clear());
-    trace_phase_record(&mut trace, "conservative_pin_clear", phase_start);
-
-    #[cfg(target_env = "gnu")]
-    {
-        let phase_start = trace_phase_start(&trace);
-        unsafe {
-            libc::malloc_trim(0);
-        }
-        trace_phase_record(&mut trace, "malloc_trim", phase_start);
-    }
-
-    let elapsed_us = start.elapsed().as_micros() as u64;
-    GC_STATS.with(|stats| {
-        let mut stats = stats.borrow_mut();
-        stats.collection_count += 1;
-        stats.total_freed_bytes += freed_bytes;
-        stats.last_pause_us = elapsed_us;
-    });
-    // Restore IN_ALLOC to its pre-collection state. Usually this clears
-    // the bit (collections fire from contexts where IN_ALLOC was clear);
-    // if the outer caller had it set (e.g., we got here via
-    // `js_gc()` invoked from a runtime function that already held the
-    // flag), preserve their state.
-    GC_FLAGS.with(|f| {
-        let cur = f.get();
-        if prev_in_alloc != 0 {
-            f.set(cur | GC_FLAG_IN_ALLOC);
-        } else {
-            f.set(cur & !GC_FLAG_IN_ALLOC);
-        }
-    });
-    if let Some(trace) = trace.as_mut() {
-        trace.pause_us = elapsed_us;
-        trace.capture_layout_scans();
-    }
-    GcCollectOutcome {
-        freed_bytes,
-        malloc_swept: true,
-        trace,
-    }
+        old_page_selection,
+        old_page_source_blocks,
+    )
+    .run_to_completion()
 }
 
 #[inline]
@@ -507,176 +221,8 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
 
 fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
     GC_TRIGGER_BUMPED.with(|c| c.set(false));
-    let mut trace = GcCycleTrace::new(GcCollectionKind::Full, trigger);
-    let start = Instant::now();
-    crate::arena::old_pages_begin_gc_cycle();
-
-    // MARK_SEEDS persists across GC cycles. Clear before any try_mark
-    // call so trace sees only this cycle's freshly-marked headers.
-    clear_mark_seeds();
-    // Build set of valid heap pointers for conservative stack scan validation
-    let phase_start = trace_phase_start(&trace);
-    let valid_ptrs = build_valid_pointer_set();
-    trace_phase_record(&mut trace, "build_valid_pointer_set", phase_start);
-
-    // === MARK PHASE ===
-
-    // 1. Optional conservative stack scan. Default `auto` mode skips
-    // this while a precise shadow-stack frame is active; the fallback
-    // remains available with `PERRY_CONSERVATIVE_STACK_SCAN=full`.
-    let phase_start = trace_phase_start(&trace);
-    let conservative_scan_decision = conservative_stack_scan_decision();
-    let conservative_root_stats =
-        mark_stack_roots_for_decision(&valid_ptrs, conservative_scan_decision);
-
-    // 2. Scan mutable roots (shadow stack + registered globals)
-    match trace.as_mut() {
-        Some(trace) => mark_mutable_root_slots(
-            &valid_ptrs,
-            Some(&mut trace.shadow_roots),
-            Some(&mut trace.root_sources),
-        ),
-        None => mark_mutable_root_slots(&valid_ptrs, None, None),
-    }
-
-    // 3. Run runtime-owned mutable scanners, then legacy copy-only scanners.
-    match trace.as_mut() {
-        Some(trace) => {
-            mark_mutable_registered_roots_with_sources(&valid_ptrs, Some(&mut trace.root_sources))
-        }
-        None => mark_mutable_registered_roots(&valid_ptrs),
-    }
-    let legacy_root_stats = mark_registered_roots(&valid_ptrs, false);
-    if let Some(trace) = trace.as_mut() {
-        trace.conservative_root_count = conservative_root_stats.root_count;
-        trace.legacy_copy_only_scanner_pinned = legacy_root_stats;
-        trace.root_sources.native_stack_fallback.decision = conservative_scan_decision;
-        trace.root_sources.native_stack_fallback.scanned = matches!(
-            conservative_scan_decision,
-            ConservativeStackScanDecision::Scan
-        );
-        trace.root_sources.native_stack_fallback.roots_found = conservative_root_stats.root_count;
-    }
-    trace_phase_record(&mut trace, "root_marking", phase_start);
-
-    // 3b. Gen-GC Phase C3: scan remembered set as additional roots.
-    //     Old-gen objects that wrote young-gen pointers since the
-    //     last collection are recorded here by the write barrier
-    //     (gen-gc-plan.md §C). For full GC this is redundant with
-    //     the conservative+precise scan that already covered them,
-    //     but it's cheap and keeps the dispatch path uniform with
-    //     the eventual minor-GC entry. RS is cleared at the end of
-    //     collection so the next cycle starts coherent.
-    let phase_start = trace_phase_start(&trace);
-    let remembered_set = mark_remembered_set_roots(&valid_ptrs);
-    trace_phase_record(&mut trace, "remembered_set_marking", phase_start);
-    if let Some(trace) = trace.as_mut() {
-        trace.remembered_set = remembered_set;
-    }
-
-    // 4. Trace from marked roots (iterative worklist)
-    let phase_start = trace_phase_start(&trace);
-    trace_marked_objects(&valid_ptrs);
-    trace_phase_record(&mut trace, "trace_worklist", phase_start);
-
-    // 5. Block-persistence pass: arena blocks survive whole or not at all, so
-    //    arena objects sharing a block with a root-reachable object persist
-    //    even when not themselves reachable. Their malloc children must stay
-    //    alive too (issues #43 / #44).
-    let phase_start = trace_phase_start(&trace);
-    let block_persist = mark_block_persisting_arena_objects(&valid_ptrs);
-    trace_phase_record(&mut trace, "block_persistence", phase_start);
-    if let Some(trace) = trace.as_mut() {
-        trace.block_persist = block_persist;
-    }
-    let live_old_to_young_sticky = rebuild_live_old_to_young_remembered_set();
-
-    // === SWEEP PHASE ===
-    // The sweep walk clears mark bits on surviving objects inline,
-    // eliminating 2 redundant heap walks (arena + malloc).
-    let phase_start = trace_phase_start(&trace);
-    let sweep = sweep_with_age_bump_and_old_reclaim(false, true);
-    trace_phase_record(&mut trace, "sweep", phase_start);
-    let freed_bytes = sweep.freed_bytes;
-    if let Some(trace) = trace.as_mut() {
-        trace.sweep = sweep;
-        trace.old_pages = crate::arena::old_page_summary();
-    }
-
-    // Gen-GC Phase C3: clear the remembered set after sweep. The
-    // RS records old→young writes since the previous collection;
-    // after a full collection, every young object referenced by
-    // an old-gen parent has either been kept alive (via the
-    // mark_remembered_set_roots scan above) or is dead and gets
-    // swept. Either way the parent's RS entry is no longer
-    // load-bearing — the next allocation cycle's barrier emissions
-    // will repopulate it as needed.
-    let phase_start = trace_phase_start(&trace);
-    remembered_set_clear();
-    live_old_to_young_sticky.restore();
-    trace_phase_record(&mut trace, "remembered_set_clear", phase_start);
-
-    // Return released glibc heap pages to the kernel. Without this, glibc
-    // keeps freed memory in its arena for reuse but never shrinks RSS, so
-    // long-running services show unbounded RSS growth from transient
-    // allocations (HTTP buffers, JSON parsers, etc.) even though the
-    // Perry GC successfully frees the underlying objects.
-    // No-op on non-glibc platforms (macOS, musl).
-    #[cfg(target_env = "gnu")]
-    {
-        let phase_start = trace_phase_start(&trace);
-        unsafe {
-            libc::malloc_trim(0);
-        }
-        trace_phase_record(&mut trace, "malloc_trim", phase_start);
-    }
-
-    let elapsed_us = start.elapsed().as_micros() as u64;
-
-    GC_STATS.with(|stats| {
-        let mut stats = stats.borrow_mut();
-        stats.collection_count += 1;
-        stats.total_freed_bytes += freed_bytes;
-        stats.last_pause_us = elapsed_us;
-    });
-    if let Some(trace) = trace.as_mut() {
-        trace.pause_us = elapsed_us;
-        trace.capture_layout_scans();
-    }
-    finish_full_old_reclaim_baseline();
-    GcCollectOutcome {
-        freed_bytes,
-        malloc_swept: true,
-        trace,
-    }
+    GcCycleState::new_full(trigger).run_to_completion()
 }
-
-/// A sorted-`Vec`-backed set of valid user-space heap pointers,
-/// used to validate candidate addresses found during the conservative
-/// stack scan.
-///
-/// Two-region layout: arena pointers and malloc pointers are stored
-/// in *separate* sorted Vecs. The address-sorted arena walker emits
-/// `arena_sorted` already in ascending order with no merge required,
-/// so finalize only sorts the small `malloc_sorted` tail (typically a
-/// few thousand entries) instead of running driftsort's K-way merge
-/// across all 1.6 M arena pointers + the malloc tail. The merge phase
-/// of the previous single-Vec implementation cost ~80 ms per GC cycle
-/// on perf-comprehensive (1.65 M element memcpy through main memory);
-/// keeping the regions separate eliminates it entirely.
-///
-/// `contains` does two binary searches instead of one (~15 ns extra
-/// per call), but contains is only called a few times per traced
-/// pointer field — bench profile shows < 500k calls per cycle, so
-/// the per-call overhead is dwarfed by the merge savings.
-///
-/// Profiling background: `HashSet<usize>` with 700 k entries was the
-/// dominant GC cost in `object_create` — even after pre-sizing the
-/// 700 k inserts were ~10-15 ms per collection because of repeated
-/// hash computation + cache misses on the bucket array. Sorted-Vec
-/// is ~3× faster on this workload at build time and the O(log n)
-/// lookup is fast enough that the few thousand stack-scan candidate
-/// validations per GC barely move the total.
 
 pub fn gc_init() {
     gc_register_mutable_root_scanner_with_source(

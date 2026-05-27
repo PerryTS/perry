@@ -61,8 +61,8 @@ pub use walk::{
     old_arena_walk_objects, ArenaResetStats,
 };
 pub(crate) use walk::{
-    arena_telemetry_snapshot, general_block_in_recent_window, ArenaRegionTelemetry,
-    ArenaTelemetrySnapshot,
+    arena_telemetry_snapshot, general_block_in_recent_window, ArenaObjectCursor,
+    ArenaRegionTelemetry, ArenaTelemetrySnapshot, ArenaWalkOrder,
 };
 
 // reset.rs
@@ -89,7 +89,7 @@ pub(crate) use page_meta::{
     old_page_account_promoted_object, old_page_account_swept_object, old_page_clear_dirty,
     old_page_mark_dirty, old_page_meta_snapshot, old_page_summary, old_pages_begin_gc_cycle,
     old_pages_reset_sweep_accounting, unregister_old_object_pages, HeapGeneration, HeapSpace,
-    OldPageMeta, OldPageSummary,
+    OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
 };
 
 #[cfg(test)]

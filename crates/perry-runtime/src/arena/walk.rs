@@ -1,5 +1,107 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ArenaWalkOrder {
+    BlockIndex,
+    Address,
+}
+
+#[derive(Clone, Copy)]
+struct ArenaWalkBlock {
+    data: usize,
+    offset: usize,
+    size: usize,
+    block_idx: usize,
+}
+
+/// Resumable arena object walker used by the GC cycle state machine.
+///
+/// The cursor snapshots block base pointers and offsets at creation time and
+/// then yields at most one walkable GC object per `next()` call. It deliberately
+/// does not hold a borrow into any arena TLS slot across calls.
+pub(crate) struct ArenaObjectCursor {
+    blocks: Vec<ArenaWalkBlock>,
+    block_pos: usize,
+    offset: usize,
+}
+
+impl ArenaObjectCursor {
+    pub(crate) fn new(order: ArenaWalkOrder) -> Self {
+        sync_inline_arena_state();
+
+        let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
+        let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });
+        let survivor1_n = SURVIVOR_ARENA_1.with(|a| unsafe { (*a.get()).blocks.len() });
+        let longlived_base = general_n + survivor0_n + survivor1_n;
+        let longlived_n = LONGLIVED_ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
+        let old_base = longlived_base + longlived_n;
+
+        let mut blocks = Vec::new();
+        let mut collect = |arena: &Arena, base: usize| {
+            for (i, block) in arena.blocks.iter().enumerate() {
+                if block.data.is_null() {
+                    continue;
+                }
+                blocks.push(ArenaWalkBlock {
+                    data: block.data as usize,
+                    offset: block.offset,
+                    size: block.size,
+                    block_idx: base + i,
+                });
+            }
+        };
+
+        ARENA.with(|arena| unsafe { collect(&*arena.get(), 0) });
+        SURVIVOR_ARENA_0.with(|arena| unsafe { collect(&*arena.get(), general_n) });
+        SURVIVOR_ARENA_1.with(|arena| unsafe { collect(&*arena.get(), general_n + survivor0_n) });
+        LONGLIVED_ARENA.with(|arena| unsafe { collect(&*arena.get(), longlived_base) });
+        OLD_ARENA.with(|arena| unsafe { collect(&*arena.get(), old_base) });
+
+        match order {
+            ArenaWalkOrder::BlockIndex => {}
+            ArenaWalkOrder::Address => blocks.sort_unstable_by_key(|block| block.data),
+        }
+
+        Self {
+            blocks,
+            block_pos: 0,
+            offset: 0,
+        }
+    }
+
+    pub(crate) fn next(&mut self) -> Option<(*mut u8, usize)> {
+        use crate::gc::GcHeader;
+
+        while let Some(block) = self.blocks.get(self.block_pos).copied() {
+            while self.offset < block.offset {
+                let aligned = (self.offset + 7) & !7;
+                if aligned >= block.offset {
+                    break;
+                }
+
+                let header_ptr = (block.data + aligned) as *mut u8;
+                let header = header_ptr as *const GcHeader;
+                unsafe {
+                    let total_size = (*header).size as usize;
+                    if total_size == 0 || total_size > block.size {
+                        break;
+                    }
+                    self.offset = aligned + total_size;
+                    let obj_type = (*header).obj_type;
+                    if crate::gc::gc_type_is_arena_walkable(obj_type) {
+                        return Some((header_ptr, block.block_idx));
+                    }
+                }
+            }
+
+            self.block_pos += 1;
+            self.offset = 0;
+        }
+
+        None
+    }
+}
+
 /// Get total bytes reserved across all arena blocks (general + longlived
 /// + old-gen). Reads the running sum maintained via deltas at the four
 /// mutation sites — one TLS load instead of an O(blocks) walk on the

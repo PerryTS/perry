@@ -74,8 +74,8 @@ impl ValidPointerSet {
         }
     }
     /// Caller must guarantee that pushes happen in ascending address
-    /// order — `build_valid_pointer_set` does so via
-    /// `arena_walk_objects_addr_sorted`.
+    /// order — `ValidPointerSetBuilder` does so via `ArenaObjectCursor`
+    /// in address order.
     pub(super) fn push_arena(&mut self, ptr: usize) {
         self.arena_sorted.push(ptr);
     }
@@ -197,66 +197,103 @@ impl ValidPointerSet {
 /// Build a set of all valid user-space pointers (pointers returned to callers).
 /// Used to validate candidates found during conservative stack scanning.
 pub(crate) fn build_valid_pointer_set() -> ValidPointerSet {
-    let malloc_count = MALLOC_STATE.with(|s| s.borrow().objects.len());
-    // 48 bytes is a conservative under-estimate (smaller than the
-    // typical 96-byte class instance) so the Vec doesn't realloc.
-    let arena_estimate = crate::arena::arena_total_bytes() / 48;
-    let mut set = ValidPointerSet::new(arena_estimate + 64, malloc_count + 64);
+    let mut builder = ValidPointerSetBuilder::new();
+    while !builder.step(usize::MAX) {}
+    builder.finish()
+}
 
-    // Arena objects: walk arena blocks in ascending data-pointer
-    // order so the pushed user_ptrs land in `arena_sorted` already
-    // sorted (within each block, offsets only increase, so
-    // block-by-block ascending-address yields globally ascending user
-    // pointers). No merge needed in finalize for this region.
-    crate::arena::arena_walk_objects_addr_sorted(|header_ptr| {
-        let user_ptr = unsafe { (header_ptr as *mut u8).add(GC_HEADER_SIZE) };
-        set.push_arena(user_ptr as usize);
-        unsafe {
-            let header = header_ptr as *const GcHeader;
-            let flags = (*header).gc_flags;
-            if flags & GC_FLAG_TENURED != 0
-                && flags & GC_FLAG_FORWARDED == 0
-                && crate::arena::pointer_in_nursery(user_ptr as usize)
-            {
-                set.record_tenured_nursery_bytes((*header).size as usize);
-            }
+pub(super) struct ValidPointerSetBuilder {
+    set: ValidPointerSet,
+    arena_cursor: Option<crate::arena::ArenaObjectCursor>,
+    malloc_index: usize,
+    arena_done: bool,
+    finalized: bool,
+}
+
+impl ValidPointerSetBuilder {
+    pub(super) fn new() -> Self {
+        let malloc_count = MALLOC_STATE.with(|s| s.borrow().objects.len());
+        // 48 bytes is a conservative under-estimate (smaller than the
+        // typical 96-byte class instance) so the Vec doesn't realloc.
+        let arena_estimate = crate::arena::arena_total_bytes() / 48;
+        Self {
+            set: ValidPointerSet::new(arena_estimate + 64, malloc_count + 64),
+            arena_cursor: Some(crate::arena::ArenaObjectCursor::new(
+                crate::arena::ArenaWalkOrder::Address,
+            )),
+            malloc_index: 0,
+            arena_done: false,
+            finalized: false,
         }
-    });
+    }
 
-    // Malloc objects: insert *directly* into the lookup_set,
-    // bypassing `malloc_sorted` + the per-cycle
-    // `sort_unstable() + merge`. On promise-heavy kernels
-    // `MallocState.objects` is millions of entries (~2.1 M on
-    // `promise_all_chains`); the per-cycle `sort_unstable` was
-    // ~30 ms (5-6 % of total kernel time) and the
-    // subsequent `lookup_set.extend(...)` did the same hashset
-    // inserts anyway. Cutting straight to `lookup_set.insert` gives
-    // us the same hashset content without the Vec materialization,
-    // sort, or merge step.
-    //
-    // Correctness note: this means `merged_sorted` (and therefore
-    // `enclosing_object`) contains arena entries only. That is the
-    // intended scope: every Perry runtime function known to derive
-    // an interior pointer (`js_array_reduce`'s `elements_ptr = arr + 8`,
-    // `js_buffer_data = buf + 8`, etc.) holds it across user
-    // callbacks for an *arena-allocated* array/buffer; malloc-tracked
-    // types (Closure, Promise, String, Map, Error, BigInt, Symbol)
-    // are accessed exclusively at their user pointer (object start).
-    // If a future runtime function starts holding an interior pointer
-    // into a malloc-allocated object, this comment is the place to
-    // revisit.
-    MALLOC_STATE.with(|s| {
-        let s = s.borrow();
-        for &header in s.objects.iter() {
+    pub(super) fn step(&mut self, budget: usize) -> bool {
+        if self.finalized {
+            return true;
+        }
+
+        let mut remaining = budget;
+        while remaining > 0 && !self.arena_done {
+            let next = self
+                .arena_cursor
+                .as_mut()
+                .and_then(crate::arena::ArenaObjectCursor::next);
+            let Some((header_ptr, _block_idx)) = next else {
+                self.arena_done = true;
+                self.arena_cursor = None;
+                break;
+            };
+            let user_ptr = unsafe { header_ptr.add(GC_HEADER_SIZE) };
+            self.set.push_arena(user_ptr as usize);
+            unsafe {
+                let header = header_ptr as *const GcHeader;
+                let flags = (*header).gc_flags;
+                if flags & GC_FLAG_TENURED != 0
+                    && flags & GC_FLAG_FORWARDED == 0
+                    && crate::arena::pointer_in_nursery(user_ptr as usize)
+                {
+                    self.set
+                        .record_tenured_nursery_bytes((*header).size as usize);
+                }
+            }
+            remaining -= 1;
+        }
+
+        while remaining > 0 && self.arena_done {
+            let maybe_header = MALLOC_STATE.with(|s| {
+                let s = s.borrow();
+                s.objects.get(self.malloc_index).copied()
+            });
+            let Some(header) = maybe_header else {
+                self.set.finalize();
+                self.finalized = true;
+                return true;
+            };
             let user_ptr = unsafe { (header as *mut u8).add(GC_HEADER_SIZE) };
             let addr = user_ptr as usize;
-            set.lookup_set.insert(addr);
-            set.record_malloc_for_range(addr);
+            self.set.lookup_set.insert(addr);
+            self.set.record_malloc_for_range(addr);
+            self.malloc_index += 1;
+            remaining -= 1;
         }
-    });
 
-    set.finalize();
-    set
+        if self.arena_done {
+            let malloc_len = MALLOC_STATE.with(|s| s.borrow().objects.len());
+            if self.malloc_index >= malloc_len {
+                self.set.finalize();
+                self.finalized = true;
+            }
+        }
+
+        self.finalized
+    }
+
+    pub(super) fn finish(mut self) -> ValidPointerSet {
+        if !self.finalized {
+            while !self.step(usize::MAX) {}
+        }
+        self.set
+    }
 }
 
 pub(super) fn push_mark_seed(header: *mut GcHeader) {
@@ -448,57 +485,64 @@ pub(super) fn drain_trace_worklist(
     drain_trace_worklist_inner(worklist, valid_ptrs, false);
 }
 
-pub(super) fn drain_trace_worklist_minor(
-    worklist: &mut Vec<*mut GcHeader>,
-    valid_ptrs: &ValidPointerSet,
-) {
-    drain_trace_worklist_inner(worklist, valid_ptrs, true);
-}
-
 pub(super) fn drain_trace_worklist_inner(
     worklist: &mut Vec<*mut GcHeader>,
     valid_ptrs: &ValidPointerSet,
     minor_only: bool,
 ) {
-    let mut i = 0;
-    while i < worklist.len() {
-        let header = worklist[i];
-        i += 1;
+    let mut cursor = 0;
+    while !drain_trace_worklist_step(worklist, &mut cursor, valid_ptrs, minor_only, usize::MAX) {}
+}
 
-        unsafe {
-            let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-            // C3b/C4 generational skip: in minor mode, an object
-            // is treated as a black leaf when it lives in OLD_ARENA
-            // (Phase B physical region) OR carries GC_FLAG_TENURED
-            // (Phase C4 logical promotion — non-moving generational).
-            // Either way its fields aren't recursively visited;
-            // young children it holds reach the worklist via the
-            // remembered set scan from C3a. False-positive RS
-            // entries (parent whose write has since been overwritten)
-            // are correctness-safe — extra young objects stay alive
-            // for one cycle, swept on the next.
-            if minor_only {
-                // Skip tracing only when the object is BOTH tenured AND
-                // physically in old-gen arena. Tenured-in-nursery
-                // objects (until the evacuation policy moves them) still
-                // hold pointers to young-gen children, and
-                // skipping their fields without a write barrier on
-                // every store leaves those children unmarked. ECS
-                // demo-simple regressed when an archetype that had
-                // survived to TENURED still held a `componentData` Map
-                // whose value arrays were young-gen — minor GC skipped
-                // tracing the archetype, the value arrays got swept,
-                // and `pipeline` forEach iterated zero entities.
-                // `pointer_in_old_gen` excludes tenured-in-nursery
-                // exactly, so the AND form is the correct gate.
-                let is_old_arena = crate::arena::pointer_in_old_gen(user_ptr as usize);
-                let is_tenured = (*header).gc_flags & GC_FLAG_TENURED != 0;
-                if is_tenured && is_old_arena {
-                    continue;
-                }
+pub(super) fn drain_trace_worklist_step(
+    worklist: &mut Vec<*mut GcHeader>,
+    cursor: &mut usize,
+    valid_ptrs: &ValidPointerSet,
+    minor_only: bool,
+    budget: usize,
+) -> bool {
+    let mut remaining = budget;
+    while remaining > 0 && *cursor < worklist.len() {
+        let header = worklist[*cursor];
+        *cursor += 1;
+        trace_one_worklist_header(header, valid_ptrs, worklist, minor_only);
+        remaining -= 1;
+    }
+    *cursor >= worklist.len()
+}
+
+pub(super) fn trace_one_worklist_header(
+    header: *mut GcHeader,
+    valid_ptrs: &ValidPointerSet,
+    worklist: &mut Vec<*mut GcHeader>,
+    minor_only: bool,
+) {
+    unsafe {
+        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+        // C3b/C4 generational skip: in minor mode, an object
+        // is treated as a black leaf when it lives in OLD_ARENA
+        // (Phase B physical region) OR carries GC_FLAG_TENURED
+        // (Phase C4 logical promotion — non-moving generational).
+        // Either way its fields aren't recursively visited;
+        // young children it holds reach the worklist via the
+        // remembered set scan from C3a. False-positive RS
+        // entries (parent whose write has since been overwritten)
+        // are correctness-safe — extra young objects stay alive
+        // for one cycle, swept on the next.
+        if minor_only {
+            // Skip tracing only when the object is BOTH tenured AND
+            // physically in old-gen arena. Tenured-in-nursery
+            // objects (until the evacuation policy moves them) still
+            // hold pointers to young-gen children, and skipping their
+            // fields without a write barrier on every store leaves those
+            // children unmarked.
+            let is_old_arena = crate::arena::pointer_in_old_gen(user_ptr as usize);
+            let is_tenured = (*header).gc_flags & GC_FLAG_TENURED != 0;
+            if is_tenured && is_old_arena {
+                return;
             }
-            trace_heap_rewrite_slots(header, valid_ptrs, worklist);
         }
+        trace_heap_rewrite_slots(header, valid_ptrs, worklist);
     }
 }
 
@@ -509,20 +553,6 @@ pub(super) fn trace_marked_objects(valid_ptrs: &ValidPointerSet) {
     // here just to gather them.
     let mut worklist = take_mark_seeds();
     drain_trace_worklist(&mut worklist, valid_ptrs);
-}
-
-/// Gen-GC Phase C3b minor variant of `trace_marked_objects`.
-/// Drains the per-cycle MARK_SEEDS worklist that root-marking
-/// populated via `try_mark_value` / `try_mark_value_or_raw` —
-/// recursion into old-gen objects is skipped. The seeds list
-/// avoids the full arena walk that the previous implementation
-/// did just to find currently-marked headers; with ~1.6M objects
-/// per cycle in perf-comprehensive that walk dominated minor-GC
-/// time and produced output containing only the small number of
-/// objects the root scan actually touched.
-pub(super) fn trace_marked_objects_minor(valid_ptrs: &ValidPointerSet) {
-    let mut worklist = take_mark_seeds();
-    drain_trace_worklist_minor(&mut worklist, valid_ptrs);
 }
 
 /// Block-persistence pass: arena block reset is all-or-nothing, so any arena
