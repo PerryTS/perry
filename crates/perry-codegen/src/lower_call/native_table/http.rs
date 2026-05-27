@@ -113,7 +113,14 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         method: "listen",
         class_filter: Some("HttpServer"),
         runtime: "js_node_http_server_listen",
-        args: &[NA_F64, NA_PTR],
+        // Node's `listen()` is variadic: listen(port[, host][, backlog][, cb]),
+        // listen(options[, cb]), listen(cb). Positional NativeArgKinds can't
+        // express "the callback floats to whichever position it's in", so pass
+        // every user arg as a JS array and let the runtime resolve the overload
+        // by value type (string→host, function→callback). Pre-#2041 the fixed
+        // `[NA_F64, NA_PTR]` mis-routed a host string into the callback slot and
+        // dropped the real callback. Issue #2041.
+        args: &[NA_VARARGS],
         ret: NR_VOID,
     },
     NativeModSig {
@@ -594,7 +601,8 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         method: "listen",
         class_filter: Some("HttpsServer"),
         runtime: "js_node_https_server_listen",
-        args: &[NA_F64, NA_PTR],
+        // Variadic listen() overloads — see the http `listen` row. Issue #2041.
+        args: &[NA_VARARGS],
         ret: NR_VOID,
     },
     NativeModSig {
@@ -631,7 +639,8 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         method: "listen",
         class_filter: Some("Http2SecureServer"),
         runtime: "js_node_http2_server_listen",
-        args: &[NA_F64, NA_PTR],
+        // Variadic listen() overloads — see the http `listen` row. Issue #2041.
+        args: &[NA_VARARGS],
         ret: NR_VOID,
     },
     NativeModSig {

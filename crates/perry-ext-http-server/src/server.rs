@@ -99,23 +99,25 @@ pub extern "C" fn js_node_http_create_server(handler: i64) -> i64 {
     })
 }
 
-/// `server.listen(port, host?, backlog?, cb?)` — bind + start
-/// accepting. Blocks the calling thread (main TS thread) for the
-/// process lifetime, draining pending requests and dispatching to
-/// the user handler.
+/// `server.listen(port?, host?, backlog?, cb?)` — bind + start accepting.
+/// Returns immediately after spawning the accept loop on the tokio runtime
+/// (non-blocking since #604); requests are drained from the main thread by
+/// `js_node_http_server_process_pending`.
 ///
-/// `opts_f64` accepts either a bare numeric port, an object literal
-/// (`{ port, host, backlog }`), or undefined for "default" (3000).
-/// The TS-side wrapper normalizes Node's many `listen()` overloads
-/// into this single shape.
+/// `args_array` is a raw `*const ArrayHeader` carrying every user-supplied
+/// `listen()` argument (codegen packs them via the `NA_VARARGS` arg kind).
+/// `parse_listen_args` resolves Node's variadic overloads by value type — a
+/// bare numeric/options/path first arg, an optional standalone host string,
+/// and the (single) function callback wherever it lands. Issue #2041.
 #[no_mangle]
-pub unsafe extern "C" fn js_node_http_server_listen(
-    server_handle: i64,
-    opts_f64: f64,
-    callback: i64,
-) {
+pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_array: i64) {
+    let parsed = crate::types::parse_listen_args(args_array);
+    let opts_f64 = parsed.opts;
     let port = extract_port(opts_f64, 3000);
-    let host = extract_host(opts_f64, "0.0.0.0");
+    let host = parsed
+        .host
+        .unwrap_or_else(|| extract_host(opts_f64, "0.0.0.0"));
+    let callback = parsed.callback;
 
     let (request_tx, request_rx) = mpsc::channel::<HttpPendingRequest>(1024);
     let (upgrade_tx, upgrade_rx) = mpsc::channel::<HttpPendingUpgrade>(256);

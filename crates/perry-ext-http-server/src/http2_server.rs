@@ -123,15 +123,18 @@ pub unsafe extern "C" fn js_node_http2_create_secure_server(opts_f64: f64, handl
     })
 }
 
-/// `http2SecureServer.listen({ port, host? }, cb?)`.
+/// `http2SecureServer.listen(port?, host?, backlog?, cb?)`. `args_array`
+/// carries the variadic `listen()` arguments; see `js_node_http_server_listen`
+/// / `parse_listen_args` for the overload resolution. Issue #2041.
 #[no_mangle]
-pub unsafe extern "C" fn js_node_http2_server_listen(
-    server_handle: i64,
-    opts_f64: f64,
-    callback: i64,
-) {
+pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_array: i64) {
+    let parsed = crate::types::parse_listen_args(args_array);
+    let opts_f64 = parsed.opts;
     let port = extract_port(opts_f64, 443);
-    let host = extract_host(opts_f64, "0.0.0.0");
+    let host = parsed
+        .host
+        .unwrap_or_else(|| extract_host(opts_f64, "0.0.0.0"));
+    let callback = parsed.callback;
 
     let (request_tx, request_rx) = mpsc::channel::<HttpPendingRequest>(1024);
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();

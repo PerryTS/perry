@@ -154,6 +154,28 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
     }
 }
 
+/// C-ABI predicate: returns 1 when `value_bits` (a NaN-boxed JSValue passed as
+/// raw bits) is a closure/function — a `POINTER_TAG` value whose pointee
+/// carries `CLOSURE_MAGIC` — and 0 for objects, arrays, strings, numbers, and
+/// everything else. Exposed for external wrapper crates that link the runtime
+/// only by C ABI (e.g. perry-ext-http-server's `parse_listen_args`, #2041),
+/// which need to tell a callback argument apart from an options-object
+/// argument without a Cargo dependency on perry-runtime.
+#[no_mangle]
+pub extern "C" fn js_value_is_closure(value_bits: i64) -> i32 {
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let bits = value_bits as u64;
+    if (bits & !POINTER_MASK) != POINTER_TAG {
+        return 0;
+    }
+    if is_closure_ptr((bits & POINTER_MASK) as usize) {
+        1
+    } else {
+        0
+    }
+}
+
 /// Get a dynamic property stored on a closure.
 /// Returns TAG_UNDEFINED if not found.
 pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {

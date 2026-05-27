@@ -129,6 +129,35 @@ pub(super) fn try_static_method_and_instance(
             }
         }
 
+        // Chained native-factory receiver: `createServer(handler).listen(...)`
+        // (and the https/http2 variants). The receiver is the inline factory
+        // CALL result, not an Ident the native-instance table can resolve, so
+        // the `if let ast::Expr::Ident` arm above misses it. Without this branch
+        // the chained `.listen(...)` falls through to the generic dynamic
+        // dispatch, the NativeModSig with `class_filter = Some("HttpServer")` is
+        // never matched, and the native listen fn is never called — so the
+        // server never binds and the process exits immediately. The variable
+        // form (`const s = createServer(...); s.listen(...)`) already works
+        // because the let-stmt arm tags `s`; only the chained form was broken.
+        // Issue #2041.
+        if let ast::Expr::Call(inner_call) = member.obj.as_ref() {
+            if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                if let Some((module_name, class_name)) =
+                    native_class_from_factory_call(ctx, inner_call)
+                {
+                    let method_name = method_ident.sym.to_string();
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Ok(Expr::NativeMethodCall {
+                        module: module_name.to_string(),
+                        class_name: Some(class_name.to_string()),
+                        object: Some(Box::new(object_expr)),
+                        method: method_name,
+                        args,
+                    }));
+                }
+            }
+        }
+
         // issue #195: WidgetCtor(...).modifierName(...) is silently dropped.
         // Reject at compile time so users discover the options-object form.
         if let ast::Expr::Call(inner_call) = member.obj.as_ref() {
@@ -300,4 +329,49 @@ pub(super) fn try_static_method_and_instance(
     }
 
     Ok(Err(args))
+}
+
+/// Resolve the native `(module, class)` produced by an inline factory call
+/// like `createServer(...)` / `http.createServer(...)` /
+/// `http2.createSecureServer(...)`, so a method chained directly on the result
+/// (`createServer(...).listen(...)`) can dispatch against the right
+/// NativeModSig `class_filter`. Mirrors the variable-binding factory maps in
+/// `module_decl.rs` / `destructuring/var_decl.rs` / `lower/stmt.rs`. Returns
+/// `None` for any other call so non-factory chains fall through unchanged.
+/// Issue #2041.
+fn native_class_from_factory_call(
+    ctx: &LoweringContext,
+    call: &ast::CallExpr,
+) -> Option<(&'static str, &'static str)> {
+    let callee_expr = match &call.callee {
+        ast::Callee::Expr(e) => e.as_ref(),
+        _ => return None,
+    };
+    // Resolve to `(module, method)`, handling both the named-import form
+    // (`createServer(...)`) and the namespace form (`http.createServer(...)`).
+    let (module, method): (String, String) = match callee_expr {
+        ast::Expr::Member(member) => {
+            let obj_ident = match member.obj.as_ref() {
+                ast::Expr::Ident(i) => i,
+                _ => return None,
+            };
+            let (module, _) = ctx.lookup_native_module(obj_ident.sym.as_ref())?;
+            let method = match &member.prop {
+                ast::MemberProp::Ident(i) => i.sym.to_string(),
+                _ => return None,
+            };
+            (module.to_string(), method)
+        }
+        ast::Expr::Ident(ident) => {
+            let (module, method_opt) = ctx.lookup_native_module(ident.sym.as_ref())?;
+            (module.to_string(), method_opt?.to_string())
+        }
+        _ => return None,
+    };
+    match (module.as_str(), method.as_str()) {
+        ("http", "createServer") => Some(("http", "HttpServer")),
+        ("https", "createServer") => Some(("https", "HttpsServer")),
+        ("http2", "createSecureServer") => Some(("http2", "Http2SecureServer")),
+        _ => None,
+    }
 }

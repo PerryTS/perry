@@ -1,7 +1,7 @@
 //! Shared NaN-boxing constants, runtime extern declarations, and
 //! port/host extraction helpers.
 
-use perry_ffi::{BufferHeader, JsValue, StringHeader};
+use perry_ffi::{ArrayHeader, BufferHeader, JsValue, StringHeader};
 
 pub const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -21,6 +21,13 @@ extern "C" {
     /// NaN-boxed with POINTER_TAG and stripped to a raw pointer). Defined
     /// in `crates/perry-runtime/src/buffer.rs::js_buffer_is_buffer`.
     pub fn js_buffer_is_buffer(ptr: i64) -> i32;
+    /// Issue #2041 — returns 1 when the NaN-boxed value bits are a
+    /// closure/function (POINTER_TAG + CLOSURE_MAGIC), 0 otherwise. Lets
+    /// `parse_listen_args` pick the `server.listen()` completion callback out
+    /// of the argument array by type rather than position, and distinguish it
+    /// from an options-object argument. Defined in
+    /// `crates/perry-runtime/src/closure/dynamic_props.rs::js_value_is_closure`.
+    pub fn js_value_is_closure(value_bits: i64) -> i32;
 }
 
 /// Opaque marker for the runtime's Promise struct — pass pointers
@@ -87,6 +94,78 @@ pub unsafe fn extract_host(opts: f64, default_host: &str) -> String {
         }
     }
     default_host.to_string()
+}
+
+/// Parsed shape of Node's variadic `server.listen(...)` overloads, shared by
+/// the http / https / http2 bind paths. Issue #2041.
+pub struct ListenArgs {
+    /// First positional argument — a bare port number, an options object
+    /// (`{ port, host, backlog }`), or `undefined`. Fed to `extract_port`
+    /// and `extract_host`.
+    pub opts: f64,
+    /// A standalone host string argument (the `listen(port, host, ...)`
+    /// overload). Takes precedence over a `host` field inside an options
+    /// object when both are present.
+    pub host: Option<String>,
+    /// Raw `*const ClosureHeader` pointer for the completion callback, or `0`
+    /// when no function argument was supplied.
+    pub callback: i64,
+}
+
+/// Normalize the JS-side `server.listen(...)` argument array into the
+/// `(opts, host, callback)` triple the bind path consumes.
+///
+/// `args_array` is a raw `*const ArrayHeader` (NOT NaN-boxed) holding every
+/// user-supplied `listen()` argument — codegen packs them via the `NA_VARARGS`
+/// arg kind. Resolution mirrors Node's type-directed overload handling: the
+/// first arg is the port / options / path; a later string arg is the host; the
+/// single function arg is the completion callback regardless of its position
+/// (`listen(port, cb)` vs `listen(port, host, cb)`); a numeric backlog arg is
+/// accepted and ignored (Perry exposes no backlog knob). The degenerate
+/// `listen(cb)` form (first and only arg is a function) is handled too.
+///
+/// # Safety
+/// `args_array` must be `0`/null or a valid Perry-runtime `ArrayHeader`.
+pub unsafe fn parse_listen_args(args_array: i64) -> ListenArgs {
+    let mut out = ListenArgs {
+        opts: f64::from_bits(TAG_UNDEFINED),
+        host: None,
+        callback: 0,
+    };
+    let arr_ptr = args_array as *const ArrayHeader;
+    if arr_ptr.is_null() {
+        return out;
+    }
+    // Codegen passes a clean raw pointer; reject a stray NaN-boxed value
+    // rather than dereferencing tag bits as an address.
+    if (args_array as u64) >> 48 != 0 {
+        return out;
+    }
+    let len = (*arr_ptr).length as usize;
+    let elements = (arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+    for i in 0..len {
+        let bits = *elements.add(i);
+        let v = JsValue::from_bits(bits);
+        // The completion callback is the (single) function argument — match it
+        // by value type, not position, so it's picked up wherever it floats.
+        let is_callback = js_value_is_closure(bits as i64) != 0;
+        if is_callback {
+            out.callback = (bits & PTR_MASK) as i64;
+            continue;
+        }
+        if i == 0 {
+            // port / options / path.
+            out.opts = f64::from_bits(bits);
+            continue;
+        }
+        if v.is_string() {
+            if let Some(s) = jsvalue_to_owned_string(f64::from_bits(bits)) {
+                out.host = Some(s);
+            }
+        }
+        // A numeric backlog (or anything else) at i > 0 is ignored.
+    }
+    out
 }
 
 /// Read a NaN-boxed JsValue as an owned String. Used for both
@@ -269,5 +348,66 @@ mod tests {
         // a wrong, low-numbered port).
         let port = unsafe { extract_port(70000.0_f64, 8080) };
         assert_eq!(port, 8080);
+    }
+
+    // Build a JS array from a slice of JsValues, the shape codegen's
+    // `NA_VARARGS` arg kind hands `js_node_http_server_listen` /
+    // `parse_listen_args`.
+    unsafe fn make_args(vals: &[JsValue]) -> i64 {
+        let mut arr = perry_ffi::js_array_alloc(vals.len() as u32);
+        for v in vals {
+            arr = perry_ffi::js_array_push(arr, *v);
+        }
+        arr as i64
+    }
+
+    #[test]
+    fn listen_null_array_is_all_defaults() {
+        // No args → no opts/host/callback; the bind path falls back to its
+        // module default port + 0.0.0.0.
+        let parsed = unsafe { parse_listen_args(0) };
+        assert!(JsValue::from_bits(parsed.opts.to_bits()).is_undefined());
+        assert!(parsed.host.is_none());
+        assert_eq!(parsed.callback, 0);
+    }
+
+    #[test]
+    fn listen_port_then_host_string_overload() {
+        // `listen(port, host)` — the standalone host string (#2041) must land
+        // in `host`, not be mistaken for a callback, and `opts` keeps the port.
+        let args = unsafe {
+            make_args(&[
+                JsValue::from_number(44500.0),
+                JsValue::from_string_ptr(perry_ffi::alloc_string("127.0.0.1").as_raw()),
+            ])
+        };
+        let parsed = unsafe { parse_listen_args(args) };
+        assert_eq!(unsafe { extract_port(parsed.opts, 3000) }, 44500);
+        assert_eq!(parsed.host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(
+            parsed.callback, 0,
+            "a host string must not be read as a callback"
+        );
+    }
+
+    #[test]
+    fn listen_non_closure_pointer_is_not_mistaken_for_callback() {
+        // The first arg of `listen(options)` / `listen(path-ish)` is a heap
+        // pointer (POINTER_TAG, like a closure) but NOT a closure. It must stay
+        // in `opts` and must not be captured as the callback — guards the
+        // `js_value_is_closure` check that tells `listen(options)` apart from
+        // `listen(cb)`. An array stands in for any non-closure heap pointer.
+        let inner = unsafe { perry_ffi::js_array_alloc(0) };
+        let args = unsafe { make_args(&[JsValue::from_object_ptr(inner)]) };
+        let parsed = unsafe { parse_listen_args(args) };
+        assert_eq!(
+            parsed.callback, 0,
+            "a non-closure pointer must not be read as a callback"
+        );
+        assert!(parsed.host.is_none());
+        assert!(
+            JsValue::from_bits(parsed.opts.to_bits()).is_pointer(),
+            "the pointer arg should be retained as opts, not dropped"
+        );
     }
 }
