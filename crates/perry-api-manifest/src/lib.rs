@@ -26,6 +26,7 @@ pub use entries::{API_MANIFEST, NATIVE_MODULES, NODE_SUBMODULES, RUNTIME_ONLY_MO
 pub use native_abi::{
     native_handle_type_id, NativeAbiParseError, NativeAbiType, NativeHandleAbi,
     NativeHandleOwnership, NativeHandleThreadAffinity, NativePodAbi, NativePodFieldAbi,
+    NativePromiseAbi, NativePromiseCompletion, NativePromiseThread,
 };
 
 /// One entry in the manifest. Identifies a single named symbol on a

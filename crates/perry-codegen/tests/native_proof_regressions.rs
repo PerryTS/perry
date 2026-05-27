@@ -1125,6 +1125,58 @@ fn native_library_manifest_lowercase_abi_returns_emit_signatures_and_artifacts()
 }
 
 #[test]
+fn native_library_manifest_native_async_promise_artifact_records_metadata() {
+    let ret = perry_api_manifest::NativeAbiType::Promise(perry_api_manifest::NativePromiseAbi {
+        result: Box::new(perry_api_manifest::NativeAbiType::F64),
+        completion: perry_api_manifest::NativePromiseCompletion::NativeAsync,
+        thread: perry_api_manifest::NativePromiseThread::Main,
+    });
+    let opts = native_library_opts_typed(vec![("native_ret_native_async", vec![], ret)]);
+    let module = module(
+        "artifact_native_async_promise_return.ts",
+        vec![Stmt::Return(Some(extern_call(
+            "native_ret_native_async",
+            Vec::new(),
+            Type::Number,
+        )))],
+    );
+
+    let ir = String::from_utf8(compile_module(&module, opts.clone()).unwrap()).unwrap();
+    assert!(
+        ir.contains("declare i64 @native_ret_native_async()"),
+        "native async promise lowering should keep the JS Promise boundary ABI:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module_with_opts(module, opts);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "NativeLibraryReturn"
+                && record["consumer"] == "native_library.raw_promise"
+                && record["native_rep_name"] == "promise_boundary"
+                && record["llvm_ty"] == "i64"
+                && record["native_value_state"] == "region_local"
+                && record["native_abi_type"]["canonical_kind"] == "promise"
+                && record["native_abi_type"]["promise_result"] == "f64"
+                && record["native_abi_type"]["promise_completion"] == "native_async"
+                && record["native_abi_type"]["promise_thread"] == "main"
+        }),
+        "expected native async promise ABI metadata in artifact:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "materialize_promise_boundary"
+                && record["native_value_state"] == "materialized"
+                && record["native_abi_transition"]["from_native_rep"] == "promise_boundary"
+                && record["native_abi_transition"]["to_native_rep"] == "js_value"
+                && record["native_abi_transition"]["op"] == "promise_box"
+                && record["native_abi_transition"]["lossy"] == false
+        }),
+        "expected native async promise return to use existing promise boxing:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn native_library_manifest_lowercase_abi_params_emit_c_abi_signature() {
     let opts = native_library_opts(vec![(
         "native_abi_args",

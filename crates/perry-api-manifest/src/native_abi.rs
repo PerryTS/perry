@@ -75,6 +75,82 @@ pub struct NativeHandleAbi {
     pub debug_name: String,
 }
 
+/// Completion path used by a Perry promise native ABI descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NativePromiseCompletion {
+    /// The native function returns a normal runtime Promise pointer. This is
+    /// the historical `promise<T>` behavior.
+    Direct,
+    /// The native function participates in Perry's runtime-owned async
+    /// completion-token registry. The JS-visible return remains a Promise.
+    NativeAsync,
+}
+
+impl NativePromiseCompletion {
+    /// Canonical manifest spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::NativeAsync => "native_async",
+        }
+    }
+}
+
+impl fmt::Display for NativePromiseCompletion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Thread policy for completing a native async promise token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NativePromiseThread {
+    /// Completion may be requested from any thread. Settlement still happens
+    /// on the runtime main-thread pump.
+    Any,
+    /// Completion requests from non-main threads are rejected by the runtime.
+    Main,
+}
+
+impl NativePromiseThread {
+    /// Canonical manifest spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::Main => "main",
+        }
+    }
+}
+
+impl fmt::Display for NativePromiseThread {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Runtime contract attached to a `promise` native ABI descriptor.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NativePromiseAbi {
+    /// Optional metadata describing the JavaScript value the promise resolves
+    /// with. Defaults to `jsvalue`.
+    pub result: Box<NativeAbiType>,
+    /// Completion machinery used behind the JS-visible Promise boundary.
+    pub completion: NativePromiseCompletion,
+    /// Thread policy for completion requests.
+    pub thread: NativePromiseThread,
+}
+
+impl NativePromiseAbi {
+    /// Construct a direct promise descriptor with `result` metadata.
+    pub fn direct(result: NativeAbiType) -> Self {
+        Self {
+            result: Box::new(result),
+            completion: NativePromiseCompletion::Direct,
+            thread: NativePromiseThread::Any,
+        }
+    }
+}
+
 /// One field in a manifest-declared POD record ABI descriptor.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NativePodFieldAbi {
@@ -176,8 +252,8 @@ pub enum NativeAbiType {
     /// Opaque native handle with runtime ownership, nullability, and thread
     /// validation metadata.
     Handle(NativeHandleAbi),
-    /// Opaque native promise boundary handle with optional result metadata.
-    Promise(Box<NativeAbiType>),
+    /// Opaque native promise boundary handle with completion metadata.
+    Promise(NativePromiseAbi),
     /// Pointer to a verifier-backed C-layout POD record.
     Pod(NativePodAbi),
     /// Native-call convenience descriptor: one JavaScript POD record view
@@ -209,7 +285,7 @@ impl NativeAbiType {
             "handle_id" => Ok(Self::HandleId),
             "buffer+len" => Ok(Self::BufferAndLen),
             "handle" => Ok(Self::Handle(NativeHandleAbi::borrowed(None))),
-            "promise" => Ok(Self::Promise(Box::new(Self::JsValue))),
+            "promise" => Ok(Self::Promise(NativePromiseAbi::direct(Self::JsValue))),
             "void" => Ok(Self::Void),
             _ => {
                 if let Some(inner) = trimmed
@@ -238,7 +314,9 @@ impl NativeAbiType {
                             "promise<T> requires a non-empty T",
                         ));
                     }
-                    return Ok(Self::Promise(Box::new(Self::parse_str(result)?)));
+                    return Ok(Self::Promise(NativePromiseAbi::direct(Self::parse_str(
+                        result,
+                    )?)));
                 }
                 Err(NativeAbiParseError::new(trimmed, "unknown native ABI type"))
             }
@@ -299,7 +377,23 @@ impl NativeAbiType {
     /// Return the optional promise result metadata attached to `promise<T>`.
     pub fn promise_result(&self) -> Option<&NativeAbiType> {
         match self {
-            Self::Promise(result) => Some(result.as_ref()),
+            Self::Promise(abi) => Some(abi.result.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Return promise completion metadata attached to `promise<T>`.
+    pub fn promise_completion(&self) -> Option<NativePromiseCompletion> {
+        match self {
+            Self::Promise(abi) => Some(abi.completion),
+            _ => None,
+        }
+    }
+
+    /// Return promise completion thread metadata attached to `promise<T>`.
+    pub fn promise_thread(&self) -> Option<NativePromiseThread> {
+        match self {
+            Self::Promise(abi) => Some(abi.thread),
             _ => None,
         }
     }
@@ -332,6 +426,13 @@ impl NativeAbiType {
     /// True when this descriptor is legal in a parameter list.
     pub fn is_valid_param(&self) -> bool {
         !matches!(self, Self::Void | Self::HandleId)
+            && !matches!(
+                self,
+                Self::Promise(NativePromiseAbi {
+                    completion: NativePromiseCompletion::NativeAsync,
+                    ..
+                })
+            )
     }
 
     /// True when this descriptor is legal as a return type.
@@ -374,7 +475,7 @@ impl fmt::Display for NativeAbiType {
                 Some(ty) => write!(f, "handle<{ty}>"),
                 None => f.write_str("handle"),
             },
-            Self::Promise(result) => write!(f, "promise<{result}>"),
+            Self::Promise(abi) => write!(f, "promise<{}>", abi.result),
             Self::Pod(pod) => write!(f, "{pod}"),
             Self::PodAndCount(pod) => {
                 if let Some(name) = pod.name.as_deref() {

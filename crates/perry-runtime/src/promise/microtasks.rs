@@ -30,6 +30,9 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
 
     ran += crate::async_hooks::drain_gc_destroy_queue();
 
+    // Native async tokens settle only through the main-thread handoff path.
+    ran += super::native_async::js_native_async_process_pending();
+
     // Process any scheduled resolutions (simulates async completions)
     ran += super::combinators::process_scheduled_resolves();
 

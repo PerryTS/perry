@@ -485,6 +485,69 @@ fn test_promise_contexts_rekey_live_and_drop_dead_from_space_after_copied_minor(
 }
 
 #[test]
+fn test_native_async_completion_token_roots_survive_copied_minor_gc() {
+    let _native_async_guard = crate::promise::native_async::test_native_async_lock();
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    activate_malloc_registry_for_tests();
+    crate::promise::native_async::test_reset_native_async_registry();
+    gc_register_mutable_root_scanner(crate::promise::scan_native_async_completion_roots_mut);
+
+    let token = crate::promise::js_native_async_completion_new(0);
+    let promise = crate::promise::js_native_async_completion_promise(token);
+    let original_promise = promise as usize;
+    let result = crate::string::js_string_from_bytes(b"native-async-result".as_ptr(), 19);
+    let handle = crate::string::js_string_from_bytes(b"native-async-handle".as_ptr(), 19);
+    let result_bits = string_bits(result as usize);
+    let handle_bits = string_bits(handle as usize);
+
+    assert_eq!(
+        crate::promise::js_native_async_completion_attach_handle(
+            token,
+            handle_bits,
+            crate::promise::PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT
+        ),
+        crate::promise::PERRY_NATIVE_ASYNC_OK
+    );
+    assert_eq!(
+        crate::promise::js_native_async_completion_resolve_bits(token, result_bits),
+        crate::promise::PERRY_NATIVE_ASYNC_OK
+    );
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+
+    let (moved_promise, moved_payload, moved_handles) =
+        crate::promise::native_async::test_native_async_slot_snapshot(token);
+    assert_ne!(
+        moved_promise, original_promise,
+        "token promise slot should be rewritten after copied-minor GC"
+    );
+    assert_ne!(
+        moved_payload.unwrap() & POINTER_MASK,
+        result as u64,
+        "token payload slot should be rewritten after copied-minor GC"
+    );
+    assert_ne!(
+        moved_handles[0] & POINTER_MASK,
+        handle as u64,
+        "token attached handle slot should be rewritten after copied-minor GC"
+    );
+
+    assert_eq!(crate::promise::js_native_async_process_pending(), 1);
+    let promise = moved_promise as *mut crate::promise::Promise;
+    unsafe {
+        assert_eq!((*promise).state, crate::promise::PromiseState::Fulfilled);
+        let value_bits = (*promise).value.to_bits();
+        assert_eq!(value_bits & TAG_MASK, STRING_TAG);
+        assert_string_bytes(
+            (value_bits & POINTER_MASK) as *const crate::StringHeader,
+            b"native-async-result",
+        );
+    }
+}
+
+#[test]
 fn test_microtask_dispatch_handles_survive_callback_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);

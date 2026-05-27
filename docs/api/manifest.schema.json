@@ -201,7 +201,7 @@
     "abiStructuredParamDescriptor": {
       "oneOf": [
         { "$ref": "#/$defs/abiParamHandleDescriptor" },
-        { "$ref": "#/$defs/abiPromiseDescriptor" },
+        { "$ref": "#/$defs/abiParamPromiseDescriptor" },
         { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
         { "$ref": "#/$defs/abiPodDescriptor" },
         { "$ref": "#/$defs/abiPodAndCountDescriptor" },
@@ -211,7 +211,7 @@
     "abiStructuredReturnDescriptor": {
       "oneOf": [
         { "$ref": "#/$defs/abiReturnHandleDescriptor" },
-        { "$ref": "#/$defs/abiPromiseDescriptor" },
+        { "$ref": "#/$defs/abiReturnPromiseDescriptor" },
         { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
         { "$ref": "#/$defs/abiPodDescriptor" },
         { "$ref": "#/$defs/abiScalarDescriptor" }
@@ -220,7 +220,7 @@
     "abiStructuredDescriptor": {
       "oneOf": [
         { "$ref": "#/$defs/abiHandleDescriptor" },
-        { "$ref": "#/$defs/abiPromiseDescriptor" },
+        { "$ref": "#/$defs/abiMetadataPromiseDescriptor" },
         { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
         { "$ref": "#/$defs/abiPodDescriptor" },
         { "$ref": "#/$defs/abiScalarDescriptor" }
@@ -240,6 +240,35 @@
     },
     "abiReturnHandleDescriptor": {
       "$ref": "#/$defs/abiHandleDescriptor"
+    },
+    "abiParamPromiseDescriptor": {
+      "allOf": [
+        { "$ref": "#/$defs/abiPromiseDescriptor" },
+        {
+          "not": {
+            "type": "object",
+            "required": ["completion"],
+            "properties": { "completion": { "const": "native_async" } }
+          },
+          "description": "Native async promise completion is only valid on returns."
+        }
+      ]
+    },
+    "abiReturnPromiseDescriptor": {
+      "$ref": "#/$defs/abiPromiseDescriptor"
+    },
+    "abiMetadataPromiseDescriptor": {
+      "allOf": [
+        { "$ref": "#/$defs/abiPromiseDescriptor" },
+        {
+          "not": {
+            "type": "object",
+            "required": ["completion"],
+            "properties": { "completion": { "const": "native_async" } }
+          },
+          "description": "Nested promise metadata cannot opt into native async completion."
+        }
+      ]
     },
     "abiHandleDescriptor": {
       "type": "object",
@@ -306,6 +335,16 @@
         "result": {
           "$ref": "#/$defs/abiDescriptor",
           "description": "Optional metadata describing the JavaScript promise result."
+        },
+        "completion": {
+          "enum": ["direct", "native_async"],
+          "default": "direct",
+          "description": "Promise completion machinery. `native_async` is valid only for return descriptors."
+        },
+        "thread": {
+          "enum": ["any", "main"],
+          "default": "any",
+          "description": "Thread policy for native async completion requests."
         }
       }
     },

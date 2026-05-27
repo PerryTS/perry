@@ -74,6 +74,8 @@ pub(crate) struct NativeAbiTypeRecord {
     pub handle_type: Option<String>,
     pub native_handle: Option<NativeHandleContractRecord>,
     pub promise_result: Option<String>,
+    pub promise_completion: Option<String>,
+    pub promise_thread: Option<String>,
     pub pod_name: Option<String>,
     pub pod_fields: Vec<NativePodFieldContractRecord>,
 }
@@ -173,6 +175,12 @@ impl NativeAbiTypeRecord {
             handle_type: descriptor.handle_type().map(str::to_string),
             native_handle,
             promise_result: descriptor.promise_result().map(ToString::to_string),
+            promise_completion: descriptor
+                .promise_completion()
+                .map(|completion| completion.as_str().to_string()),
+            promise_thread: descriptor
+                .promise_thread()
+                .map(|thread| thread.as_str().to_string()),
             pod_name: descriptor
                 .pod_abi()
                 .and_then(|pod| pod.name.as_ref().map(ToString::to_string)),
