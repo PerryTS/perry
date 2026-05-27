@@ -408,6 +408,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("os", "loadavg")
             | ("os", "machine")
             | ("os", "version")
+            | ("os", "getPriority")
+            | ("os", "setPriority")
             | ("fs", "accessSync")
             | ("fs", "access")
             | ("fs", "appendFile")

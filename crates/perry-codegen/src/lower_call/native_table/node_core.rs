@@ -11,6 +11,25 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // ========== Node OS ==========
+    NativeModSig {
+        module: "os",
+        has_receiver: false,
+        method: "getPriority",
+        class_filter: None,
+        runtime: "js_os_get_priority",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "os",
+        has_receiver: false,
+        method: "setPriority",
+        class_filter: None,
+        runtime: "js_os_set_priority",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
     // ========== Node process EventEmitter ==========
     NativeModSig {
         module: "process",

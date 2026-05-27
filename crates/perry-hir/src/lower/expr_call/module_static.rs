@@ -968,6 +968,15 @@ pub(super) fn try_module_static_methods(
                         "userInfo" => {
                             return Ok(Ok(Expr::OsUserInfo));
                         }
+                        "getPriority" | "setPriority" => {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "os".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name.to_string(),
+                                args,
+                            }));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }
