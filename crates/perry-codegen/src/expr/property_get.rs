@@ -940,7 +940,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (class_name.as_str(), property.as_str()),
                     (
                         "ReadableStream",
-                        "getReader" | "cancel" | "tee" | "pipeTo" | "pipeThrough"
+                        "getReader" | "cancel" | "tee" | "pipeTo" | "pipeThrough" | "values"
                     ) | (
                         "ReadableStreamDefaultReader",
                         "read" | "releaseLock" | "cancel"

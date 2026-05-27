@@ -760,6 +760,30 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
+    // #1545: Web ReadableStream handles are normal finite numbers, not
+    // heap objects. Expose `rs[Symbol.asyncIterator]` as the same bound method
+    // as `rs.values`, matching Node's Web Streams surface while leaving
+    // `Symbol.iterator` absent.
+    if obj_f64.is_finite() && obj_f64 > 0.0 && obj_f64.fract() == 0.0 {
+        if let Some(kind_probe) = crate::object::stream_handle_kind_probe() {
+            if kind_probe(obj_f64 as usize) == 1 {
+                let async_iterator = well_known_symbol("asyncIterator");
+                if !async_iterator.is_null() {
+                    let async_iterator_f64 = f64::from_bits(
+                        crate::value::JSValue::pointer(async_iterator as *const u8).bits(),
+                    );
+                    if sym_key_from_f64(sym_f64) == sym_key_from_f64(async_iterator_f64) {
+                        let mname = b"values";
+                        return crate::object::js_class_method_bind(
+                            obj_f64,
+                            mname.as_ptr(),
+                            mname.len(),
+                        );
+                    }
+                }
+            }
+        }
+    }
     // #321: arrays expose `Symbol.iterator`. perry has no standalone array
     // iterator object (for-of is special-cased), but `arr[Symbol.iterator]`
     // must resolve to a callable so `Symbol.iterator in arr` is true

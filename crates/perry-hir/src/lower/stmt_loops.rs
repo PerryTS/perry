@@ -17,6 +17,56 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+fn unwrap_stream_expr(mut expr: &ast::Expr) -> &ast::Expr {
+    loop {
+        expr = match expr {
+            ast::Expr::TsAs(ts_as) => &ts_as.expr,
+            ast::Expr::TsNonNull(non_null) => &non_null.expr,
+            ast::Expr::TsConstAssertion(assertion) => &assertion.expr,
+            ast::Expr::TsTypeAssertion(assertion) => &assertion.expr,
+            ast::Expr::Paren(paren) => &paren.expr,
+            _ => break,
+        };
+    }
+    expr
+}
+
+fn web_readable_stream_values_receiver(expr: &ast::Expr) -> Option<&ast::Expr> {
+    let ast::Expr::Call(call) = unwrap_stream_expr(expr) else {
+        return None;
+    };
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return None;
+    };
+    let ast::Expr::Member(member) = callee_expr.as_ref() else {
+        return None;
+    };
+    if !matches!(&member.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "values") {
+        return None;
+    }
+    Some(member.obj.as_ref())
+}
+
+fn is_web_readable_stream_expr(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    match unwrap_stream_expr(expr) {
+        ast::Expr::Ident(ident) => {
+            let name = ident.sym.as_ref();
+            matches!(
+                ctx.lookup_native_instance(name),
+                Some((_, "ReadableStream"))
+            ) || matches!(
+                ctx.lookup_local_type(name),
+                Some(Type::Named(n)) if n == "ReadableStream"
+            )
+        }
+        ast::Expr::New(new_expr) => matches!(
+            new_expr.callee.as_ref(),
+            ast::Expr::Ident(callee) if callee.sym.as_ref() == "ReadableStream"
+        ),
+        _ => false,
+    }
+}
+
 pub(crate) fn lower_stmt_for_of(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -243,7 +293,9 @@ pub(crate) fn lower_stmt_for_of(
     // `.length` on the numeric stream handle (0) and silently iterates zero
     // times. Mirrors the function-body path in `lower_decl/body_stmt.rs`.
     if for_of_stmt.is_await {
-        let mut iter_inner: &ast::Expr = &for_of_stmt.right;
+        let stream_source =
+            web_readable_stream_values_receiver(&for_of_stmt.right).unwrap_or(&for_of_stmt.right);
+        let mut iter_inner: &ast::Expr = stream_source;
         loop {
             iter_inner = match iter_inner {
                 ast::Expr::TsAs(x) => &x.expr,
@@ -254,20 +306,7 @@ pub(crate) fn lower_stmt_for_of(
             };
         }
         let is_readable_stream = match iter_inner {
-            ast::Expr::Ident(ident) => {
-                let name = ident.sym.as_ref();
-                matches!(
-                    ctx.lookup_native_instance(name),
-                    Some((_, "ReadableStream"))
-                ) || matches!(
-                    ctx.lookup_local_type(name),
-                    Some(Type::Named(n)) if n == "ReadableStream"
-                )
-            }
-            ast::Expr::New(new_expr) => matches!(
-                new_expr.callee.as_ref(),
-                ast::Expr::Ident(c) if c.sym.as_ref() == "ReadableStream"
-            ),
+            ast::Expr::Ident(_) | ast::Expr::New(_) => is_web_readable_stream_expr(ctx, iter_inner),
             // #1670: `for await (const c of res.body)` — `res.body` is a
             // `ReadableStream` but arrives as a bare `Member` (Any-typed), so
             // the Ident arm above misses it. Recognise `<obj>.body` on a
@@ -298,8 +337,10 @@ pub(crate) fn lower_stmt_for_of(
 
         if is_readable_stream {
             let for_scope_mark = ctx.push_block_scope();
-            // `as T` etc. are erased by lower_expr, so lower the full receiver.
-            let stream_expr = lower_expr(ctx, &for_of_stmt.right)?;
+            // `as T` etc. are erased by lower_expr; for `rs.values()` lower
+            // the underlying stream receiver because this branch drives the
+            // reader loop directly.
+            let stream_expr = lower_expr(ctx, stream_source)?;
 
             // const __reader = stream.getReader();
             let reader_id = ctx.fresh_local();

@@ -839,6 +839,95 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
     promise
 }
 
+fn resolved_done_promise() -> f64 {
+    unsafe {
+        let promise = js_promise_new();
+        let result = build_iter_result(TAG_UNDEFINED, true);
+        js_promise_resolve(promise, f64::from_bits(result));
+        box_promise(promise)
+    }
+}
+
+fn closure_capture_value(
+    func: extern "C" fn(*const ClosureHeader) -> f64,
+    value: f64,
+) -> *mut ClosureHeader {
+    let fn_ptr = func as *const u8;
+    perry_runtime::closure::js_register_closure_arity(fn_ptr, 0);
+    let closure = perry_runtime::closure::js_closure_alloc(fn_ptr, 1);
+    perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, value.to_bits() as i64);
+    closure
+}
+
+fn closure_capture_value_get(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    f64::from_bits(bits)
+}
+
+extern "C" fn readable_stream_iterator_next(closure: *const ClosureHeader) -> f64 {
+    let reader = closure_capture_value_get(closure);
+    if reader.to_bits() == TAG_UNDEFINED {
+        return resolved_done_promise();
+    }
+    unsafe { box_promise(js_reader_read(reader)) }
+}
+
+extern "C" fn readable_stream_iterator_return(closure: *const ClosureHeader) -> f64 {
+    let reader = closure_capture_value_get(closure);
+    if reader.to_bits() != TAG_UNDEFINED {
+        unsafe {
+            let _ = js_reader_release_lock(reader);
+        }
+    }
+    resolved_done_promise()
+}
+
+extern "C" fn readable_stream_iterator_self(closure: *const ClosureHeader) -> f64 {
+    closure_capture_value_get(closure)
+}
+
+unsafe fn build_readable_stream_iterator(stream_handle: f64) -> f64 {
+    let reader = js_readable_stream_get_reader(stream_handle);
+    let obj = js_object_alloc(0, 2);
+    let keys = js_array_alloc(2);
+    let k_next = js_string_from_bytes(b"next".as_ptr(), 4);
+    let k_return = js_string_from_bytes(b"return".as_ptr(), 6);
+    js_array_push(keys, JSValue::string_ptr(k_next));
+    js_array_push(keys, JSValue::string_ptr(k_return));
+    js_object_set_field(
+        obj,
+        0,
+        JSValue::pointer(closure_capture_value(readable_stream_iterator_next, reader) as *const u8),
+    );
+    js_object_set_field(
+        obj,
+        1,
+        JSValue::pointer(
+            closure_capture_value(readable_stream_iterator_return, reader) as *const u8,
+        ),
+    );
+    js_object_set_keys(obj, keys);
+    let iterator = f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits());
+
+    let async_iterator = perry_runtime::symbol::well_known_symbol("asyncIterator");
+    if !async_iterator.is_null() {
+        let self_closure = closure_capture_value(readable_stream_iterator_self, iterator);
+        let symbol_value = f64::from_bits(JSValue::pointer(async_iterator as *const u8).bits());
+        let closure_value = f64::from_bits(JSValue::pointer(self_closure as *const u8).bits());
+        perry_runtime::symbol::js_object_set_symbol_property(iterator, symbol_value, closure_value);
+    }
+
+    iterator
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_values(stream_handle: f64) -> f64 {
+    build_readable_stream_iterator(stream_handle)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_reader_release_lock(reader_handle: f64) -> f64 {
     let reader_id = reader_handle as usize;
@@ -1642,6 +1731,7 @@ pub(crate) unsafe fn dispatch_stream_method(
     if is_readable {
         match method {
             "getReader" => return Some(js_readable_stream_get_reader(handle)),
+            "values" | "@@asyncIterator" => return Some(js_readable_stream_values(handle)),
             "cancel" => return Some(box_promise(js_readable_stream_cancel(handle, arg0))),
             "tee" => return Some(js_readable_stream_tee(handle)),
             "pipeTo" => return Some(box_promise(js_readable_stream_pipe_to(handle, arg0))),
