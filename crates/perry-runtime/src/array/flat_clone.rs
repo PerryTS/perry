@@ -2,6 +2,29 @@
 use super::*;
 use std::ptr;
 
+/// Read the GC object-type byte for an already-range-validated heap pointer
+/// (the value returned by `clean_arr_ptr`, which guarantees the address is in
+/// the live heap window). Returns `0` if the pointer is too low to hold a
+/// preceding `GcHeader`.
+///
+/// Used by `entries`/`keys`/`values` to detect when the codegen `.entries()`
+/// catch-all (`Expr::ArrayEntries`, lowered for any non-class receiver because
+/// the static type was lost — see perry-hir `array_only_methods.rs` #597) was
+/// actually handed a Map or Set rather than an Array. Effect's
+/// `FiberRefs.diff` does `for (const [k, v] of newValue.locals.entries())`
+/// where `locals` is a `Map`; without this dispatch the Map was reinterpreted
+/// as an Array and its entry buffer read out as garbage `[index, value]`
+/// pairs, segfaulting downstream on `pairs.length` (#321 effect Context/Layer).
+#[inline]
+unsafe fn receiver_gc_type(ptr: *const ArrayHeader) -> u8 {
+    let addr = ptr as usize;
+    if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return 0;
+    }
+    let gc_header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    (*gc_header).obj_type
+}
+
 /// `Array.prototype.flat(depth)` — flatten up to `depth` levels deep
 /// (ECMA-262 §23.1.3.10).
 #[no_mangle]
@@ -333,6 +356,36 @@ pub extern "C" fn js_array_entries(arr: *const ArrayHeader) -> *mut ArrayHeader 
         return js_array_alloc(0);
     }
     unsafe {
+        // The codegen `.entries()` catch-all (Expr::ArrayEntries) lowers any
+        // non-class receiver here. When the runtime value is actually a Map or
+        // Set, route to the correct iterator materialization instead of
+        // reinterpreting its buffer as an Array (#321 effect Context/Layer).
+        match receiver_gc_type(arr) {
+            t if t == crate::gc::GC_TYPE_MAP => {
+                return crate::map::js_map_entries(arr as *const crate::map::MapHeader);
+            }
+            t if t == crate::gc::GC_TYPE_SET => {
+                // Set entries yield `[value, value]` pairs in JS.
+                let values = crate::set::js_set_to_array(arr as *const crate::set::SetHeader);
+                let len = (*values).length;
+                let result = js_array_alloc(len);
+                (*result).length = len;
+                clear_array_numeric_layout(result);
+                for i in 0..len as usize {
+                    let v = js_array_get_f64(values, i as u32);
+                    let pair = js_array_alloc(2);
+                    (*pair).length = 2;
+                    store_array_slot(pair, 0, v.to_bits());
+                    store_array_slot(pair, 1, v.to_bits());
+                    rebuild_array_layout(pair);
+                    let pair_value = crate::value::js_nanbox_pointer(pair as i64);
+                    store_array_slot(result, i, pair_value.to_bits());
+                }
+                rebuild_array_layout(result);
+                return result;
+            }
+            _ => {}
+        }
         let len = (*arr).length;
         let result = js_array_alloc(len);
         (*result).length = len;
@@ -365,6 +418,18 @@ pub extern "C" fn js_array_keys(arr: *const ArrayHeader) -> *mut ArrayHeader {
         return js_array_alloc(0);
     }
     unsafe {
+        // Map/Set receivers reaching the `.keys()` catch-all (see
+        // js_array_entries) — route to the correct keys. (#321)
+        match receiver_gc_type(arr) {
+            t if t == crate::gc::GC_TYPE_MAP => {
+                return crate::map::js_map_keys(arr as *const crate::map::MapHeader);
+            }
+            t if t == crate::gc::GC_TYPE_SET => {
+                // Set `.keys()` is an alias for `.values()`.
+                return crate::set::js_set_to_array(arr as *const crate::set::SetHeader);
+            }
+            _ => {}
+        }
         let len = (*arr).length;
         let result = js_array_alloc(len);
         (*result).length = len;
@@ -386,6 +451,17 @@ pub extern "C" fn js_array_values(arr: *const ArrayHeader) -> *mut ArrayHeader {
         return js_array_alloc(0);
     }
     unsafe {
+        // Map/Set receivers reaching the `.values()` catch-all (see
+        // js_array_entries) — route to the correct values. (#321)
+        match receiver_gc_type(arr) {
+            t if t == crate::gc::GC_TYPE_MAP => {
+                return crate::map::js_map_values(arr as *const crate::map::MapHeader);
+            }
+            t if t == crate::gc::GC_TYPE_SET => {
+                return crate::set::js_set_to_array(arr as *const crate::set::SetHeader);
+            }
+            _ => {}
+        }
         let len = (*arr).length;
         let result = js_array_alloc(len);
         if len > 0 {
