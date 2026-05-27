@@ -146,6 +146,29 @@ you need native precision or metadata: `"f32"`, `"u32"`, `"u64"`,
 `{ "kind": "handle", "type": "MyThing" }`, and
 `{ "kind": "promise", "result": "jsvalue" }`.
 
+Handles are opaque Perry native handle objects in JavaScript, not raw
+numbers. Legacy `"handle"` and `"handle<T>"` descriptors still parse
+as borrowed handles; structured descriptors can add ownership,
+nullability, thread affinity, debug names, and an owned-return
+finalizer:
+
+```json
+{
+  "kind": "handle",
+  "type": "MyThing",
+  "ownership": "owned",
+  "thread": "creator",
+  "finalizer": "my_thing_free",
+  "debugName": "MyThing"
+}
+```
+
+The finalizer symbol must use `void(ptr, ptr)` ABI and must only free
+native resources. It can run from GC finalization, so it must not call
+Perry JS APIs or allocate JS values. Use `"ptr"` when an API
+intentionally accepts a raw pointer payload instead of a managed
+handle.
+
 ## 3. Verify
 
 ```sh
@@ -291,6 +314,10 @@ pub extern "C" fn js_my_fetch(url_ptr: *const StringHeader) -> *mut Promise {
 ```
 
 ### Sync handle-based class
+
+Use a `handle` descriptor for synchronous resource-style APIs. The
+native function receives or returns the raw resource pointer as `i64`,
+while TypeScript callers see only the opaque handle object.
 
 ```rust
 use perry_ffi::{get_handle, register_handle, Handle};

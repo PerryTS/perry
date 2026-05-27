@@ -41,6 +41,7 @@ fn transition_lossy(rep: &NativeRep, op: &NativeAbiTransitionOp) -> bool {
         NativeAbiTransitionOp::None
         | NativeAbiTransitionOp::FloatExtend
         | NativeAbiTransitionOp::PointerBox
+        | NativeAbiTransitionOp::NativeHandleBox
         | NativeAbiTransitionOp::PromiseBox => false,
     }
 }
@@ -76,6 +77,29 @@ fn record_materialized_transition(
         false,
         false,
         Vec::new(),
+    );
+}
+
+pub(crate) fn record_runtime_native_handle_box_transition(
+    ctx: &mut FnCtx<'_>,
+    value: &str,
+    reason: MaterializationReason,
+) {
+    let materialized = LoweredValue {
+        semantic: SemanticKind::JsValue,
+        rep: NativeRep::JsValue,
+        llvm_ty: DOUBLE,
+        value: value.to_string(),
+    };
+    record_materialized_transition(
+        ctx,
+        "materialize_js_value",
+        "materialize_native_handle_runtime",
+        &materialized,
+        NativeRep::NativeHandle.name().to_string(),
+        NativeAbiTransitionOp::NativeHandleBox,
+        reason,
+        false,
     );
 }
 

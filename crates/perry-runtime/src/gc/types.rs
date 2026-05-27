@@ -36,7 +36,8 @@ pub const GC_TYPE_TYPED_ARRAY: u8 = 11;
 pub const GC_TYPE_SET: u8 = 12;
 pub const GC_TYPE_NATIVE_ARENA_OWNER: u8 = 13;
 pub const GC_TYPE_NATIVE_TYPED_VIEW: u8 = 14;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_NATIVE_TYPED_VIEW;
+pub const GC_TYPE_NATIVE_HANDLE: u8 = 15;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_NATIVE_HANDLE;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -123,6 +124,7 @@ pub(crate) enum GcFinalizeHookKind {
     PromiseCleanup,
     NativeArenaOwner,
     NativeTypedView,
+    NativeHandle,
 }
 
 #[allow(dead_code)]
@@ -387,6 +389,21 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::None,
         GcFinalizeHookKind::NativeTypedView,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_NATIVE_HANDLE,
+        "native_handle",
+        GcAllocationPolicy::Malloc,
+        false,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        false,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::MallocTracked,
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::NativeHandle,
+    )),
 ];
 
 #[inline]
@@ -496,6 +513,11 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
         GcFinalizeHookKind::NativeTypedView => {
             crate::native_arena::finalize_native_typed_view_for_gc(
                 user_ptr as *mut crate::native_arena::NativeTypedViewHeader,
+            );
+        }
+        GcFinalizeHookKind::NativeHandle => {
+            crate::native_handle::finalize_native_handle_for_gc(
+                user_ptr as *mut crate::native_handle::NativeHandleHeader,
             );
         }
     }

@@ -28,7 +28,9 @@
 //!   supporting helpers.
 
 use anyhow::{anyhow, Result};
-use perry_api_manifest::NativeAbiType;
+use perry_api_manifest::{
+    NativeAbiType, NativeHandleAbi, NativeHandleOwnership, NativeHandleThreadAffinity,
+};
 use perry_hir::ModuleKind;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -315,6 +317,7 @@ fn parse_native_library_functions(
                 &name,
                 &format!("params[{param_index}]"),
                 param,
+                NativeAbiDescriptorPosition::Param,
             )?;
             if !descriptor.is_valid_param() {
                 return Err(invalid_native_abi_error(
@@ -342,6 +345,7 @@ fn parse_native_library_functions(
             &name,
             "returns",
             returns_value,
+            NativeAbiDescriptorPosition::Return,
         )?;
         if !returns.is_valid_return() {
             return Err(invalid_native_abi_error(
@@ -362,12 +366,19 @@ fn parse_native_library_functions(
     Ok(parsed)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeAbiDescriptorPosition {
+    Param,
+    Return,
+}
+
 fn parse_native_abi_descriptor(
     package_json: &Path,
     function_index: usize,
     function_name: &str,
     slot: &str,
     value: &serde_json::Value,
+    position: NativeAbiDescriptorPosition,
 ) -> Result<NativeAbiType> {
     if let Some(spelling) = value.as_str() {
         return NativeAbiType::parse_str(spelling).map_err(|err| {
@@ -405,20 +416,158 @@ fn parse_native_abi_descriptor(
 
     match kind {
         "handle" => {
+            let allowed = [
+                "kind",
+                "type",
+                "ownership",
+                "nullable",
+                "thread",
+                "finalizer",
+                "debugName",
+            ];
+            for key in object.keys() {
+                if !allowed.contains(&key.as_str()) {
+                    return Err(invalid_native_abi_error(
+                        package_json,
+                        function_index,
+                        function_name,
+                        slot,
+                        &value.to_string(),
+                        &format!("unknown handle descriptor field `{key}`"),
+                    ));
+                }
+            }
+
             let handle_type = match object.get("type") {
-                Some(v) => Some(v.as_str().filter(|s| !s.trim().is_empty()).ok_or_else(|| {
+                Some(v) => Some(
+                    v.as_str()
+                        .filter(|s| !s.trim().is_empty())
+                        .ok_or_else(|| {
+                            invalid_native_abi_error(
+                                package_json,
+                                function_index,
+                                function_name,
+                                slot,
+                                &value.to_string(),
+                                "handle descriptor `type` must be a non-empty string",
+                            )
+                        })?
+                        .to_string(),
+                ),
+                None => None,
+            };
+            let ownership = match object.get("ownership") {
+                Some(v) => match v.as_str() {
+                    Some("borrowed") => NativeHandleOwnership::Borrowed,
+                    Some("owned") => NativeHandleOwnership::Owned,
+                    Some(_) | None => {
+                        return Err(invalid_native_abi_error(
+                            package_json,
+                            function_index,
+                            function_name,
+                            slot,
+                            &value.to_string(),
+                            "handle descriptor `ownership` must be `owned` or `borrowed`",
+                        ));
+                    }
+                },
+                None => NativeHandleOwnership::Borrowed,
+            };
+            let nullable = match object.get("nullable") {
+                Some(v) => v.as_bool().ok_or_else(|| {
                     invalid_native_abi_error(
                         package_json,
                         function_index,
                         function_name,
                         slot,
                         &value.to_string(),
-                        "handle descriptor `type` must be a non-empty string",
+                        "handle descriptor `nullable` must be a boolean",
                     )
-                })?),
+                })?,
+                None => false,
+            };
+            let thread = match object.get("thread") {
+                Some(v) => match v.as_str() {
+                    Some("any") => NativeHandleThreadAffinity::Any,
+                    Some("main") => NativeHandleThreadAffinity::Main,
+                    Some("creator") => NativeHandleThreadAffinity::Creator,
+                    Some(_) | None => {
+                        return Err(invalid_native_abi_error(
+                            package_json,
+                            function_index,
+                            function_name,
+                            slot,
+                            &value.to_string(),
+                            "handle descriptor `thread` must be `any`, `main`, or `creator`",
+                        ));
+                    }
+                },
+                None => NativeHandleThreadAffinity::Any,
+            };
+            let finalizer = match object.get("finalizer") {
+                Some(v) => Some(
+                    v.as_str()
+                        .filter(|s| !s.trim().is_empty())
+                        .ok_or_else(|| {
+                            invalid_native_abi_error(
+                                package_json,
+                                function_index,
+                                function_name,
+                                slot,
+                                &value.to_string(),
+                                "handle descriptor `finalizer` must be a non-empty string",
+                            )
+                        })?
+                        .to_string(),
+                ),
                 None => None,
             };
-            Ok(NativeAbiType::Handle(handle_type.map(str::to_string)))
+            if finalizer.is_some() && ownership != NativeHandleOwnership::Owned {
+                return Err(invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    function_name,
+                    slot,
+                    &value.to_string(),
+                    "handle descriptor `finalizer` requires `ownership: \"owned\"`",
+                ));
+            }
+            if finalizer.is_some() && position == NativeAbiDescriptorPosition::Param {
+                return Err(invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    function_name,
+                    slot,
+                    &value.to_string(),
+                    "handle descriptor `finalizer` is valid only on returns",
+                ));
+            }
+            let debug_name = match object.get("debugName") {
+                Some(v) => v
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .ok_or_else(|| {
+                        invalid_native_abi_error(
+                            package_json,
+                            function_index,
+                            function_name,
+                            slot,
+                            &value.to_string(),
+                            "handle descriptor `debugName` must be a non-empty string",
+                        )
+                    })?
+                    .to_string(),
+                None => handle_type.as_deref().unwrap_or("handle").to_string(),
+            };
+
+            Ok(NativeAbiType::Handle(NativeHandleAbi {
+                type_name: handle_type,
+                ownership,
+                nullable,
+                thread,
+                finalizer,
+                debug_name,
+            }))
         }
         "promise" => {
             let result = match object.get("result") {
@@ -428,6 +577,7 @@ fn parse_native_abi_descriptor(
                     function_name,
                     slot,
                     result,
+                    position,
                 )?,
                 None => NativeAbiType::JsValue,
             };
@@ -721,7 +871,7 @@ mod abi_validation_tests {
 #[cfg(test)]
 mod manifest_parse_tests {
     use super::*;
-    use perry_api_manifest::NativeAbiType;
+    use perry_api_manifest::{NativeAbiType, NativeHandleOwnership, NativeHandleThreadAffinity};
 
     fn parse_manifest_from_functions(
         pkg_dir: &Path,
@@ -776,6 +926,14 @@ mod manifest_parse_tests {
                         "handle",
                         "promise",
                         { "kind": "handle", "type": "MyThing" },
+                        {
+                            "kind": "handle",
+                            "type": "SharedThing",
+                            "ownership": "owned",
+                            "nullable": true,
+                            "thread": "creator",
+                            "debugName": "SharedThingHandle"
+                        },
                         { "kind": "promise", "result": "jsvalue" },
                         { "kind": "buffer+len" }
                     ],
@@ -813,12 +971,60 @@ mod manifest_parse_tests {
                 "handle",
                 "promise<jsvalue>",
                 "handle<MyThing>",
+                "handle<SharedThing>",
                 "promise<jsvalue>",
                 "buffer+len",
             ]
         );
+        match &function.params[17] {
+            NativeAbiType::Handle(handle) => {
+                assert_eq!(handle.type_name.as_deref(), Some("SharedThing"));
+                assert_eq!(handle.ownership, NativeHandleOwnership::Owned);
+                assert!(handle.nullable);
+                assert_eq!(handle.thread, NativeHandleThreadAffinity::Creator);
+                assert_eq!(handle.finalizer, None);
+                assert_eq!(handle.debug_name, "SharedThingHandle");
+            }
+            other => panic!("expected handle descriptor, got {other:?}"),
+        }
         assert_eq!(function.returns.to_string(), "promise<f64>");
         assert!(matches!(parsed.functions[1].returns, NativeAbiType::Void));
+    }
+
+    #[test]
+    fn native_abi_owned_return_handle_parses_finalizer_contract() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parsed = parse_manifest_from_functions(
+            dir.path(),
+            serde_json::json!([
+                {
+                    "name": "make_handle",
+                    "params": [],
+                    "returns": {
+                        "kind": "handle",
+                        "type": "OwnedThing",
+                        "ownership": "owned",
+                        "nullable": false,
+                        "thread": "main",
+                        "finalizer": "owned_thing_free",
+                        "debugName": "OwnedThing"
+                    }
+                }
+            ]),
+        )
+        .expect("parse manifest")
+        .expect("manifest");
+
+        match &parsed.functions[0].returns {
+            NativeAbiType::Handle(handle) => {
+                assert_eq!(handle.type_name.as_deref(), Some("OwnedThing"));
+                assert_eq!(handle.ownership, NativeHandleOwnership::Owned);
+                assert_eq!(handle.thread, NativeHandleThreadAffinity::Main);
+                assert_eq!(handle.finalizer.as_deref(), Some("owned_thing_free"));
+                assert_eq!(handle.debug_name, "OwnedThing");
+            }
+            other => panic!("expected handle return, got {other:?}"),
+        }
     }
 
     #[test]
@@ -886,6 +1092,65 @@ mod manifest_parse_tests {
         assert!(err.contains("params[0]"), "{err}");
         assert!(err.contains("invalid ABI"), "{err}");
         assert!(err.contains("handle"), "{err}");
+    }
+
+    #[test]
+    fn native_abi_handle_unknown_field_is_rejected() {
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_handle_field",
+            "params": [{ "kind": "handle", "type": "Thing", "surprise": true }],
+            "returns": "void"
+        }));
+        assert!(err.contains("package.json"), "{err}");
+        assert!(err.contains("bad_handle_field"), "{err}");
+        assert!(err.contains("params[0]"), "{err}");
+        assert!(err.contains("surprise"), "{err}");
+    }
+
+    #[test]
+    fn native_abi_handle_invalid_enums_are_rejected() {
+        let ownership_err = parse_manifest_error(serde_json::json!({
+            "name": "bad_handle_ownership",
+            "params": [{ "kind": "handle", "ownership": "shared" }],
+            "returns": "void"
+        }));
+        assert!(ownership_err.contains("ownership"), "{ownership_err}");
+        assert!(ownership_err.contains("shared"), "{ownership_err}");
+
+        let thread_err = parse_manifest_error(serde_json::json!({
+            "name": "bad_handle_thread",
+            "params": [{ "kind": "handle", "thread": "worker" }],
+            "returns": "void"
+        }));
+        assert!(thread_err.contains("thread"), "{thread_err}");
+        assert!(thread_err.contains("worker"), "{thread_err}");
+    }
+
+    #[test]
+    fn native_abi_handle_finalizer_requires_owned_return() {
+        let borrowed_err = parse_manifest_error(serde_json::json!({
+            "name": "bad_borrowed_finalizer",
+            "params": [],
+            "returns": { "kind": "handle", "finalizer": "free_thing" }
+        }));
+        assert!(
+            borrowed_err.contains("bad_borrowed_finalizer"),
+            "{borrowed_err}"
+        );
+        assert!(borrowed_err.contains("ownership"), "{borrowed_err}");
+
+        let param_err = parse_manifest_error(serde_json::json!({
+            "name": "bad_param_finalizer",
+            "params": [{
+                "kind": "handle",
+                "ownership": "owned",
+                "finalizer": "free_thing"
+            }],
+            "returns": "void"
+        }));
+        assert!(param_err.contains("bad_param_finalizer"), "{param_err}");
+        assert!(param_err.contains("params[0]"), "{param_err}");
+        assert!(param_err.contains("returns"), "{param_err}");
     }
 
     /// Relative `libDirs` entries must resolve against the package's

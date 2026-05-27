@@ -135,9 +135,34 @@ Descriptors with metadata may also use object form:
 
 ```json
 { "kind": "handle", "type": "MyThing" }
+{
+  "kind": "handle",
+  "type": "MyThing",
+  "ownership": "owned",
+  "nullable": true,
+  "thread": "creator",
+  "finalizer": "my_thing_free",
+  "debugName": "MyThing"
+}
 { "kind": "promise", "result": "jsvalue" }
 { "kind": "buffer+len" }
 ```
+
+Structured handles are GC-managed Perry native handle objects on the
+JavaScript side. They are opaque and branded; user code cannot forge a
+valid handle by passing a number or ordinary object. Use `"ptr"` only
+when you intentionally want the raw pointer payload escape hatch.
+
+Handle fields:
+
+| Field | Values | Default | Notes |
+|---|---|---|---|
+| `type` | string | untyped | Branded handle type. Legacy `"handle<T>"` maps here. |
+| `ownership` | `"borrowed"` / `"owned"` | `"borrowed"` | Owned return handles may run a native finalizer. Params may not declare finalizers. |
+| `nullable` | boolean | `false` | Nullable handles may wrap a null resource pointer and unwrap to `0`. Non-null descriptors reject null handles. |
+| `thread` | `"any"` / `"main"` / `"creator"` | `"any"` | Runtime validation rejects use from the wrong thread. |
+| `finalizer` | symbol string | none | Valid only on owned return handles. The symbol must have `void(ptr, ptr)` ABI and must not call Perry JS APIs during GC. |
+| `debugName` | string | `type` or `"handle"` | Stored inline for diagnostics. |
 
 ### Param types
 
@@ -153,10 +178,10 @@ Descriptors with metadata may also use object form:
 | `"usize"` | `usize` | `number` converted to pointer-sized unsigned integer |
 | `"f32"` | `f32` | `number` narrowed to 32-bit float |
 | `"f64"` / `"number"` | `f64` | `number` |
-| `"ptr"` | `i64` raw boxed pointer payload | opaque advanced handle |
+| `"ptr"` | `i64` raw boxed pointer payload | raw pointer escape hatch |
 | `"buffer_len"` | `u32` byte length | `number` |
 | `"buffer+len"` | `(*const u8, usize)` | one Buffer/Uint8Array-shaped argument |
-| `"handle"` / `"handle<T>"` | `i64` handle | opaque handle |
+| `"handle"` / `"handle<T>"` | `i64` unwrapped resource pointer | opaque native handle |
 | `"promise"` / `"promise<T>"` | `i64` promise handle | `Promise` handle metadata |
 
 ### Return types
@@ -176,7 +201,7 @@ Descriptors with metadata may also use object form:
 | `"f32"` | `-> f32` | `number` via explicit `f32 -> f64` materialization |
 | `"f64"` / `"number"` | `-> f64` | `number` |
 | `"buffer_len"` | `-> u32` | `number` |
-| `"handle"` / `"handle<T>"` | `-> i64` | opaque handle |
+| `"handle"` / `"handle<T>"` | `-> i64` resource pointer | opaque native handle object |
 | `"promise"` / `"promise<T>"` | `-> i64` | JavaScript `Promise` |
 | `"void"` | `-> ()` | `undefined` |
 
@@ -192,7 +217,9 @@ valid only as a parameter descriptor because it expands one
 JavaScript argument into two native ABI slots.
 
 Native-only numeric descriptors (`f32`, `u32`, `u64`, `usize`,
-`buffer_len`) render as TypeScript `number`. Handles remain opaque.
+`buffer_len`) render as TypeScript `number`. Handles remain opaque
+GC-managed values, even though native functions still receive and
+return raw `i64` resource pointers at the ABI boundary.
 Promises remain JavaScript promises; the optional `promise<T>` result
 metadata is currently recorded in compiler proof artifacts rather
 than changing the runtime ABI.

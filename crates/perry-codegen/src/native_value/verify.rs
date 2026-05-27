@@ -379,6 +379,64 @@ fn validate_native_abi_type_record(
     if abi.abi_slot_count == 0 && abi.canonical_kind != "void" {
         errors.push(format!("{} native ABI slot count is zero", prefix()));
     }
+    if abi.canonical_kind == "handle" {
+        match abi.native_handle.as_ref() {
+            Some(handle) => {
+                if handle.direction != abi.direction
+                    || handle.js_argument_index != abi.js_argument_index
+                    || handle.abi_slot_index != abi.abi_slot_index
+                    || handle.abi_slot_count != abi.abi_slot_count
+                {
+                    errors.push(format!(
+                        "{} native handle contract slot metadata does not match ABI record",
+                        prefix()
+                    ));
+                }
+                if handle.type_id == 0 {
+                    errors.push(format!("{} native handle type id is zero", prefix()));
+                }
+                if handle.debug_name.is_empty() {
+                    errors.push(format!("{} native handle debug name is empty", prefix()));
+                }
+                if !matches!(handle.ownership.as_str(), "owned" | "borrowed") {
+                    errors.push(format!("{} native handle ownership is invalid", prefix()));
+                }
+                if !matches!(handle.thread_affinity.as_str(), "any" | "main" | "creator") {
+                    errors.push(format!(
+                        "{} native handle thread affinity is invalid",
+                        prefix()
+                    ));
+                }
+                if handle.has_finalizer != handle.finalizer_symbol.is_some() {
+                    errors.push(format!(
+                        "{} native handle finalizer presence is inconsistent",
+                        prefix()
+                    ));
+                }
+                if handle.has_finalizer && handle.ownership != "owned" {
+                    errors.push(format!(
+                        "{} native handle finalizer requires owned ownership",
+                        prefix()
+                    ));
+                }
+                if handle.has_finalizer && abi.direction == NativeAbiDirection::Param {
+                    errors.push(format!(
+                        "{} native handle param must not carry a finalizer",
+                        prefix()
+                    ));
+                }
+            }
+            None => errors.push(format!(
+                "{} handle ABI missing native_handle contract",
+                prefix()
+            )),
+        }
+    } else if abi.native_handle.is_some() {
+        errors.push(format!(
+            "{} non-handle ABI must not carry native_handle contract",
+            prefix()
+        ));
+    }
     let rep_matches = match abi.canonical_kind.as_str() {
         "jsvalue" => matches!(&record.native_rep, NativeRep::JsValue),
         "string" | "ptr" | "i64_str" => {
@@ -569,6 +627,7 @@ fn valid_native_abi_transition(
         }
         NativeAbiTransitionOp::FloatExtend => from == "f32" && !lossy,
         NativeAbiTransitionOp::PointerBox => from == "native_handle" && !lossy,
+        NativeAbiTransitionOp::NativeHandleBox => from == "native_handle" && !lossy,
         NativeAbiTransitionOp::PromiseBox => from == "promise_boundary" && !lossy,
     }
 }
@@ -578,9 +637,9 @@ mod tests {
     use super::{NativeAbiTransitionOp, NativeAbiTransitionRecord};
     use crate::native_value::{
         verify_native_rep_records, AliasState, BoundsProof, BoundsState, BufferAccessMode,
-        BufferViewRep, LoweredValue, MaterializationReason, NativeAbiDirection, NativeAbiTypeRecord,
-        NativeFactUse, NativeRep,
-        NativeRepRecord, NativeValueState, SemanticKind,
+        BufferViewRep, LoweredValue, MaterializationReason, NativeAbiDirection,
+        NativeAbiTypeRecord, NativeFactUse, NativeRep, NativeRepRecord, NativeValueState,
+        SemanticKind,
     };
     use crate::types::{DOUBLE, F32, I32, I64, PTR};
 
@@ -964,6 +1023,54 @@ mod tests {
         r.native_rep_name = "buffer_view".to_string();
         r.llvm_ty = PTR;
         r.native_abi_type = Some(abi_type("buffer+len", NativeAbiDirection::Return, None, 0));
+        assert!(verify_native_rep_records(&[r]).is_err());
+    }
+
+    #[test]
+    fn rejects_handle_abi_missing_native_handle_contract() {
+        let mut r = record();
+        r.native_rep = NativeRep::NativeHandle;
+        r.native_rep_name = "native_handle".to_string();
+        r.llvm_ty = I64;
+        r.llvm_value = "%handle".to_string();
+        r.native_abi_type = Some(abi_type(
+            "handle<MyThing>",
+            NativeAbiDirection::Param,
+            Some(0),
+            0,
+        ));
+        r.native_abi_type.as_mut().unwrap().native_handle = None;
+
+        assert!(verify_native_rep_records(&[r]).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_native_handle_contract_fields() {
+        let mut r = record();
+        r.native_rep = NativeRep::NativeHandle;
+        r.native_rep_name = "native_handle".to_string();
+        r.llvm_ty = I64;
+        r.llvm_value = "%handle".to_string();
+        r.native_abi_type = Some(abi_type(
+            "handle<MyThing>",
+            NativeAbiDirection::Param,
+            Some(0),
+            0,
+        ));
+        let handle = r
+            .native_abi_type
+            .as_mut()
+            .unwrap()
+            .native_handle
+            .as_mut()
+            .unwrap();
+        handle.type_id = 0;
+        handle.ownership = "leased".to_string();
+        handle.thread_affinity = "worker".to_string();
+        handle.debug_name.clear();
+        handle.has_finalizer = true;
+        handle.finalizer_symbol = Some("my_thing_free".to_string());
+
         assert!(verify_native_rep_records(&[r]).is_err());
     }
 

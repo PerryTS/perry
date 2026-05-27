@@ -178,7 +178,7 @@
     },
     "abiStructuredParam": {
       "oneOf": [
-        { "$ref": "#/$defs/abiStructuredDescriptor" }
+        { "$ref": "#/$defs/abiStructuredParamDescriptor" }
       ],
       "not": {
         "type": "object",
@@ -188,13 +188,29 @@
     },
     "abiStructuredReturn": {
       "oneOf": [
-        { "$ref": "#/$defs/abiStructuredDescriptor" }
+        { "$ref": "#/$defs/abiStructuredReturnDescriptor" }
       ],
       "not": {
         "type": "object",
         "required": ["kind"],
         "properties": { "kind": { "const": "buffer+len" } }
       }
+    },
+    "abiStructuredParamDescriptor": {
+      "oneOf": [
+        { "$ref": "#/$defs/abiParamHandleDescriptor" },
+        { "$ref": "#/$defs/abiPromiseDescriptor" },
+        { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
+        { "$ref": "#/$defs/abiScalarDescriptor" }
+      ]
+    },
+    "abiStructuredReturnDescriptor": {
+      "oneOf": [
+        { "$ref": "#/$defs/abiReturnHandleDescriptor" },
+        { "$ref": "#/$defs/abiPromiseDescriptor" },
+        { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
+        { "$ref": "#/$defs/abiScalarDescriptor" }
+      ]
     },
     "abiStructuredDescriptor": {
       "oneOf": [
@@ -204,16 +220,74 @@
         { "$ref": "#/$defs/abiScalarDescriptor" }
       ]
     },
+    "abiParamHandleDescriptor": {
+      "allOf": [
+        { "$ref": "#/$defs/abiHandleDescriptor" },
+        {
+          "not": {
+            "type": "object",
+            "required": ["finalizer"]
+          },
+          "description": "Native handle parameters may not declare finalizers."
+        }
+      ]
+    },
+    "abiReturnHandleDescriptor": {
+      "$ref": "#/$defs/abiHandleDescriptor"
+    },
     "abiHandleDescriptor": {
       "type": "object",
       "additionalProperties": false,
       "required": ["kind"],
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["finalizer"]
+          },
+          "then": {
+            "type": "object",
+            "required": ["ownership"],
+            "properties": {
+              "ownership": { "const": "owned" }
+            }
+          }
+        }
+      ],
       "properties": {
         "kind": { "const": "handle" },
         "type": {
           "type": "string",
           "minLength": 1,
+          "pattern": "\\S",
           "description": "Optional metadata naming the native handle type."
+        },
+        "ownership": {
+          "enum": ["borrowed", "owned"],
+          "default": "borrowed",
+          "description": "Whether JavaScript owns the wrapped native resource."
+        },
+        "nullable": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether a null native resource pointer is valid."
+        },
+        "thread": {
+          "enum": ["any", "main", "creator"],
+          "default": "any",
+          "description": "Thread-affinity contract enforced when unwrapping the handle."
+        },
+        "finalizer": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Optional one-shot finalizer symbol. Valid only on owned return handles."
+        },
+        "debugName": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Short debug name stored in the runtime handle payload."
         }
       }
     },

@@ -454,6 +454,21 @@ fn native_library_opts(functions: Vec<(&str, Vec<&str>, &str)>) -> CompileOption
     opts
 }
 
+fn native_library_opts_typed(
+    functions: Vec<(
+        &str,
+        Vec<perry_api_manifest::NativeAbiType>,
+        perry_api_manifest::NativeAbiType,
+    )>,
+) -> CompileOptions {
+    let mut opts = empty_opts();
+    opts.native_library_functions = functions
+        .into_iter()
+        .map(|(name, params, ret)| (name.to_string(), params, ret))
+        .collect();
+    opts
+}
+
 fn array_set(array_id: u32, index: Expr, value: Expr) -> Stmt {
     Stmt::Expr(Expr::IndexSet {
         object: Box::new(local(array_id)),
@@ -533,7 +548,7 @@ fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     ];
 
     let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 9);
+    assert_eq!(artifact["schema_version"], 10);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -566,7 +581,7 @@ fn artifact_schema_v6_records_rejected_facts_for_buffer_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 9);
+    assert_eq!(artifact["schema_version"], 10);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -612,7 +627,7 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
-    assert_eq!(artifact["schema_version"], 9);
+    assert_eq!(artifact["schema_version"], 10);
     assert_eq!(artifact["summary"]["pod_layout_count"], 1);
     assert_eq!(artifact["summary"]["pod_record_count"], 1);
     let layouts = artifact["pod_layouts"].as_array().unwrap();
@@ -684,7 +699,7 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
-    assert_eq!(artifact["schema_version"], 9);
+    assert_eq!(artifact["schema_version"], 10);
     assert!(
         artifact["records"]
             .as_array()
@@ -731,7 +746,7 @@ fn artifact_schema_v8_rejects_inexact_pod_initializer_values() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_init_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 9);
+    assert_eq!(artifact["schema_version"], 10);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert_eq!(artifact["summary"]["pod_record_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
@@ -782,7 +797,7 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 9);
+    assert_eq!(artifact["schema_version"], 10);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
     assert!(
@@ -957,7 +972,8 @@ fn native_library_manifest_lowercase_abi_returns_emit_signatures_and_artifacts()
             && ir.contains("declare ptr @native_ret_ptr()")
             && ir.contains("declare i32 @native_ret_buffer_len()")
             && ir.contains("declare i64 @native_ret_handle()")
-            && ir.contains("declare i64 @native_ret_promise()"),
+            && ir.contains("declare i64 @native_ret_promise()")
+            && ir.contains("call double @js_native_handle_new_borrowed"),
         "expected lowercase manifest return kinds to drive LLVM declarations:\n{ir}"
     );
 
@@ -1026,9 +1042,9 @@ fn native_library_manifest_lowercase_abi_returns_emit_signatures_and_artifacts()
         ),
         ("materialize_js_value", "f32", "float_extend", false),
         (
-            "materialize_native_handle",
+            "materialize_native_handle_runtime",
             "native_handle",
-            "pointer_box",
+            "native_handle_box",
             false,
         ),
         (
@@ -1108,6 +1124,7 @@ fn native_library_manifest_lowercase_abi_params_emit_c_abi_signature() {
         ir.contains("call i64 @js_get_string_pointer_unified")
             && ir.contains("call ptr @js_native_buffer_data_ptr")
             && ir.contains("call i64 @js_native_buffer_byte_len")
+            && ir.contains("call i64 @js_native_handle_unwrap")
             && ir.contains("call void @native_abi_args(double")
             && ir.contains(
                 "declare void @native_abi_args(double, ptr, i32, i32, i64, i32, i64, i64, float, double, i32, ptr, i64, i64, i64, i64)"
@@ -1149,7 +1166,97 @@ fn native_library_manifest_lowercase_abi_params_emit_c_abi_signature() {
 }
 
 #[test]
-fn artifact_records_raw_numeric_array_f64_fast_paths_and_fallback_reasons() {
+fn native_library_handle_runtime_lowering_records_contracts() {
+    let owned_handle = perry_api_manifest::NativeHandleAbi {
+        type_name: Some("Thing".to_string()),
+        ownership: perry_api_manifest::NativeHandleOwnership::Owned,
+        nullable: true,
+        thread: perry_api_manifest::NativeHandleThreadAffinity::Creator,
+        finalizer: Some("thing_free".to_string()),
+        debug_name: "ThingHandle".to_string(),
+    };
+    let borrowed_param = perry_api_manifest::NativeHandleAbi {
+        ownership: perry_api_manifest::NativeHandleOwnership::Borrowed,
+        finalizer: None,
+        ..owned_handle.clone()
+    };
+    let opts = native_library_opts_typed(vec![
+        (
+            "make_thing",
+            vec![],
+            perry_api_manifest::NativeAbiType::Handle(owned_handle.clone()),
+        ),
+        (
+            "use_thing",
+            vec![perry_api_manifest::NativeAbiType::Handle(
+                borrowed_param.clone(),
+            )],
+            perry_api_manifest::NativeAbiType::Void,
+        ),
+    ]);
+    let module = module(
+        "native_library_handle_runtime_lowering.ts",
+        vec![
+            Stmt::Expr(extern_call(
+                "use_thing",
+                vec![extern_call("make_thing", Vec::new(), Type::Any)],
+                Type::Void,
+            )),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let ir = String::from_utf8(compile_module(&module, opts.clone()).unwrap()).unwrap();
+    assert!(
+        ir.contains("call double @js_native_handle_new_owned"),
+        "{ir}"
+    );
+    assert!(ir.contains("ptr @thing_free"), "{ir}");
+    assert!(ir.contains("declare void @thing_free(ptr, ptr)"), "{ir}");
+    assert!(ir.contains("call i64 @js_native_handle_unwrap"), "{ir}");
+    assert!(!ir.contains("call i64 @js_nanbox_get_pointer"), "{ir}");
+
+    let artifact = compile_artifact_json_for_module_with_opts(module, opts);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            let contract = &record["native_abi_type"]["native_handle"];
+            record["consumer"] == "native_library.raw_handle"
+                && record["native_abi_type"]["direction"] == "return"
+                && contract["type_name"] == "Thing"
+                && contract["type_id"].as_u64() == Some(owned_handle.type_id())
+                && contract["ownership"] == "owned"
+                && contract["nullable"] == true
+                && contract["thread_affinity"] == "creator"
+                && contract["debug_name"] == "ThingHandle"
+                && contract["finalizer_symbol"] == "thing_free"
+                && contract["has_finalizer"] == true
+        }),
+        "expected owned native-handle return contract:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            let contract = &record["native_abi_type"]["native_handle"];
+            record["expr_kind"] == "NativeLibraryParam"
+                && record["native_abi_type"]["direction"] == "param"
+                && record["native_abi_type"]["abi_slot_index"] == 0
+                && contract["ownership"] == "borrowed"
+                && contract["js_argument_index"] == 0
+                && contract["has_finalizer"] == false
+        }),
+        "expected borrowed native-handle param contract:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "materialize_native_handle_runtime"
+                && record["native_abi_transition"]["op"] == "native_handle_box"
+        }),
+        "expected native-handle runtime boxing transition:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
     let array_ty = Type::Array(Box::new(Type::Number));
     let module = module_with_classes_and_params(
         "artifact_numeric_array_f64.ts",

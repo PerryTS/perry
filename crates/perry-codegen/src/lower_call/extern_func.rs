@@ -5,7 +5,9 @@
 //! and the generic `perry_fn_<src>__<name>` consumer-prefix path.
 
 use anyhow::Result;
-use perry_api_manifest::NativeAbiType;
+use perry_api_manifest::{
+    NativeAbiType, NativeHandleAbi, NativeHandleOwnership, NativeHandleThreadAffinity,
+};
 use perry_hir::Expr;
 use perry_types::Type as HirType;
 
@@ -13,11 +15,12 @@ use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
     materialize_js_value, materialize_native_handle_to_js_value,
-    materialize_promise_boundary_to_js_value, AliasState, BoundsState, BufferElem, BufferIndexUnit,
-    LoweredValue, MaterializationReason, NativeAbiDirection, NativeAbiTypeRecord,
+    materialize_promise_boundary_to_js_value, record_runtime_native_handle_box_transition,
+    AliasState, BoundsState, BufferElem, BufferIndexUnit, LoweredValue, MaterializationReason,
+    NativeAbiDirection, NativeAbiTypeRecord,
 };
 use crate::type_analysis::{is_array_expr, is_string_expr};
-use crate::types::{DOUBLE, F32, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, F32, I1, I32, I64, I8, PTR, VOID};
 
 use super::{
     lower_perry_ui_table_call, perry_background_table_lookup, perry_system_table_lookup,
@@ -105,6 +108,123 @@ fn lower_buffer_and_len_param(
     arg_types.push(PTR);
     lowered.push(byte_len);
     arg_types.push(I64);
+}
+
+fn i64_literal_from_u64(value: u64) -> String {
+    (value as i64).to_string()
+}
+
+fn handle_ownership_code(ownership: NativeHandleOwnership) -> &'static str {
+    match ownership {
+        NativeHandleOwnership::Borrowed => "1",
+        NativeHandleOwnership::Owned => "2",
+    }
+}
+
+fn handle_thread_code(thread: NativeHandleThreadAffinity) -> &'static str {
+    match thread {
+        NativeHandleThreadAffinity::Any => "0",
+        NativeHandleThreadAffinity::Main => "1",
+        NativeHandleThreadAffinity::Creator => "2",
+    }
+}
+
+fn handle_debug_name_global(ctx: &mut FnCtx<'_>, handle: &NativeHandleAbi) -> (String, String) {
+    let idx = ctx.strings.intern(&handle.debug_name);
+    let entry = ctx.strings.entry(idx);
+    (
+        format!("@{}", entry.bytes_global),
+        entry.byte_len.to_string(),
+    )
+}
+
+fn lower_native_handle_param(
+    ctx: &mut FnCtx<'_>,
+    descriptor: &NativeAbiType,
+    handle: &NativeHandleAbi,
+    js_argument_index: usize,
+    abi_slot_index: usize,
+    val: &str,
+    lowered: &mut Vec<String>,
+    arg_types: &mut Vec<crate::types::LlvmType>,
+) {
+    let type_id = i64_literal_from_u64(handle.type_id());
+    let nullable = if handle.nullable { "1" } else { "0" };
+    let ownership = handle_ownership_code(handle.ownership);
+    let thread = handle_thread_code(handle.thread);
+    let raw = ctx.block().call(
+        I64,
+        "js_native_handle_unwrap",
+        &[
+            (DOUBLE, val),
+            (I64, &type_id),
+            (I32, nullable),
+            (I32, ownership),
+            (I32, thread),
+        ],
+    );
+    let native = LoweredValue::native_handle(raw.clone());
+    record_native_abi_param(
+        ctx,
+        descriptor,
+        js_argument_index,
+        abi_slot_index,
+        &native,
+        "native_handle.unwrap",
+    );
+    lowered.push(raw);
+    arg_types.push(I64);
+}
+
+fn materialize_native_handle_return(
+    ctx: &mut FnCtx<'_>,
+    raw: &str,
+    handle: &NativeHandleAbi,
+) -> String {
+    let type_id = i64_literal_from_u64(handle.type_id());
+    let nullable = if handle.nullable { "1" } else { "0" };
+    let thread = handle_thread_code(handle.thread);
+    let (debug_name_global, debug_name_len) = handle_debug_name_global(ctx, handle);
+    let boxed = match handle.ownership {
+        NativeHandleOwnership::Owned => {
+            let finalizer = handle
+                .finalizer
+                .as_ref()
+                .map(|symbol| {
+                    ctx.pending_declares
+                        .push((symbol.clone(), VOID, vec![PTR, PTR]));
+                    format!("@{symbol}")
+                })
+                .unwrap_or_else(|| "null".to_string());
+            ctx.block().call(
+                DOUBLE,
+                "js_native_handle_new_owned",
+                &[
+                    (I64, raw),
+                    (I64, &type_id),
+                    (I32, nullable),
+                    (I32, thread),
+                    (PTR, &finalizer),
+                    (PTR, &debug_name_global),
+                    (I64, &debug_name_len),
+                ],
+            )
+        }
+        NativeHandleOwnership::Borrowed => ctx.block().call(
+            DOUBLE,
+            "js_native_handle_new_borrowed",
+            &[
+                (I64, raw),
+                (I64, &type_id),
+                (I32, nullable),
+                (I32, thread),
+                (PTR, &debug_name_global),
+                (I64, &debug_name_len),
+            ],
+        ),
+    };
+    record_runtime_native_handle_box_transition(ctx, &boxed, MaterializationReason::ReturnAbi);
+    boxed
 }
 
 fn lower_manifest_param(
@@ -241,7 +361,7 @@ fn lower_manifest_param(
             lowered.push(raw);
             arg_types.push(F32);
         }
-        NativeAbiType::Ptr | NativeAbiType::Handle(_) => {
+        NativeAbiType::Ptr => {
             let raw = unbox_to_i64(ctx.block(), val);
             let native = LoweredValue::native_handle(raw.clone());
             record_native_abi_param(
@@ -254,6 +374,18 @@ fn lower_manifest_param(
             );
             lowered.push(raw);
             arg_types.push(I64);
+        }
+        NativeAbiType::Handle(handle) => {
+            lower_native_handle_param(
+                ctx,
+                descriptor,
+                handle,
+                js_argument_index,
+                abi_slot_index,
+                val,
+                lowered,
+                arg_types,
+            );
         }
         NativeAbiType::Promise(_) => {
             let raw = unbox_to_i64(ctx.block(), val);
@@ -942,6 +1074,9 @@ pub fn try_lower_extern_func_call(
             let lowered = LoweredValue::native_handle(raw.clone());
             if let Some(descriptor) = manifest_ret {
                 record_native_abi_return(ctx, descriptor, &lowered, name);
+            }
+            if let Some(NativeAbiType::Handle(handle)) = manifest_ret {
+                return Ok(Some(materialize_native_handle_return(ctx, &raw, handle)));
             }
             return Ok(Some(materialize_native_handle_to_js_value(
                 ctx,

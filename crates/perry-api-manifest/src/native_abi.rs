@@ -1,5 +1,115 @@
 use std::fmt;
 
+/// Ownership contract for a Perry native handle descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NativeHandleOwnership {
+    /// JavaScript observes a non-owning wrapper. No finalizer runs for this
+    /// descriptor.
+    Borrowed,
+    /// JavaScript owns the wrapped native resource. Owned return handles may
+    /// carry a one-shot native finalizer.
+    Owned,
+}
+
+impl NativeHandleOwnership {
+    /// Canonical manifest spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Borrowed => "borrowed",
+            Self::Owned => "owned",
+        }
+    }
+}
+
+impl fmt::Display for NativeHandleOwnership {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Thread-affinity contract for a Perry native handle descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NativeHandleThreadAffinity {
+    /// The handle may be unwrapped on any thread.
+    Any,
+    /// The handle may be unwrapped only on the runtime main thread.
+    Main,
+    /// The handle may be unwrapped only on the thread that created the JS
+    /// wrapper.
+    Creator,
+}
+
+impl NativeHandleThreadAffinity {
+    /// Canonical manifest spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::Main => "main",
+            Self::Creator => "creator",
+        }
+    }
+}
+
+impl fmt::Display for NativeHandleThreadAffinity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Runtime contract attached to a `handle` native ABI descriptor.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NativeHandleAbi {
+    /// Optional author type tag from `handle<T>` or structured
+    /// `{ "type": "T" }`.
+    pub type_name: Option<String>,
+    /// Ownership expected or produced at the JS/native boundary.
+    pub ownership: NativeHandleOwnership,
+    /// Whether a null native resource pointer is a valid handle value.
+    pub nullable: bool,
+    /// Thread on which the handle may be unwrapped.
+    pub thread: NativeHandleThreadAffinity,
+    /// Optional one-shot finalizer symbol. Valid only for owned return
+    /// handles.
+    pub finalizer: Option<String>,
+    /// Short debug label embedded in the runtime payload.
+    pub debug_name: String,
+}
+
+impl NativeHandleAbi {
+    /// Construct a borrowed, non-null, thread-agnostic descriptor.
+    pub fn borrowed(type_name: Option<String>) -> Self {
+        let debug_name = default_handle_debug_name(type_name.as_deref());
+        Self {
+            type_name,
+            ownership: NativeHandleOwnership::Borrowed,
+            nullable: false,
+            thread: NativeHandleThreadAffinity::Any,
+            finalizer: None,
+            debug_name,
+        }
+    }
+
+    /// Stable 64-bit type id used by the runtime and proof artifacts.
+    pub fn type_id(&self) -> u64 {
+        native_handle_type_id(self.type_name.as_deref())
+    }
+}
+
+fn default_handle_debug_name(type_name: Option<&str>) -> String {
+    type_name.unwrap_or("handle").to_string()
+}
+
+/// Stable FNV-1a hash for a native handle type tag.
+pub fn native_handle_type_id(type_name: Option<&str>) -> u64 {
+    let bytes = type_name.unwrap_or("handle").as_bytes();
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 /// Canonical native-library ABI descriptor used by external
 /// `perry.nativeLibrary.functions` declarations.
 ///
@@ -41,8 +151,9 @@ pub enum NativeAbiType {
     /// Native-call convenience descriptor: one JavaScript Buffer/Uint8Array
     /// argument lowers to two ABI slots, `(ptr, usize)`.
     BufferAndLen,
-    /// Opaque native handle, optionally tagged with author metadata.
-    Handle(Option<String>),
+    /// Opaque native handle with runtime ownership, nullability, and thread
+    /// validation metadata.
+    Handle(NativeHandleAbi),
     /// Opaque native promise boundary handle with optional result metadata.
     Promise(Box<NativeAbiType>),
     /// No return value. This is valid only as a return descriptor.
@@ -69,7 +180,7 @@ impl NativeAbiType {
             "ptr" => Ok(Self::Ptr),
             "buffer_len" => Ok(Self::BufferLen),
             "buffer+len" => Ok(Self::BufferAndLen),
-            "handle" => Ok(Self::Handle(None)),
+            "handle" => Ok(Self::Handle(NativeHandleAbi::borrowed(None))),
             "promise" => Ok(Self::Promise(Box::new(Self::JsValue))),
             "void" => Ok(Self::Void),
             _ => {
@@ -84,7 +195,9 @@ impl NativeAbiType {
                             "handle<T> requires a non-empty T",
                         ));
                     }
-                    return Ok(Self::Handle(Some(handle_type.to_string())));
+                    return Ok(Self::Handle(NativeHandleAbi::borrowed(Some(
+                        handle_type.to_string(),
+                    ))));
                 }
                 if let Some(inner) = trimmed
                     .strip_prefix("promise<")
@@ -136,10 +249,18 @@ impl NativeAbiType {
         }
     }
 
-    /// Return the optional handle metadata attached to `handle<T>`.
+    /// Return the optional handle type metadata attached to `handle<T>`.
     pub fn handle_type(&self) -> Option<&str> {
         match self {
-            Self::Handle(Some(ty)) => Some(ty.as_str()),
+            Self::Handle(abi) => abi.type_name.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Return the native handle runtime ABI contract.
+    pub fn handle_abi(&self) -> Option<&NativeHandleAbi> {
+        match self {
+            Self::Handle(abi) => Some(abi),
             _ => None,
         }
     }
@@ -187,8 +308,10 @@ impl NativeAbiType {
 impl fmt::Display for NativeAbiType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Handle(Some(ty)) => write!(f, "handle<{ty}>"),
-            Self::Handle(None) => f.write_str("handle"),
+            Self::Handle(abi) => match abi.type_name.as_deref() {
+                Some(ty) => write!(f, "handle<{ty}>"),
+                None => f.write_str("handle"),
+            },
             Self::Promise(result) => write!(f, "promise<{result}>"),
             other => f.write_str(other.canonical_kind()),
         }
