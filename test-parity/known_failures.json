@@ -506,12 +506,6 @@
     "category": "bug-open",
     "reason": "node:stream: calling PassThrough() without `new` should auto-instantiate; Perry behavior differs. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/destroy/destroy-returns-this": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: destroy() should return `this`. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/duplex/allow-half-open": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -764,18 +758,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(asyncGenerator) doesn't run the async stage / forward data. Reopened #1539 for pipeline execution."
   },
-  "node-suite/stream/destroy/destroy-during-write": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: destroy(err) inside _write callback does not propagate error. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/destroy/destroy-symbol": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: destroy(symbol) does not deliver via error event. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/four-stage-chain": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -835,12 +817,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: cork / uncork return type wrong. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/destroy/destroy-string": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: destroy(string) does not deliver the string value via error event. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/error/error-then-end-order": {
     "issue": "1532",
@@ -1141,12 +1117,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: WritableStream sink.start() hook not awaited before first write. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/destroy/destroy-with-callback": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroy(err) — 'error' listener receives wrong error, or 'close' fires before error listener observes. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/write/writev-chunk-shape": {
     "issue": "1539",
@@ -1549,12 +1519,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Transform default objectMode — readableObjectMode/writableObjectMode wrong default. Flips to PASS when #1539 lands."
-  },
-  "node-suite/stream/destroy/destroy-with-non-error": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroy(non-Error) — 'error' listener does not receive raw value. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/read-with-nan-size": {
     "issue": "1532",
@@ -2137,12 +2101,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pause() doesn't flip readableFlowing to false synchronously. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/destroy/destroy-during-flow": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroy() during flowing — extra 'data' emitted or 'close' wrong. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/from-array-with-undefined": {
     "issue": "1532",
