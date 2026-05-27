@@ -1074,6 +1074,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[PTR, I32, PTR, I32],
     );
+    // Namespace member reads for known Node submodules. Unlike direct
+    // named-import fallback, missing properties return undefined.
+    module.declare_function(
+        "js_node_submodule_namespace_member",
+        DOUBLE,
+        &[PTR, I32, PTR, I32],
+    );
     // Issue #841 companion: per-submodule namespace stub object. Returns
     // a NaN-boxed ObjectHeader pointer whose fields are the function
     // singletons emitted by `js_node_submodule_export_as_function`.

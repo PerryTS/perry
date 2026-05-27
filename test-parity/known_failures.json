@@ -146,12 +146,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:dgram` (UDP) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_diagnostics_channel": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:diagnostics_channel` not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_dns": {
     "issue": "793",
     "added": "2026-05-15",

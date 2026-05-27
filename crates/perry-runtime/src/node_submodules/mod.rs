@@ -865,6 +865,45 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
     f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
 }
 
+/// Returns a namespace-member value for a known Node submodule namespace import.
+///
+/// This differs from `js_node_submodule_export_as_function`: direct named-import
+/// fallback behavior still uses the historical `TAG_TRUE` sentinel for
+/// unlisted exports, but namespace property reads must behave like ordinary JS
+/// objects and return `undefined` for absent properties.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_submodule_namespace_member(
+    submod_key_ptr: *const u8,
+    submod_key_len: u32,
+    name_ptr: *const u8,
+    name_len: u32,
+) -> f64 {
+    let submod_bytes = std::slice::from_raw_parts(submod_key_ptr, submod_key_len as usize);
+    let name_bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
+    let submod_key = match std::str::from_utf8(submod_bytes) {
+        Ok(s) => s,
+        Err(_) => return f64::from_bits(crate::value::TAG_UNDEFINED),
+    };
+    let name = match std::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return f64::from_bits(crate::value::TAG_UNDEFINED),
+    };
+    let submod = match find_submodule(submod_key) {
+        Some(s) => s,
+        None => return f64::from_bits(crate::value::TAG_UNDEFINED),
+    };
+    if submod.key == "stream_promises" && name == "default" {
+        let obj = ensure_namespace_singleton(submod);
+        return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    }
+    let export = match find_export(submod, name) {
+        Some(e) => e,
+        None => return f64::from_bits(crate::value::TAG_UNDEFINED),
+    };
+    let closure_ptr = ensure_export_singleton(submod, export);
+    f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
+}
+
 /// Returns a NaN-boxed namespace stub object for the given submodule.
 /// Each known named export of that submodule is exposed as an own
 /// property on the object whose value is the export singleton
@@ -1002,6 +1041,34 @@ mod tests {
             get_object_property(ns_value, b"default").unwrap().to_bits(),
             ns_value.to_bits()
         );
+    }
+
+    #[test]
+    fn namespace_member_missing_export_returns_undefined() {
+        let value = unsafe {
+            js_node_submodule_namespace_member(
+                b"diagnostics_channel".as_ptr(),
+                "diagnostics_channel".len() as u32,
+                b"boundedChannel".as_ptr(),
+                "boundedChannel".len() as u32,
+            )
+        };
+
+        assert_eq!(value.to_bits(), crate::value::TAG_UNDEFINED);
+    }
+
+    #[test]
+    fn direct_missing_export_keeps_legacy_true_sentinel() {
+        let value = unsafe {
+            js_node_submodule_export_as_function(
+                b"diagnostics_channel".as_ptr(),
+                "diagnostics_channel".len() as u32,
+                b"boundedChannel".as_ptr(),
+                "boundedChannel".len() as u32,
+            )
+        };
+
+        assert_eq!(value.to_bits(), crate::value::TAG_TRUE);
     }
 
     #[test]
