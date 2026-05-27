@@ -193,6 +193,7 @@ fn forbidden_call(expr: &Expr) -> Option<&'static str> {
         Expr::ChildProcessExec { .. } => "child_process.exec",
         Expr::ChildProcessExecSync { .. } => "child_process.execSync",
         Expr::ChildProcessSpawn { .. } => "child_process.spawn",
+        Expr::ChildProcessFork { .. } => "child_process.fork",
         Expr::ChildProcessSpawnSync { .. } => "child_process.spawnSync",
         Expr::ChildProcessSpawnBackground { .. } => "child_process.spawnBackground",
         Expr::ChildProcessGetProcessStatus(_) => "child_process.getProcessStatus",

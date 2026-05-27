@@ -266,6 +266,7 @@ fn required_capability(expr: &Expr) -> Option<(&'static str, &'static str)> {
         Expr::ChildProcessExec { .. } => ("proc:exec", "child_process.exec"),
         Expr::ChildProcessExecSync { .. } => ("proc:exec", "child_process.execSync"),
         Expr::ChildProcessSpawn { .. } => ("proc:exec", "child_process.spawn"),
+        Expr::ChildProcessFork { .. } => ("proc:exec", "child_process.fork"),
         Expr::ChildProcessSpawnSync { .. } => ("proc:exec", "child_process.spawnSync"),
         Expr::ChildProcessSpawnBackground { .. } => ("proc:exec", "child_process.spawnBackground"),
         Expr::ChildProcessGetProcessStatus(_) => ("proc:exec", "child_process.getProcessStatus"),

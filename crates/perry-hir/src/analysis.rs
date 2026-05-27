@@ -847,6 +847,19 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(opts, assigned);
             }
         }
+        Expr::ChildProcessFork {
+            module,
+            args,
+            options,
+        } => {
+            collect_assigned_locals_expr(module, assigned);
+            if let Some(a) = args {
+                collect_assigned_locals_expr(a, assigned);
+            }
+            if let Some(opts) = options {
+                collect_assigned_locals_expr(opts, assigned);
+            }
+        }
         Expr::ChildProcessExec {
             command,
             options,

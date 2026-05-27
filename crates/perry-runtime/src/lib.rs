@@ -240,6 +240,11 @@ mod stdlib_pump {
         // without importing any stdlib module still sees its callback
         // fire on SIGWINCH.
         crate::tty::js_tty_resize_drain();
+        // #1934: drive the child_process spawn reactor — emit pending
+        // spawn/data/end/exit/close for live children. Lives in perry-runtime,
+        // so it runs even when perry-stdlib isn't linked. Zero-cost (one relaxed
+        // atomic load) when there are no live children.
+        crate::child_process::reactor::cp_reactor_pump();
         let f = STDLIB_PUMP_FN.load(Ordering::Acquire);
         if !f.is_null() {
             unsafe {
@@ -262,6 +267,11 @@ mod stdlib_pump {
     /// async ops, etc.). Returns 0 if perry-stdlib is not linked.
     #[no_mangle]
     pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
+        // #1934: a live spawn-reactor child keeps the event loop alive even when
+        // perry-stdlib isn't linked (or reports no handles).
+        if crate::child_process::reactor::cp_reactor_has_live() {
+            return 1;
+        }
         let f = STDLIB_HAS_ACTIVE_FN.load(Ordering::Acquire);
         if !f.is_null() {
             unsafe {

@@ -1088,6 +1088,12 @@ pub enum Expr {
         args: Option<Box<Expr>>,
         options: Option<Box<Expr>>,
     },
+    ChildProcessFork {
+        // fork(modulePath, args?, opts?) -> ChildProcess with an IPC channel (#1933)
+        module: Box<Expr>,
+        args: Option<Box<Expr>>,
+        options: Option<Box<Expr>>,
+    },
     ChildProcessExec {
         // exec(cmd, opts?, callback?) -> ChildProcess
         command: Box<Expr>,

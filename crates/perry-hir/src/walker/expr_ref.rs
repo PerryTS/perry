@@ -1140,6 +1140,19 @@ where
                 f(o);
             }
         }
+        Expr::ChildProcessFork {
+            module,
+            args,
+            options,
+        } => {
+            f(module);
+            if let Some(a) = args {
+                f(a);
+            }
+            if let Some(o) = options {
+                f(o);
+            }
+        }
         Expr::ChildProcessExec {
             command,
             options,

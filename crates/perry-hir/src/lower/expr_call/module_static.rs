@@ -1143,6 +1143,19 @@ pub(super) fn try_module_static_methods(
                                 }));
                             }
                         }
+                        "fork" => {
+                            if !args.is_empty() {
+                                let mut args_iter = args.into_iter();
+                                let module = args_iter.next().unwrap();
+                                let fork_args = args_iter.next().map(Box::new);
+                                let options = args_iter.next().map(Box::new);
+                                return Ok(Ok(Expr::ChildProcessFork {
+                                    module: Box::new(module),
+                                    args: fork_args,
+                                    options,
+                                }));
+                            }
+                        }
                         "exec" => {
                             if !args.is_empty() {
                                 let mut args_iter = args.into_iter();

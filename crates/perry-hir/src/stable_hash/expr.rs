@@ -299,6 +299,7 @@ impl SH for Expr {
             Expr::ChildProcessExecSync { command, options } => { tag(h, 236); command.as_ref().hash(h); options.hash(h); }
             Expr::ChildProcessSpawnSync { command, args, options, } => { tag(h, 237); command.as_ref().hash(h); args.hash(h); options.hash(h); }
             Expr::ChildProcessSpawn { command, args, options, } => { tag(h, 238); command.as_ref().hash(h); args.hash(h); options.hash(h); }
+            Expr::ChildProcessFork { module, args, options, } => { tag(h, 11240); module.as_ref().hash(h); args.hash(h); options.hash(h); }
             Expr::ChildProcessExec { command, options, callback, } => { tag(h, 239); command.as_ref().hash(h); options.hash(h); callback.hash(h); }
             Expr::ChildProcessExecFile { file, args, options, callback, } => { tag(h, 11239); file.as_ref().hash(h); args.hash(h); options.hash(h); callback.hash(h); }
             Expr::ChildProcessExecFileSync { file, args, options, } => { tag(h, 11240); file.as_ref().hash(h); args.hash(h); options.hash(h); }

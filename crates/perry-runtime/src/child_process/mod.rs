@@ -1,5 +1,12 @@
 //! Child Process module - provides process spawning capabilities
 
+// #1934: live-streaming `spawn` reactor (non-blocking child, stdout/stderr
+// pumped through the event loop, live `stdin.write()` / `kill()`).
+pub mod reactor;
+// #1933: `fork()` + IPC channel (parent `send`/`'message'`/`disconnect`, child
+// `process.send`/`process.on('message')`).
+pub mod fork;
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::process::{Command, Stdio};
@@ -76,63 +83,6 @@ unsafe fn make_two_field_object(
     crate::object::js_object_set_keys(obj, keys);
 
     obj
-}
-
-fn cp_run_command_capture(mut command: Command) -> std::io::Result<(std::process::Output, u32)> {
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let child = command.spawn()?;
-    let pid = child.id();
-    let output = child.wait_with_output()?;
-    Ok((output, pid))
-}
-
-#[cfg(unix)]
-fn cp_exit_signal(status: std::process::ExitStatus) -> Option<&'static str> {
-    use std::os::unix::process::ExitStatusExt;
-    status.signal().map(cp_signal_name)
-}
-
-#[cfg(not(unix))]
-fn cp_exit_signal(_status: std::process::ExitStatus) -> Option<&'static str> {
-    None
-}
-
-fn cp_output_array(stdout: &[u8], stderr: &[u8]) -> f64 {
-    use crate::array::{js_array_alloc, js_array_push_f64};
-
-    let output = js_array_alloc(3);
-    js_array_push_f64(output, TAG_NULL_F64);
-    js_array_push_f64(output, cp_box_string_bytes(stdout));
-    js_array_push_f64(output, cp_box_string_bytes(stderr));
-    crate::value::js_nanbox_pointer(output as i64)
-}
-
-fn cp_throw_sync_nonzero_exit(output: std::process::Output, pid: u32) -> ! {
-    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_ERROR, 6);
-    let status = output
-        .status
-        .code()
-        .map_or(TAG_NULL_F64, |code| code as f64);
-    let signal = cp_exit_signal(output.status).map_or(TAG_NULL_F64, cp_box_string);
-    js_object_set_field_by_name(obj, cp_str_key(b"status"), status);
-    js_object_set_field_by_name(obj, cp_str_key(b"signal"), signal);
-    js_object_set_field_by_name(
-        obj,
-        cp_str_key(b"output"),
-        cp_output_array(&output.stdout, &output.stderr),
-    );
-    js_object_set_field_by_name(obj, cp_str_key(b"pid"), pid as f64);
-    js_object_set_field_by_name(
-        obj,
-        cp_str_key(b"stdout"),
-        cp_box_string_bytes(&output.stdout),
-    );
-    js_object_set_field_by_name(
-        obj,
-        cp_str_key(b"stderr"),
-        cp_box_string_bytes(&output.stderr),
-    );
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
 }
 
 /// Spawn a process in the background (non-blocking).
@@ -375,61 +325,63 @@ pub extern "C" fn js_child_process_kill_process(handle_id_val: f64) -> i32 {
     0
 }
 
-/// Execute a command synchronously and return stdout as a buffer/string
-/// Returns: Buffer containing stdout, or null on error
+/// `child_process.execSync(command[, options])` — run through the shell and
+/// return stdout (a Buffer by default, a string with an `encoding` option).
+/// On a non-zero exit (or spawn failure) Node throws an Error carrying
+/// `status`/`signal`/`pid`/`output`/`stdout`/`stderr`/`cmd`, so this diverges
+/// via `js_throw` rather than returning. Returns a NaN-boxed value. #1937/#1938.
 #[no_mangle]
 pub extern "C" fn js_child_process_exec_sync(
     cmd_ptr: *const StringHeader,
     options_ptr: *const ObjectHeader,
-) -> *mut StringHeader {
+) -> f64 {
+    let opts_val = if options_ptr.is_null() {
+        cp_undefined()
+    } else {
+        cp_box_ptr(options_ptr as *const u8)
+    };
+    let mode = cp_read_output_mode(opts_val, false);
+
     if cmd_ptr.is_null() {
-        return js_string_from_bytes(b"".as_ptr(), 0);
+        return cp_box_output(b"", &mode);
     }
 
-    unsafe {
+    let cmd_str = unsafe {
         let len = (*cmd_ptr).byte_len as usize;
         let data_ptr = (cmd_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let cmd_bytes = std::slice::from_raw_parts(data_ptr, len);
+        String::from_utf8_lossy(cmd_bytes).into_owned()
+    };
 
-        let cmd_str = match std::str::from_utf8(cmd_bytes) {
-            Ok(s) => s,
-            Err(_) => return js_string_from_bytes(b"".as_ptr(), 0),
-        };
+    // Execute the command using the shell, honoring `cwd`/`env` options.
+    #[cfg(unix)]
+    let mut command = {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(&cmd_str);
+        c
+    };
+    #[cfg(windows)]
+    let mut command = {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg(&cmd_str);
+        c
+    };
+    cp_apply_options(&mut command, opts_val);
 
-        // Execute the command using the shell, honoring `cwd`/`env` options.
-        #[cfg(unix)]
-        let mut command = {
-            let mut c = Command::new("sh");
-            c.arg("-c").arg(cmd_str);
-            c
-        };
-        #[cfg(windows)]
-        let mut command = {
-            let mut c = Command::new("cmd");
-            c.arg("/C").arg(cmd_str);
-            c
-        };
-        if !options_ptr.is_null() {
-            cp_apply_options(&mut command, cp_box_ptr(options_ptr as *const u8));
-        }
-
-        match cp_run_command_capture(command) {
-            Ok(output) => {
-                let (output, pid) = output;
-                if !output.status.success() {
-                    cp_throw_sync_nonzero_exit(output, pid);
-                }
-                // Return stdout as a string
-                let stdout = &output.stdout;
-                js_string_from_bytes(stdout.as_ptr(), stdout.len() as u32)
-            }
-            Err(_) => js_string_from_bytes(b"".as_ptr(), 0),
-        }
+    let run = cp_run_to_completion(command);
+    let stdout_box = cp_box_output(&run.stdout, &mode);
+    if run.success() {
+        return stdout_box;
     }
+    let stderr_box = cp_box_output(&run.stderr, &mode);
+    cp_sync_throw_error(&run, &cmd_str, stdout_box, stderr_box);
 }
 
-/// Execute a command synchronously with more control (spawnSync)
-/// Returns: Object with stdout, stderr, status, etc.
+/// `child_process.spawnSync(command[, args][, options])` — run the file
+/// directly and return the full Node result object: `pid`, `output`
+/// (`[null, stdout, stderr]`), `stdout`, `stderr`, `status`, `signal`, and
+/// `error` (only on spawn failure). `stdout`/`stderr` are Buffers by default
+/// (strings with an `encoding` option). #1936/#1937.
 #[no_mangle]
 pub extern "C" fn js_child_process_spawn_sync(
     cmd_ptr: *const StringHeader,
@@ -440,80 +392,69 @@ pub extern "C" fn js_child_process_spawn_sync(
         return std::ptr::null_mut();
     }
 
-    unsafe {
-        // Get command string
+    let cmd_str = unsafe {
         let cmd_len = (*cmd_ptr).byte_len as usize;
         let cmd_data = (cmd_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let cmd_bytes = std::slice::from_raw_parts(cmd_data, cmd_len);
+        String::from_utf8_lossy(std::slice::from_raw_parts(cmd_data, cmd_len)).into_owned()
+    };
 
-        let cmd_str = match std::str::from_utf8(cmd_bytes) {
-            Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
-        };
+    let opts_val = if options_ptr.is_null() {
+        cp_undefined()
+    } else {
+        cp_box_ptr(options_ptr as *const u8)
+    };
+    let mode = cp_read_output_mode(opts_val, false);
 
-        // Build command
-        let mut command = Command::new(cmd_str);
+    // Build command (run the file directly — spawnSync does not use a shell
+    // unless `shell` is set).
+    let arg_strs = unsafe { cp_read_arg_strings(args_ptr as i64) };
+    let command = cp_build_command(&cmd_str, &arg_strs, opts_val);
+    let run = cp_run_to_completion(command);
 
-        // Add arguments if provided
-        if !args_ptr.is_null() {
-            let args_len = (*args_ptr).length as usize;
-            let args_data = (args_ptr as *const u8)
-                .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                as *const f64;
+    let stdout_box = cp_box_output(&run.stdout, &mode);
+    let stderr_box = cp_box_output(&run.stderr, &mode);
+    let output = cp_output_array(stdout_box, stderr_box);
+    let status = match run.code {
+        Some(c) => c as f64,
+        None => TAG_NULL_F64,
+    };
+    let signal = match run.signal {
+        Some(s) => cp_box_string(cp_signal_name(s)),
+        None => TAG_NULL_F64,
+    };
+    let pid = match run.pid {
+        Some(p) => p as f64,
+        None => TAG_NULL_F64,
+    };
 
-            for i in 0..args_len {
-                let arg_val = *args_data.add(i);
-                if let Some(arg_str) = extract_string_from_nanboxed(arg_val) {
-                    command.arg(arg_str);
-                }
-            }
-        }
-
-        // Honor `cwd`/`env` options.
-        if !options_ptr.is_null() {
-            cp_apply_options(&mut command, cp_box_ptr(options_ptr as *const u8));
-        }
-
-        // Execute the command
-        match command.output() {
-            Ok(output) => {
-                use crate::array::{js_array_alloc, js_array_push_f64};
-                use crate::value::js_nanbox_string;
-
-                // Create result object with stdout, stderr, status (3 fields)
-                let result = crate::object::js_object_alloc(0, 3);
-
-                // Set stdout as string (field 0)
-                let stdout_str =
-                    js_string_from_bytes(output.stdout.as_ptr(), output.stdout.len() as u32);
-                let stdout_boxed = js_nanbox_string(stdout_str as i64);
-                crate::object::js_object_set_field_f64(result, 0, stdout_boxed);
-
-                // Set stderr as string (field 1)
-                let stderr_str =
-                    js_string_from_bytes(output.stderr.as_ptr(), output.stderr.len() as u32);
-                let stderr_boxed = js_nanbox_string(stderr_str as i64);
-                crate::object::js_object_set_field_f64(result, 1, stderr_boxed);
-
-                // Set status (field 2)
-                let status = output.status.code().unwrap_or(-1) as f64;
-                crate::object::js_object_set_field_f64(result, 2, status);
-
-                // Build keys array for named property access
-                let keys = js_array_alloc(3);
-                let k_stdout = js_string_from_bytes(b"stdout".as_ptr(), 6);
-                let k_stderr = js_string_from_bytes(b"stderr".as_ptr(), 6);
-                let k_status = js_string_from_bytes(b"status".as_ptr(), 6);
-                js_array_push_f64(keys, js_nanbox_string(k_stdout as i64));
-                js_array_push_f64(keys, js_nanbox_string(k_stderr as i64));
-                js_array_push_f64(keys, js_nanbox_string(k_status as i64));
-                crate::object::js_object_set_keys(result, keys);
-
-                result
-            }
-            Err(_) => std::ptr::null_mut(),
-        }
+    // Assemble the result object. `error` is present only on spawn failure
+    // (Node omits it otherwise), so build via named sets rather than a fixed
+    // index layout.
+    let result = crate::object::js_object_alloc(0, 7);
+    let set = |key: &str, value: f64| {
+        let kp = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        js_object_set_field_by_name(result, kp, value);
+    };
+    set("pid", pid);
+    set("output", output);
+    set("stdout", stdout_box);
+    set("stderr", stderr_box);
+    set("status", status);
+    set("signal", signal);
+    if let Some((code, msg)) = &run.spawn_error {
+        let syscall = format!("spawnSync {cmd_str}");
+        let err = cp_make_error(
+            msg,
+            &[
+                ("code", cp_box_string(code)),
+                ("errno", cp_errno_number(code)),
+                ("syscall", cp_box_string(&syscall)),
+                ("path", cp_box_string(&cmd_str)),
+            ],
+        );
+        set("error", err);
     }
+    result
 }
 
 /// Spawn a process asynchronously
@@ -559,61 +500,58 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
         }
     };
 
+    // `exec` defaults to utf8 (callback stdout/stderr are strings); the options
+    // sit in the `arg1` slot, so the encoding is read from there. When `arg1`
+    // is the callback the lookup no-ops and the default applies.
+    let mode = cp_read_output_mode(arg1, true);
+
     if cmd_ptr.is_null() {
+        let empty = cp_box_output(b"", &mode);
         if cb.is_null() {
-            return cp_box_output(b"", arg1);
+            return empty;
         }
-        let output = cp_box_output(b"", arg1);
-        crate::closure::js_closure_call3(cb, TAG_NULL_F64, output, output);
+        crate::closure::js_closure_call3(cb, TAG_NULL_F64, empty, cp_box_output(b"", &mode));
         return f64::from_bits(TAG_UNDEFINED_BITS);
     }
 
-    let (stdout_bytes, stderr_bytes, success) = unsafe {
+    let cmd_str = unsafe {
         let len = (*cmd_ptr).byte_len as usize;
         let data_ptr = (cmd_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let cmd_bytes = std::slice::from_raw_parts(data_ptr, len);
-        match std::str::from_utf8(cmd_bytes) {
-            Ok(cmd_str) => {
-                // `exec` always runs through the shell. The options object sits
-                // in the `arg1` slot (`exec(cmd, options, cb)`); when `arg1` is
-                // the callback (`exec(cmd, cb)`) it's a closure, so the helper
-                // no-ops. `cwd`/`env` from the options are applied here.
-                #[cfg(unix)]
-                let mut command = {
-                    let mut c = Command::new("sh");
-                    c.arg("-c").arg(cmd_str);
-                    c
-                };
-                #[cfg(windows)]
-                let mut command = {
-                    let mut c = Command::new("cmd");
-                    c.arg("/C").arg(cmd_str);
-                    c
-                };
-                cp_apply_options(&mut command, arg1);
-                match command.output() {
-                    Ok(o) => (o.stdout, o.stderr, o.status.success()),
-                    Err(e) => (Vec::new(), e.to_string().into_bytes(), false),
-                }
-            }
-            Err(_) => (Vec::new(), Vec::new(), false),
-        }
+        String::from_utf8_lossy(cmd_bytes).into_owned()
     };
 
-    let stdout_box = cp_box_output(&stdout_bytes, arg1);
+    // `exec` always runs through the shell. The options object sits in the
+    // `arg1` slot (`exec(cmd, options, cb)`); when `arg1` is the callback
+    // (`exec(cmd, cb)`) it's a closure, so `cp_apply_options` no-ops. `cwd`/
+    // `env` from the options are applied here.
+    #[cfg(unix)]
+    let mut command = {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(&cmd_str);
+        c
+    };
+    #[cfg(windows)]
+    let mut command = {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg(&cmd_str);
+        c
+    };
+    cp_apply_options(&mut command, arg1);
+    let run = cp_run_to_completion(command);
+
+    let stdout_box = cp_box_output(&run.stdout, &mode);
     if cb.is_null() {
-        // Legacy no-callback shape — return the stdout string.
+        // Legacy no-callback shape — return stdout (Buffer or string per
+        // `encoding`).
         return stdout_box;
     }
 
-    let stderr_box = cp_box_output(&stderr_bytes, arg1);
-    let err_val = if success {
+    let stderr_box = cp_box_output(&run.stderr, &mode);
+    let err_val = if run.success() {
         TAG_NULL_F64
     } else {
-        let msg = "Command failed";
-        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-        crate::value::js_nanbox_pointer(err_ptr as i64)
+        cp_exec_callback_error(&run, &cmd_str)
     };
     crate::closure::js_closure_call3(cb, err_val, stdout_box, stderr_box);
     f64::from_bits(TAG_UNDEFINED_BITS)
@@ -718,28 +656,6 @@ fn cp_get_field(value: f64, name: &[u8]) -> f64 {
 fn cp_set_field(value: f64, name: &[u8], field_value: f64) {
     if let Some(obj) = cp_object_ptr(value) {
         js_object_set_field_by_name(obj, cp_str_key(name), field_value);
-    }
-}
-
-fn cp_encoding_wants_buffer(opts_val: f64) -> bool {
-    if cp_object_ptr(opts_val).is_none() {
-        return false;
-    }
-    let encoding = cp_get_field(opts_val, b"encoding");
-    if encoding.to_bits() == TAG_NULL_BITS {
-        return true;
-    }
-    match cp_value_to_string(encoding) {
-        Some(s) => s.eq_ignore_ascii_case("buffer"),
-        None => false,
-    }
-}
-
-fn cp_box_output(bytes: &[u8], opts_val: f64) -> f64 {
-    if cp_encoding_wants_buffer(opts_val) {
-        cp_make_buffer(bytes)
-    } else {
-        cp_box_string_bytes(bytes)
     }
 }
 
@@ -854,8 +770,17 @@ extern "C" fn cp_method_this0(closure: *const ClosureHeader) -> f64 {
 extern "C" fn cp_method_this1(closure: *const ClosureHeader, _a: f64) -> f64 {
     cp_this(closure)
 }
-extern "C" fn cp_method_kill(closure: *const ClosureHeader, _signal: f64) -> f64 {
-    cp_set_field(cp_this(closure), b"killed", TAG_TRUE_F64);
+extern "C" fn cp_method_kill(closure: *const ClosureHeader, signal: f64) -> f64 {
+    let this = cp_this(closure);
+    cp_set_field(this, b"killed", TAG_TRUE_F64);
+    // #1934: signal the live child if one is still running. `__cpHandle` is the
+    // reactor registry key set by `spawn`. Returns true when the signal was
+    // delivered (Node's `kill()` returns a boolean).
+    if let Some(handle) = cp_handle_of(this) {
+        if reactor::cp_live_kill(handle, signal) {
+            return TAG_TRUE_F64;
+        }
+    }
     TAG_TRUE_F64
 }
 /// `removeListener(event, cb)` / `off(event, cb)` — rebuild the `event`
@@ -914,46 +839,101 @@ extern "C" fn cp_method_read(_closure: *const ClosureHeader, _n: f64) -> f64 {
 extern "C" fn cp_method_pipe(_closure: *const ClosureHeader, dest: f64) -> f64 {
     dest
 }
-extern "C" fn cp_method_write2(_closure: *const ClosureHeader, _chunk: f64, _enc: f64) -> f64 {
+/// `child.stdin.write(chunk[, encoding][, callback])` — #1934. The `this` is
+/// the stdin Writable; route the bytes to the live child's stdin via the
+/// reactor. Returns `true` (Node's `write` returns whether the buffer can take
+/// more — `true` for our synchronous pipe write).
+extern "C" fn cp_method_write2(closure: *const ClosureHeader, chunk: f64, _enc: f64) -> f64 {
+    let this = cp_this(closure);
+    if let Some(handle) = cp_handle_of(this) {
+        let bytes = cp_value_to_bytes(chunk);
+        reactor::cp_live_stdin_write(handle, &bytes);
+    }
     TAG_TRUE_F64
 }
 
-/// Deferred emission body, scheduled via `setImmediate` from `spawn`. Slot 0
-/// captures the ChildProcess value.
-extern "C" fn cp_emit_all(closure: *const ClosureHeader) -> f64 {
-    let cp = cp_this(closure);
-
-    // A spawn failure (e.g. ENOENT) surfaces as a single `error` event; Node
-    // never fires `spawn`/`exit` in that case.
-    let err = cp_get_field(cp, b"__cpError");
-    if !JSValue::from_bits(err.to_bits()).is_undefined() {
-        cp_emit(cp, "error", &[err]);
-        return cp_undefined();
+/// `child.send(message[, sendHandle][, options][, callback])` — serialize
+/// `message` and write it to the IPC channel of a `fork()`ed child (#1933). The
+/// `this` is the ChildProcess. Returns `true` (Node returns whether the channel
+/// can take more — always `true` for our synchronous write).
+extern "C" fn cp_method_send(closure: *const ClosureHeader, message: f64, _arg: f64) -> f64 {
+    let this = cp_this(closure);
+    if let Some(handle) = cp_handle_of(this) {
+        reactor::cp_ipc_send(handle, message);
     }
+    TAG_TRUE_F64
+}
 
-    cp_emit(cp, "spawn", &[]);
-
-    // Flush each output stream: a single `data` chunk (when non-empty) then `end`.
-    for field in [b"stdout".as_slice(), b"stderr".as_slice()] {
-        let stream = cp_get_field(cp, field);
-        if cp_object_ptr(stream).is_none() {
-            continue;
-        }
-        let chunk = cp_get_field(stream, b"__cpChunk");
-        if !JSValue::from_bits(chunk.to_bits()).is_undefined() {
-            cp_emit(stream, "data", &[chunk]);
-        }
-        cp_emit(stream, "end", &[]);
+/// `child.disconnect()` — close the IPC channel (#1933). Flips `connected` to
+/// `false`, `channel` to `null`, and emits a `disconnect` event.
+extern "C" fn cp_method_disconnect(closure: *const ClosureHeader) -> f64 {
+    let this = cp_this(closure);
+    if let Some(handle) = cp_handle_of(this) {
+        reactor::cp_ipc_disconnect(handle);
     }
-
-    // Node populates `exitCode`/`signalCode` before emitting `exit`, then `close`.
-    let code = cp_get_field(cp, b"__cpExitCode");
-    let signal = cp_get_field(cp, b"__cpSignal");
-    cp_set_field(cp, b"exitCode", code);
-    cp_set_field(cp, b"signalCode", signal);
-    cp_emit(cp, "exit", &[code, signal]);
-    cp_emit(cp, "close", &[code, signal]);
+    cp_set_field(this, b"connected", TAG_FALSE_F64);
+    cp_set_field(this, b"channel", TAG_NULL_F64);
+    cp_emit(this, "disconnect", &[]);
     cp_undefined()
+}
+
+/// `child.stdin.end([chunk])` — write the optional final chunk, then close the
+/// pipe so the child sees EOF (#1934). The `this` is the stdin Writable.
+extern "C" fn cp_method_stdin_end(closure: *const ClosureHeader, chunk: f64) -> f64 {
+    let this = cp_this(closure);
+    if let Some(handle) = cp_handle_of(this) {
+        // Optional final data chunk. Skip `undefined`, the `0.0` arg-padding
+        // sentinel, and a callback argument (`end(cb)`).
+        let bits = chunk.to_bits();
+        if !JSValue::from_bits(bits).is_undefined()
+            && bits != 0
+            && crate::fs::extract_closure_ptr(chunk).is_null()
+        {
+            let bytes = cp_value_to_bytes(chunk);
+            if !bytes.is_empty() {
+                reactor::cp_live_stdin_write(handle, &bytes);
+            }
+        }
+        reactor::cp_live_stdin_close(handle);
+    }
+    this
+}
+
+/// Read the reactor registry key (`__cpHandle`) off a ChildProcess / stdio
+/// sub-object, set by `spawn`. `None` when absent (e.g. a buffered child).
+fn cp_handle_of(this: f64) -> Option<u64> {
+    let h = cp_get_field(this, b"__cpHandle");
+    if JSValue::from_bits(h.to_bits()).is_undefined() {
+        return None;
+    }
+    if h.is_finite() && h >= 0.0 {
+        Some(h as u64)
+    } else {
+        None
+    }
+}
+
+/// Best-effort decode of a `write()` chunk (Buffer or string) to raw bytes.
+fn cp_value_to_bytes(value: f64) -> Vec<u8> {
+    // Buffer fast-path.
+    let bits = value.to_bits();
+    if JSValue::from_bits(bits).is_pointer() {
+        let raw = (bits & crate::value::POINTER_MASK) as usize;
+        if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
+            let buf = raw as *const crate::buffer::BufferHeader;
+            unsafe {
+                let len = (*buf).length as usize;
+                let data =
+                    (buf as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+                return std::slice::from_raw_parts(data, len).to_vec();
+            }
+        }
+    }
+    // Otherwise stringify.
+    cp_value_to_string(value)
+        .or_else(|| Some(cp_coerce_string(value)))
+        .unwrap_or_default()
+        .into_bytes()
 }
 
 // ----- object construction -----
@@ -983,7 +963,9 @@ fn cp_register_arities() {
     js_register_closure_arity(cp_method_read as *const u8, 1);
     js_register_closure_arity(cp_method_pipe as *const u8, 1);
     js_register_closure_arity(cp_method_write2 as *const u8, 2);
-    js_register_closure_arity(cp_emit_all as *const u8, 0);
+    js_register_closure_arity(cp_method_stdin_end as *const u8, 1);
+    js_register_closure_arity(cp_method_send as *const u8, 2);
+    js_register_closure_arity(cp_method_disconnect as *const u8, 0);
 }
 
 /// Allocate a heap object whose method-name fields each hold a closure capturing
@@ -1043,7 +1025,7 @@ fn cp_build_writable() -> f64 {
         ("off", cp_cast2(cp_method_remove_listener)),
         ("emit", cp_cast2(cp_method_emit)),
         ("write", cp_cast2(cp_method_write2)),
-        ("end", cp_cast1(cp_method_this1)),
+        ("end", cp_cast1(cp_method_stdin_end)),
         ("destroy", cp_cast0(cp_method_this0)),
         ("cork", cp_cast0(cp_method_this0)),
         ("uncork", cp_cast0(cp_method_this0)),
@@ -1094,175 +1076,6 @@ unsafe fn cp_read_arg_strings(args_ptr: i64) -> Vec<String> {
         }
     }
     out
-}
-
-/// `child_process.spawn(command[, args][, options])` — returns a streaming
-/// ChildProcess. `cmd_ptr`/`args_ptr` are raw (unboxed) `StringHeader` /
-/// `ArrayHeader` pointers; `opts_ptr` is currently unused (no shell, default
-/// stdio). #1780.
-#[no_mangle]
-pub extern "C" fn js_child_process_spawn_streams(
-    cmd_ptr: i64,
-    args_ptr: i64,
-    opts_ptr: i64,
-) -> f64 {
-    cp_register_arities();
-
-    let (cmd_str, arg_strs) = unsafe {
-        (
-            cp_read_string_header(cmd_ptr),
-            cp_read_arg_strings(args_ptr),
-        )
-    };
-
-    // `opts_ptr` arrives as a raw (unboxed) heap pointer; re-box it so the
-    // options helpers can read `cwd`/`env`/`shell`. Small values mean
-    // no-options (codegen passes 0) — leave it undefined then.
-    let opts_val = if opts_ptr > 0x10000 {
-        cp_box_ptr(opts_ptr as *const u8)
-    } else {
-        cp_undefined()
-    };
-
-    // Build the command (honoring `shell`/`cwd`/`env`) and capture its output
-    // synchronously.
-    let mut command = cp_build_command(&cmd_str, &arg_strs, opts_val);
-    command.stdin(Stdio::piped());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-
-    let (pid, stdout_bytes, stderr_bytes, exit_code, signal_opt, spawn_err) = match command.spawn()
-    {
-        Ok(child) => {
-            let pid = child.id();
-            match child.wait_with_output() {
-                Ok(out) => {
-                    let code = out.status.code();
-                    #[cfg(unix)]
-                    let sig = {
-                        use std::os::unix::process::ExitStatusExt;
-                        out.status.signal()
-                    };
-                    #[cfg(not(unix))]
-                    let sig: Option<i32> = None;
-                    (Some(pid), out.stdout, out.stderr, code, sig, None)
-                }
-                Err(e) => (
-                    Some(pid),
-                    Vec::new(),
-                    Vec::new(),
-                    None,
-                    None,
-                    Some(e.to_string()),
-                ),
-            }
-        }
-        Err(e) => (
-            None,
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-            Some(e.to_string()),
-        ),
-    };
-
-    // stdout/stderr Readable + stdin Writable sub-objects.
-    let stdout_obj = cp_build_readable();
-    let stderr_obj = cp_build_readable();
-    let stdin_obj = cp_build_writable();
-    if !stdout_bytes.is_empty() {
-        cp_set_field(stdout_obj, b"__cpChunk", cp_make_buffer(&stdout_bytes));
-    }
-    if !stderr_bytes.is_empty() {
-        cp_set_field(stderr_obj, b"__cpChunk", cp_make_buffer(&stderr_bytes));
-    }
-
-    // spawnargs = [command, ...args]
-    let mut spawnargs = crate::array::js_array_alloc((arg_strs.len() + 1) as u32);
-    spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(&cmd_str));
-    for a in &arg_strs {
-        spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(a));
-    }
-
-    let cp_methods: [(&str, CpFn); 11] = [
-        ("on", cp_cast2(cp_method_on)),
-        ("once", cp_cast2(cp_method_on)),
-        ("addListener", cp_cast2(cp_method_on)),
-        ("prependListener", cp_cast2(cp_method_on)),
-        ("removeListener", cp_cast2(cp_method_remove_listener)),
-        ("off", cp_cast2(cp_method_remove_listener)),
-        (
-            "removeAllListeners",
-            cp_cast1(cp_method_remove_all_listeners),
-        ),
-        ("emit", cp_cast2(cp_method_emit)),
-        ("kill", cp_cast1(cp_method_kill)),
-        ("ref", cp_cast0(cp_method_this0)),
-        ("unref", cp_cast0(cp_method_this0)),
-    ];
-    let cp_obj = cp_build_object(&cp_methods, CP_SHAPE_ID + cp_methods.len() as u32);
-    let cp = cp_box_ptr(cp_obj as *const u8);
-
-    cp_set_field(cp, b"stdout", stdout_obj);
-    cp_set_field(cp, b"stderr", stderr_obj);
-    cp_set_field(cp, b"stdin", stdin_obj);
-
-    let mut stdio = crate::array::js_array_alloc(3);
-    stdio = crate::array::js_array_push_f64(stdio, stdin_obj);
-    stdio = crate::array::js_array_push_f64(stdio, stdout_obj);
-    stdio = crate::array::js_array_push_f64(stdio, stderr_obj);
-    cp_set_field(cp, b"stdio", cp_box_ptr(stdio as *const u8));
-
-    cp_set_field(
-        cp,
-        b"pid",
-        match pid {
-            Some(p) => p as f64,
-            None => cp_undefined(),
-        },
-    );
-    cp_set_field(cp, b"exitCode", TAG_NULL_F64);
-    cp_set_field(cp, b"signalCode", TAG_NULL_F64);
-    cp_set_field(cp, b"killed", TAG_FALSE_F64);
-    cp_set_field(cp, b"connected", TAG_FALSE_F64);
-    cp_set_field(cp, b"spawnargs", cp_box_ptr(spawnargs as *const u8));
-    cp_set_field(cp, b"spawnfile", cp_box_string(&cmd_str));
-
-    // Hidden state consumed by the deferred emission.
-    cp_set_field(
-        cp,
-        b"__cpExitCode",
-        match exit_code {
-            Some(c) => c as f64,
-            None => TAG_NULL_F64,
-        },
-    );
-    cp_set_field(
-        cp,
-        b"__cpSignal",
-        match signal_opt {
-            Some(s) => cp_box_string(cp_signal_name(s)),
-            None => TAG_NULL_F64,
-        },
-    );
-    if let Some(msg) = spawn_err {
-        let mp = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_error_new_with_message(mp);
-        cp_set_field(
-            cp,
-            b"__cpError",
-            crate::value::js_nanbox_pointer(err as i64),
-        );
-    }
-
-    // Defer spawn/data/end/exit/close until the next tick so handlers registered
-    // synchronously after this call are present when the events fire.
-    let emit_closure = js_closure_alloc(cp_emit_all as *const u8, 1);
-    js_closure_set_capture_ptr(emit_closure, 0, cp.to_bits() as i64);
-    crate::timer::js_set_immediate_callback(emit_closure as i64);
-
-    cp
 }
 
 /// Collect a NaN-boxed args value (array of strings) into owned Rust strings.
@@ -1391,11 +1204,338 @@ fn cp_build_command(cmd: &str, args: &[String], opts_val: f64) -> Command {
     command
 }
 
+// ============================================================================
+// Output encoding + error shape — #1935 / #1936 / #1937 / #1938
+// ============================================================================
+//
+// These helpers are shared by exec / execFile and the synchronous forms.
+// `exec`/`execFile` default to `"utf8"` (callback stdout/stderr are strings);
+// `execSync`/`execFileSync`/`spawnSync` default to `"buffer"`. `encoding:
+// "buffer"` or `null` always yields Buffers; any other named encoding decodes
+// the bytes with it. On a non-zero exit Node attaches diagnostic properties to
+// the error (`code`/`signal`/`killed`/`cmd` for the callback form;
+// `status`/`signal`/`pid`/`output`/`stdout`/`stderr`/`cmd` for the sync throw).
+
+/// Resolved form for captured stdout/stderr bytes.
+enum CpOutput {
+    Buffer,
+    Text(String),
+}
+
+/// Read the `encoding` option off a NaN-boxed options value. `default_text`
+/// picks the default when `encoding` is absent (exec/execFile → utf8 text;
+/// the sync forms → Buffer). `null` / `"buffer"` always mean Buffer.
+fn cp_read_output_mode(opts_val: f64, default_text: bool) -> CpOutput {
+    let enc = cp_get_field(opts_val, b"encoding");
+    let bits = enc.to_bits();
+    if JSValue::from_bits(bits).is_undefined() {
+        return if default_text {
+            CpOutput::Text("utf8".to_string())
+        } else {
+            CpOutput::Buffer
+        };
+    }
+    if bits == TAG_NULL_BITS {
+        return CpOutput::Buffer;
+    }
+    match cp_value_to_string(enc) {
+        Some(s) if s.eq_ignore_ascii_case("buffer") => CpOutput::Buffer,
+        Some(s) => CpOutput::Text(s),
+        // Non-string, non-null, non-undefined encoding — fall back to Buffer.
+        None => CpOutput::Buffer,
+    }
+}
+
+/// Decode raw bytes to a `StringHeader` using a Node encoding name.
+fn cp_encode_text(bytes: &[u8], enc: &str) -> *mut StringHeader {
+    match enc.to_ascii_lowercase().as_str() {
+        "hex" => crate::buffer::hex_encode_into_string(bytes),
+        "base64" => crate::buffer::base64_encode_into_string(bytes),
+        "base64url" => crate::buffer::base64url_encode_into_string(bytes),
+        "latin1" | "binary" => {
+            // latin1: each byte maps to a code point in U+0000..U+00FF.
+            let s: String = bytes.iter().map(|&b| b as char).collect();
+            js_string_from_bytes(s.as_ptr(), s.len() as u32)
+        }
+        // utf8 / utf-8 / ascii / unknown — store as UTF-8 (lossy for invalid).
+        _ => {
+            let s = String::from_utf8_lossy(bytes);
+            js_string_from_bytes(s.as_ptr(), s.len() as u32)
+        }
+    }
+}
+
+/// Box captured bytes per the resolved output mode (Buffer or decoded string).
+fn cp_box_output(bytes: &[u8], mode: &CpOutput) -> f64 {
+    match mode {
+        CpOutput::Buffer => cp_make_buffer(bytes),
+        CpOutput::Text(enc) => crate::value::js_nanbox_string(cp_encode_text(bytes, enc) as i64),
+    }
+}
+
+/// Decoded exit disposition of a finished child.
+struct CpExit {
+    /// Exit code when the child exited normally; `None` when killed by signal.
+    code: Option<i32>,
+    /// Signal number when the child was killed by a signal (Unix only).
+    signal: Option<i32>,
+}
+
+fn cp_decode_status(status: &std::process::ExitStatus) -> CpExit {
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    };
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    CpExit {
+        code: status.code(),
+        signal,
+    }
+}
+
+/// Map a spawn-failure `io::Error` to the Node errno-style `code` string.
+fn cp_io_error_code(e: &std::io::Error) -> &'static str {
+    use std::io::ErrorKind;
+    match e.kind() {
+        ErrorKind::NotFound => "ENOENT",
+        ErrorKind::PermissionDenied => "EACCES",
+        ErrorKind::AlreadyExists => "EEXIST",
+        ErrorKind::BrokenPipe => "EPIPE",
+        ErrorKind::TimedOut => "ETIMEDOUT",
+        ErrorKind::ConnectionRefused => "ECONNREFUSED",
+        _ => "UNKNOWN",
+    }
+}
+
+/// Node's `errno` is the negative libc errno value for the failure code.
+fn cp_errno_number(code: &str) -> f64 {
+    #[cfg(unix)]
+    let n = match code {
+        "ENOENT" => libc::ENOENT,
+        "EACCES" => libc::EACCES,
+        "EEXIST" => libc::EEXIST,
+        "EPIPE" => libc::EPIPE,
+        "ETIMEDOUT" => libc::ETIMEDOUT,
+        "ECONNREFUSED" => libc::ECONNREFUSED,
+        _ => 0,
+    };
+    #[cfg(not(unix))]
+    let n = 0;
+    -(n as f64)
+}
+
+/// Outcome of running a child to completion (buffered).
+struct CpRun {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    code: Option<i32>,
+    signal: Option<i32>,
+    pid: Option<u32>,
+    /// `Some((code, message))` when the child could not be spawned at all.
+    spawn_error: Option<(&'static str, String)>,
+}
+
+impl CpRun {
+    fn success(&self) -> bool {
+        self.spawn_error.is_none() && self.code == Some(0)
+    }
+}
+
+/// Spawn `command` with piped stdout/stderr (and a closed stdin so children
+/// that read stdin see EOF instead of blocking), run it to completion, and
+/// capture stdout/stderr/exit/pid. Used by the synchronous + buffered-callback
+/// entry points.
+fn cp_run_to_completion(mut command: Command) -> CpRun {
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    match command.spawn() {
+        Ok(child) => {
+            let pid = child.id();
+            match child.wait_with_output() {
+                Ok(o) => {
+                    let CpExit { code, signal } = cp_decode_status(&o.status);
+                    CpRun {
+                        stdout: o.stdout,
+                        stderr: o.stderr,
+                        code,
+                        signal,
+                        pid: Some(pid),
+                        spawn_error: None,
+                    }
+                }
+                Err(e) => CpRun {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    code: None,
+                    signal: None,
+                    pid: Some(pid),
+                    spawn_error: Some((cp_io_error_code(&e), e.to_string())),
+                },
+            }
+        }
+        Err(e) => CpRun {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            code: None,
+            signal: None,
+            pid: None,
+            spawn_error: Some((cp_io_error_code(&e), e.to_string())),
+        },
+    }
+}
+
+/// Build an error-like heap object. `ErrorHeader` rejects dynamic-property
+/// writes, so for the rich shape Node attaches we use a regular object whose
+/// class extends `Error` (so `instanceof Error` / `typeof` still report
+/// error-ish) and set the props by name. Returns a NaN-boxed pointer.
+fn cp_make_error(message: &str, extra: &[(&str, f64)]) -> f64 {
+    static REGISTER_ERROR: std::sync::Once = std::sync::Once::new();
+    REGISTER_ERROR.call_once(|| {
+        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_ERROR);
+    });
+    let obj =
+        crate::object::js_object_alloc(crate::error::CLASS_ID_ERROR, (extra.len() + 2) as u32);
+    let set = |key: &str, value: f64| {
+        let kp = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        js_object_set_field_by_name(obj, kp, value);
+    };
+    set("name", cp_box_string("Error"));
+    set("message", cp_box_string(message));
+    // `name`/`message` are non-enumerable on a Node Error (only the diagnostic
+    // props are enumerable), so keep them out of `Object.keys(err)`.
+    let attrs = crate::object::PropertyAttrs::new(true, false, true);
+    crate::object::set_property_attrs(obj as usize, "name".to_string(), attrs);
+    crate::object::set_property_attrs(obj as usize, "message".to_string(), attrs);
+    for (k, v) in extra {
+        set(k, *v);
+    }
+    cp_box_ptr(obj as *const u8)
+}
+
+/// `[null, stdout, stderr]` — the Node `output` array shared by spawnSync and
+/// the execSync throw error.
+fn cp_output_array(stdout: f64, stderr: f64) -> f64 {
+    let mut arr = crate::array::js_array_alloc(3);
+    arr = crate::array::js_array_push_f64(arr, TAG_NULL_F64);
+    arr = crate::array::js_array_push_f64(arr, stdout);
+    arr = crate::array::js_array_push_f64(arr, stderr);
+    cp_box_ptr(arr as *const u8)
+}
+
+/// The `(code, signal, killed)` callback-error fields, matching Node: `code` is
+/// the numeric exit code, or the signal name when the child was killed by a
+/// signal (and on spawn failure, the errno string); `signal` is the signal name
+/// or `null`; `killed` is `true` only when terminated by a signal.
+fn cp_error_code_signal(run: &CpRun) -> (f64, f64, f64) {
+    if let Some((errno_code, _)) = run.spawn_error {
+        return (cp_box_string(errno_code), TAG_NULL_F64, TAG_FALSE_F64);
+    }
+    match (run.code, run.signal) {
+        (_, Some(sig)) => {
+            let name = cp_box_string(cp_signal_name(sig));
+            (name, name, TAG_TRUE_F64)
+        }
+        (Some(c), None) => (c as f64, TAG_NULL_F64, TAG_FALSE_F64),
+        (None, None) => (TAG_NULL_F64, TAG_NULL_F64, TAG_FALSE_F64),
+    }
+}
+
+/// Build the `(err, stdout, stderr)` callback error for a failed exec/execFile
+/// run — Node attaches `code`/`signal`/`killed`/`cmd` (plus `errno`/`syscall`/
+/// `path` on spawn failure). `cmd` is the human-readable command string. #1935.
+fn cp_exec_callback_error(run: &CpRun, cmd: &str) -> f64 {
+    if let Some((errno_code, _)) = run.spawn_error {
+        let syscall = format!("spawn {cmd}");
+        let message = format!("{syscall} {errno_code}");
+        return cp_make_error(
+            &message,
+            &[
+                ("code", cp_box_string(errno_code)),
+                ("errno", cp_errno_number(errno_code)),
+                ("syscall", cp_box_string(&syscall)),
+                ("path", cp_box_string(cmd)),
+                ("cmd", cp_box_string(cmd)),
+                ("killed", TAG_FALSE_F64),
+                ("signal", TAG_NULL_F64),
+            ],
+        );
+    }
+    let (code, signal, killed) = cp_error_code_signal(run);
+    // Node's message is `Command failed: <cmd>\n<stderr>`.
+    let message = format!(
+        "Command failed: {cmd}\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    cp_make_error(
+        &message,
+        &[
+            ("code", code),
+            ("signal", signal),
+            ("killed", killed),
+            ("cmd", cp_box_string(cmd)),
+        ],
+    )
+}
+
+/// Throw the error Node raises from a failed execSync/execFileSync — carries
+/// `status`/`signal`/`pid`/`output`/`stdout`/`stderr`/`cmd`. Diverges. #1938.
+fn cp_sync_throw_error(run: &CpRun, cmd: &str, stdout: f64, stderr: f64) -> ! {
+    let status = match run.code {
+        Some(c) => c as f64,
+        None => TAG_NULL_F64,
+    };
+    let signal = match run.signal {
+        Some(s) => cp_box_string(cp_signal_name(s)),
+        None => TAG_NULL_F64,
+    };
+    let pid = match run.pid {
+        Some(p) => p as f64,
+        None => TAG_NULL_F64,
+    };
+    let output = cp_output_array(stdout, stderr);
+    // Node's execSync/execFileSync error enumerates exactly
+    // status/signal/output/pid/stdout/stderr (no `cmd` own prop — that is on the
+    // async exec callback error). The command is still surfaced in `message`.
+    let message = match &run.spawn_error {
+        Some((code, _)) => format!("Command failed: {cmd} {code}"),
+        None => format!("Command failed: {cmd}"),
+    };
+    // Field order matches Node's insertion order (status, signal, output, pid,
+    // stdout, stderr) so `Object.keys(err)` is byte-identical.
+    let err = cp_make_error(
+        &message,
+        &[
+            ("status", status),
+            ("signal", signal),
+            ("output", output),
+            ("pid", pid),
+            ("stdout", stdout),
+            ("stderr", stderr),
+        ],
+    );
+    crate::exception::js_throw(err)
+}
+
+/// `file arg1 arg2…` — the human-readable command string Node uses for the
+/// execFile error `.cmd`.
+fn cp_file_cmd_display(file: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        file.to_string()
+    } else {
+        format!("{} {}", file, args.join(" "))
+    }
+}
+
 /// `child_process.execFile(file[, args][, options][, callback])` — like `exec`
 /// but runs `file` directly (no shell). The callback fires with
-/// `(err, stdout, stderr)`; with no callback the stdout string is returned.
-/// The callback may sit in the options slot (`execFile(file, args, cb)`), so it
-/// is located the same way `exec` disambiguates. #1780.
+/// `(err, stdout, stderr)`; with no callback the stdout (Buffer/string per
+/// `encoding`) is returned. The callback may sit in the options slot
+/// (`execFile(file, args, cb)`), so it is located the same way `exec`
+/// disambiguates. On failure the error carries `code`/`signal`/`killed`/`cmd`.
+/// #1780/#1935/#1937.
 #[no_mangle]
 pub extern "C" fn js_child_process_exec_file(
     file_ptr: i64,
@@ -1412,61 +1552,65 @@ pub extern "C" fn js_child_process_exec_file(
             extract_closure_ptr(opts_val)
         }
     };
+
     let file_str = unsafe { cp_read_string_header(file_ptr) };
     let arg_strs = cp_args_from_value(args_val);
+    // execFile defaults to utf8 (callback stdout/stderr are strings).
+    let mode = cp_read_output_mode(opts_val, true);
 
     // `cwd`/`env` come from the options slot; when `opts_val` is the callback
     // (`execFile(file, args, cb)`) it's a closure, so the helper no-ops.
     let mut command = Command::new(&file_str);
     command.args(&arg_strs);
     cp_apply_options(&mut command, opts_val);
-    let (stdout_bytes, stderr_bytes, success) = match command.output() {
-        Ok(o) => (o.stdout, o.stderr, o.status.success()),
-        Err(e) => (Vec::new(), e.to_string().into_bytes(), false),
-    };
+    let run = cp_run_to_completion(command);
 
-    let stdout_box = cp_box_output(&stdout_bytes, opts_val);
+    let stdout_box = cp_box_output(&run.stdout, &mode);
     if cb.is_null() {
         return stdout_box;
     }
-    let stderr_box = cp_box_output(&stderr_bytes, opts_val);
-    let err_val = if success {
+    let stderr_box = cp_box_output(&run.stderr, &mode);
+    let err_val = if run.success() {
         TAG_NULL_F64
     } else {
-        let msg = "Command failed";
-        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-        crate::value::js_nanbox_pointer(err_ptr as i64)
+        cp_exec_callback_error(&run, &cp_file_cmd_display(&file_str, &arg_strs))
     };
     crate::closure::js_closure_call3(cb, err_val, stdout_box, stderr_box);
     f64::from_bits(TAG_UNDEFINED_BITS)
 }
 
 /// `child_process.execFileSync(file[, args][, options])` — runs `file`
-/// directly (no shell) and returns its stdout. #1780.
+/// directly (no shell) and returns its stdout (Buffer by default, string with
+/// an `encoding` option). Throws on a non-zero exit / spawn failure, carrying
+/// the same shape as `execSync`. Returns a NaN-boxed value. #1780/#1937/#1938.
 #[no_mangle]
 pub extern "C" fn js_child_process_exec_file_sync(
     file_ptr: i64,
     args_val: f64,
     opts_val: f64,
-) -> *mut StringHeader {
+) -> f64 {
     let file_str = unsafe { cp_read_string_header(file_ptr) };
+    let mode = cp_read_output_mode(opts_val, false);
     if file_str.is_empty() {
-        return js_string_from_bytes(b"".as_ptr(), 0);
+        return cp_box_output(b"", &mode);
     }
     let arg_strs = cp_args_from_value(args_val);
     let mut command = Command::new(&file_str);
     command.args(&arg_strs);
     cp_apply_options(&mut command, opts_val);
-    match cp_run_command_capture(command) {
-        Ok((o, pid)) => {
-            if !o.status.success() {
-                cp_throw_sync_nonzero_exit(o, pid);
-            }
-            js_string_from_bytes(o.stdout.as_ptr(), o.stdout.len() as u32)
-        }
-        Err(_) => js_string_from_bytes(b"".as_ptr(), 0),
+    let run = cp_run_to_completion(command);
+
+    let stdout_box = cp_box_output(&run.stdout, &mode);
+    if run.success() {
+        return stdout_box;
     }
+    let stderr_box = cp_box_output(&run.stderr, &mode);
+    cp_sync_throw_error(
+        &run,
+        &cp_file_cmd_display(&file_str, &arg_strs),
+        stdout_box,
+        stderr_box,
+    );
 }
 
 // ============================================================================
@@ -1572,9 +1716,46 @@ mod tests {
         let cmd_ptr = js_string_from_bytes(cmd.as_ptr(), cmd.len() as u32);
         let result = js_child_process_exec_sync(cmd_ptr, std::ptr::null());
 
-        assert!(!result.is_null());
+        // #1937: execSync returns a Buffer by default; verify it carries the
+        // echoed bytes.
+        assert!(JSValue::from_bits(result.to_bits()).is_pointer());
+        let buf =
+            (result.to_bits() & crate::value::POINTER_MASK) as *const crate::buffer::BufferHeader;
+        assert!(!buf.is_null());
         unsafe {
-            assert!((*result).byte_len > 0);
+            assert!((*buf).length > 0);
         }
+    }
+
+    #[test]
+    fn test_spawn_sync_result_fields() {
+        // #1936: spawnSync result carries pid / output / stdout / stderr /
+        // status / signal.
+        let cmd = "echo";
+        let cmd_ptr = js_string_from_bytes(cmd.as_ptr(), cmd.len() as u32);
+        let args = crate::array::js_array_alloc(1);
+        let hi = js_string_from_bytes(b"hi".as_ptr(), 2);
+        crate::array::js_array_push_f64(args, crate::value::js_nanbox_string(hi as i64));
+
+        let result = js_child_process_spawn_sync(cmd_ptr, args, std::ptr::null());
+        assert!(!result.is_null());
+        let get = |name: &[u8]| -> f64 {
+            let k = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            js_object_get_field_by_name_f64(result, k)
+        };
+        // status should be the numeric exit code 0.
+        assert_eq!(get(b"status"), 0.0);
+        // pid is a positive number.
+        assert!(get(b"pid") > 0.0);
+        // output / stdout / stderr are present (pointers, not undefined).
+        for f in [
+            b"output".as_slice(),
+            b"stdout".as_slice(),
+            b"stderr".as_slice(),
+        ] {
+            assert!(JSValue::from_bits(get(f).to_bits()).is_pointer());
+        }
+        // signal is null on a clean exit.
+        assert_eq!(get(b"signal").to_bits(), TAG_NULL_BITS);
     }
 }

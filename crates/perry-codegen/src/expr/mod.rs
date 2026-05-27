@@ -1842,6 +1842,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ChildProcessSpawnSync { .. }
         | Expr::ChildProcessSpawnBackground { .. }
         | Expr::ChildProcessSpawn { .. }
+        | Expr::ChildProcessFork { .. }
         | Expr::ChildProcessExec { .. }
         | Expr::ChildProcessExecFile { .. }
         | Expr::ChildProcessExecFileSync { .. }

@@ -393,7 +393,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_buffer_write", I32, &[I64, I64, I32, I32]);
 
     // ========== child_process ==========
-    module.declare_function("js_child_process_exec_sync", I64, &[I64, I64]);
+    // execSync → NaN-boxed stdout (Buffer by default / string with `encoding`);
+    // throws on non-zero exit. Returns DOUBLE. #1937/#1938.
+    module.declare_function("js_child_process_exec_sync", DOUBLE, &[I64, I64]);
     // exec(cmd, options?, callback?): cmd string ptr (I64), options + callback
     // as NaN-boxed f64 in either slot; returns undefined (callback form) or the
     // stdout string (no-callback form). See `js_child_process_exec`.
@@ -408,15 +410,20 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_child_process_spawn_sync", I64, &[I64, I64, I64]);
     // #1780: streaming spawn → NaN-boxed ChildProcess pointer (returns DOUBLE).
     module.declare_function("js_child_process_spawn_streams", DOUBLE, &[I64, I64, I64]);
+    // #1933: fork(modulePath, args, options) → NaN-boxed ChildProcess with an
+    // IPC channel (send/disconnect/'message'/connected/channel).
+    module.declare_function("js_child_process_fork", DOUBLE, &[I64, I64, I64]);
     // #1780: execFile (file, args, options, callback) + execFileSync (file, args, options).
     module.declare_function(
         "js_child_process_exec_file",
         DOUBLE,
         &[I64, DOUBLE, DOUBLE, DOUBLE],
     );
+    // execFileSync → NaN-boxed stdout (Buffer by default / string with
+    // `encoding`); throws on non-zero exit. Returns DOUBLE. #1937/#1938.
     module.declare_function(
         "js_child_process_exec_file_sync",
-        I64,
+        DOUBLE,
         &[I64, DOUBLE, DOUBLE],
     );
 
