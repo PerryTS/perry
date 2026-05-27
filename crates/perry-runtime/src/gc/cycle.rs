@@ -1,3 +1,4 @@
+use super::barrier::{ConservativePinClearState, RememberedSetClearState};
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -701,12 +702,16 @@ enum ReclaimSubphase {
 
 struct ReclaimCycleState {
     subphase: ReclaimSubphase,
+    remembered_set_clear: Option<RememberedSetClearState>,
+    conservative_pin_clear: Option<ConservativePinClearState>,
 }
 
 impl ReclaimCycleState {
     fn new() -> Self {
         Self {
             subphase: ReclaimSubphase::RememberedSet,
+            remembered_set_clear: None,
+            conservative_pin_clear: None,
         }
     }
 }
@@ -1379,34 +1384,59 @@ impl GcCycleState {
                 ReclaimSubphase::RememberedSet => {
                     let reclaim_start = trace_phase_start(&self.trace);
                     let phase_start = trace_phase_start(&self.trace);
-                    remembered_set_clear();
-                    if let Some(minor) = self.minor.as_ref() {
-                        minor.evacuation_sticky.restore();
-                    }
-                    if let Some(sticky) = self.live_old_to_young_sticky.as_ref() {
-                        sticky.restore();
-                    }
+                    let clear = {
+                        let reclaim_state =
+                            self.reclaim_state.as_mut().expect("reclaim state exists");
+                        reclaim_state
+                            .remembered_set_clear
+                            .get_or_insert_with(RememberedSetClearState::new)
+                            .step_counted(remaining)
+                    };
+                    remaining = remaining.saturating_sub(clear.work_units);
                     trace_phase_record(&mut self.trace, "remembered_set_clear", phase_start);
                     trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
-                    self.reclaim_state
-                        .as_mut()
-                        .expect("reclaim state exists")
-                        .subphase = ReclaimSubphase::ConservativePins;
-                    remaining -= 1;
+                    if clear.done {
+                        if let Some(minor) = self.minor.as_ref() {
+                            minor.evacuation_sticky.restore();
+                        }
+                        if let Some(sticky) = self.live_old_to_young_sticky.as_ref() {
+                            sticky.restore();
+                        }
+                        let reclaim_state =
+                            self.reclaim_state.as_mut().expect("reclaim state exists");
+                        reclaim_state.remembered_set_clear = None;
+                        reclaim_state.subphase = ReclaimSubphase::ConservativePins;
+                    } else {
+                        break;
+                    }
                 }
                 ReclaimSubphase::ConservativePins => {
                     let reclaim_start = trace_phase_start(&self.trace);
                     let phase_start = trace_phase_start(&self.trace);
-                    if self.minor.is_some() {
-                        CONS_PINNED.with(|s| s.borrow_mut().clear());
-                    }
+                    let done = if self.minor.is_some() {
+                        let clear = {
+                            let reclaim_state =
+                                self.reclaim_state.as_mut().expect("reclaim state exists");
+                            reclaim_state
+                                .conservative_pin_clear
+                                .get_or_insert_with(ConservativePinClearState::new)
+                                .step_counted(remaining)
+                        };
+                        remaining = remaining.saturating_sub(clear.work_units);
+                        clear.done
+                    } else {
+                        true
+                    };
                     trace_phase_record(&mut self.trace, "conservative_pin_clear", phase_start);
                     trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
-                    self.reclaim_state
-                        .as_mut()
-                        .expect("reclaim state exists")
-                        .subphase = ReclaimSubphase::MallocTrim;
-                    remaining -= 1;
+                    if done {
+                        let reclaim_state =
+                            self.reclaim_state.as_mut().expect("reclaim state exists");
+                        reclaim_state.conservative_pin_clear = None;
+                        reclaim_state.subphase = ReclaimSubphase::MallocTrim;
+                    } else {
+                        break;
+                    }
                 }
                 ReclaimSubphase::MallocTrim => {
                     let reclaim_start = trace_phase_start(&self.trace);

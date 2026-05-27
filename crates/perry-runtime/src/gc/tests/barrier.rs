@@ -1,3 +1,4 @@
+use super::super::barrier::RememberedSetClearState;
 use super::super::*;
 use super::support::*;
 
@@ -52,6 +53,14 @@ unsafe fn field_indices_on_distinct_pages(fields: *mut u64, field_count: u32) ->
         }
     }
     panic!("test object did not span two field pages");
+}
+
+fn remembered_maintenance_entry_count() -> usize {
+    let dirty_old = DIRTY_OLD_PAGES.with(|s| s.borrow().len());
+    let external_dirty =
+        EXTERNAL_DIRTY_SLOT_PAGES.with(|s| s.borrow().values().map(Vec::len).sum::<usize>());
+    let fallback = REMEMBERED_SET.with(|s| s.borrow().len());
+    dirty_old + external_dirty + fallback
 }
 
 #[test]
@@ -153,6 +162,73 @@ fn test_barriered_slot_store_api_trace_counters() {
         assert_eq!(counters.remembered_set_insert_attempts, 1);
         assert_eq!(counters.dirty_page_mark_attempts, 1);
         assert_eq!(counters.new_dirty_pages, 1);
+    }
+}
+
+#[test]
+fn test_remembered_set_clear_state_slices_maintenance_entries() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+
+    let old = crate::arena::arena_alloc_gc_old(24 * 1024, 8, GC_TYPE_STRING) as usize;
+    let old_header = unsafe { header_from_user_ptr(old as *const u8) };
+    let old_total = unsafe { (*old_header).size as usize };
+    let dirty_pages: Vec<usize> =
+        crate::arena::old_object_page_overlaps(old_header as usize, old_total)
+            .into_iter()
+            .map(|(page, _)| page)
+            .take(3)
+            .collect();
+    assert!(
+        dirty_pages.len() >= 3,
+        "test old object should span at least three old pages"
+    );
+    for &page in &dirty_pages {
+        mark_dirty_old_page(page);
+        assert!(old_page_dirty_for(page));
+    }
+
+    EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
+        let mut pages = s.borrow_mut();
+        pages.insert(0x1000, vec![0x10, 0x20]);
+        pages.insert(0x2000, vec![0x30]);
+    });
+    REMEMBERED_SET.with(|s| {
+        let mut headers = s.borrow_mut();
+        headers.insert(0x40);
+        headers.insert(0x50);
+    });
+
+    let initial = remembered_maintenance_entry_count();
+    assert_eq!(initial, dirty_pages.len() + 5);
+
+    let mut state = RememberedSetClearState::new();
+    assert!(
+        !state.step(1),
+        "one cleanup unit must not drain all maintenance structures"
+    );
+    assert_eq!(remembered_maintenance_entry_count(), initial - 1);
+    assert!(
+        DIRTY_OLD_PAGES.with(|s| !s.borrow().is_empty()),
+        "one cleanup unit should remove one dirty old page, not bulk-clear the set"
+    );
+
+    let mut calls = 1usize;
+    while !state.step(1) {
+        calls += 1;
+        assert!(
+            calls <= initial,
+            "remembered cleanup should finish after one call per maintenance entry"
+        );
+    }
+
+    assert!(calls > 1);
+    assert_eq!(remembered_maintenance_entry_count(), 0);
+    for page in dirty_pages {
+        assert!(
+            !old_page_dirty_for(page),
+            "dirty old-page metadata should be clear after cleanup completes"
+        );
     }
 }
 

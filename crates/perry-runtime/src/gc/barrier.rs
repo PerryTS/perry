@@ -1409,17 +1409,202 @@ pub fn remembered_set_size() -> usize {
     remembered_dirty_page_count() + REMEMBERED_SET.with(|s| s.borrow().len())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct MaintenanceClearStep {
+    pub(super) done: bool,
+    pub(super) work_units: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RememberedSetClearSubphase {
+    DirtyOldPages,
+    ExternalDirtySlots,
+    FallbackHeaders,
+    Done,
+}
+
+pub(super) struct RememberedSetClearState {
+    subphase: RememberedSetClearSubphase,
+}
+
+impl RememberedSetClearState {
+    pub(super) fn new() -> Self {
+        Self {
+            subphase: RememberedSetClearSubphase::DirtyOldPages,
+        }
+    }
+
+    pub(super) fn step(&mut self, budget: usize) -> bool {
+        self.step_counted(budget).done
+    }
+
+    pub(super) fn step_counted(&mut self, budget: usize) -> MaintenanceClearStep {
+        let mut work_units = 0usize;
+        loop {
+            match self.subphase {
+                RememberedSetClearSubphase::DirtyOldPages => {
+                    if dirty_old_pages_empty() {
+                        self.subphase = RememberedSetClearSubphase::ExternalDirtySlots;
+                        continue;
+                    }
+                    if work_units == budget {
+                        break;
+                    }
+                    if clear_one_dirty_old_page() {
+                        work_units = work_units.saturating_add(1);
+                    }
+                }
+                RememberedSetClearSubphase::ExternalDirtySlots => {
+                    if external_dirty_slot_headers_empty() {
+                        self.subphase = RememberedSetClearSubphase::FallbackHeaders;
+                        continue;
+                    }
+                    if work_units == budget {
+                        break;
+                    }
+                    if clear_one_external_dirty_slot_header() {
+                        work_units = work_units.saturating_add(1);
+                    }
+                }
+                RememberedSetClearSubphase::FallbackHeaders => {
+                    if fallback_remembered_set_empty() {
+                        self.subphase = RememberedSetClearSubphase::Done;
+                        continue;
+                    }
+                    if work_units == budget {
+                        break;
+                    }
+                    if clear_one_fallback_remembered_header() {
+                        work_units = work_units.saturating_add(1);
+                    }
+                }
+                RememberedSetClearSubphase::Done => {
+                    return MaintenanceClearStep {
+                        done: true,
+                        work_units,
+                    };
+                }
+            }
+        }
+        MaintenanceClearStep {
+            done: self.subphase == RememberedSetClearSubphase::Done,
+            work_units,
+        }
+    }
+}
+
+fn dirty_old_pages_empty() -> bool {
+    DIRTY_OLD_PAGES.with(|s| s.borrow().is_empty())
+}
+
+fn clear_one_dirty_old_page() -> bool {
+    DIRTY_OLD_PAGES.with(|s| {
+        let mut pages = s.borrow_mut();
+        let Some(page) = pages.iter().next().copied() else {
+            return false;
+        };
+        crate::arena::old_page_clear_dirty(page);
+        pages.remove(&page);
+        true
+    })
+}
+
+fn external_dirty_slot_headers_empty() -> bool {
+    EXTERNAL_DIRTY_SLOT_PAGES.with(|s| s.borrow().is_empty())
+}
+
+fn clear_one_external_dirty_slot_header() -> bool {
+    EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
+        let mut pages = s.borrow_mut();
+        let Some(page) = pages.keys().next().copied() else {
+            return false;
+        };
+        let remove_page = match pages.get_mut(&page) {
+            Some(headers) => {
+                headers.pop();
+                headers.is_empty()
+            }
+            None => false,
+        };
+        if remove_page {
+            pages.remove(&page);
+        }
+        true
+    })
+}
+
+fn fallback_remembered_set_empty() -> bool {
+    REMEMBERED_SET.with(|s| s.borrow().is_empty())
+}
+
+fn clear_one_fallback_remembered_header() -> bool {
+    REMEMBERED_SET.with(|s| {
+        let mut headers = s.borrow_mut();
+        let Some(header) = headers.iter().next().copied() else {
+            return false;
+        };
+        headers.remove(&header);
+        true
+    })
+}
+
+pub(super) struct ConservativePinClearState {
+    done: bool,
+}
+
+impl ConservativePinClearState {
+    pub(super) fn new() -> Self {
+        Self { done: false }
+    }
+
+    pub(super) fn step_counted(&mut self, budget: usize) -> MaintenanceClearStep {
+        if self.done {
+            return MaintenanceClearStep {
+                done: true,
+                work_units: 0,
+            };
+        }
+
+        let mut work_units = 0usize;
+        while work_units < budget {
+            if clear_one_conservative_pin() {
+                work_units = work_units.saturating_add(1);
+            } else {
+                self.done = true;
+                break;
+            }
+        }
+
+        if !self.done && conservative_pins_empty() {
+            self.done = true;
+        }
+
+        MaintenanceClearStep {
+            done: self.done,
+            work_units,
+        }
+    }
+}
+
+fn conservative_pins_empty() -> bool {
+    CONS_PINNED.with(|s| s.borrow().is_empty())
+}
+
+fn clear_one_conservative_pin() -> bool {
+    CONS_PINNED.with(|s| {
+        let mut pinned = s.borrow_mut();
+        let Some(header) = pinned.iter().next().copied() else {
+            return false;
+        };
+        pinned.remove(&header);
+        true
+    })
+}
+
 /// Gen-GC Phase C: clear the remembered set. Will be called by
 /// minor GC after the rs-scan completes (Phase C3). Test-only
 /// for now to enable test isolation.
 pub fn remembered_set_clear() {
-    DIRTY_OLD_PAGES.with(|s| {
-        let mut pages = s.borrow_mut();
-        for &page in pages.iter() {
-            crate::arena::old_page_clear_dirty(page);
-        }
-        pages.clear();
-    });
-    EXTERNAL_DIRTY_SLOT_PAGES.with(|s| s.borrow_mut().clear());
-    REMEMBERED_SET.with(|s| s.borrow_mut().clear());
+    let mut state = RememberedSetClearState::new();
+    while !state.step(usize::MAX) {}
 }

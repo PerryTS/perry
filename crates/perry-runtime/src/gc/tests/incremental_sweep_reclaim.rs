@@ -7,6 +7,75 @@ fn reset_old_reclaim_pressure() {
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
 }
 
+fn remembered_maintenance_entry_count() -> usize {
+    let dirty_old = DIRTY_OLD_PAGES.with(|s| s.borrow().len());
+    let external_dirty =
+        EXTERNAL_DIRTY_SLOT_PAGES.with(|s| s.borrow().values().map(Vec::len).sum::<usize>());
+    let fallback = REMEMBERED_SET.with(|s| s.borrow().len());
+    dirty_old + external_dirty + fallback
+}
+
+fn external_dirty_slot_page_count() -> usize {
+    EXTERNAL_DIRTY_SLOT_PAGES.with(|s| s.borrow().len())
+}
+
+fn old_dirty_pages_for_reclaim_test(count: usize) -> Vec<usize> {
+    let old = crate::arena::arena_alloc_gc_old(count * 4096 + 4096, 8, GC_TYPE_STRING) as usize;
+    let old_header = unsafe { header_from_user_ptr(old as *const u8) };
+    let old_total = unsafe { (*old_header).size as usize };
+    let pages: Vec<usize> = crate::arena::old_object_page_overlaps(old_header as usize, old_total)
+        .into_iter()
+        .map(|(page, _)| page)
+        .take(count)
+        .collect();
+    assert!(
+        pages.len() >= count,
+        "test old object should span {count} old pages"
+    );
+    pages
+}
+
+fn seed_remembered_reclaim_entries(dirty_pages: &[usize]) {
+    for &page in dirty_pages {
+        mark_dirty_old_page(page);
+        assert!(old_page_dirty_for(page));
+    }
+    EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
+        let mut pages = s.borrow_mut();
+        pages.insert(0x3000, vec![0x3010, 0x3020, 0x3030]);
+        pages.insert(0x4000, vec![0x4010, 0x4020]);
+    });
+    REMEMBERED_SET.with(|s| {
+        let mut headers = s.borrow_mut();
+        headers.insert(0x5010);
+        headers.insert(0x5020);
+        headers.insert(0x5030);
+    });
+}
+
+fn seed_external_dirty_slot_page_buckets(count: usize) {
+    EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
+        let mut pages = s.borrow_mut();
+        for index in 0..count {
+            let headers = if index % 2 == 0 {
+                Vec::new()
+            } else {
+                vec![0x8000 + index * 0x10]
+            };
+            pages.insert(0x7000 + index, headers);
+        }
+    });
+}
+
+fn seed_conservative_pins(count: usize) {
+    CONS_PINNED.with(|s| {
+        let mut pinned = s.borrow_mut();
+        for index in 0..count {
+            pinned.insert(0x6000 + index * 0x10);
+        }
+    });
+}
+
 fn budgeted_step_until_phase(target: GcCyclePhase) -> JsGcStepResult {
     let mut status = JsGcStepResult::default();
     for _ in 0..500_000 {
@@ -327,6 +396,148 @@ fn budgeted_reclaim_phase_is_split_from_completion() {
     let completed = complete_budgeted_gc_cycle();
     assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
     assert!(gc_collection_count() > before);
+    assert_eq!(tracked_malloc_headers_matching(&dead_headers), 0);
+    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+}
+
+#[test]
+fn budgeted_reclaim_slices_remembered_maintenance_entries() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let dirty_pages = old_dirty_pages_for_reclaim_test(4);
+    let live = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(live));
+    let dead_headers = allocate_dead_malloc_churn_headers(8);
+    GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(malloc_object_count().saturating_sub(1)));
+    gc_check_trigger();
+
+    let mut status = budgeted_step_until_phase(GcCyclePhase::Reclaim);
+    seed_remembered_reclaim_entries(&dirty_pages);
+    let initial = remembered_maintenance_entry_count();
+    assert!(initial > 6);
+
+    assert_eq!(
+        js_gc_step_work_units(1, &mut status),
+        JS_GC_STEP_STATUS_ACTIVE
+    );
+    assert_eq!(status.phase, GcCyclePhase::Reclaim.ffi_code());
+    assert_eq!(
+        remembered_maintenance_entry_count(),
+        initial - 1,
+        "one reclaim work unit should clear exactly one remembered maintenance entry"
+    );
+
+    for _ in 0..3 {
+        assert_eq!(
+            js_gc_step_work_units(1, &mut status),
+            JS_GC_STEP_STATUS_ACTIVE
+        );
+        assert_eq!(status.phase, GcCyclePhase::Reclaim.ffi_code());
+    }
+    assert!(
+        remembered_maintenance_entry_count() > 0,
+        "remembered maintenance cleanup should still be active after a few one-unit steps"
+    );
+
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    assert_eq!(remembered_maintenance_entry_count(), 0);
+    for page in dirty_pages {
+        assert!(!old_page_dirty_for(page));
+    }
+    assert_eq!(tracked_malloc_headers_matching(&dead_headers), 0);
+    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+}
+
+#[test]
+fn budgeted_reclaim_slices_many_external_dirty_slot_page_buckets() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let live = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(live));
+    let dead_headers = allocate_dead_malloc_churn_headers(8);
+    GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(malloc_object_count().saturating_sub(1)));
+    gc_check_trigger();
+
+    let mut status = budgeted_step_until_phase(GcCyclePhase::Reclaim);
+    seed_external_dirty_slot_page_buckets(64);
+    let initial_pages = external_dirty_slot_page_count();
+    let initial_entries = remembered_maintenance_entry_count();
+    assert_eq!(initial_pages, 64);
+    assert_eq!(initial_entries, 32);
+
+    for step in 1..=3 {
+        assert_eq!(
+            js_gc_step_work_units(1, &mut status),
+            JS_GC_STEP_STATUS_ACTIVE
+        );
+        assert_eq!(status.phase, GcCyclePhase::Reclaim.ffi_code());
+        assert_eq!(
+            external_dirty_slot_page_count(),
+            initial_pages - step,
+            "one reclaim work unit should clear exactly one external dirty-slot page bucket"
+        );
+        assert!(
+            remembered_maintenance_entry_count() >= initial_entries.saturating_sub(step),
+            "one reclaim work unit must not bulk-prune external dirty-slot headers"
+        );
+    }
+
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    assert_eq!(external_dirty_slot_page_count(), 0);
+    assert_eq!(remembered_maintenance_entry_count(), 0);
+    assert_eq!(tracked_malloc_headers_matching(&dead_headers), 0);
+    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+}
+
+#[test]
+fn budgeted_reclaim_slices_conservative_pin_cleanup() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let live = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(live));
+    let dead_headers = allocate_dead_malloc_churn_headers(8);
+    GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(malloc_object_count().saturating_sub(1)));
+    gc_check_trigger();
+
+    let mut status = budgeted_step_until_phase(GcCyclePhase::Reclaim);
+    seed_conservative_pins(6);
+    let initial = cons_pinned_count();
+    assert_eq!(initial, 6);
+
+    assert_eq!(
+        js_gc_step_work_units(1, &mut status),
+        JS_GC_STEP_STATUS_ACTIVE
+    );
+    assert_eq!(status.phase, GcCyclePhase::Reclaim.ffi_code());
+    assert_eq!(
+        cons_pinned_count(),
+        initial - 1,
+        "one reclaim work unit should clear exactly one conservative pin"
+    );
+
+    for _ in 0..3 {
+        assert_eq!(
+            js_gc_step_work_units(1, &mut status),
+            JS_GC_STEP_STATUS_ACTIVE
+        );
+        assert_eq!(status.phase, GcCyclePhase::Reclaim.ffi_code());
+    }
+    assert!(
+        cons_pinned_count() > 0,
+        "conservative pin cleanup should still be active after a few one-unit steps"
+    );
+
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    assert_eq!(cons_pinned_count(), 0);
     assert_eq!(tracked_malloc_headers_matching(&dead_headers), 0);
     assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
 }
