@@ -61,8 +61,8 @@ pub use walk::{
 };
 pub(crate) use walk::{
     arena_block_snapshots, arena_telemetry_snapshot, general_block_in_recent_window,
-    ArenaBlockSnapshot, ArenaObjectCursor, ArenaRegionTelemetry, ArenaTelemetrySnapshot,
-    ArenaWalkOrder,
+    ArenaBlockSnapshot, ArenaObjectCursor, ArenaObjectCursorBuilder, ArenaRegionTelemetry,
+    ArenaTelemetrySnapshot, ArenaWalkOrder,
 };
 
 // reset.rs

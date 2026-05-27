@@ -76,6 +76,216 @@ fn start_minor_fallback_state(trigger: GcTriggerSnapshot) -> GcCycleState {
     )
 }
 
+fn alloc_tracked_test_closure() -> *mut u8 {
+    let child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(child);
+    }
+    child
+}
+
+const VALID_POINTER_TEST_OBJECT_FIELDS: u32 = 1000;
+
+fn alloc_large_nursery_objects(count: usize) -> Vec<usize> {
+    (0..count)
+        .map(|_| unsafe {
+            let (object, _fields) = alloc_nursery_test_object(VALID_POINTER_TEST_OBJECT_FIELDS);
+            object as usize
+        })
+        .collect()
+}
+
+#[test]
+fn build_valid_pointer_set_slices_large_multi_block_arena_with_tiny_budget() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let objects = alloc_large_nursery_objects(320);
+    assert!(crate::arena::arena_block_count() > 1);
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    let mut build_steps = 0usize;
+    while state.phase() == GcCyclePhase::BuildValidPointerSet {
+        let result = state.step(GcWorkBudget::bounded(1));
+        assert_eq!(result.phase, GcCyclePhase::BuildValidPointerSet);
+        build_steps += 1;
+        assert!(
+            build_steps < 100_000,
+            "valid pointer set build did not finish"
+        );
+    }
+
+    assert_eq!(state.phase(), GcCyclePhase::RootScan);
+    assert!(
+        build_steps > crate::arena::arena_block_count(),
+        "arena setup, object walk, and finalization should span multiple build steps"
+    );
+
+    drop(objects);
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("cycle should complete");
+}
+
+#[test]
+fn build_valid_pointer_set_first_tiny_step_only_inspects_one_arena_block() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _objects = alloc_large_nursery_objects(260);
+    assert!(crate::arena::arena_block_count() > 1);
+
+    let mut builder = ValidPointerSetBuilder::new();
+    let initial = builder.snapshot_for_tests();
+    assert_eq!(initial.phase, ValidPointerSetBuildPhase::ArenaCursorSetup);
+    assert_eq!(initial.arena_setup_blocks, 0);
+
+    assert!(!builder.step(1));
+    let after = builder.snapshot_for_tests();
+    assert_eq!(after.phase, ValidPointerSetBuildPhase::ArenaCursorSetup);
+    assert_eq!(after.arena_setup_blocks, 1);
+    assert_eq!(after.lookup_count, 0);
+
+    let _ = builder.finish();
+}
+
+#[test]
+fn build_valid_pointer_set_tiny_setup_step_does_not_bulk_order_blocks() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _objects = alloc_large_nursery_objects(320);
+    let block_count = crate::arena::arena_block_count();
+    assert!(block_count > 2);
+
+    let mut builder = ValidPointerSetBuilder::new();
+    for expected_blocks in 1..block_count {
+        assert!(!builder.step(1));
+        let snapshot = builder.snapshot_for_tests();
+        assert_eq!(snapshot.phase, ValidPointerSetBuildPhase::ArenaCursorSetup);
+        assert_eq!(snapshot.arena_setup_blocks, expected_blocks);
+        assert_eq!(snapshot.lookup_count, 0);
+    }
+
+    let before_order_finish = builder.snapshot_for_tests();
+    assert_eq!(
+        before_order_finish.phase,
+        ValidPointerSetBuildPhase::ArenaCursorSetup
+    );
+    assert_eq!(before_order_finish.arena_setup_blocks, block_count - 1);
+
+    assert!(!builder.step(1));
+    let after_order_finish = builder.snapshot_for_tests();
+    assert_eq!(
+        after_order_finish.phase,
+        ValidPointerSetBuildPhase::ArenaWalk
+    );
+    assert_eq!(after_order_finish.lookup_count, 0);
+
+    let _ = builder.finish();
+}
+
+#[test]
+fn build_valid_pointer_set_tiny_arena_walk_step_adds_one_lookup_entry() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _objects = alloc_large_nursery_objects(64);
+
+    let mut builder = ValidPointerSetBuilder::new();
+    assert!(!builder.step(100_000));
+    let after_setup = builder.snapshot_for_tests();
+    assert_eq!(after_setup.phase, ValidPointerSetBuildPhase::ArenaWalk);
+    assert_eq!(after_setup.lookup_count, 0);
+
+    let mut previous_lookup_count = after_setup.lookup_count;
+    for _ in 0..16 {
+        assert!(!builder.step(1));
+        let snapshot = builder.snapshot_for_tests();
+        assert_eq!(snapshot.phase, ValidPointerSetBuildPhase::ArenaWalk);
+        assert_eq!(
+            snapshot.lookup_count,
+            previous_lookup_count + 1,
+            "one tiny arena-walk step must not rebuild or bulk-fill lookup entries"
+        );
+        previous_lookup_count = snapshot.lookup_count;
+    }
+
+    let _ = builder.finish();
+}
+
+#[test]
+fn build_valid_pointer_set_sliced_build_preserves_contains_and_enclosing_object() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let (arena_object, fields) = unsafe { alloc_nursery_test_object(4) };
+    let arena_object = arena_object as usize;
+    let interior = fields as usize;
+    let arena_strings = (0..1100).map(|_| young_leaf()).collect::<Vec<_>>();
+    let malloc_objects = (0..32)
+        .map(|_| alloc_tracked_test_closure() as usize)
+        .collect::<Vec<_>>();
+
+    let mut builder = ValidPointerSetBuilder::new();
+    let mut steps = 0usize;
+    while !builder.step(7) {
+        steps += 1;
+        assert!(steps < 100_000, "sliced valid pointer build did not finish");
+    }
+    let valid_ptrs = builder.finish();
+
+    assert!(valid_ptrs.contains(&arena_object));
+    assert_eq!(valid_ptrs.enclosing_object(interior), Some(arena_object));
+    for &ptr in arena_strings.iter().take(16) {
+        assert!(valid_ptrs.contains(&ptr));
+    }
+    for &ptr in &malloc_objects {
+        assert!(valid_ptrs.contains(&ptr));
+    }
+}
+
+#[test]
+fn build_valid_pointer_set_finalize_is_separate_bounded_phase() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _objects = alloc_large_nursery_objects(16);
+    let _malloc_objects = (0..4)
+        .map(|_| alloc_tracked_test_closure())
+        .collect::<Vec<_>>();
+
+    let mut builder = ValidPointerSetBuilder::new();
+    assert!(!builder.step(10_000));
+    assert_eq!(
+        builder.snapshot_for_tests().phase,
+        ValidPointerSetBuildPhase::ArenaWalk
+    );
+
+    assert!(!builder.step(1));
+    let after_tiny_arena = builder.snapshot_for_tests();
+    assert_eq!(after_tiny_arena.phase, ValidPointerSetBuildPhase::ArenaWalk);
+    assert!(
+        after_tiny_arena.lookup_count < _objects.len(),
+        "one tiny arena-walk step must not insert the whole arena"
+    );
+
+    while builder.snapshot_for_tests().phase != ValidPointerSetBuildPhase::Finalize {
+        assert!(!builder.step(10_000));
+    }
+    let before_finalize = builder.snapshot_for_tests();
+    assert_eq!(before_finalize.phase, ValidPointerSetBuildPhase::Finalize);
+    assert!(before_finalize.current_arena_run_len > 0 || before_finalize.arena_run_count > 0);
+
+    assert!(!builder.step(0));
+    assert_eq!(
+        builder.snapshot_for_tests().phase,
+        ValidPointerSetBuildPhase::Finalize
+    );
+    assert!(builder.step(1));
+    assert_eq!(
+        builder.snapshot_for_tests().phase,
+        ValidPointerSetBuildPhase::Done
+    );
+}
+
 #[test]
 fn full_cycle_state_steps_through_resumable_phases() {
     let _guard = CopyingNurseryTestGuard::new(1);
