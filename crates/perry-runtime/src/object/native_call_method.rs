@@ -1828,6 +1828,39 @@ pub unsafe extern "C" fn js_native_call_method(
             return f64::from_bits(JSValue::bool(true).bits());
         }
 
+        // `prim.isPrototypeOf(v)` — true iff the receiver appears in `v`'s
+        // prototype chain. #2058: a primitive receiver (number/string/boolean,
+        // reached via the `js_class_method_bind` value-read path) is never on
+        // another object's prototype chain, so the result is always `false`.
+        // Scoped to non-pointer receivers so object/class-prototype receivers
+        // keep their existing dispatch. Returning a clean boolean keeps
+        // `typeof n.isPrototypeOf === "function"` honest: the bound value is
+        // actually callable rather than throwing.
+        "isPrototypeOf" if !jsval.is_pointer() => {
+            return f64::from_bits(JSValue::bool(false).bits());
+        }
+
+        // `prim.valueOf()` — a primitive's `valueOf` returns the primitive
+        // itself (number/boolean/string/bigint). #2058: makes the bound
+        // value-read `const f = n.valueOf` callable. Pointer receivers keep
+        // their existing object/handle-specific handling above.
+        "valueOf" if !jsval.is_pointer() => {
+            return object;
+        }
+
+        // `value.toLocaleString()` — for primitives Node returns the same
+        // string as `toString()` (no locale data). Delegate so the bound
+        // value-read (#2058) is callable.
+        "toLocaleString" if !jsval.is_pointer() => {
+            return js_native_call_method(
+                object,
+                b"toString".as_ptr() as *const i8,
+                "toString".len(),
+                args_ptr,
+                args_len,
+            );
+        }
+
         // Function.prototype.call(thisArg, ...args) — invoke the receiver
         // closure with `thisArg` bound as `this` and the remaining args
         // passed positionally. Ramda's curry helpers (`_curry1`, `_curry2`,

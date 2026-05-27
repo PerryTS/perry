@@ -1109,6 +1109,41 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
     }
+    // #2058: a raw, unboxed finite f64 NUMBER receiver (e.g. `(5).toString`,
+    // or `n.isPrototypeOf` where `n: number`) reaches here with its float
+    // bits intact — numbers are NOT NaN-boxed in Perry, so `5.0` arrives as
+    // 0x4014_0000_0000_0000. That is neither a NaN-box tag (top16 >= 0x7FF8)
+    // nor a masked heap pointer (those have top16 == 0), so the generic
+    // pointer logic below would dereference the float bits as an
+    // `ObjectHeader` → SIGSEGV. Detect the primitive number first: return a
+    // bound-method closure for the inherited Number/Object prototype methods
+    // (so `typeof n.toString === "function"` holds and the value is
+    // callable), and `undefined` for any other key (matching property reads
+    // on primitives). Date timestamps and Web-Stream handles are raw f64 too,
+    // but both are special-cased above, so they never reach this branch.
+    {
+        let bits = obj as u64;
+        let f = f64::from_bits(bits);
+        // Registered Date timestamps are also raw finite f64 — leave them to
+        // the existing Date handling (the `_f64` wrapper above already routed
+        // `date.constructor`), so this branch never changes Date behavior.
+        if !key.is_null()
+            && f.is_finite()
+            && (bits >> 48) != 0
+            && !crate::date::is_registered_date_bits(bits)
+        {
+            unsafe {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                if is_primitive_proto_method(name_bytes) {
+                    let result = super::js_class_method_bind(f, name_ptr, name_len);
+                    return JSValue::from_bits(result.to_bits());
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
     // Strip NaN-boxing tags if present (defensive: handle POINTER_TAG, UNDEFINED, NULL, etc.)
     let obj = {
         let bits = obj as u64;
@@ -2148,6 +2183,26 @@ pub extern "C" fn js_object_get_field_by_name_f64(
     }
     let value = js_object_get_field_by_name(obj, key);
     f64::from_bits(value.bits())
+}
+
+/// #2058: the universal `Object.prototype` methods inherited by every value,
+/// including primitive numbers. Read as a property *value* (e.g.
+/// `const f = n.toString`, `typeof n.isPrototypeOf`), these resolve to real
+/// callable functions in Node — Perry binds them lazily via
+/// `js_class_method_bind` so the value is both `typeof "function"` and
+/// dispatchable through `js_native_call_method` (every name here has a
+/// corresponding dispatch arm). `constructor` is excluded: it is a property
+/// holding the `Number` function, not a bound method.
+fn is_primitive_proto_method(key: &[u8]) -> bool {
+    matches!(
+        key,
+        b"toString"
+            | b"valueOf"
+            | b"hasOwnProperty"
+            | b"isPrototypeOf"
+            | b"propertyIsEnumerable"
+            | b"toLocaleString"
+    )
 }
 
 fn is_timer_handle_method_key(key: &[u8]) -> bool {

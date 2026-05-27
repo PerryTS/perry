@@ -169,6 +169,26 @@ pub(crate) fn is_known_string_prototype_method(name: &str) -> bool {
     )
 }
 
+/// Names of the universal `Object.prototype.<name>` methods inherited by
+/// every object and boxed primitive (numbers, strings, booleans). Used by
+/// the `typeof <Ctor>.prototype.<m>` AST fold (#2058) so feature-detection
+/// idioms like `typeof Object.prototype.isPrototypeOf === "function"` and
+/// `typeof Number.prototype.hasOwnProperty === "function"` agree with Node.
+/// These are real functions on `Object.prototype`, so they resolve to
+/// callable values on any inheriting receiver.
+pub(crate) fn is_known_object_prototype_method(name: &str) -> bool {
+    matches!(
+        name,
+        "hasOwnProperty"
+            | "isPrototypeOf"
+            | "propertyIsEnumerable"
+            | "toLocaleString"
+            | "toString"
+            | "valueOf"
+            | "constructor"
+    )
+}
+
 /// Names of `Array.prototype.<name>` instance methods that Perry's runtime
 /// implements (or short-circuits) — used by the `typeof Array.prototype.<m>`
 /// / `typeof [].<m>` AST fold (#1777) so feature detection and the indirect

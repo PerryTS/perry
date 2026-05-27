@@ -775,23 +775,41 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 if proto_prop.sym.as_ref() == "prototype"
                                     && ctx.lookup_local(ctor).is_none()
                                 {
+                                    // #2058: every built-in prototype inherits the
+                                    // universal `Object.prototype` methods
+                                    // (`isPrototypeOf`, `hasOwnProperty`,
+                                    // `toString`, …), so `typeof
+                                    // Object.prototype.isPrototypeOf` /
+                                    // `typeof Number.prototype.hasOwnProperty` are
+                                    // "function" in Node. Plus each ctor's own
+                                    // prototype methods (and `Function.prototype`'s
+                                    // `call`/`apply`/`bind`).
+                                    let is_obj_proto = is_known_object_prototype_method(prop_name);
                                     let is_fn = match ctor {
-                                        "Array" => is_known_array_prototype_method(prop_name),
-                                        "String" => is_known_string_prototype_method(prop_name),
-                                        // Number/Boolean prototypes: the handful of
-                                        // real methods are all functions in Node.
-                                        "Number" => matches!(
-                                            prop_name,
-                                            "toFixed"
-                                                | "toPrecision"
-                                                | "toExponential"
-                                                | "toString"
-                                                | "valueOf"
-                                                | "toLocaleString"
-                                        ),
-                                        "Boolean" => {
-                                            matches!(prop_name, "toString" | "valueOf")
+                                        "Object" => is_obj_proto,
+                                        "Function" => {
+                                            is_obj_proto
+                                                || matches!(prop_name, "call" | "apply" | "bind")
                                         }
+                                        "Array" => {
+                                            is_obj_proto
+                                                || is_known_array_prototype_method(prop_name)
+                                        }
+                                        "String" => {
+                                            is_obj_proto
+                                                || is_known_string_prototype_method(prop_name)
+                                        }
+                                        // Number/Boolean prototypes: the handful of
+                                        // ctor-specific methods plus the inherited
+                                        // Object.prototype methods are all functions.
+                                        "Number" => {
+                                            is_obj_proto
+                                                || matches!(
+                                                    prop_name,
+                                                    "toFixed" | "toPrecision" | "toExponential"
+                                                )
+                                        }
+                                        "Boolean" => is_obj_proto,
                                         _ => false,
                                     };
                                     if is_fn {
